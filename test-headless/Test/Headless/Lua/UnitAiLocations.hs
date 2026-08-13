@@ -3,7 +3,10 @@
 --   unit_ai_locations.lua@'s per-unit location memory — identity dedup,
 --   page-scoped nearest lookup, targeted forget, empty-state, the
 --   persisted wire form, awareness ingest, and the load-time scrub —
---   plus the @lua.unit_ai@ v3→v4 schema evolution that carries it.
+--   plus the @lua.unit_ai@ v3→v4 schema evolution that carries it. The
+--   component's DECLARED version has moved on since (v5 as of #1291),
+--   so the version case below tracks the current one while still
+--   pinning that every historical input version, v4 included, decodes.
 --
 --   Same standalone-Lua-VM pattern as "Test.Headless.Lua.SaveModules":
 --   each 'it' runs one self-contained chunk via 'Lua.dostring' in a
@@ -307,15 +310,18 @@ spec = describe "unit location knowledge" $ do
                 , "assert(captured ~= nil)"
                 ]
 
-        it "declares version 4 while still accepting every historical \
-           \input version" $
+        it "declares the current version (v5 since #1291) while still \
+           \accepting every historical input version" $
             runsOk $ lns
                 [ registered
-                , "assert(captured.version == 4)"
+                , "assert(captured.version == 5)"
                 , "local accepted = {}"
                 , "for _, v in ipairs(captured.inputVersions) do"
                 , "  accepted[v] = true end"
-                , "for v = 1, 4 do assert(accepted[v], 'v' .. v"
+                -- Every historical version decodes, this gate's own v4
+                -- included: #915's memory rides payloads that predate
+                -- #1291's stall accounting.
+                , "for v = 1, 5 do assert(accepted[v], 'v' .. v"
                 , "  .. ' must still decode') end"
                 ]
 

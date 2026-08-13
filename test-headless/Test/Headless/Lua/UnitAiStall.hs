@@ -90,8 +90,23 @@ prelude = lns
     , "    left = left - dt"
     , "  end"
     , "end"
-    , "-- Time in which the AI never ran: the clock advances, no sample."
+    , "-- Time in which the AI never ran and nothing announced it: the"
+    , "-- clock advances, no sample is taken (a save/load boundary, a"
+    , "-- unit that stopped being ticked)."
     , "local function skip(seconds) NOW = NOW + seconds end"
+    , "-- The same, but through a path that DOES announce itself: one"
+    , "-- suspendOrders per swallowed tick, exactly as unit_ai.lua's"
+    , "-- collapsed-pose / engine-animation short-circuit and"
+    , "-- unit_ai_mental.lua's preempt call it."
+    , "local function shortCircuit(seconds)"
+    , "  local left = seconds"
+    , "  while left > 1e-9 do"
+    , "    local dt = math.min(STEP, left)"
+    , "    NOW = NOW + dt"
+    , "    stall.suspendOrders(s)"
+    , "    left = left - dt"
+    , "  end"
+    , "end"
     ]
 
 -- | The pickup half of the same accounting: @pickupUtility@ reached
@@ -118,6 +133,7 @@ pickupPrelude = lns
     , "           { { name = 'radio', displayName = 'Field Radio',"
     , "               weight = 1 } } end }"
     , "local pickup = require('scripts.unit_ai_pickup')"
+    , "local stall = require('scripts.unit_ai_stall')"
     , "local PARAMS = { pickup_timeout = 30, pickup_utility = 7.5 }"
     , "local s = { pickupOrder = { gid = 7, issuedAt = 0 },"
     , "            currentAction = nil }"
@@ -134,6 +150,15 @@ pickupPrelude = lns
     , "  end"
     , "end"
     , "local function skip(seconds) NOW = NOW + seconds end"
+    , "local function shortCircuit(seconds)"
+    , "  local left = seconds"
+    , "  while left > 1e-9 do"
+    , "    local dt = math.min(STEP, left)"
+    , "    NOW = NOW + dt"
+    , "    stall.suspendOrders(s)"
+    , "    left = left - dt"
+    , "  end"
+    , "end"
     ]
 
 -- | The real @lua.unit_ai@ component, registered against a fake
@@ -186,6 +211,26 @@ spec = describe "commanded order stall budget" $ do
                 , "tick(1, 'follow_command')"
                 , "assert(s.commandedTask,"
                 , "  'a gap with no AI sample at all must charge nothing')"
+                ]
+
+        it "is not charged for a SHORT no-tick interruption either — a \
+           \1 s get-up stun is far under MAX_CHARGED_INTERVAL, so only \
+           \the boundary the short-circuit records excludes it" $
+            runsOk $ lns
+                [ prelude
+                -- Deliberately staged one tick under the budget, so a
+                -- charged 1 s interruption would expire the order and a
+                -- correctly excluded one leaves it pending.
+                , "s.commandedTask = { x = 40, y = 0, startedAt = NOW }"
+                , "tick(59, 'follow_command')"
+                , "assert(s.commandedTask, 'still inside the budget at 59 s')"
+                , "shortCircuit(1)"
+                , "tick(1, 'follow_command')"
+                , "assert(s.commandedTask,"
+                , "  'a 1 s collapse must cost the order nothing')"
+                , "tick(3, 'follow_command')"
+                , "assert(s.commandedTask == nil,"
+                , "  'and the remaining budget still runs out')"
                 ]
 
         it "accumulates eligible time ACROSS an interruption rather than \
@@ -296,6 +341,22 @@ spec = describe "commanded order stall budget" $ do
                 , "  'the existing player-visible failure report must survive')"
                 , "assert(EVENTS[1].msg:find('pick up'),"
                 , "  'and must still name the pickup: ' .. tostring(EVENTS[1].msg))"
+                ]
+
+        it "is not charged for a SHORT no-tick interruption either — the \
+           \engine `pickup` animation itself is one, and it is briefer \
+           \than MAX_CHARGED_INTERVAL" $
+            runsOk $ lns
+                [ pickupPrelude
+                , "tick(29, 'pickup_ground')"
+                , "assert(s.pickupOrder, 'still inside the budget')"
+                , "shortCircuit(2)"
+                , "tick(2, 'pickup_ground')"
+                , "assert(s.pickupOrder,"
+                , "  'a 2 s engine animation must cost the order nothing')"
+                , "tick(5, 'pickup_ground')"
+                , "assert(s.pickupOrder == nil,"
+                , "  'and the remaining budget still runs out')"
                 ]
 
         it "a new closest approach starts its budget over too" $

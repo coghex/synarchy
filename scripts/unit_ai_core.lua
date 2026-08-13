@@ -245,6 +245,15 @@ local function seedInitialGoal(s, defName)
     if first then setGoal(s, first) end
 end
 
+-- #1291: the AI could not pursue this unit's orders over the interval
+-- that just elapsed. Takes a uid so the tick paths that swallow a
+-- whole update can call it before ensureState, and looks the state up
+-- WITHOUT creating it -- a unit with no AI state has no order to
+-- suspend.
+local function suspendOrders(uid)
+    stall.suspendOrders(aiState[uid])
+end
+
 -----------------------------------------------------------
 -- Public: player-issued move command
 -----------------------------------------------------------
@@ -466,5 +475,6 @@ M.markGoalAccomplished  = markGoalAccomplished
 M.isGoalActive          = isGoalActive
 M.seedInitialGoal       = seedInitialGoal
 M.maintainTask          = stall.maintainTask
+M.suspendOrders         = suspendOrders
 
 return M

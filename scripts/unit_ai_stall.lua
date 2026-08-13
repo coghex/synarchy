@@ -31,15 +31,23 @@
 -- ordinary scheduling cadence is eligible, an interval another action
 -- won is not.
 --
--- Intervals in which the AI could not run at all -- unit_ai.lua's
--- collapsed-pose and engine-animation short-circuit, the mental-break
--- / delirium short-circuit, a save/load boundary -- produce no sample
--- at all, so they arrive here as a GAP between two samples rather
--- than as an ineligible interval. Any interval longer than
--- MAX_CHARGED_INTERVAL is taken to be such a gap and is charged
--- nothing. That bound sits well above the slowest cadence either
--- timer samples at (pickup scores on the ~1 s thought tick, jitter
--- included) and far below either budget (30 s / 60 s).
+-- Intervals in which the AI could not run at all produce no sample
+-- here at all, so they cannot be recognised as ineligible after the
+-- fact -- however short they are. Every such path therefore RECORDS
+-- the boundary as it happens, through M.suspendOrders: unit_ai.lua's
+-- collapsed-pose / engine-animation short-circuit and
+-- unit_ai_mental.lua's delirium / mental-break preemption both call
+-- it on every tick they swallow, and the next sample then charges
+-- nothing for the interval that spans them. A one-second get-up stun
+-- costs a pending order exactly as little as a five-minute collapse.
+--
+-- MAX_CHARGED_INTERVAL is the backstop for the gaps no such path can
+-- announce -- a save/load boundary, a unit that stopped being ticked
+-- at all: an interval longer than it is not one uninterrupted stretch
+-- of AI ticking and is charged nothing. The bound sits well above the
+-- slowest cadence either timer samples at (pickup scores on the ~1 s
+-- thought tick, jitter included) and far below either budget
+-- (30 s / 60 s), so a genuinely stalled order still expires.
 --
 -- Deliberately dependency-free: no requires at all (unit_ai_core
 -- requires THIS module, so requiring it back would be a load cycle),
@@ -100,6 +108,24 @@ function M.charge(order, eligible, now)
     order.stalledFor  = acc
     order.stallSeenAt = now
     return acc
+end
+
+-- Record an interruption boundary on whatever orders `s` is carrying:
+-- the AI could not pursue them over the interval that just elapsed, so
+-- the next sample must charge nothing for it. Dropping the last-sample
+-- stamp is exactly that -- M.charge reads a missing stamp as a
+-- zero-length interval and picks the accounting back up from `now`,
+-- leaving everything already charged charged.
+--
+-- Takes the state table (nil-tolerant, since a short-circuited tick
+-- may run for a unit that has no AI state yet) rather than a uid, and
+-- is called on EVERY swallowed tick rather than only at entry: an
+-- interruption is a span, not an event, and only the last boundary
+-- inside it bounds the interval the next sample sees.
+function M.suspendOrders(s)
+    if not s then return end
+    if s.commandedTask then s.commandedTask.stallSeenAt = nil end
+    if s.pickupOrder   then s.pickupOrder.stallSeenAt   = nil end
 end
 
 -- A new closest approach: the whole budget is available again.
