@@ -510,6 +510,24 @@ tear the engine down in a `finally`, and save nothing.
   kit's remaining contents and holder, whether the medic AI claimed the
   patient on its own, and the final unit state.
 
+  Its **pre-fall baseline is captured under a stopped simulation** (#1218).
+  `engine.setPaused(true)` goes on before the first spawn and stays on
+  through roster materialization, the kit transfer, the baseline read and
+  the descent order; `engine.setPaused(false)` is issued immediately after
+  that order and everything from there on — the fall, the treatment and the
+  medic-AI observations — is live and observational as before. Under the
+  hold the AI never ticks, so each acolyte's standing `find_water` goal is
+  retired directly against `unit_ai_core`'s own state rather than through
+  probelib's `clear_find_water` (which polls for a tick that cannot come).
+  The baseline read is bracketed by `engine.isPaused()` checks and asserts
+  its own preconditions — the scout exists, sits within `ARRIVAL_TILES` of
+  its staging tile, carries zero wounds and holds the issued kit — aborting
+  with a `ScenarioError` naming what drifted instead of continuing into an
+  ambiguous before/after comparison. The `kit issued, before the fall`
+  checkpoint header carries the `engine.isPaused()` value it was recorded
+  under, so a run demonstrates the hold rather than implying it. The
+  `expedition` scenario's setup is unchanged and still runs live.
+
 An unclassified `tools/*.py` path makes CI's path-selective probe gate fall
 back to its full CI-eligible probe set for that PR — that is `ci_probes.py`'s
 pre-existing conservative default for unknown paths, not this script running
@@ -519,9 +537,9 @@ in CI.
 
 `tools/playtest/` is the naive-player UX playtest harness (H1, #647 —
 epic #641): a lockstep runner that drives a **windowed** instance, hands
-each frame to a cheap naive LLM player (screenshot-only, persona-driven,
-oracle-blind), injects its chosen `input.*` action, and records a
-replayable session trace for the critic (H2). Unlike everything else in
+each frame to a Codex `gpt-5.6-luna`/medium naive player (screenshot-only,
+persona-driven, oracle-blind), injects its chosen `input.*` action, and
+records a replayable session trace for the critic (H2). Unlike everything else in
 tools/ it deliberately launches a graphical instance (focus-stealing —
 run unattended); `--selftest` is its offline CI-safe check and `--smoke`
 a scripted no-LLM session. See `tools/playtest/README.md`.

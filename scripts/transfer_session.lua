@@ -144,24 +144,84 @@ function M.init(scriptId)
     checkVocabulary()
 end
 
--- The B1-owned "valid source" rule (#1014 review, requirements 4 + 7):
--- exactly one selected unit, player-commandable (the same
+-- The B1-owned "valid source" rule, NEAREST-OF-N (#1239; design
+-- authority docs/unified_item_transfers.md D-8, and D-11 which records
+-- that #1014's original "exactly one selected unit" rule was unfinished
+-- work rather than settled intent). A multi-unit selection is allowed
+-- and the nearest eligible unit goes.
+--
+-- A candidate is a selected unit that is player-commandable (the same
 -- faction.isPlayerCommandable gate the "Attack" entry already uses --
 -- and, since A2, the same gate the engine's own unit-endpoint
--- eligibility applies), and not the destination itself (the
--- self-transfer case the contract refuses at request time). Zero
--- selected units and MULTIPLE selected units both fail this the same
--- way, which is deliberate -- see the context-menu wiring for why
--- "Transfer" is OMITTED rather than disabled for a multi-unit
--- selection.
-function M.resolveSource(selectedUids, excludeUid)
-    if not selectedUids or #selectedUids ~= 1 then return nil end
-    local uid = selectedUids[1]
-    if excludeUid ~= nil and uid == excludeUid then return nil end
-    if not faction.isPlayerCommandable(unit.getFaction(uid)) then
-        return nil
+-- eligibility applies) and is not the destination itself (the
+-- self-transfer case the contract refuses at request time). A uid whose
+-- live faction or position has disappeared between selection and this
+-- call is SKIPPED as ineligible rather than aborting the whole
+-- resolution -- one dead selection entry must not cost the player the
+-- entry. ZERO eligible candidates returns nil, and the context-menu
+-- wiring then OMITS "Transfer" entirely rather than showing a disabled
+-- row.
+--
+-- Ranking is by squared-Euclidean grid distance to `target`
+-- (`unit.transferEndpointInfo`'s own gridX/gridY, so the ranked point
+-- is exactly the endpoint the session will name), measured in the
+-- TARGET's local u-alias frame via world.localizeTile (#1175's
+-- selection-gate rule): a candidate physically adjacent across the wrap
+-- seam measures a whole world away in canonical coords and would
+-- otherwise never be chosen. Identity away from the seam and in
+-- arena / non-wrapping worlds.
+--
+-- Both sides are FLOORED to whole tiles first, and that is load-bearing
+-- rather than tidiness. unit.getInfo's gridX/gridY are the CONTINUOUS
+-- position (Unit.Types.Instance's uiGridX is a Float, pushed with
+-- Lua.pushnumber), while transferEndpointInfo reports an already-whole
+-- tile -- and it derives a unit endpoint's tile with FLOOR
+-- (Unit.Transfer's uevTile). world.localizeTile rounds whatever it is
+-- handed, so feeding it a raw position would rank a source standing at
+-- x=10.6 -- inside tile 10, possibly the destination's own tile -- as
+-- tile 11. That mixed floor/round frame invents distance-1 gaps, which
+-- both manufactures artificial ties and lets a genuinely farther unit
+-- win. Flooring here puts candidates in exactly the tile frame the
+-- endpoint already reports.
+--
+-- An exact distance tie breaks on the LOWEST uid (D-8), never on
+-- selection order -- unit.getSelected() converts a HashSet, so its
+-- order is not contractual and two equidistant acolytes would otherwise
+-- race. This is deliberately NOT the "Pick up" precedent
+-- (init_context_menu.lua, #920), whose `d < best` lets the first unit in
+-- selection order win a tie; that gap is out of scope here.
+--
+-- `target` may be nil or carry no coords (nothing to rank against),
+-- in which case every candidate is equidistant and the lowest-uid
+-- tiebreak alone decides -- still deterministic, never a nil-arithmetic
+-- error.
+function M.resolveSource(selectedUids, excludeUid, target)
+    if not selectedUids then return nil end
+    local tx = target and target.gridX and math.floor(target.gridX)
+    local ty = target and target.gridY and math.floor(target.gridY)
+    local best, bestUid = nil, nil
+    for _, uid in ipairs(selectedUids) do
+        if excludeUid == nil or uid ~= excludeUid then
+            local info = unit.getInfo(uid)
+            local fac = info and unit.getFaction(uid)
+            if info and info.gridX and info.gridY and fac
+               and faction.isPlayerCommandable(fac) then
+                local d = 0
+                if tx and ty then
+                    local cx = math.floor(info.gridX)
+                    local cy = math.floor(info.gridY)
+                    local lx, ly = world.localizeTile(tx, ty, cx, cy)
+                    if not (lx and ly) then lx, ly = cx, cy end
+                    d = (lx - tx) * (lx - tx) + (ly - ty) * (ly - ty)
+                end
+                if bestUid == nil or d < best
+                   or (d == best and uid < bestUid) then
+                    best, bestUid = d, uid
+                end
+            end
+        end
     end
-    return uid
+    return bestUid
 end
 
 -- Create (or replace) the active transfer session for `sourceUid` ->
