@@ -1,8 +1,9 @@
 {-# LANGUAGE Strict #-}
 -- | Screen-pixel / cursor hit-testing queries: world.getHoverTile,
 --   world.getHoverPos, world.pickTile, world.pickPos — plus
---   world.localizeTile, the Lua face of the same u-seam frame contract
---   those picks report in (see "World.Render.HitTest").
+--   world.localizeTile and world.getWrapWidth, the Lua face of the same
+--   u-seam frame contract those picks report in (see
+--   "World.Render.HitTest").
 module Engine.Scripting.Lua.API.WorldQuery.Pick
     ( worldGetHoverTileFn
     , worldGetHoverPosFn
@@ -10,6 +11,7 @@ module Engine.Scripting.Lua.API.WorldQuery.Pick
     , worldPickPosFn
     , worldPickChunkFn
     , worldLocalizeTileFn
+    , worldGetWrapWidthFn
     ) where
 
 import UPrelude
@@ -28,6 +30,7 @@ import World.Render.ViewBounds (computeViewBounds)
 import World.Render.Zoom.Cursor (pixelToChunkOrigin)
 import World.Generate (viewDepth)
 import World.Generate.Coordinates (localizeTileToAnchor)
+import World.Plate.Wrap (worldWidthTiles)
 import Engine.Scripting.Lua.API.WorldQuery.Lookup
     (mVisibleWorldState, worldStateByPage)
 
@@ -239,6 +242,41 @@ worldLocalizeTileFn env = do
         _ → do
             Lua.pushnil
             return 1
+
+-- | world.getWrapWidth([pageId]) → the page's cylindrical u-wrap PERIOD
+--   in TILES ('World.Plate.worldWidthTiles' of its world size), and 0
+--   for a page that does not exist or has no live gen params yet.
+--
+--   This is the one number a script needs to reproduce the engine's own
+--   seam topology rather than approximate it: 'Location.Bounds.seamAliases'
+--   derives its half-period step from exactly this value, so a Lua
+--   containment test built on it agrees with
+--   'Location.Bounds.boundsContainsPoint' by construction. That is what
+--   @scripts/name_plate.lua@ needs (#1264) — since #1175 the selected
+--   tile arrives canonical, so a location whose bounds straddle the seam
+--   fails a raw comparison against the very tile that is physically
+--   inside it.
+--
+--   PAGE-SCOPED, matching the queries it is used beside
+--   (@world.listPlacedLocations@, @world.getSelectedTile@): with a
+--   page-id string the NAMED page is read, with no argument the active
+--   world. It deliberately does not fall back from a named-but-missing
+--   page to the active one — pages may have different wrap sizes, so a
+--   silent fallback would answer about the wrong world.
+--
+--   Tiles, not chunks, so the caller never needs its own copy of
+--   'World.Chunk.Types.chunkSize'.
+worldGetWrapWidthFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetWrapWidthFn env = do
+    mPage ← Lua.tostring 1
+    mWs ← Lua.liftIO $ case mPage of
+        Just pidBS → worldStateByPage (toWorldSimCapability env)
+                         (TE.decodeUtf8Lenient pidBS)
+        Nothing    → activeWorldStateFrom
+                         (wsWorldManagerRef (toWorldSimCapability env))
+    worldSize ← Lua.liftIO $ maybe (pure 0) pageWrapWorldSize mWs
+    Lua.pushinteger (fromIntegral (worldWidthTiles worldSize))
+    return 1
 
 -- | world.pickPos(pixX, pixY) → hx, hy or nil
 --   Synchronous fractional-position analog of pickTile: the live
