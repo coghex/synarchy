@@ -45,8 +45,11 @@ createTextureSystem pdev dev cmdPool queue config = do
       bindless ← createBindlessTextureSystem pdev dev cmdPool queue bindlessConfig
       pure bindless
 
+    -- Selection already rejects a device that cannot do bindless at all
+    -- ("Engine.Graphics.Vulkan.Device"), so what usually reaches here is a
+    -- capable device with too few slots left after the reservations. Both
+    -- sites build the message from 'unsupportedBindlessMessage' so they
+    -- describe the same shortfall identically (#1282).
     unsupported →
       logAndThrowM CatTexture (ExGraphics TextureLoadFailed) $
-        "Bindless textures are required, but this device does not meet the \
-        \renderer's required bindless capability: "
-        <> describeCapability unsupported
+        unsupportedBindlessMessage support unsupported

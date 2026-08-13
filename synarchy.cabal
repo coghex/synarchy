@@ -220,6 +220,7 @@ library
                      Engine.Graphics.Vulkan.Texture.DefaultFaceMap
                      Engine.Graphics.Vulkan.Texture.Types
                      Engine.Graphics.Vulkan.Texture.Limits
+                     Engine.Graphics.Vulkan.Texture.Requirements
                      Engine.Graphics.Vulkan.Texture.Slot
                      Engine.Graphics.Vulkan.Texture.System
                      Engine.Graphics.Vulkan.Texture.Handle
@@ -1116,6 +1117,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Input.WheelPolicy
                    Test.Headless.Graphics.VideoConfig
                    Test.Headless.Graphics.VulkanAppIdentity
+                   Test.Headless.Graphics.BindlessFeatures
                    Test.Headless.Graphics.WindowMode
                    Test.Headless.Graphics.AmbientLight
                    Test.Headless.Graphics.Screenshot

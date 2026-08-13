@@ -45,6 +45,8 @@ import Engine.Graphics.Vulkan.Texture.Limits
   (maxBindlessTextures, handleSlotTableSize)
 import Engine.Graphics.Vulkan.Texture.Rebind
   (FilterRebindPlan(..), SlotRebind(..), planFilterRebind)
+import Engine.Graphics.Vulkan.Texture.Requirements
+  (bindlessTextureBindingFlags)
 import Engine.Graphics.Vulkan.Texture.Undefined (createUndefinedTexture)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..), BindlessConfig(..))
 import Engine.Graphics.Vulkan.Types.Texture (UndefinedTexture(..))
@@ -188,17 +190,17 @@ createBindlessDescriptorPool dev config = do
 -- Note: We do NOT use VARIABLE_DESCRIPTOR_COUNT for MoltenVK compatibility
 createBindlessDescriptorSetLayout ∷ Device → BindlessConfig → EngineM σ DescriptorSetLayout
 createBindlessDescriptorSetLayout dev config = do
-  -- Not using VARIABLE_DESCRIPTOR_COUNT due to MoltenVK limitations
-  let bindingFlags =
-        DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
-        ⌄ DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT
-
-      -- The handle→slot table (binding 1) is a plain storage buffer: not
+  -- Not using VARIABLE_DESCRIPTOR_COUNT due to MoltenVK limitations.
+  -- The flags come from 'bindlessTextureBindingFlags' rather than a literal
+  -- here: each is valid only under a Vulkan 1.2 feature the logical device
+  -- has to enable, and that pairing lives in one place so the two cannot
+  -- drift apart again (#1282).
+  let -- The handle→slot table (binding 1) is a plain storage buffer: not
       -- update-after-bind (so it needs no extra device feature), written
       -- once at creation before the set is ever bound, then only its
       -- CONTENTS change (via mapped memory) — never the descriptor.
       bindingFlagsInfo = zero
-        { bindingFlags = V.fromList [bindingFlags, zero]
+        { bindingFlags = V.fromList [bindlessTextureBindingFlags, zero]
         } ∷ DescriptorSetLayoutBindingFlagsCreateInfo
 
       textureBinding = zero
