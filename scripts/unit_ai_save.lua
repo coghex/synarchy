@@ -279,8 +279,19 @@ function M.register(aiState)
         -- back-filled from the player-wide discovery state, which is a
         -- different fact entirely (what the PLAYER has mapped, not what
         -- this acolyte has seen).
-        version = 4,
-        inputVersions = { 1, 2, 3, 4 },
+        -- v5 (issue #1291): a pending commandedTask/pickupOrder carries
+        -- its stall budget as ACCUMULATED ELIGIBLE TIME
+        -- (stalledFor/stallSeenAt, scripts/unit_ai_stall.lua) instead of
+        -- the absolute progressAt origin v1-v4 wrote. A v1-v4 payload
+        -- decodes with the new pair ABSENT and is seeded on its first
+        -- tick from the absolute `progressAt` origin it does carry,
+        -- which reproduces exactly the charge the old rule had accrued
+        -- by then -- an order restored from an older save behaves as it
+        -- did before this change, never as one that can no longer
+        -- expire. Nothing is inferred here at decode time: the seeding
+        -- needs the current game clock, which only the AI tick has.
+        version = 5,
+        inputVersions = { 1, 2, 3, 4, 5 },
         required = true,
         scope = "global",
         -- Requirement 2 (round-8 review): unit_ai_save_refs.lua's
@@ -342,6 +353,13 @@ function M.register(aiState)
             -- already the correct v4 value. Nothing infers it -- see
             -- the version field's own comment above for why
             -- back-filling from player-wide discovery would be wrong.
+            --
+            -- v4 -> v5 (#1291) is identity for the same reason: an
+            -- older order's ABSENT stalledFor/stallSeenAt pair is the
+            -- correct v5 value, and the honest seed for it is derived
+            -- from the origin the payload already carries, on the first
+            -- tick that has a clock to derive it against (see the
+            -- version field's comment above).
             if version == 1 then return refsMod.wrapAiState(data) end
             if version == 2 then return refsMod.addOwnerToAiState(data) end
             return data

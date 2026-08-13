@@ -1169,6 +1169,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/k1-canonical-designation-frame.expected.json"
         }
       ]
+    },
+    {
+      "id": "l1-order-stall-budget",
+      "description": "Commanded-order stall budgets charged in eligible time only (issue #1291): lua.unit_ai became v5, replacing a pending commandedTask/pickupOrder's absolute progressAt origin with the accumulated-eligible-seconds pair stalledFor/stallSeenAt (scripts/unit_ai_stall.lua). This baseline tracks a REAL current-format session written by the live engine at lua.unit_ai v5, whose acolyte carries a PENDING commanded move whose accounting fields were written by the real maintainTask tick -- so the new shape has its own compatibility coverage. v1-v4 payloads stay tracked by the b3/c3/d1/e1/f1/g1/h1/i1/j1/k1 baselines above and decode with the pair absent, seeded from their own progressAt on the first tick so they expire exactly when the old rule would have.",
+      "declaredAt": "2026-08-13",
+      "declaredByIssue": 1291,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "scripts/unit_ai_save.lua's decode (v1 -> wrapAiState, v2 -> addOwnerToAiState, v3/v4 -> identity: a pre-#1291 order carries the absolute progressAt origin instead of stalledFor/stallSeenAt, and unit_ai_stall.charge seeds the accumulator from it on the order's first tick -- nothing is inferred at decode time)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 5,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "l1-order-stall-budget-session",
+          "path": "test-headless/data/save-compat/l1-order-stall-budget.bin",
+          "kind": "complete-session",
+          "sha256": "696afcdfc06316345bcb275bee32893017904f416563e1f2434770b579ecc6d7",
+          "sizeBytes": 909320,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then return require('scripts.unit_ai').commandMove({uid}, 20, 20), settled 6.0s and held until `(function() local s = require('scripts.unit_ai').getState(1); return s and s.commandedTask and s.commandedTask.stalledFor ~= nil and s.commandedTask.stallSeenAt ~= nil end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/l1-order-stall-budget.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

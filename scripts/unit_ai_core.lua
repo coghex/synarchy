@@ -15,6 +15,11 @@
 
 local unitAi = package.loaded["scripts.unit_ai"]
 
+-- Commanded-order stall accounting + maintainTask (#1291). Re-exported
+-- below, so every existing `core.maintainTask` / `core.TASK_*` caller
+-- is unchanged.
+local stall = require("scripts.unit_ai_stall")
+
 local M = {}
 
 local function reportFailure(uid, msg)
@@ -49,7 +54,11 @@ end
 --   actionStartedAt    = <posix>,
 --   nextActionAt       = <posix>,
 --   commandedTask      = { x, y, speed, startedAt, bestDist,
---                          progressAt } | nil,  -- last 2: #920 stall
+--                          stalledFor, stallSeenAt } | nil,
+--                                           -- last 3: the #920 stall
+--                                           -- timer, charged in #1291
+--                                           -- eligible time only
+--                                           -- (unit_ai_stall.lua)
 --   knownWaterSources  = { {x, y}, ... },   -- dedup'd by distance;
 --                                           -- empty list = none known
 --   knownLocations     = { {page,id,x,y} }, -- dedup'd by IDENTITY,
@@ -61,13 +70,6 @@ end
 -- }
 unitAi.aiState = unitAi.aiState or {}
 local aiState = unitAi.aiState
-
--- Constants for arrival detection on commanded tasks.
-local TASK_ARRIVAL_TILES = 0.6
--- TASK_TIMEOUT_SEC is a STALL budget (see maintainTask);
--- TASK_PROGRESS_TILES is the closer-than-before step that resets it.
-local TASK_TIMEOUT_SEC   = 60.0
-local TASK_PROGRESS_TILES = 0.5
 
 -----------------------------------------------------------
 -- Helpers
@@ -243,36 +245,13 @@ local function seedInitialGoal(s, defName)
     if first then setGoal(s, first) end
 end
 
------------------------------------------------------------
--- Task arrival / timeout housekeeping
------------------------------------------------------------
-local function maintainTask(uid, s)
-    local task = s.commandedTask
-    if not task then return end
-
-    local info = unit.getInfo(uid)
-    if not info then
-        -- Unit gone; drop the task.
-        s.commandedTask = nil
-        return
-    end
-
-    -- Arrival check.
-    local d = distance(info.gridX, info.gridY, task.x, task.y)
-    if d <= TASK_ARRIVAL_TILES then
-        s.commandedTask = nil
-        return
-    end
-
-    -- Timeout: a STALL timer, not a total-trip budget (#920). A long but
-    -- progressing leg must not be dropped for taking a while, so the
-    -- deadline resets ONLY on a new closest approach — circling an
-    -- unreachable target never refreshes it, and still gives up.
-    if not task.bestDist or d < task.bestDist - TASK_PROGRESS_TILES then
-        task.bestDist, task.progressAt = d, engine.gameTime()
-    end
-    local stalled = engine.gameTime() - (task.progressAt or task.startedAt)
-    if stalled > TASK_TIMEOUT_SEC then s.commandedTask = nil end
+-- #1291: the AI could not pursue this unit's orders over the interval
+-- that just elapsed. Takes a uid so the tick paths that swallow a
+-- whole update can call it before ensureState, and looks the state up
+-- WITHOUT creating it -- a unit with no AI state has no order to
+-- suspend.
+local function suspendOrders(uid)
+    stall.suspendOrders(aiState[uid])
 end
 
 -----------------------------------------------------------
@@ -481,8 +460,8 @@ end
 M.reportFailure         = reportFailure
 M.grantWorkXP           = grantWorkXP
 M.aiState               = aiState
-M.TASK_ARRIVAL_TILES    = TASK_ARRIVAL_TILES
-M.TASK_TIMEOUT_SEC      = TASK_TIMEOUT_SEC
+M.TASK_ARRIVAL_TILES    = stall.TASK_ARRIVAL_TILES
+M.TASK_TIMEOUT_SEC      = stall.TASK_TIMEOUT_SEC
 M.ensureState           = ensureState
 M.scheduleNext          = scheduleNext
 M.distance              = distance
@@ -495,6 +474,7 @@ M.setGoal               = setGoal
 M.markGoalAccomplished  = markGoalAccomplished
 M.isGoalActive          = isGoalActive
 M.seedInitialGoal       = seedInitialGoal
-M.maintainTask          = maintainTask
+M.maintainTask          = stall.maintainTask
+M.suspendOrders         = suspendOrders
 
 return M

@@ -161,6 +161,13 @@ end
 -- 60–120 s interruption as instant progress on resume. Persistent
 -- state (claims, consumed materials) stays, same as any preemption.
 local function preempt(uid, s, params, actList, newName)
+    -- An interruption boundary (#1291), recorded on EVERY tick of the
+    -- episode and not just at entry: a break/delirium swallows the
+    -- whole update, so a pending commanded move or pickup must not be
+    -- charged for any of it. Must precede the same-action early return
+    -- below — the ticks after the first are exactly the interval that
+    -- would otherwise be charged.
+    core.suspendOrders(uid)
     if s.currentAction == newName then return end
     if s.currentAction then
         for _, a in ipairs(actList or {}) do

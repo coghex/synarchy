@@ -240,11 +240,13 @@ local function tickOne(uid, defName)
     --     we'd clobber the state by issuing new commands.
     -- Crouching/Crawling pose with idle activity DOES run AI — that's
     -- how multi-phase actions (e.g. source-drink) advance.
+    -- Each return records an interruption boundary (#1291): none of the
+    -- swallowed interval, however brief, is charged to a pending order.
     local pose     = unit.getPose(uid)
     local activity = unit.getActivity(uid)
-    if pose == "collapsed" or pose == "dead" then return end
-    if activity == "drinking" or activity == "eating"
-       or activity == "pickup" or activity == "transitioning" then return end
+    if pose == "collapsed" or pose == "dead" then return core.suspendOrders(uid) end
+    if activity == "drinking" or activity == "eating" or activity == "pickup"
+       or activity == "transitioning" then return core.suspendOrders(uid) end
 
     local s = core.ensureState(uid)
     core.seedInitialGoal(s, defName)
@@ -277,34 +279,32 @@ local function tickOne(uid, defName)
     -- regardless of real progress, since one tick's delta never alone
     -- cleared the threshold (#612, surfaced by the sleep goal's longer
     -- walk-to-spot leg).
-    do
-        local wi = unit.getInfo(uid)
-        if wi then
-            local moving = (activity == "walking" or activity == "running")
-            if moving then
-                if not s.watchX then
+    local wi = unit.getInfo(uid)
+    if wi then
+        local moving = (activity == "walking" or activity == "running")
+        if moving then
+            if not s.watchX then
+                s.watchX, s.watchY = wi.gridX, wi.gridY
+                s.lastProgressAt = engine.gameTime()
+            else
+                local moved = (wi.gridX - s.watchX) ^ 2
+                            + (wi.gridY - s.watchY) ^ 2
+                if moved > 0.01 then
                     s.watchX, s.watchY = wi.gridX, wi.gridY
                     s.lastProgressAt = engine.gameTime()
-                else
-                    local moved = (wi.gridX - s.watchX) ^ 2
-                                + (wi.gridY - s.watchY) ^ 2
-                    if moved > 0.01 then
-                        s.watchX, s.watchY = wi.gridX, wi.gridY
-                        s.lastProgressAt = engine.gameTime()
-                    elseif engine.gameTime() - (s.lastProgressAt or engine.gameTime())
-                           > (params.stuck_walk_timeout or 6.0) then
-                        engine.logDebug("unitAi: stuck-walk watchdog stopped unit "
-                            .. tostring(uid))
-                        unit.stop(uid)
-                        core.reportFailure(uid, "Stuck — can't reach destination")
-                        s.watchX, s.watchY = wi.gridX, wi.gridY
-                        s.lastProgressAt = engine.gameTime()
-                    end
+                elseif engine.gameTime() - (s.lastProgressAt or engine.gameTime())
+                       > (params.stuck_walk_timeout or 6.0) then
+                    engine.logDebug("unitAi: stuck-walk watchdog stopped unit "
+                        .. tostring(uid))
+                    unit.stop(uid)
+                    core.reportFailure(uid, "Stuck — can't reach destination")
+                    s.watchX, s.watchY = wi.gridX, wi.gridY
+                    s.lastProgressAt = engine.gameTime()
                 end
-            else
-                s.watchX, s.watchY = nil, nil
-                s.lastProgressAt = engine.gameTime()
             end
+        else
+            s.watchX, s.watchY = nil, nil
+            s.lastProgressAt = engine.gameTime()
         end
     end
     local newSources = water.scanForWater(uid, s, params)

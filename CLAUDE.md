@@ -1249,12 +1249,27 @@ before touching each area:
   `item.listGround().weight` — keep both; the load changes en route. A
   completed pickup emits a `unit_event` naming the item, tagged with
   the carrier's uid — that is the surface answering "who has it".
-  `pickup_timeout` and `unit_ai_core`'s `TASK_TIMEOUT_SEC` are STALL
-  timers, not total-trip budgets: they reset on a new closest approach,
-  so a long-but-progressing leg completes while an unreachable target
-  still gives up. Don't restore the from-`issuedAt`/`startedAt` shape —
-  it capped ordered retrieval at ~21 tiles and ordered moves at ~42.
-  Gate: `expedition_retrieval_probe.py` (manual-only).
+  `pickup_timeout` and `TASK_TIMEOUT_SEC` are STALL timers, not
+  total-trip budgets: they reset on a new closest approach, so a
+  long-but-progressing leg completes while an unreachable target still
+  gives up. Don't restore the from-`issuedAt`/`startedAt` shape — it
+  capped ordered retrieval at ~21 tiles and ordered moves at ~42. Since
+  #1291 they are also spent in ELIGIBLE time only
+  (`scripts/unit_ai_stall.lua`, which owns both the accounting and
+  `maintainTask`; `unit_ai_core` re-exports it): an interval another
+  action won (the #306 ladder's eating/drinking/refill/combat/
+  `treat_ally`, or a `forage` that walks the unit AWAY) or one the AI
+  never ticked through at all (collapse, an engine animation, a mental
+  break, a load boundary — seen here as a gap longer than
+  `MAX_CHARGED_INTERVAL`) costs a pending order nothing, however long
+  it lasts. The budget still ACCUMULATES across interruptions rather
+  than restarting after one, so eligible non-progress still expires on
+  schedule and no order becomes immortal. That state
+  (`stalledFor`/`stallSeenAt` on the order) rides `lua.unit_ai` v5; a
+  v1–v4 order carries the old absolute `progressAt` instead and is
+  seeded from it on its first tick, so it expires exactly when it
+  would have. Gates: `expedition_retrieval_probe.py` (manual-only),
+  hspec `--match "commanded order stall budget"`.
 - **The expedition loop (#923)** — the arc's shipped slice is
   **prepare → travel → discover → extract → return → invest**, run as
   ONE session by `tools/expedition_loop_probe.py` (manual-only,

@@ -1201,6 +1201,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.TutorialProgress
                    Test.Headless.Lua.TutorialEvaluation
                    Test.Headless.Lua.UnitAiLocations
+                   Test.Headless.Lua.UnitAiStall
                    Test.Headless.Capability.Building
                    Test.Headless.Capability.Events
                    Test.Headless.Capability.Input
