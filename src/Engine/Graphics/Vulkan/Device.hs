@@ -8,20 +8,26 @@ module Engine.Graphics.Vulkan.Device
     -- * Device Selection
   , pickPhysicalDevice
   , findQueueFamilies
+  , scoreDevice
+  , bindlessCapableBonus
   ) where
 
 import UPrelude
 import qualified Data.ByteString as BS
 import qualified Data.Vector as V
 import qualified Data.Text as T
-import Engine.Core.Error.Exception (ExceptionType(..), InitError(..))
+import Engine.Core.Error.Exception
+  (ExceptionType(..), GraphicsError(..), InitError(..))
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logDebugSM, logInfoSM)
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Graphics.Types
+import Engine.Graphics.Vulkan.Capability
+  (BindlessSupport(..), deviceBindlessFailureMessage, isBindlessSupported
+  ,queryBindlessSupport)
+import Engine.Graphics.Vulkan.Texture.Requirements (requiredVulkan12Features)
 import Vulkan.Core10
-import Vulkan.Core12 (PhysicalDeviceVulkan12Features(..))
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
 import Vulkan.Extensions.VK_KHR_surface
@@ -83,18 +89,23 @@ createVulkanDevice _inst physicalDevice mSurface = do
   logDebugSM CatVulkan "Enabled device extensions"
     [("extensions", T.pack $ show $ map (\bs → BS.take 30 bs) deviceExtensions)]
   
-  -- Vulkan 1.2 descriptor indexing triggers MoltenVK metal argument buffers
-  let vulkan12Features = zero
-        { descriptorIndexing = True
-        , shaderSampledImageArrayNonUniformIndexing = True
-        , runtimeDescriptorArray = True
-        , descriptorBindingPartiallyBound = True
-        , descriptorBindingUpdateUnusedWhilePending = True
-        , descriptorBindingVariableDescriptorCount = True
-        } ∷ PhysicalDeviceVulkan12Features
-  
+  -- Enable exactly the descriptor-indexing features the bindless shaders and
+  -- layout actually use ('requiredVulkan12Features'), and only once the
+  -- device has been confirmed to advertise them: requesting an unsupported
+  -- feature fails createDevice with VK_ERROR_FEATURE_NOT_PRESENT, an
+  -- incidental object-creation error standing in for the capability
+  -- diagnostic (#1282). pickPhysicalDevice already rejects incapable
+  -- devices; re-checking here keeps the guarantee for any direct caller.
+  -- Vulkan 1.2 descriptor indexing triggers MoltenVK metal argument buffers.
+  support ← liftIO $ queryBindlessSupport physicalDevice
+  unless (isBindlessSupported support) $
+    logAndThrowM CatTexture (ExGraphics TextureLoadFailed)
+      (deviceBindlessFailureMessage support)
+
+  let vulkan12Features = requiredVulkan12Features
+
   logDebugM CatVulkan "Enabled Vulkan 1.2 descriptor indexing features"
-  
+
   let deviceCreateInfo = (zero ∷ DeviceCreateInfo '[])
         { queueCreateInfos = V.fromList queueCreateInfos
         , enabledExtensionNames = V.fromList deviceExtensions
@@ -136,42 +147,81 @@ pickPhysicalDevice inst mSurface = do
   when (V.null devices) $
     logAndThrowM CatVulkan (ExInit DeviceCreationFailed)
       "Failed to find GPUs with Vulkan support"
-  
-  scores ← V.mapM (rateDevice mSurface) devices
-  let ratedDevices = V.zip scores devices
-      bestDevice = V.maximumBy (\a b → compare (fst a) (fst b)) ratedDevices
-  
-  if fst bestDevice ≡ 0
-    then logAndThrowM CatVulkan (ExInit DeviceCreationFailed)
-      "Failed to find a suitable GPU"
-    else do
-      PhysicalDeviceProperties { deviceName = chosenName }
-        ← liftIO $ getPhysicalDeviceProperties (snd bestDevice)
-      logInfoSM CatVulkan "Selected physical device"
-        [("device", T.pack $ show chosenName)
-        ,("score", T.pack $ show $ fst bestDevice)]
-      return $ snd bestDevice
 
--- | Rate a physical device's suitability (higher is better, 0 = unusable)
-rateDevice ∷ Maybe SurfaceKHR → PhysicalDevice → EngineM σ Int
+  rated ← V.mapM (rateDevice mSurface) devices
+  let ratedDevices = V.zip rated devices
+      ((bestScore, bestSupport), bestPDevice) =
+        V.maximumBy (\a b → compare (fst (fst a)) (fst (fst b))) ratedDevices
+
+  when (bestScore ≡ 0) $
+    logAndThrowM CatVulkan (ExInit DeviceCreationFailed)
+      "Failed to find a suitable GPU"
+
+  -- 'scoreDevice' ranks every bindless-capable candidate above every
+  -- incapable one, so a usable best that still fails the capability check
+  -- means NO usable device can run this renderer. Report that as the
+  -- bindless-capability diagnostic (#1055's contract) here, rather than
+  -- letting createDevice fail with VK_ERROR_FEATURE_NOT_PRESENT (#1282).
+  unless (isBindlessSupported bestSupport) $
+    logAndThrowM CatTexture (ExGraphics TextureLoadFailed)
+      (deviceBindlessFailureMessage bestSupport)
+
+  PhysicalDeviceProperties { deviceName = chosenName }
+    ← liftIO $ getPhysicalDeviceProperties bestPDevice
+  logInfoSM CatVulkan "Selected physical device"
+    [("device", T.pack $ show chosenName)
+    ,("score", T.pack $ show bestScore)]
+  return bestPDevice
+
+-- | Rate a physical device's suitability (higher is better, 0 = unusable),
+--   returning the bindless support it was rated on so 'pickPhysicalDevice'
+--   can explain a capability rejection without querying the device twice.
+rateDevice ∷ Maybe SurfaceKHR → PhysicalDevice
+           → EngineM σ (Int, BindlessSupport)
 rateDevice mSurface device = do
   props ← liftIO $ getPhysicalDeviceProperties device
   queueFamilies ← findQueueFamilies device mSurface
   extensionsSupported ← checkDeviceExtensionSupport device (isJust mSurface)
+  support ← liftIO $ queryBindlessSupport device
 
-  let baseScore = case deviceType props of
-        PHYSICAL_DEVICE_TYPE_DISCRETE_GPU   → 1000
-        PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU → 100
-        _                                   → 10
-      score = if isJust queueFamilies ∧ extensionsSupported
-              then baseScore
-              else 0
+  let usable = isJust queueFamilies ∧ extensionsSupported
+      score = scoreDevice (deviceType props) usable (isBindlessSupported support)
       PhysicalDeviceProperties { deviceName = dname } = props
 
   logDebugSM CatVulkan "Rated physical device"
     [("device", T.pack $ show dname)
-    ,("score", T.pack $ show score)]
-  return score
+    ,("score", T.pack $ show score)
+    ,("bindless_capable", T.pack $ show $ isBindlessSupported support)
+    ,("missing_features", T.pack $ show $ bsMissingFeatures support)]
+  return (score, support)
+
+-- | How much a bindless-capable candidate is worth. Strictly greater than
+--   any device-type base score below, which is what makes capability
+--   dominate type: the renderer has no non-bindless path, so a discrete GPU
+--   missing the descriptor-indexing features must never displace a capable
+--   integrated one (#1282).
+bindlessCapableBonus ∷ Int
+bindlessCapableBonus = 10000
+
+-- | The pure selection rule behind 'rateDevice', over the three facts it
+--   depends on: the candidate's type, whether it has the queue families and
+--   extensions this boot mode needs, and whether it can run the bindless
+--   renderer. Factored out so the capable-over-incapable ordering is pinned
+--   by a headless test rather than by whichever GPUs a machine happens to
+--   have. 0 means unusable, as before.
+scoreDevice ∷ PhysicalDeviceType  -- ^ Discrete, integrated, or other
+            → Bool                -- ^ Queue families and extensions present
+            → Bool                -- ^ 'isBindlessSupported'
+            → Int
+scoreDevice dtype usable bindlessCapable
+  | not usable = 0
+  | otherwise  = baseScore + bonus
+  where
+    baseScore = case dtype of
+      PHYSICAL_DEVICE_TYPE_DISCRETE_GPU   → 1000
+      PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU → 100
+      _                                   → 10
+    bonus = if bindlessCapable then bindlessCapableBonus else 0
 
 -- | Find required queue family indices. Total: Nothing means the device
 --   has no graphics queue family or no family that can present to the
