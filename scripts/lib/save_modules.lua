@@ -796,62 +796,47 @@ end
 -- `KnownEntities`. Nothing enforced the contract; the two production
 -- callbacks merely happen to read only.
 --
--- `readOnlyEntityContext` is that enforcement: a shell table whose OWN
--- storage stays permanently empty, reading through to `source` via
--- `__index` and raising on every write via `__newindex` (which fires for
--- every key precisely BECAUSE the shell is empty -- a metatable on a table
--- that already holds the keys could not protect them, which is what makes
--- the shell, rather than the source itself, the thing handed out).
+-- The isolation mechanism is an INDEPENDENT DEEP COPY per component
+-- (`applyAll` calls this once per apply). What a component does to the
+-- value it was handed cannot reach any other component, because no other
+-- component -- and not Haskell's own table -- shares any part of it.
 --
--- The wrap is RECURSIVE and lazy: `__index` returns a wrapped view of any
--- table value, so the nested `unit`/`building`/`unitPage` maps are covered
--- too -- protecting only outer-field assignment would leave the
--- `entities.unit[7] = nil` that motivated this issue wide open. It is keyed
--- off the value's type rather than off those three names, so a kind added
--- to `pushRestoredEntities` later is protected the day it appears.
--- `__pairs` iterates `source`'s real membership but yields values back
--- through `__index`, so iteration can neither miss an entry nor hand out a
--- raw subtable, and `__metatable` keeps the source unreachable via
--- `getmetatable`.
+-- A read-only metatable PROXY was tried first and rejected in review, for
+-- two reasons worth recording so it doesn't get reintroduced as a
+-- "cheaper" alternative:
 --
--- `applyAll` builds a FRESH view per component rather than sharing one.
--- The read-only guarantee alone already stops ordinary assignment, but a
--- `rawset` bypasses any `__newindex` -- and against one shared shell that
--- would plant a real key that shadows `__index` for every component after
--- it, which is exactly the cross-component leak this exists to close. A
--- per-component shell confines even that to the component that did it.
-local function readOnlyEntityContext(source, what)
+--   * It isn't actually isolated. A proxy has to close over the shared
+--     source to read through to it, and the stock `debug` library is
+--     loaded in this VM: `debug.getmetatable` sees through `__metatable`
+--     and `debug.getupvalue` then lifts the source straight out of the
+--     `__index` closure, at which point an apply can mutate the one table
+--     every later copy would be made from.
+--   * It isn't a transparent table. `next` is a primitive that ignores
+--     metatables entirely -- no `__pairs`, no `__index` -- so an ordinary
+--     `next(entities)` / `for k in next, entities.unit` walk sees an
+--     EMPTY context and silently concludes the restored session has no
+--     units. Handing components something that only behaves like a table
+--     under some of the standard idioms is its own correctness trap.
+--
+-- A plain table has neither problem: every table idiom works because it
+-- IS one, and there is nothing shared left to escape to. The cost is
+-- O(components x entities) table inserts once per load, which is
+-- negligible against everything else a load does.
+--
+-- `seen` makes the copy total rather than merely adequate for the shape
+-- Haskell currently pushes: shared subtables stay shared within one
+-- copy, and a cycle terminates instead of overflowing the stack.
+local function copyEntityContext(source, seen)
     if type(source) ~= "table" then return source end
-    local cache = {}
-    local view = setmetatable({}, {
-        __index = function(_, k)
-            local v = source[k]
-            if type(v) ~= "table" then return v end
-            local wrapped = cache[k]
-            if wrapped == nil then
-                wrapped = readOnlyEntityContext(v, what .. "." .. tostring(k))
-                cache[k] = wrapped
-            end
-            return wrapped
-        end,
-        __newindex = function(_, k)
-            error("saveModules: the restored-entity context is read-only "
-                .. "(attempted to write " .. what .. "." .. tostring(k)
-                .. ") -- an apply() must not change what Haskell's "
-                .. "authoritative entity set says to every other component",
-                2)
-        end,
-        __len = function() return #source end,
-        __pairs = function(self)
-            return function(_, k)
-                local nk = next(source, k)
-                if nk == nil then return nil end
-                return nk, self[nk]
-            end, self, nil
-        end,
-        __metatable = "saveModules restored-entity context (read-only)",
-    })
-    return view
+    seen = seen or {}
+    local existing = seen[source]
+    if existing ~= nil then return existing end
+    local out = {}
+    seen[source] = out
+    for k, v in pairs(source) do
+        out[k] = copyEntityContext(v, seen)
+    end
+    return out
 end
 
 -- Apply one component's per-entity ROWS into its live singleton, issue
@@ -1007,12 +992,11 @@ end
 -- the state the rollback exists to restore. A contextless apply() means
 -- "apply every row" precisely so that unwinding stays verbatim.
 --
--- Issue #1279 makes that context immutable per component
--- (`readOnlyEntityContext`), so what a component observes no longer
--- depends on apply order or on what the components before it did with
--- the value they were handed. A mutation attempt raises inside the
--- component's own pcall and is therefore reported as that component's
--- apply failure, with the same rollback as any other.
+-- Issue #1279 gives each component its OWN copy of that context
+-- (`copyEntityContext`), so what a component observes no longer depends
+-- on apply order or on what the components before it did with the value
+-- they were handed -- every one of them sees exactly the membership and
+-- owner pages Haskell supplied.
 function saveModules.applyAll()
     local prepared = saveModules._pendingApply
     if prepared == nil then
@@ -1097,13 +1081,11 @@ function saveModules.applyAll()
     local applied = {}
     for _, id in ipairs(applyOrder) do
         if prepared[id] ~= nil then
-            -- Issue #1279: a FRESH read-only view per component (nil stays
+            -- Issue #1279: a FRESH independent copy per component, so no
+            -- component can change what any other one observes (nil stays
             -- nil -- a contextless apply still means "apply every row").
-            -- The pcall around apply() is what routes a mutation attempt's
-            -- error through the ordinary per-component failure path below,
-            -- rollback and all, instead of escaping applyAll unprotected.
             local ok, err = pcall(saveModules.registry[id].apply, prepared[id],
-                                  readOnlyEntityContext(entities, "entities"))
+                                  copyEntityContext(entities))
             if not ok then
                 -- Round 5 review: `apply` is ordinary Lua code, not
                 -- guaranteed all-or-nothing -- it may have mutated

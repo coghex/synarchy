@@ -1571,13 +1571,14 @@ spec = do
     -- filters against -- making apply ORDER load-correctness-relevant and
     -- contradicting Haskell's authoritative KnownEntities. The production
     -- callbacks only read it, so this was latent; nothing enforced it.
+    --
+    -- The mechanism is an independent per-component COPY, so these cases
+    -- assert the observable guarantee (isolation) rather than a raise:
+    -- a component's mutations land on its own copy and reach nobody.
     describe "restored-entity context isolation (issue #1279)" $ do
         -- Sorts before the observer, so it applies FIRST -- the ordering
-        -- this whole block exists to make irrelevant.
-        -- The `entities == nil` guard is the ROLLBACK pass, which is
-        -- contextless by design (#900): without it every one of these
-        -- components would throw on its own restore too, turning a clean
-        -- abort into a ROLLBACK FAILED one and testing the wrong thing.
+        -- this whole block exists to make irrelevant. The `entities == nil`
+        -- guard is the ROLLBACK pass, contextless by design (#900).
         let mutatorSpec body = T.concat
                 [ "{ version=1, inputVersions={1}, required=true, "
                 , "scope='global', deps={},"
@@ -1591,31 +1592,24 @@ spec = do
 
         it "keeps a LATER component's view of membership and owner pages \
            \exactly as Haskell supplied it after an earlier component \
-           \attempts nested deletion, nested insertion, and an owner-page \
-           \rewrite -- and applyEntityRows still retains the present-owner \
-           \row while dropping the genuinely absent-owner one" $
+           \deletes, inserts, rewrites an owner page, rebinds an outer \
+           \field and rawsets -- and applyEntityRows still retains the \
+           \present-owner row while dropping the genuinely absent-owner one" $
             runsOk $ lns $
             [ "local saveModules = require('scripts.lib.save_modules')"
             , "local codec = require('scripts.lib.data_codec')"
             ] ⧺ captureWarnings ⧺
             [ "local live = {}"
             , "local seen = {}"
-            , "local attempts = {}"
-            -- Every write below is attempted through pcall so the mutator
-            -- itself SURVIVES: this case is about what the next component
-            -- observes, not about the raise (covered separately below).
+            -- Every write here SUCCEEDS -- on this component's own copy.
+            -- The point is that none of them is observable downstream.
             , "saveModules.register('iso_a_mutator', "
               <> mutatorSpec (T.concat
-                  [ "attempts.delete = pcall(function()"
-                  , "  entities.unit[7] = nil end);"
-                  , "attempts.insert = pcall(function()"
-                  , "  entities.unit[9] = true end);"
-                  , "attempts.page = pcall(function()"
-                  , "  entities.unitPage[7] = 'HIJACKED' end);"
-                  , "attempts.outer = pcall(function()"
-                  , "  entities.unit = {} end);"
-                  , "attempts.raw = pcall(function()"
-                  , "  rawset(entities, 'unit', {}) end)"
+                  [ "entities.unit[7] = nil;"
+                  , "entities.unit[9] = true;"
+                  , "entities.unitPage[7] = 'HIJACKED';"
+                  , "entities.building[1] = true;"
+                  , "rawset(entities, 'unit', { [999]=true })"
                   ]) <> ")"
             , "saveModules.register('iso_z_observer', { version=1, "
               <> "inputVersions={1}, required=true, scope='global', deps={},"
@@ -1625,7 +1619,9 @@ spec = do
             , "  apply=function(data, entities)"
             , "    seen.unit7 = entities.unit[7]"
             , "    seen.unit9 = entities.unit[9]"
+            , "    seen.unit999 = entities.unit[999]"
             , "    seen.page7 = entities.unitPage[7]"
+            , "    seen.building1 = entities.building[1]"
             , "    saveModules.applyEntityRows(live, data, entities,"
             , "      { kind='unit', component='iso_z_observer' })"
             , "  end })"
@@ -1638,69 +1634,80 @@ spec = do
             , "              unitPage = { [7]='alpha' } })"
             , "assert(prep.ok, tostring(prep.errors and prep.errors[1]))"
             , "saveModules.applyAll()"
-            , "assert(attempts.delete == false, 'deleting a nested "
-              <> "membership entry must be refused')"
-            , "assert(attempts.insert == false, 'inserting a nested "
-              <> "membership entry must be refused')"
-            , "assert(attempts.page == false, 'rewriting an owner page "
-              <> "must be refused')"
-            , "assert(attempts.outer == false, 'rebinding an outer field "
-              <> "must be refused')"
-            , "assert(seen.unit7 == true, 'the later component must still "
-              <> "see unit 7 present, got ' .. tostring(seen.unit7))"
-            , "assert(seen.unit9 == nil, 'the later component must still "
-              <> "see unit 9 absent, got ' .. tostring(seen.unit9))"
-            , "assert(seen.page7 == 'alpha', 'the later component must see "
-              <> "Haskell owner page, got ' .. tostring(seen.page7))"
+            , "assert(seen.unit7 == true, 'a deleted membership entry must "
+              <> "still be present downstream, got ' .. tostring(seen.unit7))"
+            , "assert(seen.unit9 == nil, 'an inserted membership entry must "
+              <> "not reach downstream, got ' .. tostring(seen.unit9))"
+            , "assert(seen.unit999 == nil, 'a rawset table must not reach "
+              <> "downstream, got ' .. tostring(seen.unit999))"
+            , "assert(seen.page7 == 'alpha', 'a rewritten owner page must "
+              <> "not reach downstream, got ' .. tostring(seen.page7))"
+            , "assert(seen.building1 == nil, 'a different kind is isolated "
+              <> "too, got ' .. tostring(seen.building1))"
             , "assert(live[7] ~= nil and live[7].tag == 'seven',"
             , "  'the present-owner row must still be retained')"
             , "assert(live[9] == nil, 'the absent-owner row must still be "
               <> "dropped -- an earlier insert must not have rescued it')"
+            , "assert(#warnings == 1, 'exactly one drop diagnostic, got '"
+            , "  .. #warnings)"
             ]
 
-        it "confines even a rawset -- which bypasses any __newindex -- to \
-           \the offending component's own view, because each component is \
-           \handed a fresh one rather than a single shared table" $
+        it "hands every component a table that shares NOTHING -- neither \
+           \with Haskell's own table nor with any sibling's copy -- so \
+           \there is no shared source left for a mutation to reach \
+           \through, by any route" $ runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local source = { unit = { [7]=true }, building = {},"
+            , "                 unitPage = { [7]='alpha' } }"
+            , "local got = {}"
+            , "saveModules.register('idn_a', "
+              <> mutatorSpec "got[#got + 1] = entities" <> ")"
+            , "saveModules.register('idn_b', "
+              <> mutatorSpec "got[#got + 1] = entities" <> ")"
+            , "local prep = saveModules.prepareLoad("
+            , "  { { id='idn_a', version=1, payload=codec.encode({}) },"
+            , "    { id='idn_b', version=1, payload=codec.encode({}) } },"
+            , "  1, false, source)"
+            , "assert(prep.ok)"
+            , "saveModules.applyAll()"
+            , "assert(#got == 2, 'both components must have applied')"
+            , "assert(got[1] ~= got[2], 'each component needs its OWN copy')"
+            , "assert(got[1] ~= source and got[2] ~= source,"
+            , "  'no component may receive Haskell own table')"
+            , "assert(got[1].unit ~= got[2].unit"
+            , "  and got[1].unit ~= source.unit,"
+            , "  'the NESTED maps must be copied too, not shared')"
+            , "assert(got[1].unitPage ~= got[2].unitPage"
+            , "  and got[1].unitPage ~= source.unitPage,"
+            , "  'every nested map, not just the ones named unit')"
+            , "-- The values themselves are still exactly Haskell answer."
+            , "assert(got[2].unit[7] == true and got[2].unitPage[7] == 'alpha')"
+            , "assert(source.unit[7] == true and source.unitPage[7] == 'alpha',"
+            , "  'the source itself must come through untouched')"
+            ]
+
+        it "is an ORDINARY table under every standard idiom -- next, pairs \
+           \and getmetatable included -- so a component using raw iteration \
+           \cannot silently conclude the restored session is empty" $
             runsOk $ lns
             [ "local saveModules = require('scripts.lib.save_modules')"
             , "local codec = require('scripts.lib.data_codec')"
             , "local seen = {}"
-            , "saveModules.register('raw_a_mutator', "
-              <> mutatorSpec "rawset(entities, 'unit', { [999]=true })" <> ")"
-            , "saveModules.register('raw_z_observer', "
-              <> mutatorSpec (T.concat
-                  [ "seen.unit7 = entities.unit[7];"
-                  , "seen.unit999 = entities.unit[999]"
-                  ]) <> ")"
-            , "local prep = saveModules.prepareLoad("
-            , "  { { id='raw_a_mutator', version=1, payload=codec.encode({}) },"
-            , "    { id='raw_z_observer', version=1, payload=codec.encode({}) } },"
-            , "  1, false, { unit = { [7]=true }, building = {} })"
-            , "assert(prep.ok)"
-            , "saveModules.applyAll()"
-            , "assert(seen.unit7 == true, 'the observer must still see "
-              <> "Haskell membership, got ' .. tostring(seen.unit7))"
-            , "assert(seen.unit999 == nil, 'a rawset shell key must not "
-              <> "reach the next component')"
-            ]
-
-        it "iterates real membership and yields protected values, so a \
-           \component walking the context with pairs() can neither miss an \
-           \entry nor obtain a writable subtable" $ runsOk $ lns
-            [ "local saveModules = require('scripts.lib.save_modules')"
-            , "local codec = require('scripts.lib.data_codec')"
-            , "local seen = {}"
+            -- `next` is a primitive: it consults no metatable at all, so a
+            -- proxy shell would report an EMPTY context here.
             , "saveModules.register('iter_probe', "
               <> mutatorSpec (T.concat
-                  [ "seen.outer = 0;"
-                  , "for k, v in pairs(entities) do"
-                  , "  seen.outer = seen.outer + 1;"
-                  , "  seen[k] = v end;"
+                  [ "seen.nextOuter = (next(entities) ~= nil);"
+                  , "seen.nextUnit = (next(entities.unit) ~= nil);"
+                  , "seen.rawUnit7 = rawget(entities.unit, 7);"
+                  , "seen.meta = getmetatable(entities);"
+                  , "seen.outer = 0;"
+                  , "for _ in pairs(entities) do"
+                  , "  seen.outer = seen.outer + 1 end;"
                   , "seen.units = {};"
-                  , "for uid in pairs(entities.unit) do"
-                  , "  seen.units[#seen.units + 1] = uid end;"
-                  , "seen.wrote = pcall(function()"
-                  , "  seen.unit[7] = nil end)"
+                  , "for uid in next, entities.unit do"
+                  , "  seen.units[#seen.units + 1] = uid end"
                   ]) <> ")"
             , "local prep = saveModules.prepareLoad("
             , "  { { id='iter_probe', version=1, payload=codec.encode({}) } },"
@@ -1708,12 +1715,16 @@ spec = do
             , "              unitPage = { [7]='alpha' } })"
             , "assert(prep.ok)"
             , "saveModules.applyAll()"
+            , "assert(seen.nextOuter, 'next(entities) must see the context')"
+            , "assert(seen.nextUnit, 'next(entities.unit) must see the "
+              <> "restored membership -- a metatable-only view would not')"
+            , "assert(seen.rawUnit7 == true, 'rawget must find real storage')"
+            , "assert(seen.meta == nil, 'a plain table carries no metatable, "
+              <> "so there is nothing for debug.getmetatable to reach into')"
             , "assert(seen.outer == 3, 'pairs() must yield every kind "
               <> "Haskell supplied, got ' .. tostring(seen.outer))"
             , "assert(#seen.units == 1 and seen.units[1] == 7,"
-            , "  'pairs() over a nested map must yield its real membership')"
-            , "assert(seen.wrote == false, 'a subtable obtained by "
-              <> "iteration must be protected too')"
+            , "  'raw iteration over a nested map must yield its membership')"
             ]
 
         it "leaves the two documented compatibility semantics untouched: a \
@@ -1742,95 +1753,6 @@ spec = do
             , "saveModules.applyAll()"
             , "assert(liveEmpty[7] == nil, 'an empty per-kind set is a real "
               <> "answer and must still filter')"
-            ]
-
-        -- Requirement 2: an UNPROTECTED mutation (no pcall of the
-        -- component's own) must not escape applyAll as a raw Lua error --
-        -- it is that component's apply failure, with the ordinary rollback
-        -- and the ordinary component-specific reporting, all the way out
-        -- through the real Haskell bridge.
-        it "reports an unguarded mutation as that component's own apply \
-           \failure -- rolled back, bookkeeping cleared, and surfaced \
-           \through applyLuaLoad like any other apply error" $ do
-            result ← applyViaBridge $ lns
-                [ "local saveModules = require('scripts.lib.save_modules')"
-                , "local codec = require('scripts.lib.data_codec')"
-                , "_G.live = {}"
-                , "saveModules.register('iso_bridge_a', { version=1,"
-                , "  inputVersions={1}, required=true, scope='global', deps={},"
-                , "  snapshot=function()"
-                , "    local o = {}"
-                , "    for k, v in pairs(_G.live) do o[k] = v end"
-                , "    return o end,"
-                , "  decode=function(v,d) return d end,"
-                , "  validate=function() return nil end,"
-                , "  apply=function(data, entities)"
-                , "    saveModules.applyEntityRows(_G.live, data, entities,"
-                , "      { kind='unit', component='iso_bridge_a' })"
-                , "  end })"
-                , "_G.live[42] = { tag='preload' }"
-                , "saveModules.register('iso_bridge_z_mutates', { version=1,"
-                , "  inputVersions={1}, required=true, scope='global', deps={},"
-                , "  snapshot=function() return {} end,"
-                , "  decode=function(v,d) return d end,"
-                , "  validate=function() return nil end,"
-                , "  -- No pcall around the write: the raise must be caught"
-                , "  -- at the COMPONENT boundary, not escape applyAll. The"
-                , "  -- nil guard is only the contextless ROLLBACK pass, so"
-                , "  -- this component's own restore stays clean."
-                , "  apply=function(data, entities)"
-                , "    if entities == nil then return end"
-                , "    entities.unit[7] = nil end })"
-                , "assert(saveModules.prepareLoad("
-                , "  { { id='iso_bridge_a', version=1,"
-                , "      payload=codec.encode({ [7]={tag='seven'} }) },"
-                , "    { id='iso_bridge_z_mutates', version=1,"
-                , "      payload=codec.encode({}) } },"
-                , "  1, false, { unit = { [7]=true }, building = {} }).ok)"
-                ]
-            case result of
-                Right () → expectationFailure
-                    "expected the unguarded mutation to fail the load"
-                Left err → do
-                    T.unpack err `shouldContain` "read-only"
-                    T.unpack err `shouldContain` "iso_bridge_z_mutates"
-                    T.unpack err `shouldContain`
-                        "rolled back every already-applied component"
-                    T.unpack err `shouldNotContain` "ROLLBACK FAILED"
-
-        it "restores the earlier component and CLEARS the transaction \
-           \bookkeeping after that failure, so the aborted load leaves \
-           \nothing pending and a later prepareLoad still works" $
-            runsOk $ lns
-            [ "local saveModules = require('scripts.lib.save_modules')"
-            , "local codec = require('scripts.lib.data_codec')"
-            , "local live = { [42] = { tag='preload' } }"
-            , "saveModules.register('bk_a', "
-              <> perEntitySpec "bk_a" "live" <> ")"
-            , "saveModules.register('bk_z_mutates', "
-              <> mutatorSpec "entities.unit[7] = nil" <> ")"
-            , "local prep = saveModules.prepareLoad("
-            , "  { { id='bk_a', version=1,"
-            , "      payload=codec.encode({ [7]={tag='seven'} }) },"
-            , "    { id='bk_z_mutates', version=1, payload=codec.encode({}) } },"
-            , "  1, false, { unit = { [7]=true }, building = {} })"
-            , "assert(prep.ok)"
-            , "local ok, err = pcall(saveModules.applyAll)"
-            , "assert(not ok, 'the mutation must abort the apply')"
-            , "assert(tostring(err):find('read-only', 1, true) ~= nil,"
-            , "  'the diagnostic must name the cause: ' .. tostring(err))"
-            , "assert(live[42] ~= nil and live[42].tag == 'preload',"
-            , "  'the earlier component must be rolled back verbatim')"
-            , "assert(live[7] == nil, 'the rolled-back component must not "
-              <> "retain the new session row')"
-            , "assert(saveModules._pendingApply == nil"
-            , "  and saveModules._pendingRequestId == nil"
-            , "  and saveModules._pendingEntities == nil"
-            , "  and saveModules._loadActive == false,"
-            , "  'the aborted transaction must leave nothing pending')"
-            , "-- _loadActive cleared means register() works again."
-            , "saveModules.register('bk_after', "
-              <> perEntitySpec "bk_after" "live" <> ")"
             ]
 
     describe "unit_ai save component (issue #761 requirements 13/14)" $ do
