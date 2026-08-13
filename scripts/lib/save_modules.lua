@@ -786,6 +786,74 @@ function saveModules.abortPreparedLoad(requestId)
     saveModules._loadActive = false
 end
 
+-- Issue #1279: #900 promised every apply() "a read-only restored-entity
+-- context", but what it handed out was the single mutable table Haskell
+-- pushed, shared by every component in dependency order. `applyEntityRows`
+-- below TRUSTS the per-kind subtable for its absent-owner filtering, so an
+-- earlier component that deleted or rewrote an entry changed which rows
+-- every LATER component kept, dropped, or misassigned -- apply order became
+-- load-correctness-relevant, contradicting Haskell's authoritative
+-- `KnownEntities`. Nothing enforced the contract; the two production
+-- callbacks merely happen to read only.
+--
+-- `readOnlyEntityContext` is that enforcement: a shell table whose OWN
+-- storage stays permanently empty, reading through to `source` via
+-- `__index` and raising on every write via `__newindex` (which fires for
+-- every key precisely BECAUSE the shell is empty -- a metatable on a table
+-- that already holds the keys could not protect them, which is what makes
+-- the shell, rather than the source itself, the thing handed out).
+--
+-- The wrap is RECURSIVE and lazy: `__index` returns a wrapped view of any
+-- table value, so the nested `unit`/`building`/`unitPage` maps are covered
+-- too -- protecting only outer-field assignment would leave the
+-- `entities.unit[7] = nil` that motivated this issue wide open. It is keyed
+-- off the value's type rather than off those three names, so a kind added
+-- to `pushRestoredEntities` later is protected the day it appears.
+-- `__pairs` iterates `source`'s real membership but yields values back
+-- through `__index`, so iteration can neither miss an entry nor hand out a
+-- raw subtable, and `__metatable` keeps the source unreachable via
+-- `getmetatable`.
+--
+-- `applyAll` builds a FRESH view per component rather than sharing one.
+-- The read-only guarantee alone already stops ordinary assignment, but a
+-- `rawset` bypasses any `__newindex` -- and against one shared shell that
+-- would plant a real key that shadows `__index` for every component after
+-- it, which is exactly the cross-component leak this exists to close. A
+-- per-component shell confines even that to the component that did it.
+local function readOnlyEntityContext(source, what)
+    if type(source) ~= "table" then return source end
+    local cache = {}
+    local view = setmetatable({}, {
+        __index = function(_, k)
+            local v = source[k]
+            if type(v) ~= "table" then return v end
+            local wrapped = cache[k]
+            if wrapped == nil then
+                wrapped = readOnlyEntityContext(v, what .. "." .. tostring(k))
+                cache[k] = wrapped
+            end
+            return wrapped
+        end,
+        __newindex = function(_, k)
+            error("saveModules: the restored-entity context is read-only "
+                .. "(attempted to write " .. what .. "." .. tostring(k)
+                .. ") -- an apply() must not change what Haskell's "
+                .. "authoritative entity set says to every other component",
+                2)
+        end,
+        __len = function() return #source end,
+        __pairs = function(self)
+            return function(_, k)
+                local nk = next(source, k)
+                if nk == nil then return nil end
+                return nk, self[nk]
+            end, self, nil
+        end,
+        __metatable = "saveModules restored-entity context (read-only)",
+    })
+    return view
+end
+
 -- Apply one component's per-entity ROWS into its live singleton, issue
 -- #900's replacement for the whole-singleton clobber every per-entity
 -- component used to open its apply() with.
@@ -938,6 +1006,13 @@ end
 -- absent from the RESTORED context, so filtering it would erase exactly
 -- the state the rollback exists to restore. A contextless apply() means
 -- "apply every row" precisely so that unwinding stays verbatim.
+--
+-- Issue #1279 makes that context immutable per component
+-- (`readOnlyEntityContext`), so what a component observes no longer
+-- depends on apply order or on what the components before it did with
+-- the value they were handed. A mutation attempt raises inside the
+-- component's own pcall and is therefore reported as that component's
+-- apply failure, with the same rollback as any other.
 function saveModules.applyAll()
     local prepared = saveModules._pendingApply
     if prepared == nil then
@@ -1022,8 +1097,13 @@ function saveModules.applyAll()
     local applied = {}
     for _, id in ipairs(applyOrder) do
         if prepared[id] ~= nil then
+            -- Issue #1279: a FRESH read-only view per component (nil stays
+            -- nil -- a contextless apply still means "apply every row").
+            -- The pcall around apply() is what routes a mutation attempt's
+            -- error through the ordinary per-component failure path below,
+            -- rollback and all, instead of escaping applyAll unprotected.
             local ok, err = pcall(saveModules.registry[id].apply, prepared[id],
-                                  entities)
+                                  readOnlyEntityContext(entities, "entities"))
             if not ok then
                 -- Round 5 review: `apply` is ordinary Lua code, not
                 -- guaranteed all-or-nothing -- it may have mutated
