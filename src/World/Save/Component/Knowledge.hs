@@ -99,14 +99,40 @@ newtype ContainerKnowledgeDTO =
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
+-- | The fault in a remembered scalar, or 'Nothing' when it is a
+--   finite, non-negative number.
+--
+--   Ordered so a non-finite value is never described as "negative":
+--   @NaN@ makes every ordered comparison false, and @-Infinity@ IS
+--   @< 0@ while being wrong for a reason a reader needs told exactly
+--   ("infinite", not "negative"). The result is the adjective phrase
+--   the diagnostic reads with, so the finite-negative message is
+--   character-for-character what it always was.
+scalarFault ∷ RealFloat a ⇒ a → Maybe Text
+scalarFault v
+    | isNaN v      = Just "a not-a-number"
+    | isInfinite v = Just "an infinite"
+    | v < 0        = Just "a negative"
+    | otherwise    = Nothing
+
 -- | Component-local invariants. Deliberately narrow — the two things
 --   that can only ever be corruption:
 --
---     * a negative remembered weight (mass is non-negative; the measure
---       that produces it, 'Item.Types.itemTotalWeight', sums
---       non-negative terms), and
---     * a negative reveal time (game-time seconds start at 0 and only
---       advance).
+--     * a remembered weight that is not a finite, non-negative number
+--       (mass is non-negative and finite; the measure that produces
+--       it, 'Item.Types.itemTotalWeight', sums finitely many
+--       non-negative finite terms), and
+--     * a reveal time that is not a finite, non-negative number
+--       (game-time seconds start at 0 and only advance by finite
+--       steps).
+--
+--   Both checks were once a bare @< 0@, which let a structurally
+--   decodable @NaN@ or @+Infinity@ through into the restored knowledge
+--   map and out to Lua as a plain number (#1278) — every ordered
+--   comparison against @NaN@ is false, and @+Infinity@ is not @< 0@.
+--   Neither value is producible by a real observation, so both are the
+--   present-but-malformed payload @docs\/persistence_contract.md@ §5
+--   requires the all-or-nothing load to reject.
 --
 --   Deliberately NOT checked: whether a remembered record's
 --   'BuildingId' still resolves to a live building. A demolished
@@ -122,15 +148,15 @@ newtype ContainerKnowledgeDTO =
 validateContainerKnowledge ∷ ContainerKnowledgeDTO → [ComponentError]
 validateContainerKnowledge (ContainerKnowledgeDTO slices) = concat
     [ [ err ("page '" <> tshow (pckPageId s) <> "': container #"
-             <> tshow (unBuildingId bid) <> " has a negative remembered \
-                \weight (" <> tshow (crdStoredWeight r) <> ")")
+             <> tshow (unBuildingId bid) <> " has " <> fault
+             <> " remembered weight (" <> tshow (crdStoredWeight r) <> ")")
       | s ← slices, (bid, r) ← HM.toList (pckRecords s)
-      , crdStoredWeight r < 0 ]
+      , Just fault ← [scalarFault (crdStoredWeight r)] ]
     , [ err ("page '" <> tshow (pckPageId s) <> "': container #"
-             <> tshow (unBuildingId bid) <> " has a negative reveal time ("
-             <> tshow (crdRevealedAt r) <> ")")
+             <> tshow (unBuildingId bid) <> " has " <> fault
+             <> " reveal time (" <> tshow (crdRevealedAt r) <> ")")
       | s ← slices, (bid, r) ← HM.toList (pckRecords s)
-      , crdRevealedAt r < 0 ]
+      , Just fault ← [scalarFault (crdRevealedAt r)] ]
     ]
   where err = ComponentError containerKnowledgeComponentId 1 ValidatePhase
 
