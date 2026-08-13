@@ -106,13 +106,16 @@ The foundations landed; the interaction layer did not, and was never filed.
   "Store in \<cargo\>" (`scripts/unit_info_v2_context_menu.lua:234`) and
   "Withdraw with \<unit\>" (`scripts/cargo_inventory_panel.lua:436`). #1013
   removes each only once its replacement exists.
-- **B1's single-unit rule is unfinished work that the code now defends.**
-  `scripts/transfer_session.lua:158` still reads
-  `if not selectedUids or #selectedUids ~= 1 then return nil end`, and the
-  comment at `:155-156` asserts that behavior as intended — *"Transfer is
-  OMITTED rather than disabled for a multi-unit selection."* That directly
-  contradicts D-8, which #1013 signed off and which explicitly supersedes it.
-  See D-11.
+- **B1's single-unit rule is gone (UIT-3A, #1239, landed).**
+  `scripts/transfer_session.lua`'s `resolveSource` now implements D-8's
+  nearest-of-N: a multi-unit selection is allowed, the nearest eligible
+  candidate to the endpoint's own `gridX`/`gridY` becomes the source, exact
+  distance ties break on lowest uid, and distance is measured in the target's
+  local u-alias frame (`world.localizeTile`, #1175). Zero eligible candidates
+  still omits "Transfer" rather than disabling it. The comments in
+  `transfer_session.lua` and both `init_context_menu.lua` call sites that
+  asserted the single-unit rule as intended were corrected with it. See D-11
+  for why that comment was misleading rather than authoritative.
 
 ## Desired experience
 
