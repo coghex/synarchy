@@ -19,6 +19,8 @@ import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
+import qualified Data.Serialize as S
+import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
 import Building.Knowledge
@@ -38,8 +40,13 @@ import Unit.Types
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
 import World.Save.Component (componentKnownIds)
+import World.Save.Component.Knowledge
+    ( ContainerKnowledgeDTO(..), PageContainerKnowledgeDTO(..)
+    , ContainerRecordDTO(..), containerKnowledgeCodec )
 import World.Save.Component.Page (blankPageSnapshot)
-import World.Save.Component.Types (metadataComponentId)
+import World.Save.Component.Types
+    ( ComponentCodec(..), ComponentError(..), ComponentPhase(..)
+    , containerKnowledgeComponentId, metadataComponentId )
 import World.Save.Envelope (encodeSessionSnapshot, decodeSessionEnvelope)
 import World.Save.Envelope.Codec
     (DecodedEnvelope(..), decodeEnvelope, encodeEnvelope)
@@ -309,6 +316,63 @@ decodeFor bytes =
 
 knowledgeComponentId ∷ ComponentId
 knowledgeComponentId = ComponentId "container-knowledge"
+
+-- | One decodable container-knowledge payload carrying exactly one
+--   record, so a scalar can be set to any bit pattern cereal will
+--   happily round-trip. This is the shape the byte-stream corruption
+--   case above can NOT produce: these bytes decode perfectly, and only
+--   'ccValidate' stands between them and the restored knowledge map.
+knowledgeDTOWith ∷ Float → Double → ContainerKnowledgeDTO
+knowledgeDTOWith weight revealedAt = ContainerKnowledgeDTO
+    [ PageContainerKnowledgeDTO pageA $ HM.singleton (BuildingId 6)
+        ContainerRecordDTO { crdItems        = []
+                           , crdStoredWeight = weight
+                           , crdRevealedAt   = revealedAt } ]
+
+-- | The component's own validator, run on that payload.
+faultsFor ∷ Float → Double → [ComponentError]
+faultsFor weight revealedAt =
+    ccValidate containerKnowledgeCodec (knowledgeDTOWith weight revealedAt)
+
+-- | The single error the validator must produce, or a failure naming
+--   what it produced instead. Every invalid case asserts the structured
+--   identity, not just that something was rejected.
+theFault ∷ Float → Double → IO ComponentError
+theFault weight revealedAt = case faultsFor weight revealedAt of
+    [e] → do
+        ceComponent e `shouldBe` containerKnowledgeComponentId
+        ceVersion   e `shouldBe` 1
+        cePhase     e `shouldBe` ValidatePhase
+        -- The page and container are named, so a diagnostic points at
+        -- the offending record rather than at the component.
+        ceMessage e `shouldSatisfy` T.isInfixOf "knowledge_page_a"
+        ceMessage e `shouldSatisfy` T.isInfixOf "container #6"
+        pure e
+    other → do
+        expectationFailure
+            ("expected exactly one validation error, got: " <> show other)
+        pure (ComponentError knowledgeComponentId 1 ValidatePhase "")
+
+-- | An envelope whose container-knowledge payload is replaced by a
+--   STRUCTURALLY VALID encoding of the given record — the real
+--   'decodeSessionEnvelope' path, not 'ccValidate' in isolation.
+envelopeWith ∷ Float → Double → BS.ByteString
+envelopeWith weight revealedAt = rewriteComponents
+    (\cid raw → Just (if cid ≡ knowledgeComponentId
+                        then S.encode (knowledgeDTOWith weight revealedAt)
+                        else raw))
+    (encodeFor knowledgeSnapshot)
+
+-- | That envelope must fail at the component's own validate phase,
+--   yielding no 'SessionSnapshot' at all.
+expectEnvelopeRejected ∷ Text → BS.ByteString → IO ()
+expectEnvelopeRejected fault bytes = case decodeFor bytes of
+    Right _  → expectationFailure
+        "a decodable non-finite container-knowledge payload loaded anyway"
+    Left err → do
+        err `shouldSatisfy`
+            T.isInfixOf "[container-knowledge v1 ValidatePhase]"
+        err `shouldSatisfy` T.isInfixOf fault
 
 -- | Rewrite an envelope's component set: drop the container-knowledge
 --   component entirely (the pre-A3 save shape) or replace its payload
@@ -800,3 +864,74 @@ spec = describe "Container knowledge" $ do
                     (HS.fromList ["bandage"]) pages
             withAll `shouldBe` []
             length withoutKit `shouldBe` 1
+
+    -- #1278. Both scalars were once checked with a bare `< 0`, and a
+    -- bare `< 0` is not a finiteness check: every ordered comparison
+    -- against NaN is false, and +Infinity is not `< 0`. Neither value
+    -- is producible by a real observation (both are derived from
+    -- finite engine state), so both are the present-but-malformed
+    -- payload docs/persistence_contract.md §5 makes fatal. The
+    -- byte-stream corruption case above cannot reach this: these
+    -- payloads decode perfectly.
+    describe "non-finite remembered scalars" $ do
+
+        it "a NaN remembered weight is rejected -- and is NOT reported \
+           \as negative, which it is not" $ do
+            e ← theFault (0/0) 900
+            ceMessage e `shouldSatisfy`
+                T.isInfixOf "a not-a-number remembered weight"
+            ceMessage e `shouldNotSatisfy` T.isInfixOf "negative"
+
+        it "an infinite remembered weight is rejected, in both signs, \
+           \and neither is reported as negative" $ do
+            plus ← theFault (1/0) 900
+            ceMessage plus `shouldSatisfy`
+                T.isInfixOf "an infinite remembered weight"
+            ceMessage plus `shouldNotSatisfy` T.isInfixOf "negative"
+            minus ← theFault (-1/0) 900
+            ceMessage minus `shouldSatisfy`
+                T.isInfixOf "an infinite remembered weight"
+            ceMessage minus `shouldNotSatisfy` T.isInfixOf "negative"
+
+        it "a finite negative remembered weight is still rejected, with \
+           \the message it always had" $ do
+            e ← theFault (-1.5) 900
+            ceMessage e `shouldSatisfy`
+                T.isInfixOf "a negative remembered weight (-1.5)"
+
+        it "a NaN reveal time is rejected -- and is NOT reported as \
+           \negative" $ do
+            e ← theFault 4.05 (0/0)
+            ceMessage e `shouldSatisfy` T.isInfixOf "a not-a-number reveal time"
+            ceMessage e `shouldNotSatisfy` T.isInfixOf "negative"
+
+        it "an infinite reveal time is rejected, in both signs, and \
+           \neither is reported as negative" $ do
+            plus ← theFault 4.05 (1/0)
+            ceMessage plus `shouldSatisfy` T.isInfixOf "an infinite reveal time"
+            ceMessage plus `shouldNotSatisfy` T.isInfixOf "negative"
+            minus ← theFault 4.05 (-1/0)
+            ceMessage minus `shouldSatisfy` T.isInfixOf "an infinite reveal time"
+            ceMessage minus `shouldNotSatisfy` T.isInfixOf "negative"
+
+        it "a finite negative reveal time is still rejected, with the \
+           \message it always had" $ do
+            e ← theFault 4.05 (-1.0)
+            ceMessage e `shouldSatisfy`
+                T.isInfixOf "a negative reveal time (-1.0)"
+
+        it "a finite, non-negative observation is accepted -- zero and \
+           \positive alike, so tightening the check rejected nothing a \
+           \real reveal can produce" $ do
+            faultsFor 0 0 `shouldBe` []
+            faultsFor 4.05 950.25 `shouldBe` []
+
+        it "a decodable NaN weight fails the REAL envelope path at the \
+           \container-knowledge validate phase, yielding no snapshot" $
+            expectEnvelopeRejected "a not-a-number remembered weight"
+                                   (envelopeWith (0/0) 900)
+
+        it "a decodable infinite reveal time fails the REAL envelope \
+           \path the same way" $
+            expectEnvelopeRejected "an infinite reveal time"
+                                   (envelopeWith 4.05 (1/0))
