@@ -85,16 +85,161 @@ spec = describe "Transfer context menu" $ do
             labels `shouldSatisfy` T.isInfixOf "Contents"
             labels `shouldNotSatisfy` T.isInfixOf "Transfer"
 
-        it "multiple selected sources -> no silent source choice (Transfer omitted)" $ \env → do
+        -- #1239 (D-8, superseding #1014's rule via D-11): a multi-unit
+        -- selection is no longer refused -- the NEAREST eligible unit
+        -- becomes the source. The farther unit is listed FIRST and
+        -- carries the LOWER uid, so neither "first in selection order"
+        -- nor "lowest uid" could produce the right answer by accident.
+        it "multiple selected sources -> Transfer appears and the NEAREST is the source" $ \env → do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
             run ls (buildingStub 505 "built" 200 [] <> selectedStub [7, 8]
-                    <> endpointInfoStub "building" 505 True "Cargo Hold")
+                    <> unitInfoStub [(7, (10, 25)), (8, (10, 22))]
+                    <> endpointInfoStubAt "building" 505 True "Cargo Hold" (10, 20))
+            claimed ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
+            claimed `shouldBe` "true"
+            labels ← capturedLabels ls
+            labels `shouldSatisfy` T.isInfixOf "Contents"
+            labels `shouldSatisfy` T.isInfixOf "Transfer"
+            -- Requirement 4 / review: assert the SESSION's source, not
+            -- just the resolver, by driving the menu's own callback.
+            invoke ← evalDebug ls "_G.__transferCallback(); return 'ok'"
+            invoke `shouldNotSatisfy` isLuaError
+            sess ← decodeOr =<< evalDebug ls "return require('scripts.transfer_session').get()"
+            spSourceId sess `shouldBe` 8
+
+        it "an exact distance tie resolves to the LOWEST uid, not selection order" $ \env → do
+            -- The higher uid is listed FIRST and both sit at squared
+            -- distance 4, so a "first candidate wins" comparison (the
+            -- '#920 Pick up' precedent's own gap) would answer 9.
+            -- unit.getSelected converts a HashSet, so selection order
+            -- is not contractual and this tiebreak is what stops two
+            -- equidistant acolytes from racing (D-8).
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (buildingStub 516 "built" 200 [] <> selectedStub [9, 4]
+                    <> unitInfoStub [(9, (10, 22)), (4, (10, 18))]
+                    <> endpointInfoStubAt "building" 516 True "Cargo Hold" (10, 20))
+            claimed ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
+            claimed `shouldBe` "true"
+            _ ← evalDebug ls "_G.__transferCallback(); return 'ok'"
+            sess ← decodeOr =<< evalDebug ls "return require('scripts.transfer_session').get()"
+            spSourceId sess `shouldBe` 4
+
+            -- ...and the OTHER input order answers identically, which
+            -- is the whole point of not trusting HashSet iteration.
+            run ls (selectedStub [4, 9])
+            _ ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
+            _ ← evalDebug ls "_G.__transferCallback(); return 'ok'"
+            sess2 ← decodeOr =<< evalDebug ls "return require('scripts.transfer_session').get()"
+            spSourceId sess2 `shouldBe` 4
+
+        it "a non-commandable selected unit is skipped even when it is the CLOSEST" $ \env → do
+            -- Filtering must precede ranking: uid 5 is adjacent to the
+            -- endpoint but wildlife, uid 6 is five tiles out but
+            -- player-commandable. Ranking first would answer 5.
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (buildingStub 517 "built" 200 [] <> selectedStub [5, 6]
+                    <> unitInfoStub [(5, (10, 21)), (6, (10, 25))]
+                    <> unitFactionStub [(5, "wildlife"), (6, "player")]
+                    <> endpointInfoStubAt "building" 517 True "Cargo Hold" (10, 20))
+            claimed ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
+            claimed `shouldBe` "true"
+            labels ← capturedLabels ls
+            labels `shouldSatisfy` T.isInfixOf "Transfer"
+            _ ← evalDebug ls "_G.__transferCallback(); return 'ok'"
+            sess ← decodeOr =<< evalDebug ls "return require('scripts.transfer_session').get()"
+            spSourceId sess `shouldBe` 6
+
+        it "a selection of ONLY non-commandable units still omits Transfer (never a disabled row)" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (buildingStub 518 "built" 200 [] <> selectedStub [5, 6]
+                    <> unitInfoStub [(5, (10, 21)), (6, (10, 25))]
+                    <> unitFactionStub [(5, "wildlife"), (6, "wildlife")]
+                    <> endpointInfoStubAt "building" 518 True "Cargo Hold" (10, 20))
             claimed ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
             claimed `shouldBe` "true"
             labels ← capturedLabels ls
             labels `shouldSatisfy` T.isInfixOf "Contents"
             labels `shouldNotSatisfy` T.isInfixOf "Transfer"
+
+        it "a selected uid whose live position or faction vanished is skipped, not fatal" $ \env → do
+            -- unit.getSelected filters live ids, but a Lua read a
+            -- moment later can still observe a deletion. uid 3 would
+            -- have been nearest but has no live info; uid 11 has info
+            -- but no live faction; uid 12 survives and must be chosen
+            -- without any arithmetic/indexing error.
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (buildingStub 519 "built" 200 [] <> selectedStub [3, 11, 12]
+                    <> unitInfoStub [(11, (10, 21)), (12, (10, 26))]
+                    <> unitFactionStub [(3, "player"), (12, "player")]
+                    <> endpointInfoStubAt "building" 519 True "Cargo Hold" (10, 20))
+            claimed ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
+            claimed `shouldNotSatisfy` isLuaError
+            claimed `shouldBe` "true"
+            labels ← capturedLabels ls
+            labels `shouldSatisfy` T.isInfixOf "Transfer"
+            _ ← evalDebug ls "_G.__transferCallback(); return 'ok'"
+            sess ← decodeOr =<< evalDebug ls "return require('scripts.transfer_session').get()"
+            spSourceId sess `shouldBe` 12
+
+        it "every selected uid vanishing leaves zero candidates -> Transfer omitted, no error" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (buildingStub 520 "built" 200 [] <> selectedStub [3, 11]
+                    <> unitInfoStub [] <> unitFactionStub []
+                    <> endpointInfoStubAt "building" 520 True "Cargo Hold" (10, 20))
+            claimed ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
+            claimed `shouldNotSatisfy` isLuaError
+            claimed `shouldBe` "true"
+            labels ← capturedLabels ls
+            labels `shouldSatisfy` T.isInfixOf "Contents"
+            labels `shouldNotSatisfy` T.isInfixOf "Transfer"
+
+        it "distance is measured in the TARGET's local alias frame, so a seam-adjacent unit wins" $ \env → do
+            -- Requirement 3 (#1175's selection-gate rule), kept
+            -- self-contained: a --match run initializes no world, and
+            -- the real world.localizeTile is identity with none
+            -- visible, so this installs a faithful seam-aware stub for
+            -- a wrapping world (alias step 128 tiles) instead.
+            --
+            -- uid 20 sits at canonical (131, -126) -- one alias step
+            -- away from (3, 2), i.e. physically ONE tile from the
+            -- endpoint at (2, 2). uid 10 sits at (7, 2), genuinely
+            -- five tiles out. In raw canonical coords uid 20 measures a
+            -- whole world away, so a seam-blind ranking answers 10 --
+            -- and 10 is also the lower uid, so the tiebreak cannot
+            -- rescue it either.
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (seamLocalizeStub 128)
+            run ls (buildingStub 521 "built" 200 [] <> selectedStub [10, 20]
+                    <> unitInfoStub [(10, (7, 2)), (20, (131, -126))]
+                    <> endpointInfoStubAt "building" 521 True "Cargo Hold" (2, 2))
+            claimed ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
+            claimed `shouldBe` "true"
+            _ ← evalDebug ls "_G.__transferCallback(); return 'ok'"
+            sess ← decodeOr =<< evalDebug ls "return require('scripts.transfer_session').get()"
+            spSourceId sess `shouldBe` 20
+
+            -- Argument ORIENTATION: the anchor defining the frame is
+            -- the TARGET endpoint on every call, and the re-expressed
+            -- coord is the CANDIDATE. Swapping the pairs would localize
+            -- the target into each unit's frame instead, which is a
+            -- different (and wrong) question.
+            anchors ← evalDebug ls (T.concat
+                [ "local s = {}; for _, c in ipairs(_G.__localizeCalls) do "
+                , "s[#s+1] = string.format('%d:%d', c.ax, c.ay) end; "
+                , "return table.concat(s, ',')" ])
+            anchors `shouldBe` "\"2:2,2:2\""
+            tiles ← evalDebug ls (T.concat
+                [ "local s = {}; for _, c in ipairs(_G.__localizeCalls) do "
+                , "s[#s+1] = string.format('%d:%d', c.gx, c.gy) end; "
+                , "table.sort(s); return table.concat(s, ',')" ])
+            tiles `shouldBe` "\"131:-126,7:2\""
 
         it "the eligibility query, not building.getStorageCapacity, decides Transfer (no policy duplication)" $ \env → do
             -- #1014 review's discriminating test: a positive storage
@@ -154,6 +299,29 @@ spec = describe "Transfer context menu" $ do
             claimed `shouldBe` "true"
             labels ← capturedLabels ls
             labels `shouldNotSatisfy` T.isInfixOf "Transfer"
+
+        -- #1239 requirement 4: the unit-target path gets nearest-of-N
+        -- too, and the self-exclusion composes with it. The target
+        -- itself is listed FIRST and sits at distance 0, the lowest
+        -- uid is the FARTHEST candidate -- so excluding the target,
+        -- taking the first, or taking the lowest uid each answer
+        -- differently, and only "nearest of the rest" answers 8.
+        it "a multi-unit selection including the target picks the nearest of the REST" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (unitTargetStub 99 <> selectedStub [99, 7, 8]
+                    <> unitInfoStub [(99, (10, 20)), (7, (10, 25)), (8, (10, 22))]
+                    <> endpointInfoStubAt "unit" 99 True "Technomule" (10, 20))
+            claimed ← evalDebug ls "return require('scripts.init_context_menu').tryUnitMenu(10, 20)"
+            claimed `shouldBe` "true"
+            labels ← capturedLabels ls
+            labels `shouldSatisfy` T.isInfixOf "Transfer"
+            invoke ← evalDebug ls "_G.__transferCallback(); return 'ok'"
+            invoke `shouldNotSatisfy` isLuaError
+            sess ← decodeOr =<< evalDebug ls "return require('scripts.transfer_session').get()"
+            spSourceId sess `shouldBe` 8
+            spDestinationKind sess `shouldBe` "unit"
+            spDestinationId sess `shouldBe` 99
 
         -- #1085 §9's deliberate widening, proved against the REAL
         -- engine query and REAL faction data rather than a Boolean
@@ -447,15 +615,80 @@ selectedStub uids = "unit.getSelected = function() return {"
 -- one endpoint -- every other endpoint falls through to baseSetupLua's
 -- default nil, matching a genuinely stale/missing target.
 endpointInfoStub ∷ Text → Int → Bool → Text → Text
-endpointInfoStub kind rid eligible displayName = T.concat
+endpointInfoStub kind rid eligible displayName =
+    endpointInfoStubAt kind rid eligible displayName (10, 20)
+
+-- | The same stub with the endpoint's own grid position spelled out --
+-- since #1239 that position is the point selected units are ranked
+-- against, so a nearest-of-N case has to control it.
+endpointInfoStubAt ∷ Text → Int → Bool → Text → (Int, Int) → Text
+endpointInfoStubAt kind rid eligible displayName (gx, gy) = T.concat
     [ "unit.transferEndpointInfo = function(ep) "
     , "  if ep and ep.kind == '", kind, "' and ep.id == "
-    , T.pack (show rid), " then "
+    , tshow rid, " then "
     , "    return { eligible = ", if eligible then "true" else "false"
-    , ", displayName = '", displayName, "', page = 'p', gridX = 10, gridY = 20"
+    , ", displayName = '", displayName, "', page = 'p', gridX = ", tshow gx
+    , ", gridY = ", tshow gy
     , ", capacity = 200, storedWeight = 0, contents = {} } "
     , "  end; return nil end; "
     ]
+
+-- | @unit.getInfo@ answering a fixed per-uid grid position. A uid with
+-- NO entry returns nil -- exactly how a unit destroyed between
+-- selection and resolution reads, which 'resolveSource' must skip
+-- rather than trip over.
+unitInfoStub ∷ [(Int, (Int, Int))] → Text
+unitInfoStub entries = T.concat
+    [ "unit.getInfo = function(uid) return ({"
+    , T.intercalate ", "
+        [ T.concat [ "[", tshow uid, "]={gridX=", tshow gx
+                   , ",gridY=", tshow gy, "}" ]
+        | (uid, (gx, gy)) ← entries ]
+    , "})[uid] end; "
+    ]
+
+-- | @unit.getFaction@ answering a fixed per-uid faction; an unlisted
+-- uid returns nil (the live faction vanished).
+unitFactionStub ∷ [(Int, Text)] → Text
+unitFactionStub entries = T.concat
+    [ "unit.getFaction = function(uid) return ({"
+    , T.intercalate ", "
+        [ T.concat [ "[", tshow uid, "]='", f, "'" ] | (uid, f) ← entries ]
+    , "})[uid] end; "
+    ]
+
+-- | A faithful Lua transcription of 'World.Generate.Coordinates.
+-- localizeTileToAnchor' for a wrapping world whose u-alias step is
+-- @step@ TILES: pick the alias @(gx ± step, gy ∓ step)@ with the
+-- smallest Chebyshev distance to the anchor, an exact tie keeping the
+-- coord as supplied.
+--
+-- A @--match "Transfer context menu"@ run initializes no world, and the
+-- real @world.localizeTile@ resolves against the VISIBLE page's world
+-- size -- identity when there is none. So the seam case installs this
+-- rather than depending on another spec's shared world. It also records
+-- every call into @_G.__localizeCalls@, which is what lets the case
+-- pin the anchor/coord argument ORIENTATION as well as the ranking.
+seamLocalizeStub ∷ Int → Text
+seamLocalizeStub step = T.concat
+    [ "_G.__localizeCalls = {}; "
+    , "world.localizeTile = function(ax, ay, gx, gy) "
+    , "  table.insert(_G.__localizeCalls, "
+    , "    { ax = ax, ay = ay, gx = gx, gy = gy }); "
+    , "  local step = ", tshow step, "; "
+    , "  local bx, by = gx, gy; "
+    , "  local bd = math.max(math.abs(gx - ax), math.abs(gy - ay)); "
+    , "  for _, k in ipairs({-1, 1}) do "
+    , "    local cx, cy = gx + k * step, gy - k * step; "
+    , "    local d = math.max(math.abs(cx - ax), math.abs(cy - ay)); "
+    , "    if d < bd then bd, bx, by = d, cx, cy end "
+    , "  end; "
+    , "  return bx, by "
+    , "end; "
+    ]
+
+tshow ∷ Int → Text
+tshow = T.pack . show
 
 -- | @building.hitTestAt@ (fixed to this bid), @getActivity@,
 -- @getStorageCapacity@, @getOperations@ for one building.

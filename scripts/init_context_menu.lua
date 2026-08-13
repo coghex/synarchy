@@ -34,15 +34,22 @@ function M.tryBuildingMenu(x, y)
     -- flows through without a UI change here — a Built station with
     -- zero storage capacity (hasStation but not hasStorage, "Bills"
     -- only) is exactly the case that query must ALSO refuse.
-    -- transferSession.resolveSource returns nil for any selection that
-    -- isn't exactly one player-commandable unit (#1014 review
-    -- requirement 4: zero or multiple selected sources both omit the
-    -- entry, never a silent pick).
+    -- transferSession.resolveSource picks the NEAREST player-commandable
+    -- unit out of the selection (#1239, D-8: multi-unit selections are
+    -- allowed, exact ties break on lowest uid), and returns nil only
+    -- when the selection holds no eligible candidate at all -- which
+    -- omits the entry rather than showing a disabled row. The endpoint
+    -- query runs FIRST here because its gridX/gridY is the point
+    -- candidates are ranked against.
     local transferSession = require("scripts.transfer_session")
-    local source = transferSession.resolveSource(unit.getSelected())
-    local endpointInfo = source
-        and unit.transferEndpointInfo({ kind = "building", id = hitBid })
-    local hasTransfer = endpointInfo and endpointInfo.eligible
+    local endpointInfo =
+        unit.transferEndpointInfo({ kind = "building", id = hitBid })
+    local source = nil
+    if endpointInfo and endpointInfo.eligible then
+        source = transferSession.resolveSource(unit.getSelected(), nil,
+                                               endpointInfo)
+    end
+    local hasTransfer = source ~= nil
 
     if not (hasStorage or hasStation or hasTransfer) then return false end
 
@@ -162,14 +169,22 @@ function M.tryUnitMenu(x, y)
     -- debug units included), not only the technomule — an intentional,
     -- player-visible widening, because faction eligibility is what
     -- replaced the marker. transferSession.resolveSource excludes the
-    -- target from a would-be source (self-transfer) and requires
-    -- exactly one selected, player-commandable unit.
+    -- target from a would-be source (self-transfer) and, since #1239,
+    -- picks the NEAREST player-commandable unit out of the rest of the
+    -- selection (D-8; exact ties break on lowest uid). A selection that
+    -- holds only the target still yields no candidate, so no row. The
+    -- endpoint query runs FIRST because its gridX/gridY is the point
+    -- candidates are ranked against.
     do
         local transferSession = require("scripts.transfer_session")
-        local source = transferSession.resolveSource(selectedUids, targetUid)
-        local endpointInfo = source
-            and unit.transferEndpointInfo({ kind = "unit", id = targetUid })
+        local endpointInfo =
+            unit.transferEndpointInfo({ kind = "unit", id = targetUid })
+        local source = nil
         if endpointInfo and endpointInfo.eligible then
+            source = transferSession.resolveSource(selectedUids, targetUid,
+                                                   endpointInfo)
+        end
+        if source then
             table.insert(items, { label = "Transfer",
                 callback = function()
                     transferSession.create(source, "unit", targetUid)
