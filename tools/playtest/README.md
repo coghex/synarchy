@@ -19,8 +19,8 @@ records everything into a replayable **session trace** for the critic
 ## Usage
 
 ```bash
-# Full session with the naive LLM player (needs ANTHROPIC_API_KEY or an
-# `ant auth login` profile, and `pip install anthropic`)
+# Full session with the naive LLM player (needs the Codex CLI and an
+# existing Codex login; verify once with `codex login status`)
 python3 tools/playtest/run.py
 python3 tools/playtest/run.py --persona impatient_imogen --turns 60 --dt 3
 
@@ -42,9 +42,12 @@ python3 tools/playtest/run.py --selftest
 ```
 
 Defaults: port **9308** (never the GUI's 8008), 40 turns, `dt` 2.0 s,
-model `claude-sonnet-5` at low effort with thinking disabled (cheap and
-naive is the point — a #641 design decision), stuck detection after 3
-identical no-change turns. `--help` lists everything.
+the per-turn player hard-pinned through Codex to **`gpt-5.6-luna` at
+medium reasoning effort**, a 120-second per-decision timeout, and stuck
+detection after 3 identical no-change turns. The model and effort are
+deliberately not CLI options: all naive-player sessions use the same
+cost-conscious configuration. `--decision-timeout` changes only the
+timeout; `--help` lists everything.
 
 ## The lockstep loop
 
@@ -87,8 +90,11 @@ surfacing ground truth would destroy the naive-perception premise.
 This is enforced structurally: `agent.build_system_prompt(persona,
 manual, fb_size)` has no parameter oracle data could arrive through
 (the selftest asserts the signature), and `PlayerAgent.decide()` takes
-the screenshot path + memory only. The **critic** (H2) reads the
-oracle from the trace instead.
+the screenshot path + memory only. Each decision runs as an ephemeral
+`codex exec` in a fresh empty directory with shell, web search, plugins,
+skills, image generation, and multi-agent tools disabled, so Codex cannot
+inspect the repository or acquire context beyond the prompt and attached
+screenshot. The **critic** (H2) reads the oracle from the trace instead.
 
 The prompt casts the model as a *confused new player narrating their
 experience and taking notes* — explicitly not a QA tester. Per turn it
@@ -307,7 +313,8 @@ clean and additive.
   of the loop, trace write, replay, stuck detection, trace phase
   fidelity (#698: terminal/stuck/interrupted turns record and replay
   without an invented step or post call), and the oracle-blind prompt
-  shape (FakeEngine + scripted agent; no window, no build, no API key).
+  shape plus the pinned Codex/Luna/medium invocation (FakeEngine +
+  scripted agent; no window, no build, no model call).
 - `python3 tools/playtest/run.py --smoke` — few-turn scripted session
   against a real instance (windowed by default; add
   `--render-mode offscreen` for the windowless #650 substrate —

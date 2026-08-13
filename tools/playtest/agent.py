@@ -9,19 +9,27 @@ through. The prompt casts it as a confused new player narrating their
 experience and taking notes — explicitly not a bug-hunter.
 
 ScriptedAgent is a deterministic no-LLM stand-in for --smoke and
---selftest runs (loop/trace/replay plumbing without an API key).
+--selftest runs (loop/trace/replay plumbing without a Codex login).
 """
 from __future__ import annotations
 
-import base64
 import json
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 
 from engine import ACTION_KINDS
 
-DEFAULT_MODEL = "claude-sonnet-5"  # cheap + naive is the point (#641 design call)
-DEFAULT_EFFORT = "low"
-DEFAULT_MAX_TOKENS = 1024
+# These are deliberately pins, not user-selectable defaults. Every naive-player
+# turn must use the same cheap, quick Codex configuration so an ordinary H1 run
+# cannot silently fall back to a costly provider/model. The critic and optional
+# persona-flavor generator are separate workflows with their own model choices.
+PLAYER_BACKEND = "codex-cli"
+PLAYER_MODEL = "gpt-5.6-luna"
+PLAYER_EFFORT = "medium"
+DEFAULT_DECISION_TIMEOUT = 120.0
 
 # Structured-output schema for the per-turn decision. The action mirrors
 # the harness vocabulary (translate_action in engine.py).
@@ -34,21 +42,26 @@ TURN_SCHEMA = {
             "type": "object",
             "properties": {
                 "do": {"type": "string", "enum": list(ACTION_KINDS)},
-                "x": {"type": "number"},
-                "y": {"type": "number"},
-                "x1": {"type": "number"},
-                "y1": {"type": "number"},
-                "x2": {"type": "number"},
-                "y2": {"type": "number"},
-                "dx": {"type": "number"},
-                "dy": {"type": "number"},
-                "button": {"type": "string"},
-                "mods": {"type": "array", "items": {"type": "string"}},
-                "name": {"type": "string"},
-                "text": {"type": "string"},
-                "reason": {"type": "string"},
+                "x": {"type": ["number", "null"]},
+                "y": {"type": ["number", "null"]},
+                "x1": {"type": ["number", "null"]},
+                "y1": {"type": ["number", "null"]},
+                "x2": {"type": ["number", "null"]},
+                "y2": {"type": ["number", "null"]},
+                "dx": {"type": ["number", "null"]},
+                "dy": {"type": ["number", "null"]},
+                "button": {"type": ["string", "null"]},
+                "mods": {"type": ["array", "null"],
+                         "items": {"type": "string"}},
+                "name": {"type": ["string", "null"]},
+                "text": {"type": ["string", "null"]},
+                "reason": {"type": ["string", "null"]},
             },
-            "required": ["do"],
+            # Codex/OpenAI strict structured output requires every property to
+            # be required; fields irrelevant to the chosen action are null.
+            "required": ["do", "x", "y", "x1", "y1", "x2", "y2",
+                         "dx", "dy", "button", "mods", "name", "text",
+                         "reason"],
             "additionalProperties": False,
         },
         "expectation": {"type": "string",
@@ -134,9 +147,15 @@ def normalize_turn(data: dict) -> dict:
     """Coerce a model reply into the turn shape, downgrading anything
     unusable to a recorded 'wait' (a confused reply is data, not a
     crash)."""
+    raw_action = data.get("action")
+    action = ({k: v for k, v in raw_action.items() if v is not None}
+              if isinstance(raw_action, dict) else {})
     out = {
         "observation": str(data.get("observation") or ""),
-        "action": data.get("action") if isinstance(data.get("action"), dict) else {},
+        # Codex's strict schema requires nullable placeholders; discard them
+        # before trace/memory/translation so the historical compact action
+        # vocabulary stays unchanged.
+        "action": action,
         "expectation": str(data.get("expectation") or ""),
         "note": str(data.get("note") or ""),
     }
@@ -146,63 +165,136 @@ def normalize_turn(data: dict) -> dict:
     return out
 
 
+def _build_codex_command(codex_bin: str, screenshot_path: str, workspace: str,
+                         schema_path: str, output_path: str) -> list[str]:
+    """Build the pinned, oracle-blind Codex invocation for one turn.
+
+    The isolated empty cwd and disabled tools are part of the purity boundary:
+    the player can reason over the attached screenshot and prompt, but cannot
+    inspect the game repository or acquire outside information.
+    """
+    return [
+        codex_bin, "exec",
+        "--model", PLAYER_MODEL,
+        "--config", f'model_reasoning_effort="{PLAYER_EFFORT}"',
+        "--config", 'model_provider="openai"',
+        "--config", 'approval_policy="never"',
+        "--config", 'web_search="disabled"',
+        "--config", "agents.enabled=false",
+        "--disable", "shell_tool",
+        "--disable", "multi_agent",
+        "--disable", "plugins",
+        "--disable", "remote_plugin",
+        "--disable", "skill_search",
+        "--disable", "image_generation",
+        "--disable", "view_image",
+        "--sandbox", "read-only",
+        "--cd", workspace,
+        "--skip-git-repo-check",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--ephemeral",
+        "--strict-config",
+        "--image", os.path.abspath(screenshot_path),
+        "--output-schema", schema_path,
+        "--output-last-message", output_path,
+        "--json",
+        "--color", "never",
+        "-",
+    ]
+
+
+def _parse_codex_usage(events_jsonl: str) -> dict | None:
+    """Extract the last turn-completed usage event from `codex exec --json`."""
+    usage = None
+    for line in events_jsonl.splitlines():
+        try:
+            event = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(event, dict):
+            continue
+        candidate = event.get("usage")
+        if event.get("type") == "turn.completed" and isinstance(candidate, dict):
+            usage = candidate
+    if usage is None:
+        return None
+    result = {
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("output_tokens"),
+        "cache_read_input_tokens": usage.get(
+            "cached_input_tokens", usage.get("cache_read_input_tokens")),
+    }
+    if "reasoning_output_tokens" in usage:
+        result["reasoning_output_tokens"] = usage["reasoning_output_tokens"]
+    return result
+
+
 class PlayerAgent:
     """The naive LLM player. decide() sees the screenshot + rolling
-    memory only."""
+    memory only. Its provider/model/effort are intentionally fixed."""
 
-    def __init__(self, persona: dict, manual: str, model: str = DEFAULT_MODEL,
-                 effort: str = DEFAULT_EFFORT, max_tokens: int = DEFAULT_MAX_TOKENS):
-        try:
-            import anthropic
-        except ImportError as e:
+    def __init__(self, persona: dict, manual: str,
+                 decision_timeout: float = DEFAULT_DECISION_TIMEOUT):
+        codex_bin = shutil.which("codex")
+        if codex_bin is None:
             raise SystemExit(
-                "the player agent needs the Anthropic SDK: pip install anthropic\n"
-                "(scripted/--smoke/--selftest/--replay runs don't)") from e
-        self._anthropic = anthropic
-        self.client = anthropic.Anthropic()  # ANTHROPIC_API_KEY / ant auth profile
+                "the player agent needs the Codex CLI on PATH and logged in\n"
+                "(check with: codex login status; scripted/--smoke/--selftest/"
+                "--replay runs don't)")
+        if decision_timeout <= 0:
+            raise ValueError("decision_timeout must be positive")
+        self.codex_bin = codex_bin
         self.persona = persona
         self.manual = manual
-        self.model = model
-        self.effort = effort
-        self.max_tokens = max_tokens
+        self.model = PLAYER_MODEL
+        self.effort = PLAYER_EFFORT
+        self.decision_timeout = decision_timeout
         self.needs_llm = True
-        self._structured = True  # drop to lenient parsing if the model rejects it
 
     def decide(self, screenshot_path: str, fb_size, memory_lines: list[str],
                turn: int) -> dict:
         system = build_system_prompt(self.persona, self.manual, fb_size)
-        with open(screenshot_path, "rb") as f:
-            image_b64 = base64.standard_b64encode(f.read()).decode()
         memory = "\n".join(memory_lines) if memory_lines else "(first turn — nothing yet)"
-        content = [
-            {"type": "image",
-             "source": {"type": "base64", "media_type": "image/png", "data": image_b64}},
-            {"type": "text",
-             "text": f"Turn {turn}. Your notes from recent turns:\n{memory}\n\n"
-                     "Here is what you see now. One JSON object, one action."},
-        ]
-        kwargs = dict(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            thinking={"type": "disabled"},  # cheap + snappy; naive is the point
-            system=[{"type": "text", "text": system,
-                     "cache_control": {"type": "ephemeral"}}],
-            messages=[{"role": "user", "content": content}],
+        prompt = (
+            system
+            + f"\nTurn {turn}. Your notes from recent turns:\n{memory}\n\n"
+            + "The attached image is what you see now. Do not inspect files, "
+              "search, or use tools; the prompt, your notes, and this screenshot "
+              "are everything you know. Return one JSON object with one action."
         )
-        output_config = {"effort": self.effort}
-        if self._structured:
-            output_config["format"] = {"type": "json_schema", "schema": TURN_SCHEMA}
-        try:
-            response = self.client.messages.create(output_config=output_config, **kwargs)
-        except self._anthropic.BadRequestError:
-            if not self._structured:
-                raise
-            # Model/config without structured-output support: fall back
-            # to lenient parsing for the rest of the session.
-            self._structured = False
-            output_config.pop("format", None)
-            response = self.client.messages.create(output_config=output_config, **kwargs)
-        text = next((b.text for b in response.content if b.type == "text"), "")
+
+        # A fresh empty cwd on every turn prevents Codex's general-purpose agent
+        # substrate from seeing the game checkout. Session continuity comes only
+        # from the rolling player memory explicitly included above.
+        with tempfile.TemporaryDirectory(prefix="synarchy_playtest_codex_") as scratch:
+            workspace = os.path.join(scratch, "workspace")
+            os.mkdir(workspace)
+            schema_path = os.path.join(scratch, "turn.schema.json")
+            output_path = os.path.join(scratch, "turn.json")
+            with open(schema_path, "w", encoding="utf-8") as f:
+                json.dump(TURN_SCHEMA, f)
+            command = _build_codex_command(
+                self.codex_bin, screenshot_path, workspace, schema_path, output_path)
+            try:
+                response = subprocess.run(
+                    command, input=prompt, text=True, capture_output=True,
+                    timeout=self.decision_timeout, check=False)
+            except subprocess.TimeoutExpired as e:
+                raise RuntimeError(
+                    f"Codex player decision timed out after "
+                    f"{self.decision_timeout:g}s") from e
+            if response.returncode != 0:
+                detail = (response.stderr or response.stdout or "no diagnostic").strip()
+                raise RuntimeError(
+                    f"Codex player decision failed (exit {response.returncode}): "
+                    f"{detail[-2000:]}")
+            try:
+                with open(output_path, encoding="utf-8") as f:
+                    text = f.read().strip()
+            except OSError as e:
+                raise RuntimeError("Codex player returned no final response file") from e
+
         try:
             data = _lenient_parse(text)
         except (ValueError, TypeError):
@@ -210,12 +302,7 @@ class PlayerAgent:
                     "expectation": "", "note": "[harness: reply was not JSON]"}
         result = normalize_turn(data)
         result["raw"] = text
-        result["usage"] = {
-            "input_tokens": response.usage.input_tokens,
-            "output_tokens": response.usage.output_tokens,
-            "cache_read_input_tokens": getattr(response.usage,
-                                               "cache_read_input_tokens", None),
-        }
+        result["usage"] = _parse_codex_usage(response.stdout)
         return result
 
 
