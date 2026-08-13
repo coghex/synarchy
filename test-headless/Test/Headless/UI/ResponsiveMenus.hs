@@ -26,10 +26,11 @@ import Data.Aeson (FromJSON(..), decode, withObject, (.:), (.:?))
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Lazy as BL
-import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.IORef (newIORef, readIORef, writeIORef, atomicModifyIORef')
 import qualified Data.Map.Strict as Map
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
+import Engine.Graphics.Config (VideoConfig(..))
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
@@ -45,8 +46,80 @@ import UI.Types (UIPageManager(..), emptyUIPageManager)
 luaLines ∷ [Text] → Text
 luaLines = T.intercalate " "
 
+-- | The canonical UI scale every example in this suite starts from.
+--   Matches the tracked @config/video_default.yaml@'s @ui_scale@, so a
+--   machine with no local overlay sees no behavioral change at all.
+menusBaselineUIScale ∷ Float
+menusBaselineUIScale = 1.0
+
+-- | Pin the engine's in-memory UI scale to 'menusBaselineUIScale',
+--   preserving every other 'VideoConfig' field exactly as engine
+--   initialization resolved it (#1266).
+--
+--   This is an in-memory mutation ONLY — the same narrow one
+--   @engine.setUIScale@ performs ('Engine.Scripting.Lua.API.Config'),
+--   whose persistence is a separate @saveVideoConfig@ call this suite
+--   never makes. Running these specs therefore cannot modify,
+--   truncate, or regenerate a developer's @config/*.local.yaml@.
+normalizeUIScale ∷ EngineEnv → IO ()
+normalizeUIScale env =
+    atomicModifyIORef' (videoConfigRef env) $ \c →
+        (c { vcUIScale = menusBaselineUIScale }, ())
+
+-- | Every example here runs against its own freshly booted headless
+--   engine, and 'Engine.Core.Init' populates that engine's
+--   'videoConfigRef' from the developer's @config/video.local.yaml@
+--   when one exists, falling back to @config/video_default.yaml@
+--   otherwise (#638/#786's local-overlay contract, which is correct
+--   and out of scope here). Without this wrapper an example's
+--   effective UI scale is therefore whatever the developer last saved
+--   from the Settings menu, and cases whose geometry assertions were
+--   written against an implicit 1x flip verdict on a machine carrying
+--   @ui_scale: 1.5@ — two of them did (#1266).
+--
+--   So establish the canonical baseline BEFORE the example body runs,
+--   which is before any of its Lua modules or menu geometry
+--   initialize. Cases that intentionally exercise a different scale
+--   are unaffected: they already state it themselves with an explicit
+--   @engine.setUIScale(...)@ as their first Lua statement, which
+--   overrides this baseline exactly as it overrode the inherited
+--   value before.
+--
+--   'Test.Headless.UI.ResponsiveGameplay.resetFixture' does the same
+--   normalization for the same reason; it just folds it into a
+--   shared-fixture reset rather than a per-example wrapper, because
+--   that suite shares one engine across its cases.
+withMenusEngine ∷ (EngineEnv → IO α) → IO α
+withMenusEngine action = withHeadlessEngine $ \env → do
+    normalizeUIScale env
+    action env
+
 spec ∷ Spec
-spec = around withHeadlessEngine $ do
+spec = around withMenusEngine $ do
+    describe "suite UI-scale baseline (#1266)" $ do
+        it "pins the effective scale to 1x whatever the local video config resolved to, preserving every other video setting" $ \env → do
+            -- Simulate an arbitrary developer overlay landing in the
+            -- engine's live config, then re-run the wrapper's own
+            -- normalization: the scale must come back to the baseline
+            -- and nothing else may move. Deterministic on a machine
+            -- with no config/video.local.yaml (CI) as well as one
+            -- with any in-envelope ui_scale saved.
+            atomicModifyIORef' (videoConfigRef env) $ \c →
+                (c { vcUIScale = 1.5 }, ())
+            skewed ← readIORef (videoConfigRef env)
+            normalizeUIScale env
+            pinned ← readIORef (videoConfigRef env)
+            vcUIScale pinned `shouldBe` menusBaselineUIScale
+            pinned `shouldBe` skewed { vcUIScale = menusBaselineUIScale }
+
+        it "is what an example without its own engine.setUIScale actually observes" $ \env → do
+            ls ← newBareLuaBackend env
+            -- The value scripts/ui/scale.lua reads for all menu
+            -- geometry, through the same engine.getUIScale every screen
+            -- module uses.
+            atBaseline ← evalBool ls "return engine.getUIScale() == 1.0"
+            atBaseline `shouldBe` True
+
     describe "envelope classification (scripts/ui/responsive.lua)" $ do
         it "every configured resolution is fully supported at 1x, except 3840x2160 (whose 1601-2160 band requires 1.5x-4x)" $ \env → do
             ls ← newBareLuaBackend env

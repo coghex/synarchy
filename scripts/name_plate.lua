@@ -67,6 +67,47 @@ local function worldRow(worldId)
     return { kind = "world", id = nil, name = ident.name }
 end
 
+-- Half of the page's cylindrical u-wrap period, in tiles — the one
+-- alias step Location.Bounds.seamAliases shifts a box by. Zero for a
+-- page that does not wrap, is not live, or an engine too old to answer,
+-- which collapses the containment below to the plain Cartesian test.
+--
+-- PAGE-SCOPED on purpose: world.listPlacedLocations and
+-- world.getSelectedTile are both read for this same worldId, and two
+-- live pages can have different wrap sizes, so an active-page fallback
+-- or a nominal default would measure the selection against the wrong
+-- world.
+local function seamStep(worldId)
+    if type(world) ~= "table" or type(world.getWrapWidth) ~= "function" then
+        return 0
+    end
+    local ok, w = pcall(world.getWrapWidth, worldId)
+    if not ok or type(w) ~= "number" or w <= 0 then return 0 end
+    return math.floor(w / 2)
+end
+
+-- Inclusive containment against a location's stored bounds, seam-aware:
+-- Location.Bounds.boundsContainsPoint's exact topology — the box itself
+-- plus one cylindrical image each way along (+u, -v).
+--
+-- Location bounds are cylindrical while the selected tile arrives in the
+-- canonical storage frame (#1175), so a location straddling the U seam
+-- is named by a tile that the raw comparison alone rejects even though
+-- it is physically inside (#1264). Identity away from the seam and for a
+-- non-wrapping page, where step is 0 and the loop runs once.
+local function boundsContain(b, step, gx, gy)
+    local lo, hi = 0, 0
+    if step > 0 then lo, hi = -1, 1 end
+    for k = lo, hi do
+        local dx, dy = k * step, -k * step
+        if gx >= b.min_x + dx and gx <= b.max_x + dx
+           and gy >= b.min_y + dy and gy <= b.max_y + dy then
+            return true
+        end
+    end
+    return false
+end
+
 -- The DISCOVERED location containing a tile, if any. Lifecycle is the
 -- gate, exactly as the engine's own eligibility rule has it: an
 -- undiscovered ruin is invisible to this surface even though the record
@@ -78,12 +119,12 @@ local function locationRowAt(worldId, gx, gy)
     end
     local ok, list = pcall(world.listPlacedLocations, worldId)
     if not ok or type(list) ~= "table" then return nil end
+    local step = seamStep(worldId)
     for _, e in ipairs(list) do
         local b = e.bounds
         if e.instance_id and b and e.lifecycle ~= "unknown"
            and e.lifecycle ~= "hinted"
-           and gx >= b.min_x and gx <= b.max_x
-           and gy >= b.min_y and gy <= b.max_y then
+           and boundsContain(b, step, gx, gy) then
             return { kind = "location", id = e.instance_id,
                      name = e.name or "?" }
         end

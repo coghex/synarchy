@@ -3577,6 +3577,89 @@ spec = aroundAll withSharedFixture $ do
                     eclOpenKind p `shouldBe` Just "river"
                     eclOpenId p `shouldBe` Just 7
 
+        -- #1264. Location bounds are CYLINDRICAL (Location.Bounds
+        -- .boundsContainsPoint tests the box and both u-wrap aliases)
+        -- while #1175 hands the plate a CANONICAL selected tile, so a
+        -- location straddling the seam is named by a tile that a raw
+        -- Cartesian comparison rejects. The numbers here are the
+        -- authoritative divergence Test.Headless.Location.Bounds pins:
+        -- world size 8 (wrap period 8 * 16 = 128 tiles), bounds
+        -- (68,4)-(72,8), canonical tile (6,70) — raw distance 62, seam
+        -- distance 0. The wrap width is stubbed only for the hud's OWN
+        -- page, so a plate that asked about the active page or assumed
+        -- a nominal size gets 0 back and fails to find the row.
+        it "the name plate finds a DISCOVERED location whose bounds \
+           \straddle the U seam from the canonical selected tile, \
+           \resolving the wrap period of its own page -- while an \
+           \undiscovered seam location and a genuinely distant one \
+           \still produce no row" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ stubQuery, bootHud
+                , "local np = require('scripts.name_plate');"
+                , "local ep = require('scripts.etymology_panel');"
+                , "world.getIdentity = function() return {name='Karadun'} end;"
+                -- Canonical frame: this tile lies in the (-1) alias of
+                -- the ruin's stored box, never in the box itself.
+                , "world.getSelectedTile = function() return {gx=6, gy=70} end;"
+                , "world.getRiverAt = function() return nil end;"
+                , "local pages = {};"
+                , "world.getWrapWidth = function(pid)"
+                , "  pages[#pages + 1] = tostring(pid);"
+                , "  if pid == 'main_world' then return 128 end;"
+                , "  return 0 end;"
+                -- Ordered so a broken lifecycle gate or an always-true
+                -- containment would be caught by the WRONG row winning.
+                , "world.listPlacedLocations = function() return {"
+                , "  {instance_id=9, name='Faraway', lifecycle='discovered',"
+                , "   bounds={min_x=200,min_y=200,max_x=210,max_y=210}},"
+                , "  {instance_id=12, name='Hidden', lifecycle='unknown',"
+                , "   bounds={min_x=68,min_y=4,max_x=72,max_y=8}},"
+                , "  {instance_id=13, name='Rumoured', lifecycle='hinted',"
+                , "   bounds={min_x=68,min_y=4,max_x=72,max_y=8}},"
+                , "  {instance_id=11, name='Karkeep', lifecycle='discovered',"
+                , "   bounds={min_x=68,min_y=4,max_x=72,max_y=8}} } end;"
+                , "np.refresh();"
+                , "local d = np.dump();"
+                , "local kinds, names, locRow = {}, {}, nil;"
+                , "for _, row in ipairs(d.rows) do"
+                , "  table.insert(kinds, row.kind);"
+                , "  table.insert(names, row.name);"
+                , "  if row.kind == 'location' then locRow = row end"
+                , "end;"
+                , "local openKind, openId;"
+                , "if locRow then"
+                , "  local button = require('scripts.ui.button');"
+                , "  button.handleClickByElement(locRow.handle);"
+                , "  openKind, openId = ep.currentTarget()"
+                , "end;"
+                -- Never an empty array, so "the plate never asked" is a
+                -- readable assertion failure rather than a decode error.
+                , "if #pages == 0 then pages[1] = '(never asked)' end;"
+                , "return {kinds = kinds, names = names, pages = pages,"
+                , "        found = locRow ~= nil,"
+                , "        openKind = openKind, openId = openId}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe EtySeamProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    -- The seam-straddling ruin produces its row.
+                    espFound p `shouldBe` True
+                    espKinds p `shouldBe` ["world", "location"]
+                    espNames p `shouldBe` ["Karadun", "Karkeep"]
+                    -- Neither undiscovered lifecycle leaks a name, and
+                    -- containment did not simply become true for all.
+                    espNames p `shouldNotSatisfy` elem "Hidden"
+                    espNames p `shouldNotSatisfy` elem "Rumoured"
+                    espNames p `shouldNotSatisfy` elem "Faraway"
+                    -- The wrap period came from the plate's OWN page.
+                    espPages p `shouldSatisfy` all (≡ "main_world")
+                    espPages p `shouldNotSatisfy` null
+                    -- and the row still opens the etymology panel on
+                    -- that instance, so the action stays reachable.
+                    espOpenKind p `shouldBe` Just "location"
+                    espOpenId p `shouldBe` Just 11
+
 -- * FromJSON row types
 
 data ToolbarRow = ToolbarRow { trW ∷ Int, trH ∷ Int, trCount ∷ Int, trAllIn ∷ Bool } deriving Show
@@ -4165,6 +4248,15 @@ instance FromJSON EtyClickProbe where
         EtyClickProbe <$> o .: "found" <*> o .:? "x" .!= 0 <*> o .:? "y" .!= 0
                       <*> o .:? "w" .!= 0 <*> o .:? "h" .!= 0
                       <*> o .:? "openKind" <*> o .:? "openId"
+
+data EtySeamProbe = EtySeamProbe
+    { espKinds ∷ [Text], espNames ∷ [Text], espPages ∷ [Text]
+    , espFound ∷ Bool, espOpenKind ∷ Maybe Text, espOpenId ∷ Maybe Int
+    } deriving Show
+instance FromJSON EtySeamProbe where
+    parseJSON = withObject "EtySeamProbe" $ \o →
+        EtySeamProbe <$> o .: "kinds" <*> o .: "names" <*> o .: "pages"
+                     <*> o .: "found" <*> o .:? "openKind" <*> o .:? "openId"
 
 data EtyWheelProbe = EtyWheelProbe
     { ewCaptures ∷ Bool, ewBefore ∷ Int, ewAfterDown ∷ Int, ewAfterUp ∷ Int

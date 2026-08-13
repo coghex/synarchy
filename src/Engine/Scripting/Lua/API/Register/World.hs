@@ -117,6 +117,7 @@ registerWorldAPI env backendState = do
   registerLuaFunction "pickPos"      (worldPickPosFn env)
   registerLuaFunction "pickChunk"    (worldPickChunkFn env)
   registerLuaFunction "localizeTile" (worldLocalizeTileFn env)
+  registerLuaFunction "getWrapWidth" (worldGetWrapWidthFn env)
   registerLuaFunction "getClimateAt" (worldGetClimateAtFn (toWorldSimCapability env))
   registerLuaFunction "getAmbientAt" (worldGetAmbientAtFn (toWorldSimCapability env))
   registerLuaFunction "getSunAngleAt" (worldGetSunAngleAtFn (toWorldSimCapability env))
