@@ -22,6 +22,7 @@
 --   descriptor writes, so the invariant is assertable headlessly.
 module Engine.Graphics.Vulkan.Texture.Release
   ( TextureReleasePlan(..)
+  , releaseOwnerHandles
   , planTextureRelease
   , dropReleasedHandles
   , freeReleasedSlots
@@ -31,7 +32,8 @@ module Engine.Graphics.Vulkan.Texture.Release
 import UPrelude
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
-import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Asset.Base (AssetId)
+import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
 import Engine.Graphics.Vulkan.Texture.Slot
   (TextureSlot(..), TextureSlotAllocator, freeSlot)
@@ -53,13 +55,47 @@ data TextureReleasePlan = TextureReleasePlan
     --   textures.
   } deriving (Show, Eq)
 
+-- | The complete owner set to hand 'planTextureRelease' for a release of
+--   these atlases: their canonical handles
+--   ('Engine.Asset.Types.taTextureHandle') plus every handle the POOL
+--   records as belonging to one of them.
+--
+--   That second half is not redundant with the slot sweep below.
+--   @duplicateCachedTextureHandle@
+--   ("Engine.Scripting.Lua.Message.Texture") writes an alias's
+--   @AssetReady@ state, its size entry and its refcount bump
+--   UNCONDITIONALLY; only the @btsHandleMap@ insertion is conditional on
+--   the canonical owner actually holding a slot. So a cache hit against
+--   an atlas whose registration ran out of bindless slots — or one taken
+--   with no bindless system at all — produces a POOL-ONLY alias: real in
+--   @apTextureHandles@ and the texture size map, absent from
+--   @btsHandleMap@, and therefore invisible to any slot-derived sweep.
+--   @AssetReady@ carries the atlas's 'AssetId', which names it anyway.
+--
+--   Only @AssetReady@ names an asset; a handle still loading or failed
+--   carries no id to match, so neither is swept in.
+releaseOwnerHandles
+  ∷ Set.Set AssetId
+    -- ^ The atlases being released
+  → [TextureHandle]
+    -- ^ Their canonical handles
+  → Map.Map TextureHandle (AssetState AssetId)
+    -- ^ @apTextureHandles@
+  → [TextureHandle]
+releaseOwnerHandles assetIds canonical handleStates = Set.toAscList $
+  Set.fromList canonical `Set.union` Set.fromList
+    [ texHandle
+    | (texHandle, AssetReady assetId _) ← Map.toList handleStates
+    , assetId `Set.member` assetIds
+    ]
+
 -- | Decide what a final release invalidates.
 --
---   The owners are the canonical handles whose atlases are being
---   destroyed ('Engine.Asset.Types.taTextureHandle'). Their slots come
---   out of @btsHandleMap@, and then every handle in that map naming one
---   of those slots is swept in — which is exactly the alias set,
---   because an alias is defined by sharing its canonical owner's slot.
+--   The owners are the handles being released ('releaseOwnerHandles').
+--   Their slots come out of @btsHandleMap@, and then every handle in
+--   that map naming one of those slots is swept in too — which is the
+--   rest of the alias set, because a cached alias is defined by sharing
+--   its canonical owner's slot.
 planTextureRelease
   ∷ [TextureHandle]
     -- ^ Canonical owners being released

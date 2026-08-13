@@ -32,8 +32,9 @@ import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
 import Engine.Graphics.Vulkan.Texture.Slot
   (TextureSlot(..), TextureSlotAllocator, createSlotAllocator, allocateSlot)
 import Engine.Graphics.Vulkan.Texture.Release
-  (TextureReleasePlan(..), planTextureRelease, dropReleasedHandles
-  , freeReleasedSlots, resolveHandleSlot)
+  (TextureReleasePlan(..), releaseOwnerHandles, planTextureRelease
+  , dropReleasedHandles, freeReleasedSlots, resolveHandleSlot)
+import qualified Data.Set as Set
 import Vulkan.Core10 (ImageView(..), Sampler(..))
 
 -- | Atlas A's canonical owner, and two cached aliases of it. Both
@@ -276,3 +277,56 @@ spec = do
           sizes'  = dropReleasedSizes plan textureSizes
       Map.member canonicalA states' `shouldBe` False
       HM.member canonicalA sizes' `shouldBe` False
+
+  describe "an atlas whose registration never got a bindless slot" $ do
+    -- @duplicateCachedTextureHandle@ writes an alias's @AssetReady@
+    -- state, size entry and refcount bump UNCONDITIONALLY; only the
+    -- @btsHandleMap@ insertion is conditional on the canonical owner
+    -- holding a slot. So a cache hit against a slot-exhausted atlas (or
+    -- one taken with no bindless system at all) leaves POOL-ONLY
+    -- aliases, which no slot-derived sweep can see.
+    let -- Neither the canonical nor its aliases ever reached the
+        -- bindless map; only atlas B is registered.
+        starvedMap = Map.fromList
+          [ (canonicalB, BindlessTextureHandle slotB canonicalB)
+          , (aliasB,     BindlessTextureHandle slotB aliasB)
+          ]
+        owners = releaseOwnerHandles (Set.singleton (AssetId 10))
+                   [canonicalA] handleStates
+        plan = planTextureRelease owners starvedMap
+
+    it "finds the pool-only aliases through their AssetReady asset id" $
+      owners `shouldBe` [canonicalA, aliasA1, aliasA2]
+
+    it "purges every one of them from the pool and size bookkeeping" $ do
+      let states' = dropReleasedHandles plan handleStates
+          sizes'  = dropReleasedSizes plan textureSizes
+          aHandles = [canonicalA, aliasA1, aliasA2]
+      map (`Map.member` states') aHandles `shouldBe` [False, False, False]
+      map (`HM.member` sizes') aHandles `shouldBe` [False, False, False]
+
+    it "frees no slot, because the atlas never held one" $
+      trpFreedSlots plan `shouldBe` []
+
+    it "leaves the registered atlas and its own alias alone" $ do
+      dropReleasedHandles plan starvedMap `shouldBe` starvedMap
+      let states' = dropReleasedHandles plan handleStates
+      map (`Map.member` states') [canonicalB, aliasB] `shouldBe` [True, True]
+
+    it "ignores handles that name no asset at all" $ do
+      -- Only @AssetReady@ carries an 'AssetId'; a loading or failed
+      -- handle must not be swept into another atlas's release.
+      let loading = TextureHandle 20
+          failed  = TextureHandle 21
+          states  = Map.union handleStates $ Map.fromList
+            [ (loading, AssetLoading "pending.png" [] 0.5)
+            , (failed,  AssetFailed "boom") ]
+      releaseOwnerHandles (Set.singleton (AssetId 10)) [canonicalA] states
+        `shouldBe` [canonicalA, aliasA1, aliasA2]
+
+    it "sweeps every drained atlas at once, canonical handles included" $
+      -- The 'cleanupResources' shape: every atlas id, every canonical
+      -- handle. Nothing may be left behind.
+      releaseOwnerHandles (Set.fromList [AssetId 10, AssetId 11])
+        [canonicalA, canonicalB] handleStates
+        `shouldBe` [canonicalA, aliasA1, canonicalB, aliasB, aliasA2]

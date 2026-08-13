@@ -34,6 +34,7 @@ module Engine.Asset.Manager
 import UPrelude
 import qualified Data.Map.Strict as Map
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Set as Set
 import qualified Data.Text as T
 import Data.IORef (IORef, readIORef, atomicModifyIORef', writeIORef)
 import Engine.Core.Monad
@@ -50,7 +51,8 @@ import Engine.Asset.Handle
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Texture.Bindless (releaseTextureHandles)
-import Engine.Graphics.Vulkan.Texture.Release (TextureReleasePlan(..))
+import Engine.Graphics.Vulkan.Texture.Release
+  (TextureReleasePlan(..), releaseOwnerHandles)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem)
 import qualified Vulkan.Core10 as Vk
 
@@ -146,10 +148,15 @@ unloadAsset aid = do
           sys ← requireTextureSystem (rvTextureSystemRef rv) atlasName
           liftIO $ Vk.deviceWaitIdle dev
           -- Invalidates the canonical handle AND every cached-atlas alias
-          -- sharing its slot; the shader table is zeroed for all of them
-          -- inside this call, before 'sys'' (whose allocator can hand the
-          -- slot out again) is published below.
-          (plan, sys') ← releaseTextureHandles dev [taTextureHandle atlas] sys
+          -- of it: those sharing its slot, plus any the pool records
+          -- against this asset id but that never got a bindless mapping
+          -- ('releaseOwnerHandles'). The shader table is zeroed for all
+          -- of them inside this call, before 'sys'' (whose allocator can
+          -- hand the slot out again) is published below.
+          handleStates ← liftIO $ readIORef (apTextureHandles pool)
+          let owners = releaseOwnerHandles (Set.singleton aid)
+                         [taTextureHandle atlas] handleStates
+          (plan, sys') ← releaseTextureHandles dev owners sys
           liftIO $ do
             purgeReleasedHandles plan (apTextureHandles pool) (rvTextureSizeRef rv)
             atomicModifyIORef' poolRef $ \p → (p
@@ -212,7 +219,10 @@ cleanupResources device _state = do
     -- image is destroyed. Draining used to skip this entirely.
     unless (null atlases) $ do
       sys ← requireTextureSystem (rvTextureSystemRef rv) "the loaded texture atlases"
-      (plan, sys') ← releaseTextureHandles device (map taTextureHandle atlases) sys
+      handleStates ← liftIO $ readIORef (apTextureHandles pool)
+      let owners = releaseOwnerHandles (Map.keysSet (apTextureAtlases pool))
+                     (map taTextureHandle atlases) handleStates
+      (plan, sys') ← releaseTextureHandles device owners sys
       liftIO $ do
         purgeReleasedHandles plan (apTextureHandles pool) (rvTextureSizeRef rv)
         writeIORef (rvTextureSystemRef rv) (Just sys')
