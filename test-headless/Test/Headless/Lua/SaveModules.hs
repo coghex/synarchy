@@ -1859,6 +1859,67 @@ spec = do
             , "  'raw iteration over a nested map must yield its membership')"
             ]
 
+        -- The encoded snapshot rides data_codec, whose limits are PAYLOAD
+        -- limits: MAX_TABLE_ENTRIES is 200,000 per table, and
+        -- KnownEntities has no matching bound -- the context names every
+        -- entity in the session while a component's payload carries only
+        -- the rows it saved, so a session can exceed the cap with a tiny
+        -- payload. That must not turn into a failed load.
+        it "still applies a session whose entity set is too large to \
+           \snapshot -- falling back to per-component copies, which stay \
+           \isolated -- rather than failing a load that used to succeed" $
+            runsOk $ lns $
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            ] ⧺ captureWarnings ⧺
+            [ "local live = {}"
+            , "local seen = {}"
+            , "local units = {}"
+            , "for i = 1, codec.MAX_TABLE_ENTRIES + 1 do units[i] = true end"
+            , "saveModules.register('big_a_mutator', "
+              <> mutatorSpec (T.concat
+                  [ "entities.unit[7] = nil;"
+                  , "entities.unitPage[7] = 'HIJACKED'"
+                  ]) <> ")"
+            , "saveModules.register('big_z_observer', { version=1, "
+              <> "inputVersions={1}, required=true, scope='global', deps={},"
+            , "  snapshot=function() return {} end,"
+            , "  decode=function(v,d) return d end,"
+            , "  validate=function() return nil end,"
+            , "  apply=function(data, entities)"
+            , "    seen.unit7 = entities.unit[7]"
+            , "    seen.page7 = entities.unitPage[7]"
+            , "    seen.absent = entities.unit[999999]"
+            , "    saveModules.applyEntityRows(live, data, entities,"
+            , "      { kind='unit', component='big_z_observer' })"
+            , "  end })"
+            , "local prep = saveModules.prepareLoad("
+            , "  { { id='big_a_mutator', version=1, payload=codec.encode({}) },"
+            , "    { id='big_z_observer', version=1,"
+            , "      payload=codec.encode({ [7]={tag='seven'},"
+            , "                             [999999]={tag='gone'} }) } },"
+            , "  1, false, { unit = units, building = {},"
+            , "              unitPage = { [7]='alpha' } })"
+            , "assert(prep.ok, tostring(prep.errors and prep.errors[1]))"
+            , "saveModules.applyAll()"
+            , "assert(seen.unit7 == true, 'the later component must still "
+              <> "see unit 7 present, got ' .. tostring(seen.unit7))"
+            , "assert(seen.page7 == 'alpha', 'an earlier mutation must "
+              <> "still not reach it, got ' .. tostring(seen.page7))"
+            , "assert(seen.absent == nil, 'the oversized set is still the "
+              <> "REAL membership, not an everything-passes stand-in')"
+            , "assert(live[7] ~= nil and live[7].tag == 'seven',"
+            , "  'the present-owner row must still be retained')"
+            , "assert(live[999999] == nil, 'the absent-owner row must still "
+              <> "be dropped -- filtering is not skipped in this path')"
+            , "local sawFallback = false"
+            , "for _, w in ipairs(warnings) do"
+            , "  if w:find('too large to snapshot', 1, true) ~= nil then"
+            , "    sawFallback = true end end"
+            , "assert(sawFallback, 'the degrade must be announced, not "
+              <> "silent')"
+            ]
+
         it "leaves the two documented compatibility semantics untouched: a \
            \nil context is still 'apply every row' and an EMPTY per-kind \
            \set still filters" $ runsOk $ lns
