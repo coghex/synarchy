@@ -24,6 +24,9 @@ local distance       = core.distance
 local ensureState    = core.ensureState
 
 local mv = require("scripts.movement_speed")
+-- Shared eligible-time stall accounting (#1291) — the same one
+-- maintainTask charges a commanded move against.
+local stall = require("scripts.unit_ai_stall")
 
 -- How much closer the carrier must get before its pickup deadline
 -- resets. Comfortably above path jitter, small enough that a real
@@ -112,16 +115,21 @@ local function pickupUtility(uid, s, params)
     -- walking and used to be abandoned mid-approach purely for taking
     -- longer than the budget. The deadline resets only on a NEW closest
     -- approach, so a unit circling or oscillating never refreshes it —
-    -- the same progress rule as unit_ai.lua's stuck-walk watchdog.
+    -- the same progress rule as unit_ai.lua's stuck-walk watchdog — and
+    -- only time the carrier was actually free to walk is charged
+    -- against it (#1291, unit_ai_stall.lua). This runs on the thought
+    -- tick rather than every update the way maintainTask does; the
+    -- accounting is written to tolerate both cadences.
+    local now = engine.gameTime()
     local info = unit.getInfo(uid)
     if info then
         local d = distance(info.gridX, info.gridY, g.x, g.y)
         if not order.bestDist or d < order.bestDist - PICKUP_PROGRESS_TILES then
-            order.bestDist   = d
-            order.progressAt = engine.gameTime()
+            order.bestDist = d
+            stall.reset(order, now)
         end
     end
-    if engine.gameTime() - (order.progressAt or order.issuedAt)
+    if stall.charge(order, s.currentAction == "pickup_ground", now)
        > (params.pickup_timeout or 30) then
         -- Stalled out short of a still-present item: a real failure.
         reportFailure(uid, "Couldn't reach item to pick up")

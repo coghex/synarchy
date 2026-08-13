@@ -65,7 +65,9 @@ What this caught (both fixed alongside this probe):
   * `maintainTask`'s TASK_TIMEOUT_SEC was the same shape for move
     orders, dropping a still-progressing return leg at ~42 tiles (and
     sooner once a survival interruption ate into the budget).
-  Both are now STALL timers that reset on a new closest approach.
+  Both are now STALL timers that reset on a new closest approach, and
+  (#1291) charge only time the unit was free to pursue the order —
+  the interruption in stage 3 costs it nothing however long it lasts.
 
 Ground-item ids are ZERO-based (`src/Item/Ground.hs` `gisNextId = 0`),
 unlike every other allocator here — this probe compares them
