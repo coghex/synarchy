@@ -33,8 +33,9 @@ module Engine.Asset.Manager
 
 import UPrelude
 import qualified Data.Map.Strict as Map
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
-import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
+import Data.IORef (IORef, readIORef, atomicModifyIORef', writeIORef)
 import Engine.Core.Monad
 import Engine.Core.State (EngineState(..), GraphicsState(..))
 import Engine.Core.Capability.RenderView
@@ -48,7 +49,9 @@ import Engine.Asset.Types
 import Engine.Asset.Handle
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types
-import Engine.Graphics.Vulkan.Texture.Bindless (unregisterTexture)
+import Engine.Graphics.Vulkan.Texture.Bindless (releaseTextureHandles)
+import Engine.Graphics.Vulkan.Texture.Release (TextureReleasePlan(..))
+import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem)
 import qualified Vulkan.Core10 as Vk
 
 generateTextureHandle ∷ AssetPool → IO TextureHandle
@@ -76,6 +79,35 @@ updateFontState handle newState pool =
   atomicModifyIORef' (apFontHandles pool) $ \m →
     (Map.insert handle newState m, ())
 
+-- | Purge every handle a release invalidated from the pool-side
+--   bookkeeping: its 'AssetState' entry in @apTextureHandles@ (which is
+--   where @AssetReady@ lives — there is no separate ready map) and its
+--   dimensions in the texture size map. Both are keyed by the stable
+--   handle, so an alias has its own entry in each and neither is
+--   reachable from the atlas alone (#1281).
+purgeReleasedHandles ∷ TextureReleasePlan
+                     → IORef (Map.Map TextureHandle (AssetState AssetId))
+                     → IORef (HM.HashMap TextureHandle (Int, Int))
+                     → IO ()
+purgeReleasedHandles plan handleStatesRef sizeRef = do
+  atomicModifyIORef' handleStatesRef $ \m →
+    (foldl' (flip Map.delete) m (trpInvalidated plan), ())
+  atomicModifyIORef' sizeRef $ \m →
+    (foldl' (flip HM.delete) m (trpInvalidated plan), ())
+
+-- | Read the live bindless system, or fail loudly. A release cannot
+--   proceed without it: destroying an atlas image while handles may
+--   still resolve to its slot is the stale-alias defect (#1281), and a
+--   silent skip is what made that possible.
+requireTextureSystem ∷ IORef (Maybe BindlessTextureSystem) → Text
+                     → EngineM σ BindlessTextureSystem
+requireTextureSystem sysRef whatFor =
+  liftIO (readIORef sysRef) ⌦ \case
+    Just sys → pure sys
+    Nothing  → logAndThrowM CatAsset (ExGraphics CleanupError) $
+      "Refusing to destroy " <> whatFor <> ": no bindless texture system, "
+        <> "so its stable texture handles cannot be invalidated first"
+
 -- | Decrement an asset's ref count; if it reaches zero, run its cleanup
 --   action and remove it from the pool
 unloadAsset ∷ AssetId → EngineM' ()
@@ -89,24 +121,43 @@ unloadAsset aid = do
       if refCount ≤ 0 then do
           -- Free GPU resources safely, mirroring 'disposeTransientTexture':
           -- idle the device (the atlas may still be sampled by an in-flight
-          -- frame), unregister the bindless slot (repoints it at the
+          -- frame), invalidate the bindless slot (repoints it at the
           -- undefined texture AND frees the slot for reuse), THEN destroy
           -- the image/view/memory — so no descriptor still references the
           -- imageView when it is destroyed. Skipping either step risks a
           -- use-after-free / a dangling descriptor + leaked slot.
+          --
+          -- Both steps are all-or-nothing (#1281). The device and the
+          -- bindless system used to be optional 'forM_' branches that
+          -- silently skipped invalidation and destroyed the image anyway,
+          -- leaving live handles resolving to a slot whose image was
+          -- gone. Now a missing one aborts the release with the atlas and
+          -- every mapping still intact, so it can be retried.
           env ← ask
           gs  ← gets graphicsState
-          forM_ (vulkanDevice gs) $ \dev → do
-            liftIO $ Vk.deviceWaitIdle dev
-            mSys ← liftIO $ readIORef (rvTextureSystemRef (toRenderViewCapability env))
-            forM_ mSys $ \sys → do
-              sys' ← unregisterTexture dev (taTextureHandle atlas) sys
-              liftIO $ writeIORef (rvTextureSystemRef (toRenderViewCapability env)) (Just sys')
-          liftIO $ maybe (pure ()) id (taCleanup atlas)
-          liftIO $ atomicModifyIORef' poolRef $ \p → (p
-            { apTextureAtlases = Map.delete aid (apTextureAtlases p)
-            , apAssetPaths = Map.filter (≢ aid) (apAssetPaths p)
-            }, ())
+          let rv = toRenderViewCapability env
+              atlasName = "texture atlas " <> taName atlas
+                            <> " (" <> taPath atlas <> ")"
+          dev ← case vulkanDevice gs of
+            Just d  → pure d
+            Nothing → logAndThrowM CatAsset (ExGraphics VulkanDeviceLost) $
+              "Refusing to destroy " <> atlasName <> ": no Vulkan device, "
+                <> "so its stable texture handles cannot be invalidated first"
+          sys ← requireTextureSystem (rvTextureSystemRef rv) atlasName
+          liftIO $ Vk.deviceWaitIdle dev
+          -- Invalidates the canonical handle AND every cached-atlas alias
+          -- sharing its slot; the shader table is zeroed for all of them
+          -- inside this call, before 'sys'' (whose allocator can hand the
+          -- slot out again) is published below.
+          (plan, sys') ← releaseTextureHandles dev [taTextureHandle atlas] sys
+          liftIO $ do
+            purgeReleasedHandles plan (apTextureHandles pool) (rvTextureSizeRef rv)
+            atomicModifyIORef' poolRef $ \p → (p
+              { apTextureAtlases = Map.delete aid (apTextureAtlases p)
+              , apAssetPaths = Map.filter (≢ aid) (apAssetPaths p)
+              }, ())
+            writeIORef (rvTextureSystemRef rv) (Just sys')
+            maybe (pure ()) id (taCleanup atlas)
       else
           liftIO $ atomicModifyIORef' poolRef $ \p → (p
             { apTextureAtlases = Map.adjust (\a → a { taRefCount = refCount }) aid (apTextureAtlases p)
@@ -149,14 +200,28 @@ cleanupAssetManager = do
 
 cleanupResources ∷ Vk.Device → GraphicsState → EngineM' ()
 cleanupResources device _state = do
+    env ← ask
+    let rv = toRenderViewCapability env
     poolRef ← asks (rvAssetPoolRef . toRenderViewCapability)
     pool ← liftIO $ readIORef poolRef
+    let atlases = Map.elems (apTextureAtlases pool)
+    -- Same invariant the single-atlas path holds (#1281), applied to the
+    -- whole drain: every stable handle naming a slot we are about to
+    -- release — canonical owner and cached-atlas aliases alike — is
+    -- invalidated, and every slot is handed back exactly once, BEFORE any
+    -- image is destroyed. Draining used to skip this entirely.
+    unless (null atlases) $ do
+      sys ← requireTextureSystem (rvTextureSystemRef rv) "the loaded texture atlases"
+      (plan, sys') ← releaseTextureHandles device (map taTextureHandle atlases) sys
+      liftIO $ do
+        purgeReleasedHandles plan (apTextureHandles pool) (rvTextureSizeRef rv)
+        writeIORef (rvTextureSystemRef rv) (Just sys')
     -- The device is already fully idle here ('cleanupAssetManager' waits
     -- on both queues + the device before calling us), and 'taCleanup'
     -- only destroys image/view/memory — no GPU submission — so the device
     -- stays idle through the loop. No per-texture idle needed (that was N
     -- full CPU↔GPU stalls for N atlases). One trailing barrier below.
-    forM_ (Map.elems $ apTextureAtlases pool) $ \atlas → do
+    forM_ atlases $ \atlas → do
         logDebugSM CatAsset "Cleaning up texture"
           [("name", taName atlas)
           ,("path", taPath atlas)

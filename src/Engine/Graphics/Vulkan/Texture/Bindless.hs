@@ -19,6 +19,7 @@ module Engine.Graphics.Vulkan.Texture.Bindless
   , registerTexture
   , registerPinnedTexture
   , unregisterTexture
+  , releaseTextureHandles
   , setTextureFilter
   , getTextureSlotIndex
   , handleSlotTableSize
@@ -36,7 +37,7 @@ import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logWarnM)
 import Engine.Core.Capability.Render
   (RenderCapability(..), toRenderCapability)
-import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Graphics.Config (textureFilterToVulkan)
 import Engine.Graphics.Vulkan.Sampler.Cache
 import Engine.Graphics.Vulkan.Texture.Slot
@@ -45,6 +46,9 @@ import Engine.Graphics.Vulkan.Texture.Limits
   (maxBindlessTextures, handleSlotTableSize)
 import Engine.Graphics.Vulkan.Texture.Rebind
   (FilterRebindPlan(..), SlotRebind(..), planFilterRebind)
+import Engine.Graphics.Vulkan.Texture.Release
+  (TextureReleasePlan(..), planTextureRelease, dropReleasedHandles
+  , freeReleasedSlots, resolveHandleSlot)
 import Engine.Graphics.Vulkan.Texture.Requirements
   (bindlessTextureBindingFlags)
 import Engine.Graphics.Vulkan.Texture.Undefined (createUndefinedTexture)
@@ -396,6 +400,48 @@ unregisterTexture dev texHandle system = do
         , btsPinned = newPinned
         }
 
+-- | Finally release one or more CANONICAL textures: invalidate every
+--   stable handle that resolves to a slot they own — the canonical
+--   owners and every cached-atlas alias sharing those slots (#1281) —
+--   and only then hand the slots back.
+--
+--   'unregisterTexture' above is deliberately left alone: it is the
+--   single-owner path (transient world-preview\/zoom textures, blood
+--   decal atlases) where the handle being dropped is the only name for
+--   its slot. This is the atlas path, where it is not.
+--
+--   Order matters. The descriptor repoint and the handle→slot zeroing
+--   both happen here, through the system's persistently-mapped table
+--   pointer, BEFORE the returned system — the one whose allocator will
+--   hand the slot to the next registration — is published. So no
+--   shader-visible handle can survive the slot's generation change. The
+--   returned plan names every handle the caller must also purge from
+--   its own bookkeeping (@apTextureHandles@, the texture size map).
+releaseTextureHandles ∷ Device
+                      → [TextureHandle]  -- ^ canonical owners being destroyed
+                      → BindlessTextureSystem
+                      → EngineM σ (TextureReleasePlan, BindlessTextureSystem)
+releaseTextureHandles dev owners system = do
+  let plan = planTextureRelease owners (btsHandleMap system)
+  -- Repaint every released slot with the undefined texture first, so a
+  -- descriptor never names an image view that is about to be destroyed.
+  forM_ (trpFreedSlots plan) $ \slot →
+    writeDescriptorSlot dev (btsDescriptorSet system) (btsConfig system)
+      (tsIndex slot)
+      (utImageView $ btsUndefinedTexture system)
+      (btsTextureSampler system)
+  -- Then zero the shader handle→slot entry of EVERY invalidated handle,
+  -- canonical and alias alike, so each resolves to slot 0 (#286).
+  liftIO $ forM_ (trpInvalidated plan) $ \texHandle →
+    writeHandleSlotEntry system (toInt texHandle) 0
+  pure ( plan
+       , system
+           { btsSlotAllocator = freeReleasedSlots plan (btsSlotAllocator system)
+           , btsHandleMap     = dropReleasedHandles plan (btsHandleMap system)
+           , btsImageViews    = dropReleasedHandles plan (btsImageViews system)
+           , btsPinned        = dropReleasedHandles plan (btsPinned system)
+           } )
+
 -- | Switch the shared texture sampler to match a new global filter.
 --   Acquires the new kind from the cache, repaints EVERY slot (the
 --   unallocated ones with the undefined view, the allocated ones with
@@ -453,6 +499,4 @@ setTextureFilter dev flt system = do
 --   ("Engine.Graphics.Vulkan.ShaderCode").
 getTextureSlotIndex ∷ TextureHandle → BindlessTextureSystem → Word32
 getTextureSlotIndex texHandle system =
-  case Map.lookup texHandle (btsHandleMap system) of
-    Just bindlessHandle → fromBindlessHandle bindlessHandle
-    Nothing → 0
+  resolveHandleSlot texHandle (btsHandleMap system)
