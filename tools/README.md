@@ -494,16 +494,40 @@ tear the engine down in a `finally`, and save nothing.
 - **`expedition`** (~5 min) generates a deterministic world (seed 42, size
   64, 3 plates), derives a base camp and a fixed out-and-back route from
   that world, provisions two acolytes off the STATIONARY mule through
-  `unit.transferItemToUnit` (capacity-gated the way the fetch AI gates it),
-  then walks the pair 3 × 8 tiles out and straight back under the real
+  `unit.transferItemToUnit`, then walks the pair 3 × 8 tiles out and
+  straight back under the real
   player move order (`unitAi.commandMove`). It reports, at every waypoint:
   inventory, carrying weight vs capacity, hunger/calories/hydration/
   exhaustion/stamina, blood and bleed rate, pain, wounds and their dressing
   state, the AI's current action/role/treatment claim, and position —
   plus an observations list for anything that ended a trip early.
+
+  Provisioning is **prospectively capacity-gated** (#1212), so no
+  successful transfer can leave a traveller above its carrying capacity.
+  The engine verb itself deliberately has no capacity check (its laxity is
+  a contract the fetch/repair/medic AI callers depend on,
+  `src/Unit/Transfer.hs`) and is unchanged; the runner does the projection
+  instead. It picks the concrete source instance the verb would move —
+  the first `defName` match in `unit.getInventory` — and requires
+  `getCarryingWeight(receiver) + that instance's weight ≤
+  getStat(receiver, 'carrying_capacity')` before passing that same
+  `instanceId` to the verb, re-measuring after every accepted item. Those
+  are the modifier-applied capacity and full recursive instance weight the
+  strict `unit.checkTransfer`/`unit.commitTransfer` policy uses; the
+  strict path itself is not usable here because it additionally requires
+  Chebyshev reach ≤ 1, which the first-aid scenario's ridge-top scout does
+  not have. An item that would not fit is **refused and reported** — for
+  partial provisioning as well as for zero transfers, naming the item, the
+  receiver's load, its capacity and the overshoot — and the report prints
+  each traveller's post-provisioning load against its capacity. A receiver
+  already over capacity refuses further items and says so; the runner
+  never unloads inventory it did not put there. A capacity refusal is a
+  gameplay observation and still exits 0, in both scenarios.
 - **`first-aid`** (~2 min) builds a wide arena ridge, issues the mule's
-  pre-stocked `first_aid_kit` to the selected expedition acolyte via the
-  same transfer path, walks that acolyte off the ridge for a real fall,
+  pre-stocked `first_aid_kit` to the selected expedition acolyte via that
+  same capacity-gated transfer path — a kit refused for want of room is
+  recorded as an observation and the run continues into an untreated fall
+  rather than aborting — walks that acolyte off the ridge for a real fall,
   administers first aid through `unit.treatBleeding` the moment the injury
   lands, and reports the injury, the treatment call's full result
   (part/kind/method/bandages used/attempts/residual seep/message), the
