@@ -53,6 +53,7 @@ import glob
 import os
 import sys
 import time
+from typing import NamedTuple
 
 from probelib import boot, quit_engine, send, send_json, clear_find_water
 
@@ -531,24 +532,118 @@ def walk_leg(port: int, uids: list[int], tx: float, ty: float,
 # ---------------------------------------------------------------------
 # Inventory transfer (the existing engine path the fetch AI uses)
 # ---------------------------------------------------------------------
-def transfer(port: int, frm: int, to: int, defname: str, count: int = 1) -> int:
+class TransferResult(NamedTuple):
+    """What one `transfer` call actually did.
+
+    `code` is `'ok'` when every requested instance moved; otherwise it
+    names why the loop stopped and `detail` is the human-readable
+    sentence the report prints. `moved` is meaningful either way — a
+    partial move reports the count AND the reason the next instance was
+    turned away, so provisioning two of three rations is as legible as
+    provisioning none."""
+    moved: int
+    code: str
+    detail: str
+
+    @property
+    def refused(self) -> bool:
+        """True when the loop stopped short of the requested count."""
+        return self.code != "ok"
+
+    @property
+    def observational(self) -> bool:
+        """True when the refusal is a GAMEPLAY outcome (the receiver has
+        no room) rather than a setup/runtime failure. The runner's exit
+        status reports the latter only, so a caller that treats a failed
+        transfer as fatal must consult this first."""
+        return self.code in ("capacity", "no-capacity")
+
+
+def transfer(port: int, frm: int, to: int, defname: str,
+             count: int = 1) -> TransferResult:
     """Move up to `count` instances of `defname` between two units via
     `unit.transferItemToUnit` — the atomic all-or-nothing engine path
-    acolytes already use to pull stock off the technomule. Returns how
-    many actually moved.
+    acolytes already use to pull stock off the technomule.
 
-    The engine verb deliberately has no capacity check (the Lua caller
-    gates, the same way pickup and the fetch AI do), so the loop stops
-    at the receiver's carrying capacity rather than silently burying an
-    acolyte under an encumbrance penalty the route would then measure."""
+    **No successful move here can leave the receiver over its carrying
+    capacity** (#1212). The engine verb deliberately has no capacity
+    check (the Lua caller gates, the same way pickup and the fetch AI
+    do), and asking only whether the receiver is ALREADY full is not
+    that gate: a receiver a gram below its cap would accept one more
+    indivisible item and finish over it, and since encumbrance scales
+    movement speed (#305) the overshoot then contaminates the very route
+    measurements this runner exists to produce.
+
+    So each iteration picks a CONCRETE source instance — the first
+    `defname` match in `unit.getInventory(frm)`, which is exactly the
+    instance the verb would move on its own — and applies the strict
+    transfer policy's own prospective rule to it:
+    `unit.getCarryingWeight(to) + that instance's weight <=
+    unit.getStat(to, 'carrying_capacity')`. Both readings are the pair
+    `Unit.Transfer`'s `fits` uses (`unit.getInventory`'s `weight` is the
+    full recursive `itemTotalWeight` — case, fill and nested contents;
+    `getStat` is modifier-applied), and the chosen instance's own
+    `instanceId` is passed to the verb so the item that was weighed is
+    the item that moves. Capacity is re-read every iteration, so a
+    3-ration request stops at whichever ration no longer fits.
+
+    A receiver that is already over capacity simply refuses the next
+    item and says so; nothing here unloads inventory it did not put
+    there. The strict `unit.checkTransfer`/`unit.commitTransfer` path
+    computes the same rule engine-side, but additionally requires
+    Chebyshev reach <= 1 (`src/Unit/Transfer.hs`) — and the first-aid
+    scenario provisions its scout across the arena ridge — so this
+    scenario keeps the legacy verb and does the projection itself.
+
+    Returns a `TransferResult`; a capacity refusal is a gameplay
+    observation, never a `ScenarioError`."""
+    lua = (
+        "local moved, code, detail = 0, 'ok', ''; "
+        f"for _ = 1, {count} do "
+        f"local inv = unit.getInventory({frm}); "
+        "local iid, iw = nil, nil; "
+        "if inv ~= nil then for _, it in ipairs(inv) do "
+        f"if it.defName == '{defname}' then "
+        "iid, iw = it.instanceId, (it.weight or 0); break end end end; "
+        "if iid == nil then code = 'source-empty'; detail = "
+        f"'unit {frm} holds no {defname} to hand over'; break end; "
+        f"local cap = unit.getStat({to}, 'carrying_capacity'); "
+        f"local carried = unit.getCarryingWeight({to}) or 0; "
+        "if cap == nil or cap <= 0 then code = 'no-capacity'; detail = "
+        f"string.format('unit {to} reports no usable carrying_capacity "
+        "(%s), so no item can be shown to fit', tostring(cap)); break end; "
+        "if carried + iw > cap then code = 'capacity'; detail = string.format("
+        f"'the next {defname} weighs %.2f kg and unit {to} already carries "
+        "%.2f kg of its %.2f kg capacity, so accepting it would leave it "
+        "%.2f kg over', iw, carried, cap, carried + iw - cap); break end; "
+        f"if unit.transferItemToUnit({frm}, {to}, '{defname}', iid) then "
+        "moved = moved + 1; else code = 'engine-refused'; detail = "
+        "string.format('unit.transferItemToUnit refused instance %d of "
+        f"{defname}', iid); break end end; "
+        "return moved .. '|' .. code .. '|' .. detail"
+    )
+    raw = send(port, lua, timeout=20.0)
+    bits = raw.split("|", 2)
+    if len(bits) != 3:
+        raise ScenarioError(
+            f"provisioning {defname} from unit {frm} to unit {to} replied "
+            f"{raw!r}, which is not a moved|code|detail result")
+    return TransferResult(int(_num(bits[0], 0) or 0), bits[1], bits[2])
+
+
+def provisioning_load(port: int, uid: int) -> str:
+    """The receiver's post-provisioning load against its capacity, read
+    from the same pair `transfer` gates on — so the report states the
+    guarantee outright instead of leaving it to be inferred from the
+    checkpoint below."""
     raw = send(port,
-               f"local n = 0; for _ = 1, {count} do "
-               f"local w = unit.getCarryingWeight({to}) or 0; "
-               f"local cap = unit.getStat({to}, 'carrying_capacity'); "
-               f"if cap and w >= cap then break end; "
-               f"if unit.transferItemToUnit({frm}, {to}, '{defname}') "
-               f"then n = n + 1 else break end end; return n")
-    return int(_num(raw, 0) or 0)
+               f"local w = unit.getCarryingWeight({uid}) or 0; "
+               f"local cap = unit.getStat({uid}, 'carrying_capacity'); "
+               "if cap == nil then return string.format('%.2f kg carried, "
+               "no carrying_capacity stat', w) end; "
+               "return string.format('%.2f / %.2f kg (%s capacity)', w, cap, "
+               "(w <= cap) and 'within' or 'OVER')")
+    return raw or "unreadable"
 
 
 # ---------------------------------------------------------------------
@@ -641,18 +736,26 @@ def run_expedition(port: int) -> int:
 
         # Provision the party off the STATIONARY mule through the real
         # inventory-transfer path. The mule stays at camp as the supply
-        # point; it never travels.
+        # point; it never travels. Every move is gated on the prospective
+        # instance's own weight (#1212), so no traveller starts the route
+        # over its carrying capacity and the encumbrance the route
+        # measures is the one the provisioning intended.
         moved = []
         for uid in party:
             moved.append((uid, "rations", transfer(port, mule, uid,
                                                    "rations", 3)))
         moved.append((party[0], "first_aid_kit",
                       transfer(port, mule, party[0], "first_aid_kit", 1)))
-        for uid, name, n in moved:
-            if n == 0:
+        for uid, name, res in moved:
+            # A partial move is reported too: moving one of three rations
+            # still means an item was turned away, and which one it was
+            # is exactly what a provisioning observation is for.
+            if res.refused:
                 observations.append(
-                    f"no {name} could be transferred from the mule "
-                    f"({mule}) to acolyte {uid}")
+                    f"provisioning acolyte {uid} off the mule ({mule}) "
+                    f"stopped after {res.moved} of the requested {name}: "
+                    f"{res.detail}")
+        loads = [(uid, provisioning_load(port, uid)) for uid in party]
 
         checkpoints.append(checkpoint(port, "prepared at camp",
                                       party + [mule], t0))
@@ -685,7 +788,12 @@ def run_expedition(port: int) -> int:
         print(f"party          acolytes {party[0]} and {party[1]}")
         print(f"supply point   technomule {mule}, stationary at camp")
         print("provisioning   " + ", ".join(
-            f"{n}x {name} -> {uid}" for uid, name, n in moved))
+            f"{res.moved}x {name} -> {uid}" for uid, name, res in moved))
+        print("               every move was gated on the chosen instance's "
+              "own weight, so no\n               traveller can finish "
+              "provisioning above its carrying capacity:")
+        for uid, load in loads:
+            print(f"               acolyte {uid} loaded to {load}")
         print("condition      each acolyte's standing find_water goal was "
               "retired at spawn so the fixed route is the standing order")
         for cp in checkpoints:
@@ -732,9 +840,19 @@ def kit_state(port: int, uids: list[int]) -> str:
     return "; ".join(out)
 
 
-def baseline_scout(port: int, scout: int) -> dict:
+def baseline_scout(port: int, scout: int, expect_kit: bool = True) -> dict:
     """Read the scout ONCE with the simulation stopped and prove the
     pre-fall preconditions against that very read (#1218).
+
+    `expect_kit=False` says the kit was legitimately refused for want of
+    carrying room (#1212) — a gameplay outcome the caller has already
+    recorded as an observation — so the run continues into the fall
+    rather than aborting, and the report says the precondition was
+    dropped instead of claiming a kit the scout does not hold. The fall
+    is still TREATED in that case: `unit.treatBleeding` improvises a
+    makeshift tourniquet when the kit owner has no supplies
+    (`src/Engine/Scripting/Lua/API/Units/Medical.hs`), which is itself
+    worth observing. Every other precondition still holds.
 
     The whole point of the hold is that this snapshot is coherent, so the
     stopped state is re-checked on BOTH sides of the read: a value
@@ -772,8 +890,9 @@ def baseline_scout(port: int, scout: int) -> dict:
         raise ScenarioError(
             f"the scout (unit {scout}) was already injured before the fall: "
             f"{len(wounds)} wound(s) — {fmt_wounds(snap)}")
-    if not any(isinstance(item, dict) and item.get("defName") == "first_aid_kit"
-               for item in _as_list(snap.get("inventory"))):
+    if expect_kit and not any(
+            isinstance(item, dict) and item.get("defName") == "first_aid_kit"
+            for item in _as_list(snap.get("inventory"))):
         raise ScenarioError(
             f"the scout (unit {scout}) is not carrying the issued "
             f"first_aid_kit at the pre-fall baseline (inventory: "
@@ -886,13 +1005,29 @@ def run_first_aid(port: int) -> int:
         acolytes, mule = uids[:5], uids[5]
         scout, medic = acolytes[0], acolytes[1]
 
-        n = transfer(port, mule, scout, "first_aid_kit", 1)
-        if n != 1:
-            raise ScenarioError(
-                "the mule's stocked first-aid kit could not be moved onto "
-                "the expedition acolyte via unit.transferItemToUnit")
+        # The kit issue runs through the same capacity-gated helper the
+        # expedition provisioning uses (#1212). A refusal for want of
+        # room is a GAMEPLAY outcome and stays an observation with exit
+        # 0; only a broken source or a broken engine verb is a setup
+        # failure worth aborting on.
+        res = transfer(port, mule, scout, "first_aid_kit", 1)
+        kit_issued = res.moved == 1
+        if not kit_issued:
+            if res.observational:
+                observations.append(
+                    f"the mule's stocked first-aid kit was not issued to "
+                    f"the scout ({scout}): {res.detail}")
+            else:
+                raise ScenarioError(
+                    "the mule's stocked first-aid kit could not be moved "
+                    "onto the expedition acolyte via "
+                    f"unit.transferItemToUnit — {res.detail}")
+        # Read the post-issue load HERE, under the hold, rather than at
+        # report time: by then the treatment has drawn bandages out of
+        # the kit and the number would no longer describe the issue.
+        kit_issue_load = provisioning_load(port, scout)
         kit_before = kit_state(port, uids)
-        scout_baseline = baseline_scout(port, scout)
+        scout_baseline = baseline_scout(port, scout, expect_kit=kit_issued)
         pre_fall = checkpoint(port, "kit issued, before the fall",
                               [scout, medic, mule], t0,
                               snaps={scout: scout_baseline},
@@ -968,15 +1103,24 @@ def run_first_aid(port: int) -> int:
               f"(uids {uids}), player faction")
         print(f"scout          acolyte {scout} (fell), medic acolyte {medic}")
         print(f"supply point   technomule {mule}, stationary at camp")
-        print("kit issue      1x first_aid_kit moved mule -> scout via "
-              "unit.transferItemToUnit")
+        print("kit issue      " + (
+            "1x first_aid_kit moved mule -> scout via "
+            "unit.transferItemToUnit,\n               gated on that "
+            f"instance's own weight — scout at {kit_issue_load} once "
+            "issued"
+            if kit_issued else
+            f"REFUSED — {res.detail}\n               (a capacity refusal "
+            "is an observation, not a setup failure)"))
         print("baseline       spawn, provisioning and the pre-fall "
               "checkpoint all ran with the simulation STOPPED "
               "(engine.isPaused() == true, re-read either side of the "
               "snapshot);")
         print(f"               the scout was verified within "
-              f"{ARRIVAL_TILES} tiles of {FA_SCOUT_TILE}, unwounded and "
-              f"holding the kit before the descent order released it")
+              f"{ARRIVAL_TILES} tiles of {FA_SCOUT_TILE} and unwounded"
+              + (", and holding the kit," if kit_issued else
+                 " (the kit precondition was dropped with the refused "
+                 "issue),")
+              + "\n               before the descent order released it")
         print(f"kit before     {kit_before}")
         print(f"kit after      {kit_state(port, uids)}")
         print(f"landing        {landing}, pose {pose}, {nwounds} wound(s); "

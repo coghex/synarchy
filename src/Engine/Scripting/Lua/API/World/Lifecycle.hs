@@ -4,6 +4,7 @@ module Engine.Scripting.Lua.API.World.Lifecycle
     , worldGetIdentityFn
     , worldGetLanguageProvenanceFn
     , worldSuggestNameFn
+    , maxSuggestNameOrdinal
     , worldGeneratedNameCharactersFn
     , SuggestionStep(..)
     , suggestionStep
@@ -310,39 +311,85 @@ worldGetLanguageProvenanceFn env = do
 --   (see "Language.Suggest"), which is the behavior the dice button
 --   exists to show.
 --
---   A failure — no catalogue on disk, a malformed one, an
---   unconstructible generator version — returns @nil@ plus a
---   descriptive message and changes nothing. There is deliberately no
---   fallback name: the dummy word-list generator this replaced produced
---   text with no language behind it, and quietly resurrecting that
---   behavior is what #1106 requirement 7 forbids.
+--   **The supported ordinal range is 0 through 10,000 inclusive**
+--   ('maxSuggestNameOrdinal'). An omitted, non-numeric, or negative
+--   ordinal still normalizes to 0; one ABOVE the maximum is refused
+--   outright, with @nil@ plus a message naming that maximum. The bound
+--   exists because the reroll chain is a replay: "Language.Suggest"'s
+--   @headIndexAt@ walks from ordinal zero one step at a time, which is
+--   what makes each reroll provably differ from its predecessor (#1106
+--   requirement 2) and also makes the cost Θ(ordinal). Since this runs
+--   SYNCHRONOUSLY on the shared Lua thread — the one serving the UI
+--   scripts in a graphical session (#1106 requirement 8) — a
+--   caller-sized ordinal would monopolize it, so the domain is bounded
+--   rather than the walk made sublinear (#1272). 10,000 is 250 times
+--   the longest reroll sequence anything exercises and still completes
+--   in integer-only replay well inside one interactive frame's budget.
+--
+--   A failure — an out-of-range ordinal, no catalogue on disk, a
+--   malformed one, an unconstructible generator version — returns @nil@
+--   plus a descriptive message and changes nothing. There is
+--   deliberately no fallback name: the dummy word-list generator this
+--   replaced produced text with no language behind it, and quietly
+--   resurrecting that behavior is what #1106 requirement 7 forbids.
 worldSuggestNameFn ∷ LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
 worldSuggestNameFn backendState = do
     seedArg ← Lua.tointeger 1
     ordArg  ← Lua.tointeger 2
-    let seed    = maybe 0 fromIntegral seedArg ∷ Word64
-        ordinal = max 0 (maybe 0 fromIntegral ordArg) ∷ Int
-    result ← Lua.liftIO $ resolveSuggestion backendState seed ordinal
-    case result of
-        Right sug → do
-            Lua.newtable
-            Lua.pushstring (TE.encodeUtf8 (nsName sug))
-            Lua.setfield (-2) "name"
-            Lua.pushstring (TE.encodeUtf8 (nsGloss sug))
-            Lua.setfield (-2) "gloss"
-            Lua.pushstring (TE.encodeUtf8 (encodeNameExpr (nsExpr sug)))
-            Lua.setfield (-2) "expr"
-            Lua.newtable
-            Lua.pushstring (TE.encodeUtf8 (langSeedText (nsSeed sug)))
-            Lua.setfield (-2) "seed"
-            Lua.pushinteger (fromIntegral (generatorVersionInt (nsVersion sug)))
-            Lua.setfield (-2) "version"
-            Lua.setfield (-2) "language"
-            return 1
-        Left msg → do
-            Lua.pushnil
-            Lua.pushstring (TE.encodeUtf8 msg)
-            return 2
+    let seed   = maybe 0 fromIntegral seedArg ∷ Word64
+        rawOrd = maybe 0 id ordArg ∷ Lua.Integer
+    -- Bound-check the RAW Lua integer, before any narrowing conversion
+    -- and before 'resolveSuggestion' — which reads the catalogue and
+    -- writes 'lbsLanguageCache'. A refused ordinal must do neither, so
+    -- it costs nothing and leaves nothing behind.
+    if rawOrd > fromIntegral maxSuggestNameOrdinal
+      then do
+        Lua.pushnil
+        Lua.pushstring (TE.encodeUtf8 (ordinalOutOfRangeText rawOrd))
+        return 2
+      else do
+        let ordinal = max 0 (fromIntegral rawOrd) ∷ Int
+        result ← Lua.liftIO $ resolveSuggestion backendState seed ordinal
+        case result of
+            Right sug → do
+                Lua.newtable
+                Lua.pushstring (TE.encodeUtf8 (nsName sug))
+                Lua.setfield (-2) "name"
+                Lua.pushstring (TE.encodeUtf8 (nsGloss sug))
+                Lua.setfield (-2) "gloss"
+                Lua.pushstring (TE.encodeUtf8 (encodeNameExpr (nsExpr sug)))
+                Lua.setfield (-2) "expr"
+                Lua.newtable
+                Lua.pushstring (TE.encodeUtf8 (langSeedText (nsSeed sug)))
+                Lua.setfield (-2) "seed"
+                Lua.pushinteger
+                    (fromIntegral (generatorVersionInt (nsVersion sug)))
+                Lua.setfield (-2) "version"
+                Lua.setfield (-2) "language"
+                return 1
+            Left msg → do
+                Lua.pushnil
+                Lua.pushstring (TE.encodeUtf8 msg)
+                return 2
+
+-- | The largest reroll ordinal @world.suggestName@ accepts, inclusive.
+--
+--   Part of that function's public contract — see its documentation for
+--   why the domain is bounded at all. The value is stated there too, so
+--   move both together.
+maxSuggestNameOrdinal ∷ Int
+maxSuggestNameOrdinal = 10000
+
+-- | An over-bound ordinal's rejection message. Names the offending
+--   value AND the maximum, because a caller that guessed the domain
+--   wrong needs to know where it actually ends.
+ordinalOutOfRangeText ∷ Lua.Integer → Text
+ordinalOutOfRangeText raw = T.concat
+    [ "world.suggestName: reroll ordinal "
+    , T.pack (show (toInteger raw))
+    , " is out of range; the maximum is "
+    , T.pack (show maxSuggestNameOrdinal)
+    , "." ]
 
 -- | world.generatedNameCharacters() → string
 --
