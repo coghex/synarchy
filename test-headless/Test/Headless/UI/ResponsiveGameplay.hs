@@ -3227,6 +3227,85 @@ spec = aroundAll withSharedFixture $ do
                     -- endpoint must never consult it.
                     ckpReveals p `shouldBe` 0
 
+        it "the three header lines never overlap at any supported UI scale, and the age line stays clear of the tab strip (round-1 review)" $ \(env, ls) → do
+            resetFixture env ls
+            -- Round-1 review: label.new rasterises at fontSize *
+            -- uiscale, so a baseline advanced by RAW constants falls
+            -- behind its own glyphs as the scale rises — at 2x the age
+            -- line's glyph mass reached back up into the subtitle's
+            -- while buildLayout's reserved (scaled) space below it sat
+            -- empty. Geometry-only, which is exactly what this suite can
+            -- measure: engine.getTextWidth is 0 headless, but a text
+            -- element's position IS its baseline and label height is
+            -- derived straight from fontSize * uiscale.
+            r ← evalJSON ls $ luaLines
+                [ "local origK = building.getContainerKnowledge;"
+                , "local origInfo = building.getInfo;"
+                , "local origGT = engine.gameTime;"
+                , "engine.gameTime = function() return 300.0 end;"
+                , "building.getInfo = function() return"
+                , "    { displayName='Cargo Hold' } end;"
+                , "building.getContainerKnowledge = function() return"
+                , "  { state='known', storedWeight=2.0, capacity=400.0,"
+                , "    revealedAt=0.0, items = {"
+                , "    { defName='steel_bar', category='Materials',"
+                , "      weight=2.0 } } } end;"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "local il = require('scripts.ui.item_list');"
+                , "local lbl = require('scripts.ui.label');"
+                , "local out = {};"
+                -- The whole #748 envelope: 0.5x floor through the 4x cap.
+                , "for i, u in ipairs({0.5, 1.0, 2.0, 3.0, 4.0}) do"
+                , "    engine.setUIScale(u);"
+                , "    local pg = UI.newPage('cargo_hdr_' .. i, 'overlay');"
+                , "    UI.showPage(pg);"
+                , "    cip.setup({page = pg, fbW = 1920, fbH = 2160,"
+                , "               boxTexSet = 1, menuFont = 1});"
+                , "    cip.openFor('building', 20 + i, 300, 300);"
+                , "    local hasAge = cip.state.ageId ~= nil;"
+                , "    local tb = UI.getElementInfo("
+                , "        lbl.getElementHandle(cip.state.titleId)).y;"
+                , "    local sb = UI.getElementInfo("
+                , "        lbl.getElementHandle(cip.state.subtitleId)).y;"
+                , "    local _, sh = lbl.getSize(cip.state.subtitleId);"
+                , "    local ab, ah = 0, 0;"
+                , "    if hasAge then"
+                , "        ab = UI.getElementInfo("
+                , "            lbl.getElementHandle(cip.state.ageId)).y;"
+                , "        local _, hh = lbl.getSize(cip.state.ageId);"
+                , "        ah = hh;"
+                , "    end;"
+                , "    local tabTop = 1000000;"
+                , "    for _, t in ipairs(il.getTabs(cip.state.listId)) do"
+                , "        local bi = UI.getElementInfo(t.boxId);"
+                , "        if bi and bi.y < tabTop then tabTop = bi.y end"
+                , "    end;"
+                -- Glyph mass sits ABOVE the baseline, so line N is clear
+                -- of line N-1 exactly when (baselineN - heightN) is at
+                -- or below baselineN-1.
+                , "    out[i] = {scale = u, hasAge = hasAge,"
+                , "              titleGap = (sb - sh) - tb,"
+                , "              ageGap = (ab - ah) - sb,"
+                , "              listGap = tabTop - ab};"
+                , "    cip.closeIfOpen();"
+                , "end;"
+                , "building.getContainerKnowledge = origK;"
+                , "building.getInfo = origInfo; engine.gameTime = origGT;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe [HeaderGeometryRow] of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just rows → do
+                    length rows `shouldBe` 5
+                    forM_ rows $ \g → do
+                        hgrHasAge g `shouldBe` True
+                        -- The subtitle clears the title, the age clears
+                        -- the subtitle, and the tab strip clears the age
+                        -- — at 0.5x through 4x alike.
+                        hgrTitleGap g `shouldSatisfy` (≥ 0)
+                        hgrAgeGap g `shouldSatisfy` (≥ 0)
+                        hgrListGap g `shouldSatisfy` (> 0)
+
         it "the row context menu operates on the REMEMBERED row, handing withdraw the remembered instance id" $ \(env, ls) → do
             resetFixture env ls
             -- Requirement 7: the withdraw path is unchanged, and a
@@ -4554,6 +4633,18 @@ instance FromJSON ContainerRefreshProbe where
                               <*> o .: "afterRows" <*> o .:? "afterAge"
                               <*> o .:? "afterNames" .!= ""
                               <*> o .: "reveals"
+
+-- #1237 round-1 review: the three header lines' vertical clearances at
+-- one UI scale. Each gap is (next line's glyph top - previous line's
+-- baseline), so a negative value is a real overlap.
+data HeaderGeometryRow = HeaderGeometryRow
+    { hgrScale ∷ Double, hgrHasAge ∷ Bool, hgrTitleGap ∷ Double
+    , hgrAgeGap ∷ Double, hgrListGap ∷ Double } deriving Show
+instance FromJSON HeaderGeometryRow where
+    parseJSON = withObject "HeaderGeometryRow" $ \o →
+        HeaderGeometryRow <$> o .: "scale" <*> o .: "hasAge"
+                          <*> o .: "titleGap" <*> o .: "ageGap"
+                          <*> o .: "listGap"
 
 data RememberedMenuProbe = RememberedMenuProbe
     { rmpLabel ∷ Text, rmpDefName ∷ Text, rmpInstance ∷ Int

@@ -497,11 +497,33 @@ end
 -----------------------------------------------------------
 -- Render: title row
 -----------------------------------------------------------
+-- Every header baseline is measured in SCALED units, matching the
+-- scaled band heights buildLayout reserves (titleH/subH/ageH) and the
+-- scaled font label.new actually rasterises. Round-1 review: the
+-- pre-#1237 code advanced by the RAW TITLE_H/SUBTITLE_H constants and
+-- offset each baseline by a raw fontSize, so above 1x the lines
+-- advanced more slowly than their own glyphs grew — at 2x the third
+-- line's glyph mass reached back up into the second's, and the reserved
+-- space below stayed empty. Identical arithmetic at uiscale 1.
+--
+-- A text element's position IS its baseline and its glyph mass sits
+-- ABOVE it (scripts/ui/label.lua), so band N's baseline is its band top
+-- plus a fraction of the scaled font — the ascent — not its band
+-- height.
+local function headerBaselines(uiscale)
+    local titleH = math.floor(TITLE_H    * uiscale)
+    local subH   = math.floor(SUBTITLE_H * uiscale)
+    return math.floor(TITLE_FONT * uiscale * 0.85),
+           titleH + math.floor(SUBTITLE_FONT * uiscale * 0.85),
+           titleH + subH + math.floor(AGE_FONT * uiscale * 0.85)
+end
+
 local function buildTitle(originX, originY, kind, view)
     local s = cargoInventoryPanel.state
     local h = cargoInventoryPanel.hud
     if not h then return end
     local uiscale = scale.get()
+    local titleBase, subBase, ageBase = headerBaselines(uiscale)
 
     s.titleId = label.new({
         name     = "cargo_inv_title",
@@ -513,8 +535,7 @@ local function buildTitle(originX, originY, kind, view)
         uiscale  = uiscale,
     })
     local th = label.getElementHandle(s.titleId)
-    UI.addToPage(h.page, th, originX,
-                 originY + math.floor(TITLE_FONT * 0.85))
+    UI.addToPage(h.page, th, originX, originY + titleBase)
     UI.setZIndex(th, 132)
 
     s.subtitleId = label.new({
@@ -527,8 +548,7 @@ local function buildTitle(originX, originY, kind, view)
         uiscale  = uiscale,
     })
     local sh = label.getElementHandle(s.subtitleId)
-    UI.addToPage(h.page, sh, originX,
-                 originY + TITLE_H + math.floor(SUBTITLE_FONT * 0.85))
+    UI.addToPage(h.page, sh, originX, originY + subBase)
     UI.setZIndex(sh, 132)
 
     -- The "as of…" line exists only for a snapshot there is an
@@ -548,9 +568,7 @@ local function buildTitle(originX, originY, kind, view)
             uiscale  = uiscale,
         })
         local ah = label.getElementHandle(s.ageId)
-        UI.addToPage(h.page, ah, originX,
-                     originY + TITLE_H + SUBTITLE_H
-                       + math.floor(AGE_FONT * 0.85))
+        UI.addToPage(h.page, ah, originX, originY + ageBase)
         UI.setZIndex(ah, 132)
     end
 end
