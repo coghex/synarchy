@@ -684,6 +684,25 @@ def _fps_unrepresentable(fx: Fixture) -> None:
             .replace("        fps: 8\n", "        fps: " + "9" * 4000 + "\n"))
 
 
+@negative("an `fps:` that overflows the engine's 32-bit Float",
+          "32-bit Float")
+def _fps_overflows_runtime_float(fx: Fixture) -> None:
+    # Fits a Python double, so every earlier check passes; loads as
+    # Infinity in UnitYamlAnim's Float field.
+    valid_fixture(fx)
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+            .replace("        fps: 8\n", "        fps: 1.0e+100\n"))
+
+
+@negative("an `fps:` that underflows the engine's 32-bit Float",
+          "32-bit Float")
+def _fps_underflows_runtime_float(fx: Fixture) -> None:
+    # Positive and finite as a double; loads as 0.
+    valid_fixture(fx)
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+            .replace("        fps: 8\n", "        fps: 1.0e-100\n"))
+
+
 @positive("a large but representable fps is still accepted")
 def _fps_large_but_finite(fx: Fixture) -> None:
     # The other direction: the rule is about representability, not about
@@ -877,7 +896,7 @@ def main() -> int:
 
     # The suite is only meaningful if it actually built fixtures; a
     # refactor that silently emptied a registry must not read as green.
-    if len(POSITIVE) < 9 or len(NEGATIVE) < 56:
+    if len(POSITIVE) < 9 or len(NEGATIVE) < 58:
         failures.append(
             f"case registries look truncated: {len(POSITIVE)} positive, "
             f"{len(NEGATIVE)} negative")

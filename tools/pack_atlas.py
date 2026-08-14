@@ -73,11 +73,12 @@ INVARIANTS ENFORCED
   * animation and direction keys are strings, never coerced (YAML
     resolves an unquoted `123:` to an int that would stringify into a
     valid-looking identifier);
-  * `fps` is a finite, float-representable positive number (`.nan` and
-    `.inf` are real floats to PyYAML and neither fails a positivity
-    test; an unbounded-precision int makes `math.isfinite` raise rather
-    than answer) and `loop` a boolean, rejected rather than coerced when
-    they are not;
+  * `fps` is a positive number that survives the engine's 32-bit
+    `Float` — `.nan` and `.inf` are real floats to PyYAML and neither
+    fails a positivity test, an unbounded-precision int makes
+    `math.isfinite` raise rather than answer, and `1.0e+100` /
+    `1.0e-100` fit a double but load as infinity / zero — and `loop` is
+    a boolean, rejected rather than coerced when it is not;
   * no symlink appears anywhere in the walk (unit directory,
     `animations/` root, animation directory, direction directory, or
     frame), so nothing can be linked past the inventory.
@@ -132,6 +133,7 @@ from __future__ import annotations
 import argparse
 import math
 import re
+import struct
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -247,6 +249,23 @@ def is_representable_number(value: object) -> bool:
         return math.isfinite(value)  # type: ignore[arg-type]
     except (OverflowError, TypeError, ValueError):
         return False
+
+
+def fits_runtime_float(value: float) -> bool:
+    """Whether ``value`` survives the engine's single-precision `Float`.
+
+    `Engine.Asset.YamlUnits.UnitYamlAnim` stores `uyaFps` as a Haskell
+    `Float`, which is 32-bit. Python's own check only proves the value
+    fits a 64-bit double, so `1.0e+100` and `1.0e-100` pass it and then
+    become `Infinity` and `0` respectively at load time — neither is a
+    frame rate. Round-tripping through a 32-bit pack reproduces exactly
+    what the engine will hold.
+    """
+    try:
+        narrowed = struct.unpack("<f", struct.pack("<f", float(value)))[0]
+    except (OverflowError, ValueError):
+        return False
+    return math.isfinite(narrowed) and narrowed != 0.0
 
 
 def render_scalar(value: object, limit: int = 40) -> str:
@@ -386,6 +405,12 @@ def parse_animations(
             elif fps <= 0:
                 report.err(
                     where, f"`fps:` must be positive, got {render_scalar(fps)}")
+            elif not fits_runtime_float(fps):
+                report.err(
+                    where,
+                    f"`fps:` does not survive the engine's 32-bit Float, got "
+                    f"{render_scalar(fps)} (it would load as infinity or "
+                    f"zero)")
         if "loop" in raw_anim and not isinstance(raw_anim["loop"], bool):
             report.err(
                 where,

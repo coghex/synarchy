@@ -632,10 +632,13 @@ eventually outweighs that convenience.
   - Mitigation: D-10 defers the work until the measured budget activates it,
     selects transcode targets from device features, retains PNG fallback, and
     permits mixed encodings without retaining duplicate copies of one atlas.
-- Risk: the validator's current 120 warnings are silenced without understanding
-  whether the files are unused, unreferenced future art, or missing declarations.
-  - Mitigation: require an explicit classification during TEX-1 and keep original
-    sources until their approved disposition is implemented.
+- Risk: unowned asset files are silenced without understanding whether they are
+  unused, unreferenced future art, or missing declarations.
+  - Mitigation: TEX-1 (#1257) required an explicit path-level classification and
+    owner confirmation before any deletion. All 695 then-unowned paths were
+    RETAINED and declared, nothing was deleted, and the validator now has no
+    exemption mechanism at all — so a future unowned file fails the gate rather
+    than accumulating as a warning.
 
 ## Rollout and rollback
 
