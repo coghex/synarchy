@@ -45,7 +45,9 @@ module Engine.Scripting.Lua.API.Units.Transfer
     --   'Test.Headless.Unit.TransferApi' drive the REAL pop, the REAL
     --   restore and the REAL manager writes against a stub push, which
     --   is the only way to gate "a failed cross-manager write restores
-    --   the source item at its original index".
+    --   the source item at its original index" — and, since #1274, the
+    --   branch where a stub push destroys the source first, so the
+    --   restore has nothing to splice into.
   , commitCross
   , popUnit
   , popBuilding
@@ -519,7 +521,14 @@ type PushStep = EngineEnv → ItemInstance → LivePlacement
 -- | Restore a popped instance at its ORIGINAL index after a failed
 --   push. Inventory order is player-visible, so "unchanged" means
 --   order-preserving, not merely same-multiset.
-type RestoreStep = EngineEnv → Int → ItemInstance → IO ()
+--
+--   The result reports whether the splice-back actually happened
+--   (#1274). It fails with 'ReasonSourceMissing' when the source is no
+--   longer in its manager — another thread tore it down between the pop
+--   and this call — because there is then nothing to restore into and
+--   'commitCross' must say so rather than discard the outcome.
+type RestoreStep = EngineEnv → Int → ItemInstance
+                 → IO (Either TransferReason ())
 
 -- | The cross-manager shape depositToCargo already uses: validate
 --   against a fresh scene, pop under the source's ref, push under the
@@ -534,6 +543,26 @@ type RestoreStep = EngineEnv → Int → ItemInstance → IO ()
 --   proximity only from the opening snapshot would let a unit that
 --   walked away (or was teleported) mid-call still deposit from out of
 --   range.
+--
+--   CONCURRENT SOURCE TEARDOWN IS THE ONE EXCEPTION to #190's
+--   restore-on-failure guarantee (#1274). The pop and the push are
+--   separate transactions on separate refs, so another thread —
+--   @handleUnitDestroyCommand@, @BuildingDestroy@ — can remove the
+--   source instance in the window between them. The restore then has
+--   nothing to splice back into, and the item is CONSUMED WITH THE
+--   SOURCE: that is exactly what teardown does to the rest of the
+--   source's contents, which it deletes with the instance and never
+--   spills to the ground, so the in-flight item ends up where it would
+--   have anyway. No path duplicates it — the failing push wrote
+--   nothing, and the vanished source cannot be written to.
+--
+--   What this must NOT do is report that silently. Failure precedence:
+--   a restore that fails because the source vanished OVERRIDES the
+--   destination's refusal, so the caller is told
+--   @staleFailure ReasonSourceMissing@ (@became_stale/source_missing@)
+--   rather than a stale destination-side reason that would imply a
+--   splice-back which never happened. A restore that SUCCEEDS keeps
+--   returning the destination's original refusal, unchanged.
 commitCross ∷ EngineEnv → TransferEndpoint → TransferEndpoint
             → (PopStep, RestoreStep) → PushStep → TransferItemRef
             → IO (Either TransferFailure ItemInstance)
@@ -550,8 +579,10 @@ commitCross env from to (pop, restore) push ref = do
                     case stored of
                         Right () → pure (Right item)
                         Left r   → do
-                            restore env (tcIndex c) item
-                            pure (Left (staleFailure r))
+                            restored ← restore env (tcIndex c) item
+                            pure $ Left $ staleFailure $ case restored of
+                                Right () → r
+                                Left rr  → rr
 
 popUnit ∷ UnitId → (PopStep, RestoreStep)
 popUnit uid = (pop, restore)
@@ -579,13 +610,17 @@ popUnit uid = (pop, restore)
                                             HM.insert uid u' (umInstances um) }
                                    , Right (live, place) )
                         _ → (um, Left ReasonInstanceMissing)
+    -- The unit was destroyed between the pop and here: its whole
+    -- uiInventory went with it, so there is no inventory left to splice
+    -- into and the caller is told so (#1274).
     restore env ix item =
         atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
             case HM.lookup uid (umInstances um) of
-                Nothing → (um, ())
+                Nothing → (um, Left ReasonSourceMissing)
                 Just u  →
                     let u' = u { uiInventory = insertAt ix item (uiInventory u) }
-                    in (um { umInstances = HM.insert uid u' (umInstances um) }, ())
+                    in ( um { umInstances = HM.insert uid u' (umInstances um) }
+                       , Right () )
 
 popBuilding ∷ BuildingId → (PopStep, RestoreStep)
 popBuilding bid = (pop, restore)
@@ -616,15 +651,18 @@ popBuilding bid = (pop, restore)
                                             HM.insert bid inst' (bmInstances bm) }
                                    , Right (live, place) )
                         _ → (bm, Left ReasonInstanceMissing)
+    -- Demolished between the pop and here: biStorage went with the
+    -- instance, so there is nothing to splice into (#1274).
     restore env ix item =
         atomicModifyIORef' (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
             case HM.lookup bid (bmInstances bm) of
-                Nothing → (bm, ())
+                Nothing → (bm, Left ReasonSourceMissing)
                 Just inst →
                     let inst' = inst { biStorage =
                                          insertAt ix item (biStorage inst) }
-                    in (bm { bmInstances =
-                               HM.insert bid inst' (bmInstances bm) }, ())
+                    in ( bm { bmInstances =
+                                HM.insert bid inst' (bmInstances bm) }
+                       , Right () )
 
 -- | Final destination-side re-check under the building ref: the
 --   building still exists, is still Built with storage, is still in
