@@ -1334,6 +1334,57 @@ def _hand_edited_index(fx: Fixture) -> None:
     fx.validate_fails("generated-index metadata mismatch")
 
 
+@scenario("a duplicated animation entry in the index is rejected")
+def _duplicate_index_entry(fx: Fixture) -> None:
+    # Keying the stored entries by name to diagnose them is exactly
+    # what swallows this: two copies of one VALID entry collapse to a
+    # dict identical to a fresh compile's, so every per-entry check
+    # passes while the file plainly differs.
+    build_unit(fx, "hero", [("idle", uniform(CANON5, 2), True),
+                            ("walk", uniform(ALL8, 2), False)])
+    fx.compile_ok()
+    document = fx.index("hero")
+    document["animations"].append(document["animations"][0])
+    fx.index_path("hero").write_text(
+        json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    fx.validate_fails("duplicate entry for animation 'idle'")
+
+
+@scenario("a reordered animations list is rejected")
+def _reordered_index_entries(fx: Fixture) -> None:
+    # Same class as the duplicate above: the set of names is right and
+    # every entry is byte-correct, so only the ORDER differs.
+    build_unit(fx, "hero", [("idle", uniform(CANON5, 2), True),
+                            ("walk", uniform(ALL8, 2), False)])
+    fx.compile_ok()
+    document = fx.index("hero")
+    document["animations"].reverse()
+    fx.index_path("hero").write_text(
+        json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    fx.validate_fails("not in canonical name-sorted order")
+
+
+@scenario("a mismatch the diagnostics cannot name still fails")
+def _unnamed_mismatch_backstop(fx: Fixture) -> None:
+    # The whole-document comparison is the authority; the drill-down
+    # only says WHERE. This pins the backstop directly by blinding the
+    # drill-down, so a future edit shape nobody anticipated cannot be
+    # accepted merely because no diagnostic recognised it.
+    build_unit(fx, "hero", [("idle", uniform(CANON5, 2), True)])
+    fx.compile_ok()
+    document = fx.index("hero")
+    document["animations"].append(document["animations"][0])
+    fx.index_path("hero").write_text(
+        json.dumps(document, indent=2) + "\n", encoding="utf-8")
+
+    blinded = pack_atlas.report_index_mismatch
+    pack_atlas.report_index_mismatch = lambda *a, **k: None
+    try:
+        fx.validate_fails("does not match a fresh compile")
+    finally:
+        pack_atlas.report_index_mismatch = blinded
+
+
 @scenario("a reformatted but semantically identical index is rejected")
 def _noncanonical_index(fx: Fixture) -> None:
     build_unit(fx, "hero", [("idle", uniform(CANON5, 2), True)])
@@ -1606,7 +1657,7 @@ def main() -> int:
 
     # The suite is only meaningful if it actually built fixtures; a
     # refactor that silently emptied a registry must not read as green.
-    if len(POSITIVE) < 9 or len(NEGATIVE) < 61 or len(SCENARIO) < 27:
+    if len(POSITIVE) < 9 or len(NEGATIVE) < 61 or len(SCENARIO) < 30:
         failures.append(
             f"case registries look truncated: {len(POSITIVE)} positive, "
             f"{len(NEGATIVE)} negative, {len(SCENARIO)} scenario")

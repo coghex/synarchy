@@ -1709,7 +1709,14 @@ INDEX_METADATA_KEYS = (
 def report_index_mismatch(
     report: Report, where: str, expected: Dict[str, Any], actual: Any,
 ) -> None:
-    """Name the specific way a stored index differs from a fresh one."""
+    """Name the specific way a stored index differs from a fresh one.
+
+    DIAGNOSTIC ONLY. The authority is the whole-document comparison in
+    the caller, which has already found a difference; everything here
+    exists to say WHERE. The caller therefore backstops this function:
+    a difference it cannot name is still reported, so no shape can slip
+    through by being one this code forgot to look for.
+    """
     if not isinstance(actual, dict):
         report.err(where, "index is not a JSON object")
         return
@@ -1739,8 +1746,31 @@ def report_index_mismatch(
         if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
             report.err(where, "malformed entry in the index `animations` list")
             return
+        # Keying by name is what makes the per-animation diagnostics
+        # below possible, and it is exactly what would swallow a
+        # duplicated entry: two copies of one VALID entry collapse to a
+        # dict identical to a fresh compile's, leaving nothing to
+        # report even though the file plainly differs.
+        if entry["name"] in stored:
+            report.err(
+                where,
+                f"duplicate entry for animation '{entry['name']}' in the "
+                f"index `animations` list. This file is generated — "
+                f"regenerate it with --compile rather than editing it.")
+            return
         stored[entry["name"]] = entry
     fresh = {entry["name"]: entry for entry in expected["animations"]}
+
+    if set(stored) == set(fresh):
+        # Same animations, so the per-entry walk below would find
+        # nothing: only the ORDER differs. Entries are emitted sorted by
+        # name, and that order is part of the generated contract.
+        order = [entry["name"] for entry in raw_anims]
+        if order != [entry["name"] for entry in expected["animations"]]:
+            report.err(
+                where,
+                f"index `animations` are not in canonical name-sorted "
+                f"order: {', '.join(order)}")
 
     for name in sorted(set(fresh) - set(stored)):
         report.err(where, f"index is stale: no entry for animation '{name}'")
@@ -1823,7 +1853,19 @@ def validate_unit_index(
         return
 
     if stored != expected:
+        before = len(report.errors)
         report_index_mismatch(report, where, expected, stored)
+        if len(report.errors) == before:
+            # The comparison above is the authority and it already
+            # found a difference; the drill-down is only there to name
+            # it. A shape it cannot name must still FAIL, or a stored
+            # index would be accepted purely because the diagnostics
+            # did not anticipate its edit.
+            report.err(
+                where,
+                f"{INDEX_FILENAME} does not match a fresh compile of this "
+                f"unit. It is a generated file — regenerate it with "
+                f"--compile.")
     elif stored_bytes != canonical_index_bytes(expected):
         # Same values, different bytes: the file was reformatted or
         # re-keyed by hand. The index is generated, and TEX-3 will
