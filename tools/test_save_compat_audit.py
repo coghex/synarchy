@@ -1149,6 +1149,151 @@ def test_haskell_component_source_paths_discovers_new_files_automatically() -> N
            f"a Component/ directory, got {sca.HASKELL_COMPONENT_SOURCE_PATHS}")
 
 
+def _malformed_older_versions_source(current: int, older: str) -> str:
+    """One synthetic ComponentSpec whose only interesting field is its
+    csOlderVersions declaration."""
+    return f"""\
+evolvedCodec ∷ ComponentCodec D
+evolvedCodec = componentCodec ComponentSpec
+    {{ csComponent     = evolvedComponentId
+    , csVersion       = {current}
+    , csRequired      = True
+    , csDeps          = []
+    , csEncode        = enc
+    , csDecode        = id
+    , csOlderVersions = {older}
+    , csValidate      = const []
+    }}
+"""
+
+
+def _expect_older_versions_rejected(current: int, older: str,
+                                    must_mention: list[str],
+                                    what: str) -> None:
+    try:
+        specs = sca.discover_component_specs(
+            _malformed_older_versions_source(current, older), "synthetic.hs")
+        expect(False,
+               f"expected discover_component_specs to raise for {what}, got "
+               f"{specs}")
+    except ValueError as e:
+        missing = [m for m in must_mention if m not in str(e)]
+        expect(not missing,
+               f"expected the {what} error to mention {missing}, got: {e}")
+
+
+def test_discover_component_specs_rejects_a_duplicate_older_version() -> None:
+    print("issue #1275: csOlderVersions repeating a strictly OLDER version "
+          "is rejected -- only the first decoder for a repeated version is "
+          "ever reached by the dispatch table's lookup, so the second is "
+          "silently unreachable. Set-normalizing it (the old "
+          "`sorted({current} | set(older))`) erased exactly this evidence")
+    _expect_older_versions_rejected(
+        4, "[ atVersion 3 migrateV3, atVersion 2 migrateV2, "
+           "atVersion 3 migrateV3Again ]",
+        ["evolvedCodec", "v3", "more than once"],
+        "a duplicate older version")
+
+
+def test_discover_component_specs_rejects_the_current_version_as_older() -> None:
+    print("issue #1275: csOlderVersions listing the CURRENT version is "
+          "rejected -- the real current decoder shadows it (sortOn is stable "
+          "and the current version is prepended), so its frozen DTO is never "
+          "reached. Distinct from the duplicate case above, so uniqueness "
+          "and strict ordering are demonstrated independently")
+    _expect_older_versions_rejected(
+        4, "[ atVersion 4 migrateV4, atVersion 1 migrateV1 ]",
+        ["evolvedCodec", "v4", "csVersion"],
+        "the current version declared as older")
+
+
+def test_discover_component_specs_rejects_a_future_older_version() -> None:
+    print("issue #1275: csOlderVersions listing a version NEWER than "
+          "csVersion is rejected -- the reader would advertise and accept a "
+          "version no writer has ever produced")
+    _expect_older_versions_rejected(
+        4, "[ atVersion 5 migrateV5, atVersion 1 migrateV1 ]",
+        ["evolvedCodec", "v5", "NEWER"],
+        "a future version declared as older")
+
+
+def test_discover_component_specs_fails_closed_on_unreadable_older_entries() -> None:
+    print("issue #1275: the parse fails CLOSED. A findall scan silently "
+          "SKIPPED any element it did not recognize, deriving an accepted-"
+          "version set missing real decoders; every one of these shapes must "
+          "raise instead")
+    for older, what in [
+        ("[ atVersion legacyVersion migrateOld ]",
+         "a non-literal atVersion argument"),
+        ("[ ComponentVersion { cvVersion = 1, cvDecode = decodeV1 } ]",
+         "a hand-built ComponentVersion"),
+        ("[ frozenAt 1 migrateV1 ]", "a helper expression"),
+        ("[ atVersion 1 migrateV1, someOtherEntry ]",
+         "one unreadable element beside a readable one"),
+        ("olderVersionsOf myComponent", "a non-list value"),
+    ]:
+        _expect_older_versions_rejected(
+            4, older, ["evolvedCodec", "cannot enumerate"], what)
+
+
+def test_discover_component_specs_exhausts_each_older_entry() -> None:
+    print("issue #1275 (review round 1): matching only the HEAD of an entry "
+          "is not fail-closed. An element whose readable `atVersion <n>` "
+          "prefix is followed by more expression evaluates to a DIFFERENT "
+          "ComponentVersion than the one recorded, so the entry must be "
+          "consumed COMPLETELY or rejected")
+    for older, what in [
+        ("[ atVersion 1 migrateV1 `seq` atVersion futureVersion migrateFuture ]",
+         "a trailing operator application hiding a non-literal version"),
+        ("[ atVersion 1 (id ∷ D → D) `orElse` atVersion 9 migrateV9 ]",
+         "a trailing operator application after a parenthesized build"),
+        ("[ atVersion 1 migrateV1 extraArgument ]",
+         "a second argument after the build"),
+        ("[ atVersion 1 ]", "no build argument at all"),
+        ("[ atVersion 1 $ migrateV1 ]",
+         "an application operator this audit does not read"),
+        ("[ atVersion 1 migrateV1 . fixup ]",
+         "a composed build expression"),
+    ]:
+        _expect_older_versions_rejected(
+            4, older, ["evolvedCodec", "cannot enumerate"], what)
+
+
+def test_discover_component_specs_reads_the_real_build_argument_shapes() -> None:
+    print("issue #1275 (review round 1): exhausting each entry must not "
+          "reject the shapes actually shipped -- a bare identifier, a "
+          "qualified name, and a balanced parenthesized expression "
+          "(including nested parens and a string literal)")
+    for older, expected in [
+        ("[ atVersion 1 migrateWorldPagesV1 ]", [1, 4]),
+        ("[ atVersion 1 Page.migrateV1 ]", [1, 4]),
+        ("[ atVersion 1 (id ∷ WorldActivityDTO → WorldActivityDTO) ]", [1, 4]),
+        ("[ atVersion 1 (fmap (dropTag \"v1\") . migrateV1) ]", [1, 4]),
+        ("[ atVersion 2 (migrateV2 ∷ D2 → A), atVersion 1 migrateV1 ]",
+         [1, 2, 4]),
+    ]:
+        specs = sca.discover_component_specs(
+            _malformed_older_versions_source(4, older), "synthetic.hs")
+        expect(len(specs) == 1 and specs[0]["inputVersions"] == expected,
+               f"expected inputVersions {expected} for {older}, got {specs}")
+
+
+def test_discover_component_specs_accepts_a_well_formed_multi_version_table() -> None:
+    print("issue #1275: a well-formed table is completely unaffected -- "
+          "descending, ascending, and single-entry declarations all still "
+          "yield the same ascending inputVersions they always did")
+    for older, expected in [
+        ("[ atVersion 3 m3, atVersion 2 m2, atVersion 1 m1 ]", [1, 2, 3, 4]),
+        ("[ atVersion 1 m1, atVersion 2 m2, atVersion 3 m3 ]", [1, 2, 3, 4]),
+        ("[ atVersion 1 (id ∷ D → D) ]", [1, 4]),
+        ("[]", [4]),
+    ]:
+        specs = sca.discover_component_specs(
+            _malformed_older_versions_source(4, older), "synthetic.hs")
+        expect(len(specs) == 1 and specs[0]["inputVersions"] == expected,
+               f"expected inputVersions {expected} for {older}, got {specs}")
+
+
 def test_discover_lua_save_modules_finds_the_real_two_modules() -> None:
     print("round-16 review: discover_lua_save_modules scans scripts/ rather "
           "than trusting a fixed 2-file list -- confirm it still finds the "
@@ -1494,6 +1639,13 @@ def main() -> int:
         test_discover_component_specs_derives_input_versions_from_one_declaration,
         test_discover_component_specs_ignores_commented_out_fields,
         test_discover_component_specs_raises_on_a_spec_missing_a_needed_field,
+        test_discover_component_specs_rejects_a_duplicate_older_version,
+        test_discover_component_specs_rejects_the_current_version_as_older,
+        test_discover_component_specs_rejects_a_future_older_version,
+        test_discover_component_specs_fails_closed_on_unreadable_older_entries,
+        test_discover_component_specs_exhausts_each_older_entry,
+        test_discover_component_specs_reads_the_real_build_argument_shapes,
+        test_discover_component_specs_accepts_a_well_formed_multi_version_table,
         test_hand_rolled_component_codec_is_no_longer_silently_discovered,
         test_haskell_component_source_paths_discovers_new_files_automatically,
         test_discover_lua_save_modules_finds_the_real_two_modules,

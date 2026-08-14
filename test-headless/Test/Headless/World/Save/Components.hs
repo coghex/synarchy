@@ -11,6 +11,7 @@ module Test.Headless.World.Save.Components (spec) where
 
 import UPrelude
 import Test.Hspec
+import Control.Exception (ErrorCall(..), evaluate)
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Serialize as S
@@ -576,6 +577,32 @@ isLeft _        = False
 componentIdText ∷ ComponentId → Text
 componentIdText (ComponentId t) = t
 
+-- | Issue #1275: a synthetic spec whose ONLY interesting content is its
+--   declared version table. The DTO is a bare 'Word32' so nothing about
+--   any real component's shape can influence what the construction-time
+--   check does with the declarations.
+versionTableProbe ∷ Word32 → [Word32] → ComponentSpec Word32 Word32
+versionTableProbe current older = ComponentSpec
+    { csComponent     = probeComponentId
+    , csVersion       = current
+    , csRequired      = True
+    , csDeps          = []
+    , csEncode        = const 0
+    , csDecode        = id
+    , csOlderVersions = [ atVersion v (id ∷ Word32 → Word32) | v ← older ]
+    , csValidate      = const []
+    }
+
+probeComponentId ∷ ComponentId
+probeComponentId = ComponentId "version-table-probe"
+
+-- | An 'ErrorCall' whose message contains every given fragment — used to
+--   prove a construction-time rejection actually NAMES the component and
+--   the offending version, not merely that something crashed.
+errorMentioning ∷ [Text] → Selector ErrorCall
+errorMentioning needles (ErrorCall msg) =
+    all (`T.isInfixOf` T.pack msg) needles
+
 -- | A payload's byte length plus an FNV-1a-64 fingerprint of its bytes —
 --   a compact stand-in for pinning whole encoded payloads inline
 --   (issue #1093's byte-identical-encoding requirement). Deliberately its
@@ -1045,6 +1072,82 @@ spec = do
                     ("expected exactly one migrated page slice, got "
                      <> show other)
                 Left e → expectationFailure (T.unpack (renderComponentError e))
+
+    -- Issue #1275: 'csOlderVersions' promised every entry was OLDER than
+    -- the current version, and nothing enforced it. Because
+    -- 'componentCodec' sorts the current version together with the
+    -- declared older ones and dispatches by first-match 'lookup', a
+    -- malformed table degrades SILENTLY rather than failing: a repeated
+    -- version leaves its second decoder unreachable, the current version
+    -- listed as older is shadowed by the real current decoder, and a
+    -- future version is advertised and accepted as though it were
+    -- history. The version is an ordinary 'Word32' argument, so the type
+    -- checker sees nothing wrong with any of them.
+    --
+    -- 'componentCodec' is the AUTHORITATIVE boundary for that contract:
+    -- it rejects the table BEFORE a 'ComponentCodec' exists, so a
+    -- malformed declaration cannot reach a live dispatch table at all.
+    -- The registered-codec invariants above ("advertises exactly the
+    -- versions it dispatches on") and 'tools/save_compat_audit.py' both
+    -- still observe the same rule over the real components — deliberately
+    -- kept as defense-in-depth, since each catches it through a
+    -- different mechanism (runtime probing / source parsing).
+    describe "csOlderVersions table validity (issue #1275)" $ do
+        it "rejects a version declared TWICE, naming the component and the \
+           \repeated version -- the dispatch table's lookup would only ever \
+           \reach the first of the two decoders" $
+            evaluate (componentCodec (versionTableProbe 4 [3, 2, 3]))
+                `shouldThrow` errorMentioning
+                    ["version-table-probe", "v3", "more than once"]
+
+        it "rejects the CURRENT version declared as older -- sortOn is \
+           \stable and the current decoder is prepended, so the entry's own \
+           \frozen DTO would never be reached" $
+            evaluate (componentCodec (versionTableProbe 4 [4, 1]))
+                `shouldThrow` errorMentioning
+                    ["version-table-probe", "v4", "CURRENT version"]
+
+        it "rejects a version NEWER than csVersion -- the reader would \
+           \advertise and accept a version no writer has ever produced" $
+            evaluate (componentCodec (versionTableProbe 4 [5, 1]))
+                `shouldThrow` errorMentioning
+                    ["version-table-probe", "v5", "NEWER"]
+
+        it "reports the FIRST offending entry in declaration order, so the \
+           \diagnostic points at a real line rather than at whichever entry \
+           \a sort happened to surface" $ do
+            evaluate (componentCodec (versionTableProbe 4 [9, 2, 2]))
+                `shouldThrow` errorMentioning ["v9"]
+            evaluate (componentCodec (versionTableProbe 4 [2, 2, 9]))
+                `shouldThrow` errorMentioning ["v2"]
+
+        it "leaves every WELL-FORMED table alone: descending, ascending, \
+           \single-entry, and empty declarations all build and advertise \
+           \the same ascending accepted set they always did" $ do
+            let versOf = ccInputVers . componentCodec
+            versOf (versionTableProbe 4 [3, 2, 1]) `shouldBe` [1, 2, 3, 4]
+            versOf (versionTableProbe 4 [1, 2, 3]) `shouldBe` [1, 2, 3, 4]
+            versOf (versionTableProbe 4 [1])       `shouldBe` [1, 4]
+            versOf (versionTableProbe 4 [])        `shouldBe` [4]
+
+        it "the pure check agrees exactly with what construction does -- \
+           \Nothing for a well-formed table, and a message naming the \
+           \component and the offending version otherwise" $ do
+            olderVersionTableError probeComponentId 4 [3, 2, 1]
+                `shouldBe` Nothing
+            olderVersionTableError probeComponentId 4 []
+                `shouldBe` Nothing
+            olderVersionTableError probeComponentId 4 [2, 2]
+                `shouldSatisfy` maybe False
+                    (\m → "version-table-probe" `T.isInfixOf` m
+                          ∧ "v2" `T.isInfixOf` m)
+
+        it "every REAL registered codec still constructs -- forcing the \
+           \whole authoritative registry runs this check over every shipped \
+           \declaration, so a malformed one would fail HERE rather than \
+           \being reported after the fact" $
+            map (T.null . componentIdText . rcId) saveComponentRegistry
+                `shouldSatisfy` all not
 
     describe "frozen entity DTOs (requirement 4)" $ do
         -- The mutable runtime STATE records (UnitSimState, CraftBill,
