@@ -3,11 +3,13 @@
 
 A sum type whose `Serialize` instance is DERIVED THROUGH `Generic` is
 encoded by cereal as a constructor INDEX followed by that constructor's
-fields. The index is positional, so inserting, reordering, removing, or
+fields. BOTH are positional. So inserting, reordering, removing, or
 renaming a constructor silently reinterprets every value already written
-to disk: `Climbing` decodes as `Falling`, `DirNE` as `DirE`. Nothing
-fails to compile and no ordinary test notices — which makes it the
-highest-consequence silent-corruption rule in the project.
+to disk — `Climbing` decodes as `Falling`, `DirNE` as `DirE` — and so
+does reordering or retyping the FIELDS of one constructor, which moves
+no tag at all. Nothing fails to compile and no ordinary test notices —
+which makes it the highest-consequence silent-corruption rule in the
+project.
 
 That rule was PARTIALLY enforced before this audit, not unenforced. The
 manifest-driven compat gate (`Test.Headless.World.Save.Compat`) decodes
@@ -21,7 +23,10 @@ constructor invisible. Extending the fixtures instead was considered and
 rejected in the issue: they are ~300 KB binaries regenerated through a
 real engine boot, one state per constructor would be costly, and they
 still would not catch a RENAME. A golden constructor list is cheap and
-catches reorder, insert, remove, and rename uniformly.
+catches reorder, insert, remove, and rename uniformly — and, since
+#1270, the same list's recorded payload signatures catch a
+same-arity field reorder or retype inside one constructor, which a
+fixture can only ever catch for the values it happens to carry.
 
 === How the guarded set is determined (requirement 2)
 
@@ -44,7 +49,7 @@ A type is GUARDED iff all three hold:
 This is deliberately a documented SUPERSET of "reachable from a
 currently emitted component DTO or a still-accepted historical DTO" —
 the option this issue's review explicitly permits. The superset is the
-safer rule and, measured against this tree, barely larger: 29 of the 34
+safer rule and, measured against this tree, barely larger: 32 of the 37
 guarded types are genuinely reachable from a save-wire DTO today, and
 the other 5 hold a `Generic`-derived `Serialize` instance precisely
 because someone intended to serialize them. Guarding by the property
@@ -64,10 +69,28 @@ keeps a diagnostic from quietly missing an affected component.
 === What the baseline records, and why an append must ratchet it
 
 `docs/save_compat/enum_baseline.json` records, per module-qualified type
-identity, the ordered constructor list with each constructor's arity.
-Arity is part of the record because a constructor that keeps its name
-and index but gains or loses a field changes that alternative's payload
-layout just as destructively as a reorder changes the tag.
+identity, the ordered constructor list, and for each constructor its
+ordered PAYLOAD — the field slots that follow its tag on the wire, with
+`arity` their count. The payload is part of the record because cereal
+writes a constructor's fields positionally too (issue #1270), so a
+constructor that keeps its name and index while its fields are
+reordered, or one field's serialized type is changed, reinterprets
+already-saved bytes exactly as destructively as reordering the
+constructors does — and neither the name nor the count moves. Recording
+the count alone left that invisible.
+
+A slot is `normalize_field_type`'s output for a positional alternative,
+and `selector ∷ <type>` for a record one. Read those two functions for
+the precise contract; the two limits worth knowing up front are:
+
+  - It compares what the CONSTRUCTOR DECLARES. A field whose type is a
+    synonym, or whose `Serialize` instance changes underneath it, is
+    not discoverable here and no slot moves — that hazard belongs to
+    the frozen-DTO boundary and to `Test.Headless.World.Save.Compat`'s
+    real decode of tracked fixtures.
+  - Two POSITIONAL fields of the same type, swapped, are the same
+    declaration text; nothing static can see it. Record alternatives do
+    not have that blind spot, which is why a slot keeps its selector.
 
 Each entry also records WHERE that type sat on the save wire when it was
 captured — its source file, and every component and historical shape
@@ -93,12 +116,31 @@ constructor would be invisible. `--update-baseline` performs exactly
 that ratchet, and refuses to write anything when any incompatible change
 is also present, so it can never double as a "make it pass" button.
 
+=== Which gate owns what
+
+This audit is the exhaustive authoritative gate for BOTH halves of a
+guarded sum's wire contract: its constructor list, and each
+constructor's payload signature. Nothing else owns the second half —
+before #1270 nothing did, which is the gap that issue closed.
+
+Other gates overlap it incidentally, and that overlap is welcome rather
+than something to prune: `Test.Headless.World.Save.Compat` decodes
+tracked binary fixtures and so re-proves whichever constructor VALUES
+those fixtures happen to carry, and `tools/save_compat_audit.py`'s
+frozen-DTO fingerprint moves when a frozen module is edited, which
+catches some transitive sums (`WorldEditDTO`, `ConstructTargetDTO`)
+from the other direction. Neither is exhaustive over the guarded set;
+this audit is.
+
 What this audit does NOT cover: hand-written `Serialize` instances (the
 `put`/`get` code IS the wire contract, in source, where review can see
-it), field-order drift inside a single-constructor record (the frozen-DTO
-boundary rule + `tools/save_compat_audit.py`), and whether a migration is
-CORRECT (`Test.Headless.World.Save.Compat`'s real decode of tracked
-fixtures).
+it), field-order drift inside a SINGLE-constructor record (which emits
+no tag at all, and belongs to the frozen-DTO boundary rule +
+`tools/save_compat_audit.py`), a change reachable only THROUGH a field's
+declared type rather than visible in the declaration itself (a type
+synonym redefined elsewhere, or a referenced type's own `Serialize`
+implementation changing), and whether a migration is CORRECT
+(`Test.Headless.World.Save.Compat`'s real decode of tracked fixtures).
 
 Usage:
   python3 tools/enum_append_only_audit.py
@@ -208,11 +250,28 @@ class AuditError(Exception):
 
 @dataclass(frozen=True)
 class Constructor:
-    """One alternative of a sum type, with the number of fields it
-    carries. Both halves are the wire contract: the NAME pins what the
-    positional tag means, the ARITY pins that alternative's payload."""
+    """One alternative of a sum type: what its tag means, and what
+    follows that tag on the wire.
+
+    The NAME pins what the positional tag means. The PAYLOAD pins the
+    fields that follow it, in declared order — cereal writes them
+    POSITIONALLY too, so swapping two of a constructor's fields or
+    changing one field's serialized type reinterprets already-saved
+    bytes exactly as destructively as reordering the constructors does,
+    while leaving the name and the field COUNT untouched (issue #1270).
+    Recording the count alone was the gap: `arity` is now derived from
+    the payload precisely so the two can never disagree.
+
+    A slot's spelling is `normalize_field_type`'s output for a
+    positional alternative, and `selector ∷ <type>` for a record one —
+    see that function and `record_slots` for what the normalization
+    deliberately erases and what it deliberately keeps."""
     name: str
-    arity: int
+    payload: tuple[str, ...]
+
+    @property
+    def arity(self) -> int:
+        return len(self.payload)
 
     def render(self) -> str:
         return f"{self.name}/{self.arity}"
@@ -434,6 +493,71 @@ def matching_bracket(text: str) -> int:
     return -1
 
 
+def split_field_signature(text: str) -> tuple[str, str] | None:
+    """Split one record field group at its depth-0 `∷`/`::`.
+
+    Returns `(selectors, declared type)`, or `None` when the group
+    carries no signature at all — which is not an error but the LEADING
+    half of a shared signature (`{ x, y ∷ !Int }` splits on the comma
+    into a bare `x` and a signed `y ∷ !Int`, and `x`'s type is `y`'s).
+    Depth-aware so a kind signature nested inside brackets is not
+    mistaken for the field's own."""
+    depth = 0
+    for i, ch in enumerate(text):
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif depth == 0:
+            if ch == "∷":
+                return text[:i], text[i + 1:]
+            if text[i:i + 2] == "::":
+                return text[:i], text[i + 2:]
+    return None
+
+
+def normalize_field_type(text: str) -> str:
+    """One field's declared type, reduced to its wire-significant spelling.
+
+    Requirement 2's whole content is in what this erases, and the erased
+    set is deliberately CLOSED and small — everything not listed here
+    stays significant, because a normalizer that is clever about type
+    equivalence would start silently accepting real changes:
+
+      - comments, including the `{-# UNPACK #-}` pragma (already blanked
+        to spaces by `strip_haskell_comments`, which is why they never
+        arrive here);
+      - layout — newlines and runs of whitespace collapse to one space,
+        and the padding a bracketed or tupled type may carry inside its
+        brackets or around its commas is canonicalised, so `!(Int, Int)`
+        and `~( Int ,Int )` are the same field;
+      - `::` spelled as `∷`;
+      - the strictness/laziness markers `!` and `~`, which are a
+        code-generation directive rather than part of the type;
+      - and, ONLY as a consequence of that last one, a redundant
+        enclosing parenthesis pair. `!` forces parentheses a bare type
+        does not need (`a ∷ !(Maybe Int)` versus `a ∷ Maybe Int`), so
+        without this an added or removed `!` would still show up as a
+        payload change and requirement 2 would not hold. A tuple's
+        parentheses ARE its type and are kept.
+
+    What stays significant: the field ORDER, the declared type's
+    structure, and every identifier in it."""
+    normalized = " ".join(text.replace("::", "∷").split())
+    normalized = re.sub(r"([(\[])[ ]+", r"\1", normalized)
+    normalized = re.sub(r"[ ]+([)\],])", r"\1", normalized)
+    normalized = re.sub(r",(?=[^ ])", ", ", normalized)
+    while normalized[:1] in ("!", "~"):
+        normalized = normalized[1:].lstrip()
+    while len(normalized) > 2 and normalized[0] == "(" \
+            and matching_bracket(normalized) == len(normalized) - 1:
+        inner = normalized[1:-1].strip()
+        if not inner or len(split_top_level(inner, ",")) > 1:
+            break
+        normalized = inner
+    return normalized
+
+
 # ----- Declaration extraction ----------------------------------------
 
 def module_name_of(rel_path: str, text: str) -> str:
@@ -625,7 +749,8 @@ def parse_constructors(decl: Declaration) -> list[Constructor]:
                 raise AuditError(
                     f"{decl.where()}: `{ctor}` has unexpected text after "
                     f"its record braces: {extra!r}")
-            arity = record_arity(decl, ctor, rest[brace + 1:brace + close])
+            payload = record_slots(decl, ctor,
+                                   rest[brace + 1:brace + close])
         else:
             if _HAS_SIG_RE.search(rest):
                 raise AuditError(
@@ -637,18 +762,33 @@ def parse_constructors(decl: Declaration) -> list[Constructor]:
                     raise AuditError(
                         f"{decl.where()}: `{ctor}` has an unreadable field "
                         f"{atom!r}")
-            arity = len(atoms)
-        constructors.append(Constructor(ctor, arity))
+            payload = [normalize_field_type(atom) for atom in atoms]
+        constructors.append(Constructor(ctor, tuple(payload)))
     return constructors
 
 
-def record_arity(decl: Declaration, ctor: str, inner: str) -> int:
-    """How many fields a record constructor declares.
+def record_slots(decl: Declaration, ctor: str, inner: str) -> list[str]:
+    """A record constructor's field slots, in declared order.
 
     Every depth-0 comma-separated group is exactly one field: both
     `{ a ∷ !Int, b ∷ !Int }` and the shared-signature `{ a, b ∷ !Int }`
-    split into two groups, and both are two fields on the wire."""
-    total = 0
+    split into two groups, and both are two fields on the wire. In the
+    shared form only the LAST group of a run carries the signature, so
+    the unsigned ones ahead of it take their type from it — which is
+    also why an unsigned group is not an error until the run ends
+    without one.
+
+    Each slot records the selector as well as the type. That is not
+    decoration: cereal writes a record's fields positionally and never
+    the selectors, so swapping two SAME-TYPED fields (`{ x, y ∷ !Int }`
+    → `{ y, x ∷ !Int }`) is a real reinterpretation of saved bytes that
+    the types alone cannot see. Keeping the selector is the only handle
+    on which slot is which — with the deliberate consequence that a
+    pure selector RENAME reports too, exactly as a constructor rename
+    already does, because nothing in the declaration distinguishes a
+    rename from a rename-plus-reorder."""
+    slots: list[str] = []
+    pending: list[str] = []
     for group in split_top_level(inner, ","):
         text = group.strip()
         if not text:
@@ -659,8 +799,33 @@ def record_arity(decl: Declaration, ctor: str, inner: str) -> int:
             raise AuditError(
                 f"{decl.where()}: `{ctor}` has an unreadable record field "
                 f"{head!r}")
-        total += 1
-    return total
+        split = split_field_signature(text)
+        if split is None:
+            if _FIELD_NAME_RE.fullmatch(text) is None:
+                head = " ".join(text[:40].split())
+                raise AuditError(
+                    f"{decl.where()}: `{ctor}` has an unreadable record "
+                    f"field {head!r}")
+            pending.append(text)
+            continue
+        selector = split[0].strip()
+        if _FIELD_NAME_RE.fullmatch(selector) is None:
+            raise AuditError(
+                f"{decl.where()}: `{ctor}` has an unreadable record field "
+                f"selector {selector!r}")
+        declared = normalize_field_type(split[1])
+        if not declared:
+            raise AuditError(
+                f"{decl.where()}: `{ctor}`'s field `{selector}` declares "
+                f"no type")
+        for name in [*pending, selector]:
+            slots.append(f"{name} ∷ {declared}")
+        pending = []
+    if pending:
+        raise AuditError(
+            f"{decl.where()}: `{ctor}`'s record field(s) "
+            f"{', '.join(pending)} carry no type signature")
+    return slots
 
 
 def qualifies_as_guarded(decl: Declaration) -> bool:
@@ -1077,17 +1242,30 @@ def load_baseline(path: Path) -> dict[str, BaselineEntry]:
         ctors: list[Constructor] = []
         for item in raw_ctors:
             if not isinstance(item, dict) or "name" not in item \
-                    or "arity" not in item:
+                    or "arity" not in item or "payload" not in item:
                 raise AuditError(
                     f"{BASELINE_REL}: `{qualified}` has a constructor entry "
-                    f"without both `name` and `arity`")
+                    f"without all of `name`, `arity` and `payload`")
             arity = item["arity"]
             if not isinstance(arity, int) or isinstance(arity, bool) \
                     or arity < 0:
                 raise AuditError(
                     f"{BASELINE_REL}: `{qualified}`'s `{item['name']}` has a "
                     f"non-integer arity {arity!r}")
-            ctors.append(Constructor(str(item["name"]), arity))
+            payload = item["payload"]
+            if not isinstance(payload, list) \
+                    or not all(isinstance(slot, str) for slot in payload):
+                raise AuditError(
+                    f"{BASELINE_REL}: `{qualified}`'s `{item['name']}` has a "
+                    f"`payload` that is not a list of field strings")
+            if len(payload) != arity:
+                raise AuditError(
+                    f"{BASELINE_REL}: `{qualified}`'s `{item['name']}` "
+                    f"declares arity {arity} but {len(payload)} payload "
+                    f"field(s) — the two describe the same thing and a "
+                    f"disagreement means the entry was hand-edited")
+            ctors.append(Constructor(str(item["name"]),
+                                     tuple(str(slot) for slot in payload)))
         recorded: list[tuple[str, str]] = []
         for item in entry.get("carriers", []):
             if not isinstance(item, dict) or "carrier" not in item \
@@ -1123,7 +1301,8 @@ def render_baseline(guarded: dict[str, GuardedType],
                                   for component in carrier.components}),
             "carriers": [{"carrier": c.label, "via": " → ".join(c.path)}
                          for c in recorded],
-            "constructors": [{"name": c.name, "arity": c.arity}
+            "constructors": [{"name": c.name, "arity": c.arity,
+                              "payload": list(c.payload)}
                              for c in entry.constructors],
         }
     document = {
@@ -1133,11 +1312,15 @@ def render_baseline(guarded: dict[str, GuardedType],
             "tools/enum_append_only_audit.py -- do not hand-edit to make "
             "the audit pass: a change that is not a pure append is a "
             "save-format break, not a baseline update. The `constructors` "
-            "list is the contract; `source`/`onSaveWire`/`components`/"
-            "`carriers` record where each type sat on the save wire when "
-            "it was captured, so a type that is later renamed, moved, or "
-            "deleted -- and therefore can no longer be walked -- still "
-            "reports which components and historical shapes carried it."),
+            "list is the contract: each entry's `name` pins what its "
+            "positional tag means and its `payload` pins the ordered "
+            "field slots that follow the tag (`arity` is their count), "
+            "because cereal writes those fields positionally too. "
+            "`source`/`onSaveWire`/`components`/`carriers` record where "
+            "each type sat on the save wire when it was captured, so a "
+            "type that is later renamed, moved, or deleted -- and "
+            "therefore can no longer be walked -- still reports which "
+            "components and historical shapes carried it."),
         "types": types,
     }
     return json.dumps(document, indent=2, ensure_ascii=False) + "\n"
@@ -1193,10 +1376,20 @@ def describe_incompatibility(baseline: list[Constructor],
             lines.append(f"    tag {index}: was {was.render()}, now "
                          f"{now.render()} — every saved {was.name} decodes "
                          f"as {now.name}")
-        else:
+        elif was.arity != now.arity:
             lines.append(f"    tag {index}: {was.name} carried {was.arity} "
                          f"field(s), now carries {now.arity} — the payload "
                          f"after this tag changes shape")
+        else:
+            lines.append(f"    tag {index}: {was.name} still carries "
+                         f"{was.arity} field(s), but their PAYLOAD changed "
+                         f"— every saved {was.name} decodes its bytes into "
+                         f"the wrong fields")
+            for slot in range(was.arity):
+                if was.payload[slot] == now.payload[slot]:
+                    continue
+                lines.append(f"      field {slot}: was `{was.payload[slot]}`"
+                             f", now `{now.payload[slot]}`")
     return lines
 
 
@@ -1668,6 +1861,142 @@ def _self_test() -> list[str]:
                 "INCOMPATIBLE",
                 "Crouching carried 0 field(s), now carries 1")
 
+    # 2b. Issue #1270: a SAME-ARITY payload mutation is the same kind of
+    #     silent reinterpretation, and was invisible while the baseline
+    #     recorded only name and arity. The fixture's `Pose` carries
+    #     payload in both forms — positional and record — because only
+    #     the record form makes a reorder of two SAME-TYPED fields
+    #     visible at all (positionally, `!Int !Int` swapped is the same
+    #     declaration text; nothing static can see it, and the docstring
+    #     says so rather than implying otherwise).
+    payload_alts = ("Standing",
+                    "Crouching !Int !Text",
+                    "Crawling { cwFrom ∷ !Int, cwTo ∷ !Int }")
+
+    def payload_tree(*alternatives: str) -> dict[str, str]:
+        """The payload-carrying fixture, with the baseline the audit's
+        own writer captured from `payload_alts`."""
+        tree = _source_tree()
+        tree["src/Unit/Sim/Types.hs"] = _pose(*payload_alts)
+        code, out = _run(tree, update=True)
+        if code != 0:
+            failures.append(f"payload fixture: could not capture a "
+                            f"baseline:\n{out}")
+        tree[BASELINE_REL] = out.split("<<baseline>>\n", 1)[1]
+        if alternatives:
+            tree["src/Unit/Sim/Types.hs"] = _pose(*alternatives)
+        return tree
+
+    expect_clean("payload fixture", payload_tree())
+    # The baseline must actually RECORD the field slots, in both forms —
+    # otherwise every mutation case below would be passing vacuously.
+    for needle in ('"payload": [\n            "Int",\n            "Text"',
+                   '"cwFrom ∷ Int",\n            "cwTo ∷ Int"'):
+        if needle not in payload_tree()[BASELINE_REL]:
+            failures.append(f"payload baseline: missing {needle!r}:"
+                            f"\n{payload_tree()[BASELINE_REL]}")
+    # A field's serialized TYPE changes: same name, same count, different
+    # bytes after the tag.
+    expect_fail("payload field type change",
+                payload_tree("Standing", "Crouching !Word8 !Text",
+                             "Crawling { cwFrom ∷ !Int, cwTo ∷ !Int }"),
+                "INCOMPATIBLE",
+                "tag 1: Crouching still carries 2 field(s), but their "
+                "PAYLOAD changed",
+                "field 0: was `Int`, now `Word8`")
+    # Two positional fields swap: each slot's type moves.
+    expect_fail("payload field reorder (positional)",
+                payload_tree("Standing", "Crouching !Text !Int",
+                             "Crawling { cwFrom ∷ !Int, cwTo ∷ !Int }"),
+                "INCOMPATIBLE",
+                "tag 1: Crouching still carries 2 field(s)",
+                "field 0: was `Int`, now `Text`",
+                "field 1: was `Text`, now `Int`")
+    # Two SAME-TYPED record fields swap. This is the case the types alone
+    # cannot see, and the reason a slot records its selector.
+    expect_fail("payload field reorder (record, identical types)",
+                payload_tree("Standing", "Crouching !Int !Text",
+                             "Crawling { cwTo ∷ !Int, cwFrom ∷ !Int }"),
+                "INCOMPATIBLE",
+                "tag 2: Crawling still carries 2 field(s)",
+                "field 0: was `cwFrom ∷ Int`, now `cwTo ∷ Int`",
+                "field 1: was `cwTo ∷ Int`, now `cwFrom ∷ Int`")
+    # The documented consequence of keeping the selector: a rename
+    # reports too, exactly as a constructor rename already does.
+    expect_fail("record selector rename",
+                payload_tree("Standing", "Crouching !Int !Text",
+                             "Crawling { cwStart ∷ !Int, cwTo ∷ !Int }"),
+                "INCOMPATIBLE",
+                "field 0: was `cwFrom ∷ Int`, now `cwStart ∷ Int`")
+    # A payload mutation must carry the SAME component/DTO-path
+    # attribution and migration guidance every other incompatible change
+    # gets — it is the same class of break, so it needs the same answer.
+    _, payload_out = _run(payload_tree(
+        "Standing", "Crouching !Word8 !Text",
+        "Crawling { cwFrom ∷ !Int, cwTo ∷ !Int }"))
+    for needle in ('"unit-sim" — World.Save.Component.Entities',
+                   '"units" — World.Save.Component.Entities',
+                   "via UnitSimStateDTO → Pose",
+                   "via UnitInstanceDTO → Pose", "Bump `ccVersion` on EVERY",
+                   "`ccInputVers`", "Migrate from the frozen DTO"):
+        if needle not in payload_out:
+            failures.append(f"payload guidance: missing {needle!r}:"
+                            f"\n{payload_out}")
+
+    # 2c. Requirement 2: a WIRE-EQUIVALENT respelling of the very same
+    #     fields must stay clean. Every erasure `normalize_field_type`
+    #     claims is exercised here at once: strictness markers added and
+    #     removed, an `{-# UNPACK #-}` pragma, `::` for `∷`, layout
+    #     spread over lines, haddock comments between the fields, and
+    #     the parentheses a `!` forces around an otherwise bare type.
+    expect_clean("wire-equivalent respelling", payload_tree(
+        "Standing",
+        "Crouching\n        {-# UNPACK #-} !Int   -- ^ how long\n"
+        "        Text",
+        "Crawling { cwFrom :: Int   -- ^ from here\n"
+        "             , cwTo :: !(Int) }"))
+    # ...and the flip side, so that clemency is not blanket: a tuple's
+    # parentheses ARE its type, and survive the same treatment.
+    tupled = _source_tree()
+    tupled["src/Unit/Sim/Types.hs"] = _pose(
+        "Standing", "Sleeping !(Int, Int)", "Crawling")
+    _, tupled_out = _run(tupled, update=True)
+    tupled[BASELINE_REL] = tupled_out.split("<<baseline>>\n", 1)[1]
+    if '"(Int, Int)"' not in tupled[BASELINE_REL]:
+        failures.append(f"tuple field: parentheses were stripped from the "
+                        f"recorded type:\n{tupled[BASELINE_REL]}")
+    expect_clean("tuple field respelling", dict(tupled, **{
+        "src/Unit/Sim/Types.hs": _pose(
+            "Standing", "Sleeping ~(  Int ,Int  )", "Crawling")}))
+    expect_fail("tuple field element change", dict(tupled, **{
+        "src/Unit/Sim/Types.hs": _pose(
+            "Standing", "Sleeping !(Int, Word8)", "Crawling")}),
+        "INCOMPATIBLE", "field 0: was `(Int, Int)`, now `(Int, Word8)`")
+
+    # 2d. A record's shared signature (`{ x, y ∷ !Int }`) distributes the
+    #     type over every selector ahead of it, in declared order — and a
+    #     field left with no signature at all reports rather than being
+    #     dropped.
+    shared = _source_tree()
+    shared["src/Unit/Sim/Types.hs"] = _pose(
+        "Standing", "Crawling { cwTo, cwFrom ∷ !Int }", "Crouching")
+    _, shared_out = _run(shared, update=True)
+    # Deliberately declared against alphabetical order: the recorded
+    # slots must follow the DECLARATION, which is what the wire follows.
+    needle = '"cwTo ∷ Int",\n            "cwFrom ∷ Int"'
+    if needle not in shared_out:
+        failures.append(f"shared record signature: missing {needle!r}:"
+                        f"\n{shared_out}")
+    unsigned = _clean_tree()
+    unsigned["src/Extra/Types.hs"] = (
+        "module Extra.Types where\n\n"
+        "data Unsigned\n"
+        "    = UnsignedA { ua ∷ !Int }\n"
+        "    | UnsignedB { ub ∷ !Int, uc }\n"
+        "    deriving (Show, Eq, Generic, Serialize)\n")
+    expect_fail("record field with no type signature", unsigned,
+                "carry no type signature")
+
     # 3. Requirement 6 + the review's multi-component correction: an
     #    incompatible change names EVERY affected component and the DTO
     #    path, and says what to do instead.
@@ -1738,8 +2067,8 @@ def _self_test() -> list[str]:
     # rather than imply the type was safely off the wire.
     def bare_ghost(document) -> None:
         document["types"]["Unit.Sim.Types.Ghost"] = {
-            "constructors": [{"name": "GhostA", "arity": 0},
-                             {"name": "GhostB", "arity": 0}]}
+            "constructors": [{"name": "GhostA", "arity": 0, "payload": []},
+                             {"name": "GhostB", "arity": 0, "payload": []}]}
 
     bare = _clean_tree()
     bare[BASELINE_REL] = _rewrite_baseline(bare_ghost)
@@ -1781,6 +2110,38 @@ def _self_test() -> list[str]:
                 renamed_after_append, "INCOMPATIBLE",
                 "tag 3: was Sleeping/0, now Dozing/0")
 
+    # 5b. The ratchet carries PAYLOAD too: an appended constructor's
+    #     field slots must land in the baseline, or the append would
+    #     record a constructor whose payload nothing later compares.
+    appended_payload = payload_tree(
+        "Standing", "Crouching !Int !Text",
+        "Crawling { cwFrom ∷ !Int, cwTo ∷ !Int }",
+        "Sleeping { slDepth ∷ !Float }")
+    code, out = _run(appended_payload)
+    if code == 0 or "APPEND-COMPATIBLE" not in out or "INCOMPATIBLE" in out:
+        failures.append(f"payload append: not reported as append-compatible:"
+                        f"\n{out}")
+    code, out = _run(appended_payload, update=True)
+    if code != 0:
+        failures.append(f"payload append: --update-baseline refused it:"
+                        f"\n{out}")
+    if '"slDepth ∷ Float"' not in out:
+        failures.append(f"payload append: the appended constructor's payload "
+                        f"was not recorded:\n{out}")
+    payload_ratcheted = dict(appended_payload)
+    payload_ratcheted[BASELINE_REL] = out.split("<<baseline>>\n", 1)[1]
+    expect_clean("payload-ratcheted tree", payload_ratcheted)
+    # ...and the appended constructor's own payload is guarded from then
+    # on, which is the hole a payload-less ratchet would have left.
+    expect_fail("payload change to a previously appended constructor",
+                dict(payload_ratcheted, **{
+                    "src/Unit/Sim/Types.hs": _pose(
+                        "Standing", "Crouching !Int !Text",
+                        "Crawling { cwFrom ∷ !Int, cwTo ∷ !Int }",
+                        "Sleeping { slDepth ∷ !Word8 }")}),
+                "INCOMPATIBLE",
+                "field 0: was `slDepth ∷ Float`, now `slDepth ∷ Word8`")
+
     # 6. --update-baseline must never double as a "make it pass" button.
     code, out = _run(with_pose("Crouching", "Standing", "Crawling"),
                      update=True)
@@ -1788,6 +2149,20 @@ def _self_test() -> list[str]:
         failures.append("--update-baseline accepted a reorder")
     if "refusing to update" not in out:
         failures.append(f"--update-baseline: no refusal message:\n{out}")
+    # ...including for a payload mutation, which must be refused for the
+    # same reason and leave the recorded slots untouched.
+    mutated = payload_tree("Standing", "Crouching !Word8 !Text",
+                           "Crawling { cwTo ∷ !Int, cwFrom ∷ !Int }")
+    code, out = _run(mutated, update=True)
+    written = out.split("<<baseline>>\n", 1)[1]
+    if code == 0:
+        failures.append("--update-baseline accepted a payload mutation")
+    if "refusing to update" not in out or "PAYLOAD changed" not in out:
+        failures.append(f"--update-baseline: no payload refusal message:"
+                        f"\n{out}")
+    if written != mutated[BASELINE_REL]:
+        failures.append("--update-baseline rewrote the baseline over a "
+                        "payload mutation anyway")
     if '"name": "Crouching"' in out.split("<<baseline>>\n", 1)[1] \
             and out.split("<<baseline>>\n", 1)[1].index('"Crouching"') \
             < out.split("<<baseline>>\n", 1)[1].index('"Standing"'):
@@ -1807,8 +2182,8 @@ def _self_test() -> list[str]:
     # 8. ...in BOTH directions: a baseline entry with no live type fails.
     def add_ghost(document) -> None:
         document["types"]["Unit.Sim.Types.UnitActivity"] = {
-            "constructors": [{"name": "Idle", "arity": 0},
-                             {"name": "Walking", "arity": 0}]}
+            "constructors": [{"name": "Idle", "arity": 0, "payload": []},
+                             {"name": "Walking", "arity": 0, "payload": []}]}
 
     stale = _clean_tree()
     stale[BASELINE_REL] = _rewrite_baseline(add_ghost)
@@ -1942,13 +2317,29 @@ def _self_test() -> list[str]:
              "has no `constructors` list"),
             ("constructor without an arity",
              json.dumps({"types": {"Unit.Sim.Types.Pose": {"constructors": [
-                 {"name": "Standing"}, {"name": "Crouching", "arity": 0}]}}}),
-             "without both `name` and `arity`"),
+                 {"name": "Standing", "payload": []},
+                 {"name": "Crouching", "arity": 0, "payload": []}]}}}),
+             "without all of `name`, `arity` and `payload`"),
+            ("constructor without a payload",
+             json.dumps({"types": {"Unit.Sim.Types.Pose": {"constructors": [
+                 {"name": "Standing", "arity": 0},
+                 {"name": "Crouching", "arity": 0, "payload": []}]}}}),
+             "without all of `name`, `arity` and `payload`"),
             ("non-integer arity",
              json.dumps({"types": {"Unit.Sim.Types.Pose": {"constructors": [
-                 {"name": "Standing", "arity": "0"},
-                 {"name": "Crouching", "arity": 0}]}}}),
-             "non-integer arity")):
+                 {"name": "Standing", "arity": "0", "payload": []},
+                 {"name": "Crouching", "arity": 0, "payload": []}]}}}),
+             "non-integer arity"),
+            ("payload that is not a list of strings",
+             json.dumps({"types": {"Unit.Sim.Types.Pose": {"constructors": [
+                 {"name": "Standing", "arity": 1, "payload": [7]},
+                 {"name": "Crouching", "arity": 0, "payload": []}]}}}),
+             "not a list of field strings"),
+            ("payload disagreeing with its own arity",
+             json.dumps({"types": {"Unit.Sim.Types.Pose": {"constructors": [
+                 {"name": "Standing", "arity": 0, "payload": ["Int"]},
+                 {"name": "Crouching", "arity": 0, "payload": []}]}}}),
+             "declares arity 0 but 1 payload field(s)")):
         tree = _clean_tree()
         tree[BASELINE_REL] = content
         expect_fail(f"malformed baseline: {label}", tree, needle)

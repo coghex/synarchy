@@ -1497,7 +1497,10 @@ subsystem table above for the full contract.
 **Enum schema policy:** `Direction`, `Pose`, `UnitActivity` (and any
 enum serialized via `Generic Serialize`) are positional by constructor
 tag — **append-only**. Inserting/reordering silently corrupts saves;
-anything beyond appending requires a `currentSaveVersion` bump.
+anything beyond appending requires a `currentSaveVersion` bump. A
+constructor's own FIELDS are positional too, so reordering them or
+changing one field's serialized type corrupts saves the same way while
+moving no tag (#1270).
 
 Enforced mechanically since #1145 by `tools/enum_append_only_audit.py`
 (in CI and `make ci`, with its own `--self-test`), which is the
@@ -1505,17 +1508,27 @@ authority on which types are guarded and why — read its module
 docstring before adding, moving, or changing one. It guards **every**
 `data` declaration under `src/`/`app/` that derives `Serialize` through
 `Generic` and has two or more constructors — a deliberate superset of
-"reachable from a save component", currently 34 types, so a type that
-becomes persisted later was already guarded the day its instance was
-derived. `docs/save_compat/enum_baseline.json` is the golden
-constructor list (name + arity, module-qualified) plus the save-wire
-attribution captured with it; it is GENERATED end to end, so don't
-hand-edit it — a pure append ratchets it with `--update-baseline`, and
-anything else is a wire-format break the audit refuses to record. An
-incompatible change's output names every component and historical shape
-that carries the type, with the reachability path — including for a
-type that was renamed or deleted, which is read back from the recorded
-attribution because there is nothing left to walk.
+"reachable from a save component", currently 37 types (32 of them
+reachable from a save-wire DTO today), so a type that becomes persisted
+later was already guarded the day its instance was derived.
+`docs/save_compat/enum_baseline.json` is the golden constructor list —
+module-qualified, each constructor recording its name and its ordered
+PAYLOAD signature (`arity` is that payload's length) — plus the
+save-wire attribution captured with it; it is GENERATED end to end, so
+don't hand-edit it — a pure append ratchets it with `--update-baseline`,
+and anything else is a wire-format break the audit refuses to record. A
+payload slot is the field's declared type, normalized (strictness
+markers, `{-# UNPACK #-}`, layout, `::`/`∷` and the parentheses a `!`
+forces are all erased; field order and type structure are not), with the
+selector kept for a record alternative — which is what makes swapping
+two same-typed record fields visible, and means a selector rename
+reports too. An incompatible change's output names every component and
+historical shape that carries the type, with the reachability path —
+including for a type that was renamed or deleted, which is read back
+from the recorded attribution because there is nothing left to walk.
+Since #1270 this audit is the one exhaustive gate owning payload drift
+inside a multi-constructor sum; single-constructor record field order
+stays the frozen-DTO boundary's and `tools/save_compat_audit.py`'s.
 
 **Architecture (persistence-overhaul epic #756-#768, landed):**
 - `World.Save.Snapshot.SessionSnapshot` is the immutable, validated
