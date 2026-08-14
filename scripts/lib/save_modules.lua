@@ -179,12 +179,45 @@ end
 -- the Haskell-side restore, unconditionally -- see the register()
 -- comment on deps' scope) -- it exists purely so the dependency is
 -- DECLARED and its id validated, per requirement 2/3.
+--
+-- DRIFT GATE (issue #1277): hand-keeping alone already failed once --
+-- #1087/PR #1126 registered "container-knowledge" on the Haskell side
+-- and this table was not updated, so a Lua component declaring that
+-- real dependency was rejected as depending on an unregistered
+-- component, which fails every save/load. The mirror is now checked
+-- MECHANICALLY, in both directions, by the headless spec
+-- "Test.Headless.Lua.SaveModules" ("Lua persistence components" ->
+-- "the hand-kept Haskell-component mirror"): it compares the ids this
+-- table actually accepts -- read through saveModules.haskellComponentIds()
+-- below, so the gate sees exactly what registryStaticErrors() sees --
+-- against the authoritative Haskell-owned set, `metadataComponentId`
+-- plus `World.Save.Component.componentKnownIds` (equivalently
+-- "metadata" plus every id in `saveComponentRegistry`; the envelope's
+-- own known-id construction, `World.Save.Envelope.knownComponentIds`,
+-- unions those same two). Adding a Haskell component without adding it
+-- here now fails that spec by name, and so does a stale id left here
+-- after one is removed there.
 local HASKELL_COMPONENT_IDS = {
     ["metadata"] = true, ["core-session"] = true, ["texture-palette"] = true,
     ["world-pages"] = true, ["world-edits"] = true, ["world-activity"] = true,
     ["buildings"] = true, ["units"] = true, ["unit-sim"] = true,
     ["craft-bills"] = true, ["power-nodes"] = true,
+    ["container-knowledge"] = true,
 }
+
+-- Every Haskell-owned component id this module ACCEPTS as a declared
+-- dependency, sorted, as a fresh dense array (a caller can neither
+-- observe nor mutate the mirror itself). Derived by the same truthiness
+-- test registryStaticErrors() applies, so the drift gate above cannot
+-- pass while validation disagrees with it.
+function saveModules.haskellComponentIds()
+    local ids = {}
+    for id, accepted in pairs(HASKELL_COMPONENT_IDS) do
+        if accepted then ids[#ids + 1] = id end
+    end
+    table.sort(ids)
+    return ids
+end
 
 -- A genuine dense array: integer keys 1..n with no gaps and no other
 -- key types -- rejects an associative/sparse table a caller may have
