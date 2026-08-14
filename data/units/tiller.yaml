@@ -1,0 +1,63 @@
+# tiller — ASSET-ONLY unit declaration (issue #1257).
+#
+# `asset_units:` is the authoritative inventory entry for a shipped unit
+# asset tree that is NOT a gameplay unit. Entries here declare animation
+# frames for `tools/pack_atlas.py --validate-only --strict` and for the
+# `--preview units/tiller` browser, and nothing else: they are never
+# returned by `Engine.Asset.YamlUnits.loadUnitYaml`, so they are never
+# registered as a `UnitYamlDef`, load no gameplay textures, and are not
+# listable or spawnable. Promotion to a runtime definition is #1261's
+# decision, not this file's.
+asset_units:
+  - name: tiller
+    animations:
+      idle:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/tiller/animations/idle/south/frame_000.png"
+          south-east:
+            - "assets/textures/units/tiller/animations/idle/south-east/frame_000.png"
+          east:
+            - "assets/textures/units/tiller/animations/idle/east/frame_000.png"
+          north-east:
+            - "assets/textures/units/tiller/animations/idle/north-east/frame_000.png"
+          north:
+            - "assets/textures/units/tiller/animations/idle/north/frame_000.png"
+      run:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/tiller/animations/run/south/frame_000.png"
+            - "assets/textures/units/tiller/animations/run/south/frame_001.png"
+            - "assets/textures/units/tiller/animations/run/south/frame_002.png"
+            - "assets/textures/units/tiller/animations/run/south/frame_003.png"
+            - "assets/textures/units/tiller/animations/run/south/frame_004.png"
+          south-east:
+            - "assets/textures/units/tiller/animations/run/south-east/frame_000.png"
+            - "assets/textures/units/tiller/animations/run/south-east/frame_001.png"
+            - "assets/textures/units/tiller/animations/run/south-east/frame_002.png"
+            - "assets/textures/units/tiller/animations/run/south-east/frame_003.png"
+            - "assets/textures/units/tiller/animations/run/south-east/frame_004.png"
+          east:
+            - "assets/textures/units/tiller/animations/run/east/frame_000.png"
+            - "assets/textures/units/tiller/animations/run/east/frame_001.png"
+            - "assets/textures/units/tiller/animations/run/east/frame_002.png"
+            - "assets/textures/units/tiller/animations/run/east/frame_003.png"
+            - "assets/textures/units/tiller/animations/run/east/frame_004.png"
+          north-east:
+            - "assets/textures/units/tiller/animations/run/north-east/frame_000.png"
+            - "assets/textures/units/tiller/animations/run/north-east/frame_001.png"
+            - "assets/textures/units/tiller/animations/run/north-east/frame_002.png"
+            - "assets/textures/units/tiller/animations/run/north-east/frame_003.png"
+            - "assets/textures/units/tiller/animations/run/north-east/frame_004.png"
+          north:
+            - "assets/textures/units/tiller/animations/run/north/frame_000.png"
+            - "assets/textures/units/tiller/animations/run/north/frame_001.png"
+            - "assets/textures/units/tiller/animations/run/north/frame_002.png"
+            - "assets/textures/units/tiller/animations/run/north/frame_003.png"
+            - "assets/textures/units/tiller/animations/run/north/frame_004.png"

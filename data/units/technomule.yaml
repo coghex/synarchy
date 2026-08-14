@@ -339,3 +339,33 @@ units:
             - "assets/textures/units/technomule/animations/run/north/frame_005.png"
             - "assets/textures/units/technomule/animations/run/north/frame_006.png"
             - "assets/textures/units/technomule/animations/run/north/frame_007.png"
+      hit_react:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/technomule/animations/hit_react/south/frame_000.png"
+            - "assets/textures/units/technomule/animations/hit_react/south/frame_001.png"
+            - "assets/textures/units/technomule/animations/hit_react/south/frame_002.png"
+            - "assets/textures/units/technomule/animations/hit_react/south/frame_003.png"
+          south-east:
+            - "assets/textures/units/technomule/animations/hit_react/south-east/frame_000.png"
+            - "assets/textures/units/technomule/animations/hit_react/south-east/frame_001.png"
+            - "assets/textures/units/technomule/animations/hit_react/south-east/frame_002.png"
+            - "assets/textures/units/technomule/animations/hit_react/south-east/frame_003.png"
+          east:
+            - "assets/textures/units/technomule/animations/hit_react/east/frame_000.png"
+            - "assets/textures/units/technomule/animations/hit_react/east/frame_001.png"
+            - "assets/textures/units/technomule/animations/hit_react/east/frame_002.png"
+            - "assets/textures/units/technomule/animations/hit_react/east/frame_003.png"
+          north-east:
+            - "assets/textures/units/technomule/animations/hit_react/north-east/frame_000.png"
+            - "assets/textures/units/technomule/animations/hit_react/north-east/frame_001.png"
+            - "assets/textures/units/technomule/animations/hit_react/north-east/frame_002.png"
+            - "assets/textures/units/technomule/animations/hit_react/north-east/frame_003.png"
+          north:
+            - "assets/textures/units/technomule/animations/hit_react/north/frame_000.png"
+            - "assets/textures/units/technomule/animations/hit_react/north/frame_001.png"
+            - "assets/textures/units/technomule/animations/hit_react/north/frame_002.png"
+            - "assets/textures/units/technomule/animations/hit_react/north/frame_003.png"

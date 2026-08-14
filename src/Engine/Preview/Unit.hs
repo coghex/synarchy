@@ -12,12 +12,16 @@
 --   for WHICH animations exist, WHICH directions each has, and the
 --   frame ORDER within a direction. @data\/units\/\<name\>.yaml@ only
 --   AUGMENTS a matching animation with playback metadata
---   (@fps@\/@loop@\/@flip@). Three shipped animation folders
---   (@acolyte\/pushing_idle@, @bear_brown\/roar@,
---   @technomule\/hit_react@) have no YAML entry at all, three asset
---   units have no YAML file at all, and the bear's @run@\/@walk@
---   folders hold frame 008 files the YAML omits — the viewer shows all
---   of them.
+--   (@fps@\/@loop@\/@flip@).
+--
+--   Since #1257 every shipped animation folder IS declared: the three
+--   asset-only trees (@tiller@, @unknown_unit@, @white_tailed_deer@)
+--   have @data\/units\/\<name\>.yaml@ files using the @asset_units:@
+--   form, so their metadata is read here exactly like a gameplay unit's
+--   while @Engine.Asset.YamlUnits.loadUnitYaml@ still never registers
+--   them. The filesystem stays authoritative regardless — the fallback
+--   below is retained for genuinely undeclared local development
+--   content, not for anything committed.
 module Engine.Preview.Unit
   ( UnitFocusError(..)
   , unitFocusErrorMessage
@@ -245,18 +249,29 @@ instance FromJSON UnitAnimMetaDef where
         ⊚ v .:  "name"
         ⊛ v .:? "animations" .!= Map.empty
 
+-- | Both declaration forms, flattened. A gameplay unit lives under
+--   @units:@ and an asset-only unit (#1257) under @asset_units:@; the
+--   viewer wants the animation metadata either way and has no reason to
+--   care which list it came from — the distinction is about
+--   REGISTRATION, which the preview never performs. Both keys are
+--   optional here (unlike @Engine.Asset.YamlUnits.UnitYamlFile@, which
+--   refuses a file with neither): a preview must degrade to defaults
+--   rather than fail, so an unrecognised file simply yields no metadata.
 newtype UnitAnimMetaFile = UnitAnimMetaFile { uamfUnits ∷ [UnitAnimMetaDef] }
 
 instance FromJSON UnitAnimMetaFile where
-    parseJSON = withObject "UnitAnimMetaFile" $ \v → UnitAnimMetaFile
-        ⊚ v .: "units"
+    parseJSON = withObject "UnitAnimMetaFile" $ \v → do
+        gameplay ← v .:? "units"       .!= []
+        assets   ← v .:? "asset_units" .!= []
+        pure (UnitAnimMetaFile (gameplay ⧺ assets))
 
--- | Playback metadata for @unitName@, keyed by animation name. Empty
---   for a missing, unreadable, or unparseable YAML file, and empty for
---   a file that holds no def matching @unitName@ — every such case
---   falls back to the documented per-animation defaults rather than
---   failing the preview (three of the seven shipped unit asset trees
---   have no YAML at all).
+-- | Playback metadata for @unitName@, keyed by animation name. Reads
+--   both the @units:@ and @asset_units:@ declaration forms. Empty for a
+--   missing, unreadable, or unparseable YAML file, and empty for a file
+--   that holds no def matching @unitName@ — every such case falls back
+--   to the documented per-animation defaults rather than failing the
+--   preview. No shipped tree relies on that fallback since #1257; local
+--   uncommitted assets still can.
 loadUnitAnimMeta ∷ Text → IO (Map.Map Text UnitYamlAnim)
 loadUnitAnimMeta unitName = do
     let path = unitDataPath unitName

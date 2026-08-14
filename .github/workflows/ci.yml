@@ -230,6 +230,8 @@ jobs:
             sed 's/^/worldgen=/' >> "$GITHUB_OUTPUT"
           printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate graphical | \
             sed 's/^/graphical=/' >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate unit-assets | \
+            sed 's/^/unit-assets=/' >> "$GITHUB_OUTPUT"
 
       # plan.json exists after --dry-run; its hash keys the store cache.
       # The store path is static because the image pins CABAL_DIR (#671).
@@ -414,6 +416,24 @@ jobs:
         run: |
           python3 tools/test_findings_report_audit.py
           python3 tools/findings_report_audit.py
+
+      # Unit-asset inventory gate (#1257): filesystem-first validation
+      # that every committed PNG under
+      # assets/textures/units/<unit>/animations/ is owned by exactly one
+      # animation-frame declaration in data/units/*.yaml, under either
+      # the gameplay `units:` or the asset-only `asset_units:` form.
+      # Path-selective on PRs; unconditional after a merge to master, so
+      # a path the selector does not list can never leave the inventory
+      # unchecked on master. The self-test runs first: it proves the
+      # checker still fails on each violation class, so a green strict
+      # run below cannot be a vacuously permissive checker.
+      - name: Unit asset inventory
+        if: >-
+          github.event_name != 'pull_request'
+          || steps.expensive-gates.outputs.unit-assets == 'true'
+        run: |
+          python3 tools/test_pack_atlas.py
+          python3 tools/pack_atlas.py --validate-only --strict
 
       # Worldgen regression gate — see the header comment. Baselines
       # are tracked in tools/baselines/ (#421), captured on the primary

@@ -49,10 +49,15 @@ MiB as PNG files on disk.
 The repository already has several pieces of the intended system: per-animation
 frame rate, looping and horizontal mirroring are data-driven; directions can be
 mirrored at render time; the preview browser understands unit animations; and
-`tools/pack_atlas.py` validates some of the unit asset inventory. It does not,
-however, pack atlases, produce a runtime index, or participate in CI. Its strict
-mode currently reports 120 orphan-file warnings, so it is not yet an enforceable
-gate.
+`tools/pack_atlas.py` validates the unit asset inventory. It does not, however,
+pack atlases or produce a runtime index.
+
+As of TEX-1 (#1257) its strict mode IS an enforceable gate: discovery is
+filesystem-first rather than YAML-first, so it covers the complete corpus of 7
+unit trees, 116 animations and 4,620 frames, and it exits 0 with zero warnings.
+Every committed animation PNG is owned by exactly one animation-frame
+declaration, with no directory- or glob-level exemption mechanism. See
+**Unit asset inventory** in `CLAUDE.md` for the enforced contract.
 
 The legacy plan also predates the current asset contract. Unit animation metadata
 now lives in `data/units/*.yaml`, not a separate `animations.yaml`, and some
@@ -511,6 +516,19 @@ eventually outweighs that convenience.
 > unit-YAML entries (decoder defaults), so every browsable animation is
 > atlased and the per-frame retirement is clean; the preview's YAML-less
 > browsing convention ends with this slice.
+>
+> **2026-08-13 — TEX-1 (#1257) performed the declaration half.** Every
+> shipped animation folder now carries a declaration, so no committed
+> asset relies on YAML-less browsing any more; the preview retains that
+> fallback only for uncommitted local content. TEX-1 deliberately stopped
+> at the phase boundary: `tiller`, `unknown_unit` and `white_tailed_deer`
+> are declared under the asset-only `asset_units:` key, which is read by
+> the validator and the preview but never returned by
+> `Engine.Asset.YamlUnits.loadUnitYaml`, so they load no gameplay
+> texture and are neither listable nor spawnable. PROMOTING any of them
+> to a runtime `units:` definition remains this slice's decision, and
+> #1261's specification should be refreshed to say so explicitly before
+> it is solved.
 
 - **Outcome:** Brown bear, red squirrel, and technomule use the approved atlas
   representation, and no unit animation loads one image per frame.

@@ -97,6 +97,17 @@ changes per season. Replicate that with a **skeleton-freeze mask**:
 Engine layout: `assets/textures/units/<name>/animations/<activity>/<direction>/frame_NNN.png`
 plus `portrait.png` (32×32). Unit yaml (`data/units/<name>.yaml`) points `sprite:` at an idle frame.
 
+**Every generated animation frame must be declared before it lands** (#1257).
+`python3 tools/pack_atlas.py --validate-only --strict` is a blocking gate that
+walks the filesystem first, so a newly generated folder with no declaration
+fails CI — there is no exemption mechanism to reach for. Declare a gameplay
+unit's animations under `units:` as usual; declare a tree that ships as art but
+is not a spawnable unit under the asset-only `asset_units:` key (`name` +
+`animations` only). Frames must be contiguous from `frame_000.png`, share one
+pixel size across the whole animation, and match the `flip` rule below exactly:
+`flip: true` ⇒ exactly the five stored directions, `flip: false` ⇒ all eight.
+See **Unit asset inventory** in `CLAUDE.md` for the full contract.
+
 - **Directions**: store 5 (`east`, `north`, `north-east`, `south`, `south-east`); the engine
   mirrors W/SW/NW at runtime. **Exception**: asymmetric animations (e.g. `*_RH_dagger`) store all
   8 directions — a mirrored right hand becomes a left hand.

@@ -32,6 +32,7 @@ RUN apt-get update \
     locales \
     pkg-config \
     python3 \
+    python3-yaml \
     tar \
     xorg-dev \
     xz-utils \

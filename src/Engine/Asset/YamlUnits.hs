@@ -14,9 +14,11 @@ module Engine.Asset.YamlUnits
     , UnitYamlStrike(..)
     , UnitYamlNaturalResistance(..)
     , UnitYamlFile(..)
+    , UnitYamlAssetDef(..)
     , defaultUnitYamlBody
     , defaultUnitYamlNaturalResistance
     , loadUnitYaml
+    , loadUnitYamlAssets
     , unitYamlBodyPartToBodyPart
     ) where
 
@@ -428,14 +430,61 @@ instance FromJSON UnitYamlDef where
         ⊛ v .:? "natural_weapon"
         ⊛ v .:? "modifiers"           .!= []
 
-newtype UnitYamlFile = UnitYamlFile
-    { uyfUnits ∷ [UnitYamlDef]
+-- | An ASSET-ONLY unit declaration (#1257): the authoritative inventory
+--   entry for a shipped @assets\/textures\/units\/\<name\>\/@ tree that
+--   is deliberately NOT a gameplay unit.
+--
+--   It declares animation frames — for @tools\/pack_atlas.py@'s strict
+--   inventory and for the @--preview units\/\<name\>@ browser's playback
+--   metadata — and nothing else. It carries no @sprite@, no stats, no
+--   body: there is nothing here to register, load a gameplay texture
+--   for, list, or spawn, and 'loadUnitYaml' never returns one, so the
+--   exclusion is a property of WHICH LIST the entry is in rather than of
+--   a field it happens to omit or a decode it happens to fail. Promoting
+--   one of these to a runtime definition is #1261's decision.
+data UnitYamlAssetDef = UnitYamlAssetDef
+    { uyadName       ∷ !Text
+      -- ^ must equal the asset directory name — @Engine.Preview.Unit@
+      --   resolves @data\/units\/\<name\>.yaml@ and then selects the def
+      --   whose name matches the requested unit.
+    , uyadAnimations ∷ !(Map.Map Text UnitYamlAnim)
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON UnitYamlAssetDef where
+    parseJSON = withObject "UnitYamlAssetDef" $ \v → UnitYamlAssetDef
+        ⊚ v .: "name"
+        ⊛ v .: "animations"
+
+-- | One @data\/units\/*.yaml@ file: gameplay defs under @units:@ and
+--   asset-only declarations under @asset_units:@. Either key may be
+--   absent, but a file with NEITHER is refused — that is exactly what a
+--   mistyped top-level key looks like, and silently decoding it as
+--   "zero units" would lose a whole file's worth of definitions without
+--   a word.
+data UnitYamlFile = UnitYamlFile
+    { uyfUnits      ∷ [UnitYamlDef]
+    , uyfAssetUnits ∷ [UnitYamlAssetDef]
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlFile where
-    parseJSON = withObject "UnitYamlFile" $ \v → UnitYamlFile
-        ⊚ v .: "units"
+    parseJSON = withObject "UnitYamlFile" $ \v → do
+        gameplay ← v .:? "units"
+        assets   ← v .:? "asset_units"
+        case (gameplay, assets) of
+            (Nothing, Nothing) → fail
+                "unit YAML declares neither `units:` nor `asset_units:`"
+            _ → pure (UnitYamlFile (fromMaybe [] gameplay)
+                                   (fromMaybe [] assets))
 
+-- | The GAMEPLAY unit definitions in a file. Asset-only declarations are
+--   not returned, so nothing downstream registers, textures, lists or
+--   spawns them.
 loadUnitYaml ∷ LoggerState → FilePath → IO [UnitYamlDef]
 loadUnitYaml logger =
     loadYamlList logger "unit" "unit definitions" uyfUnits
+
+-- | The ASSET-ONLY declarations in a file (#1257). Read by the asset
+--   inventory and by tests; deliberately not by unit registration.
+loadUnitYamlAssets ∷ LoggerState → FilePath → IO [UnitYamlAssetDef]
+loadUnitYamlAssets logger =
+    loadYamlList logger "unit" "asset-only unit declarations" uyfAssetUnits

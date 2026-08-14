@@ -9,9 +9,11 @@ engine instance.
 `make ci` (repo root) runs `tools/ci-local.sh`, which runs the complete local
 CI gate: a warning-clean (`-Werror`) build of
 the library/exe + both test suites, the headless hspec suite,
-`test_audit.py`, and `world_check.py --quick`. PR CI is path-selective for
-the graphical test-suite build and quick worldgen check, while pushes to
-master run both; a green `make ci` remains a conservative CI prediction.
+`test_audit.py`, the unit-asset inventory gate (`test_pack_atlas.py` +
+`pack_atlas.py --validate-only --strict`), and `world_check.py --quick`. PR
+CI is path-selective for the graphical test-suite build, the quick worldgen
+check, and the unit-asset gate, while pushes to master run all three; a green
+`make ci` remains a conservative CI prediction.
 `-Werror` itself lives in `synarchy.cabal`'s checked-in warning policy, so
 every build already carries it; `ci-local.sh` only scopes a temporary
 `-fforce-recomp` via `cabal.project.local` (forcing a genuine recheck of
@@ -101,6 +103,41 @@ any budgeted file grows back past its limit.
 ```bash
 python3 tools/lua_module_budget.py
 ```
+
+### `pack_atlas.py`
+The authoritative unit-animation asset inventory (#1257). `--validate-only`
+walks every PNG under
+`assets/textures/units/<unit>/animations/<animation>/<direction>/` —
+FILESYSTEM-FIRST, so it covers trees no YAML mentions — and checks that each
+is owned by exactly one animation-frame declaration in `data/units/*.yaml`,
+under either the gameplay `units:` key or the asset-only `asset_units:` key.
+Also enforces identifier safety, exact per-animation/per-direction
+containment (cross-unit, cross-animation and cross-direction references are
+each named), `frame_NNN.png` naming, contiguous numbering from zero, the
+five-vs-eight direction rule against `flip`, PNG decodability, and one pixel
+size per animation. Reuse of an animation frame as `sprite`,
+`directional_sprites` or `portrait` is legal and never reported as a
+duplicate. Needs PyYAML; PNG decoding is standard-library only. Atlas packing
+is not implemented yet.
+
+```bash
+python3 tools/pack_atlas.py --validate-only --strict
+python3 tools/pack_atlas.py --validate-only --unit acolyte
+python3 tools/pack_atlas.py --validate-only --root <alternative tree>
+```
+
+### `test_pack_atlas.py`
+Fixture self-test for `pack_atlas.py`. Every case builds a complete isolated
+unit tree in a temp directory and runs the real validator against it via
+`--root`, so nothing reads or mutates the shipped assets. Each negative case
+asserts BOTH a nonzero exit and a diagnostic naming the actual problem.
+
+```bash
+python3 tools/test_pack_atlas.py
+```
+
+Both run unconditionally in `make ci` and post-merge master CI, and
+path-selectively on PRs (`ci_expensive_gates.py --gate unit-assets`).
 
 ### `action_outcome_coverage.py`
 Self-audit (#646) for the F4 action-outcome oracle: greps each registered
