@@ -29,10 +29,12 @@
 --   'checkBatch' would answer @out_of_range@ for every legitimate
 --   remote order and the create-time CAPACITY gate — the one that
 --   refuses a doomed trip before the carrier walks — would never run.
---   So creation passes 'ReachDeferred'
+--   So creation passes @ReachDeferred carrierPage@
 --   ('Unit.Transfer.checkBatchWith'), which relaxes adjacency and
---   nothing else: same page is still required, and
---   @unit.checkTransfer@/@unit.commitTransfer@ are untouched.
+--   nothing else — and pins both endpoints to the CARRIER's own page,
+--   because an order is stored in that page's store and the integrity
+--   graph scopes the acting unit and both endpoints there as BLOCKING
+--   errors. @unit.checkTransfer@/@unit.commitTransfer@ are untouched.
 --
 --   [Arrival reconciliation] 'commitOneLive' revalidates from scratch
 --   and reports a DIRECT reason. An entry reaching arrival already
@@ -122,21 +124,29 @@ pushBool b = Lua.pushboolean b ≫ return 1
 
 -- * Page resolution
 
--- | The order store belonging to the page @uid@ stands on.
+-- | The page @uid@ stands on, and that page's order store.
 --
 --   Resolved from the UNIT rather than from the active page (the rule
 --   'craftAddBillFn' follows for bills): orders are per-page state and
 --   a carrier can legitimately be on a loaded, non-visible page, where
 --   the active-page store would be somebody else's. 'Nothing' when the
 --   unit does not exist or its page is not loaded.
-unitOrderStore ∷ EngineEnv → UnitId → IO (Maybe WorldState)
+--
+--   The page id comes back with the store because it is not merely how
+--   the store was found — it is a PRECONDITION on what may be stored in
+--   it. An order's acting unit and both its endpoints must live on the
+--   order's own page ("World.Save.Integrity" scopes all three there as
+--   blocking errors), and the carrier is what decides which page that
+--   is, so creation validates the endpoints against this value rather
+--   than only against each other.
+unitOrderStore ∷ EngineEnv → UnitId → IO (Maybe (WorldPageId, WorldState))
 unitOrderStore env uid = do
     um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     case HM.lookup uid (umInstances um) of
         Nothing → pure Nothing
         Just u  → do
             mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
-            pure (lookup (uiPage u) (wmWorlds mgr))
+            pure ((,) (uiPage u) ⊚ lookup (uiPage u) (wmWorlds mgr))
 
 -- | Run @f@ against the store of the page @uid@ is on, having resolved
 --   the order @oid@ names AND confirmed @uid@ is the one carrying it.
@@ -149,7 +159,7 @@ withOwnedOrder env uid oid f = do
     mWs ← unitOrderStore env uid
     case mWs of
         Nothing → pure Nothing
-        Just ws → atomicModifyIORef' (wsTransferOrdersRef ws) $ \orders →
+        Just (_, ws) → atomicModifyIORef' (wsTransferOrdersRef ws) $ \orders →
             case lookupTransferOrder oid orders of
                 Just order | troUnit order ≡ uid →
                     let (orders', _) = updateTransferOrder oid (f order) orders
@@ -291,10 +301,15 @@ unitCreateTransferOrderFn env = do
             case mWs of
                 Nothing → pushErr "unit.createTransferOrder: no such unit, \
                                   \or its world page is not loaded"
-                Just ws → do
+                Just (page, ws) → do
                     ls ← Lua.liftIO $ readLiveState env
                     let scene = sceneFor ls (trSource req) (trDestination req)
-                    case checkBatchWith ReachDeferred scene req of
+                    -- The CARRIER's page, not merely the endpoints'
+                    -- agreement with each other: an order is stored in
+                    -- this page's store and the integrity graph scopes
+                    -- its acting unit and both endpoints here. See
+                    -- 'ReachPolicy'.
+                    case checkBatchWith (ReachDeferred page) scene req of
                         Left e  → pushRequestError e
                         Right b
                             | not (batchHasQueued b) →
@@ -337,7 +352,7 @@ unitGetTransferOrdersFn env = do
             case mWs of
                 Nothing → pushErr "unit.getTransferOrders: no such unit, \
                                   \or its world page is not loaded"
-                Just ws → do
+                Just (_, ws) → do
                     -- ONE live-state read for the whole reply, not one
                     -- per order: two orders naming the same counterpart
                     -- must not be able to report it in two different
@@ -413,7 +428,7 @@ unitCommitTransferOrderFn env = do
             case mWs of
                 Nothing → pushErr "unit.commitTransferOrder: no such unit, \
                                   \or its world page is not loaded"
-                Just ws → do
+                Just (_, ws) → do
                     mOrder ← Lua.liftIO $ do
                         orders ← readIORef (wsTransferOrdersRef ws)
                         pure $ case lookupTransferOrder oid orders of

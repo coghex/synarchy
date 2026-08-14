@@ -271,6 +271,37 @@ spec = describe "Unit transfer Lua API (orders, #1247)" $ do
             r `shouldBe` q "#none none|101:ration:failed:out_of_range"
             orders ls 1 `shouldReturn` q "0;"
 
+        it "refuses a request whose endpoints agree with each other but \
+           \not with the ACTING unit's page" $ \env → do
+            -- The endpoints are a perfectly good page-A pair; the actor
+            -- stands on page B. The order would be stored in page B's
+            -- store — the store this verb selects FROM THE ACTOR — where
+            -- World.Save.Integrity scopes the acting unit and both
+            -- endpoints as BLOCKING wrong-page errors. Accepting it
+            -- would leave a session whose every later save fails, so
+            -- creation must refuse rather than store it.
+            resetOrderWorld env [mkItem "ration" 101 0.5] []
+            ls ← backend env
+            r ← create ls 5 (req "unit" 1 "building" 8 (itemLit 101 "ration"))
+            r `shouldBe` q "#none none|101:ration:failed:out_of_range"
+            -- Neither page's store gained anything: not the actor's,
+            -- which is the one that would have been written…
+            orders ls 5 `shouldReturn` q "0;"
+            -- …nor the endpoints' own.
+            orders ls 1 `shouldReturn` q "0;"
+            -- And the item never moved.
+            unitLoose env acolyteUid `shouldReturn` [101]
+
+        it "accepts the same endpoints from an actor that IS on their \
+           \page, so the refusal above is the page and nothing else" $ \env → do
+            resetOrderWorld env [mkItem "ration" 101 0.5] []
+            ls ← backend env
+            -- uid 4 is a page-A bystander: neither endpoint, but on the
+            -- right page. A carrier that is neither end is exactly the
+            -- D-10 building→building shape the store supports.
+            r ← create ls 4 (req "unit" 1 "building" 8 (itemLit 101 "ration"))
+            r `shouldBe` q "#1 all|101:ration:queued"
+
         it "still applies every non-range precondition at a distance" $ \env → do
             resetOrderWorld env [mkItem "ration" 101 0.5] []
             ls ← backend env

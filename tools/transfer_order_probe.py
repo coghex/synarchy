@@ -300,6 +300,20 @@ def events_since(port: int, mark: int, category: str, uid: int) -> list:
             if e.get("category") == category and e.get("uid") == uid]
 
 
+def transfer_events(port: int, mark: int, uid: int) -> list:
+    """Completion events THIS job emitted, not every ambient one.
+
+    `unit_event` is the shared low-priority per-unit category ("dropped
+    items, minor incidents"), so an idle acolyte files them for reasons
+    that have nothing to do with a transfer. Asserting on the whole
+    category would make "the order completed exactly once" fail
+    whenever the carrier happened to do something else in the window —
+    a flake that reads as an exactly-once violation while the hold's
+    contents say otherwise."""
+    return [e for e in events_since(port, mark, "unit_event", uid)
+            if "transferred" in e.get("text", "")]
+
+
 def current_action(port: int, uid: int) -> str:
     return send(port, "local s = require('scripts.unit_ai').getState"
                       f"({uid}); return tostring(s and s.currentAction)")
@@ -398,7 +412,10 @@ def phase_walk_and_commit(port: int, chk: Checks) -> None:
     chk.ok(ingots(port, uid) == [],
            "the carrier is no longer holding either ingot")
 
-    evs = events_since(port, mark, "unit_event", uid)
+    # count, too: the event log DEDUPES identical consecutive entries
+    # into one row carrying a count, so "one row" alone would not rule
+    # out the same completion having been emitted twice.
+    evs = transfer_events(port, mark, uid)
     chk.ok(len(evs) == 1 and evs[0].get("count", 1) == 1,
            "exactly ONE attributed unit_event for the completed order",
            str(evs))
@@ -412,8 +429,9 @@ def phase_walk_and_commit(port: int, chk: Checks) -> None:
     time.sleep(10.0)
     chk.ok(len(stored(port, bid)) == 2,
            "ten more seconds of ticking commit nothing further")
-    chk.ok(not events_since(port, before, "unit_event", uid),
-           "and emit no second completion event")
+    chk.ok(not transfer_events(port, before, uid),
+           "and emit no second completion event",
+           str(transfer_events(port, before, uid)))
     send(port, f"unit.destroy({uid}); return 'ok'")
 
 

@@ -524,23 +524,37 @@ hasDuplicate = go []
 --   @unit.checkTransfer@/@unit.commitTransfer@ answer exactly as they
 --   always have.
 --
---   'ReachDeferred' exists for exactly one caller — creating a durable
---   transfer ORDER, whose entire premise is that the endpoints are NOT
---   adjacent yet and a unit is about to walk between them. Without it
---   an order at a distance is unexpressible: 'planItem' refuses on
---   range BEFORE it ever weighs the item, so every legitimate remote
---   order would come back @out_of_range@ and the create-time capacity
---   gate (the whole point of refusing a doomed trip before the walk)
---   would never run at all.
+--   @ReachDeferred carrierPage@ exists for exactly one caller — creating
+--   a durable transfer ORDER, whose entire premise is that the endpoints
+--   are NOT adjacent yet and a unit is about to walk between them.
+--   Without it an order at a distance is unexpressible: 'planItem'
+--   refuses on range BEFORE it ever weighs the item, so every legitimate
+--   remote order would come back @out_of_range@ and the create-time
+--   capacity gate (the whole point of refusing a doomed trip before the
+--   walk) would never run at all.
 --
---   What it does NOT relax is the SAME-PAGE requirement, which stays a
---   hard 'ReasonOutOfRange' either way: a unit cannot walk to another
---   world page, so an order across one could never complete and must
---   refuse at creation rather than stall forever afterwards.
+--   It relaxes ADJACENCY and nothing else. It carries the page the
+--   CARRIER walks from, and requires BOTH endpoints to be on it — which
+--   is strictly stronger than the same-page-as-each-other rule
+--   'ReachRequired' enforces, and deliberately so:
+--
+--   * A unit cannot walk to another world page, so an order whose
+--     endpoints sit on one could never complete and must refuse at
+--     creation rather than stall forever afterwards.
+--   * The acting unit is recorded ALONGSIDE the endpoint pair
+--     ('Unit.Transfer.Orders.TransferOrder'), so "the endpoints agree
+--     with each other" does not imply "the carrier is there too" — a
+--     third page is expressible. That combination is not merely
+--     unwalkable, it is CORRUPTING: an order lives in its page's store,
+--     and "World.Save.Integrity" scopes the acting unit and both
+--     endpoints to that page as BLOCKING @wrong-page@ errors. Accepting
+--     one would poison every later save of the session, so the carrier's
+--     page is a precondition of creation rather than something checked
+--     afterwards.
 data ReachPolicy
     = ReachRequired
-    | ReachDeferred
-    deriving (Show, Eq, Ord, Enum, Bounded)
+    | ReachDeferred !WorldPageId
+    deriving (Show, Eq, Ord)
 
 -- | Validate every precondition for ONE item, requiring adjacency.
 planItem ∷ TransferScene → TransferEndpoint → TransferEndpoint
@@ -570,13 +584,18 @@ planItemWith policy scene from to ref = do
   where
     note r = maybe (Left (requestFailure r)) Right
 
--- | Same page always; adjacent only when the policy demands it.
+-- | Can an item get from @src@ to @dst@ under this policy?
+--
+--   'ReachRequired' is the original rule: same page as each other, and
+--   already adjacent. @ReachDeferred p@ drops adjacency and pins BOTH
+--   endpoints to @p@ — the carrier's own page — which also implies they
+--   agree with each other. See 'ReachPolicy' for why the carrier's page
+--   is the one that matters.
 reachable ∷ ReachPolicy → TransferEndpointView → TransferEndpointView → Bool
-reachable policy src dst =
-    endpointPage src ≡ endpointPage dst
-      ∧ case policy of
-            ReachRequired → withinReach src dst
-            ReachDeferred → True
+reachable ReachRequired src dst =
+    endpointPage src ≡ endpointPage dst ∧ withinReach src dst
+reachable (ReachDeferred carrierPage) src dst =
+    endpointPage src ≡ carrierPage ∧ endpointPage dst ≡ carrierPage
 
 -- | Validate ONE item and compute both post-move lists, requiring
 --   adjacency. Used directly for an immediate transfer; 'commitBatch'
@@ -683,10 +702,10 @@ checkBatch ∷ TransferScene → TransferRequest
 checkBatch = checkBatchWith ReachRequired
 
 -- | 'checkBatch' under an explicit 'ReachPolicy'. Order creation
---   (#1247) passes 'ReachDeferred' so the per-item CAPACITY verdict is
---   reached for endpoints that are not adjacent yet; everything else
---   about the check — request order, the progressively updated scene,
---   which entries queue — is identical.
+--   (#1247) passes @ReachDeferred carrierPage@ so the per-item CAPACITY
+--   verdict is reached for endpoints that are not adjacent yet;
+--   everything else about the check — request order, the progressively
+--   updated scene, which entries queue — is identical.
 checkBatchWith ∷ ReachPolicy → TransferScene → TransferRequest
                → Either TransferRequestError TransferBatch
 checkBatchWith policy scene req = do
