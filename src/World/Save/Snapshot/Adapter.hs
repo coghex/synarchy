@@ -159,6 +159,7 @@ pageToWorldPageSave cam nextBid nextUid page = WorldPageSave
     , wpsFloraHarvests = pgsFloraHarvests page
     , wpsChopDesignations = pgsChopDesignations page
     , wpsCraftBills   = pgsCraftBills page
+    , wpsTransferOrders = pgsTransferOrders page
     , wpsPowerNodes   = pgsPowerNodes page
     , wpsContainerKnowledge = pgsContainerKnowledge page
     , wpsTillDesignations = pgsTillDesignations page

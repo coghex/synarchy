@@ -53,6 +53,7 @@ import qualified Test.Headless.World.Save.Integrity as SaveIntegrity
 import qualified Test.Headless.World.Save.Storage as SaveStorage
 import qualified Test.Headless.World.Save.Contract as SaveContract
 import qualified Test.Headless.World.Identity as WorldIdentity
+import qualified Test.Headless.World.TransferOrders as WorldTransferOrders
 import qualified Test.Headless.World.CursorInfo as CursorInfo
 import qualified Test.Headless.World.SelectTileZ as SelectTileZ
 import qualified Test.Headless.World.SelectChunk as SelectChunk
@@ -248,6 +249,13 @@ main = hspec $ do
     -- of re-restoring the shared worlds.
     aroundAll withHeadlessEngine $
         describe "World identity (#707)" WorldIdentity.spec
+    -- Own engine (#1246): writes a populated transfer-order store into a
+    -- live page's WorldState and saves it, which the shared-worlds
+    -- engine above must not see. Registered under the SAME describe as
+    -- the pure contract gate so `--match "persistence contract"` covers
+    -- both halves -- the codec round trip and the live capture/restore.
+    aroundAll withHeadlessEngine $
+        describe "persistence contract" WorldTransferOrders.spec
     -- Own engine: #913's failure-report cases queue a WorldSave for a
     -- page that does not exist, and assert on the shared event log --
     -- both of which would be noise (and, for the log, a source of

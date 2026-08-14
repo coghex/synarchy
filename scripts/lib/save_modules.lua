@@ -202,7 +202,7 @@ local HASKELL_COMPONENT_IDS = {
     ["world-pages"] = true, ["world-edits"] = true, ["world-activity"] = true,
     ["buildings"] = true, ["units"] = true, ["unit-sim"] = true,
     ["craft-bills"] = true, ["power-nodes"] = true,
-    ["container-knowledge"] = true,
+    ["container-knowledge"] = true, ["transfer-orders"] = true,
 }
 
 -- Every Haskell-owned component id this module ACCEPTS as a declared

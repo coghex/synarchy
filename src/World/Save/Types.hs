@@ -71,6 +71,7 @@ import World.Mine.Types (MineDesignations)
 import World.Construct.Types
     (ConstructDesignations, ConstructDesignation(..), ConstructTarget(..))
 import Craft.Bills (CraftBills(..), CraftBill(..), BillId(..))
+import Unit.Transfer.Orders (TransferOrders)
 import Building.Knowledge (ContainerKnowledge(..), ContainerRecord(..))
 import Power.Types (PowerNodes)
 import World.Chop.Types (ChopDesignations)
@@ -109,7 +110,7 @@ saveMagic = 0x53595241
 --   ("World.Save.Envelope", "docs/persistence_contract.md"). Per-bump
 --   history up to v91: "docs/history/savedata_version_changelog.md".
 currentSaveVersion ∷ Int
-currentSaveVersion = 92
+currentSaveVersion = 93
 
 -- | The shape of the tagged save envelope's fixed 16-byte header
 --   (issue #759, save-overhaul B1): magic, the envelope FRAMING
@@ -320,6 +321,18 @@ data WorldPageSave = WorldPageSave
         --   no surface at all and nothing would ever clear it.
         --   Capacity is never stored — it is always read live from the
         --   def. Appended for save v92.
+    , wpsTransferOrders ∷ !TransferOrders
+        -- ^ Durable transfer orders (#1246, epic #1013): this page's
+        --   queue of standing "move these exact item instances from
+        --   this endpoint to that one" orders, each carrying its acting
+        --   unit and every requested item's own lifecycle state, plus
+        --   the page-local id allocator. Restored VERBATIM, exactly as
+        --   wpsCraftBills/wpsPowerNodes are (issue #763): an order whose
+        --   carrier died or whose destination was demolished is a
+        --   tolerated, non-blocking diagnostic — logged at staging by
+        --   "World.Load.Stage" and never pruned — while a reference
+        --   resolving on a DIFFERENT page is the hard error
+        --   "World.Save.Integrity" raises. Appended for save v93.
     , wpsIdentity ∷ !(Maybe WorldIdentity)
         -- ^ Player-facing identity (#707): display name + optional
         --   gloss. Lives HERE — on the page's saved state — rather than

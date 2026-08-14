@@ -6,7 +6,9 @@
 --   last-known contents are PLAYER KNOWLEDGE, not building state, and
 --   the two evolve for entirely different reasons.
 --
---   __This is the first OPTIONAL gameplay component.__ Every other
+--   __This is the first OPTIONAL gameplay component__ — joined since by
+--   #1246's @"transfer-orders"@
+--   ("World.Save.Component.Transfer"), on identical terms. Every OTHER
 --   component in 'World.Save.Component.saveComponentRegistry' is
 --   required, and 'World.Save.Envelope.Codec.decodeEnvelope' refuses a
 --   modern envelope missing one. A container-knowledge payload cannot

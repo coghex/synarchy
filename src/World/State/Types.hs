@@ -37,6 +37,7 @@ import World.Chop.Types (ChopDesignations)
 import World.Till.Types (TillDesignations)
 import World.Plant.Types (PlantDesignations)
 import Craft.Bills (CraftBills, emptyCraftBills)
+import Unit.Transfer.Orders (TransferOrders, emptyTransferOrders)
 import Building.Types (BuildingId)
 import Building.Knowledge (ContainerKnowledge, emptyContainerKnowledge)
 import Power.Types (PowerNodes, emptyPowerNodes)
@@ -148,6 +149,20 @@ data WorldState = WorldState
       --   thread with atomicModifyIORef' — claims resolve atomically
       --   without a queue round-trip. Persisted in saves
       --   (wpsCraftBills, v70).
+    , wsTransferOrdersRef ∷ IORef TransferOrders
+      -- ^ Durable transfer orders (#1246, epic #1013): this page's queue
+      --   of standing "move these exact item instances from this
+      --   endpoint to that one" orders — the acting unit, the endpoint
+      --   pair, and every requested item's own lifecycle state (see
+      --   Unit.Transfer.Orders), plus the page-local id allocator, which
+      --   lives inside the record so a load cannot mint a colliding id.
+      --   Lives here, not on EngineEnv, for exactly the reason craft
+      --   bills and container knowledge do: it is per-page gameplay
+      --   state, so a destroyed page takes its orders with it. Like
+      --   those two it has no world-thread side effects, so a mutation
+      --   is one atomicModifyIORef' from whichever thread owns the verb.
+      --   Persisted in saves (wpsTransferOrders, v93) as its own
+      --   OPTIONAL "transfer-orders" component.
     , wsPowerNodesRef ∷ IORef PowerNodes
       -- ^ Power-node registry (#358): placed solar-panel/battery source
       --   and storage nodes (role + peak watts / capacity Wh), keyed by
@@ -271,6 +286,7 @@ emptyWorldState = do
     wsFloraHarvestsRef ← newIORef emptyFloraHarvests
     wsChopDesignationsRef ← newIORef HM.empty
     wsCraftBillsRef ← newIORef emptyCraftBills
+    wsTransferOrdersRef ← newIORef emptyTransferOrders
     wsPowerNodesRef ← newIORef emptyPowerNodes
     wsContainerKnowledgeRef ← newIORef emptyContainerKnowledge
     wsPendingContainerSeedsRef ← newIORef HS.empty
@@ -291,6 +307,7 @@ emptyWorldState = do
                         wsGroundItemsRef wsSpoilRef wsStructureStageRef
                         wsConstructDesignationsRef wsFloraHarvestsRef
                         wsChopDesignationsRef wsCraftBillsRef
+                        wsTransferOrdersRef
                         wsPowerNodesRef wsContainerKnowledgeRef
                         wsPendingContainerSeedsRef
                         wsTillDesignationsRef

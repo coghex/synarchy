@@ -429,6 +429,141 @@
         }
       ]
     },
+    "Unit.Transfer.TransferEndpoint": {
+      "source": "src/Unit/Transfer.hs",
+      "onSaveWire": true,
+      "components": [],
+      "carriers": [
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → TransferOrders → TransferOrder → TransferBatch → TransferEndpoint"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "EndpointUnit",
+          "arity": 1,
+          "payload": [
+            "UnitId"
+          ]
+        },
+        {
+          "name": "EndpointBuilding",
+          "arity": 1,
+          "payload": [
+            "BuildingId"
+          ]
+        }
+      ]
+    },
+    "Unit.Transfer.TransferReason": {
+      "source": "src/Unit/Transfer.hs",
+      "onSaveWire": true,
+      "components": [],
+      "carriers": [
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → TransferOrders → TransferOrder → TransferBatch → QueuedTransfer → TransferState → TransferFailure → TransferReason"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "ReasonInstanceUnspecified",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "ReasonSourceMissing",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "ReasonSourceIneligible",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "ReasonReceiverMissing",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "ReasonReceiverIneligible",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "ReasonInstanceMissing",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "ReasonItemNotTransferable",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "ReasonOutOfRange",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "ReasonReceiverFull",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "ReasonBecameStale",
+          "arity": 0,
+          "payload": []
+        }
+      ]
+    },
+    "Unit.Transfer.TransferState": {
+      "source": "src/Unit/Transfer.hs",
+      "onSaveWire": true,
+      "components": [],
+      "carriers": [
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → TransferOrders → TransferOrder → TransferBatch → QueuedTransfer → TransferState"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "TransferQueued",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "TransferInTransit",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "TransferReadyToCommit",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "TransferCompleted",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "TransferCancelled",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "TransferFailed",
+          "arity": 1,
+          "payload": [
+            "TransferFailure"
+          ]
+        }
+      ]
+    },
     "World.Construct.Types.ConstructStatus": {
       "source": "src/World/Construct/Types.hs",
       "onSaveWire": true,
@@ -1649,6 +1784,147 @@
           "payload": [
             "Int",
             "Int"
+          ]
+        }
+      ]
+    },
+    "World.Save.Component.Transfer.TransferEndpointDTO": {
+      "source": "src/World/Save/Component/Transfer.hs",
+      "onSaveWire": true,
+      "components": [
+        "transfer-orders"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"transfer-orders\" — World.Save.Component.Transfer",
+          "via": "PageTransferOrdersDTO → TransferOrderQueueDTO → TransferOrderDTO → TransferEndpointDTO"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "TedUnit",
+          "arity": 1,
+          "payload": [
+            "SamePageRef UnitId"
+          ]
+        },
+        {
+          "name": "TedBuilding",
+          "arity": 1,
+          "payload": [
+            "SamePageRef BuildingId"
+          ]
+        }
+      ]
+    },
+    "World.Save.Component.Transfer.TransferReasonDTO": {
+      "source": "src/World/Save/Component/Transfer.hs",
+      "onSaveWire": true,
+      "components": [
+        "transfer-orders"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"transfer-orders\" — World.Save.Component.Transfer",
+          "via": "PageTransferOrdersDTO → TransferOrderQueueDTO → TransferOrderDTO → QueuedTransferDTO → TransferStateDTO → TransferFailureDTO → TransferReasonDTO"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "TrdInstanceUnspecified",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "TrdSourceMissing",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "TrdSourceIneligible",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "TrdReceiverMissing",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "TrdReceiverIneligible",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "TrdInstanceMissing",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "TrdItemNotTransferable",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "TrdOutOfRange",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "TrdReceiverFull",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "TrdBecameStale",
+          "arity": 0,
+          "payload": []
+        }
+      ]
+    },
+    "World.Save.Component.Transfer.TransferStateDTO": {
+      "source": "src/World/Save/Component/Transfer.hs",
+      "onSaveWire": true,
+      "components": [
+        "transfer-orders"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"transfer-orders\" — World.Save.Component.Transfer",
+          "via": "PageTransferOrdersDTO → TransferOrderQueueDTO → TransferOrderDTO → QueuedTransferDTO → TransferStateDTO"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "TsdQueued",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "TsdInTransit",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "TsdReadyToCommit",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "TsdCompleted",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "TsdCancelled",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "TsdFailed",
+          "arity": 1,
+          "payload": [
+            "TransferFailureDTO"
           ]
         }
       ]

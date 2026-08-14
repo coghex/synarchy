@@ -790,8 +790,16 @@ def extract_lua_registered_modules(
 # codebase's one-field-per-line style (already relied on by
 # `_extract_fields_from_brace_block`) keeps the match scoped to a single
 # field's own declaration rather than spilling into a sibling field.
+#
+# The leading punctuation class accepts `{` as well as `,` (issue #1246):
+# a record's FIRST field opens with `{ name :: ...` while every later one
+# opens with `, name :: ...`, so a comma-only prefix silently skipped
+# whichever typed reference happened to be declared first in its DTO.
+# Every reference field that existed before #1246 was a later one, which
+# is why the gap went unnoticed until `qtdInstance` (QueuedTransferDTO's
+# item-instance reference) landed at the head of its record.
 REFERENCE_FIELD_RE = re.compile(
-    r"^\s*,?\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*(?:∷|::)[^\n]*"
+    r"^\s*[,{]?\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*(?:∷|::)[^\n]*"
     r"\b(?:SamePageRef|CrossPageRef)\b",
     re.MULTILINE,
 )

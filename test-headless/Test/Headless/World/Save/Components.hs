@@ -21,7 +21,8 @@ import Numeric (readHex, showHex)
 import qualified Data.HashSet as HS
 import World.Save.Envelope
 import World.Save.Compat.MetadataV1 (SaveMetadataV1(..))
-import World.Save.Envelope.Codec (encodeEnvelope, decodeEnvelope, deManifest)
+import World.Save.Envelope.Codec
+    (encodeEnvelope, decodeEnvelope, deManifest, dePayloads)
 import World.Save.Envelope.Types
     (defaultEnvelopeLimits, ComponentId(..), EnvelopeManifest(..)
     , ComponentDescriptor(..))
@@ -31,6 +32,17 @@ import World.Save.Component.Session
 import World.Save.Component.Page
 import World.Save.Component.Entities
 import World.Save.Component.Knowledge (containerKnowledgeCodec)
+import World.Save.Component.Transfer
+    ( transferOrdersCodec, validateTransferOrders
+    , TransferOrdersDTO(..), PageTransferOrdersDTO(..)
+    , TransferOrderQueueDTO(..), TransferOrderDTO(..)
+    , TransferEndpointDTO(..) )
+import Unit.Transfer
+    ( TransferBatch(..), TransferEndpoint(..), TransferItemRef(..)
+    , TransferState(..), QueuedTransfer(..) )
+import Unit.Transfer.Orders
+    ( TransferOrderId(..), TransferOrders(..), addTransferOrder
+    , transferOrderAllocatorExhausted )
 import World.Save.Compat.SessionV90
 import Language.Generated.Types
     (LanguageProvenance(..), LangSeed(..), GeneratorVersion(..))
@@ -77,6 +89,7 @@ import World.Weather.Types
     , defaultRegionClimate, emptyOceanGrid, emptyAtmoGrid )
 import Craft.Bills
     ( emptyCraftBills, CraftBill(..), CraftBills(..), BillId(..), BillMode(..) )
+import Unit.Transfer.Orders (emptyTransferOrders)
 import Power.Types
     ( emptyPowerNodes, PowerNode(..), PowerNodes(..), PowerNodeId(..)
     , PowerRole(..) )
@@ -140,6 +153,7 @@ minimalPage pid = PageSnapshot
     , pgsFloraHarvests = emptyFloraHarvests
     , pgsChopDesignations = HM.empty
     , pgsCraftBills   = emptyCraftBills
+    , pgsTransferOrders = emptyTransferOrders
     , pgsPowerNodes   = emptyPowerNodes
     , pgsTillDesignations = HM.empty
     , pgsCropPlots    = emptyCropPlots
@@ -468,6 +482,11 @@ richGenParams = canon defaultWorldGenParams
 fullPage ∷ WorldPageId → PageSnapshot
 fullPage pid = (richPage pid)
     { pgsCraftBills  = richBills
+      -- #1246: populated here (and NOT on 'richPage') so the pinned
+      -- transfer-orders row below is a real order's bytes on one fixture
+      -- and the empty default's on the other, rather than the degenerate
+      -- encoding on both.
+    , pgsTransferOrders = onePendingOrder
     , pgsPowerNodes  = richNodes
     , pgsGroundItems = GroundItems 2 (HM.singleton 1 (GroundItem richItem 3.5 4.5))
     , pgsMineDesignations = HM.singleton (1, 2) (MineDesignation 0 (1,1,1,1) 0.5)
@@ -554,6 +573,7 @@ minimalWorldPageSave pid = WorldPageSave
     , wpsFloraHarvests = emptyFloraHarvests
     , wpsChopDesignations = HM.empty
     , wpsCraftBills   = emptyCraftBills
+    , wpsTransferOrders = emptyTransferOrders
     , wpsPowerNodes   = emptyPowerNodes
     , wpsTillDesignations = HM.empty
     , wpsCropPlots    = emptyCropPlots
@@ -647,6 +667,7 @@ goldenRichPayloads =
     , ("craft-bills",         (58,   "beec8f6ff4c58c26"))
     , ("power-nodes",         (58,   "beec8f6ff4c58c26"))
     , ("container-knowledge", (50,   "1ed7627acac89064"))
+    , ("transfer-orders",     (58,   "beec8f6ff4c58c26"))
     ]
 
 goldenFullPayloads ∷ [(Text, (Int, Text))]
@@ -662,6 +683,7 @@ goldenFullPayloads =
     , ("craft-bills",         (125, "687f006dbc839e32"))
     , ("power-nodes",         (58,  "0cadd98f962a6b12"))
     , ("container-knowledge", (29,  "1a075ce50a1643b1"))
+    , ("transfer-orders",     (87,  "952016d6f5458b43"))
     ]
 
 encodedPayloadDigests ∷ SessionSnapshot → [(Text, (Int, Text))]
@@ -698,10 +720,89 @@ codecProbes =
     , probeOf unitsCodec, probeOf unitSimCodec
     , probeOf craftBillsCodec, probeOf powerNodesCodec
     , probeOf containerKnowledgeCodec
+    , probeOf transferOrdersCodec
     ]
 
 decodeErrorOf ∷ ComponentCodec a → Word32 → BS.ByteString → Maybe ComponentError
 decodeErrorOf cc v bytes = either Just (const Nothing) (ccDecode cc v bytes)
+
+-- | 'addTransferOrder' refuses on an exhausted allocator (#1246 review
+--   round 2), which no fixture here can reach — every one starts from
+--   'emptyTransferOrders'. Fail loudly rather than defaulting, so a
+--   future change that DID exhaust it surfaces as this error instead of
+--   as a silently empty store.
+-- | The smallest batch an allocator-boundary case needs: what is being
+--   measured there is the ID, never the payload.
+emptyBatch ∷ TransferBatch
+emptyBatch = TransferBatch
+    { tbSource      = EndpointUnit (UnitId 1)
+    , tbDestination = EndpointBuilding (BuildingId 1)
+    , tbEntries     = [] }
+
+mustAdd ∷ UnitId → TransferBatch → TransferOrders → TransferOrders
+mustAdd uid batch orders = case addTransferOrder uid batch orders of
+    Just (orders', _) → orders'
+    Nothing → error "fixture: addTransferOrder refused a fresh allocator"
+
+-- | #1246: one PENDING transfer order, built through the real creation
+--   surface so the fixture also carries the allocator the store issued
+--   it from. Deliberately references ids absent from 'minimalPage' --
+--   dangling is tolerated (see "World.Save.Integrity"), so this proves
+--   the component round-trips without depending on a populated page.
+onePendingOrder ∷ TransferOrders
+onePendingOrder = mustAdd (UnitId 7) TransferBatch
+    { tbSource      = EndpointUnit (UnitId 7)
+    , tbDestination = EndpointBuilding (BuildingId 3)
+    , tbEntries     =
+        [ QueuedTransfer
+            { qtItem = TransferItemRef { tirInstanceId = 41
+                                       , tirDefName = "bandage" }
+            , qtState = TransferQueued } ]
+    } emptyTransferOrders
+
+-- | A one-page transfer-orders DTO with an explicit allocator, map key
+--   and embedded id, so each validator rule can be violated in
+--   isolation.
+ordersDTO ∷ Word32 → TransferOrderId → TransferOrderId → TransferOrdersDTO
+ordersDTO next key embedded = TransferOrdersDTO
+    [ PageTransferOrdersDTO page1 TransferOrderQueueDTO
+        { toqOrders = HM.singleton key TransferOrderDTO
+            { trdId          = embedded
+            , trdUnit        = SamePageRef (UnitId 1)
+            , trdSource      = TedUnit (SamePageRef (UnitId 1))
+            , trdDestination = TedBuilding (SamePageRef (BuildingId 1))
+            , trdEntries     = [] }
+        , toqNextId = next } ]
+
+mentions ∷ Text → [ComponentError] → Bool
+mentions needle = any (T.isInfixOf needle ∘ ceMessage)
+
+-- | Drop the transfer-orders component from an encoded envelope
+--   entirely: the shape every save written before #1246 has.
+withoutTransferOrders ∷ BS.ByteString → BS.ByteString
+withoutTransferOrders = rewriteTransferOrders (const Nothing)
+
+-- | Replace its payload with bytes no version of the DTO can decode.
+withGarbageTransferOrders ∷ BS.ByteString → BS.ByteString
+withGarbageTransferOrders =
+    rewriteTransferOrders (const (Just "not-a-transfer-orders-payload"))
+
+rewriteTransferOrders
+    ∷ (BS.ByteString → Maybe BS.ByteString) → BS.ByteString → BS.ByteString
+rewriteTransferOrders f bytes =
+    case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
+             (HS.insert metadataComponentId componentKnownIds) HS.empty bytes of
+        Left err → error ("rewriteTransferOrders: decode: " <> show err)
+        Right de →
+            let specs = [ (cdId d, cdVersion d, cdRequired d, payload)
+                        | d ← emComponents (deManifest de)
+                        , Just raw ← [HM.lookup (cdId d) (dePayloads de)]
+                        , Just payload ← [ if cdId d ≡ transferOrdersComponentId
+                                             then f raw else Just raw ] ]
+            in case encodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
+                        specs of
+                Left err  → error ("rewriteTransferOrders: encode: " <> show err)
+                Right out → out
 
 spec ∷ Spec
 spec = do
@@ -730,15 +831,18 @@ spec = do
                 b = stubComponent (ComponentId "b") [ComponentId "a"]
             isLeft (dependencyOrder [a, b]) `shouldBe` True
 
-        it "every gameplay component is required EXCEPT the single \
-           \deliberately-optional one -- requirement 7's rule, plus its \
-           \one documented exception (#1087's container-knowledge, which \
-           \post-dates every tracked compatibility baseline and whose \
-           \absence has an honest meaning: no container has ever been \
-           \inspected). A SECOND optional component has to be justified \
-           \here rather than slip in unnoticed" $
+        it "every gameplay component is required EXCEPT the two \
+           \deliberately-optional ones -- requirement 7's rule, plus its \
+           \documented exceptions: #1087's container-knowledge (absence \
+           \means no container has ever been inspected) and #1246's \
+           \transfer-orders (absence means no order is queued). Both \
+           \post-date every tracked compatibility baseline and both \
+           \absences are TRUE of such a session rather than invented. A \
+           \THIRD optional component has to be justified here rather \
+           \than slip in unnoticed" $
             [ rcId c | c ← saveComponentRegistry, not (rcRequired c) ]
-                `shouldBe` [containerKnowledgeComponentId]
+                `shouldBe` [ containerKnowledgeComponentId
+                           , transferOrdersComponentId ]
 
     describe "per-component codecs" $ do
         it "each component round-trips its own slice of the snapshot" $ do
@@ -1317,9 +1421,112 @@ spec = do
                                    , craftBillsComponentId, powerNodesComponentId
                                    , worldEditsComponentId, worldActivityComponentId
                                    , texPaletteComponentId
-                                   , containerKnowledgeComponentId ]
+                                   , containerKnowledgeComponentId
+                                   , transferOrdersComponentId ]
                     ids `shouldMatchList` expected
                     (ComponentId "session" `elem` ids) `shouldBe` False
+
+    -- #1246: the SECOND optional component. Its absent/present-but-broken
+    -- split is the same rule #1087's container-knowledge established, so
+    -- it is asserted the same way — through the REAL
+    -- encodeSessionSnapshot/decodeSessionEnvelope path, never through
+    -- 'ccValidate' in isolation, since "absent" is decided at the
+    -- MANIFEST level by 'registerComponent' rather than by the codec.
+    describe "transfer-orders is OPTIONAL (#1246)" $ do
+        let orderedPage = (minimalPage page1)
+                { pgsTransferOrders = onePendingOrder }
+            orderedSnap = buildSessionSnapshot minimalGlobals [orderedPage]
+            orderedMeta = snapshotSaveMetadata (SaveRequestMeta "s" "t" False)
+                              orderedSnap
+            orderedBytes = encodeSessionSnapshot orderedMeta orderedSnap []
+            decodedOrders bytes = case decodeSessionEnvelope HS.empty HS.empty bytes of
+                Left err → Left err
+                Right (_, snap, _, _) →
+                    Right (pgsTransferOrders <$> HM.lookup page1 (snapPages snap))
+
+        it "round-trips a populated order store through the real \
+           \production codec" $
+            decodedOrders orderedBytes `shouldBe` Right (Just onePendingOrder)
+
+        it "an ABSENT payload decodes to the empty default -- no orders \
+           \queued, allocator back at 1 -- which is what lets every save \
+           \written before this component existed keep loading" $
+            decodedOrders (withoutTransferOrders orderedBytes)
+                `shouldBe` Right (Just emptyTransferOrders)
+
+        it "a PRESENT but malformed payload still fails the load exactly \
+           \as a required component would -- absent and broken are \
+           \different answers" $
+            case decodedOrders (withGarbageTransferOrders orderedBytes) of
+                Left msg → msg `shouldSatisfy` T.isInfixOf "transfer-orders"
+                Right _  → expectationFailure
+                    "a garbage transfer-orders payload loaded anyway"
+
+        it "rejects an order id at or above the page's own allocator -- a \
+           \decoded store whose next id could collide with a restored \
+           \order" $
+            validateTransferOrders (ordersDTO 1 (TransferOrderId 1)
+                                        (TransferOrderId 1))
+                `shouldSatisfy` mentions "not below the page's order allocator"
+
+        it "rejects the reserved id 0, and an allocator of 0 that would \
+           \mint it" $ do
+            validateTransferOrders (ordersDTO 1 (TransferOrderId 0)
+                                        (TransferOrderId 0))
+                `shouldSatisfy` mentions "reserved"
+            validateTransferOrders (ordersDTO 0 (TransferOrderId 1)
+                                        (TransferOrderId 1))
+                `shouldSatisfy` mentions "allocator is 0"
+
+        it "rejects a map key that disagrees with the order's own \
+           \embedded id -- two copies of one identity that would make \
+           \lookup-by-key and lookup-by-field name different orders" $
+            validateTransferOrders (ordersDTO 9 (TransferOrderId 1)
+                                        (TransferOrderId 2))
+                `shouldSatisfy` mentions "map key"
+
+        it "accepts a well-formed store" $
+            validateTransferOrders (ordersDTO 2 (TransferOrderId 1)
+                                        (TransferOrderId 1))
+                `shouldBe` []
+
+        -- Review round 2: 'trosNextId' is a Word32, so incrementing past
+        -- maxBound wrapped to 0, the next allocation normalised that back
+        -- to 1, and HM.insert then OVERWROTE whatever order already held
+        -- id 1 — silent reuse of a durable identity, the one failure a
+        -- save format cannot recover from. The allocator now saturates
+        -- and refuses instead.
+        it "refuses to allocate past the end of the id space rather than \
+           \wrapping and overwriting an existing order" $ do
+            let exhausted = emptyTransferOrders { trosNextId = maxBound }
+            transferOrderAllocatorExhausted exhausted `shouldBe` True
+            addTransferOrder (UnitId 1) emptyBatch exhausted
+                `shouldBe` Nothing
+
+        it "issues the LAST id below the boundary, and only then reports \
+           \exhaustion -- the refusal is off by neither one id nor two" $ do
+            let lastFree = emptyTransferOrders { trosNextId = maxBound - 1 }
+            transferOrderAllocatorExhausted lastFree `shouldBe` False
+            case addTransferOrder (UnitId 1) emptyBatch lastFree of
+                Nothing → expectationFailure
+                    "refused while one id was still free"
+                Just (after, oid) → do
+                    oid `shouldBe` TransferOrderId (maxBound - 1)
+                    trosNextId after `shouldBe` maxBound
+                    transferOrderAllocatorExhausted after `shouldBe` True
+                    -- The order it DID issue is still there: saturating
+                    -- must not disturb what was already allocated.
+                    HM.keys (trosOrders after)
+                        `shouldBe` [TransferOrderId (maxBound - 1)]
+                    addTransferOrder (UnitId 1) emptyBatch after
+                        `shouldBe` Nothing
+
+        it "accepts a SATURATED allocator on decode -- it is the \
+           \legitimate terminal state, not corruption: every stored id \
+           \is strictly below it and no further id can be issued" $
+            validateTransferOrders (ordersDTO maxBound (TransferOrderId 1)
+                                        (TransferOrderId 1))
+                `shouldBe` []
 
     describe "assembly cross-validation (requirement 6/9/12)" $ do
         it "rejects a manifest/gameplay metadata mismatch" $ do

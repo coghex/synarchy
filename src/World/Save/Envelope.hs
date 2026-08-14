@@ -13,8 +13,11 @@
 --     ("World.Save.Component.saveComponentRegistry") — @"core-session"@,
 --     @"texture-palette"@, @"world-pages"@, @"world-edits"@,
 --     @"world-activity"@, @"buildings"@, @"units"@, @"unit-sim"@,
---     @"craft-bills"@, @"power-nodes"@ — each independently versioned,
---     converted to/from "World.Save.Snapshot"'s 'SessionSnapshot'.
+--     @"craft-bills"@, @"power-nodes"@, plus the two OPTIONAL entries
+--     @"container-knowledge"@ (#1087) and @"transfer-orders"@ (#1246),
+--     whose absence is a legitimate default rather than a decode
+--     failure — each independently versioned, converted to/from
+--     "World.Save.Snapshot"'s 'SessionSnapshot'.
 --   - a DYNAMIC set of Lua-owned components (issue #761, save-overhaul
 --     B3), one per module registered with
 --     @scripts/lib/save_modules.lua@, each riding under the reserved

@@ -57,6 +57,7 @@ import World.Flora.Harvest (emptyFloraHarvests)
 import World.Flora.CropPlot (emptyCropPlots)
 import World.Edit.Types (emptyWorldEdits)
 import Craft.Bills (emptyCraftBills)
+import Unit.Transfer.Orders (emptyTransferOrders)
 import Power.Types (emptyPowerNodes)
 import Building.Knowledge (emptyContainerKnowledge)
 
@@ -101,6 +102,7 @@ minimalPage gp = PageSnapshot
     , pgsFloraHarvests = emptyFloraHarvests
     , pgsChopDesignations = HM.empty
     , pgsCraftBills   = emptyCraftBills
+    , pgsTransferOrders = emptyTransferOrders
     , pgsPowerNodes   = emptyPowerNodes
     , pgsTillDesignations = HM.empty
     , pgsCropPlots    = emptyCropPlots

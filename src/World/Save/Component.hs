@@ -56,6 +56,7 @@ import World.Save.Component.Session
 import World.Save.Component.Page
 import World.Save.Component.Entities
 import World.Save.Component.Knowledge
+import World.Save.Component.Transfer
 import World.Save.Integrity
     (IntegrityError(..), sessionIntegrityErrors, integrityErrorCap)
 
@@ -106,12 +107,18 @@ saveComponentRegistry =
         (\ver d snap → onPages snap (applyCraftBills ver d))
     , registerComponent powerNodesCodec
         (\ver d snap → onPages snap (applyPowerNodes ver d))
-      -- #1087: the one OPTIONAL entry. Absent ⇒ every page keeps
-      -- 'blankPageSnapshot''s empty knowledge map (every container
-      -- never-inspected), which is what lets every pre-#1087 baseline in
-      -- docs/save_compat/manifest.json keep loading.
+      -- #1087: the FIRST of the two OPTIONAL entries. Absent ⇒ every
+      -- page keeps 'blankPageSnapshot''s empty knowledge map (every
+      -- container never-inspected), which is what lets every pre-#1087
+      -- baseline in docs/save_compat/manifest.json keep loading.
     , registerComponent containerKnowledgeCodec
         (\ver d snap → onPages snap (applyContainerKnowledge ver d))
+      -- #1246: the SECOND OPTIONAL entry, on the same terms. Absent ⇒
+      -- every page keeps 'blankPageSnapshot''s empty order queue, which
+      -- is true rather than invented for every session that predates
+      -- this slice: there was nowhere for an order to be stored at all.
+    , registerComponent transferOrdersCodec
+        (\ver d snap → onPages snap (applyTransferOrders ver d))
     ]
   where
     onPages snap f = (\pages → snap { snapPages = pages }) ⊚ f (snapPages snap)
@@ -123,10 +130,12 @@ componentKnownIds = HS.fromList (map rcId saveComponentRegistry)
 
 -- | The ids this reader hard-requires. Every gameplay component was
 --   required until #1087 (requirement 7's "none is safely defaultable"),
---   which added @"container-knowledge"@ as the one genuine exception:
+--   which added @"container-knowledge"@ as the first genuine exception:
 --   it post-dates every tracked compatibility baseline, and an absent
 --   payload has an honest, non-guessing meaning ("no container has ever
---   been inspected") rather than a fabricated one.
+--   been inspected") rather than a fabricated one. #1246's
+--   @"transfer-orders"@ is the second, on identical terms ("no order is
+--   queued", true of every session that had nowhere to queue one).
 componentRequiredIds ∷ HS.HashSet ComponentId
 componentRequiredIds =
     HS.fromList [ rcId c | c ← saveComponentRegistry, rcRequired c ]

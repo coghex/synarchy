@@ -395,6 +395,41 @@ spec = describe "Transfer context menu" $ do
             spDestinationDisplayName sess `shouldBe` "Cargo Hold"
             spContractState sess `shouldBe` "queued"
 
+        -- #1246 requirement 6 / epic decision D-3: durable transfer
+        -- ORDERS now persist in their own save component, and the Mode A
+        -- session must stay exactly as transient as it was. This asserts
+        -- the hook itself — that 'transfer_session.init' registers one
+        -- under its own id, and that running it drops the live session.
+        -- The other half of the chain (a real load runs EVERY registered
+        -- reset hook, once every component has committed) is
+        -- 'Test.Headless.Lua.SaveModules''s existing applyAll coverage;
+        -- the two together are what makes "no session survives a load"
+        -- true, and neither on its own would be.
+        it "the Mode A session is cleared by its save-load reset hook, \
+           \and contributes NO save component of its own (#1246 D-3)" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (endpointInfoStub "unit" 99 True "Technomule")
+            run ls "require('scripts.transfer_session').init('transfer_session'); "
+            created ← evalDebug ls
+                "local s = require('scripts.transfer_session').create(7, 'unit', 99); return s"
+            created `shouldNotSatisfy` isLuaError
+            -- Registered as a RESET hook, never as a persistent
+            -- component: a session in saveModules.registry would mean
+            -- Mode A state riding into a save.
+            hookKind ← evalDebug ls
+                "local sm = require('scripts.lib.save_modules'); \
+                \return type(sm.resetHooks['transfer_session']) \
+                \  .. '/' .. type(sm.registry['transfer_session'])"
+            -- Debug-console return values are JSON-serialized, so a
+            -- string comes back quoted.
+            hookKind `shouldBe` "\"function/nil\""
+            cleared ← evalDebug ls
+                "local sm = require('scripts.lib.save_modules'); \
+                \sm.resetHooks['transfer_session'](); \
+                \return tostring(require('scripts.transfer_session').get())"
+            cleared `shouldBe` "\"nil\""
+
         it "is reusable independent of the context-menu callback (requirement 8)" $ \env → do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
