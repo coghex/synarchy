@@ -410,6 +410,20 @@ spec = describe "Unit transfer contract" $ do
             refusal scene (toHold 82 "acolyte_robe")
                 `shouldBe` Just (requestFailure ReasonItemNotTransferable)
 
+        it "refuses a held instance id that no longer names the requested def" $ do
+            -- #1273: the identity contract is validated before the
+            -- location-specific reason is chosen, so a stale pair reads
+            -- the same wherever its id resolves. "Worn" would assert
+            -- the requested item exists, which this reference never
+            -- named.
+            let worn  = mkItem "steel_dagger" 81 1.0
+                robe  = mkItem "acolyte_robe" 82 1.5
+                scene = sceneOf (source [] [worn, robe]) (cargoHold 200 [])
+            refusal scene (toHold 81 "steel_sword")
+                `shouldBe` Just (requestFailure ReasonInstanceMissing)
+            refusal scene (toHold 82 "leather_robe")
+                `shouldBe` Just (requestFailure ReasonInstanceMissing)
+
         it "has no equipped list to consult for a building source" $ do
             -- A building endpoint's loose storage is all it has, so an
             -- unknown id there is MISSING, never "worn".
