@@ -43,8 +43,16 @@ ALL8 = CANON5 + ["north-west", "west", "south-west"]
 # Fixture construction
 # --------------------------------------------------------------------
 
-def png_bytes(width: int = 4, height: int = 4) -> bytes:
-    """A real, minimal 8-bit RGBA PNG of the requested size."""
+def png_bytes(width: int = 4, height: int = 4, *,
+              ihdr_compression: int = 0, ihdr_filter: int = 0) -> bytes:
+    """A real, minimal 8-bit RGBA PNG of the requested size.
+
+    The two IHDR method knobs exist for the malformed-header cases: with
+    either set to a non-zero value the file still has correct chunk CRCs
+    and an IDAT that inflates to exactly the right length, so ONLY the
+    header field under test is wrong. A checker that reads those fields
+    without validating them accepts the result.
+    """
     raw = b"".join(b"\x00" + b"\x7f\x20\x40\xff" * width
                    for _ in range(height))
 
@@ -52,7 +60,8 @@ def png_bytes(width: int = 4, height: int = 4) -> bytes:
         return (struct.pack(">I", len(body)) + ctype + body
                 + struct.pack(">I", binascii.crc32(ctype + body) & 0xFFFFFFFF))
 
-    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6,
+                       ihdr_compression, ihdr_filter, 0)
     return (pack_atlas.PNG_SIGNATURE
             + chunk(b"IHDR", ihdr)
             + chunk(b"IDAT", zlib.compress(raw))
@@ -237,6 +246,17 @@ def _both_keys(fx: Fixture) -> None:
     fx.yaml("hero", gameplay_yaml("hero", [("idle", CANON5, 2, True)])
             + asset_only_yaml("prop", [("spin", CANON5, 2, True)]).replace(
                 "asset_units:\n", "asset_units:\n", 1))
+
+
+@positive("the approved <lowercase>_RH_<lowercase> animation name is accepted")
+def _rh_exception(fx: Fixture) -> None:
+    # The one narrowly matched exception to the lowercase identifier
+    # rule: eight shipped acolyte animations use it, and it authors all
+    # eight directions (a mirrored right hand would be a left hand).
+    fx.frames("hero", "attack_heavy_RH_dagger", ALL8, 2)
+    fx.write_file("assets/textures/units/hero/idle.png", png_bytes())
+    fx.yaml("hero", gameplay_yaml("hero", [
+        ("attack_heavy_RH_dagger", ALL8, 2, False)]))
 
 
 # -- negative ---------------------------------------------------------
@@ -507,6 +527,78 @@ def _loose_direction(fx: Fixture) -> None:
                   png_bytes())
 
 
+@negative("an arbitrary mixed-case animation name outside the approved "
+          "exception", "unsafe animation identifier")
+def _mixed_case_anim(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+            .replace("      spin:\n", "      AnyThing:\n"))
+
+
+@negative("a near-miss of the approved _RH_ exception (upper-case weapon)",
+          "unsafe animation identifier")
+def _rh_near_miss(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+            .replace("      spin:\n", "      attack_RH_Dagger:\n"))
+
+
+@negative("a mixed-case animation DIRECTORY outside the approved exception",
+          "unsafe animation directory name")
+def _mixed_case_anim_dir(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.frames("prop", "AnyThing", CANON5, 1)
+
+
+@negative("an unpadded frame filename", "must match frame_NNN.png")
+def _unpadded_frame(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/prop/animations/spin/south/frame_2.png",
+        png_bytes())
+
+
+@negative("an over-padded frame filename", "must match frame_NNN.png")
+def _overpadded_frame(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/prop/animations/spin/south/frame_0002.png",
+        png_bytes())
+
+
+@negative("an unpadded frame DECLARATION", "must match frame_NNN.png")
+def _unpadded_declared(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/prop/animations/spin/south/frame_2.png",
+        png_bytes())
+    body = asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+    body = body.replace(
+        frame_lines("prop", "spin", "south", 2, " " * 12),
+        frame_lines("prop", "spin", "south", 2, " " * 12)
+        + frame_lines("prop", "spin", "south", 1, " " * 12, start=2,
+                      name=lambda i: f"frame_{i}.png"))
+    fx.yaml("prop", body)
+
+
+@negative("a PNG header declaring an unknown filter method",
+          "unknown filter method")
+def _bad_filter_method(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/prop/animations/spin/south/frame_001.png",
+        png_bytes(ihdr_filter=1))
+
+
+@negative("a PNG header declaring an unknown compression method",
+          "unknown compression method")
+def _bad_compression_method(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/prop/animations/spin/south/frame_001.png",
+        png_bytes(ihdr_compression=1))
+
+
 # --------------------------------------------------------------------
 # Runner
 # --------------------------------------------------------------------
@@ -553,7 +645,7 @@ def main() -> int:
 
     # The suite is only meaningful if it actually built fixtures; a
     # refactor that silently emptied a registry must not read as green.
-    if len(POSITIVE) < 4 or len(NEGATIVE) < 25:
+    if len(POSITIVE) < 5 or len(NEGATIVE) < 37:
         failures.append(
             f"case registries look truncated: {len(POSITIVE)} positive, "
             f"{len(NEGATIVE)} negative")

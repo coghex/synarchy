@@ -44,13 +44,13 @@ A file may hold either key or both. A file holding neither is an error
 INVARIANTS ENFORCED
 -------------------
 
-  * a unit identifier is one lowercase `[a-z0-9_]+` path component, and
-    an animation identifier one `[A-Za-z0-9_]+` component (upper case
-    only because the shipped `*_RH_dagger` acolyte animations use the
-    documented asymmetric-weapon suffix — see ANIM_IDENT_RE);
+  * a unit identifier is one lowercase `[a-z0-9_]+` path component; an
+    animation identifier is the same, plus the one narrowly matched
+    approved exception `<lowercase>_RH_<lowercase>` for the documented
+    asymmetric-weapon animations — see ANIM_IDENT_RE;
   * direction names come from the engine's own direction vocabulary and
     sit at the direction level of the tree;
-  * frame files are named `frame_NNN.png`;
+  * frame files are named `frame_NNN.png`, with exactly three digits;
   * a declared path is relative, free of `..`, free of symlinks, and
     resolves inside the exact expected
     `<unit>/animations/<animation>/<direction>/` directory — cross-unit,
@@ -149,23 +149,32 @@ ALL_DIRS = {
 CANONICAL_DIRS = {"south", "south-east", "east", "north-east", "north"}
 
 # A unit identifier is exactly one lowercase path component.
-#
-# An ANIMATION identifier allows ASCII upper case as well, and only for
-# that reason: eight shipped acolyte animations carry the documented
-# asymmetric-weapon suffix `_RH_dagger` (`docs/asset_generation.md`),
-# which `scripts/acolyte_combat.lua` and `scripts/unit_ai_combat_attack.lua`
-# concatenate at runtime from the equipped item. Lowercasing them is a
-# gameplay-data rename, which #1257 puts out of scope; the safety
-# property this rule actually exists for — ONE path component, ASCII
-# word characters only, so nothing can carry a separator, a dot, or
-# traversal — is unaffected by letter case.
-#
-# Directions are NOT matched by either: they legitimately contain '-'
-# and are checked against DIR_ALIASES instead.
 UNIT_IDENT_RE = re.compile(r"^[a-z0-9_]+$")
-ANIM_IDENT_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
-FRAME_RE = re.compile(r"^frame_(\d+)\.png$")
+# An ANIMATION identifier is the same lowercase rule, plus ONE narrowly
+# matched approved exception: the documented asymmetric-weapon infix
+# `_RH_` (`docs/asset_generation.md` — a mirrored right hand would become
+# a left hand, so those animations author all eight directions). Eight
+# shipped acolyte animations use it, and `scripts/acolyte_combat.lua` and
+# `scripts/unit_ai_combat_attack.lua` concatenate the suffix at runtime
+# from the equipped item, so lowercasing them is a gameplay-data rename
+# #1257 puts out of scope.
+#
+# The exception is deliberately a SHAPE, not a blanket allowance of upper
+# case: both halves around `_RH_` must still be lowercase, so
+# `attack_heavy_RH_dagger` is accepted while `AnyThing`,
+# `attack_heavy_RH_Dagger`, `attack_LH_dagger` and a bare `RH_dagger` are
+# all rejected. The safety property the rule exists for — ONE path
+# component, ASCII word characters only, so nothing carries a separator, a
+# dot, or traversal — holds either way.
+ANIM_IDENT_RE = re.compile(r"^[a-z0-9_]+$|^[a-z0-9_]+_RH_[a-z0-9_]+$")
+
+# Exactly three digits: `frame_NNN.png` is the asset format, and the
+# numbering rule below counts from `frame_000.png`. `\d+` would also
+# admit `frame_1.png`, `frame_01.png` and `frame_0000.png`, which are
+# three different spellings of one index and would let a directory hold
+# apparent duplicates that the gap/duplicate check could not see.
+FRAME_RE = re.compile(r"^frame_(\d{3})\.png$")
 
 # Relative to the validation root.
 ASSET_PREFIX: Tuple[str, ...] = ("assets", "textures", "units")
@@ -267,7 +276,7 @@ def decode_png_size(path: Path) -> Tuple[int, int]:
                 raise PngError("first chunk is not IHDR")
             if length != 13:
                 raise PngError(f"IHDR is {length} bytes, expected 13")
-            width, height, depth, colour, _comp, _filt, interlace = \
+            width, height, depth, colour, comp, filt, interlace = \
                 struct.unpack(">IIBBBBB", body)
             if width == 0 or height == 0:
                 raise PngError(f"zero dimension ({width}x{height})")
@@ -276,6 +285,15 @@ def decode_png_size(path: Path) -> Tuple[int, int]:
             if depth not in PNG_DEPTHS[colour]:
                 raise PngError(
                     f"bit depth {depth} is illegal for colour type {colour}")
+            # The PNG specification defines exactly one value for each of
+            # these. A CRC-correct header carrying anything else is
+            # malformed even if its IDAT inflates cleanly, and a decoder
+            # is entitled to refuse it — so accepting it would make the
+            # decodability invariant a promise this checker does not keep.
+            if comp != 0:
+                raise PngError(f"unknown compression method {comp}")
+            if filt != 0:
+                raise PngError(f"unknown filter method {filt}")
             header = (width, height, depth, colour, interlace)
         elif ctype == b"IDAT":
             idat += body

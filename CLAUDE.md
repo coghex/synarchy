@@ -1637,9 +1637,13 @@ looks like). Three decoders share the shape:
 registers anything), and `tools/pack_atlas.py`.
 
 Enforced invariants — a unit identifier is one lowercase `[a-z0-9_]+`
-path component and an animation identifier one `[A-Za-z0-9_]+`
-component (upper case only for the documented `*_RH_dagger`
-asymmetric-weapon suffix); frames are `frame_NNN.png`; a declared path is
+path component; an animation identifier is the same, plus ONE narrowly
+matched approved exception, `<lowercase>_RH_<lowercase>`, for the
+documented asymmetric-weapon animations (so `attack_heavy_RH_dagger`
+passes while `AnyThing`, `attack_heavy_RH_Dagger` and `attack_LH_dagger`
+do not); frames are `frame_NNN.png` with exactly three digits, so
+`frame_1.png` and `frame_0002.png` are rejected rather than read as
+another spelling of an index; a declared path is
 relative, `..`-free, symlink-free, and resolves inside its EXACT
 `<unit>/animations/<animation>/<direction>/` directory, so cross-unit,
 cross-animation and cross-direction references are each named as such;
@@ -1647,8 +1651,9 @@ cross-animation and cross-direction references are each named as such;
 `flip: false` exactly all eight; per direction, indices start at 0 with
 no gaps or duplicates, while different directions of one animation may
 hold different counts; every frame decodes as a PNG (standard library
-only — no image package in CI) and one animation's frames share one
-pixel size.
+only — no image package in CI, with its IHDR compression and filter
+methods required to be the single value the PNG specification defines
+for each) and one animation's frames share one pixel size.
 
 **"Duplicate" means duplicate ANIMATION-FRAME claims only.** Reusing an
 animation frame as a unit's `sprite`, a `directional_sprites` entry, or

@@ -113,7 +113,8 @@ is owned by exactly one animation-frame declaration in `data/units/*.yaml`,
 under either the gameplay `units:` key or the asset-only `asset_units:` key.
 Also enforces identifier safety, exact per-animation/per-direction
 containment (cross-unit, cross-animation and cross-direction references are
-each named), `frame_NNN.png` naming, contiguous numbering from zero, the
+each named), strict three-digit `frame_NNN.png` naming, contiguous
+numbering from zero, the
 five-vs-eight direction rule against `flip`, PNG decodability, and one pixel
 size per animation. Reuse of an animation frame as `sprite`,
 `directional_sprites` or `portrait` is legal and never reported as a
