@@ -45,6 +45,15 @@ WINDOW, so this probe is also the gate on a building endpoint rendering
 exactly as it did before that generalization, and on a unit endpoint
 reaching the same window through the same manager.
 
+Since #1237 a BUILDING endpoint renders the player's REMEMBERED contents
+(`building.getContainerKnowledge`), so this is also the rendered gate on
+all three knowledge states, on the "as of…" age, and on the rule that
+opening the window reveals nothing. The never-inspected fixture is a
+WORKER-BUILT storage def left at zero progress: A3 seeds a container as
+known-empty at its first transition to Built, so an instant-built one
+cannot supply that state, and calling a knowledge verb to manufacture it
+would make the probe assert its own writes.
+
 Verifies, in order:
 
   1. cargo Contents panel (a BUILDING endpoint): its title and
@@ -66,11 +75,19 @@ Verifies, in order:
      a resize preserves the endpoint identity AND the selected tab, unit
      rows expose no row action, and a wildlife unit — not
      player-commandable — cannot open the window at all.
-  4. first-aid-kit Contents panel: the Haskell-side pre-grouped rows
+  4. last-known contents (#1237): a never-inspected container renders as
+     unknown — not as an empty one — with its capacity still shown, an
+     unknown stored weight and no age; opening it reveals nothing; a
+     known-empty one renders "(empty)" with an age; a completed deposit
+     refreshes an ALREADY-OPEN window to "known" with the moved item and
+     a fresh age; and that age advances across two increasing
+     `engine.gameTime()` readings taken against the same unchanged
+     `revealedAt`.
+  5. first-aid-kit Contents panel: the Haskell-side pre-grouped rows
      appear unchanged (never re-split by the finer stack key), the rows
      expose NO right-click action at all, and an emptied container
      renders its "(empty)" state.
-  5. unit inventory section: rows and counts, a wrapped/centred tab
+  6. unit inventory section: rows and counts, a wrapped/centred tab
      strip inside the section rect, tab selection filtering, and a real
      right-click reaching the representative instance's Equip/Contents
      menu.
@@ -87,6 +104,7 @@ Usage: python3 tools/item_list_widget_probe.py
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import sys
 import tempfile
@@ -101,7 +119,16 @@ from probelib import (boot, camera_state, centred_within,
 SPROOT = tempfile.gettempdir()
 TEST_BUILDING_YAML = os.path.join(SPROOT, "item_list_widget_probe_buildings.yaml")
 DEF_CARGO = "probe_item_list_cargo"
+DEF_EMPTY = "probe_item_list_empty"
+DEF_UNSEEN = "probe_item_list_unseen"
 
+# DEF_UNSEEN is deliberately WORKER-BUILT (`build_work > 0`). A
+# `building.spawn`ed instance of it is created at zero progress and never
+# reaches Built, so A3's `SeedAtBuildCompletion` trigger never fires and
+# its knowledge record genuinely does not exist — the never-inspected
+# state, obtained without calling a single knowledge-mutating verb. Its
+# capacity is still def-declared and therefore still LIVE, which is what
+# requirement 1 needs a fixture for.
 TEST_BUILDINGS = f"""\
 buildings:
   - name: "{DEF_CARGO}"
@@ -114,6 +141,26 @@ buildings:
     race: "acolyte_cult"
     build_work: 0.0
     storage_capacity: 400.0
+  - name: "{DEF_EMPTY}"
+    display_name: "Probe Item List Empty Cargo"
+    category: "Test"
+    description: "Throwaway #1237 known-empty fixture — not shipped content."
+    sprite: "assets/textures/buildings/cargo_hold_S/default.png"
+    tile_size: {{ x: 1, y: 1 }}
+    placement: "flat_ground"
+    race: "acolyte_cult"
+    build_work: 0.0
+    storage_capacity: 250.0
+  - name: "{DEF_UNSEEN}"
+    display_name: "Probe Item List Unseen Cargo"
+    category: "Test"
+    description: "Throwaway #1237 never-inspected fixture — not shipped content."
+    sprite: "assets/textures/buildings/cargo_hold_S/default.png"
+    tile_size: {{ x: 1, y: 1 }}
+    placement: "flat_ground"
+    race: "acolyte_cult"
+    build_work: 240.0
+    storage_capacity: 300.0
 """
 
 # Deliberately spans several categories so the tab strip has something
@@ -213,6 +260,86 @@ def panel_chrome(port: int) -> dict:
                           " return {title = s.titleId and l.getText(s.titleId),"
                           " subtitle = s.subtitleId and l.getText(s.subtitleId)}")
     return got if isinstance(got, dict) else {}
+
+
+def chrome_text(port: int, name: str):
+    """One of the window's own labels, located by its engine element name
+    through the `ui.dumpWidgets()` oracle rather than by reading the
+    panel's bookkeeping.
+
+    Returns None when the label does not exist, which is itself the
+    assertion for the two labels #1237 renders CONDITIONALLY:
+    `cargo_inv_age` (absent for a live endpoint and for a never-inspected
+    container) and `cargo_inv_empty` (the item-list widget's own
+    empty-state line, absent whenever there are rows)."""
+    for w in widgets(port):
+        if w.get("type") == "label" and w.get("name") == name:
+            return w.get("label")
+    return None
+
+
+def format_age(elapsed: float) -> str:
+    """Mirror of `formatAge` in scripts/cargo_inventory_panel.lua.
+
+    Deliberately restated here rather than read out of the panel: the
+    checks below assert that the RENDERED label equals what the engine's
+    own `revealedAt` and `engine.gameTime()` say it must be — the same
+    technique the header checks already use for
+    "Storage: %.2f / %.2f kg". A wording or bucketing change in the Lua
+    therefore fails this gate instead of slipping past it."""
+    s = int(math.floor(elapsed))
+    if s < 0:
+        s = 0
+    if s < 5:
+        return "just now"
+    if s < 60:
+        return f"{s}s ago"
+    if s < 3600:
+        m, rs = s // 60, s % 60
+        if m < 10 and rs > 0:
+            return f"{m}m {rs}s ago"
+        return f"{m}m ago"
+    if s < 86400:
+        hr, m = s // 3600, (s % 3600) // 60
+        if m > 0:
+            return f"{hr}h {m}m ago"
+        return f"{hr}h ago"
+    d, hr = s // 86400, (s % 86400) // 3600
+    if hr > 0:
+        return f"{d}d {hr}h ago"
+    return f"{d}d ago"
+
+
+def knowledge(port: int, bid: int) -> dict:
+    got = send_json(port, f"return building.getContainerKnowledge({bid})")
+    return got if isinstance(got, dict) else {}
+
+
+def game_time(port: int) -> float:
+    raw = send(port, "return engine.gameTime()").strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return float("nan")
+
+
+def expected_age(port: int, bid: int):
+    """The "as of…" line the open window MUST be showing, derived from
+    the engine's own knowledge record and game clock — never a wall
+    clock. Read while the simulation is stopped so the two round trips
+    below describe one instant."""
+    k = knowledge(port, bid)
+    revealed = k.get("revealedAt")
+    if not isinstance(revealed, (int, float)):
+        return None, k
+    return "as of " + format_age(game_time(port) - float(revealed)), k
+
+
+def open_window_on(port: int, bid: int) -> bool:
+    accepted = send(port, "return require('scripts.cargo_inventory_panel')"
+                          f".openFor('building', {bid}, 240, 240)").strip()
+    time.sleep(0.5)
+    return accepted == "true"
 
 
 def click_widget_center(port: int, w: dict) -> None:
@@ -397,13 +524,32 @@ def cargo_scenario(port: int, bid: int, bpixel, vp: dict) -> None:
     check("the cargo window's title names the building",
           bool(want_name) and chrome.get("title") == want_name,
           f"got {chrome.get('title')!r} want {want_name!r}")
+    # Since #1237 the header reports the REMEMBERED weight, not the live
+    # one. Every stack here was deposited through the real verb, which
+    # reveals on commit, so the two agree — and that agreement is worth
+    # asserting separately: it is what makes "renders the snapshot"
+    # compatible with "a freshly-used container looks current".
+    k = knowledge(port, bid)
     cap = send(port, f"return building.getStorageCapacity({bid})").strip()
     used = send(port, f"return building.getStorageWeight({bid})").strip()
-    want_sub = "Storage: %.2f / %.2f kg" % (float(used), float(cap))
-    check("the cargo window's header reports the building's real "
-          "stored weight and capacity",
+    check("a container stocked through the real deposit verb has a "
+          "remembered record matching its live storage",
+          k.get("state") == "known"
+          and abs(float(k.get("storedWeight") or 0) - float(used)) < 0.01
+          and abs(float(k.get("capacity") or 0) - float(cap)) < 0.01,
+          f"knowledge {k!r} vs live {used}/{cap}")
+    want_sub = "Storage: %.2f / %.2f kg" % (float(k.get("storedWeight") or 0),
+                                            float(k.get("capacity") or 0))
+    check("the cargo window's header reports the building's remembered "
+          "stored weight and its live capacity",
           chrome.get("subtitle") == want_sub,
           f"got {chrome.get('subtitle')!r} want {want_sub!r}")
+    want_age, _ = expected_age(port, bid)
+    check("a known container shows an 'as of…' age derived from its "
+          "revealedAt and the game clock",
+          want_age is not None
+          and chrome_text(port, "cargo_inv_age") == want_age,
+          f"got {chrome_text(port, 'cargo_inv_age')!r} want {want_age!r}")
 
     rows = item_rows(port, CARGO_LIST_ID)
     check("cargo rows are one per STACK, not one per item",
@@ -576,6 +722,11 @@ def unit_endpoint_scenario(port: int, uid: int, wild_uid: int,
           abs(float(ep.get("storedWeight") or 0) - loose) > 1e-6
           or not loose,
           f"storedWeight={ep.get('storedWeight')!r} loose sum={loose!r}")
+    # #1237 requirement 6: a unit knows its own contents, so there is no
+    # staleness to date and no "as of…" line to draw.
+    check("a unit endpoint renders NO age indicator",
+          chrome_text(port, "cargo_inv_age") is None,
+          f"got {chrome_text(port, 'cargo_inv_age')!r}")
 
     # -- Rows are that call's loose inventory, one per stack.
     rows = item_rows(port, CARGO_LIST_ID)
@@ -688,6 +839,159 @@ def unit_endpoint_scenario(port: int, uid: int, wild_uid: int,
                          ".openFor('item_container', 1, 240, 240)").strip()
     check("the manager refuses an unknown endpoint kind", unknown == "false",
           f"got {unknown!r}")
+
+
+def knowledge_scenario(port: int, unseen_bid: int, empty_bid: int,
+                        uid: int) -> None:
+    """#1237: the three knowledge states, the age, and the no-reveal rule,
+    all read off the REAL rendered window.
+
+    Runs with the simulation stopped except for the one deliberate
+    interval that advances the game clock, so every "engine says X, the
+    label says Y" pair describes a single instant."""
+    print("== last-known container contents (#1237) ==")
+    set_paused(port, True)
+
+    # -- Never inspected. The fixture is worker-built and left at zero
+    #    progress, so nothing has ever seeded or revealed it.
+    k = knowledge(port, unseen_bid)
+    if not check("the engine reports the worker-built fixture as genuinely "
+                 "never-inspected", k.get("state") == "unknown", f"got {k!r}"):
+        return
+    cap = k.get("capacity")
+    check("its capacity is still live and positive even with no record",
+          isinstance(cap, (int, float)) and cap > 0, f"got {cap!r}")
+
+    if not check("the container window opens on a never-inspected container",
+                 open_window_on(port, unseen_bid)):
+        return
+    chrome = panel_chrome(port)
+    want_sub = "Storage: unknown / %.2f kg" % float(cap)
+    check("its header reads the stored weight as UNKNOWN while still "
+          "showing the live capacity",
+          chrome.get("subtitle") == want_sub,
+          f"got {chrome.get('subtitle')!r} want {want_sub!r}")
+    check("a never-inspected container renders NO rows",
+          not item_rows(port, CARGO_LIST_ID))
+    check("it renders an explicit never-inspected line, not an empty list",
+          chrome_text(port, "cargo_inv_empty")
+              == "Contents unknown (never inspected)",
+          f"got {chrome_text(port, 'cargo_inv_empty')!r}")
+    check("a never-inspected container shows no age at all",
+          chrome_text(port, "cargo_inv_age") is None,
+          f"got {chrome_text(port, 'cargo_inv_age')!r}")
+
+    # -- Requirement 4: opening reveals nothing. Tick it for a while,
+    #    including a real tab interaction, then re-ask the engine.
+    time.sleep(1.5)
+    for t in tab_boxes(port, CARGO_LIST_ID):
+        click_widget_center(port, t)
+        time.sleep(0.3)
+    after = knowledge(port, unseen_bid)
+    check("opening (and interacting with) the window reveals NOTHING — the "
+          "container is still never-inspected",
+          after.get("state") == "unknown" and after.get("revealedAt") is None,
+          f"got {after!r}")
+    send(port, "require('scripts.cargo_inventory_panel').closeIfOpen();"
+               " return 'ok'")
+    time.sleep(0.3)
+
+    # -- Known-EMPTY: a second instant-built fixture, seeded at Built and
+    #    deliberately never stocked.
+    k = knowledge(port, empty_bid)
+    if not check("the engine reports the unstocked instant-built fixture as "
+                 "known-empty", k.get("state") == "empty", f"got {k!r}"):
+        return
+    if not check("the container window opens on a known-empty container",
+                 open_window_on(port, empty_bid)):
+        return
+    chrome = panel_chrome(port)
+    want_sub = "Storage: %.2f / %.2f kg" % (float(k.get("storedWeight") or 0),
+                                            float(k.get("capacity") or 0))
+    check("a known-empty container reports a real zero stored weight, not "
+          "an unknown one",
+          chrome.get("subtitle") == want_sub,
+          f"got {chrome.get('subtitle')!r} want {want_sub!r}")
+    check("it renders the known-empty line, distinct from the unknown one",
+          chrome_text(port, "cargo_inv_empty") == "(empty)",
+          f"got {chrome_text(port, 'cargo_inv_empty')!r}")
+    want_age, _ = expected_age(port, empty_bid)
+    check("a known-empty container shows an age derived from its own "
+          "revealedAt and the game clock",
+          want_age is not None
+          and chrome_text(port, "cargo_inv_age") == want_age,
+          f"got {chrome_text(port, 'cargo_inv_age')!r} want {want_age!r}")
+
+    # -- Requirement 5: a completed movement refreshes an OPEN window.
+    before_revealed = (knowledge(port, empty_bid) or {}).get("revealedAt")
+    set_paused(port, False)
+    send(port, f"return unit.addItem({uid}, 'quinoa_sack')")
+    send(port, f"return unit.depositToCargo({uid}, {empty_bid},"
+               " 'quinoa_sack')", timeout=20.0)
+    moved = poll_until(8.0, lambda: "quinoa_sack" in
+                       {r.get("defName")
+                        for r in item_rows(port, CARGO_LIST_ID)},
+                       interval=0.4)
+    set_paused(port, True)
+    time.sleep(0.5)
+    check("a completed deposit refreshes the ALREADY-OPEN window to the "
+          "moved item, with no reopen", bool(moved),
+          f"rows: {[r.get('defName') for r in item_rows(port, CARGO_LIST_ID)]!r}")
+    k = knowledge(port, empty_bid)
+    check("the engine's record is now 'known' with a newer revealedAt",
+          k.get("state") == "known"
+          and isinstance(k.get("revealedAt"), (int, float))
+          and (before_revealed is None
+               or k["revealedAt"] > before_revealed),
+          f"got {k!r} (was revealed at {before_revealed!r})")
+    chrome = panel_chrome(port)
+    want_sub = "Storage: %.2f / %.2f kg" % (float(k.get("storedWeight") or 0),
+                                            float(k.get("capacity") or 0))
+    check("the header follows the refreshed remembered weight",
+          chrome.get("subtitle") == want_sub,
+          f"got {chrome.get('subtitle')!r} want {want_sub!r}")
+    check("the known-empty line is gone now that there are remembered rows",
+          chrome_text(port, "cargo_inv_empty") is None,
+          f"got {chrome_text(port, 'cargo_inv_empty')!r}")
+    want_age, _ = expected_age(port, empty_bid)
+    check("and the age is the fresh one",
+          want_age is not None
+          and chrome_text(port, "cargo_inv_age") == want_age,
+          f"got {chrome_text(port, 'cargo_inv_age')!r} want {want_age!r}")
+
+    # -- Requirement 3 read literally: the SAME fixed revealedAt observed
+    #    at two increasing game-clock readings. engine.gameTime() only
+    #    advances while unpaused, so the interval is a real unpause; the
+    #    fixed revealedAt is re-asserted afterwards so a stray reveal
+    #    during it fails the check rather than faking a pass.
+    t0 = game_time(port)
+    age0 = chrome_text(port, "cargo_inv_age")
+    revealed0 = k.get("revealedAt")
+    set_paused(port, False)
+    time.sleep(12.0)
+    set_paused(port, True)
+    time.sleep(0.5)
+    t1 = game_time(port)
+    k1 = knowledge(port, empty_bid)
+    age1 = chrome_text(port, "cargo_inv_age")
+    check("the game clock advanced across the unpaused interval", t1 > t0,
+          f"got {t0!r} -> {t1!r}")
+    check("the observation itself did not move (same revealedAt)",
+          k1.get("revealedAt") == revealed0,
+          f"got {k1.get('revealedAt')!r} want {revealed0!r}")
+    want0 = ("as of " + format_age(t0 - float(revealed0))
+             if isinstance(revealed0, (int, float)) else None)
+    want1 = ("as of " + format_age(t1 - float(revealed0))
+             if isinstance(revealed0, (int, float)) else None)
+    check("the displayed age matches the derivation at BOTH readings",
+          age0 == want0 and age1 == want1,
+          f"got {age0!r}/{age1!r} want {want0!r}/{want1!r}")
+    check("and it visibly ADVANCED as game time passed",
+          age1 != age0, f"still {age0!r} after {t1 - t0:.1f} game seconds")
+
+    send(port, "require('scripts.cargo_inventory_panel').closeIfOpen();"
+               " return 'ok'")
+    time.sleep(0.3)
 
 
 def item_contents_scenario(port: int, mule_uid: int, uid: int) -> None:
@@ -877,17 +1181,19 @@ def main() -> int:
     with open(TEST_BUILDING_YAML, "w") as f:
         f.write(TEST_BUILDINGS)
     n = send(port, f"return engine.loadBuildingYaml('{TEST_BUILDING_YAML}')")
-    check("probe building def loaded", float(n) == 1.0, f"got {n!r}")
+    check("probe building defs loaded", float(n) == 3.0, f"got {n!r}")
 
     print("  (scanning terrain outward from the origin for dry anchor sites)")
-    sites = allocate_dry_anchors(port, 4)
-    if not check("found four separated dry sites for the fixtures",
+    sites = allocate_dry_anchors(port, 6)
+    if not check("found six separated dry sites for the fixtures",
                  sites is not None):
         quit_engine(port, proc)
         return 1
-    (bax, bay), (aax, aay), (max_, may_), (wax, way) = sites
+    ((bax, bay), (aax, aay), (max_, may_), (wax, way),
+     (eax, eay), (uax, uay)) = sites
     print(f"  (fixture sites: building={(bax, bay)} acolyte={(aax, aay)} "
-          f"technomule={(max_, may_)} wildlife={(wax, way)})")
+          f"technomule={(max_, may_)} wildlife={(wax, way)} "
+          f"empty-cargo={(eax, eay)} unseen-cargo={(uax, uay)})")
 
     uid = int(float(send(port,
         f"return unit.spawn('acolyte', {aax}, {aay}, nil, 'player')")))
@@ -906,6 +1212,24 @@ def main() -> int:
     check("storage building reaches Built activity",
           bool(poll_until(10.0, lambda: send(
               port, f"return building.getActivity({bid})").strip('"') == "built")))
+
+    # -- #1237 fixtures. The instant-built one seeds known-empty at Built
+    #    and is deliberately never stocked; the worker-built one never
+    #    reaches Built at all, so it is never seeded and stays genuinely
+    #    never-inspected.
+    empty_bid = int(float(send(
+        port, f"return building.spawn('{DEF_EMPTY}', {eax}, {eay})")))
+    check("known-empty fixture reaches Built activity",
+          bool(poll_until(10.0, lambda: send(
+              port,
+              f"return building.getActivity({empty_bid})").strip('"')
+                  == "built")))
+    unseen_bid = int(float(send(
+        port, f"return building.spawn('{DEF_UNSEEN}', {uax}, {uay})")))
+    check("never-inspected fixture stays UNBUILT (worker-built, zero "
+          "progress, no construct_job AI running)",
+          send(port, f"return building.getActivity({unseen_bid})").strip('"')
+              != "built")
 
     # -- Stock the cargo through the real deposit verb, and give the
     #    acolyte its own multi-category inventory plus a first-aid kit.
@@ -937,6 +1261,7 @@ def main() -> int:
     bpixel = focus_building(port, bid, bax, bay, vp)
     cargo_scenario(port, bid, bpixel, vp)
 
+    knowledge_scenario(port, unseen_bid, empty_bid, uid)
     unit_endpoint_scenario(port, uid, wild_uid, vp)
     unit_inventory_scenario(port, uid)
     item_contents_scenario(port, mule_uid, uid)
