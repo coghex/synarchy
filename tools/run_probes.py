@@ -277,6 +277,13 @@ PROBES = [
      "whole-session load transaction: mutual exclusion, complete replacement "
      "(not merge), missing-def rejection leaves the old session intact, "
      "paused dwell + default-speed unpause, no ghost pages on repeat (#763)"),
+    ("transfer_order", "transfer_order_probe.py",
+     "transfer-order unit job (#1247): a queued order walks its carrier to "
+     "the counterpart footprint and commits exactly once; the command-time "
+     "and arrival capacity refusals; a partial batch; a stale instance; a "
+     "vanished counterpart retiring quietly; a blocked approach stalling "
+     "out; a progressing trip outliving the stall budget; and a mid-walk "
+     "save/load round trip resuming to completion"),
     ("transfer_context_menu", "transfer_context_menu_probe.py",
      "offscreen: right-click 'Transfer' on a built storage building and on "
      "the technomule, located via ui.dumpWidgets(), creates a session with "

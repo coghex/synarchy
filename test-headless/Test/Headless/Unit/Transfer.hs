@@ -599,6 +599,125 @@ spec = describe "Unit transfer contract" $ do
             refusal scene (toHold 41 "steel_plate")
                 `shouldBe` Just (requestFailure ReasonOutOfRange)
 
+    -- #1247: creating a durable ORDER validates everything EXCEPT
+    -- adjacency, because the endpoints are not adjacent yet by
+    -- definition. Everything below is about what that does and,
+    -- equally, what it must not touch.
+    describe "deferred reach (#1247)" $ do
+        it "accepts a distant pair the required-reach policy refuses" $ do
+            let item  = mkItem "steel_plate" 41 1.2
+                far   = buildingAt (40, 10) (1, 1) True 200 []
+                scene = sceneOf (source [item] []) far
+                r     = toHold 41 "steel_plate"
+            planItemWith ReachRequired scene (trSource r) (trDestination r)
+                         (firstItem r)
+                `shouldBe` Left (requestFailure ReasonOutOfRange)
+            planItemWith ReachDeferred scene (trSource r) (trDestination r)
+                         (firstItem r)
+                `shouldSatisfy` isRight
+
+        it "reaches the CAPACITY verdict a range refusal would have \
+           \pre-empted" $ do
+            -- planItem checks range BEFORE capacity, so under the
+            -- required policy an overweight DISTANT request reports
+            -- out_of_range and the create-time capacity gate never
+            -- runs at all. This is the exact ordering hazard deferring
+            -- reach exists to remove.
+            let item  = mkItem "crate" 41 500
+                far   = buildingAt (40, 10) (1, 1) True 200 []
+                scene = sceneOf (source [item] []) far
+                r     = toHold 41 "crate"
+            planItemWith ReachDeferred scene (trSource r) (trDestination r)
+                         (firstItem r)
+                `shouldBe` Left (requestFailure ReasonReceiverFull)
+
+        it "still refuses a CROSS-PAGE pair — deferring reach is not \
+           \deferring the page" $ do
+            let item  = mkItem "steel_plate" 41 1.2
+                away  = buildingAt (11, 10) (1, 1) True 200 []
+                away' = case away of
+                    BuildingEndpointAt b →
+                        BuildingEndpointAt b { bevPage = otherPage }
+                    x → x
+                scene = sceneOf (source [item] []) away'
+                r     = toHold 41 "steel_plate"
+            planItemWith ReachDeferred scene (trSource r) (trDestination r)
+                         (firstItem r)
+                `shouldBe` Left (requestFailure ReasonOutOfRange)
+
+        it "keeps every other precondition, in the same order" $ do
+            let item   = mkItem "steel_plate" 41 1.2
+                shut   = buildingAt (40, 10) (1, 1) False 200 []
+                scene  = sceneOf (source [item] []) shut
+                r      = toHold 41 "steel_plate"
+                absent = toHold 99 "steel_plate"
+                open   = sceneOf (source [item] [])
+                                 (buildingAt (40, 10) (1, 1) True 200 [])
+            planItemWith ReachDeferred scene (trSource r) (trDestination r)
+                         (firstItem r)
+                `shouldBe` Left (requestFailure ReasonReceiverIneligible)
+            planItemWith ReachDeferred open (trSource absent)
+                         (trDestination absent) (firstItem absent)
+                `shouldBe` Left (requestFailure ReasonInstanceMissing)
+
+        it "leaves the DEFAULT policy required, so every existing \
+           \caller is unchanged" $ do
+            let item  = mkItem "steel_plate" 41 1.2
+                far   = buildingAt (40, 10) (1, 1) True 200 []
+                scene = sceneOf (source [item] []) far
+                r     = toHold 41 "steel_plate"
+            planOne scene r `shouldBe` Left (requestFailure ReasonOutOfRange)
+            commitOne scene r `shouldBe` Left (requestFailure ReasonOutOfRange)
+            checkBatch scene r `shouldBe`
+                Right TransferBatch
+                    { tbSource      = trSource r
+                    , tbDestination = trDestination r
+                    , tbEntries     =
+                        [ QueuedTransfer (itemRef 41 "steel_plate")
+                            (TransferFailed
+                                (requestFailure ReasonOutOfRange)) ] }
+
+        it "queues the first eight of twelve at a distance (D-1)" $ do
+            -- The ordered, progressively remeasured check is the SAME
+            -- one either way; only the range verdict differs.
+            let items = [mkItem "crate" (fromIntegral i) 25 | i ← [41 .. 52 ∷ Int]]
+                far   = buildingAt (40, 10) (1, 1) True 200 []
+                scene = sceneOf (source items []) far
+                r     = request acolyteEp holdEp
+                            [itemRef (fromIntegral i) "crate" | i ← [41 .. 52 ∷ Int]]
+            case checkBatchWith ReachDeferred scene r of
+                Left e  → expectationFailure ("unexpected: " <> show e)
+                Right b → states b `shouldBe`
+                    replicate 8 TransferQueued
+                    ⧺ replicate 4 (TransferFailed
+                                      (requestFailure ReasonReceiverFull))
+
+    -- #1247: the failure twin of cancelBatch — an order self-terminating
+    -- because it provably cannot finish, rather than somebody choosing
+    -- to abandon one that still could.
+    describe "self-termination (#1247)" $ do
+        it "fails every PENDING entry and leaves terminal ones alone" $ do
+            let a = QueuedTransfer (itemRef 41 "crate") TransferQueued
+                b = QueuedTransfer (itemRef 42 "crate") TransferInTransit
+                c = QueuedTransfer (itemRef 43 "crate") TransferReadyToCommit
+                d = QueuedTransfer (itemRef 44 "crate") TransferCompleted
+                e = QueuedTransfer (itemRef 45 "crate")
+                        (TransferFailed (requestFailure ReasonReceiverFull))
+                batch = TransferBatch acolyteEp holdEp [a, b, c, d, e]
+                out   = requestFailure ReasonOutOfRange
+            states (failPendingBatch out batch) `shouldBe`
+                [ TransferFailed out, TransferFailed out, TransferFailed out
+                , TransferCompleted
+                , TransferFailed (requestFailure ReasonReceiverFull) ]
+
+        it "carries a cause through, which is what tells a vanished \
+           \counterpart from an unreachable one" $ do
+            let batch = TransferBatch acolyteEp holdEp
+                            [QueuedTransfer (itemRef 41 "crate") TransferQueued]
+                gone  = staleFailure ReasonReceiverMissing
+            states (failPendingBatch gone batch) `shouldBe` [TransferFailed gone]
+            batchTerminal (failPendingBatch gone batch) `shouldBe` True
+
     describe "atomicity" $ do
         it "leaves both endpoints unchanged on a refusal" $ do
             let a      = mkItem "steel_bar" 61 0.8

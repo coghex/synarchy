@@ -32,7 +32,34 @@ M.AI_BUILDING_REF_FIELDS = refsMod.AI_BUILDING_REF_FIELDS
 local TRANSIENT_CANDIDATE_FIELDS = {
     "chopCandidate", "digCandidate", "tillCandidate", "plantCandidate",
     "constructCandidate", "repairCandidate", "craftCandidate",
+    -- #1247: the transfer order table read out of the engine store on
+    -- THIS tick and consumed by transferExecute on the same one. Same
+    -- rule as every candidate above -- and the same specific hazard as
+    -- craftCandidate/repairCandidate, since it embeds a live engine
+    -- projection (the counterpart's current placement) that requirement
+    -- 14 forbids persisting as a copy.
+    "transferCandidate",
 }
+
+-- #1247: trip bookkeeping for an in-flight transfer order -- its stall
+-- budget and the closest approach so far -- keyed by the order id it
+-- belongs to. Stripped for a reason the *Candidate fields do not share,
+-- so it gets its own list rather than a misleading name in theirs:
+--
+--   * #1246's order store is AUTHORITATIVE for order state and is
+--     persisted by its own engine-side component, so nothing about the
+--     order itself needs mirroring here. Persisting this would durably
+--     carry a TransferOrderId as a bare number -- a reference kind
+--     unit_ai_save_refs.lua does not declare and the integrity graph
+--     could not check.
+--   * What is left is re-derivable and SHOULD restart: the first tick
+--     after a load re-reads the store, re-establishes the closest
+--     approach from where the carrier actually stands, and gives the
+--     order its full budget again. That is the same answer
+--     MAX_CHARGED_INTERVAL already gives a load boundary
+--     (unit_ai_stall.lua) -- an interval the AI could not tick through
+--     charges a pending order nothing, however long it lasted.
+local TRANSIENT_ORDER_FIELDS = { "transferOrder" }
 
 local function buildItemDefSet()
     local set = {}
@@ -221,6 +248,7 @@ local function snapshotUnitState(s)
     local copy = {}
     for k, v in pairs(s) do copy[k] = v end
     for _, f in ipairs(TRANSIENT_CANDIDATE_FIELDS) do copy[f] = nil end
+    for _, f in ipairs(TRANSIENT_ORDER_FIELDS) do copy[f] = nil end
     -- constructJob (round-5 review) retains the full parsed structure-
     -- pack YAML build-cost table (unit_ai_construct.lua's
     -- packBuildInfo -- materials/build_work/etc.) rather than a stable

@@ -325,6 +325,7 @@ library
                      Engine.Scripting.Lua.API.Units.Inventory
                      Engine.Scripting.Lua.API.Units.Cargo
                      Engine.Scripting.Lua.API.Units.Transfer
+                      Engine.Scripting.Lua.API.Units.TransferOrder
                      Engine.Scripting.Lua.API.Units.Stats
                      Engine.Scripting.Lua.API.Units.Selection
                      Engine.Scripting.Lua.API.Units.Medical
@@ -1071,6 +1072,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.SpawnShed
                    Test.Headless.Unit.Transfer
                    Test.Headless.Unit.TransferApi
+                   Test.Headless.Unit.TransferOrderApi
                    Test.Headless.Unit.NightPerception
                    Test.Headless.Unit.LineOfSight
                    Test.Headless.Item.GroundPageOwnership

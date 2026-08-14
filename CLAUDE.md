@@ -1044,6 +1044,33 @@ before touching each area:
   shift by live mental effectiveness (±10) — tests asserting quality
   must pin the neutral-effectiveness precondition (#878). Gates:
   `craft_probe.py`, `craft_bill_probe.py`.
+- **Player transfers + orders (#1000/#1085/#1246/#1247)** — ONE policy
+  (`src/Unit/Transfer.hs`, pure) decides whether exact item instances may
+  move between two endpoints (a unit inventory or a built building's loose
+  storage, on BOTH sides; direction is DERIVED from the pair). Proximity is
+  Chebyshev ≤ 1 between the occupied RECTANGLES, capacity weighs the actual
+  instance, a batch is ordered and reports per-item outcomes, and no item
+  ever half-moves. The lax AI verbs
+  (`unit.transferItemToUnit`/`transferItemToBuilding`/`depositToCargo`/
+  `withdrawFromCargo`) are a SEPARATE, deliberately unchecked path the
+  fetch/repair/medic ladders depend on — never route AI work through the
+  strict one. A durable ORDER (#1246's per-page store, `wsTransferOrdersRef`)
+  adds distance: `unit.createTransferOrder` validates with adjacency DEFERRED
+  (`ReachPolicy`) — same page still required — because the endpoints are not
+  adjacent yet and the create-time capacity gate must be reached anyway;
+  `unit.checkTransfer`/`commitTransfer` keep requiring adjacency, unchanged.
+  `scripts/unit_ai_transfer.lua` then walks the ACTING unit (recorded beside
+  the endpoint pair, so a building→building order has no approach and this
+  executor skips it) at comfort pace, holding a 7.5 in-progress lock, and
+  ARRIVAL IS THE COMMIT: `unit.commitTransferOrder` re-validates atomically,
+  so a refusal there is recorded as `became_stale` carrying the real reason as
+  its cause, and only `ready_to_commit` entries are ever submitted — a
+  create-time refusal is never retried. The stall timer is a STALL timer
+  (60 s of ELIGIBLE time, reset on every new closest approach), never a
+  trip budget. Terminal orders STAY in the store — exactly-once comes from
+  the lifecycle, not from deletion, and pruning is #1253's. Gates: hspec
+  `--match "Unit transfer"` (contract + both Lua surfaces),
+  `tools/transfer_order_probe.py` (manual-only).
 - **Power (#358-#361, #590/#591)** — solar/battery nodes are
   item-consuming placements (`power.placeNode` via
   `buildTool.commitPlacement`); networks (wire 4-adjacency +

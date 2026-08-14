@@ -15,10 +15,18 @@
 --   wraps each one in a single @atomicModifyIORef'@ on the world's
 --   @wsTransferOrdersRef@.
 --
---   __What is deliberately NOT here.__ Nothing in this slice creates an
---   order from a player gesture (UIT-2C) or executes one as a unit job
---   (UIT-2B); 'addTransferOrder' is the minimal programmatic creation
---   surface the persistence tests need. The transient Mode A session
+--   __What is deliberately NOT here.__ Nothing creates an order from a
+--   player gesture (UIT-2C); 'addTransferOrder' is the programmatic
+--   creation surface, reached from Lua through
+--   @unit.createTransferOrder@. Executing an order is
+--   "Engine.Scripting.Lua.API.Units.TransferOrder" plus
+--   @scripts/unit_ai_transfer.lua@ (#1247, UIT-2B): this module stays
+--   the pure store those drive, so the transitions below are the only
+--   way an order's state ever changes and the headless suite can
+--   exercise them without an engine. Explicit cancellation and pruning
+--   of terminal orders remain UIT-5A's — nothing here removes an order
+--   because it finished, so a completed order stays inspectable.
+--   The transient Mode A session
 --   (@scripts/transfer_session.lua@) stays transient — it registers a
 --   @saveModules.registerResetHook@ so a session never survives a load
 --   (epic decision D-3) — and no session state enters this store.
@@ -38,6 +46,7 @@ module Unit.Transfer.Orders
     , addTransferOrder
     , transferOrderAllocatorExhausted
     , removeTransferOrder
+    , updateTransferOrder
     , lookupTransferOrder
     , ordersForUnit
     , transferOrderList
@@ -146,6 +155,31 @@ removeTransferOrder oid orders
     | HM.member oid (trosOrders orders) =
         (orders { trosOrders = HM.delete oid (trosOrders orders) }, True)
     | otherwise = (orders, False)
+
+-- | Rewrite ONE stored order's batch in place (#1247) — the single
+--   mutation path every lifecycle transition goes through, so the live
+--   engine's @atomicModifyIORef'@ on @wsTransferOrdersRef@ is the whole
+--   critical section and a concurrent reader never observes half a
+--   transition.
+--
+--   'False' (store untouched) when the id names nothing. The order's
+--   id, its acting unit and its endpoint pair are all IMMUTABLE: only
+--   the batch is rewritten, and the caller supplies a
+--   'Unit.Transfer.TransferBatch' transition
+--   ('Unit.Transfer.markBatchInTransit',
+--   'Unit.Transfer.markBatchReadyToCommit',
+--   'Unit.Transfer.failPendingBatch', or the reconciled result of an
+--   arrival commit) rather than a whole replacement order — which is
+--   what makes "an order never changes what it is, only how far along
+--   it is" structural rather than a rule each caller has to remember.
+updateTransferOrder ∷ TransferOrderId → (TransferBatch → TransferBatch)
+                    → TransferOrders → (TransferOrders, Bool)
+updateTransferOrder oid f orders = case HM.lookup oid (trosOrders orders) of
+    Nothing    → (orders, False)
+    Just order →
+        let order' = order { troBatch = f (troBatch order) }
+        in ( orders { trosOrders = HM.insert oid order' (trosOrders orders) }
+           , True )
 
 lookupTransferOrder ∷ TransferOrderId → TransferOrders → Maybe TransferOrder
 lookupTransferOrder oid = HM.lookup oid ∘ trosOrders

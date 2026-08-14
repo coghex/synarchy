@@ -17,9 +17,21 @@
 --   @aroundAll withHeadlessEngine@ block rather than the shared
 --   worldgen engine.
 --
+--   The fixture primitives below are shared with
+--   'Test.Headless.Unit.TransferOrderApi' (#1247), which needs the same
+--   kind of scene at DIFFERENT geometry (a counterpart twenty tiles
+--   away, a multi-tile footprint, a second page). One set of unit /
+--   building / item constructors for both, rather than a second copy
+--   free to drift from what the projections actually read.
+--
 --   Run just this gate: @cabal test synarchy-test-headless
---   --test-options='--match "Unit transfer Lua API"'@.
-module Test.Headless.Unit.TransferApi (spec) where
+--   --test-options='--match "Unit transfer Lua API"'@ — which reaches
+--   the order spec too, by way of its own describe name.
+module Test.Headless.Unit.TransferApi
+    ( spec
+    , minimalDef, storageDef, mkUnit, mkBuilding, mkItem
+    , newBareLuaBackend, evalDebug
+    ) where
 
 import UPrelude
 import Test.Hspec

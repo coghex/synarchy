@@ -23,12 +23,12 @@
 -- init/update/shutdown/onSaveLoaded lifecycle. Every domain's utility/
 -- execute bodies (survival needs, water-seeking, combat, logistics,
 -- construction, crafting, dig/chop/till/plant/harvest, repair, pickup,
--- medic) live in scripts/unit_ai_*.lua submodules, required below and
--- wired into the action registry. Shared plumbing (per-unit state,
--- goal layer, distance/footprint geometry, water-source memory) lives
--- in scripts/unit_ai_core.lua; the materials-sourcing ladder is in
--- scripts/unit_ai_fetch.lua; per-unit location knowledge (#915) is in
--- scripts/unit_ai_locations.lua.
+-- transfer, medic) live in scripts/unit_ai_*.lua submodules, required
+-- below and wired into the action registry. Shared plumbing (per-unit
+-- state, goal layer, distance/footprint geometry, water-source memory)
+-- lives in scripts/unit_ai_core.lua; the materials-sourcing ladder is
+-- in scripts/unit_ai_fetch.lua; per-unit location knowledge (#915) is
+-- in scripts/unit_ai_locations.lua.
 --
 -- Designation job coordinates (#1175 requirement 4, audit result). The
 -- job coords the AI stores across ticks -- s.digJob / s.chopJob /
@@ -92,6 +92,7 @@ local chop          = require("scripts.unit_ai_chop")
 require("scripts.unit_ai_farm")
 local repairMod     = require("scripts.unit_ai_repair")
 local pickup        = require("scripts.unit_ai_pickup")
+local transfer      = require("scripts.unit_ai_transfer")
 local medic         = require("scripts.unit_ai_medic")
 local sleepGoal     = require("scripts.unit_ai_sleep")
 local mentalAi      = require("scripts.unit_ai_mental")
@@ -105,12 +106,9 @@ local locations     = require("scripts.unit_ai_locations")
 local unitAiSave    = require("scripts.unit_ai_save")
 
 -----------------------------------------------------------
--- Action registry per unit type
------------------------------------------------------------
--- Per-species action lists. Populated below via registerActions so
--- the universal combat candidates (retreat / engage / attack_target)
--- are prepended uniformly — species lists only declare their ambient
--- actions.
+-- Action registry per unit type. Per-species ambient action lists,
+-- filled in below via registerActions — see its own block for the
+-- universal combat prepend every one of them gets.
 -----------------------------------------------------------
 local actions = {}
 
@@ -190,6 +188,7 @@ unitAi.registerActions("acolyte", {
     { name = "auto_harvest", utility = unitAi.harvest.utility, execute = unitAi.harvest.execute },
     { name = "repair_job", utility = repairMod.utility, execute = repairMod.execute, onExit = repairMod.onExit },
     { name = "pickup_ground", utility = pickup.pickupUtility, execute = pickup.pickupExecute },
+    transfer.action,
 })
 
 -- Technomule: player pack unit. Stands by the colony's materials
@@ -213,6 +212,7 @@ unitAi.registerActions("technomule", {
     { name = "idle", utility = needs.idleUtility, execute = needs.idleExecute },
     { name = "wander", utility = needs.wanderUtility, execute = needs.wanderExecute },
     { name = "follow_command", utility = combat.followCommandUtility, execute = combat.followCommandExecute },
+    transfer.action,
 })
 
 -- Load species satellite scripts. Each one defines its candidates

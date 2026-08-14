@@ -67,6 +67,7 @@ module Unit.Transfer
     , TransferReason(..)
     , TransferFailure(..)
     , transferReasonId
+    , transferReasonFromId
     , allTransferReasons
     , requestFailure
     , staleFailure
@@ -97,15 +98,20 @@ module Unit.Transfer
       -- * Per-item policy
     , TransferPlan(..)
     , TransferCommit(..)
+    , ReachPolicy(..)
     , validateBatch
     , planItem
+    , planItemWith
     , commitItem
+    , commitItemWith
     , applyTransferCommit
       -- * Batch lifecycle
     , checkBatch
+    , checkBatchWith
     , markBatchInTransit
     , markBatchReadyToCommit
     , cancelBatch
+    , failPendingBatch
     , commitBatch
     , batchTerminal
     , batchHasQueued
@@ -215,6 +221,21 @@ transferReasonId r = case r of
 
 allTransferReasons ∷ [TransferReason]
 allTransferReasons = [minBound .. maxBound]
+
+-- | The inverse of 'transferReasonId', derived from the enumeration
+--   itself rather than from a second hand-written table — so a reason
+--   added later is parseable the moment it is spellable, and the two
+--   directions cannot disagree. 'Nothing' for anything that is not one
+--   of the ten ids.
+--
+--   Exists for the callers that RECEIVE a reason from outside the
+--   engine — @unit.failTransferOrder@ (#1247) takes the retirement
+--   reason and its optional cause as these ids, so the unit job names
+--   a refusal in the same vocabulary every other surface reports one
+--   in instead of the engine inventing a private mapping for it.
+transferReasonFromId ∷ Text → Maybe TransferReason
+transferReasonFromId t =
+    lookup t [(transferReasonId r, r) | r ← allTransferReasons]
 
 -- | Why the WHOLE request was rejected before any item was checked or
 --   moved. Deliberately a separate type from 'TransferReason': these
@@ -494,11 +515,45 @@ hasDuplicate = go []
 
 -- * Per-item policy
 
--- | Validate every precondition for ONE item. Check order is fixed so
---   the reason a given broken world produces is deterministic.
+-- | Whether an endpoint pair must ALREADY be adjacent for a request to
+--   be valid (#1247).
+--
+--   'ReachRequired' is the original and still the default everywhere an
+--   item is about to MOVE: an immediate transfer, and the arrival
+--   commit of a queued order. Every existing caller keeps it, so
+--   @unit.checkTransfer@/@unit.commitTransfer@ answer exactly as they
+--   always have.
+--
+--   'ReachDeferred' exists for exactly one caller — creating a durable
+--   transfer ORDER, whose entire premise is that the endpoints are NOT
+--   adjacent yet and a unit is about to walk between them. Without it
+--   an order at a distance is unexpressible: 'planItem' refuses on
+--   range BEFORE it ever weighs the item, so every legitimate remote
+--   order would come back @out_of_range@ and the create-time capacity
+--   gate (the whole point of refusing a doomed trip before the walk)
+--   would never run at all.
+--
+--   What it does NOT relax is the SAME-PAGE requirement, which stays a
+--   hard 'ReasonOutOfRange' either way: a unit cannot walk to another
+--   world page, so an order across one could never complete and must
+--   refuse at creation rather than stall forever afterwards.
+data ReachPolicy
+    = ReachRequired
+    | ReachDeferred
+    deriving (Show, Eq, Ord, Enum, Bounded)
+
+-- | Validate every precondition for ONE item, requiring adjacency.
 planItem ∷ TransferScene → TransferEndpoint → TransferEndpoint
          → TransferItemRef → Either TransferFailure TransferPlan
-planItem scene from to ref = do
+planItem = planItemWith ReachRequired
+
+-- | Validate every precondition for ONE item under an explicit
+--   'ReachPolicy'. Check order is fixed so the reason a given broken
+--   world produces is deterministic.
+planItemWith ∷ ReachPolicy → TransferScene → TransferEndpoint
+             → TransferEndpoint → TransferItemRef
+             → Either TransferFailure TransferPlan
+planItemWith policy scene from to ref = do
     when (tirInstanceId ref ≤ 0) $ Left (requestFailure ReasonInstanceUnspecified)
     src ← note ReasonSourceMissing (tscSource scene)
     dst ← note ReasonReceiverMissing (tscDestination scene)
@@ -507,7 +562,7 @@ planItem scene from to ref = do
     unless (endpointEligible src) $ Left (requestFailure ReasonSourceIneligible)
     unless (endpointEligible dst) $ Left (requestFailure ReasonReceiverIneligible)
     plan ← resolveInstance ref src
-    unless (endpointPage src ≡ endpointPage dst ∧ withinReach src dst) $
+    unless (reachable policy src dst) $
         Left (requestFailure ReasonOutOfRange)
     unless (fits scene dst (tpItem plan)) $
         Left (requestFailure ReasonReceiverFull)
@@ -515,13 +570,27 @@ planItem scene from to ref = do
   where
     note r = maybe (Left (requestFailure r)) Right
 
--- | Validate ONE item and compute both post-move lists. Used directly
---   for an immediate transfer; 'commitBatch' folds it over a queued
---   order's ready entries.
+-- | Same page always; adjacent only when the policy demands it.
+reachable ∷ ReachPolicy → TransferEndpointView → TransferEndpointView → Bool
+reachable policy src dst =
+    endpointPage src ≡ endpointPage dst
+      ∧ case policy of
+            ReachRequired → withinReach src dst
+            ReachDeferred → True
+
+-- | Validate ONE item and compute both post-move lists, requiring
+--   adjacency. Used directly for an immediate transfer; 'commitBatch'
+--   folds it over a queued order's ready entries.
 commitItem ∷ TransferScene → TransferEndpoint → TransferEndpoint
            → TransferItemRef → Either TransferFailure TransferCommit
-commitItem scene from to ref = do
-    plan ← planItem scene from to ref
+commitItem = commitItemWith ReachRequired
+
+-- | 'commitItem' under an explicit 'ReachPolicy'.
+commitItemWith ∷ ReachPolicy → TransferScene → TransferEndpoint
+               → TransferEndpoint → TransferItemRef
+               → Either TransferFailure TransferCommit
+commitItemWith policy scene from to ref = do
+    plan ← planItemWith policy scene from to ref
     src  ← maybe (Left (requestFailure ReasonSourceMissing)) Right
                  (tscSource scene)
     dst  ← maybe (Left (requestFailure ReasonReceiverMissing)) Right
@@ -611,7 +680,16 @@ fits scene dst item =
 --   revalidates.
 checkBatch ∷ TransferScene → TransferRequest
            → Either TransferRequestError TransferBatch
-checkBatch scene req = do
+checkBatch = checkBatchWith ReachRequired
+
+-- | 'checkBatch' under an explicit 'ReachPolicy'. Order creation
+--   (#1247) passes 'ReachDeferred' so the per-item CAPACITY verdict is
+--   reached for endpoints that are not adjacent yet; everything else
+--   about the check — request order, the progressively updated scene,
+--   which entries queue — is identical.
+checkBatchWith ∷ ReachPolicy → TransferScene → TransferRequest
+               → Either TransferRequestError TransferBatch
+checkBatchWith policy scene req = do
     items ← validateBatch req
     pure TransferBatch
         { tbSource      = trSource req
@@ -621,7 +699,7 @@ checkBatch scene req = do
   where
     go _  []         = []
     go sc (i : is) =
-        case commitItem sc (trSource req) (trDestination req) i of
+        case commitItemWith policy sc (trSource req) (trDestination req) i of
             Left f  → QueuedTransfer i (TransferFailed f) : go sc is
             Right c → QueuedTransfer i TransferQueued
                         : go (applyTransferCommit c sc) is
@@ -649,6 +727,28 @@ step from to q
 cancelBatch ∷ TransferBatch → TransferBatch
 cancelBatch = overEntries $ \q →
     if isPending (qtState q) then q { qtState = TransferCancelled } else q
+
+-- | The failure twin of 'cancelBatch' (#1247): every PENDING entry
+--   becomes 'TransferFailed' with the SAME given failure, already
+--   terminal entries are left exactly as they are.
+--
+--   The distinction from 'cancelBatch' is who decided. Cancellation is
+--   somebody CHOOSING to abandon an order that could still have run
+--   (UIT-5A's explicit cancel); this is the order self-terminating
+--   because it provably cannot finish — the counterpart stopped
+--   existing, or the carrier stalled short of it. Recording that as
+--   'TransferCancelled' would claim an intent nobody had, and would
+--   throw away the reason, which is the one thing a player asking "why
+--   didn't my supplies arrive?" needs.
+--
+--   No vocabulary is invented for it: the caller supplies an ordinary
+--   'TransferFailure', so a stall is @out_of_range@ and a vanished
+--   counterpart is @became_stale@ with @source_missing@ /
+--   @receiver_missing@ as its cause.
+failPendingBatch ∷ TransferFailure → TransferBatch → TransferBatch
+failPendingBatch failure = overEntries $ \q →
+    if isPending (qtState q) then q { qtState = TransferFailed failure }
+                             else q
 
 -- | Commit at arrival: ready entries are attempted SEQUENTIALLY in
 --   original request order against a scene advanced after every

@@ -256,6 +256,19 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
                               "comparison, plus every cross-referenced probe it runs "
                               "(#767); the compact persistence_contract probe is "
                               "CI-eligible instead"),
+    "transfer_order": (SLOW_WORLDGEN, "manual-only on two independent counts "
+                       "(#1247): its save/load phase generates a real world "
+                       "page and boots two more engines, because a save "
+                       "containing an arena page hangs the world thread on "
+                       "load (#365); and the stall/long-haul phases are "
+                       "REAL-TIME by construction — a stall budget can only "
+                       "be shown to expire by letting ~60 s of it elapse, and "
+                       "a progressing trip can only be shown to outlive that "
+                       "budget by walking for longer than it. Both also lean "
+                       "on AI arbitration timing (the transfer_order lock "
+                       "holding against the wander tick), the same grounds "
+                       "that keep every other AI-driven probe out of the "
+                       "blocking gate. Total ~8 min"),
     "location_overlay": (SLOW_WORLDGEN, "needs real worldgen for overlay placement"),
     "location_stamp_idempotent": (SLOW_WORLDGEN, "needs real worldgen plus a save/restart/reload round-trip"),
     "portal_location": (SLOW_WORLDGEN, "needs real worldgen for a placed ruin_small to test starting-building exclusion against (#778)"),

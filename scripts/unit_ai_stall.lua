@@ -1,9 +1,11 @@
 -- Order stall accounting for player-issued orders (#1291).
 --
--- Both order timers -- TASK_TIMEOUT_SEC for a commanded move (below)
--- and unit_ai_pickup.lua's pickup_timeout for a commanded pickup --
--- are STALL timers, not total-trip budgets (#920): they answer "is
--- this unit getting anywhere?", never "how long has this trip taken".
+-- All three order timers -- TASK_TIMEOUT_SEC for a commanded move
+-- (below), unit_ai_pickup.lua's pickup_timeout for a commanded pickup,
+-- and unit_ai_transfer.lua's transfer_order_timeout for a queued
+-- transfer order (#1247) -- are STALL timers, not total-trip budgets
+-- (#920): they answer "is this unit getting anywhere?", never "how
+-- long has this trip taken".
 --
 -- What they measure is ELIGIBLE time. The #306 ladder deliberately
 -- outranks a commanded move with eating, drinking, a dry-canteen
@@ -133,8 +135,9 @@ end
 -- inside it bounds the interval the next sample sees.
 function M.suspendOrders(s)
     if not s then return end
-    if s.commandedTask then s.commandedTask.stallSeenAt = nil end
-    if s.pickupOrder   then s.pickupOrder.stallSeenAt   = nil end
+    if s.commandedTask  then s.commandedTask.stallSeenAt  = nil end
+    if s.pickupOrder    then s.pickupOrder.stallSeenAt    = nil end
+    if s.transferOrder  then s.transferOrder.stallSeenAt  = nil end
 end
 
 -- A new closest approach: the whole budget is available again.

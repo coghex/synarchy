@@ -531,7 +531,15 @@ None currently blocking. Every decision above carries prior signoff from epic
   ready_to_commit → completed`, modeled on #920's `commandPickup`: capacity
   gated at command time AND again on arrival, and a stall timeout that resets on
   closest approach rather than a total-trip budget. Commit-time revalidation and
-  the partial-batch outcome are A1/A2's and are consumed, not rebuilt.
+  the partial-batch outcome are A1/A2's and are consumed, not rebuilt. Creating
+  an order is range-INDEPENDENT (its endpoints are not adjacent yet by
+  definition) while preserving `unit.checkTransfer`/`unit.commitTransfer`
+  unchanged. Also the BASELINE self-termination and durable bookkeeping for the
+  two ways an order provably cannot finish: a carrier that stalls short of a
+  counterpart still present terminalizes its pending entries as
+  `failed/out_of_range`, and a counterpart that vanished as
+  `failed/became_stale` with `source_missing`/`receiver_missing` as its cause
+  and no player warning.
 - **Phase:** 3 — order foundation
 - **Depends on:** `UIT-2A`
 - **Ordering:** `critical path`
@@ -540,8 +548,9 @@ None currently blocking. Every decision above carries prior signoff from epic
   arrival; the wander tick cannot take the unit away mid-order; twelve items into
   room for eight commits eight and reports the rest; a snapshot that went stale
   fails as `ReasonBecameStale`; and the lax AI verbs are untouched.
-- **Out of scope:** The player gesture that creates an order, and every failure
-  path beyond the ones commit already returns (UIT-5A).
+- **Out of scope:** The player gesture that creates an order; explicit
+  cancellation, pruning of terminal orders, and any failure surfacing richer
+  than the warnings above — all UIT-5A's.
 - **Open questions:** None
 
 ### UIT-2C. Promote "Store in cargo" to a queued order-at-a-distance
@@ -623,20 +632,26 @@ None currently blocking. Every decision above carries prior signoff from epic
 
 - **Outcome:** Every way a queued order can fail resolves predictably, leaving no
   half-moved item and no unit stuck on a dead order.
-- **Scope:** Explicit cancellation of a queued order; an unreachable or
-  obstructed endpoint reported through the existing `unit_warning` path rather
-  than retried forever; an instance that vanished between snapshot and commit;
-  and a commit that fails outright. The states and reasons already exist —
-  `TransferCancelled`, `TransferFailed`, and all ten `TransferReason` values —
-  so this slice handles and surfaces them rather than inventing vocabulary.
+- **Scope:** Explicit cancellation of a queued order; pruning terminal orders
+  from the persisted store once their outcome is surfaced; and richer policy and
+  surfacing on top of UIT-2B's baseline — which already self-terminates an
+  unreachable endpoint and a vanished counterpart, records the structured reason
+  and cause, and warns on the reachable-but-unreached case. What is left here is
+  everything beyond that floor: a retry or re-route policy for an obstructed
+  endpoint, and how a failed order is presented rather than merely logged. The
+  states and reasons already exist — `TransferCancelled`, `TransferFailed`, and
+  all ten `TransferReason` values — so this slice handles and surfaces them
+  rather than inventing vocabulary.
 - **Phase:** 6 — failure handling
 - **Depends on:** `UIT-2B`, `UIT-2C`
 - **Ordering:** `critical path`
 - **Relevant decisions:** D-1, D-2, D-3
 - **Acceptance signals:** A cancelled order releases its unit and mutates
-  nothing; an unreachable endpoint warns and gives up rather than looping; a
-  stale instance fails with the structured reason and cause; and no failure path
-  leaves an item half-moved.
+  nothing; a terminal order is pruned once its outcome has been surfaced; and
+  the failures UIT-2B already terminalises are presented to the player rather
+  than only recorded. (That an unreachable endpoint gives up rather than looping,
+  that a stale instance fails with the structured reason and cause, and that no
+  failure path leaves an item half-moved are UIT-2B's own gates.)
 - **Out of scope:** Session failures (UIT-5B) and new failure vocabulary.
 - **Open questions:** None
 
