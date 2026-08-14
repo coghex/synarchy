@@ -250,15 +250,26 @@ COMPONENT_ID_LITERAL_RE = re.compile(
 # instead of silently matching into the NEXT codec's fields.
 COMPONENT_SPEC_HEAD_RE = re.compile(
     r"(\w+)\s*=\s*componentCodec\s+ComponentSpec\b")
-# One `csOlderVersions` element, anchored at the element's START and
-# requiring an INTEGER LITERAL version. Deliberately not a `findall` over
-# the whole field value (issue #1275): a scan would silently skip any
-# element it does not recognize -- `atVersion someVersionConstant f`, a
-# hand-built `ComponentVersion { cvVersion = 3, ... }`, a helper
-# expression -- and derive an accepted-version set with entries missing.
-# Each element is matched WHOLE-LIST-AWARE by _parse_older_versions
-# below, which raises on anything this pattern cannot read.
+# The HEAD of one `csOlderVersions` element: anchored at the element's
+# start and requiring an INTEGER LITERAL version. Deliberately not a
+# `findall` over the whole field value (issue #1275): a scan would
+# silently skip any element it does not recognize -- `atVersion
+# someVersionConstant f`, a hand-built `ComponentVersion { cvVersion = 3,
+# ... }`, a helper expression -- and derive an accepted-version set with
+# entries missing.
+#
+# Matching this pattern is NECESSARY BUT NOT SUFFICIENT. It only proves
+# the element STARTS the right way; `_parse_older_version_entry` below
+# then consumes the single build argument and requires the element to be
+# EXHAUSTED, so a trailing operator/helper application cannot ride along
+# behind a readable prefix (`atVersion 1 migrateV1 `seq` atVersion
+# futureVersion migrateFuture` would otherwise be recorded as v1 while
+# the ComponentVersion actually built is the unreadable second one).
 AT_VERSION_ENTRY_RE = re.compile(r"atVersion\s+(\d+)(?![\w'])")
+# One atomic build argument: a (possibly qualified) identifier. The other
+# accepted shape is a balanced parenthesized group, lexed rather than
+# matched, so nesting and string literals inside it are handled.
+BUILD_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_'.]*")
 LUA_MODULE_VERSION_RE = re.compile(r"\bversion\s*=\s*(\d+)")
 LUA_MODULE_INPUT_VERSIONS_RE = re.compile(
     r"\binputVersions\s*=\s*\{([^}]*)\}")
@@ -332,17 +343,89 @@ def _split_top_level_fields(block: str) -> list[str]:
     return [f for f in (f.strip() for f in fields) if f]
 
 
+def _consume_build_atom(text: str) -> int | None:
+    """The length of the ONE atomic build argument at the start of
+    `text` -- a balanced `( ... )` group or a (possibly qualified)
+    identifier -- or None when `text` does not start with either.
+
+    Lexed rather than regex-matched so nesting depth and string literals
+    are actually tracked; the caller's fail-closed contract depends on
+    knowing exactly where the argument ENDS, not merely that one is
+    present."""
+    if not text:
+        return None
+    if text[0] == "(":
+        depth = 0
+        i = 0
+        while i < len(text):
+            ch = text[i]
+            if ch == '"':
+                i += 1
+                while i < len(text) and text[i] != '"':
+                    i += 2 if text[i] == "\\" else 1
+                i += 1
+                continue
+            if ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                depth -= 1
+                if depth == 0:
+                    return i + 1
+            i += 1
+        return None
+    m = BUILD_IDENT_RE.match(text)
+    return m.end() if m else None
+
+
+def _parse_older_version_entry(codec: str, element: str, where: str) -> int:
+    """The version of ONE `csOlderVersions` element, requiring the whole
+    element to be exactly `atVersion <integer literal> <one build
+    argument>` and nothing more (issue #1275).
+
+    Exhausting the element is the point. Validating only the head would
+    read `atVersion 1 migrateV1 `seq` atVersion futureVersion
+    migrateFuture` as a plain v1 while the ComponentVersion the element
+    really evaluates to carries an unreadable version -- precisely the
+    silently-incomplete accepted-version set this parse exists to
+    prevent."""
+    def reject(why: str) -> ValueError:
+        return ValueError(
+            f"{where}: codec '{codec}' has a csOlderVersions entry this "
+            f"audit cannot enumerate ({element!r}): {why}. Every entry must "
+            f"be exactly `atVersion <integer literal> <build>` -- a "
+            f"non-literal version, a hand-built ComponentVersion, a helper "
+            f"expression, or anything trailing the build argument would "
+            f"otherwise be silently omitted from, or misread into, the "
+            f"accepted-version set")
+
+    m = AT_VERSION_ENTRY_RE.match(element)
+    if m is None:
+        raise reject("it does not begin with `atVersion <integer literal>`")
+    rest = element[m.end():].lstrip()
+    consumed = _consume_build_atom(rest)
+    if consumed is None:
+        raise reject("no build argument (an identifier or a balanced "
+                     "parenthesized expression) follows the version")
+    trailing = rest[consumed:].strip()
+    if trailing:
+        raise reject(f"unread text follows the build argument ({trailing!r})")
+    return int(m.group(1))
+
+
 def _parse_older_versions(codec: str, raw: str, where: str) -> list[int]:
     """The `csOlderVersions` versions IN DECLARATION ORDER, keeping
     duplicates (issue #1275).
 
-    Fails CLOSED. The field must be a literal list whose every element is
-    an `atVersion <integer literal> ...` application; a non-list value (a
-    named helper, a `concat`, a variable), a non-literal version
-    argument, or a directly-constructed `ComponentVersion` raises rather
-    than being skipped. A skipped element is worse than no parse at all
-    here: it would silently narrow the accepted-version set this audit
-    then compares the whole fixture manifest against."""
+    Fails CLOSED, and does so by EXHAUSTING what it reads rather than by
+    recognizing shapes it happens to know. The field must be a literal
+    list, and `_parse_older_version_entry` must consume each element
+    completely; a non-list value (a named helper, a `concat`, a
+    variable), a non-literal version argument, a directly-constructed
+    `ComponentVersion`, and anything trailing an otherwise-readable
+    element all raise rather than being skipped or half-read. A skipped
+    or misread element is worse than no parse at all here: it would
+    silently narrow the accepted-version set this audit then compares the
+    whole fixture manifest against."""
     text = raw.strip()
     if not (text.startswith("[") and text.endswith("]")):
         raise ValueError(
@@ -351,19 +434,8 @@ def _parse_older_versions(codec: str, raw: str, where: str) -> list[int]:
             f"`[ atVersion <n> <build>, ... ]` list, because a partially "
             f"read table would yield an accepted-version set missing real "
             f"decoders")
-    versions: list[int] = []
-    for element in _split_top_level_fields(text[1:-1]):
-        m = AT_VERSION_ENTRY_RE.match(element)
-        if m is None:
-            raise ValueError(
-                f"{where}: codec '{codec}' has a csOlderVersions entry this "
-                f"audit cannot enumerate ({element!r}); every entry must be "
-                f"`atVersion <integer literal> <build>` -- a non-literal "
-                f"version, a hand-built ComponentVersion, or a helper "
-                f"expression would otherwise be silently omitted from the "
-                f"accepted-version set")
-        versions.append(int(m.group(1)))
-    return versions
+    return [_parse_older_version_entry(codec, element, where)
+            for element in _split_top_level_fields(text[1:-1])]
 
 
 def _check_older_versions(codec: str, current: int, older: list[int],

@@ -1236,6 +1236,48 @@ def test_discover_component_specs_fails_closed_on_unreadable_older_entries() -> 
             4, older, ["evolvedCodec", "cannot enumerate"], what)
 
 
+def test_discover_component_specs_exhausts_each_older_entry() -> None:
+    print("issue #1275 (review round 1): matching only the HEAD of an entry "
+          "is not fail-closed. An element whose readable `atVersion <n>` "
+          "prefix is followed by more expression evaluates to a DIFFERENT "
+          "ComponentVersion than the one recorded, so the entry must be "
+          "consumed COMPLETELY or rejected")
+    for older, what in [
+        ("[ atVersion 1 migrateV1 `seq` atVersion futureVersion migrateFuture ]",
+         "a trailing operator application hiding a non-literal version"),
+        ("[ atVersion 1 (id ∷ D → D) `orElse` atVersion 9 migrateV9 ]",
+         "a trailing operator application after a parenthesized build"),
+        ("[ atVersion 1 migrateV1 extraArgument ]",
+         "a second argument after the build"),
+        ("[ atVersion 1 ]", "no build argument at all"),
+        ("[ atVersion 1 $ migrateV1 ]",
+         "an application operator this audit does not read"),
+        ("[ atVersion 1 migrateV1 . fixup ]",
+         "a composed build expression"),
+    ]:
+        _expect_older_versions_rejected(
+            4, older, ["evolvedCodec", "cannot enumerate"], what)
+
+
+def test_discover_component_specs_reads_the_real_build_argument_shapes() -> None:
+    print("issue #1275 (review round 1): exhausting each entry must not "
+          "reject the shapes actually shipped -- a bare identifier, a "
+          "qualified name, and a balanced parenthesized expression "
+          "(including nested parens and a string literal)")
+    for older, expected in [
+        ("[ atVersion 1 migrateWorldPagesV1 ]", [1, 4]),
+        ("[ atVersion 1 Page.migrateV1 ]", [1, 4]),
+        ("[ atVersion 1 (id ∷ WorldActivityDTO → WorldActivityDTO) ]", [1, 4]),
+        ("[ atVersion 1 (fmap (dropTag \"v1\") . migrateV1) ]", [1, 4]),
+        ("[ atVersion 2 (migrateV2 ∷ D2 → A), atVersion 1 migrateV1 ]",
+         [1, 2, 4]),
+    ]:
+        specs = sca.discover_component_specs(
+            _malformed_older_versions_source(4, older), "synthetic.hs")
+        expect(len(specs) == 1 and specs[0]["inputVersions"] == expected,
+               f"expected inputVersions {expected} for {older}, got {specs}")
+
+
 def test_discover_component_specs_accepts_a_well_formed_multi_version_table() -> None:
     print("issue #1275: a well-formed table is completely unaffected -- "
           "descending, ascending, and single-entry declarations all still "
@@ -1601,6 +1643,8 @@ def main() -> int:
         test_discover_component_specs_rejects_the_current_version_as_older,
         test_discover_component_specs_rejects_a_future_older_version,
         test_discover_component_specs_fails_closed_on_unreadable_older_entries,
+        test_discover_component_specs_exhausts_each_older_entry,
+        test_discover_component_specs_reads_the_real_build_argument_shapes,
         test_discover_component_specs_accepts_a_well_formed_multi_version_table,
         test_hand_rolled_component_codec_is_no_longer_silently_discovered,
         test_haskell_component_source_paths_discovers_new_files_automatically,
