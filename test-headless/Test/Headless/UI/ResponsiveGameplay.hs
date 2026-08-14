@@ -2038,11 +2038,14 @@ spec = aroundAll withSharedFixture $ do
         it "cargo_inventory_panel: the panel width is capped instead of only repositioning an oversized panel" $ \(env, ls) → do
             resetFixture env ls
             r ← evalJSON ls $ luaLines
+                -- Since #1237 a building endpoint's whole data source is
+                -- building.getContainerKnowledge, so that is what these
+                -- pre-existing #750 geometry cases stub.
                 [ "engine.setUIScale(4.0);"
-                , "local origCap = building.getStorageCapacity;"
-                , "local origStorage = building.getStorage;"
-                , "building.getStorageCapacity = function() return 100 end;"
-                , "building.getStorage = function() return {} end;"
+                , "local origK = building.getContainerKnowledge;"
+                , "building.getContainerKnowledge = function() return"
+                , "  { state='empty', items={}, storedWeight=0.0,"
+                , "    capacity=100.0, revealedAt=0.0 } end;"
                 , "local pg = UI.newPage('cargo_test_page', 'overlay');"
                 , "local cip = require('scripts.cargo_inventory_panel');"
                 , "cip.setup({page = pg, fbW = 800, fbH = 2160, boxTexSet = 1});"
@@ -2050,8 +2053,7 @@ spec = aroundAll withSharedFixture $ do
                 , "local p = require('scripts.ui.panel');"
                 , "local x, y = p.getPosition(cip.state.panelId);"
                 , "local pw, ph = p.getSize(cip.state.panelId);"
-                , "building.getStorageCapacity = origCap;"
-                , "building.getStorage = origStorage;"
+                , "building.getContainerKnowledge = origK;"
                 , "return {w=pw,"
                 , "        inFrame=(x>=0 and y>=0 and (x+pw)<=800 and (y+ph)<=2160)}"
                 ]
@@ -2063,15 +2065,15 @@ spec = aroundAll withSharedFixture $ do
             resetFixture env ls
             r ← evalJSON ls $ luaLines
                 [ "engine.setUIScale(4.0);"
-                , "local origCap = building.getStorageCapacity;"
-                , "local origStorage = building.getStorage;"
-                , "building.getStorageCapacity = function() return 100 end;"
-                , "building.getStorage = function() return {"
+                , "local origK = building.getContainerKnowledge;"
+                , "building.getContainerKnowledge = function() return"
+                , "  { state='known', storedWeight=0.0, capacity=100.0,"
+                , "    revealedAt=0.0, items = {"
                 , "    { defName='i1', category='Cat1' }, { defName='i2', category='Cat2' },"
                 , "    { defName='i3', category='Cat3' }, { defName='i4', category='Cat4' },"
                 , "    { defName='i5', category='Cat5' }, { defName='i6', category='Cat6' },"
                 , "    { defName='i7', category='Cat7' }, { defName='i8', category='Cat8' },"
-                , "} end;"
+                , "} } end;"
                 , "local pg = UI.newPage('cargo_tab_test_page', 'overlay');"
                 , "local cip = require('scripts.cargo_inventory_panel');"
                 , "cip.setup({page = pg, fbW = 800, fbH = 2160, boxTexSet = 1});"
@@ -2082,8 +2084,7 @@ spec = aroundAll withSharedFixture $ do
                 , "    local info = UI.getElementInfo(t.boxId);"
                 , "    table.insert(out, {x=info.x, y=info.y, w=info.width, h=info.height})"
                 , "end;"
-                , "building.getStorageCapacity = origCap;"
-                , "building.getStorage = origStorage;"
+                , "building.getContainerKnowledge = origK;"
                 , "return out"
                 ]
             case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe [RectRow] of
@@ -2112,30 +2113,30 @@ spec = aroundAll withSharedFixture $ do
             -- one that needed no shrink at all.
             r ← evalJSON ls $ luaLines
                 [ "engine.setUIScale(4.0);"
-                , "local origCap = building.getStorageCapacity;"
-                , "local origStorage = building.getStorage;"
+                , "local origK = building.getContainerKnowledge;"
                 , "local label = require('scripts.ui.label');"
                 , "local cip = require('scripts.cargo_inventory_panel');"
-                , "building.getStorageCapacity = function() return 100 end;"
-                , "building.getStorage = function() return {"
-                , "    { defName='i1', category='Cat1' } } end;"
+                , "local function known(items) return function() return"
+                , "  { state='known', items=items, storedWeight=0.0,"
+                , "    capacity=100.0, revealedAt=0.0 } end end;"
+                , "building.getContainerKnowledge = known({"
+                , "    { defName='i1', category='Cat1' } });"
                 , "local pg1 = UI.newPage('cargo_lbl_test_1', 'overlay');"
                 , "cip.setup({page = pg1, fbW = 800, fbH = 2160, boxTexSet = 1});"
                 , "cip.openFor('building', 1, 400, 400);"
                 , "local il = require('scripts.ui.item_list');"
                 , "local _, unshunkH = label.getSize(il.getTabs(cip.state.listId)[1].labelId);"
-                , "building.getStorage = function() return {"
+                , "building.getContainerKnowledge = known({"
                 , "    { defName='i1', category='Cat1' }, { defName='i2', category='Cat2' },"
                 , "    { defName='i3', category='Cat3' }, { defName='i4', category='Cat4' },"
                 , "    { defName='i5', category='Cat5' }, { defName='i6', category='Cat6' },"
                 , "    { defName='i7', category='Cat7' }, { defName='i8', category='Cat8' },"
-                , "} end;"
+                , "});"
                 , "local pg2 = UI.newPage('cargo_lbl_test_2', 'overlay');"
                 , "cip.setup({page = pg2, fbW = 800, fbH = 2160, boxTexSet = 1});"
                 , "cip.openFor('building', 1, 400, 400);"
                 , "local _, shrunkH = label.getSize(il.getTabs(cip.state.listId)[2].labelId);"
-                , "building.getStorageCapacity = origCap;"
-                , "building.getStorage = origStorage;"
+                , "building.getContainerKnowledge = origK;"
                 , "return {unshrunkH = unshunkH, shrunkH = shrunkH}"
                 ]
             case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ShrinkHeightProbe of
@@ -2154,12 +2155,12 @@ spec = aroundAll withSharedFixture $ do
             -- test page) so hud.createUI()'s snapshot/reopen machinery
             -- actually engages.
             r ← evalJSON ls $ luaLines
-                [ "local origCap = building.getStorageCapacity;"
-                , "local origStorage = building.getStorage;"
-                , "building.getStorageCapacity = function() return 100 end;"
-                , "building.getStorage = function() return {"
+                [ "local origK = building.getContainerKnowledge;"
+                , "building.getContainerKnowledge = function() return"
+                , "  { state='known', storedWeight=0.0, capacity=100.0,"
+                , "    revealedAt=0.0, items = {"
                 , "    { defName='i1', category='Cat1' }, { defName='i2', category='Cat2' },"
-                , "} end;"
+                , "} } end;"
                 , "local hud = require('scripts.hud');"
                 , "hud.init(1,2,1920,1080);"
                 , "hud.createUI();"
@@ -2174,8 +2175,7 @@ spec = aroundAll withSharedFixture $ do
                 , "local wasOpenBefore = cip.isOpen();"
                 , "local tabBefore = cip.state.activeTab;"
                 , "hud.onFramebufferResize(1600, 900);"
-                , "building.getStorageCapacity = origCap;"
-                , "building.getStorage = origStorage;"
+                , "building.getContainerKnowledge = origK;"
                 , "return {wasOpenBefore = wasOpenBefore, tabBefore = tabBefore,"
                 , "        isOpenAfter = cip.isOpen(), kindAfter = cip.state.kind,"
                 , "        idAfter = cip.state.id,"
@@ -2204,14 +2204,14 @@ spec = aroundAll withSharedFixture $ do
             -- rendered row's representative instance, so it is driven
             -- through the real shared dispatcher, not a host function.
             r ← evalJSON ls $ luaLines
-                [ "local origCap = building.getStorageCapacity;"
-                , "local origStorage = building.getStorage;"
+                [ "local origK = building.getContainerKnowledge;"
                 , "local origSel = unit.getSelected;"
-                , "building.getStorageCapacity = function() return 100 end;"
-                , "building.getStorage = function() return {"
+                , "building.getContainerKnowledge = function() return"
+                , "  { state='known', storedWeight=3.0, capacity=100.0,"
+                , "    revealedAt=0.0, items = {"
                 , "    { defName='i1', displayName='Ore', category='Cat1', weight=2.0 },"
                 , "    { defName='i2', displayName='Rope', category='Cat2', weight=1.0 },"
-                , "} end;"
+                , "} } end;"
                 , "unit.getSelected = function() return {} end;"
                 , "local cm = require('scripts.ui.context_menu');"
                 , "local origShow = cm.show; _G.__menuShown = false;"
@@ -2226,8 +2226,8 @@ spec = aroundAll withSharedFixture $ do
                 , "local rowInfo = UI.getElementInfo(rows[1].hitId);"
                 , "local routed = il.handleCallback('onItemListRightClick', rows[1].hitId);"
                 , "cm.show = origShow;"
-                , "building.getStorageCapacity = origCap;"
-                , "building.getStorage = origStorage; unit.getSelected = origSel;"
+                , "building.getContainerKnowledge = origK;"
+                , "unit.getSelected = origSel;"
                 , "return {hasFrame = tb.hasFrame(il.getTabBarId(cip.state.listId)),"
                 , "        tabCount = #il.getTabs(cip.state.listId),"
                 , "        rowCount = #rows, interactive = rowInfo.interactive,"
@@ -2247,23 +2247,33 @@ spec = aroundAll withSharedFixture $ do
         it "a building endpoint opens through the generalized signature with the same rows, tabs, header and row action" $ \(env, ls) → do
             resetFixture env ls
             r ← evalJSON ls $ luaLines
+                -- #1237: the LIVE reads are left deliberately answering
+                -- something else entirely, so a header or row that came
+                -- from them rather than from the remembered snapshot
+                -- would be unmistakable.
                 [ "local origCap = building.getStorageCapacity;"
                 , "local origStorage = building.getStorage;"
                 , "local origWeight = building.getStorageWeight;"
                 , "local origInfo = building.getInfo;"
-                , "building.getStorageCapacity = function() return 400 end;"
-                , "building.getStorageWeight = function() return 12.5 end;"
+                , "local origK = building.getContainerKnowledge;"
+                , "building.getStorageCapacity = function() return 999 end;"
+                , "building.getStorageWeight = function() return 777.5 end;"
+                , "building.getStorage = function() return {"
+                , "    { defName='live_only', displayName='Live Only',"
+                , "      category='Wrong', weight=9.0 } } end;"
                 , "building.getInfo = function() return"
                 , "    { displayName='Cargo Hold', gridX=0, gridY=0,"
                 , "      tileW=1, tileH=1 } end;"
-                , "building.getStorage = function() return {"
+                , "building.getContainerKnowledge = function() return"
+                , "  { state='known', storedWeight=12.5, capacity=400.0,"
+                , "    revealedAt=0.0, items = {"
                 , "    { defName='steel_bar', displayName='Steel Bar',"
                 , "      category='Materials', weight=2.0 },"
                 , "    { defName='steel_bar', displayName='Steel Bar',"
                 , "      category='Materials', weight=2.0 },"
                 , "    { defName='bandage', displayName='Bandage',"
                 , "      category='Medical', weight=0.1 },"
-                , "} end;"
+                , "} } end;"
                 , "local origSel = unit.getSelected;"
                 , "unit.getSelected = function() return {} end;"
                 , "local cm = require('scripts.ui.context_menu');"
@@ -2292,6 +2302,7 @@ spec = aroundAll withSharedFixture $ do
                 , "building.getStorage = origStorage;"
                 , "building.getStorageWeight = origWeight;"
                 , "building.getInfo = origInfo;"
+                , "building.getContainerKnowledge = origK;"
                 , "return out"
                 ]
             case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe EndpointOpenProbe of
@@ -2302,7 +2313,9 @@ spec = aroundAll withSharedFixture $ do
                     cwoKind p `shouldBe` Just "building"
                     cwoId p `shouldBe` Just 11
                     cwoTitle p `shouldBe` "Cargo Hold"
-                    -- Byte-identical to the pre-#1234 header.
+                    -- Byte-identical to the pre-#1234 header, and the
+                    -- REMEMBERED numbers — not the live 777.5 / 999
+                    -- those same stubs answer with (#1237).
                     cwoSubtitle p `shouldBe` "Storage: 12.50 / 400.00 kg"
                     cwoRowCount p `shouldBe` 2      -- steel_bar x2 stacks
                     cwoTabCount p `shouldBe` 3      -- All + Materials + Medical
@@ -2375,11 +2388,11 @@ spec = aroundAll withSharedFixture $ do
         it "an unknown endpoint kind is refused, creating no panel state and leaving an already-open window alone" $ \(env, ls) → do
             resetFixture env ls
             r ← evalJSON ls $ luaLines
-                [ "local origCap = building.getStorageCapacity;"
-                , "local origStorage = building.getStorage;"
-                , "building.getStorageCapacity = function() return 100 end;"
-                , "building.getStorage = function() return {"
-                , "    { defName='i1', category='Cat1' } } end;"
+                [ "local origK = building.getContainerKnowledge;"
+                , "building.getContainerKnowledge = function() return"
+                , "  { state='known', storedWeight=1.0, capacity=100.0,"
+                , "    revealedAt=0.0, items = {"
+                , "    { defName='i1', category='Cat1' } } } end;"
                 , "local pg = UI.newPage('cargo_ep_unknown', 'overlay');"
                 , "local cip = require('scripts.cargo_inventory_panel');"
                 , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
@@ -2389,8 +2402,7 @@ spec = aroundAll withSharedFixture $ do
                 , "  survivorKind = cip.state.kind, survivorId = cip.state.id,"
                 , "  panelId = cip.state.panelId, listId = cip.state.listId};"
                 , "cip.closeIfOpen();"
-                , "building.getStorageCapacity = origCap;"
-                , "building.getStorage = origStorage;"
+                , "building.getContainerKnowledge = origK;"
                 , "return out"
                 ]
             case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe EndpointRejectProbe of
@@ -2483,13 +2495,13 @@ spec = aroundAll withSharedFixture $ do
             -- an unrelated endpoint — a rebuild of a window the caller
             -- never asked about.
             r ← evalJSON ls $ luaLines
-                [ "local origCap = building.getStorageCapacity;"
-                , "local origStorage = building.getStorage;"
-                , "building.getStorageCapacity = function() return 100 end;"
-                , "building.getStorage = function() return {"
+                [ "local origK = building.getContainerKnowledge;"
+                , "building.getContainerKnowledge = function() return"
+                , "  { state='known', storedWeight=2.0, capacity=100.0,"
+                , "    revealedAt=0.0, items = {"
                 , "    { defName='i1', category='Cat1', weight=1.0 },"
                 , "    { defName='i2', category='Cat2', weight=1.0 },"
-                , "} end;"
+                , "} } end;"
                 , "local pg = UI.newPage('cargo_reject_reopen', 'overlay');"
                 , "local cip = require('scripts.cargo_inventory_panel');"
                 , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
@@ -2511,8 +2523,7 @@ spec = aroundAll withSharedFixture $ do
                 , "  tabAfter = cip.state.activeTab, rowsBefore = rowsBefore,"
                 , "  rowsAfter = #il.getRows(cip.state.listId)};"
                 , "cip.closeIfOpen();"
-                , "building.getStorageCapacity = origCap;"
-                , "building.getStorage = origStorage;"
+                , "building.getContainerKnowledge = origK;"
                 , "return out"
                 ]
             case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe RejectedReopenProbe of
@@ -2549,6 +2560,7 @@ spec = aroundAll withSharedFixture $ do
                 , "local origWeight = building.getStorageWeight;"
                 , "local origInfo = building.getInfo;"
                 , "local origSession = package.loaded['scripts.transfer_session'];"
+                , "local origK = building.getContainerKnowledge;"
                 , "building.hitTestAt = function() return 77 end;"
                 , "building.getActivity = function() return 'built' end;"
                 , "building.getStorageCapacity = function() return 200 end;"
@@ -2559,6 +2571,10 @@ spec = aroundAll withSharedFixture $ do
                 , "      tileW=1, tileH=1 } end;"
                 , "building.getStorage = function() return {"
                 , "    { defName='i1', category='Cat1', weight=1.0 } } end;"
+                , "building.getContainerKnowledge = function() return"
+                , "  { state='known', storedWeight=1.0, capacity=200.0,"
+                , "    revealedAt=0.0, items = {"
+                , "    { defName='i1', category='Cat1', weight=1.0 } } } end;"
                 -- Keep this test on the Contents row alone: an absent
                 -- source is exactly how the real module omits Transfer.
                 , "package.loaded['scripts.transfer_session'] ="
@@ -2589,6 +2605,7 @@ spec = aroundAll withSharedFixture $ do
                 , "building.getStorage = origStorage;"
                 , "building.getStorageWeight = origWeight;"
                 , "building.getInfo = origInfo;"
+                , "building.getContainerKnowledge = origK;"
                 , "return out"
                 ]
             case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe EndpointRejectProbe of
@@ -2781,6 +2798,498 @@ spec = aroundAll withSharedFixture $ do
             case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe WidthCapProbe of
                 Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
                 Just p → wcpInFrame p `shouldBe` True
+
+    -- #1237 (epic #1013, UIT-1B). The container window renders a BUILDING
+    -- endpoint's REMEMBERED contents, not live truth. Every case below
+    -- deliberately leaves building.getStorage / getStorageWeight /
+    -- getStorageCapacity answering something the knowledge record does
+    -- not, so a value that came from the live path is unmistakable rather
+    -- than merely equal-by-luck. The issue's own gate for the rendered
+    -- integration is tools/item_list_widget_probe.py (manual-only,
+    -- needs-gpu); these are the CI-blocking half.
+    describe "cargo_inventory_panel.lua renders LAST-KNOWN container contents with an age indicator (#1237)" $ do
+        it "a never-inspected container renders as UNKNOWN — never as an empty one — with a live capacity, an unknown stored weight and no age line" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "local origK = building.getContainerKnowledge;"
+                , "local origInfo = building.getInfo;"
+                , "local origCap = building.getStorageCapacity;"
+                , "local origStorage = building.getStorage;"
+                , "local origWeight = building.getStorageWeight;"
+                -- Live truth says the hold is full of ore; none of it may
+                -- reach the window, because nobody has looked inside.
+                , "building.getStorageCapacity = function() return 400 end;"
+                , "building.getStorageWeight = function() return 88.0 end;"
+                , "building.getStorage = function() return {"
+                , "    { defName='ore', displayName='Ore',"
+                , "      category='Materials', weight=44.0 } } end;"
+                , "building.getInfo = function() return"
+                , "    { displayName='Cargo Hold', gridX=0, gridY=0,"
+                , "      tileW=1, tileH=1 } end;"
+                -- Exactly what the engine reports with no record at all:
+                -- a numeric zero weight and NO revealedAt key.
+                , "building.getContainerKnowledge = function() return"
+                , "  { state='unknown', items={}, storedWeight=0.0,"
+                , "    capacity=400.0 } end;"
+                , "local pg = UI.newPage('cargo_k_unknown', 'overlay');"
+                , "UI.showPage(pg);"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.setup({page = pg, fbW = 1920, fbH = 1080,"
+                , "           boxTexSet = 1, menuFont = 1});"
+                , "local accepted = cip.openFor('building', 11, 300, 300);"
+                , "local il = require('scripts.ui.item_list');"
+                , "local lbl = require('scripts.ui.label');"
+                , "local rows = il.getRows(cip.state.listId);"
+                , "local names = {};"
+                , "for i, rw in ipairs(rows) do names[i] = rw.item.defName end;"
+                , "local et = nil;"
+                , "for _, e in ipairs(UI.getVisibleElements()) do"
+                , "    if e.name == 'cargo_inv_empty_text' then et = e.text end"
+                , "end;"
+                , "local out = {accepted = accepted,"
+                , "  subtitle = lbl.getText(cip.state.subtitleId),"
+                , "  age = cip.state.ageId and lbl.getText(cip.state.ageId) or nil,"
+                , "  emptyText = et, rowCount = #rows,"
+                , "  rowNames = table.concat(names, ',')};"
+                , "cip.closeIfOpen();"
+                , "building.getContainerKnowledge = origK;"
+                , "building.getInfo = origInfo;"
+                , "building.getStorageCapacity = origCap;"
+                , "building.getStorage = origStorage;"
+                , "building.getStorageWeight = origWeight;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ContainerKnowledgeProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    ckpAccepted p `shouldBe` True
+                    -- Capacity is LIVE and always shown; the stored
+                    -- weight reads as unknown rather than as the
+                    -- engine's numeric 0 (and never as the live 88).
+                    ckpSubtitle p `shouldBe` "Storage: unknown / 400.00 kg"
+                    ckpAge p `shouldBe` Nothing
+                    ckpRowCount p `shouldBe` 0
+                    ckpRowNames p `shouldBe` ""
+                    -- The distinguishing fact: an explicit
+                    -- never-inspected line, NOT an empty item list.
+                    ckpEmpty p `shouldBe`
+                        Just "Contents unknown (never inspected)"
+
+        it "a known-EMPTY container renders as empty, with a stored weight of zero and an age derived from revealedAt" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "local origK = building.getContainerKnowledge;"
+                , "local origInfo = building.getInfo;"
+                , "local origGT = engine.gameTime;"
+                , "local origStorage = building.getStorage;"
+                -- Live truth again disagrees, in the other direction.
+                , "building.getStorage = function() return {"
+                , "    { defName='ore', category='Materials', weight=44.0 } } end;"
+                , "building.getInfo = function() return"
+                , "    { displayName='Cargo Hold' } end;"
+                , "building.getContainerKnowledge = function() return"
+                , "  { state='empty', items={}, storedWeight=0.0,"
+                , "    capacity=400.0, revealedAt=100.0 } end;"
+                , "engine.gameTime = function() return 250.0 end;"
+                , "local pg = UI.newPage('cargo_k_empty', 'overlay');"
+                , "UI.showPage(pg);"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.setup({page = pg, fbW = 1920, fbH = 1080,"
+                , "           boxTexSet = 1, menuFont = 1});"
+                , "local accepted = cip.openFor('building', 12, 300, 300);"
+                , "local il = require('scripts.ui.item_list');"
+                , "local lbl = require('scripts.ui.label');"
+                , "local rows = il.getRows(cip.state.listId);"
+                , "local et = nil;"
+                , "for _, e in ipairs(UI.getVisibleElements()) do"
+                , "    if e.name == 'cargo_inv_empty_text' then et = e.text end"
+                , "end;"
+                , "local out = {accepted = accepted,"
+                , "  subtitle = lbl.getText(cip.state.subtitleId),"
+                , "  age = cip.state.ageId and lbl.getText(cip.state.ageId) or nil,"
+                , "  emptyText = et, rowCount = #rows, rowNames = ''};"
+                , "cip.closeIfOpen();"
+                , "building.getContainerKnowledge = origK;"
+                , "building.getInfo = origInfo; engine.gameTime = origGT;"
+                , "building.getStorage = origStorage;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ContainerKnowledgeProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    ckpAccepted p `shouldBe` True
+                    ckpSubtitle p `shouldBe` "Storage: 0.00 / 400.00 kg"
+                    ckpRowCount p `shouldBe` 0
+                    ckpEmpty p `shouldBe` Just "(empty)"
+                    -- 250 - 100 = 150 game seconds. Derived from
+                    -- revealedAt against engine.gameTime(), never a
+                    -- wall clock.
+                    ckpAge p `shouldBe` Just "as of 2m 30s ago"
+
+        it "a KNOWN container renders the remembered rows and remembered weight through the shared widget, not the live storage" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalJSON ls $ luaLines
+                [ "local origK = building.getContainerKnowledge;"
+                , "local origInfo = building.getInfo;"
+                , "local origGT = engine.gameTime;"
+                , "local origCap = building.getStorageCapacity;"
+                , "local origStorage = building.getStorage;"
+                , "local origWeight = building.getStorageWeight;"
+                , "local origSel = unit.getSelected;"
+                , "unit.getSelected = function() return {} end;"
+                , "building.getStorageCapacity = function() return 999 end;"
+                , "building.getStorageWeight = function() return 777.5 end;"
+                , "building.getStorage = function() return {"
+                , "    { defName='live_only', category='Wrong', weight=9.0 } } end;"
+                , "building.getInfo = function() return"
+                , "    { displayName='Cargo Hold' } end;"
+                , "building.getContainerKnowledge = function() return"
+                , "  { state='known', storedWeight=4.10, capacity=400.0,"
+                , "    revealedAt=0.0, items = {"
+                , "    { defName='steel_bar', displayName='Steel Bar',"
+                , "      category='Materials', weight=2.0 },"
+                , "    { defName='steel_bar', displayName='Steel Bar',"
+                , "      category='Materials', weight=2.0 },"
+                , "    { defName='bandage', displayName='Bandage',"
+                , "      category='Medical', weight=0.1 } } } end;"
+                , "engine.gameTime = function() return 45.0 end;"
+                , "local pg = UI.newPage('cargo_k_known', 'overlay');"
+                , "UI.showPage(pg);"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.setup({page = pg, fbW = 1920, fbH = 1080,"
+                , "           boxTexSet = 1, menuFont = 1});"
+                , "local accepted = cip.openFor('building', 13, 300, 300);"
+                , "local il = require('scripts.ui.item_list');"
+                , "local lbl = require('scripts.ui.label');"
+                , "local rows = il.getRows(cip.state.listId);"
+                , "local names = {};"
+                , "for i, rw in ipairs(rows) do names[i] = rw.item.defName end;"
+                , "table.sort(names);"
+                , "local et = nil;"
+                , "for _, e in ipairs(UI.getVisibleElements()) do"
+                , "    if e.name == 'cargo_inv_empty_text' then et = e.text end"
+                , "end;"
+                , "local out = {accepted = accepted,"
+                , "  subtitle = lbl.getText(cip.state.subtitleId),"
+                , "  age = cip.state.ageId and lbl.getText(cip.state.ageId) or nil,"
+                , "  emptyText = et, rowCount = #rows,"
+                , "  rowNames = table.concat(names, ',')};"
+                , "cip.closeIfOpen();"
+                , "building.getContainerKnowledge = origK;"
+                , "building.getInfo = origInfo; engine.gameTime = origGT;"
+                , "building.getStorageCapacity = origCap;"
+                , "building.getStorage = origStorage;"
+                , "building.getStorageWeight = origWeight;"
+                , "unit.getSelected = origSel;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ContainerKnowledgeProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    ckpAccepted p `shouldBe` True
+                    ckpSubtitle p `shouldBe` "Storage: 4.10 / 400.00 kg"
+                    -- One row per remembered STACK, through the same
+                    -- shared widget the live path uses — and never the
+                    -- live_only row those stubs would have produced.
+                    ckpRowCount p `shouldBe` 2
+                    ckpRowNames p `shouldBe` "bandage,steel_bar"
+                    -- "known" has rows, so no empty-state line at all.
+                    ckpEmpty p `shouldBe` Nothing
+                    ckpAge p `shouldBe` Just "as of 45s ago"
+
+        it "the age ADVANCES as game time passes, retexting the existing label instead of rebuilding the window" $ \(env, ls) → do
+            resetFixture env ls
+            -- Requirement 3's "advance as game time passes" read
+            -- literally: the same fixed revealedAt observed at two
+            -- increasing engine.gameTime() values. Routing the age
+            -- through the widget's staleness key would tear the popup
+            -- down once a game second, so the list instance is required
+            -- to survive.
+            r ← evalJSON ls $ luaLines
+                [ "local origK = building.getContainerKnowledge;"
+                , "local origInfo = building.getInfo;"
+                , "local origGT = engine.gameTime;"
+                , "_G.__now = 10.0;"
+                , "engine.gameTime = function() return _G.__now end;"
+                , "building.getInfo = function() return"
+                , "    { displayName='Cargo Hold' } end;"
+                , "building.getContainerKnowledge = function() return"
+                , "  { state='known', storedWeight=2.0, capacity=400.0,"
+                , "    revealedAt=0.0, items = {"
+                , "    { defName='steel_bar', category='Materials',"
+                , "      weight=2.0 } } } end;"
+                , "local pg = UI.newPage('cargo_k_age', 'overlay');"
+                , "UI.showPage(pg);"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.setup({page = pg, fbW = 1920, fbH = 1080,"
+                , "           boxTexSet = 1, menuFont = 1});"
+                , "cip.openFor('building', 14, 300, 300);"
+                , "local lbl = require('scripts.ui.label');"
+                , "local listBefore = cip.state.listId;"
+                , "local before = lbl.getText(cip.state.ageId);"
+                , "_G.__now = 3700.0;"
+                , "cip.update(0.1);"
+                , "local after = lbl.getText(cip.state.ageId);"
+                , "local out = {before = before, after = after,"
+                , "  sameList = (cip.state.listId == listBefore)};"
+                , "cip.closeIfOpen();"
+                , "building.getContainerKnowledge = origK;"
+                , "building.getInfo = origInfo; engine.gameTime = origGT;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ContainerAgeAdvanceProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    caaBefore p `shouldBe` "as of 10s ago"
+                    caaAfter p `shouldBe` "as of 1h 1m ago"
+                    caaSameList p `shouldBe` True
+
+        it "opening, ticking, re-tabbing and resize-reopening a never-inspected container never calls building.refreshContainerKnowledge" $ \(env, ls) → do
+            resetFixture env ls
+            -- Requirement 4: opening the window reveals nothing, and
+            -- proximity alone never changes what renders. The knowledge
+            -- layer has exactly one write verb reachable from Lua, so
+            -- counting its calls across every entry point this window
+            -- has is the whole gate.
+            r ← evalJSON ls $ luaLines
+                [ "local origK = building.getContainerKnowledge;"
+                , "local origR = building.refreshContainerKnowledge;"
+                , "local origInfo = building.getInfo;"
+                , "_G.__reveals = 0;"
+                , "building.refreshContainerKnowledge = function()"
+                , "    _G.__reveals = _G.__reveals + 1; return true end;"
+                , "building.getInfo = function() return"
+                , "    { displayName='Cargo Hold' } end;"
+                , "building.getContainerKnowledge = function() return"
+                , "  { state='unknown', items={}, storedWeight=0.0,"
+                , "    capacity=400.0 } end;"
+                , "local pg = UI.newPage('cargo_k_noreveal', 'overlay');"
+                , "UI.showPage(pg);"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.setup({page = pg, fbW = 1920, fbH = 1080,"
+                , "           boxTexSet = 1, menuFont = 1});"
+                , "local accepted = cip.openFor('building', 15, 300, 300);"
+                , "cip.update(0.1); cip.update(0.1); cip.update(0.1);"
+                , "cip.onTabChange('All');"
+                , "cip.reopenWithTab('building', 15, 300, 300, 'All');"
+                , "local lbl = require('scripts.ui.label');"
+                , "local il = require('scripts.ui.item_list');"
+                , "local out = {accepted = accepted,"
+                , "  subtitle = lbl.getText(cip.state.subtitleId),"
+                , "  age = cip.state.ageId and lbl.getText(cip.state.ageId) or nil,"
+                , "  rowCount = #il.getRows(cip.state.listId), rowNames = '',"
+                , "  reveals = _G.__reveals};"
+                , "cip.closeIfOpen();"
+                , "building.getContainerKnowledge = origK;"
+                , "building.refreshContainerKnowledge = origR;"
+                , "building.getInfo = origInfo;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ContainerKnowledgeProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    ckpAccepted p `shouldBe` True
+                    ckpReveals p `shouldBe` 0
+                    -- Still unknown after all of it.
+                    ckpSubtitle p `shouldBe` "Storage: unknown / 400.00 kg"
+                    ckpAge p `shouldBe` Nothing
+                    ckpRowCount p `shouldBe` 0
+
+        it "a completed movement's refreshed record reaches an ALREADY-OPEN window through the existing per-tick refresh" $ \(env, ls) → do
+            resetFixture env ls
+            -- Requirement 5. The engine replaces the record at the
+            -- instant a deposit commits, so the window needs no new
+            -- plumbing — but the unknown → known transition renders zero
+            -- rows on BOTH sides of it, which is exactly the case a
+            -- row-only staleness comparison would miss.
+            r ← evalJSON ls $ luaLines
+                [ "local origK = building.getContainerKnowledge;"
+                , "local origR = building.refreshContainerKnowledge;"
+                , "local origInfo = building.getInfo;"
+                , "local origGT = engine.gameTime;"
+                , "_G.__reveals = 0;"
+                , "building.refreshContainerKnowledge = function()"
+                , "    _G.__reveals = _G.__reveals + 1; return true end;"
+                , "engine.gameTime = function() return 600.0 end;"
+                , "building.getInfo = function() return"
+                , "    { displayName='Cargo Hold' } end;"
+                , "_G.__record = { state='unknown', items={},"
+                , "                storedWeight=0.0, capacity=400.0 };"
+                , "building.getContainerKnowledge = function()"
+                , "    return _G.__record end;"
+                , "local pg = UI.newPage('cargo_k_refresh', 'overlay');"
+                , "UI.showPage(pg);"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.setup({page = pg, fbW = 1920, fbH = 1080,"
+                , "           boxTexSet = 1, menuFont = 1});"
+                , "cip.openFor('building', 16, 300, 300);"
+                , "local il = require('scripts.ui.item_list');"
+                , "local lbl = require('scripts.ui.label');"
+                , "local beforeSubtitle = lbl.getText(cip.state.subtitleId);"
+                , "local beforeRows = #il.getRows(cip.state.listId);"
+                , "local beforeAge = cip.state.ageId"
+                , "                    and lbl.getText(cip.state.ageId) or nil;"
+                -- The engine's own post-commit replacement.
+                , "_G.__record = { state='known', storedWeight=2.0,"
+                , "  capacity=400.0, revealedAt=597.0, items = {"
+                , "  { defName='steel_bar', category='Materials',"
+                , "    weight=2.0 } } };"
+                , "cip.update(0.1);"
+                , "local rows = il.getRows(cip.state.listId);"
+                , "local names = {};"
+                , "for i, rw in ipairs(rows) do names[i] = rw.item.defName end;"
+                , "local out = {beforeSubtitle = beforeSubtitle,"
+                , "  beforeRows = beforeRows, beforeAge = beforeAge,"
+                , "  afterSubtitle = lbl.getText(cip.state.subtitleId),"
+                , "  afterRows = #rows,"
+                , "  afterAge = cip.state.ageId"
+                , "               and lbl.getText(cip.state.ageId) or nil,"
+                , "  afterNames = table.concat(names, ','),"
+                , "  reveals = _G.__reveals};"
+                , "cip.closeIfOpen();"
+                , "building.getContainerKnowledge = origK;"
+                , "building.refreshContainerKnowledge = origR;"
+                , "building.getInfo = origInfo; engine.gameTime = origGT;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ContainerRefreshProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    crfpBeforeSubtitle p `shouldBe`
+                        "Storage: unknown / 400.00 kg"
+                    crfpBeforeRows p `shouldBe` 0
+                    crfpBeforeAge p `shouldBe` Nothing
+                    crfpAfterSubtitle p `shouldBe` "Storage: 2.00 / 400.00 kg"
+                    crfpAfterRows p `shouldBe` 1
+                    crfpAfterNames p `shouldBe` "steel_bar"
+                    -- 600 - 597 = 3 game seconds.
+                    crfpAfterAge p `shouldBe` Just "as of just now"
+                    -- And the window still wrote nothing itself.
+                    crfpReveals p `shouldBe` 0
+
+        it "a UNIT endpoint keeps reporting live contents, with no staleness, no age line and no knowledge read at all" $ \(env, ls) → do
+            resetFixture env ls
+            -- Requirement 6, and the reason the knowledge branch lives in
+            -- the endpoint's own `view` rather than in the renderer: an
+            -- entity knows its own contents.
+            r ← evalJSON ls $ luaLines
+                [ "local origEp = unit.transferEndpointInfo;"
+                , "local origUInfo = unit.getInfo;"
+                , "local origK = building.getContainerKnowledge;"
+                , "_G.__kreads = 0;"
+                , "building.getContainerKnowledge = function()"
+                , "    _G.__kreads = _G.__kreads + 1; return nil end;"
+                , "unit.getInfo = function() return { name = 'Sister Vela' } end;"
+                , "unit.transferEndpointInfo = function() return"
+                , "  { eligible = true, displayName = 'Acolyte',"
+                , "    capacity = 40.0, storedWeight = 31.25, contents = {"
+                , "    { defName='wood_log', category='Materials',"
+                , "      weight=5.0 } } } end;"
+                , "local pg = UI.newPage('cargo_k_unit', 'overlay');"
+                , "UI.showPage(pg);"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.setup({page = pg, fbW = 1920, fbH = 1080,"
+                , "           boxTexSet = 1, menuFont = 1});"
+                , "local accepted = cip.openFor('unit', 5, 300, 300);"
+                , "cip.update(0.1);"
+                , "local il = require('scripts.ui.item_list');"
+                , "local lbl = require('scripts.ui.label');"
+                , "local rows = il.getRows(cip.state.listId);"
+                , "local names = {};"
+                , "for i, rw in ipairs(rows) do names[i] = rw.item.defName end;"
+                , "local et = nil;"
+                , "for _, e in ipairs(UI.getVisibleElements()) do"
+                , "    if e.name == 'cargo_inv_empty_text' then et = e.text end"
+                , "end;"
+                , "local out = {accepted = accepted,"
+                , "  subtitle = lbl.getText(cip.state.subtitleId),"
+                , "  age = cip.state.ageId and lbl.getText(cip.state.ageId) or nil,"
+                , "  emptyText = et, rowCount = #rows,"
+                , "  rowNames = table.concat(names, ','),"
+                , "  reveals = _G.__kreads};"
+                , "cip.closeIfOpen();"
+                , "unit.transferEndpointInfo = origEp; unit.getInfo = origUInfo;"
+                , "building.getContainerKnowledge = origK;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ContainerKnowledgeProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    ckpAccepted p `shouldBe` True
+                    ckpSubtitle p `shouldBe` "Carrying: 31.25 / 40.00 kg"
+                    ckpAge p `shouldBe` Nothing
+                    ckpRowCount p `shouldBe` 1
+                    ckpRowNames p `shouldBe` "wood_log"
+                    -- Not "(empty)" and not an unknown line either: a
+                    -- live endpoint keeps its pre-#1237 blank.
+                    ckpEmpty p `shouldBe` Nothing
+                    -- The knowledge layer is building-scoped; a unit
+                    -- endpoint must never consult it.
+                    ckpReveals p `shouldBe` 0
+
+        it "the row context menu operates on the REMEMBERED row, handing withdraw the remembered instance id" $ \(env, ls) → do
+            resetFixture env ls
+            -- Requirement 7: the withdraw path is unchanged, and a
+            -- withdraw whose instance is gone stays the engine's safe
+            -- no-op — so the remembered id is what must reach it.
+            r ← evalJSON ls $ luaLines
+                [ "local origK = building.getContainerKnowledge;"
+                , "local origInfo = building.getInfo;"
+                , "local origSel = unit.getSelected;"
+                , "local origUInfo = unit.getInfo;"
+                , "local origW = unit.withdrawFromCargo;"
+                , "local origGT = engine.gameTime;"
+                , "engine.gameTime = function() return 0.0 end;"
+                , "building.getInfo = function() return"
+                , "    { displayName='Cargo Hold', gridX=10, gridY=10,"
+                , "      tileW=1, tileH=1 } end;"
+                -- instanceId 4242 exists only in the MEMORY; the live
+                -- storage is deliberately empty.
+                , "building.getContainerKnowledge = function() return"
+                , "  { state='known', storedWeight=2.0, capacity=400.0,"
+                , "    revealedAt=0.0, items = {"
+                , "    { defName='steel_bar', displayName='Steel Bar',"
+                , "      category='Materials', weight=2.0,"
+                , "      instanceId=4242 } } } end;"
+                , "unit.getSelected = function() return {7} end;"
+                , "unit.getInfo = function() return"
+                , "    { name='Sister Vela', gridX=10, gridY=11 } end;"
+                , "unit.withdrawFromCargo = function(uid, bid, defName, instId)"
+                , "    _G.__wd = {uid=uid, bid=bid, defName=defName,"
+                , "               instanceId=instId}; return false end;"
+                , "local cm = require('scripts.ui.context_menu');"
+                , "local origShow = cm.show; local captured = nil;"
+                , "cm.show = function(items) captured = items end;"
+                , "local pg = UI.newPage('cargo_k_menu', 'overlay');"
+                , "UI.showPage(pg);"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "cip.setup({page = pg, fbW = 1920, fbH = 1080,"
+                , "           boxTexSet = 1, menuFont = 1});"
+                , "cip.openFor('building', 17, 300, 300);"
+                , "local il = require('scripts.ui.item_list');"
+                , "local rows = il.getRows(cip.state.listId);"
+                , "il.handleCallback('onItemListRightClick', rows[1].hitId);"
+                , "local row = captured and captured[1] or nil;"
+                , "if row and row.callback then row.callback() end;"
+                , "local wd = _G.__wd or {};"
+                , "local out = {label = row and row.label or '',"
+                , "  defName = wd.defName or '', instanceId = wd.instanceId or -1,"
+                , "  bid = wd.bid or -1, uid = wd.uid or -1};"
+                , "cip.closeIfOpen(); cm.show = origShow;"
+                , "building.getContainerKnowledge = origK;"
+                , "building.getInfo = origInfo; unit.getSelected = origSel;"
+                , "unit.getInfo = origUInfo; unit.withdrawFromCargo = origW;"
+                , "engine.gameTime = origGT;"
+                , "return out"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe RememberedMenuProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    rmpLabel p `shouldBe` "Withdraw with Sister Vela"
+                    rmpDefName p `shouldBe` "steel_bar"
+                    rmpInstance p `shouldBe` 4242
+                    rmpBid p `shouldBe` 17
+                    rmpUid p `shouldBe` 7
 
     describe "build_tool.lua's picker stays in-frame at a narrow, high-scale, still-C2-supported combination (round-7 review)" $ do
         it "the picker width is capped to the remaining framebuffer space right of its toolbar anchor, with no prior position clamp to rely on" $ \(env, ls) → do
@@ -4006,6 +4515,54 @@ instance FromJSON EndpointTabProbe where
         EndpointTabProbe <$> o .: "tabAfterClick" <*> o .: "tabAfterReopen"
                          <*> o .: "tabAfterFresh" <*> o .: "kindAfterReopen"
                          <*> o .: "idAfterReopen"
+
+-- #1237: how one container-window open RENDERED. `age` and `emptyText`
+-- are Maybe because their ABSENCE is the assertion in half these cases
+-- (a live or never-inspected endpoint draws no age line; a "known" one
+-- draws no empty-state line) — and a Lua table simply has no such key
+-- when the panel produced nil. `rowNames` is a comma-joined string
+-- rather than a list because an empty Lua table serializes as `{}`,
+-- which no [Text] decoder accepts.
+data ContainerKnowledgeProbe = ContainerKnowledgeProbe
+    { ckpAccepted ∷ Bool, ckpSubtitle ∷ Text, ckpAge ∷ Maybe Text
+    , ckpEmpty ∷ Maybe Text, ckpRowCount ∷ Int, ckpRowNames ∷ Text
+    , ckpReveals ∷ Int } deriving Show
+instance FromJSON ContainerKnowledgeProbe where
+    parseJSON = withObject "ContainerKnowledgeProbe" $ \o →
+        ContainerKnowledgeProbe <$> o .: "accepted" <*> o .: "subtitle"
+                                <*> o .:? "age" <*> o .:? "emptyText"
+                                <*> o .: "rowCount"
+                                <*> o .:? "rowNames" .!= ""
+                                <*> o .:? "reveals" .!= 0
+
+data ContainerAgeAdvanceProbe = ContainerAgeAdvanceProbe
+    { caaBefore ∷ Text, caaAfter ∷ Text, caaSameList ∷ Bool } deriving Show
+instance FromJSON ContainerAgeAdvanceProbe where
+    parseJSON = withObject "ContainerAgeAdvanceProbe" $ \o →
+        ContainerAgeAdvanceProbe <$> o .: "before" <*> o .: "after"
+                                 <*> o .: "sameList"
+
+data ContainerRefreshProbe = ContainerRefreshProbe
+    { crfpBeforeSubtitle ∷ Text, crfpBeforeRows ∷ Int
+    , crfpBeforeAge ∷ Maybe Text, crfpAfterSubtitle ∷ Text
+    , crfpAfterRows ∷ Int, crfpAfterAge ∷ Maybe Text
+    , crfpAfterNames ∷ Text, crfpReveals ∷ Int } deriving Show
+instance FromJSON ContainerRefreshProbe where
+    parseJSON = withObject "ContainerRefreshProbe" $ \o →
+        ContainerRefreshProbe <$> o .: "beforeSubtitle" <*> o .: "beforeRows"
+                              <*> o .:? "beforeAge" <*> o .: "afterSubtitle"
+                              <*> o .: "afterRows" <*> o .:? "afterAge"
+                              <*> o .:? "afterNames" .!= ""
+                              <*> o .: "reveals"
+
+data RememberedMenuProbe = RememberedMenuProbe
+    { rmpLabel ∷ Text, rmpDefName ∷ Text, rmpInstance ∷ Int
+    , rmpBid ∷ Int, rmpUid ∷ Int } deriving Show
+instance FromJSON RememberedMenuProbe where
+    parseJSON = withObject "RememberedMenuProbe" $ \o →
+        RememberedMenuProbe <$> o .: "label" <*> o .: "defName"
+                            <*> o .: "instanceId" <*> o .: "bid"
+                            <*> o .: "uid"
 
 data ShrinkHeightProbe = ShrinkHeightProbe
     { shpUnshrunkH ∷ Double, shpShrunkH ∷ Double } deriving Show

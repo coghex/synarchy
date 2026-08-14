@@ -57,6 +57,14 @@ import Engine.Scripting.Lua.API.Equipment (pushItemInstance)
 --   nil (rather than a table) only when @bid@ names no live building,
 --   or its page is gone — the same "don't offer this at all" answer
 --   @unit.transferReceiverInfo@ gives.
+--
+--   Since #1237 this is a LIVE read: @scripts/cargo_inventory_panel.lua@
+--   builds a building endpoint's whole view from it (contents, stored
+--   weight, capacity and the "as of…" age), so the three-state
+--   distinction and the nil @revealedAt@ above are load-bearing rather
+--   than prospective. Its own gate is
+--   @--match \"LAST-KNOWN container contents\"@ plus
+--   @tools\/item_list_widget_probe.py@.
 buildingGetContainerKnowledgeFn
     ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingGetContainerKnowledgeFn env = do
