@@ -65,8 +65,13 @@ INVARIANTS ENFORCED
     declares exactly all eight;
   * per direction, frame indices start at 0 with no gaps or duplicates
     (different directions of one animation may hold different counts);
-  * every frame decodes as a PNG, and all frames of one animation share
-    one pixel size.
+  * every frame decodes as a PNG — signature, per-chunk CRC, the IHDR
+    method fields, the inflated IDAT length, and every scanline's filter
+    type, interlaced images included — and all frames of one animation
+    share one pixel size;
+  * no symlink appears anywhere in the walk (unit directory,
+    `animations/` root, animation directory, direction directory, or
+    frame), so nothing can be linked past the inventory.
 
 USAGE
 -----
@@ -228,6 +233,39 @@ class PngError(Exception):
     """A PNG that does not decode."""
 
 
+# Adam7 interlacing, as the PNG specification tabulates it: the starting
+# row/column and row/column increment of each of the seven passes.
+ADAM7_START_ROW = (0, 0, 4, 0, 2, 0, 1)
+ADAM7_START_COL = (0, 4, 0, 2, 0, 1, 0)
+ADAM7_ROW_STEP = (8, 8, 8, 4, 4, 2, 2)
+ADAM7_COL_STEP = (8, 8, 4, 4, 2, 2, 1)
+
+
+def scanline_layout(
+    width: int, height: int, channels: int, depth: int, interlace: int,
+) -> List[Tuple[int, int]]:
+    """``[(row_bytes, row_count), ...]`` for the inflated IDAT stream.
+
+    One entry for a non-interlaced image; one per non-empty Adam7 pass
+    for an interlaced one. Modelling both the same way is what lets the
+    size and filter-byte checks below cover interlaced files too, rather
+    than skipping them.
+    """
+    def stride(w: int) -> int:
+        return (w * channels * depth + 7) // 8
+
+    if interlace == 0:
+        return [(stride(width), height)]
+
+    passes: List[Tuple[int, int]] = []
+    for p in range(7):
+        pass_w = -(-(width - ADAM7_START_COL[p]) // ADAM7_COL_STEP[p])
+        pass_h = -(-(height - ADAM7_START_ROW[p]) // ADAM7_ROW_STEP[p])
+        if pass_w > 0 and pass_h > 0:
+            passes.append((stride(pass_w), pass_h))
+    return passes
+
+
 def decode_png_size(path: Path) -> Tuple[int, int]:
     """Structurally decode ``path`` and return its (width, height).
 
@@ -310,23 +348,35 @@ def decode_png_size(path: Path) -> Tuple[int, int]:
         raise PngError("no IDAT data")
 
     width, height, depth, colour, interlace = header
+    if interlace not in (0, 1):
+        raise PngError(f"unknown interlace method {interlace}")
     try:
         raw = zlib.decompress(bytes(idat))
     except zlib.error as error:
         raise PngError(f"IDAT does not inflate: {error}") from error
 
-    # Adam7 rearranges the scanlines, so only check the total for the
-    # (universal, in this repo) non-interlaced case.
-    if interlace == 0:
-        bits = width * PNG_CHANNELS[colour] * depth
-        stride = (bits + 7) // 8
-        expected = height * (stride + 1)
-        if len(raw) != expected:
-            raise PngError(
-                f"inflated IDAT is {len(raw)} bytes, expected {expected} "
-                f"for {width}x{height}")
-    elif interlace != 1:
-        raise PngError(f"unknown interlace method {interlace}")
+    layout = scanline_layout(width, height, PNG_CHANNELS[colour], depth,
+                             interlace)
+    expected = sum((row_bytes + 1) * rows for row_bytes, rows in layout)
+    if len(raw) != expected:
+        raise PngError(
+            f"inflated IDAT is {len(raw)} bytes, expected {expected} "
+            f"for {width}x{height}")
+
+    # Every scanline is prefixed by its filter type, and the
+    # specification defines only 0-4. A file using anything else still
+    # inflates to exactly the right length, so the size check above
+    # cannot see it — but a decoder rejects it, which is precisely the
+    # "undecodable" this gate promises to catch.
+    offset = 0
+    for row_bytes, rows in layout:
+        for _ in range(rows):
+            method = raw[offset]
+            if method > 4:
+                raise PngError(
+                    f"unknown scanline filter type {method} at byte "
+                    f"{offset} (the specification defines 0-4)")
+            offset += row_bytes + 1
 
     return width, height
 
@@ -741,12 +791,26 @@ def walk_physical(
         return found
 
     for unit_dir in sorted(units_root.iterdir()):
-        if not unit_dir.is_dir() or unit_dir.is_symlink():
-            continue
         unit = unit_dir.name
         if only_unit is not None and unit != only_unit:
             continue
+        # A symlink is an ERROR, never a skip. Skipping one was a hole in
+        # the no-exemption contract: a symlinked unit tree would evade
+        # the whole filesystem-first walk — and with it the identifier,
+        # naming and ownership checks — while its frames still shipped.
+        # `is_dir()` follows links, so every level below is checked the
+        # same way, which is also the rule
+        # `Engine.Preview.Unit.resolveUnitDir` applies to a unit
+        # directory and its `animations/` root.
+        if unit_dir.is_symlink():
+            report.err(unit, f"symlinked unit directory: {unit}")
+            continue
+        if not unit_dir.is_dir():
+            continue
         anim_root = unit_dir / "animations"
+        if anim_root.is_symlink():
+            report.err(unit, f"symlinked animations/ directory: {unit}")
+            continue
         if not anim_root.is_dir():
             continue
         if not UNIT_IDENT_RE.match(unit):
@@ -757,6 +821,12 @@ def walk_physical(
 
         for anim_dir in sorted(anim_root.iterdir()):
             rel_anim = f"{unit}/{anim_dir.name}"
+            if anim_dir.is_symlink():
+                report.err(
+                    rel_anim,
+                    f"symlinked animation directory: "
+                    f"{anim_dir.relative_to(root).as_posix()}")
+                continue
             if not anim_dir.is_dir():
                 report.err(
                     rel_anim,
@@ -773,6 +843,10 @@ def walk_physical(
 
             for dir_dir in sorted(anim_dir.iterdir()):
                 rel = dir_dir.relative_to(root).as_posix()
+                if dir_dir.is_symlink():
+                    report.err(
+                        rel_anim, f"symlinked direction directory: {rel}")
+                    continue
                 if not dir_dir.is_dir():
                     report.err(
                         rel_anim, f"loose file at the direction level: {rel}")

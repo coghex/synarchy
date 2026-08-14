@@ -43,25 +43,60 @@ ALL8 = CANON5 + ["north-west", "west", "south-west"]
 # Fixture construction
 # --------------------------------------------------------------------
 
+def independent_layout(
+    width: int, height: int, interlace: int,
+) -> List[tuple[int, int]]:
+    """``[(pixels_per_row, row_count), ...]`` for an 8-bit RGBA image.
+
+    Deliberately NOT `pack_atlas.scanline_layout`. The interlaced fixture
+    is only evidence about the validator's Adam7 arithmetic if the two
+    are computed independently — sharing the helper makes the fixture
+    mutate in lockstep with the code under test, and a broken layout then
+    produces a file that "matches" the broken expectation. The table
+    below is transcribed straight from the PNG specification's Adam7
+    pass description.
+    """
+    if interlace == 0:
+        return [(width, height)]
+    out: List[tuple[int, int]] = []
+    for start_row, start_col, row_step, col_step in (
+        (0, 0, 8, 8), (0, 4, 8, 8), (4, 0, 8, 4), (0, 2, 4, 4),
+        (2, 0, 4, 2), (0, 1, 2, 2), (1, 0, 2, 1),
+    ):
+        cols = len(range(start_col, width, col_step))
+        rows = len(range(start_row, height, row_step))
+        if cols and rows:
+            out.append((cols, rows))
+    return out
+
+
 def png_bytes(width: int = 4, height: int = 4, *,
-              ihdr_compression: int = 0, ihdr_filter: int = 0) -> bytes:
+              ihdr_compression: int = 0, ihdr_filter: int = 0,
+              scanline_filter: int = 0, interlace: int = 0) -> bytes:
     """A real, minimal 8-bit RGBA PNG of the requested size.
 
-    The two IHDR method knobs exist for the malformed-header cases: with
-    either set to a non-zero value the file still has correct chunk CRCs
-    and an IDAT that inflates to exactly the right length, so ONLY the
-    header field under test is wrong. A checker that reads those fields
-    without validating them accepts the result.
-    """
-    raw = b"".join(b"\x00" + b"\x7f\x20\x40\xff" * width
-                   for _ in range(height))
+    The malformed-input knobs all keep the file otherwise well-formed —
+    correct chunk CRCs, and an IDAT that inflates to exactly the length
+    the header implies — so ONLY the field under test is wrong. That is
+    what makes the negative cases sharp: a checker that reads a field
+    without validating it, or that validates only the inflated SIZE,
+    accepts the result.
 
+    `interlace=1` produces a genuine Adam7 layout, so the positive case
+    proves the pass-structure arithmetic rather than merely not crashing.
+    """
     def chunk(ctype: bytes, body: bytes) -> bytes:
         return (struct.pack(">I", len(body)) + ctype + body
                 + struct.pack(">I", binascii.crc32(ctype + body) & 0xFFFFFFFF))
 
+    prefix = bytes([scanline_filter])
+    raw = b"".join(prefix + b"\x7f\x20\x40\xff" * row_pixels
+                   for row_pixels, rows in independent_layout(
+                       width, height, interlace)
+                   for _ in range(rows))
+
     ihdr = struct.pack(">IIBBBBB", width, height, 8, 6,
-                       ihdr_compression, ihdr_filter, 0)
+                       ihdr_compression, ihdr_filter, interlace)
     return (pack_atlas.PNG_SIGNATURE
             + chunk(b"IHDR", ihdr)
             + chunk(b"IDAT", zlib.compress(raw))
@@ -257,6 +292,29 @@ def _rh_exception(fx: Fixture) -> None:
     fx.write_file("assets/textures/units/hero/idle.png", png_bytes())
     fx.yaml("hero", gameplay_yaml("hero", [
         ("attack_heavy_RH_dagger", ALL8, 2, False)]))
+
+
+# An interlaced size whose seven Adam7 passes have distinguishable byte
+# totals. Size matters here: at 9x9 several plausible mis-transcriptions
+# of the pass table (swapping two start columns, say) happen to preserve
+# every pass's dimensions, so the length check cannot see them. 11x7
+# separates all of them.
+INTERLACED_W, INTERLACED_H = 11, 7
+
+
+@positive("a genuinely Adam7-interlaced frame validates")
+def _interlaced(fx: Fixture) -> None:
+    # Exercises the pass-structure arithmetic against an independently
+    # computed layout: a wrong Adam7 table makes the length check reject
+    # this valid file.
+    fx.frames("prop", "spin", CANON5, 2)
+    for d in CANON5:
+        for i in range(2):
+            fx.write_file(
+                f"assets/textures/units/prop/animations/spin/{d}/"
+                f"frame_{i:03d}.png",
+                png_bytes(INTERLACED_W, INTERLACED_H, interlace=1))
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)]))
 
 
 # -- negative ---------------------------------------------------------
@@ -599,6 +657,55 @@ def _bad_compression_method(fx: Fixture) -> None:
         png_bytes(ihdr_compression=1))
 
 
+@negative("a scanline declaring an undefined filter type",
+          "unknown scanline filter type")
+def _bad_scanline_filter(fx: Fixture) -> None:
+    # Inflates to EXACTLY the expected length, so only a real
+    # filter-byte walk catches it.
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/prop/animations/spin/south/frame_001.png",
+        png_bytes(scanline_filter=5))
+
+
+@negative("an interlaced frame with an undefined filter type in a later "
+          "Adam7 pass", "unknown scanline filter type")
+def _bad_interlaced_filter(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/prop/animations/spin/south/frame_001.png",
+        png_bytes(INTERLACED_W, INTERLACED_H, scanline_filter=6,
+                  interlace=1))
+
+
+@negative("a symlinked unit directory", "symlinked unit directory")
+def _symlinked_unit(fx: Fixture) -> None:
+    # The bypass this closes: a skipped symlink meant a whole unit tree
+    # could ship without ever entering the filesystem-first walk.
+    valid_fixture(fx)
+    fx.symlink("assets/textures/units/ghost", "prop")
+
+
+@negative("a symlinked animations/ root", "symlinked animations/ directory")
+def _symlinked_anim_root(fx: Fixture) -> None:
+    valid_fixture(fx)
+    (fx.root / "assets/textures/units/ghost").mkdir(parents=True)
+    fx.symlink("assets/textures/units/ghost/animations",
+               str(fx.root / "assets/textures/units/prop/animations"))
+
+
+@negative("a symlinked animation directory", "symlinked animation directory")
+def _symlinked_anim(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.symlink("assets/textures/units/prop/animations/twin", "spin")
+
+
+@negative("a symlinked direction directory", "symlinked direction directory")
+def _symlinked_direction(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.symlink("assets/textures/units/prop/animations/spin/west", "south")
+
+
 # --------------------------------------------------------------------
 # Runner
 # --------------------------------------------------------------------
@@ -645,7 +752,7 @@ def main() -> int:
 
     # The suite is only meaningful if it actually built fixtures; a
     # refactor that silently emptied a registry must not read as green.
-    if len(POSITIVE) < 5 or len(NEGATIVE) < 37:
+    if len(POSITIVE) < 6 or len(NEGATIVE) < 43:
         failures.append(
             f"case registries look truncated: {len(POSITIVE)} positive, "
             f"{len(NEGATIVE)} negative")
