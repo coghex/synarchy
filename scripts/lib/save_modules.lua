@@ -786,28 +786,6 @@ function saveModules.abortPreparedLoad(requestId)
     saveModules._loadActive = false
 end
 
--- Issue #1279: an independent deep copy of the restored-entity context,
--- used by `applyAll`'s fallback when the context is too large for
--- `dataCodec` to snapshot (see the long note there -- the encoded
--- snapshot is the primary mechanism; this keeps an oversized session
--- loading, fully isolated, rather than failing it).
---
--- `seen` makes the copy total rather than merely adequate for the shape
--- Haskell currently pushes: shared subtables stay shared within one copy,
--- and a cycle terminates instead of overflowing the stack.
-local function copyEntityContext(source, seen)
-    if type(source) ~= "table" then return source end
-    seen = seen or {}
-    local existing = seen[source]
-    if existing ~= nil then return existing end
-    local out = {}
-    seen[source] = out
-    for k, v in pairs(source) do
-        out[k] = copyEntityContext(v, seen)
-    end
-    return out
-end
-
 -- Apply one component's per-entity ROWS into its live singleton, issue
 -- #900's replacement for the whole-singleton clobber every per-entity
 -- component used to open its apply() with.
@@ -1103,33 +1081,37 @@ function saveModules.applyAll()
     -- already ride through: plain booleans, integers and strings, decoded
     -- by walking, never by evaluating.
     --
-    -- But its limits are PAYLOAD limits, and `KnownEntities` has no
-    -- matching bound: the context names every entity in the session,
-    -- whereas a component's payload only carries rows it actually saved,
-    -- so a session can exceed `MAX_TABLE_ENTRIES` with a tiny payload.
-    -- Refusing to apply there would fail a load that used to succeed, so
-    -- an unencodable context DEGRADES instead: fall back to precomputed
-    -- per-component copies, which are still completely isolated for
-    -- ordinary code and are exactly what this issue set out to fix. Only
-    -- the extra `debug`-reachability hardening is given up, and only for
-    -- a session too large to encode -- never a load.
-    local encodedContext, fallbackContexts = nil, nil
+    -- Its default limits, however, are PAYLOAD limits -- they bound what
+    -- a component may WRITE TO DISK, where an unbounded payload is a
+    -- corruption surface. They do not describe this snapshot, which never
+    -- reaches a save file and whose size is a property of the session:
+    -- `KnownEntities` has no matching bound, and the context names every
+    -- entity in the session while a component's payload carries only the
+    -- rows it actually saved, so a session can exceed
+    -- `MAX_TABLE_ENTRIES` with a tiny payload. Applying a payload limit
+    -- here would fail a load that has nothing wrong with it, so this one
+    -- call site passes `UNBOUNDED` (and decode is given the same
+    -- allowance, or what encoded would not read back).
+    --
+    -- That leaves encode failing only for a context that isn't plain data
+    -- at all -- a function, a metatable, a cycle -- which
+    -- `pushRestoredEntities` cannot produce. It is treated as fail-fast
+    -- (#761) and aborts before any state has changed, exactly like the
+    -- rollback-capture failure above.
+    local encodedContext = nil
     if entities ~= nil then
-        local encoded, encErr = dataCodec.encode(entities)
-        if encoded ~= nil then
-            encodedContext = encoded
-        else
-            engine.logWarn("saveModules: the restored-entity context is too "
-                .. "large to snapshot (" .. tostring(encErr) .. ") -- "
-                .. "falling back to per-component copies; every component "
-                .. "still sees the same entity set")
-            fallbackContexts = {}
-            for _, id in ipairs(applyOrder) do
-                if prepared[id] ~= nil then
-                    fallbackContexts[id] = copyEntityContext(entities)
-                end
-            end
+        local encoded, encErr =
+            dataCodec.encode(entities, dataCodec.UNBOUNDED)
+        if encoded == nil then
+            saveModules._pendingApply = nil
+            saveModules._pendingRequestId = nil
+            saveModules._pendingEntities = nil
+            saveModules._loadActive = false
+            error("saveModules.applyAll: could not capture the restored-"
+                .. "entity context -- aborting before any state changed: "
+                .. tostring(encErr))
         end
+        encodedContext = encoded
     end
     -- Nothing reads the raw source past this point (the rollback pass is
     -- contextless by design), so drop it here rather than at the end: the
@@ -1146,9 +1128,10 @@ function saveModules.applyAll()
             -- with the ordinary rollback below -- never a nil context
             -- silently downgrading it to "apply every row".
             local ok, err = pcall(function()
-                local context = fallbackContexts and fallbackContexts[id]
-                if context == nil and encodedContext ~= nil then
-                    local decoded, decErr = dataCodec.decode(encodedContext)
+                local context = nil
+                if encodedContext ~= nil then
+                    local decoded, decErr =
+                        dataCodec.decode(encodedContext, dataCodec.UNBOUNDED)
                     if decoded == nil then
                         error("could not rebuild the restored-entity "
                             .. "context: " .. tostring(decErr))

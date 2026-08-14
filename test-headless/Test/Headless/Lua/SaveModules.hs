@@ -217,6 +217,54 @@ spec = do
             , "assert(codec.encode(m1) == codec.encode(m2))"
             ]
 
+        -- Issue #1279: the limits are PAYLOAD limits. One caller -- an
+        -- engine-generated snapshot that never reaches disk -- needs them
+        -- lifted, without relaxing them for anything that does.
+        it "takes a per-call limits override that lifts the payload caps \
+           \for that call ALONE, leaving the module defaults and every \
+           \other caller exactly as they were" $ runsOk $ lns
+            [ "local codec = require('scripts.lib.data_codec')"
+            , "local big = {}"
+            , "for i = 1, codec.MAX_TABLE_ENTRIES + 1 do big[i] = true end"
+            , "local capped, err = codec.encode(big)"
+            , "assert(capped == nil, 'the default cap must still reject it')"
+            , "assert(err:find('max entries', 1, true) ~= nil, err)"
+            , "local free = codec.encode(big, codec.UNBOUNDED)"
+            , "assert(free ~= nil, 'UNBOUNDED must encode it')"
+            , "local back = codec.decode(free, codec.UNBOUNDED)"
+            , "assert(back ~= nil and #back == codec.MAX_TABLE_ENTRIES + 1"
+            , "  and back[1] == true and back[#back] == true,"
+            , "  'it must round-trip through the same allowance')"
+            -- A payload written with an allowance its reader lacks would
+            -- be unreadable; the caps stay symmetric on purpose.
+            , "assert(codec.decode(free) == nil, 'the DEFAULT decode must "
+              <> "still refuse it -- the override is not sticky')"
+            , "assert(codec.MAX_TABLE_ENTRIES == 200000"
+            , "  and codec.MAX_DEPTH == 64"
+            , "  and codec.MAX_STRING_BYTES == 4 * 1024 * 1024"
+            , "  and codec.MAX_TOTAL_BYTES == 16 * 1024 * 1024,"
+            , "  'the module defaults must be untouched by an override')"
+            , "assert(codec.decode(codec.encode({a=1})) ~= nil,"
+            , "  'an ordinary call still behaves exactly as before')"
+            ]
+
+        it "honours a PARTIAL limits override, keeping the module default \
+           \for every key the caller did not name" $ runsOk $ lns
+            [ "local codec = require('scripts.lib.data_codec')"
+            , "local big = {}"
+            , "for i = 1, codec.MAX_TABLE_ENTRIES + 1 do big[i] = true end"
+            , "local only = { MAX_TABLE_ENTRIES = math.huge }"
+            , "assert(codec.encode(big, only) ~= nil,"
+            , "  'the named key must be lifted')"
+            , "local deep = {}"
+            , "local cur = deep"
+            , "for _ = 1, codec.MAX_DEPTH + 2 do"
+            , "  cur.next = {}; cur = cur.next end"
+            , "local d, derr = codec.encode(deep, only)"
+            , "assert(d == nil and derr:find('max depth', 1, true) ~= nil,"
+            , "  'an unnamed key must keep its default: ' .. tostring(derr))"
+            ]
+
         it "rejects functions, userdata-shaped, threads, and metatables" $
             runsOk $ lns
             [ "local codec = require('scripts.lib.data_codec')"
@@ -1859,15 +1907,17 @@ spec = do
             , "  'raw iteration over a nested map must yield its membership')"
             ]
 
-        -- The encoded snapshot rides data_codec, whose limits are PAYLOAD
-        -- limits: MAX_TABLE_ENTRIES is 200,000 per table, and
+        -- The encoded snapshot rides data_codec, whose DEFAULT limits are
+        -- PAYLOAD limits: MAX_TABLE_ENTRIES is 200,000 per table, and
         -- KnownEntities has no matching bound -- the context names every
         -- entity in the session while a component's payload carries only
         -- the rows it saved, so a session can exceed the cap with a tiny
-        -- payload. That must not turn into a failed load.
-        it "still applies a session whose entity set is too large to \
-           \snapshot -- falling back to per-component copies, which stay \
-           \isolated -- rather than failing a load that used to succeed" $
+        -- payload. This snapshot never reaches disk, so it passes
+        -- UNBOUNDED; the same session must load, on the SAME immutable
+        -- path as any other (no second, weaker mechanism for big worlds).
+        it "applies a session whose entity set is past the codec's default \
+           \per-table cap on the ordinary immutable path, keeping both the \
+           \real membership and sibling isolation" $
             runsOk $ lns $
             [ "local saveModules = require('scripts.lib.save_modules')"
             , "local codec = require('scripts.lib.data_codec')"
@@ -1912,12 +1962,13 @@ spec = do
             , "  'the present-owner row must still be retained')"
             , "assert(live[999999] == nil, 'the absent-owner row must still "
               <> "be dropped -- filtering is not skipped in this path')"
-            , "local sawFallback = false"
-            , "for _, w in ipairs(warnings) do"
-            , "  if w:find('too large to snapshot', 1, true) ~= nil then"
-            , "    sawFallback = true end end"
-            , "assert(sawFallback, 'the degrade must be announced, not "
-              <> "silent')"
+            -- The DEFAULT limits must be untouched by the override: this
+            -- same context is still refused for anything disk-bound.
+            , "assert(codec.encode({ unit = units }) == nil,"
+            , "  'the payload default cap must still reject this context "
+              <> "-- the allowance is per call, not a global relaxation')"
+            , "assert(#warnings == 1, 'the dropped row must still report "
+              <> "its diagnostic, got ' .. #warnings)"
             ]
 
         it "leaves the two documented compatibility semantics untouched: a \
