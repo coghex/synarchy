@@ -1652,7 +1652,9 @@ cross-animation and cross-direction references are each named as such;
 no gaps or duplicates, while different directions of one animation may
 hold different counts; every frame decodes as a PNG (standard library
 only — no image package in CI; signature, per-chunk CRC, critical-chunk
-presence and order, the IHDR method fields, the inflated IDAT length and
+presence and order, refusal of any unknown CRITICAL chunk while unknown
+ancillary chunks are ignored as a decoder ignores them, the IHDR method
+fields, the inflated IDAT length and
 every scanline's filter type, Adam7 interlacing included) and one animation's frames share one pixel size.
 No symlink may appear anywhere in the walk — unit directory,
 `animations/` root, animation directory, direction directory, or frame —

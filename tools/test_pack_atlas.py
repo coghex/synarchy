@@ -363,6 +363,11 @@ def _legal_png_variants(fx: Fixture) -> None:
     ancillary = png_from_chunks([
         ihdr_chunk(4, 4),
         png_chunk(b"tEXt", b"Software\x00fixture"),
+        # An UNKNOWN ancillary chunk too (lower-case first letter): a
+        # decoder skips these, and so must this checker — the
+        # unknown-critical rule below must not become "reject anything
+        # unfamiliar".
+        png_chunk(b"qUvW", b"\x00\x01\x02"),
         idat_chunk(4, 4),
         png_chunk(b"tIME", struct.pack(">HBBBBB", 2026, 8, 13, 0, 0, 0)),
         IEND_CHUNK,
@@ -837,6 +842,32 @@ def _duplicate_ihdr(fx: Fixture) -> None:
         ihdr_chunk(4, 4), ihdr_chunk(4, 4), idat_chunk(4, 4), IEND_CHUNK]))
 
 
+@negative("an unknown CRITICAL chunk", "unknown critical chunk")
+def _unknown_critical_chunk(fx: Fixture) -> None:
+    # Upper-case first letter = critical. A decoder must refuse a
+    # critical chunk it does not understand, so accepting one would let
+    # a frame no decoder reads pass strict validation.
+    valid_fixture(fx)
+    _replace_frame(fx, png_from_chunks([
+        ihdr_chunk(4, 4), png_chunk(b"ABCD", b"\x00"), idat_chunk(4, 4),
+        IEND_CHUNK]))
+
+
+@negative("an unknown critical chunk after IDAT", "unknown critical chunk")
+def _unknown_critical_after_idat(fx: Fixture) -> None:
+    valid_fixture(fx)
+    _replace_frame(fx, png_from_chunks([
+        ihdr_chunk(4, 4), idat_chunk(4, 4), png_chunk(b"ZZZZ", b""),
+        IEND_CHUNK]))
+
+
+@negative("a dimension beyond the PNG maximum", "exceeds the PNG maximum")
+def _oversized_dimension(fx: Fixture) -> None:
+    valid_fixture(fx)
+    _replace_frame(fx, png_from_chunks([
+        ihdr_chunk((1 << 31) + 4, 4), idat_chunk(4, 4), IEND_CHUNK]))
+
+
 @negative("a chunk type that is not four letters", "not four letters")
 def _bad_chunk_type(fx: Fixture) -> None:
     valid_fixture(fx)
@@ -891,7 +922,7 @@ def main() -> int:
 
     # The suite is only meaningful if it actually built fixtures; a
     # refactor that silently emptied a registry must not read as green.
-    if len(POSITIVE) < 7 or len(NEGATIVE) < 52:
+    if len(POSITIVE) < 7 or len(NEGATIVE) < 55:
         failures.append(
             f"case registries look truncated: {len(POSITIVE)} positive, "
             f"{len(NEGATIVE)} negative")

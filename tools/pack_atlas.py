@@ -187,6 +187,18 @@ ASSET_PREFIX: Tuple[str, ...] = ("assets", "textures", "units")
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
+# The four critical chunks the PNG specification defines. A chunk whose
+# FIRST type byte is upper case is critical (bit 5 of that byte is the
+# ancillary flag), and a decoder must REFUSE a critical chunk it does not
+# know — so any other upper-case-initial type is a hard error here, while
+# an unknown ancillary chunk is simply ignored, exactly as a decoder
+# ignores it.
+PNG_CRITICAL_CHUNKS = frozenset({b"IHDR", b"PLTE", b"IDAT", b"IEND"})
+
+# PNG limits both dimensions to 2^31 - 1; the four-byte header field can
+# express more than that.
+PNG_MAX_DIMENSION = (1 << 31) - 1
+
 # PNG colour type -> samples per pixel.
 PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
 
@@ -270,10 +282,11 @@ def scanline_layout(
 def decode_png_size(path: Path) -> Tuple[int, int]:
     """Structurally decode ``path`` and return its (width, height).
 
-    This walks the whole chunk stream, verifies every chunk CRC, checks
-    critical-chunk presence and ORDER (IHDR first, PLTE before IDAT and
-    required for indexed colour, IDATs consecutive, IEND empty and
-    final), parses IHDR, and inflates the concatenated IDAT payload,
+    This walks the whole chunk stream, verifies every chunk CRC, refuses
+    any critical chunk it does not know while ignoring unknown ancillary
+    ones exactly as a decoder does, checks critical-chunk presence and
+    ORDER (IHDR first, PLTE before IDAT and required for indexed colour,
+    IDATs consecutive, IEND empty and final), parses IHDR, and inflates the concatenated IDAT payload,
     checking both that its length is exactly the raw scanline total the
     header declares and that every scanline's filter type is one the
     specification defines. That is enough to reject truncation, byte
@@ -308,6 +321,11 @@ def decode_png_size(path: Path) -> Tuple[int, int]:
         name = ctype.decode("latin-1", "replace")
         if not all(0x41 <= b <= 0x5A or 0x61 <= b <= 0x7A for b in ctype):
             raise PngError(f"chunk type is not four letters: {name!r}")
+        if ctype not in PNG_CRITICAL_CHUNKS and not ctype[0] & 0x20:
+            raise PngError(
+                f"unknown critical chunk {name} (a decoder must refuse a "
+                f"critical chunk it does not know; an ancillary chunk would "
+                f"spell its type with a lower-case first letter)")
         body_start = offset + 8
         body_end = body_start + length
         if body_end + 4 > len(data):
@@ -339,6 +357,10 @@ def decode_png_size(path: Path) -> Tuple[int, int]:
                 struct.unpack(">IIBBBBB", body)
             if width == 0 or height == 0:
                 raise PngError(f"zero dimension ({width}x{height})")
+            if width > PNG_MAX_DIMENSION or height > PNG_MAX_DIMENSION:
+                raise PngError(
+                    f"dimension exceeds the PNG maximum of "
+                    f"{PNG_MAX_DIMENSION} ({width}x{height})")
             if colour not in PNG_CHANNELS:
                 raise PngError(f"unknown colour type {colour}")
             if depth not in PNG_DEPTHS[colour]:
