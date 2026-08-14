@@ -1635,7 +1635,10 @@ key an entry sits under is the entire runtime distinction:
 
 A file may hold either key or both; a file holding NEITHER is refused
 rather than decoded as zero units (that is what a mistyped top-level key
-looks like). Three decoders share the shape:
+looks like), and so is a key present with an explicit `null` — aeson's
+`.:?` reads that as absent, so the engine's own decoder refuses the
+file, and accepting it in the gate would leave CI green while startup
+logged a parse failure. Three decoders share the shape:
 `Engine.Asset.YamlUnits.UnitYamlFile`, `Engine.Preview.Unit`'s
 `UnitAnimMetaFile` (which reads both, since the preview never
 registers anything), and `tools/pack_atlas.py`. Animation and direction

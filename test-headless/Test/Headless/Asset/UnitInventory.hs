@@ -144,6 +144,15 @@ spec = do
                 entries ← readIORef entriesRef
                 map leLevel entries `shouldBe` [LevelWarn]
 
+        it "refuses a file whose only key is an explicit null — aeson's \
+           \.:? reads that as absent, so it declares neither form" $
+            withTempUnitYaml "units: null\n" $ \path → do
+                (logger, entriesRef) ← recordingLogger
+                defs ← loadUnitYaml logger path
+                defs `shouldBe` []
+                entries ← readIORef entriesRef
+                map leLevel entries `shouldBe` [LevelWarn]
+
         it "accepts a file carrying BOTH keys, routing each entry to \
            \its own side" $
             withTempUnitYaml

@@ -281,6 +281,29 @@ def _no_key(fx: Fixture) -> None:
     fx.yaml("stray", "unit:\n  - name: hero\n")
 
 
+@negative("a file whose only key is an explicit null",
+          "present but null")
+def _null_units_key(fx: Fixture) -> None:
+    # `data.get(key) is None` cannot tell an explicit null from an
+    # absent key, so this passed the "declares neither" check and then
+    # skipped silently — while the Haskell loader refuses the file.
+    valid_fixture(fx)
+    fx.yaml("stray", "units: null\n")
+
+
+@negative("an asset-only key present but null", "present but null")
+def _null_asset_units_key(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.yaml("stray", "asset_units: null\n")
+
+
+@negative("a key present with no value at all", "present but null")
+def _empty_units_key(fx: Fixture) -> None:
+    # `units:` with nothing after it is the same None to PyYAML.
+    valid_fixture(fx)
+    fx.yaml("stray", "units:\n")
+
+
 @negative("an asset-only entry carrying gameplay fields",
           "carries gameplay field")
 def _asset_only_gameplay(fx: Fixture) -> None:
@@ -896,7 +919,7 @@ def main() -> int:
 
     # The suite is only meaningful if it actually built fixtures; a
     # refactor that silently emptied a registry must not read as green.
-    if len(POSITIVE) < 9 or len(NEGATIVE) < 58:
+    if len(POSITIVE) < 9 or len(NEGATIVE) < 61:
         failures.append(
             f"case registries look truncated: {len(POSITIVE)} positive, "
             f"{len(NEGATIVE)} negative")

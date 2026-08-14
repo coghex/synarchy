@@ -39,7 +39,10 @@ Two declaration forms live under `data/units/`:
                 are refused outright rather than ignored.
 
 A file may hold either key or both. A file holding neither is an error
-(that is what a mistyped top-level key looks like).
+(that is what a mistyped top-level key looks like), and so is a key
+present with an explicit null — the engine's own decoder reads that as
+absent and refuses the file, so accepting it here would leave the gate
+green while startup failed.
 
 INVARIANTS ENFORCED
 -------------------
@@ -561,8 +564,21 @@ def load_declarations(
             continue
 
         for asset_only, key in ((False, "units"), (True, "asset_units")):
-            raw = data.get(key)
+            if key not in data:
+                continue
+            raw = data[key]
+            # An explicit null is NOT the same as an absent key, and
+            # `data.get(key) is None` cannot tell them apart. Aeson's
+            # `.:?` reads a present null as Nothing, so `units: null`
+            # alone makes the Haskell loader fail with "declares
+            # neither" — a file that skipped this check would leave the
+            # gate green while startup logged a parse failure, which is
+            # exactly the divergence this tool exists to prevent.
             if raw is None:
+                report.err(
+                    source,
+                    f"`{key}:` is present but null. Give it a list of "
+                    f"entries, or remove the key.")
                 continue
             if not isinstance(raw, list):
                 report.err(source, f"`{key}:` is not a list")
