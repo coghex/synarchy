@@ -65,10 +65,11 @@ INVARIANTS ENFORCED
     declares exactly all eight;
   * per direction, frame indices start at 0 with no gaps or duplicates
     (different directions of one animation may hold different counts);
-  * every frame decodes as a PNG — signature, per-chunk CRC, the IHDR
-    method fields, the inflated IDAT length, and every scanline's filter
-    type, interlaced images included — and all frames of one animation
-    share one pixel size;
+  * every frame decodes as a PNG — signature, per-chunk CRC,
+    critical-chunk presence and order, the IHDR method fields, the
+    inflated IDAT length, and every scanline's filter type, interlaced
+    images included — and all frames of one animation share one pixel
+    size;
   * no symlink appears anywhere in the walk (unit directory,
     `animations/` root, animation directory, direction directory, or
     frame), so nothing can be linked past the inventory.
@@ -269,12 +270,16 @@ def scanline_layout(
 def decode_png_size(path: Path) -> Tuple[int, int]:
     """Structurally decode ``path`` and return its (width, height).
 
-    This walks the whole chunk stream, verifies every chunk CRC, parses
-    IHDR, and inflates the concatenated IDAT payload, checking that the
-    inflated length is exactly the raw scanline total the header
-    declares. That is enough to reject truncation, byte corruption, a
-    wrong-sized image, and a non-PNG file wearing a .png name, without
-    needing an image library on the CI box.
+    This walks the whole chunk stream, verifies every chunk CRC, checks
+    critical-chunk presence and ORDER (IHDR first, PLTE before IDAT and
+    required for indexed colour, IDATs consecutive, IEND empty and
+    final), parses IHDR, and inflates the concatenated IDAT payload,
+    checking both that its length is exactly the raw scanline total the
+    header declares and that every scanline's filter type is one the
+    specification defines. That is enough to reject truncation, byte
+    corruption, a wrong-sized image, a structurally invalid stream, and
+    a non-PNG file wearing a .png name, without needing an image library
+    on the CI box.
 
     Raises PngError with a specific reason on anything malformed.
     """
@@ -290,6 +295,9 @@ def decode_png_size(path: Path) -> Tuple[int, int]:
     header: Optional[Tuple[int, int, int, int, int]] = None
     idat = bytearray()
     saw_iend = False
+    saw_plte = False
+    idat_started = False
+    idat_closed = False
     chunk_index = 0
 
     while offset < len(data):
@@ -297,17 +305,30 @@ def decode_png_size(path: Path) -> Tuple[int, int]:
             raise PngError("truncated chunk header")
         (length,) = struct.unpack(">I", data[offset:offset + 4])
         ctype = data[offset + 4:offset + 8]
+        name = ctype.decode("latin-1", "replace")
+        if not all(0x41 <= b <= 0x5A or 0x61 <= b <= 0x7A for b in ctype):
+            raise PngError(f"chunk type is not four letters: {name!r}")
         body_start = offset + 8
         body_end = body_start + length
         if body_end + 4 > len(data):
             raise PngError(
-                f"truncated {ctype.decode('latin-1')} chunk "
-                f"(declared {length} bytes)")
+                f"truncated {name} chunk (declared {length} bytes)")
         body = data[body_start:body_end]
         (stored_crc,) = struct.unpack(">I", data[body_end:body_end + 4])
         actual_crc = binascii.crc32(ctype + body) & 0xFFFFFFFF
         if stored_crc != actual_crc:
-            raise PngError(f"bad CRC on {ctype.decode('latin-1')} chunk")
+            raise PngError(f"bad CRC on {name} chunk")
+
+        # Critical-chunk ORDER and presence, not just CRCs. Tracking
+        # "have I seen an IHDR/IDAT/IEND anywhere" accepts streams no
+        # decoder does: data after the end marker, an indexed image with
+        # no palette, IDATs split by another chunk.
+        if saw_iend:
+            raise PngError(f"{name} chunk appears after IEND")
+        if ctype == b"IHDR" and chunk_index != 0:
+            raise PngError("duplicate IHDR chunk")
+        if idat_started and ctype != b"IDAT":
+            idat_closed = True
 
         if chunk_index == 0:
             if ctype != b"IHDR":
@@ -333,9 +354,34 @@ def decode_png_size(path: Path) -> Tuple[int, int]:
             if filt != 0:
                 raise PngError(f"unknown filter method {filt}")
             header = (width, height, depth, colour, interlace)
+        elif ctype == b"PLTE":
+            if saw_plte:
+                raise PngError("duplicate PLTE chunk")
+            if idat_started:
+                raise PngError("PLTE chunk appears after IDAT")
+            assert header is not None
+            palette_colour = header[3]
+            if palette_colour in (0, 4):
+                raise PngError(
+                    f"PLTE chunk is not allowed for colour type "
+                    f"{palette_colour}")
+            if length == 0 or length % 3 != 0:
+                raise PngError(
+                    f"PLTE is {length} bytes, expected a non-zero multiple "
+                    f"of 3")
+            if palette_colour == 3 and length // 3 > 1 << header[2]:
+                raise PngError(
+                    f"PLTE holds {length // 3} entries, more than the "
+                    f"{1 << header[2]} a bit depth of {header[2]} can index")
+            saw_plte = True
         elif ctype == b"IDAT":
+            if idat_closed:
+                raise PngError("IDAT chunks are not consecutive")
+            idat_started = True
             idat += body
         elif ctype == b"IEND":
+            if length != 0:
+                raise PngError(f"IEND is {length} bytes, expected 0")
             saw_iend = True
         chunk_index += 1
         offset = body_end + 4
@@ -346,6 +392,8 @@ def decode_png_size(path: Path) -> Tuple[int, int]:
         raise PngError("no IEND chunk")
     if not idat:
         raise PngError("no IDAT data")
+    if header[3] == 3 and not saw_plte:
+        raise PngError("colour type 3 (indexed) requires a PLTE chunk")
 
     width, height, depth, colour, interlace = header
     if interlace not in (0, 1):

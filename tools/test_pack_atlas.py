@@ -103,6 +103,38 @@ def png_bytes(width: int = 4, height: int = 4, *,
             + chunk(b"IEND", b""))
 
 
+def png_chunk(ctype: bytes, body: bytes) -> bytes:
+    """One CRC-correct PNG chunk."""
+    return (struct.pack(">I", len(body)) + ctype + body
+            + struct.pack(">I", binascii.crc32(ctype + body) & 0xFFFFFFFF))
+
+
+def png_from_chunks(chunks: Sequence[bytes]) -> bytes:
+    """A signature plus exactly the chunks given, each CRC-correct.
+
+    The structural cases build their streams this way rather than by
+    tweaking `png_bytes`: chunk PRESENCE and ORDER are the property under
+    test, so the fixture should state the chunk list outright instead of
+    hiding it behind a flag.
+    """
+    return pack_atlas.PNG_SIGNATURE + b"".join(chunks)
+
+
+def ihdr_chunk(width: int, height: int, depth: int = 8,
+               colour: int = 6, interlace: int = 0) -> bytes:
+    return png_chunk(b"IHDR", struct.pack(
+        ">IIBBBBB", width, height, depth, colour, 0, 0, interlace))
+
+
+def idat_chunk(width: int, height: int, channels: int = 4) -> bytes:
+    raw = b"".join(b"\x00" + bytes([0x40]) * (width * channels)
+                   for _ in range(height))
+    return png_chunk(b"IDAT", zlib.compress(raw))
+
+
+IEND_CHUNK = png_chunk(b"IEND", b"")
+
+
 class Fixture:
     """A throwaway repository root holding units and their assets."""
 
@@ -314,6 +346,35 @@ def _interlaced(fx: Fixture) -> None:
                 f"assets/textures/units/prop/animations/spin/{d}/"
                 f"frame_{i:03d}.png",
                 png_bytes(INTERLACED_W, INTERLACED_H, interlace=1))
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)]))
+
+
+@positive("structurally legal PNG variants are NOT over-rejected")
+def _legal_png_variants(fx: Fixture) -> None:
+    # An indexed image WITH its palette, and a truecolour image carrying
+    # an ancillary chunk before and after IDAT. Both are valid PNG; the
+    # critical-chunk rules must not sweep them up.
+    indexed = png_from_chunks([
+        ihdr_chunk(4, 4, colour=3),
+        png_chunk(b"PLTE", bytes([0x7f, 0x20, 0x40]) * 64),
+        idat_chunk(4, 4, channels=1),
+        IEND_CHUNK,
+    ])
+    ancillary = png_from_chunks([
+        ihdr_chunk(4, 4),
+        png_chunk(b"tEXt", b"Software\x00fixture"),
+        idat_chunk(4, 4),
+        png_chunk(b"tIME", struct.pack(">HBBBBB", 2026, 8, 13, 0, 0, 0)),
+        IEND_CHUNK,
+    ])
+    fx.frames("prop", "spin", CANON5, 2)
+    for d in CANON5:
+        fx.write_file(
+            f"assets/textures/units/prop/animations/spin/{d}/frame_000.png",
+            indexed)
+        fx.write_file(
+            f"assets/textures/units/prop/animations/spin/{d}/frame_001.png",
+            ancillary)
     fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)]))
 
 
@@ -706,6 +767,84 @@ def _symlinked_direction(fx: Fixture) -> None:
     fx.symlink("assets/textures/units/prop/animations/spin/west", "south")
 
 
+def _replace_frame(fx: Fixture, content: bytes) -> None:
+    fx.write_file(
+        "assets/textures/units/prop/animations/spin/south/frame_001.png",
+        content)
+
+
+@negative("an indexed image with no PLTE chunk", "requires a PLTE chunk")
+def _indexed_without_plte(fx: Fixture) -> None:
+    valid_fixture(fx)
+    _replace_frame(fx, png_from_chunks([
+        ihdr_chunk(4, 4, colour=3), idat_chunk(4, 4, channels=1),
+        IEND_CHUNK]))
+
+
+@negative("a chunk after IEND", "appears after IEND")
+def _chunk_after_iend(fx: Fixture) -> None:
+    valid_fixture(fx)
+    _replace_frame(fx, png_from_chunks([
+        ihdr_chunk(4, 4), idat_chunk(4, 4), IEND_CHUNK, idat_chunk(4, 4)]))
+
+
+@negative("an IEND carrying a payload", "IEND is 4 bytes, expected 0")
+def _nonempty_iend(fx: Fixture) -> None:
+    valid_fixture(fx)
+    _replace_frame(fx, png_from_chunks([
+        ihdr_chunk(4, 4), idat_chunk(4, 4), png_chunk(b"IEND", b"junk")]))
+
+
+@negative("IDAT chunks split by another chunk", "not consecutive")
+def _split_idat(fx: Fixture) -> None:
+    valid_fixture(fx)
+    _replace_frame(fx, png_from_chunks([
+        ihdr_chunk(4, 4), idat_chunk(4, 4),
+        png_chunk(b"tEXt", b"Software\x00fixture"),
+        idat_chunk(4, 4), IEND_CHUNK]))
+
+
+@negative("a PLTE chunk after IDAT", "PLTE chunk appears after IDAT")
+def _plte_after_idat(fx: Fixture) -> None:
+    valid_fixture(fx)
+    _replace_frame(fx, png_from_chunks([
+        ihdr_chunk(4, 4, colour=3), idat_chunk(4, 4, channels=1),
+        png_chunk(b"PLTE", bytes([0x7f, 0x20, 0x40]) * 64), IEND_CHUNK]))
+
+
+@negative("a PLTE chunk on a greyscale image", "not allowed for colour type")
+def _plte_on_greyscale(fx: Fixture) -> None:
+    valid_fixture(fx)
+    _replace_frame(fx, png_from_chunks([
+        ihdr_chunk(4, 4, colour=0),
+        png_chunk(b"PLTE", bytes([0x7f, 0x20, 0x40])),
+        idat_chunk(4, 4, channels=1), IEND_CHUNK]))
+
+
+@negative("a PLTE length that is not a multiple of three",
+          "expected a non-zero multiple of 3")
+def _ragged_plte(fx: Fixture) -> None:
+    valid_fixture(fx)
+    _replace_frame(fx, png_from_chunks([
+        ihdr_chunk(4, 4, colour=3), png_chunk(b"PLTE", b"\x01\x02\x03\x04"),
+        idat_chunk(4, 4, channels=1), IEND_CHUNK]))
+
+
+@negative("a duplicate IHDR chunk", "duplicate IHDR")
+def _duplicate_ihdr(fx: Fixture) -> None:
+    valid_fixture(fx)
+    _replace_frame(fx, png_from_chunks([
+        ihdr_chunk(4, 4), ihdr_chunk(4, 4), idat_chunk(4, 4), IEND_CHUNK]))
+
+
+@negative("a chunk type that is not four letters", "not four letters")
+def _bad_chunk_type(fx: Fixture) -> None:
+    valid_fixture(fx)
+    _replace_frame(fx, png_from_chunks([
+        ihdr_chunk(4, 4), png_chunk(b"12\x00d", b""), idat_chunk(4, 4),
+        IEND_CHUNK]))
+
+
 # --------------------------------------------------------------------
 # Runner
 # --------------------------------------------------------------------
@@ -752,7 +891,7 @@ def main() -> int:
 
     # The suite is only meaningful if it actually built fixtures; a
     # refactor that silently emptied a registry must not read as green.
-    if len(POSITIVE) < 6 or len(NEGATIVE) < 43:
+    if len(POSITIVE) < 7 or len(NEGATIVE) < 52:
         failures.append(
             f"case registries look truncated: {len(POSITIVE)} positive, "
             f"{len(NEGATIVE)} negative")
