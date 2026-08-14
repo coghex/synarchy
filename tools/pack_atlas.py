@@ -73,9 +73,11 @@ INVARIANTS ENFORCED
   * animation and direction keys are strings, never coerced (YAML
     resolves an unquoted `123:` to an int that would stringify into a
     valid-looking identifier);
-  * `fps` is a finite positive number (`.nan` and `.inf` are real floats
-    to PyYAML, and neither fails a positivity test) and `loop` a
-    boolean, rejected rather than coerced when they are not;
+  * `fps` is a finite, float-representable positive number (`.nan` and
+    `.inf` are real floats to PyYAML and neither fails a positivity
+    test; an unbounded-precision int makes `math.isfinite` raise rather
+    than answer) and `loop` a boolean, rejected rather than coerced when
+    they are not;
   * no symlink appears anywhere in the walk (unit directory,
     `animations/` root, animation directory, direction directory, or
     frame), so nothing can be linked past the inventory.
@@ -233,6 +235,33 @@ def normalise_dir(key: str) -> Optional[str]:
     return DIR_ALIASES.get(key.lower())
 
 
+def is_representable_number(value: object) -> bool:
+    """Whether ``value`` is a finite number this tool can reason about.
+
+    ``math.isfinite`` RAISES ``OverflowError`` on an int too large to
+    convert to float, so it cannot be used as a bare predicate against
+    YAML input: an integer literal has unbounded precision and a
+    four-thousand-digit one parses perfectly well.
+    """
+    try:
+        return math.isfinite(value)  # type: ignore[arg-type]
+    except (OverflowError, TypeError, ValueError):
+        return False
+
+
+def render_scalar(value: object, limit: int = 40) -> str:
+    """``repr`` of a YAML scalar, truncated.
+
+    A malformed value can be arbitrarily long — the very input that
+    motivated 'is_representable_number' is four thousand digits — and a
+    diagnostic that pastes it whole is unreadable.
+    """
+    text = repr(value)
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}... ({len(text)} chars)"
+
+
 # --------------------------------------------------------------------
 # Declarations
 # --------------------------------------------------------------------
@@ -315,7 +344,9 @@ def parse_animations(
 
         flip = raw_anim.get("flip", False)
         if not isinstance(flip, bool):
-            report.err(where, f"`flip:` must be a boolean, got {flip!r}")
+            report.err(
+                where,
+                f"`flip:` must be a boolean, got {render_scalar(flip)}")
             flip = False
 
         # `fps` and `loop` are inventory-relevant: the preview reads them
@@ -330,22 +361,36 @@ def parse_animations(
             # frame rate.
             if isinstance(fps, bool) or not isinstance(fps, (int, float)):
                 report.err(
-                    where, f"`fps:` must be a number, got {fps!r}")
-            elif not math.isfinite(fps):
-                # PyYAML resolves `.nan` and `.inf` to real floats, and
-                # neither is caught by a positivity test: `nan <= 0` is
-                # False because every NaN comparison is, and `inf <= 0`
-                # is False because infinity really is greater. Check
-                # finiteness FIRST, or both reach the engine as a frame
-                # rate no clock can advance against.
+                    where,
+                    f"`fps:` must be a number, got {render_scalar(fps)}")
+            elif not is_representable_number(fps):
+                # Two distinct ways to get here, both of which a bare
+                # positivity test misses:
+                #
+                #  * PyYAML resolves `.nan` and `.inf` to real floats.
+                #    `nan <= 0` is False because every NaN comparison
+                #    is, and `inf <= 0` is False because infinity really
+                #    is greater.
+                #  * a Python int has unbounded precision, so a
+                #    thousand-digit `fps:` is a perfectly valid YAML
+                #    integer that no float can hold — and asking
+                #    `math.isfinite` about it raises rather than
+                #    answering.
+                #
+                # Either way it is not a frame rate any clock can
+                # advance against, so check this BEFORE positivity.
                 report.err(
-                    where, f"`fps:` must be finite, got {fps!r}")
+                    where,
+                    f"`fps:` must be a finite, representable number, got "
+                    f"{render_scalar(fps)}")
             elif fps <= 0:
                 report.err(
-                    where, f"`fps:` must be positive, got {fps!r}")
+                    where, f"`fps:` must be positive, got {render_scalar(fps)}")
         if "loop" in raw_anim and not isinstance(raw_anim["loop"], bool):
             report.err(
-                where, f"`loop:` must be a boolean, got {raw_anim['loop']!r}")
+                where,
+                f"`loop:` must be a boolean, got "
+                f"{render_scalar(raw_anim['loop'])}")
 
         raw_frames = raw_anim.get("frames")
         if not isinstance(raw_frames, dict) or not raw_frames:

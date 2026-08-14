@@ -1659,10 +1659,13 @@ ASCEND in the order they are declared (playback walks the declared list,
 so a contiguous-but-shuffled list plays out of sequence while every
 set-based check still passes), and have no gaps or duplicates, while
 different directions of one animation may hold different counts; `fps`
-is a FINITE positive number (PyYAML resolves `.nan` and `.inf` to real
-floats, and neither fails a positivity test — `nan <= 0` is False like
-every NaN comparison, and infinity really is greater) and `loop` a
-boolean, rejected rather than coerced when they are not. No symlink may appear anywhere in the walk — unit
+is a FINITE, float-representable positive number and `loop` a boolean,
+rejected rather than coerced when they are not. Both `fps` guards exist
+because a positivity test alone is not enough: PyYAML resolves `.nan`
+and `.inf` to real floats (`nan <= 0` is False like every NaN
+comparison, and infinity really is greater), and a Python int has
+unbounded precision, so a thousand-digit `fps:` is valid YAML that makes
+`math.isfinite` RAISE rather than answer. No symlink may appear anywhere in the walk — unit
 directory, `animations/` root, animation directory, direction directory,
 or frame — so nothing can be linked past the inventory: a symlinked
 entry is an ERROR, never a skipped one, or a linked tree would evade the

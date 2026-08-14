@@ -648,7 +648,7 @@ def _fps_boolean(fx: Fixture) -> None:
             .replace("        fps: 8\n", "        fps: true\n"))
 
 
-@negative("a NaN `fps:`", "`fps:` must be finite")
+@negative("a NaN `fps:`", "`fps:` must be a finite")
 def _fps_nan(fx: Fixture) -> None:
     # `nan <= 0` is False — every NaN comparison is — so a positivity
     # test alone lets this through.
@@ -657,20 +657,40 @@ def _fps_nan(fx: Fixture) -> None:
             .replace("        fps: 8\n", "        fps: .nan\n"))
 
 
-@negative("an infinite `fps:`", "`fps:` must be finite")
+@negative("an infinite `fps:`", "`fps:` must be a finite")
 def _fps_infinite(fx: Fixture) -> None:
     valid_fixture(fx)
     fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
             .replace("        fps: 8\n", "        fps: .inf\n"))
 
 
-@negative("a negative-infinity `fps:`", "`fps:` must be finite")
+@negative("a negative-infinity `fps:`", "`fps:` must be a finite")
 def _fps_negative_infinite(fx: Fixture) -> None:
     # Caught by the positivity test too, but it must report the FINITE
     # diagnostic: the finiteness check has to run first.
     valid_fixture(fx)
     fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
             .replace("        fps: 8\n", "        fps: -.inf\n"))
+
+
+@negative("an `fps:` integer too large to represent as a float",
+          "`fps:` must be a finite")
+def _fps_unrepresentable(fx: Fixture) -> None:
+    # A Python int has unbounded precision, so this is a perfectly valid
+    # YAML integer — and `math.isfinite` RAISES on it rather than
+    # answering, which crashed the validator instead of diagnosing it.
+    valid_fixture(fx)
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+            .replace("        fps: 8\n", "        fps: " + "9" * 4000 + "\n"))
+
+
+@positive("a large but representable fps is still accepted")
+def _fps_large_but_finite(fx: Fixture) -> None:
+    # The other direction: the rule is about representability, not about
+    # magnitude, so an absurd-but-finite rate must not be rejected here.
+    fx.frames("prop", "spin", CANON5, 2)
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+            .replace("        fps: 8\n", "        fps: 1000000\n"))
 
 
 @negative("a `loop:` that is not a boolean", "`loop:` must be a boolean")
@@ -857,7 +877,7 @@ def main() -> int:
 
     # The suite is only meaningful if it actually built fixtures; a
     # refactor that silently emptied a registry must not read as green.
-    if len(POSITIVE) < 8 or len(NEGATIVE) < 55:
+    if len(POSITIVE) < 9 or len(NEGATIVE) < 56:
         failures.append(
             f"case registries look truncated: {len(POSITIVE)} positive, "
             f"{len(NEGATIVE)} negative")
