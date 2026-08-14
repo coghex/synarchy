@@ -1,0 +1,608 @@
+# white_tailed_deer — ASSET-ONLY unit declaration (issue #1257).
+#
+# `asset_units:` is the authoritative inventory entry for a shipped unit
+# asset tree that is NOT a gameplay unit. Entries here declare animation
+# frames for `tools/pack_atlas.py --validate-only --strict` and for the
+# `--preview units/white_tailed_deer` browser, and nothing else: they are never
+# returned by `Engine.Asset.YamlUnits.loadUnitYaml`, so they are never
+# registered as a `UnitYamlDef`, load no gameplay textures, and are not
+# listable or spawnable. Promotion to a runtime definition is #1261's
+# decision, not this file's.
+asset_units:
+  - name: white_tailed_deer
+    animations:
+      alert:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/white_tailed_deer/animations/alert/south/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/alert/south/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/alert/south/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/alert/south/frame_003.png"
+          south-east:
+            - "assets/textures/units/white_tailed_deer/animations/alert/south-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/alert/south-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/alert/south-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/alert/south-east/frame_003.png"
+          east:
+            - "assets/textures/units/white_tailed_deer/animations/alert/east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/alert/east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/alert/east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/alert/east/frame_003.png"
+          north-east:
+            - "assets/textures/units/white_tailed_deer/animations/alert/north-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/alert/north-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/alert/north-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/alert/north-east/frame_003.png"
+          north:
+            - "assets/textures/units/white_tailed_deer/animations/alert/north/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/alert/north/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/alert/north/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/alert/north/frame_003.png"
+      attack:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/white_tailed_deer/animations/attack/south/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/south/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/south/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/south/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/south/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/south/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/south/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/south/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/south/frame_008.png"
+          south-east:
+            - "assets/textures/units/white_tailed_deer/animations/attack/south-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/south-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/south-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/south-east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/south-east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/south-east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/south-east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/south-east/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/south-east/frame_008.png"
+          east:
+            - "assets/textures/units/white_tailed_deer/animations/attack/east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/east/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/east/frame_008.png"
+          north-east:
+            - "assets/textures/units/white_tailed_deer/animations/attack/north-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/north-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/north-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/north-east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/north-east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/north-east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/north-east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/north-east/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/north-east/frame_008.png"
+          north:
+            - "assets/textures/units/white_tailed_deer/animations/attack/north/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/north/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/north/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/north/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/north/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/north/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/north/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/north/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/attack/north/frame_008.png"
+      death:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/white_tailed_deer/animations/death/south/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/south/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/south/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/south/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/south/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/south/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/south/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/south/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/south/frame_008.png"
+          south-east:
+            - "assets/textures/units/white_tailed_deer/animations/death/south-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/south-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/south-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/south-east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/south-east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/south-east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/south-east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/south-east/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/south-east/frame_008.png"
+          east:
+            - "assets/textures/units/white_tailed_deer/animations/death/east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/east/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/east/frame_008.png"
+          north-east:
+            - "assets/textures/units/white_tailed_deer/animations/death/north-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/north-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/north-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/north-east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/north-east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/north-east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/north-east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/north-east/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/north-east/frame_008.png"
+          north:
+            - "assets/textures/units/white_tailed_deer/animations/death/north/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/north/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/north/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/north/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/north/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/north/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/north/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/north/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/death/north/frame_008.png"
+      drink:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/white_tailed_deer/animations/drink/south/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/south/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/south/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/south/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/south/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/south/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/south/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/white_tailed_deer/animations/drink/south-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/south-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/south-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/south-east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/south-east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/south-east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/south-east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/white_tailed_deer/animations/drink/east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/white_tailed_deer/animations/drink/north-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/north-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/north-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/north-east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/north-east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/north-east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/north-east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/white_tailed_deer/animations/drink/north/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/north/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/north/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/north/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/north/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/north/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/north/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/drink/north/frame_007.png"
+      eat:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/white_tailed_deer/animations/eat/south/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/south/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/south/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/south/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/south/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/south/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/south/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/white_tailed_deer/animations/eat/south-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/south-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/south-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/south-east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/south-east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/south-east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/south-east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/white_tailed_deer/animations/eat/east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/white_tailed_deer/animations/eat/north-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/north-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/north-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/north-east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/north-east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/north-east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/north-east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/white_tailed_deer/animations/eat/north/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/north/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/north/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/north/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/north/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/north/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/north/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/eat/north/frame_007.png"
+      hit_react:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/south/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/south/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/south/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/south/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/south/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/south/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/south/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/south/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/south/frame_008.png"
+          south-east:
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/south-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/south-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/south-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/south-east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/south-east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/south-east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/south-east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/south-east/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/south-east/frame_008.png"
+          east:
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/east/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/east/frame_008.png"
+          north-east:
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/north-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/north-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/north-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/north-east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/north-east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/north-east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/north-east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/north-east/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/north-east/frame_008.png"
+          north:
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/north/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/north/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/north/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/north/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/north/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/north/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/north/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/north/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/hit_react/north/frame_008.png"
+      idle:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/white_tailed_deer/animations/idle/south/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/idle/south/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/idle/south/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/idle/south/frame_003.png"
+          south-east:
+            - "assets/textures/units/white_tailed_deer/animations/idle/south-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/idle/south-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/idle/south-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/idle/south-east/frame_003.png"
+          east:
+            - "assets/textures/units/white_tailed_deer/animations/idle/east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/idle/east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/idle/east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/idle/east/frame_003.png"
+          north-east:
+            - "assets/textures/units/white_tailed_deer/animations/idle/north-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/idle/north-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/idle/north-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/idle/north-east/frame_003.png"
+          north:
+            - "assets/textures/units/white_tailed_deer/animations/idle/north/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/idle/north/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/idle/north/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/idle/north/frame_003.png"
+      lying_idle:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/white_tailed_deer/animations/lying_idle/south/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_idle/south/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_idle/south/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_idle/south/frame_003.png"
+          south-east:
+            - "assets/textures/units/white_tailed_deer/animations/lying_idle/south-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_idle/south-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_idle/south-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_idle/south-east/frame_003.png"
+          east:
+            - "assets/textures/units/white_tailed_deer/animations/lying_idle/east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_idle/east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_idle/east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_idle/east/frame_003.png"
+          north-east:
+            - "assets/textures/units/white_tailed_deer/animations/lying_idle/north-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_idle/north-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_idle/north-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_idle/north-east/frame_003.png"
+          north:
+            - "assets/textures/units/white_tailed_deer/animations/lying_idle/north/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_idle/north/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_idle/north/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_idle/north/frame_003.png"
+      lying_to_sleeping:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/south/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/south/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/south/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/south/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/south/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/south/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/south/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/south/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/south/frame_008.png"
+          south-east:
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/south-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/south-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/south-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/south-east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/south-east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/south-east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/south-east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/south-east/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/south-east/frame_008.png"
+          east:
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/east/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/east/frame_008.png"
+          north-east:
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/north-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/north-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/north-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/north-east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/north-east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/north-east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/north-east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/north-east/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/north-east/frame_008.png"
+          north:
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/north/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/north/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/north/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/north/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/north/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/north/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/north/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/north/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/lying_to_sleeping/north/frame_008.png"
+      run:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/white_tailed_deer/animations/run/south/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/south/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/south/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/south/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/south/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/south/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/south/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/white_tailed_deer/animations/run/south-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/south-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/south-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/south-east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/south-east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/south-east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/south-east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/white_tailed_deer/animations/run/east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/white_tailed_deer/animations/run/north-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/north-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/north-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/north-east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/north-east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/north-east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/north-east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/white_tailed_deer/animations/run/north/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/north/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/north/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/north/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/north/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/north/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/north/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/run/north/frame_007.png"
+      sleeping_idle:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/white_tailed_deer/animations/sleeping_idle/south/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/sleeping_idle/south/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/sleeping_idle/south/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/sleeping_idle/south/frame_003.png"
+          south-east:
+            - "assets/textures/units/white_tailed_deer/animations/sleeping_idle/south-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/sleeping_idle/south-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/sleeping_idle/south-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/sleeping_idle/south-east/frame_003.png"
+          east:
+            - "assets/textures/units/white_tailed_deer/animations/sleeping_idle/east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/sleeping_idle/east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/sleeping_idle/east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/sleeping_idle/east/frame_003.png"
+          north-east:
+            - "assets/textures/units/white_tailed_deer/animations/sleeping_idle/north-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/sleeping_idle/north-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/sleeping_idle/north-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/sleeping_idle/north-east/frame_003.png"
+          north:
+            - "assets/textures/units/white_tailed_deer/animations/sleeping_idle/north/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/sleeping_idle/north/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/sleeping_idle/north/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/sleeping_idle/north/frame_003.png"
+      standing_to_lying:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/south/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/south/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/south/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/south/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/south/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/south/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/south/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/south/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/south/frame_008.png"
+          south-east:
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/south-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/south-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/south-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/south-east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/south-east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/south-east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/south-east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/south-east/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/south-east/frame_008.png"
+          east:
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/east/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/east/frame_008.png"
+          north-east:
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/north-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/north-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/north-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/north-east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/north-east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/north-east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/north-east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/north-east/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/north-east/frame_008.png"
+          north:
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/north/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/north/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/north/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/north/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/north/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/north/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/north/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/north/frame_007.png"
+            - "assets/textures/units/white_tailed_deer/animations/standing_to_lying/north/frame_008.png"
+      walk:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/white_tailed_deer/animations/walk/south/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/south/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/south/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/south/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/south/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/south/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/south/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/white_tailed_deer/animations/walk/south-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/south-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/south-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/south-east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/south-east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/south-east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/south-east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/white_tailed_deer/animations/walk/east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/white_tailed_deer/animations/walk/north-east/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/north-east/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/north-east/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/north-east/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/north-east/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/north-east/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/north-east/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/white_tailed_deer/animations/walk/north/frame_000.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/north/frame_001.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/north/frame_002.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/north/frame_003.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/north/frame_004.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/north/frame_005.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/north/frame_006.png"
+            - "assets/textures/units/white_tailed_deer/animations/walk/north/frame_007.png"

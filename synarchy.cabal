@@ -1079,6 +1079,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Item.QualityTier
                    Test.Headless.Asset.TextureFallback
                    Test.Headless.Asset.Types
+                   Test.Headless.Asset.UnitInventory
                    Test.Headless.Asset.YamlList
                    Test.Headless.Preview.Discovery
                    Test.Headless.Preview.UnitAnimation

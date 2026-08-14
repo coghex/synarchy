@@ -3314,3 +3314,58 @@ units:
             - "assets/textures/units/acolyte/animations/standing_to_pushing/north/frame_002.png"
             - "assets/textures/units/acolyte/animations/standing_to_pushing/north/frame_003.png"
             - "assets/textures/units/acolyte/animations/standing_to_pushing/north/frame_004.png"
+      pushing_idle:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/acolyte/animations/pushing_idle/south/frame_000.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/south/frame_001.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/south/frame_002.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/south/frame_003.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/south/frame_004.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/south/frame_005.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/south/frame_006.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/south/frame_007.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/south/frame_008.png"
+          south-east:
+            - "assets/textures/units/acolyte/animations/pushing_idle/south-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/south-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/south-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/south-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/south-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/south-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/south-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/south-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/south-east/frame_008.png"
+          east:
+            - "assets/textures/units/acolyte/animations/pushing_idle/east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/east/frame_008.png"
+          north-east:
+            - "assets/textures/units/acolyte/animations/pushing_idle/north-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/north-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/north-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/north-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/north-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/north-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/north-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/north-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/north-east/frame_008.png"
+          north:
+            - "assets/textures/units/acolyte/animations/pushing_idle/north/frame_000.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/north/frame_001.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/north/frame_002.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/north/frame_003.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/north/frame_004.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/north/frame_005.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/north/frame_006.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/north/frame_007.png"
+            - "assets/textures/units/acolyte/animations/pushing_idle/north/frame_008.png"
