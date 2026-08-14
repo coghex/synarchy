@@ -61,6 +61,10 @@ UNIT_ASSET_GLOBS = [
     "tools/pack_atlas.py", "tools/test_pack_atlas.py",
     "tools/ci_expensive_gates.py", "tools/ci-local.sh", "Makefile",
     ".github/workflows/ci.yml", ".github/ci/Dockerfile",
+    # The pinned Python toolchain the compiler runs on (#1258). The
+    # self-test fails when it disagrees with the Dockerfile, so a pin
+    # edit has to re-run this gate.
+    "tools/requirements-assets.txt",
     # The unit-YAML schema/loader, the preview metadata loader, and the
     # gameplay registration loader — the three decoders that have to
     # agree with the checker about the declaration shape.
@@ -143,6 +147,7 @@ def self_test() -> int:
         ("unit-assets", ["Makefile"], True),
         ("unit-assets", [".github/workflows/ci.yml"], True),
         ("unit-assets", [".github/ci/Dockerfile"], True),
+        ("unit-assets", ["tools/requirements-assets.txt"], True),
         ("unit-assets", ["src/Engine/Asset/YamlUnits.hs"], True),
         ("unit-assets", ["src/Engine/Preview/Unit.hs"], True),
         ("unit-assets", ["src/Engine/Scripting/Lua/API/Units/Yaml.hs"], True),

@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
 """
-pack_atlas.py — authoritative unit-animation asset inventory validator.
+pack_atlas.py — unit-animation asset inventory validator AND the
+deterministic per-animation atlas compiler.
 
-Per the texture-infrastructure plan in `docs/texture_infrastructure.md`,
-this script will eventually pack per-direction PNG frames into atlas
-sheets, optionally compressing to KTX2. For now only the
-`--validate-only` mode is implemented.
+Two modes, one tool:
+
+    --validate-only   the authoritative asset inventory gate (#1257),
+                      extended by #1258 to also verify any generated
+                      atlas index it finds against its own sources.
+    --compile         compile the declared frames into one lossless PNG
+                      atlas per ANIMATION plus a generated per-unit
+                      index (#1258).
+
+Per `docs/texture_infrastructure.md` (TEX-2), KTX2 encoding stays
+deferred to TEX-5 and runtime sampling to TEX-3.
 
 WHAT IT VALIDATES (issue #1257)
 -------------------------------
@@ -86,6 +94,91 @@ INVARIANTS ENFORCED
     `animations/` root, animation directory, direction directory, or
     frame), so nothing can be linked past the inventory.
 
+WHAT IT COMPILES (issue #1258)
+------------------------------
+
+`--compile` turns the validated declarations into DERIVED artifacts.
+Sources are never touched: individual PNG frames remain the editable
+artwork (D-1) and unit YAML remains the only hand-edited semantic
+authority (D-11).
+
+    assets/textures/units/<unit>/atlas/<animation>.png   one atlas per
+                                                         ANIMATION (D-2)
+    assets/textures/units/<unit>/atlas/index.json        the generated
+                                                         per-unit index
+
+Layout. One ROW per AUTHORED direction, in `ATLAS_DIRECTION_ORDER` —
+the engine's own `Unit.Direction` order `S, SW, W, NW, N, NE, E, SE`,
+restricted to the directions this animation actually authors, so a
+`flip: true` animation has five rows and a `flip: false` one has eight.
+Each direction's row index is nevertheless recorded EXPLICITLY, so the
+runtime reads a row rather than re-deriving the order.
+
+Columns are the animation's maximum authored frame count. A shorter row
+is rectangularized with transparent RGBA8 zero cells and NOTHING ELSE
+(D-5): padding exists so the sheet is a rectangle, and the index's
+per-direction `frame_count` is the only frame authority — no padding
+cell is addressable as a frame.
+
+Cell geometry is exact INTEGER pixels: frame `c` of the direction whose
+row is `r` occupies `x = c * cell_width`, `y = r * cell_height`,
+`cell_width` x `cell_height`. Every frame of one animation must decode
+to those same dimensions; a mismatch is a compile error, never an
+implicit rescale or crop (D-6 — nothing here resamples or blends).
+
+Every atlas cell is a byte-for-byte copy of its source frame's
+canonical decoded RGBA8 samples, alpha included. "Byte-for-byte" is
+about those decoded samples, not about PNG-encoded file bytes: the
+engine's own upload path decodes to RGBA8 as well
+(`Engine.Scripting.Lua.Message.Texture`'s convertRGBA8).
+
+The index. One JSON document per unit, generated end to end — see
+`build_index_document` for the exact schema. It carries a
+`schema_version` (the FORMAT contract TEX-3 will parse, bumped when the
+document shape changes) separately from `tool_version` (this compiler's
+own revision), a documented `direction_order`, and per animation: the
+storage format and atlas path, atlas/cell dimensions, columns, rows,
+each authored direction's row and REAL frame count, the mirroring
+declaration, and two digests.
+
+Digests are `sha256` and are named as such in the document:
+
+  * `source_digest` is PER ANIMATION, over a canonically ordered,
+    length-prefixed stream of that animation's own inputs — name, flip,
+    fps, loop, and for every direction in atlas order its declared
+    frame paths and their canonical decoded RGBA8 pixels. Per-animation
+    is the point: one animation's edit must not invalidate an unrelated
+    atlas (D-12).
+  * `atlas_digest` is over the atlas's decoded RGBA8 CONTENT
+    (dimensions + samples), not its file bytes, so it stays meaningful
+    across PNG encoders while still pinning every pixel.
+
+Determinism and locality. A clean rebuild from identical sources under
+an unchanged toolchain produces identical artifacts. An incremental run
+compares each artifact against what it would generate and WRITES ONLY
+ON A REAL DIFFERENCE, so editing one animation rewrites that
+animation's atlas and its unit index and nothing else — unrelated
+atlases are not even opened for writing. Note that an mtime-only touch
+of a frame changes nothing: the digest is over content.
+
+Obsolete compiler-owned output — an atlas for an animation that was
+deleted or renamed — is removed from the unit's own `atlas/` directory
+during a compile of that unit. Nothing outside that directory is ever
+removed, so source artwork and other units' artifacts are structurally
+out of reach.
+
+STALENESS
+---------
+
+`--validate-only` is index-aware. A unit with NO index is valid: units
+are legacy until TEX-4 begins production tracking. Where an index DOES
+exist it is regenerated from the sources and compared, so a stale
+source digest, a hand-edited or non-canonically serialized index, a
+missing indexed atlas, and an atlas whose pixels do not match its
+sources are all reported — and a tampered index cannot certify a
+tampered atlas, because the comparison is against a fresh regeneration
+rather than against the numbers the file itself carries.
+
 USAGE
 -----
 
@@ -103,51 +196,74 @@ USAGE
         (non-PNG debris in the animation tree); every inventory
         violation above is an ERROR regardless of this flag.
 
-    python3 tools/pack_atlas.py --validate-only --root <dir>
-        Validate an alternative tree holding `data/units/` and
+    python3 tools/pack_atlas.py --compile [--unit acolyte]
+        Compile atlases and indices. Refuses to run at all if the
+        inventory does not validate.
+
+    python3 tools/pack_atlas.py --compile --check
+        Report what a compile WOULD change and change nothing. Exits
+        non-zero if anything is out of date — the shape a CI freshness
+        gate wants.
+
+    python3 tools/pack_atlas.py {--validate-only|--compile} --root <dir>
+        Operate on an alternative tree holding `data/units/` and
         `assets/textures/units/`. Used by tools/test_pack_atlas.py so
         its fixtures never touch the shipped assets.
+
+Exactly one of `--validate-only` / `--compile` is required: writing
+derived artifacts is never something this tool does by default.
 
 WHAT IT DOES NOT VALIDATE
 -------------------------
 
-This tool never OPENS a frame. It establishes that each declared frame
-exists and is a regular file, and asserts nothing about its contents:
-not that it decodes, not its pixel dimensions, not its colour type, and
-not that one animation's frames agree on a size.
+`--validate-only` never OPENS a frame unless an atlas index exists for
+that unit. For a unit with no index it establishes that each declared
+frame exists and is a regular file, and asserts nothing about its
+contents: not that it decodes, not its pixel dimensions, not its colour
+type, and not that one animation's frames agree on a size.
 
-That boundary is deliberate (#1257). Validating a real binary format
-here is its own piece of work with its own cost, tracked as #1311, and
-it will depend on a maintained decoding library rather than a
-hand-rolled parser.
+That boundary is deliberate (#1257) and #1311 tracks lifting it. The
+COMPILER necessarily decodes, so those properties are enforced for any
+animation that is actually compiled.
 
 REQUIREMENTS
 ------------
 
-PyYAML — install with:
+PyYAML for the declarations, Pillow for image decode/encode. Pillow is
+imported LAZILY: the inventory gate on an index-free corpus — which is
+every shipped unit until TEX-4 — runs without it.
 
-    python3 -m pip install --user pyyaml
+`tools/requirements-assets.txt` pins both, is what the CI image
+installs, and is therefore the reference toolchain for byte-identical
+output. Install it with:
 
-That is the only third-party dependency; deliberately no image package.
+    python3 -m pip install --user -r tools/requirements-assets.txt
+
+Validation does NOT require that exact toolchain: every recorded digest
+is over canonical decoded RGBA8, so a different Pillow build verifies a
+committed atlas just as well as the one that wrote it.
 
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
+import io
+import json
 import math
 import re
 import struct
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 try:
     import yaml  # PyYAML
 except ImportError:
     sys.stderr.write(
         "error: PyYAML is required. Install with:\n"
-        "    python3 -m pip install --user pyyaml\n"
+        "    python3 -m pip install --user -r tools/requirements-assets.txt\n"
     )
     sys.exit(2)
 
@@ -214,6 +330,119 @@ FRAME_RE = re.compile(r"\Aframe_(\d{3})\.png\Z")
 # Relative to the validation root.
 ASSET_PREFIX: Tuple[str, ...] = ("assets", "textures", "units")
 
+# --- compiler constants (#1258) --------------------------------------
+
+# The FORMAT contract. TEX-3 parses this document, and
+# `docs/texture_infrastructure.md` requires an incompatible index to be
+# rejectable, so this number is the runtime's compatibility gate and
+# changes only when the document SHAPE does.
+INDEX_SCHEMA_VERSION = 1
+
+# This compiler's own revision, deliberately separate from the schema
+# version: a change in how artifacts are produced (encoder settings,
+# padding, digest inputs) that leaves the document shape alone bumps
+# only this, and every index carrying an older value is regenerated.
+TOOL_VERSION = 1
+
+GENERATOR = "tools/pack_atlas.py"
+DIGEST_ALGORITHM = "sha256"
+STORAGE_FORMAT = "png"
+
+# The compiler-owned output directory, a SIBLING of `animations/`. The
+# inventory walk descends `animations/` and nothing else, so generated
+# artifacts are structurally outside it and can never read as an
+# unclassified source frame.
+ATLAS_DIR_NAME = "atlas"
+INDEX_FILENAME = "index.json"
+
+# Row order: the engine's own `Unit.Direction` constructor order
+# (`DirS | DirSW | DirW | DirNW | DirN | DirNE | DirE | DirSE`),
+# restricted per animation to the directions it actually authors. Each
+# row index is recorded explicitly in the index, so the runtime never
+# has to reproduce this list to read an atlas — it is here to make the
+# layout deterministic, not to be re-derived downstream.
+ATLAS_DIRECTION_ORDER: Tuple[str, ...] = (
+    "south", "south-west", "west", "north-west",
+    "north", "north-east", "east", "south-east",
+)
+
+# `Engine.Asset.YamlUnits.UnitYamlAnim`'s own decoder defaults. The
+# index records EFFECTIVE values, so an animation that omits a field
+# must record exactly what the engine would hold for it.
+DEFAULT_FPS = 8.0
+DEFAULT_LOOP = True
+DEFAULT_FLIP = False
+
+# Digest domain tags. Each carries its own version so a change to what
+# goes INTO a digest invalidates every recorded one rather than
+# silently producing a colliding value from different inputs.
+SOURCE_DIGEST_TAG = b"synarchy-atlas-source-v1"
+ATLAS_DIGEST_TAG = b"synarchy-atlas-content-v1"
+
+
+class ImageBackendMissing(Exception):
+    """Pillow is needed for this operation and is not installed."""
+
+
+_IMAGE_MODULE: Any = None
+
+
+def image_module() -> Any:
+    """Import Pillow on demand.
+
+    Lazy on purpose: `--validate-only` over a corpus with no generated
+    index never decodes anything, and that is the shipped state of
+    every unit until TEX-4 begins production tracking. Making the
+    inventory gate hard-depend on an image package would be a
+    regression in what it takes to run it.
+    """
+    global _IMAGE_MODULE
+    if _IMAGE_MODULE is None:
+        try:
+            from PIL import Image  # type: ignore[import-not-found]
+        except ImportError as error:
+            raise ImageBackendMissing(
+                "Pillow is required to compile or verify atlases. Install "
+                "the pinned toolchain with:\n"
+                "    python3 -m pip install --user -r "
+                "tools/requirements-assets.txt"
+            ) from error
+        _IMAGE_MODULE = Image
+    return _IMAGE_MODULE
+
+
+@dataclass
+class Frame:
+    """One decoded source frame: canonical RGBA8 samples plus size."""
+    width: int
+    height: int
+    pixels: bytes
+
+
+def decode_rgba8(path: Path) -> Frame:
+    """Decode one PNG to canonical 8-bit RGBA samples.
+
+    Decoding goes through Pillow rather than a hand-rolled parser: PNG
+    has paletted, greyscale, 16-bit and interlaced forms plus ancillary
+    colour-management chunks, and every one of them has to arrive at
+    the same canonical RGBA8 the engine's upload path produces.
+    `convert("RGBA")` is that normalisation; it is not a resample.
+    """
+    image_mod = image_module()
+    try:
+        with image_mod.open(path) as handle:
+            if handle.format != "PNG":
+                found = handle.format or "an unrecognised format"
+                raise ValueError(f"expected a PNG, got {found}")
+            converted = handle.convert("RGBA")
+            return Frame(converted.width, converted.height,
+                         converted.tobytes())
+    except ImageBackendMissing:
+        raise
+    except Exception as error:  # noqa: BLE001 - any decode failure is one finding
+        raise ValueError(f"cannot decode as an image: {error}") from error
+
+
 @dataclass
 class Issue:
     severity: str  # "error" | "warning"
@@ -254,6 +483,18 @@ def is_representable_number(value: object) -> bool:
         return False
 
 
+def narrow_to_runtime_float(value: float) -> float:
+    """``value`` as the engine's 32-bit `Float` will actually hold it.
+
+    The generated index records the EFFECTIVE frame rate, so `fps: 8`
+    and `fps: 8.0` must produce one identical document — and a rate the
+    engine will round has to be recorded rounded, or the index would
+    promise a timing the runtime cannot reproduce. Only ever called
+    after `fits_runtime_float` has accepted the value.
+    """
+    return float(struct.unpack("<f", struct.pack("<f", float(value)))[0])
+
+
 def fits_runtime_float(value: float) -> bool:
     """Whether ``value`` survives the engine's single-precision `Float`.
 
@@ -290,12 +531,20 @@ def render_scalar(value: object, limit: int = 40) -> str:
 
 @dataclass
 class AnimDecl:
-    """One declared animation, already bound to its declaring unit."""
+    """One declared animation, already bound to its declaring unit.
+
+    `fps` and `loop` are the EFFECTIVE values — the declared ones where
+    they are valid, `UnitYamlAnim`'s own decoder defaults otherwise —
+    because the generated index records what the engine will hold, not
+    what the file happened to spell.
+    """
     unit: str
     name: str
     flip: bool
     frames: Dict[str, List[str]]  # normalised direction -> declared paths
     where: str
+    fps: float = DEFAULT_FPS
+    loop: bool = DEFAULT_LOOP
 
 
 @dataclass
@@ -377,6 +626,7 @@ def parse_animations(
         # on the Haskell side fails the whole file on one, so a value
         # this tool waves through would take the unit's real animations
         # down with it at load time.
+        fps_value = DEFAULT_FPS
         if "fps" in raw_anim:
             fps = raw_anim["fps"]
             # bool is an int subclass in Python; `fps: true` is not a
@@ -414,11 +664,17 @@ def parse_animations(
                     f"`fps:` does not survive the engine's 32-bit Float, got "
                     f"{render_scalar(fps)} (it would load as infinity or "
                     f"zero)")
-        if "loop" in raw_anim and not isinstance(raw_anim["loop"], bool):
-            report.err(
-                where,
-                f"`loop:` must be a boolean, got "
-                f"{render_scalar(raw_anim['loop'])}")
+            else:
+                fps_value = narrow_to_runtime_float(fps)
+        loop_value = DEFAULT_LOOP
+        if "loop" in raw_anim:
+            if not isinstance(raw_anim["loop"], bool):
+                report.err(
+                    where,
+                    f"`loop:` must be a boolean, got "
+                    f"{render_scalar(raw_anim['loop'])}")
+            else:
+                loop_value = raw_anim["loop"]
 
         raw_frames = raw_anim.get("frames")
         if not isinstance(raw_frames, dict) or not raw_frames:
@@ -453,7 +709,8 @@ def parse_animations(
                 continue
             frames[norm] = [str(p) for p in paths]
 
-        out.append(AnimDecl(unit_name, anim_name, flip, frames, where))
+        out.append(AnimDecl(unit_name, anim_name, flip, frames, where,
+                            fps_value, loop_value))
     return out
 
 
@@ -907,6 +1164,743 @@ def walk_physical(
 
 
 # --------------------------------------------------------------------
+# Compilation: geometry, digests, and the generated index (#1258)
+# --------------------------------------------------------------------
+
+@dataclass
+class DirectionPlan:
+    """One authored direction's row in an animation's atlas."""
+    direction: str
+    row: int
+    declared: List[str]   # declared POSIX paths, in playback order
+    frames: List[Frame]   # decoded, same order
+
+
+@dataclass
+class AnimPlan:
+    """Everything needed to emit one animation's atlas and index entry."""
+    unit: str
+    name: str
+    flip: bool
+    fps: float
+    loop: bool
+    directions: List[DirectionPlan]
+    cell_width: int
+    cell_height: int
+    columns: int
+    atlas_rel: str        # POSIX path relative to the operating root
+
+    @property
+    def rows(self) -> int:
+        return len(self.directions)
+
+    @property
+    def atlas_width(self) -> int:
+        return self.columns * self.cell_width
+
+    @property
+    def atlas_height(self) -> int:
+        return self.rows * self.cell_height
+
+
+def atlas_dir_rel(unit: str) -> PurePosixPath:
+    return PurePosixPath(*ASSET_PREFIX, unit, ATLAS_DIR_NAME)
+
+
+def atlas_file_rel(unit: str, anim: str) -> PurePosixPath:
+    return atlas_dir_rel(unit) / f"{anim}.{STORAGE_FORMAT}"
+
+
+def plan_animation(
+    report: Report, root: Path, anim: AnimDecl,
+) -> Optional[AnimPlan]:
+    """Decode one animation's frames and fix its atlas geometry.
+
+    Returns ``None`` — having reported why — if anything about the
+    animation makes it uncompilable. A unit with one such animation
+    emits NO artifacts at all, so a half-written index can never name
+    an atlas that was never produced.
+    """
+    ordered = [d for d in ATLAS_DIRECTION_ORDER if d in anim.frames]
+    if not ordered:
+        report.err(anim.where, "no usable direction has any frames")
+        return None
+
+    directions: List[DirectionPlan] = []
+    cell: Optional[Tuple[int, int]] = None
+    cell_source = ""
+    for row, direction in enumerate(ordered):
+        declared = anim.frames[direction]
+        frames: List[Frame] = []
+        for declared_path in declared:
+            source = root / PurePosixPath(declared_path)
+            if not source.is_file():
+                # Reported by the inventory gate too, but reaching the
+                # decoder with a missing file would report it as an
+                # undecodable image, which is a different problem.
+                report.err(f"{anim.where}/{direction}",
+                           f"missing file: {declared_path}")
+                return None
+            try:
+                frame = decode_rgba8(source)
+            except ImageBackendMissing as error:
+                report.err(anim.where, str(error))
+                return None
+            except ValueError as error:
+                report.err(f"{anim.where}/{direction}",
+                           f"{declared_path}: {error}")
+                return None
+            if frame.width <= 0 or frame.height <= 0:
+                report.err(f"{anim.where}/{direction}",
+                           f"{declared_path}: zero-sized image")
+                return None
+            # Every frame of ONE animation shares a cell. A mismatch is
+            # an error rather than an implicit rescale or crop: D-6
+            # keeps unit art nearest-neighbour, so resampling here would
+            # change how it looks on screen.
+            if cell is None:
+                cell = (frame.width, frame.height)
+                cell_source = declared_path
+            elif (frame.width, frame.height) != cell:
+                report.err(
+                    f"{anim.where}/{direction}",
+                    f"inconsistent frame dimensions: {declared_path} is "
+                    f"{frame.width}x{frame.height}, but {cell_source} is "
+                    f"{cell[0]}x{cell[1]}. Every frame of one animation "
+                    f"must share the atlas cell size.")
+                return None
+            frames.append(frame)
+        directions.append(DirectionPlan(direction, row, list(declared), frames))
+
+    if cell is None:
+        report.err(anim.where, "no frames to compile")
+        return None
+
+    return AnimPlan(
+        unit=anim.unit,
+        name=anim.name,
+        flip=anim.flip,
+        fps=anim.fps,
+        loop=anim.loop,
+        directions=directions,
+        cell_width=cell[0],
+        cell_height=cell[1],
+        columns=max(len(d.frames) for d in directions),
+        atlas_rel=atlas_file_rel(anim.unit, anim.name).as_posix(),
+    )
+
+
+def compose_atlas(plan: AnimPlan) -> bytes:
+    """The atlas's canonical RGBA8 samples.
+
+    The buffer starts as zeroes, so every cell a direction does not
+    reach stays fully transparent RGBA(0, 0, 0, 0). That is the ONLY
+    thing padding is for: rectangularizing a row shorter than the
+    animation's maximum authored frame count. Nothing addresses a
+    padding cell as a frame — the index's per-direction `frame_count`
+    is the sole frame authority.
+
+    Each frame is copied scanline by scanline as raw bytes, so no
+    blending, compositing or resampling can occur.
+    """
+    stride = plan.atlas_width * 4
+    buffer = bytearray(stride * plan.atlas_height)
+    row_bytes = plan.cell_width * 4
+    for direction in plan.directions:
+        top = direction.row * plan.cell_height
+        for column, frame in enumerate(direction.frames):
+            left = column * row_bytes
+            for line in range(plan.cell_height):
+                start = (top + line) * stride + left
+                source = line * row_bytes
+                buffer[start:start + row_bytes] = \
+                    frame.pixels[source:source + row_bytes]
+    return bytes(buffer)
+
+
+def digest_stream(tag: bytes, fields: Sequence[Tuple[str, bytes]]) -> str:
+    """A canonical, length-prefixed digest over labelled fields.
+
+    Every field carries its label and an explicit byte length, so no
+    concatenation of two different field sequences can produce the same
+    stream — the failure mode a bare `b"".join` invites, where moving a
+    character across a boundary leaves the hash unchanged.
+    """
+    digest = hashlib.sha256()
+    digest.update(struct.pack("<Q", len(tag)))
+    digest.update(tag)
+    for label, value in fields:
+        encoded = label.encode("utf-8")
+        digest.update(struct.pack("<Q", len(encoded)))
+        digest.update(encoded)
+        digest.update(struct.pack("<Q", len(value)))
+        digest.update(value)
+    return digest.hexdigest()
+
+
+def source_digest(plan: AnimPlan) -> str:
+    """This animation's own source digest.
+
+    PER ANIMATION by design (D-12): the whole point of one atlas per
+    animation is that editing one cannot invalidate another, and a
+    digest taken over a whole unit would give that back. The inputs are
+    everything the compiled artifacts depend on — the animation's
+    identity, its mirroring/timing declarations, and for each direction
+    in atlas order its declared source paths and their canonical
+    decoded pixels — in one fixed order.
+    """
+    fields: List[Tuple[str, bytes]] = [
+        ("unit", plan.unit.encode("utf-8")),
+        ("animation", plan.name.encode("utf-8")),
+        ("flip", b"1" if plan.flip else b"0"),
+        ("loop", b"1" if plan.loop else b"0"),
+        ("fps", repr(plan.fps).encode("ascii")),
+        ("cell", f"{plan.cell_width}x{plan.cell_height}".encode("ascii")),
+        ("columns", str(plan.columns).encode("ascii")),
+        ("direction_count", str(len(plan.directions)).encode("ascii")),
+    ]
+    for direction in plan.directions:
+        fields.append(("direction", direction.direction.encode("utf-8")))
+        fields.append(("row", str(direction.row).encode("ascii")))
+        fields.append(
+            ("frame_count", str(len(direction.frames)).encode("ascii")))
+        for declared, frame in zip(direction.declared, direction.frames):
+            fields.append(("frame_path", declared.encode("utf-8")))
+            fields.append(
+                ("frame_size", f"{frame.width}x{frame.height}".encode("ascii")))
+            fields.append(("frame_pixels", frame.pixels))
+    return digest_stream(SOURCE_DIGEST_TAG, fields)
+
+
+def content_digest(width: int, height: int, pixels: bytes) -> str:
+    """A digest over decoded RGBA8 CONTENT, never over file bytes.
+
+    An atlas re-encoded by a different PNG writer holds the same
+    picture, so pinning the encoded bytes would report a false staleness
+    the moment the toolchain moved. Pinning the samples still catches
+    every pixel-level tamper, which is what the guarantee is actually
+    about.
+    """
+    return digest_stream(ATLAS_DIGEST_TAG, [
+        ("width", str(width).encode("ascii")),
+        ("height", str(height).encode("ascii")),
+        ("pixels", pixels),
+    ])
+
+
+def build_index_document(unit: str, plans: Sequence[AnimPlan]) -> Dict[str, Any]:
+    """The complete generated index for one unit.
+
+    Key order is the insertion order below and animations are sorted by
+    name, so the document is a pure function of its inputs — which is
+    what lets validation regenerate it and compare bytes.
+
+    Nobody hand-edits this file (D-11). It carries no field a human
+    would need to choose.
+    """
+    animations: List[Dict[str, Any]] = []
+    for plan in sorted(plans, key=lambda p: p.name):
+        pixels = compose_atlas(plan)
+        animations.append({
+            "name": plan.name,
+            "storage_format": STORAGE_FORMAT,
+            "atlas_path": plan.atlas_rel,
+            "atlas_width": plan.atlas_width,
+            "atlas_height": plan.atlas_height,
+            "cell_width": plan.cell_width,
+            "cell_height": plan.cell_height,
+            "columns": plan.columns,
+            "rows": plan.rows,
+            "flip": plan.flip,
+            "fps": plan.fps,
+            "loop": plan.loop,
+            "directions": [
+                {
+                    "direction": d.direction,
+                    "row": d.row,
+                    "frame_count": len(d.frames),
+                }
+                for d in plan.directions
+            ],
+            "source_digest": source_digest(plan),
+            "atlas_digest": content_digest(
+                plan.atlas_width, plan.atlas_height, pixels),
+        })
+    return {
+        "schema_version": INDEX_SCHEMA_VERSION,
+        "generator": GENERATOR,
+        "tool_version": TOOL_VERSION,
+        "digest_algorithm": DIGEST_ALGORITHM,
+        "unit": unit,
+        "direction_order": list(ATLAS_DIRECTION_ORDER),
+        "animations": animations,
+    }
+
+
+def canonical_index_bytes(document: Dict[str, Any]) -> bytes:
+    """The one permitted serialization of an index document."""
+    return (json.dumps(document, indent=2, ensure_ascii=True,
+                       sort_keys=False, allow_nan=False) + "\n").encode("utf-8")
+
+
+def encode_atlas_png(width: int, height: int, pixels: bytes) -> bytes:
+    """Encode RGBA8 samples as a lossless PNG.
+
+    `optimize` and `compress_level` are set explicitly rather than left
+    to Pillow's defaults so the encode is a fixed function of the
+    samples for a given toolchain.
+    """
+    image_mod = image_module()
+    image = image_mod.frombytes("RGBA", (width, height), pixels)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG", optimize=False, compress_level=9)
+    return buffer.getvalue()
+
+
+# --------------------------------------------------------------------
+# Compiler-owned output directory
+# --------------------------------------------------------------------
+
+def resolve_atlas_dir(
+    report: Report, root: Path, unit: str,
+) -> Optional[Path]:
+    """The unit's own compiler-owned output directory, or ``None``.
+
+    Containment is checked after canonical resolution and every
+    component is refused if it is a symlink, so no link can redirect
+    writes — or a later obsolescence sweep's DELETES — outside this
+    unit's own tree.
+    """
+    rel = atlas_dir_rel(unit)
+    link = check_no_symlink(root, rel)
+    if link is not None:
+        report.err(unit, f"symlink in the atlas output path: {link}")
+        return None
+
+    unit_dir = root.joinpath(*ASSET_PREFIX, unit)
+    if not unit_dir.is_dir():
+        report.err(unit, f"unit asset directory does not exist: "
+                         f"{rel.parent.as_posix()}")
+        return None
+
+    atlas_dir = root / rel
+    if atlas_dir.exists() and not atlas_dir.is_dir():
+        report.err(unit, f"atlas output path is not a directory: "
+                         f"{rel.as_posix()}")
+        return None
+    if atlas_dir.is_dir() and atlas_dir.resolve().parent != unit_dir.resolve():
+        report.err(unit, f"atlas output directory escapes the unit tree: "
+                         f"{atlas_dir.resolve()}")
+        return None
+    return atlas_dir
+
+
+def sweep_atlas_dir(
+    report: Report, root: Path, unit: str, atlas_dir: Path,
+    keep: Set[str],
+) -> Optional[List[str]]:
+    """Classify everything in the output directory; list what is obsolete.
+
+    Only ordinary `<animation>.png` files this compiler produces are
+    ever removable, and only from this one directory — which sits
+    beside `animations/`, never inside it, so source artwork is
+    structurally unreachable. Anything unexpected is REPORTED and left
+    alone rather than deleted.
+    """
+    if not atlas_dir.is_dir():
+        return []
+    obsolete: List[str] = []
+    failed = False
+    for entry in sorted(atlas_dir.iterdir()):
+        rel = f"{atlas_dir_rel(unit).as_posix()}/{entry.name}"
+        if entry.is_symlink():
+            report.err(unit, f"symlink in the compiler-owned atlas "
+                             f"directory: {rel}")
+            failed = True
+            continue
+        if entry.is_dir():
+            report.err(unit, f"unexpected directory in the compiler-owned "
+                             f"atlas directory: {rel}")
+            failed = True
+            continue
+        if entry.name == INDEX_FILENAME:
+            continue
+        if not entry.name.endswith(f".{STORAGE_FORMAT}"):
+            report.err(unit, f"unexpected file in the compiler-owned atlas "
+                             f"directory: {rel}")
+            failed = True
+            continue
+        if entry.name not in keep:
+            obsolete.append(rel)
+    return None if failed else obsolete
+
+
+# --------------------------------------------------------------------
+# Compile
+# --------------------------------------------------------------------
+
+@dataclass
+class CompileOutcome:
+    written: List[str] = field(default_factory=list)
+    removed: List[str] = field(default_factory=list)
+    unchanged: int = 0
+
+
+def compile_unit(
+    report: Report, root: Path, decl: UnitDecl, dry_run: bool,
+) -> Optional[CompileOutcome]:
+    """Compile one unit's animations. Nothing is written on any error."""
+    output_dir = root / atlas_dir_rel(decl.name)
+    if not decl.anims and not (output_dir.exists() or output_dir.is_symlink()):
+        # Nothing declared and nothing generated. Most units are here:
+        # a unit only acquires an output directory by being compiled.
+        return CompileOutcome()
+
+    atlas_dir = resolve_atlas_dir(report, root, decl.name)
+    if atlas_dir is None:
+        return None
+
+    # A case-insensitive filesystem would silently collapse two
+    # animations whose names differ only in case — and `_RH_` makes
+    # mixed case reachable — into one atlas file, so the second would
+    # overwrite the first while both index entries claimed it.
+    by_filename: Dict[str, str] = {}
+    for anim in decl.anims:
+        filename = f"{anim.name}.{STORAGE_FORMAT}"
+        clash = by_filename.get(filename.lower())
+        if clash is not None:
+            report.err(
+                decl.name,
+                f"animations '{clash}' and '{anim.name}' would compile to "
+                f"the same atlas filename on a case-insensitive filesystem")
+            return None
+        by_filename[filename.lower()] = anim.name
+
+    plans: List[AnimPlan] = []
+    for anim in sorted(decl.anims, key=lambda a: a.name):
+        plan = plan_animation(report, root, anim)
+        if plan is None:
+            return None
+        plans.append(plan)
+
+    document = build_index_document(decl.name, plans)
+    index_bytes = canonical_index_bytes(document)
+    index_path = atlas_dir / INDEX_FILENAME
+    index_rel = f"{atlas_dir_rel(decl.name).as_posix()}/{INDEX_FILENAME}"
+
+    obsolete = sweep_atlas_dir(
+        report, root, decl.name, atlas_dir,
+        {f"{p.name}.{STORAGE_FORMAT}" for p in plans})
+    if obsolete is None:
+        return None
+
+    if not plans:
+        # The unit's LAST animation was deleted or renamed away. Its
+        # whole generated set is obsolete, index included: an index
+        # describing no animations is a shape nothing downstream should
+        # have to interpret, and removing it leaves exactly the
+        # index-free state validation already accepts as legacy.
+        outcome = CompileOutcome(removed=list(obsolete))
+        if index_path.is_file():
+            outcome.removed.append(index_rel)
+        if not dry_run:
+            try:
+                for rel in outcome.removed:
+                    (root / PurePosixPath(rel)).unlink()
+            except OSError as error:
+                report.err(decl.name,
+                           f"cannot remove obsolete artifacts: {error}")
+                return None
+            try:
+                # `rmdir` refuses a non-empty directory, so this can
+                # only ever take away what the compiler put there. An
+                # empty output directory left behind would read to
+                # validation as an index-less generated set.
+                atlas_dir.rmdir()
+            except OSError:
+                pass
+        return outcome
+
+    outcome = CompileOutcome(removed=obsolete)
+    pending: List[Tuple[Path, bytes, str]] = []
+    for plan in plans:
+        pixels = compose_atlas(plan)
+        target = root / PurePosixPath(plan.atlas_rel)
+        # Compare by decoded CONTENT, not by encoded bytes: an atlas
+        # that already holds exactly these samples is correct, and
+        # rewriting it only because another PNG encoder produced it
+        # would be pure churn against D-12's locality guardrail.
+        if atlas_content_matches(target, plan.atlas_width,
+                                 plan.atlas_height, pixels):
+            outcome.unchanged += 1
+            continue
+        try:
+            encoded = encode_atlas_png(
+                plan.atlas_width, plan.atlas_height, pixels)
+        except ImageBackendMissing as error:
+            report.err(f"{decl.name}/{plan.name}", str(error))
+            return None
+        pending.append((target, encoded, plan.atlas_rel))
+
+    index_current = read_bytes_or_none(index_path)
+    index_changed = index_current != index_bytes
+    if index_changed:
+        outcome.written.append(index_rel)
+    else:
+        outcome.unchanged += 1
+    outcome.written = [rel for _, _, rel in pending] + outcome.written
+
+    if dry_run:
+        return outcome
+
+    try:
+        atlas_dir.mkdir(parents=True, exist_ok=True)
+        # Atlases first, index second: an interrupted compile then
+        # leaves an index OLDER than its atlases, which validation
+        # reports as stale — the recoverable direction. The reverse
+        # order could leave an index naming an atlas that does not
+        # exist yet.
+        for target, encoded, _ in pending:
+            target.write_bytes(encoded)
+        if index_changed:
+            index_path.write_bytes(index_bytes)
+        # Obsolete output goes last, once the replacement is durable.
+        for rel in obsolete:
+            (root / PurePosixPath(rel)).unlink()
+    except OSError as error:
+        report.err(decl.name, f"cannot write compiled artifacts: {error}")
+        return None
+    return outcome
+
+
+def read_bytes_or_none(path: Path) -> Optional[bytes]:
+    try:
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
+def atlas_content_matches(
+    path: Path, width: int, height: int, pixels: bytes,
+) -> bool:
+    """Whether ``path`` already decodes to exactly these samples."""
+    if not path.is_file() or path.is_symlink():
+        return False
+    try:
+        frame = decode_rgba8(path)
+    except ImageBackendMissing:
+        raise
+    except ValueError:
+        return False
+    return (frame.width == width and frame.height == height
+            and frame.pixels == pixels)
+
+
+# --------------------------------------------------------------------
+# Index validation
+# --------------------------------------------------------------------
+
+INDEX_METADATA_KEYS = (
+    "schema_version", "generator", "tool_version", "digest_algorithm",
+    "unit", "direction_order",
+)
+
+
+def report_index_mismatch(
+    report: Report, where: str, expected: Dict[str, Any], actual: Any,
+) -> None:
+    """Name the specific way a stored index differs from a fresh one."""
+    if not isinstance(actual, dict):
+        report.err(where, "index is not a JSON object")
+        return
+
+    for key in INDEX_METADATA_KEYS:
+        if actual.get(key) != expected[key]:
+            report.err(
+                where,
+                f"generated-index metadata mismatch: `{key}` is "
+                f"{render_scalar(actual.get(key), 80)}, expected "
+                f"{render_scalar(expected[key], 80)}. This file is "
+                f"generated — regenerate it with --compile rather than "
+                f"editing it.")
+    unknown = [k for k in actual if k not in expected]
+    if unknown:
+        report.err(
+            where,
+            f"generated-index metadata mismatch: unknown top-level key(s) "
+            f"{', '.join(repr(k) for k in unknown)}")
+
+    raw_anims = actual.get("animations")
+    if not isinstance(raw_anims, list):
+        report.err(where, "index has no `animations` list")
+        return
+    stored: Dict[str, Any] = {}
+    for entry in raw_anims:
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+            report.err(where, "malformed entry in the index `animations` list")
+            return
+        stored[entry["name"]] = entry
+    fresh = {entry["name"]: entry for entry in expected["animations"]}
+
+    for name in sorted(set(fresh) - set(stored)):
+        report.err(where, f"index is stale: no entry for animation '{name}'")
+    for name in sorted(set(stored) - set(fresh)):
+        report.err(
+            where,
+            f"index carries an obsolete entry for animation '{name}', which "
+            f"is no longer declared")
+    for name in sorted(set(fresh) & set(stored)):
+        want, have = fresh[name], stored[name]
+        if have == want:
+            continue
+        if have.get("source_digest") != want["source_digest"]:
+            report.err(
+                f"{where}/{name}",
+                f"stale atlas: the recorded source digest no longer matches "
+                f"this animation's declarations and frame pixels. "
+                f"Regenerate with --compile.")
+            continue
+        differing = sorted(
+            set(want) | set(have),
+            key=lambda k: (k not in want, k))
+        for key in differing:
+            if have.get(key) != want.get(key):
+                report.err(
+                    f"{where}/{name}",
+                    f"index entry disagrees with a fresh compile: `{key}` is "
+                    f"{render_scalar(have.get(key), 80)}, expected "
+                    f"{render_scalar(want.get(key), 80)}")
+                break
+
+
+def validate_unit_index(
+    report: Report, root: Path, decl: UnitDecl,
+) -> None:
+    """Check one unit's generated artifacts against its live sources.
+
+    The comparison is against a FRESH regeneration, never against the
+    numbers the stored file carries about itself. That is what stops a
+    tampered index from certifying a tampered atlas: both would have to
+    match what the sources actually produce.
+    """
+    atlas_dir = root / atlas_dir_rel(decl.name)
+    index_path = atlas_dir / INDEX_FILENAME
+    # `exists()` FOLLOWS links, so a dangling symlink where the output
+    # directory belongs would read as "no artifacts" and skip the whole
+    # check. `is_symlink()` is what sees it.
+    if not (atlas_dir.exists() or atlas_dir.is_symlink()):
+        # No generated artifacts. Legitimate: units are legacy until
+        # TEX-4 begins production tracking.
+        return
+
+    where = f"{decl.name}/{ATLAS_DIR_NAME}"
+    if resolve_atlas_dir(report, root, decl.name) is None:
+        return
+    if not index_path.is_file():
+        report.err(
+            where,
+            f"generated atlas directory has no {INDEX_FILENAME}. Compiled "
+            f"artifacts are only usable through their index; regenerate "
+            f"with --compile or remove the directory.")
+        return
+
+    plans: List[AnimPlan] = []
+    for anim in sorted(decl.anims, key=lambda a: a.name):
+        plan = plan_animation(report, root, anim)
+        if plan is None:
+            return
+        plans.append(plan)
+    expected = build_index_document(decl.name, plans)
+
+    stored_bytes = read_bytes_or_none(index_path)
+    if stored_bytes is None:
+        report.err(where, f"cannot read {INDEX_FILENAME}")
+        return
+    try:
+        stored = json.loads(stored_bytes.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        report.err(where, f"{INDEX_FILENAME} is not valid JSON: {error}")
+        return
+
+    if stored != expected:
+        report_index_mismatch(report, where, expected, stored)
+    elif stored_bytes != canonical_index_bytes(expected):
+        # Same values, different bytes: the file was reformatted or
+        # re-keyed by hand. The index is generated, and TEX-3 will
+        # compare it by content digest, so its serialization is part of
+        # the contract rather than a style preference.
+        report.err(
+            where,
+            f"{INDEX_FILENAME} is not canonically serialized. It is a "
+            f"generated file — regenerate it with --compile.")
+
+    keep = {f"{plan.name}.{STORAGE_FORMAT}" for plan in plans}
+    for orphan in sweep_atlas_dir(report, root, decl.name, atlas_dir,
+                                  keep) or []:
+        report.err(
+            where,
+            f"obsolete compiler-owned output: {orphan} belongs to no "
+            f"declared animation. Regenerate with --compile.")
+
+    fresh = {entry["name"]: entry for entry in expected["animations"]}
+    for plan in plans:
+        entry = fresh[plan.name]
+        atlas_path = root / PurePosixPath(plan.atlas_rel)
+        anim_where = f"{decl.name}/{plan.name}"
+        if atlas_path.is_symlink():
+            report.err(anim_where, f"symlinked atlas: {plan.atlas_rel}")
+            continue
+        if not atlas_path.is_file():
+            report.err(
+                anim_where,
+                f"indexed atlas is missing from disk: {plan.atlas_rel}")
+            continue
+        try:
+            actual = decode_rgba8(atlas_path)
+        except ImageBackendMissing as error:
+            report.err(anim_where, str(error))
+            return
+        except ValueError as error:
+            report.err(anim_where, f"{plan.atlas_rel}: {error}")
+            continue
+        if content_digest(actual.width, actual.height,
+                          actual.pixels) != entry["atlas_digest"]:
+            report.err(
+                anim_where,
+                f"atlas content does not match its sources: "
+                f"{plan.atlas_rel} does not hold the pixels a fresh compile "
+                f"produces. Regenerate with --compile.")
+
+
+def validate_indices(
+    report: Report, root: Path, decls: Sequence[UnitDecl],
+    only_unit: Optional[str],
+) -> None:
+    """Verify every generated artifact set against its live sources."""
+    declared = {decl.name for decl in decls}
+    for decl in decls:
+        validate_unit_index(report, root, decl)
+
+    # A generated directory under a unit nothing declares is orphaned
+    # output. The inventory walk cannot see it — it descends
+    # `animations/` only — so it is checked here.
+    units_root = root.joinpath(*ASSET_PREFIX)
+    if not units_root.is_dir():
+        return
+    for unit_dir in sorted(units_root.iterdir()):
+        unit = unit_dir.name
+        if only_unit is not None and unit != only_unit:
+            continue
+        if unit in declared or unit_dir.is_symlink() or not unit_dir.is_dir():
+            continue
+        if (unit_dir / ATLAS_DIR_NAME).exists():
+            report.err(
+                f"{unit}/{ATLAS_DIR_NAME}",
+                f"generated atlas directory for a unit with no declaration "
+                f"in data/units/")
+
+
+# --------------------------------------------------------------------
 # Driver
 # --------------------------------------------------------------------
 
@@ -918,9 +1912,15 @@ class Totals:
     frames: int = 0
 
 
-def validate(
+def validate_sources(
     root: Path, only_unit: Optional[str], report: Report,
-) -> Totals:
+) -> Tuple[Totals, List[UnitDecl]]:
+    """The #1257 inventory gate: declarations against the filesystem.
+
+    Split out from `validate` because `--compile` needs exactly this
+    half — an out-of-date generated index is the very thing a compile
+    fixes, so refusing to compile on one would be a deadlock.
+    """
     totals = Totals()
     decls = load_declarations(report, root / "data" / "units")
     if only_unit is not None:
@@ -937,7 +1937,7 @@ def validate(
             f"no such unit: '{only_unit}' has neither a declaration in "
             f"data/units/ nor an asset tree under "
             f"{'/'.join(ASSET_PREFIX)}/")
-        return totals
+        return totals, decls
     claimed: Dict[Path, str] = {}
 
     for decl in decls:
@@ -983,15 +1983,22 @@ def validate(
             f"unclassified frame on disk (no animation declaration owns "
             f"it): {rel}")
 
+    return totals, decls
+
+
+def validate(
+    root: Path, only_unit: Optional[str], report: Report,
+) -> Totals:
+    """The full `--validate-only` gate: inventory, then freshness."""
+    totals, decls = validate_sources(root, only_unit, report)
+    # Index checks run even when the inventory already failed: a stale
+    # artifact and a broken declaration are independent findings, and
+    # reporting only the first would hide the other behind a fix.
+    validate_indices(report, root, decls, only_unit)
     return totals
 
 
-def cmd_validate(
-    root: Path, target_unit: Optional[str], strict: bool,
-) -> int:
-    report = Report()
-    totals = validate(root, target_unit, report)
-
+def print_report(report: Report) -> None:
     def fmt(issue: Issue) -> str:
         return f"  [{issue.where}] {issue.msg}"
 
@@ -1004,6 +2011,14 @@ def cmd_validate(
         for w in report.warnings:
             print(fmt(w))
 
+
+def cmd_validate(
+    root: Path, target_unit: Optional[str], strict: bool,
+) -> int:
+    report = Report()
+    totals = validate(root, target_unit, report)
+    print_report(report)
+
     if not report.errors and not report.warnings:
         print(
             f"OK — {totals.units} unit declaration(s) "
@@ -1014,6 +2029,53 @@ def cmd_validate(
     return 1 if report.has_failures(strict) else 0
 
 
+def cmd_compile(
+    root: Path, target_unit: Optional[str], strict: bool, dry_run: bool,
+) -> int:
+    """Compile atlases and indices — or, with `dry_run`, report the work.
+
+    Compilation never runs against an inventory that does not validate:
+    the declarations ARE the compiler's contract, so producing derived
+    artifacts from a corpus that fails it would launder a broken
+    declaration into a tracked artifact.
+    """
+    report = Report()
+    _, decls = validate_sources(root, target_unit, report)
+    if report.has_failures(strict):
+        print_report(report)
+        print("refusing to compile: the source inventory does not validate.")
+        return 1
+
+    written: List[str] = []
+    removed: List[str] = []
+    unchanged = 0
+    for decl in sorted(decls, key=lambda d: d.name):
+        outcome = compile_unit(report, root, decl, dry_run)
+        if outcome is None:
+            continue
+        written.extend(outcome.written)
+        removed.extend(outcome.removed)
+        unchanged += outcome.unchanged
+
+    print_report(report)
+    verb = "would write" if dry_run else "wrote"
+    scrub = "would remove" if dry_run else "removed"
+    for path in written:
+        print(f"  {verb}: {path}")
+    for path in removed:
+        print(f"  {scrub}: {path}")
+
+    tally = (f"{verb} {len(written)} artifact(s), {scrub} {len(removed)}, "
+             f"{unchanged} already current.")
+    if report.has_failures(strict):
+        return 1
+    if dry_run and (written or removed):
+        print(f"OUT OF DATE — {tally}")
+        return 1
+    print(f"OK — {tally}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -1021,11 +2083,24 @@ def main() -> int:
     ap.add_argument(
         "--validate-only",
         action="store_true",
-        help="Only validate; do not pack atlases (packing not yet implemented).",
+        help="Validate the inventory and any generated atlas index; write "
+             "nothing.",
+    )
+    ap.add_argument(
+        "--compile",
+        action="store_true",
+        help="Compile one lossless PNG atlas per animation plus the "
+             "generated per-unit index.",
+    )
+    ap.add_argument(
+        "--check",
+        action="store_true",
+        help="With --compile: report what would change and change nothing, "
+             "exiting non-zero if any artifact is out of date.",
     )
     ap.add_argument(
         "--unit",
-        help="Restrict validation to a single unit by name (e.g. 'acolyte').",
+        help="Restrict the run to a single unit by name (e.g. 'acolyte').",
     )
     ap.add_argument(
         "--strict",
@@ -1041,10 +2116,15 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    if not args.validate_only:
+    # Writing derived artifacts is never a default. Requiring the mode
+    # explicitly also keeps every existing `--validate-only` call site
+    # meaning exactly what it did before the compiler existed.
+    if args.validate_only == args.compile:
         sys.stderr.write(
-            "error: packing not yet implemented; pass --validate-only\n"
-        )
+            "error: pass exactly one of --validate-only or --compile\n")
+        return 2
+    if args.check and not args.compile:
+        sys.stderr.write("error: --check applies to --compile\n")
         return 2
 
     root = Path(args.root).resolve()
@@ -1055,6 +2135,8 @@ def main() -> int:
         sys.stderr.write(f"error: not a unit name: {args.unit}\n")
         return 2
 
+    if args.compile:
+        return cmd_compile(root, args.unit, args.strict, args.check)
     return cmd_validate(root, args.unit, args.strict)
 
 
