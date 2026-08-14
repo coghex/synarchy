@@ -15,6 +15,23 @@ in the library inventory. The converse (an inventory entry with no
 file) needs no guard here -- it fails `cabal build all`, which is
 already a blocking CI gate.
 
+Membership alone is not enough (issue #1280). Cabal resolves a listed
+name to exactly ONE path under `hs-source-dirs: src` -- `Existing` to
+`src/Existing.hs` and nowhere else -- so a second file that *declares*
+an already-listed name is still dead: it satisfies a name-membership
+check while cabal never selects it. Two further checks close that hole:
+
+  * DUPLICATE -- more than one source file resolves to the same module
+    name. Cabal compiles at most one of them; the rest are dead files
+    hidden behind a listed name.
+  * MISMATCH -- a file's declaration contradicts its own path. The
+    inventory can name the declaration (no such path exists) or the
+    path (GHC rejects the file), so either way the file is unselectable.
+
+A file's path identity is derived relative to the `source_root` handed
+to the audit, never `REPO_ROOT`, so synthetic trees and any-cwd runs
+behave identically to a repository run.
+
 Scope: the top-level unnamed `library` stanza ONLY. The executable and
 test-suite stanzas carry their own `other-modules` lists (`App.*`,
 `Test.*`); folding those in would pad the inventory with names no
@@ -22,13 +39,15 @@ test-suite stanzas carry their own `other-modules` lists (`App.*`,
 
 Usage:
   python3 tools/cabal_module_audit.py
-Exit codes: 0 = every src/ module is listed, 1 = one or more are not.
+Exit codes: 0 = every src/ module is listed exactly once and agrees
+with its path, 1 = one or more findings of any kind.
 """
 from __future__ import annotations
 
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CABAL_PATH = REPO_ROOT / "synarchy.cabal"
@@ -120,28 +139,54 @@ def library_modules(cabal_text: str) -> set[str]:
     return listed
 
 
-def declared_module_name(path: Path, source_root: Path) -> str:
-    """The module name a source file declares, falling back to its path
-    when it declares none (a file cabal could not list either way)."""
+class SourceFile(NamedTuple):
+    """One `src/**/*.hs` file, under both names it can be known by.
+
+    `name` is the identity the inventory is checked against (the
+    declaration when there is one). `path_name` is what cabal would
+    resolve this path to under `hs-source-dirs: src`; the two agreeing
+    is what makes the file selectable at all."""
+    name: str
+    path_name: str
+    declared: str | None
+    display: str
+
+
+def declared_module_name(path: Path) -> str | None:
+    """The module name a source file declares, or None when it declares
+    none (a file cabal could not select by declaration either way)."""
     match = _MODULE_DECL_RE.search(path.read_text(encoding="utf-8"))
-    if match:
-        return match.group(1)
+    return match.group(1) if match else None
+
+
+def path_module_name(path: Path, source_root: Path) -> str:
+    """The module name cabal resolves this path to, derived relative to
+    the audited source root rather than REPO_ROOT so a synthetic tree
+    anywhere on disk behaves exactly like the repository's own."""
     rel = path.relative_to(source_root).with_suffix("")
     return ".".join(rel.parts)
+
+
+def collect_source_files(source_root: Path) -> list[SourceFile]:
+    """Every source file, nested directories included, sorted by the
+    name it is audited under then by path."""
+    found: list[SourceFile] = []
+    for path in sorted(source_root.rglob("*.hs")):
+        declared = declared_module_name(path)
+        path_name = path_module_name(path, source_root)
+        try:
+            display = str(path.relative_to(REPO_ROOT))
+        except ValueError:
+            display = str(path)
+        found.append(SourceFile(declared or path_name, path_name,
+                                declared, display))
+    return sorted(found, key=lambda f: (f.name, f.display))
 
 
 def collect_source_modules(source_root: Path) -> list[tuple[str, str]]:
     """(module name, repo-relative path) for every source file, nested
     directories included, sorted by module name."""
-    found: list[tuple[str, str]] = []
-    for path in sorted(source_root.rglob("*.hs")):
-        name = declared_module_name(path, source_root)
-        try:
-            display = str(path.relative_to(REPO_ROOT))
-        except ValueError:
-            display = str(path)
-        found.append((name, display))
-    return sorted(found)
+    return [(f.name, f.display) for f in collect_source_files(source_root)]
 
 
 def audit(cabal_text: str,
@@ -152,13 +197,69 @@ def audit(cabal_text: str,
             if entry[0] not in listed]
 
 
+def duplicate_modules(
+        source_files: list[SourceFile]) -> list[tuple[str, list[str]]]:
+    """(module name, every path claiming it) for each name more than one
+    source file resolves to.
+
+    Cabal selects exactly one path per listed name, so every path past
+    the first is a file nothing compiles -- and a listed name is what
+    hides it from the membership check."""
+    by_name: dict[str, list[str]] = {}
+    for f in source_files:
+        by_name.setdefault(f.name, []).append(f.display)
+    return [(name, sorted(paths))
+            for name, paths in sorted(by_name.items()) if len(paths) > 1]
+
+
+def path_mismatches(
+        source_files: list[SourceFile]) -> list[tuple[str, str, str]]:
+    """(path, declared name, path-derived name) for each file whose
+    declaration contradicts its own path.
+
+    A file declaring a name its path does not spell is unselectable
+    either way: listing the declaration points cabal at a path that does
+    not exist, and listing the path hands GHC a file whose header
+    disagrees. Files with no declaration at all are excluded -- there is
+    nothing to contradict, and the path is already their identity."""
+    return [(f.display, f.declared, f.path_name)
+            for f in source_files
+            if f.declared is not None and f.declared != f.path_name]
+
+
 def run(cabal_text: str, source_root: Path) -> int:
-    source_modules = collect_source_modules(source_root)
+    source_files = collect_source_files(source_root)
+    source_modules = [(f.name, f.display) for f in source_files]
     listed = library_modules(cabal_text)
     unlisted = audit(cabal_text, source_modules)
+    duplicates = duplicate_modules(source_files)
+    mismatches = path_mismatches(source_files)
     print(f"  library inventory: {len(listed)} module(s)")
     print(f"  {source_root.name}/ source tree: "
           f"{len(source_modules)} module(s)")
+
+    # Every class of finding is reported before returning, so a tree
+    # with both a duplicate and an unlisted module names both rather
+    # than hiding one behind the other's exit.
+    if duplicates:
+        print(f"\n{len(duplicates)} module name(s) claimed by more than "
+              f"one source file:")
+        for name, paths in duplicates:
+            print(f"  {name}")
+            for path in paths:
+                print(f"    {path}")
+        print("\nCabal resolves each listed name to exactly one path, so "
+              "every other file\nhere is never compiled. Rename or delete "
+              "the impostor(s).")
+    if mismatches:
+        print(f"\n{len(mismatches)} source file(s) whose declaration "
+              f"contradicts their path:")
+        for path, declared, path_name in mismatches:
+            print(f"  {path} declares `{declared}` "
+                  f"but its path names `{path_name}`")
+        print("\nCabal cannot select either name: the declared one has no "
+              "such path, and\nthe path-derived one has a mismatched "
+              "header. Make the two agree.")
     if unlisted:
         print(f"\n{len(unlisted)} source module(s) missing from "
               f"synarchy.cabal's library inventory:")
@@ -166,6 +267,7 @@ def run(cabal_text: str, source_root: Path) -> int:
             print(f"  {name} ({path})")
         print("\nAdd each module to the library stanza's exposed-modules "
               "or other-modules,\nor delete the file if it is dead code.")
+    if duplicates or mismatches or unlisted:
         return 1
     print("\nEvery library source module is listed in synarchy.cabal")
     return 0
