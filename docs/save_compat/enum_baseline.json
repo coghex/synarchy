@@ -442,11 +442,17 @@
       "constructors": [
         {
           "name": "EndpointUnit",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "UnitId"
+          ]
         },
         {
           "name": "EndpointBuilding",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "BuildingId"
+          ]
         }
       ]
     },
@@ -463,43 +469,53 @@
       "constructors": [
         {
           "name": "ReasonInstanceUnspecified",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ReasonSourceMissing",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ReasonSourceIneligible",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ReasonReceiverMissing",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ReasonReceiverIneligible",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ReasonInstanceMissing",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ReasonItemNotTransferable",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ReasonOutOfRange",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ReasonReceiverFull",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ReasonBecameStale",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -516,27 +532,35 @@
       "constructors": [
         {
           "name": "TransferQueued",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TransferInTransit",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TransferReadyToCommit",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TransferCompleted",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TransferCancelled",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TransferFailed",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "TransferFailure"
+          ]
         }
       ]
     },
@@ -1779,11 +1803,17 @@
       "constructors": [
         {
           "name": "TedUnit",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "SamePageRef UnitId"
+          ]
         },
         {
           "name": "TedBuilding",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "SamePageRef BuildingId"
+          ]
         }
       ]
     },
@@ -1802,43 +1832,53 @@
       "constructors": [
         {
           "name": "TrdInstanceUnspecified",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TrdSourceMissing",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TrdSourceIneligible",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TrdReceiverMissing",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TrdReceiverIneligible",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TrdInstanceMissing",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TrdItemNotTransferable",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TrdOutOfRange",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TrdReceiverFull",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TrdBecameStale",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -1857,27 +1897,35 @@
       "constructors": [
         {
           "name": "TsdQueued",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TsdInTransit",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TsdReadyToCommit",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TsdCompleted",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TsdCancelled",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TsdFailed",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "TransferFailureDTO"
+          ]
         }
       ]
     },

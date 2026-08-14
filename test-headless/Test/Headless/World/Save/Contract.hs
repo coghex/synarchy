@@ -203,6 +203,16 @@ richBuilding2 = BuildingInstanceSnapshot
     , bisStorage = [richItem 940]
     }
 
+-- | 'addTransferOrder' refuses on an exhausted allocator (#1246 review
+--   round 2), which no fixture here can reach — every one starts from
+--   'emptyTransferOrders'. Fail loudly rather than defaulting, so a
+--   future change that DID exhaust it surfaces as this error instead of
+--   as a silently empty store.
+mustAdd ∷ UnitId → TransferBatch → TransferOrders → TransferOrders
+mustAdd uid batch orders = case addTransferOrder uid batch orders of
+    Just (orders', _) → orders'
+    Nothing → error "fixture: addTransferOrder refused a fresh allocator"
+
 -- | #1246: a POPULATED transfer-order store, built through the REAL
 --   creation surface ('addTransferOrder') rather than by hand, so the
 --   fixture also pins that ids start at 1, advance, and leave the
@@ -219,10 +229,8 @@ richBuilding2 = BuildingInstanceSnapshot
 --   coverage in "Test.Headless.World.Save.Integrity".
 richTransferOrders ∷ TransferOrders
 richTransferOrders =
-    let (afterFirst, _)  = addTransferOrder (UnitId 1) unitToBuilding
-                               emptyTransferOrders
-        (afterSecond, _) = addTransferOrder (UnitId 1) buildingToBuilding
-                               afterFirst
+    let afterFirst  = mustAdd (UnitId 1) unitToBuilding emptyTransferOrders
+        afterSecond = mustAdd (UnitId 1) buildingToBuilding afterFirst
     in afterSecond
   where
     -- Request order is meaningful and is asserted positionally below.

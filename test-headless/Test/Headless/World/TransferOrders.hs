@@ -66,6 +66,16 @@ entry iid nm st = QueuedTransfer
     { qtItem  = TransferItemRef { tirInstanceId = iid, tirDefName = nm }
     , qtState = st }
 
+-- | 'addTransferOrder' refuses on an exhausted allocator (#1246 review
+--   round 2), which no fixture here can reach — every one starts from
+--   'emptyTransferOrders'. Fail loudly rather than defaulting, so a
+--   future change that DID exhaust it surfaces as this error instead of
+--   as a silently empty store.
+mustAdd ∷ UnitId → TransferBatch → TransferOrders → TransferOrders
+mustAdd uid batch orders = case addTransferOrder uid batch orders of
+    Just (orders', _) → orders'
+    Nothing → error "fixture: addTransferOrder refused a fresh allocator"
+
 -- | The live store this spec writes into the page. Deliberately built
 --   through the real 'addTransferOrder' surface, so the allocator that
 --   travels with it is one the store itself issued rather than a number
@@ -80,10 +90,8 @@ entry iid nm st = QueuedTransfer
 --   purely in "Test.Headless.World.Save.Integrity".
 liveOrders ∷ TransferOrders
 liveOrders =
-    let (afterFirst, _)  = addTransferOrder (UnitId 11) unitToBuilding
-                               emptyTransferOrders
-        (afterSecond, _) = addTransferOrder (UnitId 11) buildingToBuilding
-                               afterFirst
+    let afterFirst  = mustAdd (UnitId 11) unitToBuilding emptyTransferOrders
+        afterSecond = mustAdd (UnitId 11) buildingToBuilding afterFirst
     in afterSecond
   where
     unitToBuilding = TransferBatch

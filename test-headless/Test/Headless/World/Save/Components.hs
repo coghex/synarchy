@@ -41,7 +41,8 @@ import Unit.Transfer
     ( TransferBatch(..), TransferEndpoint(..), TransferItemRef(..)
     , TransferState(..), QueuedTransfer(..) )
 import Unit.Transfer.Orders
-    (TransferOrderId(..), TransferOrders, addTransferOrder)
+    ( TransferOrderId(..), TransferOrders(..), addTransferOrder
+    , transferOrderAllocatorExhausted )
 import World.Save.Compat.SessionV90
 import Language.Generated.Types
     (LanguageProvenance(..), LangSeed(..), GeneratorVersion(..))
@@ -725,13 +726,31 @@ codecProbes =
 decodeErrorOf ∷ ComponentCodec a → Word32 → BS.ByteString → Maybe ComponentError
 decodeErrorOf cc v bytes = either Just (const Nothing) (ccDecode cc v bytes)
 
+-- | 'addTransferOrder' refuses on an exhausted allocator (#1246 review
+--   round 2), which no fixture here can reach — every one starts from
+--   'emptyTransferOrders'. Fail loudly rather than defaulting, so a
+--   future change that DID exhaust it surfaces as this error instead of
+--   as a silently empty store.
+-- | The smallest batch an allocator-boundary case needs: what is being
+--   measured there is the ID, never the payload.
+emptyBatch ∷ TransferBatch
+emptyBatch = TransferBatch
+    { tbSource      = EndpointUnit (UnitId 1)
+    , tbDestination = EndpointBuilding (BuildingId 1)
+    , tbEntries     = [] }
+
+mustAdd ∷ UnitId → TransferBatch → TransferOrders → TransferOrders
+mustAdd uid batch orders = case addTransferOrder uid batch orders of
+    Just (orders', _) → orders'
+    Nothing → error "fixture: addTransferOrder refused a fresh allocator"
+
 -- | #1246: one PENDING transfer order, built through the real creation
 --   surface so the fixture also carries the allocator the store issued
 --   it from. Deliberately references ids absent from 'minimalPage' --
 --   dangling is tolerated (see "World.Save.Integrity"), so this proves
 --   the component round-trips without depending on a populated page.
 onePendingOrder ∷ TransferOrders
-onePendingOrder = fst $ addTransferOrder (UnitId 7) TransferBatch
+onePendingOrder = mustAdd (UnitId 7) TransferBatch
     { tbSource      = EndpointUnit (UnitId 7)
     , tbDestination = EndpointBuilding (BuildingId 3)
     , tbEntries     =
@@ -1468,6 +1487,44 @@ spec = do
 
         it "accepts a well-formed store" $
             validateTransferOrders (ordersDTO 2 (TransferOrderId 1)
+                                        (TransferOrderId 1))
+                `shouldBe` []
+
+        -- Review round 2: 'trosNextId' is a Word32, so incrementing past
+        -- maxBound wrapped to 0, the next allocation normalised that back
+        -- to 1, and HM.insert then OVERWROTE whatever order already held
+        -- id 1 — silent reuse of a durable identity, the one failure a
+        -- save format cannot recover from. The allocator now saturates
+        -- and refuses instead.
+        it "refuses to allocate past the end of the id space rather than \
+           \wrapping and overwriting an existing order" $ do
+            let exhausted = emptyTransferOrders { trosNextId = maxBound }
+            transferOrderAllocatorExhausted exhausted `shouldBe` True
+            addTransferOrder (UnitId 1) emptyBatch exhausted
+                `shouldBe` Nothing
+
+        it "issues the LAST id below the boundary, and only then reports \
+           \exhaustion -- the refusal is off by neither one id nor two" $ do
+            let lastFree = emptyTransferOrders { trosNextId = maxBound - 1 }
+            transferOrderAllocatorExhausted lastFree `shouldBe` False
+            case addTransferOrder (UnitId 1) emptyBatch lastFree of
+                Nothing → expectationFailure
+                    "refused while one id was still free"
+                Just (after, oid) → do
+                    oid `shouldBe` TransferOrderId (maxBound - 1)
+                    trosNextId after `shouldBe` maxBound
+                    transferOrderAllocatorExhausted after `shouldBe` True
+                    -- The order it DID issue is still there: saturating
+                    -- must not disturb what was already allocated.
+                    HM.keys (trosOrders after)
+                        `shouldBe` [TransferOrderId (maxBound - 1)]
+                    addTransferOrder (UnitId 1) emptyBatch after
+                        `shouldBe` Nothing
+
+        it "accepts a SATURATED allocator on decode -- it is the \
+           \legitimate terminal state, not corruption: every stored id \
+           \is strictly below it and no further id can be issued" $
+            validateTransferOrders (ordersDTO maxBound (TransferOrderId 1)
                                         (TransferOrderId 1))
                 `shouldBe` []
 

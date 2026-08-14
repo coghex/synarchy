@@ -316,7 +316,14 @@ newtype TransferOrdersDTO =
 --       mint id 0 after a load — 0 is the reserved "no order" value;
 --     * no order carries id 0, for the same reason;
 --     * every order's id sits BELOW the page's allocator, so the next
---       programmatic creation cannot reuse a restored order's id;
+--       programmatic creation cannot reuse a restored order's id. Note
+--       this is what makes a SATURATED allocator ('maxBound') safe to
+--       accept rather than reject: it is the legitimate terminal state
+--       'Unit.Transfer.Orders.transferOrderAllocatorExhausted' names —
+--       every stored id is strictly below it, and
+--       'Unit.Transfer.Orders.addTransferOrder' refuses to issue another
+--       rather than wrapping — so refusing the payload would reject a
+--       perfectly consistent save instead of catching corruption;
 --     * the map KEY and the DTO's own embedded 'trdId' agree. They are
 --       two independent copies of one identity, kept in sync by
 --       construction in the live store but not on the wire, and a

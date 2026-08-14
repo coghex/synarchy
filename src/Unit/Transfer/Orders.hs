@@ -36,6 +36,7 @@ module Unit.Transfer.Orders
     , TransferOrders(..)
     , emptyTransferOrders
     , addTransferOrder
+    , transferOrderAllocatorExhausted
     , removeTransferOrder
     , lookupTransferOrder
     , ordersForUnit
@@ -93,9 +94,32 @@ data TransferOrders = TransferOrders
 emptyTransferOrders ∷ TransferOrders
 emptyTransferOrders = TransferOrders HM.empty 1
 
+-- | Has this page's allocator run out of ids to issue? 'trosNextId'
+--   SATURATES at 'maxBound' rather than wrapping, so that value is the
+--   terminal "no id left" state, not an issuable id.
+--
+--   Reaching it needs ~4.29 billion orders on ONE page, so this is a
+--   correctness boundary rather than a practical one — but the failure
+--   it prevents is silent durable-identity REUSE, which is the one class
+--   of bug a save format cannot recover from: incrementing past
+--   'maxBound' wraps to 0, the next allocation normalises that back to 1,
+--   and 'HM.insert' then overwrites whatever order already holds id 1.
+transferOrderAllocatorExhausted ∷ TransferOrders → Bool
+transferOrderAllocatorExhausted orders = trosNextId orders ≡ maxBound
+
 -- | Queue a new order for @uid@. The allocator is read from the store
 --   itself, so after a load this mints the next UNUSED id rather than
 --   restarting at 1 and overwriting a restored order.
+--
+--   'Nothing' when the allocator is exhausted
+--   ('transferOrderAllocatorExhausted'). Refusing is the ONLY safe
+--   answer: every alternative — wrapping, reusing, or silently returning
+--   the store unchanged with some id the caller would then treat as
+--   real — hands out an id that already names a different order, and a
+--   durable identity that names two things is exactly what
+--   'World.Save.Integrity' can no longer tell apart afterwards. A caller
+--   that cannot proceed without an order must surface the refusal, not
+--   paper over it.
 --
 --   @max 1@ makes "0 is never issued" structural rather than merely
 --   conventional: 'emptyTransferOrders' starts at 1 and every decode
@@ -103,14 +127,17 @@ emptyTransferOrders = TransferOrders HM.empty 1
 --   identity — but a single missed guard elsewhere would otherwise mint
 --   the one id the rest of the system treats as "no order".
 addTransferOrder ∷ UnitId → TransferBatch → TransferOrders
-                 → (TransferOrders, TransferOrderId)
-addTransferOrder uid batch orders =
-    let next  = max 1 (trosNextId orders)
-        oid   = TransferOrderId next
-        order = TransferOrder { troId = oid, troUnit = uid, troBatch = batch }
-    in ( orders { trosOrders = HM.insert oid order (trosOrders orders)
-                , trosNextId = next + 1 }
-       , oid )
+                 → Maybe (TransferOrders, TransferOrderId)
+addTransferOrder uid batch orders
+    | transferOrderAllocatorExhausted orders = Nothing
+    | otherwise =
+        let next  = max 1 (trosNextId orders)
+            oid   = TransferOrderId next
+            order = TransferOrder { troId = oid, troUnit = uid
+                                  , troBatch = batch }
+        in Just ( orders { trosOrders = HM.insert oid order (trosOrders orders)
+                         , trosNextId = next + 1 }
+                , oid )
 
 -- | Cancel an order outright. False when the id names nothing.
 removeTransferOrder ∷ TransferOrderId → TransferOrders

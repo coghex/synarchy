@@ -165,13 +165,23 @@ nodeWithBuilding nid building = PowerNodes
         , pnPeakWatts = 100, pnCapacityWh = 0, pnStoredWh = 0 }
     , pnsNextId = 100 }
 
+-- | 'addTransferOrder' refuses on an exhausted allocator (#1246 review
+--   round 2), which no fixture here can reach — every one starts from
+--   'emptyTransferOrders'. Fail loudly rather than defaulting, so a
+--   future change that DID exhaust it surfaces as this error instead of
+--   as a silently empty store.
+mustAdd ∷ UnitId → TransferBatch → TransferOrders → TransferOrders
+mustAdd uid batch orders = case addTransferOrder uid batch orders of
+    Just (orders', _) → orders'
+    Nothing → error "fixture: addTransferOrder refused a fresh allocator"
+
 -- | #1246: one transfer order whose acting unit, source endpoint,
 --   destination endpoint and single requested item are each supplied
 --   independently, so any ONE of the four can be pointed at a
 --   wrong-page or absent target while the other three resolve.
 orderWith ∷ UnitId → TransferEndpoint → TransferEndpoint → Int64
           → TransferOrders
-orderWith acting source dest iid = fst $ addTransferOrder acting
+orderWith acting source dest iid = mustAdd acting
     TransferBatch
         { tbSource      = source
         , tbDestination = dest
