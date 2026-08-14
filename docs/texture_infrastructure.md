@@ -49,10 +49,15 @@ MiB as PNG files on disk.
 The repository already has several pieces of the intended system: per-animation
 frame rate, looping and horizontal mirroring are data-driven; directions can be
 mirrored at render time; the preview browser understands unit animations; and
-`tools/pack_atlas.py` validates some of the unit asset inventory. It does not,
-however, pack atlases, produce a runtime index, or participate in CI. Its strict
-mode currently reports 120 orphan-file warnings, so it is not yet an enforceable
-gate.
+`tools/pack_atlas.py` validates the unit asset inventory. It does not, however,
+pack atlases or produce a runtime index.
+
+As of TEX-1 (#1257) its strict mode IS an enforceable gate: discovery is
+filesystem-first rather than YAML-first, so it covers the complete corpus of 7
+unit trees, 116 animations and 4,620 frames, and it exits 0 with zero warnings.
+Every committed animation PNG is owned by exactly one animation-frame
+declaration, with no directory- or glob-level exemption mechanism. See
+**Unit asset inventory** in `CLAUDE.md` for the enforced contract.
 
 The legacy plan also predates the current asset contract. Unit animation metadata
 now lives in `data/units/*.yaml`, not a separate `animations.yaml`, and some
@@ -150,10 +155,13 @@ whose freshness cannot be verified.
   authored directions. An atlas format therefore cannot assume one common
   frame count for every row; it must record each direction's real count and pad
   unused cells deterministically.
-- `tools/pack_atlas.py` is currently a validator despite its name. Running
-  `python3 tools/pack_atlas.py --validate-only --strict` reports 120 orphan
-  warnings and exits nonzero. It is not referenced by `Makefile`, the CI
-  workflow, or the local CI driver.
+- `tools/pack_atlas.py` is currently a validator despite its name. As of TEX-1
+  (#1257) it is filesystem-first and enforceable: `python3 tools/pack_atlas.py
+  --validate-only --strict` covers the complete corpus (7 unit trees, 116
+  animations, 4,620 frames) and exits 0 with zero warnings, and it runs
+  unconditionally in `make ci` and post-merge master CI, path-selectively on
+  PRs via `tools/ci_expensive_gates.py --gate unit-assets`. It validates paths
+  and structure only, never file contents; image-content validation is #1311.
 - `docs/asset_generation.md` documents the live source layout and mirroring
   convention. The legacy proposal for a separate
   `assets/units/<unit>/animations.yaml` was never adopted.
@@ -403,8 +411,10 @@ eventually outweighs that convenience.
 - **Scope:** Extend `tools/pack_atlas.py`; classify every current orphan warning
   as referenced art, non-runtime source material, or genuinely obsolete content;
   validate names, containment, duplicate paths, direction sets, asymmetric
-  exceptions, dimensions, numbering, and exact orphan ownership; add self-tests
-  and path-selective CI wiring.
+  exceptions, numbering, and exact orphan ownership; add self-tests
+  and path-selective CI wiring. Image-content validation — decodability and
+  per-animation pixel-size consistency — was descoped by owner decision on
+  2026-08-14 and is tracked as #1311.
 - **Phase:** 1 — establish trustworthy inputs
 - **Depends on:** `none`
 - **Ordering:** `can land first`
@@ -511,6 +521,19 @@ eventually outweighs that convenience.
 > unit-YAML entries (decoder defaults), so every browsable animation is
 > atlased and the per-frame retirement is clean; the preview's YAML-less
 > browsing convention ends with this slice.
+>
+> **2026-08-13 — TEX-1 (#1257) performed the declaration half.** Every
+> shipped animation folder now carries a declaration, so no committed
+> asset relies on YAML-less browsing any more; the preview retains that
+> fallback only for uncommitted local content. TEX-1 deliberately stopped
+> at the phase boundary: `tiller`, `unknown_unit` and `white_tailed_deer`
+> are declared under the asset-only `asset_units:` key, which is read by
+> the validator and the preview but never returned by
+> `Engine.Asset.YamlUnits.loadUnitYaml`, so they load no gameplay
+> texture and are neither listable nor spawnable. PROMOTING any of them
+> to a runtime `units:` definition remains this slice's decision, and
+> #1261's specification should be refreshed to say so explicitly before
+> it is solved.
 
 - **Outcome:** Brown bear, red squirrel, and technomule use the approved atlas
   representation, and no unit animation loads one image per frame.
@@ -609,10 +632,13 @@ eventually outweighs that convenience.
   - Mitigation: D-10 defers the work until the measured budget activates it,
     selects transcode targets from device features, retains PNG fallback, and
     permits mixed encodings without retaining duplicate copies of one atlas.
-- Risk: the validator's current 120 warnings are silenced without understanding
-  whether the files are unused, unreferenced future art, or missing declarations.
-  - Mitigation: require an explicit classification during TEX-1 and keep original
-    sources until their approved disposition is implemented.
+- Risk: unowned asset files are silenced without understanding whether they are
+  unused, unreferenced future art, or missing declarations.
+  - Mitigation: TEX-1 (#1257) required an explicit path-level classification and
+    owner confirmation before any deletion. All 695 then-unowned paths were
+    RETAINED and declared, nothing was deleted, and the validator now has no
+    exemption mechanism at all — so a future unowned file fails the gate rather
+    than accumulating as a warning.
 
 ## Rollout and rollback
 

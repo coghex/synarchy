@@ -11,7 +11,7 @@ referenced issues/PRs when you need the full story behind a contract stated here
 - **Build:** `cabal build all` (does NOT build test suites — use `cabal build synarchy-test-headless` explicitly)
 - **Run:** `cabal run synarchy`
 - **Run tests:** see **Testing Tiers** below — pick the cheapest tier that covers the change; don't run the gates as an iteration loop
-- **Pre-push gate:** `make ci` runs the exact checks CI runs (`.github/workflows/ci.yml`): warning-clean (`-Werror`) build of library/exe + both test suites, the headless hspec suite, `test_audit.py`, the Lua/Haskell module-budget guards, the Unicode-operator audit, the persistence-inventory / EngineEnv-capability / save-compat / enum-append-only / cabal-library-module-inventory / material-id / findings-report-status audits (each with its own self-test), and `world_check.py --quick`. Uses the prod profile and your warm `dist-newstyle`. `-Werror` is checked into `synarchy.cabal`'s warning policy (not injected by this gate), so `tools/ci-local.sh` only scopes a temporary `-fforce-recomp` via `cabal.project.local`, restored on exit. It is NOT an iteration loop and must not be run automatically before opening a PR — only on an explicit user request for full local CI validation.
+- **Pre-push gate:** `make ci` runs the exact checks CI runs (`.github/workflows/ci.yml`): warning-clean (`-Werror`) build of library/exe + both test suites, the headless hspec suite, `test_audit.py`, the Lua/Haskell module-budget guards, the Unicode-operator audit, the persistence-inventory / EngineEnv-capability / save-compat / enum-append-only / cabal-library-module-inventory / material-id / findings-report-status audits (each with its own self-test), the unit-asset inventory gate (`test_pack_atlas.py` + `pack_atlas.py --validate-only --strict`), and `world_check.py --quick`. Uses the prod profile and your warm `dist-newstyle`. `-Werror` is checked into `synarchy.cabal`'s warning policy (not injected by this gate), so `tools/ci-local.sh` only scopes a temporary `-fforce-recomp` via `cabal.project.local`, restored on exit. It is NOT an iteration loop and must not be run automatically before opening a PR — only on an explicit user request for full local CI validation.
 - **Debug output:** `ENGINE_DEBUG=Vulkan,Graphics,...` environment variable
 
 ## Testing Tiers
@@ -32,7 +32,11 @@ seconds and the expensive gates at the end.
    `EngineEnv`'s field set or `docs/engineenv_capability_inventory.md`
    changes; a module-budget guard only when changing a capped module;
    `test_audit.py` only when changing `world_audit.py`/`world_check.py`;
-   `findings_report_audit.py` only when editing a findings report.
+   `findings_report_audit.py` only when editing a findings report;
+   the unit-asset inventory gate (`test_pack_atlas.py` +
+   `pack_atlas.py --validate-only --strict`, ~1 s) when touching
+   `assets/textures/units/`, `data/units/`, or the unit-YAML /
+   preview / registration decoders.
    Do NOT run the whole headless suite, the 21-seed world check, or
    `make ci` by default — CI is the full-suite authority.
 
@@ -760,12 +764,14 @@ pre-boot + `scripts/ui/unit_animation_view.lua` in-engine):
   exist, which directions each has, and the `frame_NNN.png` order
   (NUMERIC, so an unpadded `frame_10` can't sort before `frame_2`).
   `data/units/<name>.yaml` only AUGMENTS a matching animation with
-  `fps`/`loop`/`flip`. Three shipped animation folders
-  (`acolyte/pushing_idle`, `bear_brown/roar`, `technomule/hit_react`)
-  have no YAML entry and three unit asset trees have no YAML file at
-  all — all of them browse. Missing metadata falls back to the SAME
-  values `UnitYamlAnim`'s decoder defaults to: `fps=8`, `loop=true`,
-  `flip=false`.
+  `fps`/`loop`/`flip`. Since #1257 every shipped animation folder IS
+  declared, in one of two forms (see **Unit asset inventory** below):
+  `tiller`, `unknown_unit` and `white_tailed_deer` carry `asset_units:`
+  files, and `acolyte/pushing_idle`, `bear_brown/roar` and
+  `technomule/hit_react` gained ordinary entries. The viewer's
+  missing-metadata fallback is retained for uncommitted local content
+  and falls back to the SAME values `UnitYamlAnim`'s decoder defaults
+  to: `fps=8`, `loop=true`, `flip=false`.
 - **Ordering + default selection:** animations sort case-sensitively by
   exact directory name (the same `Ord`-on-the-label rule
   `Engine.Preview.Discovery.sortEntries` uses); `idle` is selected when
@@ -1606,6 +1612,116 @@ cross-referenced persistence probes on isolated resource roots),
 `transactional_load_probe.py`, `persistence_integrity_probe.py`,
 `multiworld_save_probe.py`. NB #365: a save containing an arena page
 hangs the world thread on load — never use arenas as a save-test page.
+
+## Unit asset inventory
+
+`python3 tools/pack_atlas.py --validate-only --strict` is the
+authoritative, enforceable inventory of unit ANIMATION art (#1257).
+Discovery is **filesystem-first**: it walks every PNG under
+`assets/textures/units/<unit>/animations/<animation>/<direction>/` and
+checks the declarations against it, never the other way round — the
+YAML-first version it replaced simply never looked at the three asset
+trees that had no YAML. The current corpus is 7 unit trees, 116
+animations, 4,620 frames, and strict validation exits 0 with zero
+warnings. **Every committed animation PNG is owned by exactly one
+animation-frame declaration; there is no directory or glob exemption
+mechanism.** Adding an undeclared frame fails the gate.
+
+**Two declaration forms live under `data/units/`,** and which top-level
+key an entry sits under is the entire runtime distinction:
+
+- `units:` — a gameplay unit. `Engine.Asset.YamlUnits.loadUnitYaml`
+  returns these, so they register, load textures, list, and spawn.
+  `name` and `sprite` are mandatory.
+- `asset_units:` — an ASSET-ONLY unit: `tiller`, `unknown_unit`,
+  `white_tailed_deer`. Declares exactly `name` + `animations` — a
+  WHITELIST, so an unknown key fails as surely as a gameplay one, and
+  BOTH decoders enforce it (Aeson ignores keys a parser doesn't ask for,
+  so `UnitYamlAssetDef` checks the key set explicitly; a silently
+  accepted `sprite:` would decode fine and then be skipped by
+  `loadUnitYaml`, looking exactly like a unit that failed to register). `loadUnitYaml` never
+  returns one — `loadUnitYamlAssets` does — so nothing registers,
+  textures, lists, or spawns it. `unknown_unit`'s hard-coded
+  missing-texture fallback (`Engine.Scripting.Lua.API.Units.List`) is
+  untouched by its declaration. Promotion to a runtime definition is
+  **#1261's** decision, deliberately not this phase's.
+
+A file may hold either key or both; a file holding NEITHER is refused
+rather than decoded as zero units (that is what a mistyped top-level key
+looks like), and so is a key present with an explicit `null` — aeson's
+`.:?` reads that as absent, so the engine's own decoder refuses the
+file, and accepting it in the gate would leave CI green while startup
+logged a parse failure. Three decoders share the shape:
+`Engine.Asset.YamlUnits.UnitYamlFile`, `Engine.Preview.Unit`'s
+`UnitAnimMetaFile` (which reads both, since the preview never
+registers anything), and `tools/pack_atlas.py`. Animation and direction
+keys are strings, never coerced — YAML resolves an unquoted `123:` to an
+int whose `str()` would look like a valid identifier.
+
+Enforced invariants — a unit identifier is one lowercase `[a-z0-9_]+`
+path component; an animation identifier is the same, plus ONE narrowly
+matched approved exception, `<lowercase>_RH_<lowercase>`, for the
+documented asymmetric-weapon animations (so `attack_heavy_RH_dagger`
+passes while `AnyThing`, `attack_heavy_RH_Dagger` and `attack_LH_dagger`
+do not); frames are `frame_NNN.png` with exactly three digits, so
+`frame_1.png` and `frame_0002.png` are rejected rather than read as
+another spelling of an index; a declared path is
+relative, `..`-free, symlink-free, and resolves inside its EXACT
+`<unit>/animations/<animation>/<direction>/` directory, so cross-unit,
+cross-animation and cross-direction references are each named as such;
+`flip: true` declares exactly the canonical five authored directions and
+`flip: false` exactly all eight; per direction, indices start at 0,
+ASCEND in the order they are declared (playback walks the declared list,
+so a contiguous-but-shuffled list plays out of sequence while every
+set-based check still passes), and have no gaps or duplicates, while
+different directions of one animation may hold different counts; `fps`
+is a positive number that survives the engine's 32-bit `Float`, and
+`loop` a boolean, rejected rather than coerced when they are not. The
+`fps` guards stack because a positivity test alone is not enough:
+PyYAML resolves `.nan`/`.inf` to real floats (`nan <= 0` is False like
+every NaN comparison, and infinity really is greater); a Python int has
+unbounded precision, so a thousand-digit `fps:` is valid YAML that makes
+`math.isfinite` RAISE rather than answer; and `1.0e+100`/`1.0e-100` fit
+a 64-bit double but land in `UnitYamlAnim`'s single-precision field as
+infinity and zero. No symlink may appear anywhere in the walk — unit
+directory, `animations/` root, animation directory, direction directory,
+or frame — so nothing can be linked past the inventory: a symlinked
+entry is an ERROR, never a skipped one, or a linked tree would evade the
+inventory while its frames still ship. A `--unit` naming neither a
+declaration nor an asset tree exits non-zero rather than reporting a
+clean run of an empty inventory.
+
+**"Duplicate" means duplicate ANIMATION-FRAME claims only.** Reusing an
+animation frame as a unit's `sprite`, a `directional_sprites` entry, or
+its `portrait` is deliberately legal (20 shipped references do this) and
+is never reported.
+
+**The gate validates paths and structure, never file CONTENTS.** It
+establishes that each declared frame exists and is a regular file and
+asserts nothing about what is inside it — not that it decodes, not its
+pixel dimensions, not that one animation's frames agree on a size. That
+boundary is deliberate: validating a real binary format here is its own
+work with its own cost, tracked as **#1311**, and it will depend on a
+maintained decoding library rather than a hand-rolled parser. PyYAML is
+the validator's only third-party dependency.
+
+**Scope is `animations/` — deliberately not the whole unit tree.**
+`assets/textures/units/unknown_unit/rotations/*.png` and the per-unit
+`portrait.png` files are referenced from hard-coded Haskell or from
+non-animation YAML fields; they are outside this inventory.
+
+**Deleting art needs the owner's explicit confirmation** (`#1257` R4):
+present an exact path-level classification first. #1257 itself deleted
+nothing — all 695 previously-unowned paths were retained and declared.
+
+Gates: `python3 tools/test_pack_atlas.py` (fixture-based, isolated temp
+trees, never touching the shipped assets; every negative case asserts a
+nonzero exit AND a diagnostic naming the real problem, and a rule that
+tightens gets a positive case pinning the other direction) and the
+strict run above. Both run unconditionally in `make ci`
+and post-merge master CI, and path-selectively on PRs via
+`tools/ci_expensive_gates.py --gate unit-assets`. hspec:
+`--match "Asset.UnitInventory"`.
 
 ## AI Asset Generation
 

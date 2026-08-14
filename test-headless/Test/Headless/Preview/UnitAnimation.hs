@@ -16,7 +16,8 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import System.Directory
     ( getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive
-    , doesDirectoryExist, createDirectoryLink, removeDirectoryLink )
+    , doesDirectoryExist, doesFileExist, createDirectoryLink
+    , removeDirectoryLink )
 import System.FilePath ((</>))
 import Engine.Asset.YamlUnits (UnitYamlAnim(..))
 import Engine.Core.Types (PreviewUnit(..), PreviewAnim(..), PreviewFrameDir(..))
@@ -29,11 +30,16 @@ import Unit.Direction (Direction(..))
 realUnit ∷ String
 realUnit = "acolyte"
 
--- A unit with NO data/units/<name>.yaml at all: exactly the
--- missing-metadata case the review amendment called out as real rather
--- than hypothetical (three of the seven shipped asset trees have none).
-yamllessUnit ∷ String
-yamllessUnit = "tiller"
+-- A shipped ASSET-ONLY tree (#1257): it has a data/units/<name>.yaml,
+-- but declared under `asset_units:`, so it is browsable and carries
+-- real playback metadata while never entering the gameplay unit
+-- registry. It replaces the old "no YAML at all" fixture, which no
+-- shipped tree exhibits any more — the fallback for genuinely
+-- undeclared content is still covered, by the pure `effectiveFlip`
+-- cases and by the "a name no YAML file exists for at all" case below,
+-- neither of which depends on a shipped tree.
+assetOnlyUnit ∷ String
+assetOnlyUnit = "tiller"
 
 anim ∷ Float → Bool → Bool → UnitYamlAnim
 anim fps loop flipV = UnitYamlAnim
@@ -352,18 +358,23 @@ spec = do
                             paThumb idle `shouldSatisfy`
                                 T.isSuffixOf "/south/frame_000.png"
 
-        it "resolves a unit with NO data/units YAML at all, using the \
-           \documented defaults for every animation" $ do
-            result ← buildPreviewUnit unitsCategoryRoot yamllessUnit
+        it "resolves a shipped ASSET-ONLY unit from its asset_units \
+           \declaration, with the declared playback metadata" $ do
+            result ← buildPreviewUnit unitsCategoryRoot assetOnlyUnit
             case result of
                 Left err → expectationFailure
                     (T.unpack (unitFocusErrorMessage err))
                 Right u → do
                     puAnims u `shouldSatisfy` not ∘ null
                     puAnims u `shouldSatisfy` all (\a → paFps a ≡ 8 ∧ paLoop a)
-                    -- Every cell still resolves for the canonical
-                    -- five-direction layout, via the inferred mirroring.
-                    puAnims u `shouldSatisfy` all (\a → not (null (paDirs a)))
+                    -- The declaration states flip: true over the
+                    -- canonical five, so every one of the eight cells
+                    -- still resolves — the same visible result the
+                    -- pre-#1257 inference produced.
+                    puAnims u `shouldSatisfy` all (\a → paFlip a)
+                    puAnims u `shouldSatisfy` all
+                        (\a → map pfdDirection (paDirs a)
+                                ≡ map directionDirName previewDirectionOrder)
 
         it "rejects an unknown unit through the same error the CLI prints" $ do
             result ← buildPreviewUnit unitsCategoryRoot "nosuch"
@@ -375,9 +386,13 @@ spec = do
             Map.lookup "idle" meta `shouldSatisfy` isJust
             fmap uyaFlip (Map.lookup "idle" meta) `shouldBe` Just True
 
-        it "is empty (never an error) for a unit with no YAML file" $ do
-            meta ← loadUnitAnimMeta (T.pack yamllessUnit)
-            meta `shouldBe` Map.empty
+        it "extracts a shipped ASSET-ONLY unit's metadata from its \
+           \asset_units: block, exactly as it does a gameplay unit's" $ do
+            meta ← loadUnitAnimMeta (T.pack assetOnlyUnit)
+            sort (Map.keys meta) `shouldBe` ["idle", "run"]
+            fmap uyaFlip (Map.lookup "idle" meta) `shouldBe` Just True
+            fmap uyaFps  (Map.lookup "idle" meta) `shouldBe` Just 8
+            fmap uyaLoop (Map.lookup "idle" meta) `shouldBe` Just True
 
         it "is empty for a name no YAML file exists for at all" $ do
             meta ← loadUnitAnimMeta "definitely_not_a_unit_887"
@@ -386,7 +401,10 @@ spec = do
     -- Sanity: the real trees this spec leans on exist in this checkout,
     -- or half the assertions above prove nothing.
     describe "fixture sanity" $ do
-        it "the shipped acolyte and tiller asset trees exist" $ do
+        it "the shipped acolyte and tiller asset trees exist, and the \
+           \asset-only tree really does carry a declaration now" $ do
             a ← doesDirectoryExist (unitsCategoryRoot </> realUnit)
-            t ← doesDirectoryExist (unitsCategoryRoot </> yamllessUnit)
+            t ← doesDirectoryExist (unitsCategoryRoot </> assetOnlyUnit)
             (a, t) `shouldBe` (True, True)
+            declared ← doesFileExist (unitDataPath (T.pack assetOnlyUnit))
+            declared `shouldBe` True

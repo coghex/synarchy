@@ -9,9 +9,11 @@ engine instance.
 `make ci` (repo root) runs `tools/ci-local.sh`, which runs the complete local
 CI gate: a warning-clean (`-Werror`) build of
 the library/exe + both test suites, the headless hspec suite,
-`test_audit.py`, and `world_check.py --quick`. PR CI is path-selective for
-the graphical test-suite build and quick worldgen check, while pushes to
-master run both; a green `make ci` remains a conservative CI prediction.
+`test_audit.py`, the unit-asset inventory gate (`test_pack_atlas.py` +
+`pack_atlas.py --validate-only --strict`), and `world_check.py --quick`. PR
+CI is path-selective for the graphical test-suite build, the quick worldgen
+check, and the unit-asset gate, while pushes to master run all three; a green
+`make ci` remains a conservative CI prediction.
 `-Werror` itself lives in `synarchy.cabal`'s checked-in warning policy, so
 every build already carries it; `ci-local.sh` only scopes a temporary
 `-fforce-recomp` via `cabal.project.local` (forcing a genuine recheck of
@@ -101,6 +103,47 @@ any budgeted file grows back past its limit.
 ```bash
 python3 tools/lua_module_budget.py
 ```
+
+### `pack_atlas.py`
+The authoritative unit-animation asset inventory (#1257). `--validate-only`
+walks every PNG under
+`assets/textures/units/<unit>/animations/<animation>/<direction>/` —
+FILESYSTEM-FIRST, so it covers trees no YAML mentions — and checks that each
+is owned by exactly one animation-frame declaration in `data/units/*.yaml`,
+under either the gameplay `units:` key or the asset-only `asset_units:` key.
+Also enforces identifier safety, exact per-animation/per-direction
+containment (cross-unit, cross-animation and cross-direction references are
+each named), strict three-digit `frame_NNN.png` naming, contiguous
+numbering from zero in the declared order, the five-vs-eight direction rule
+against `flip`, and the scalar types of `fps` and `loop`.
+Reuse of an animation frame as `sprite`,
+`directional_sprites` or `portrait` is legal and never reported as a
+duplicate. A `--unit` naming neither a declaration nor an asset tree exits
+non-zero rather than reporting an empty success.
+
+It never OPENS a frame: contents — decodability, pixel dimensions, size
+consistency within an animation — are deliberately out of scope and tracked in
+issue #1311. PyYAML is the only third-party dependency. Atlas packing is not
+implemented yet.
+
+```bash
+python3 tools/pack_atlas.py --validate-only --strict
+python3 tools/pack_atlas.py --validate-only --unit acolyte
+python3 tools/pack_atlas.py --validate-only --root <alternative tree>
+```
+
+### `test_pack_atlas.py`
+Fixture self-test for `pack_atlas.py`. Every case builds a complete isolated
+unit tree in a temp directory and runs the real validator against it via
+`--root`, so nothing reads or mutates the shipped assets. Each negative case
+asserts BOTH a nonzero exit and a diagnostic naming the actual problem.
+
+```bash
+python3 tools/test_pack_atlas.py
+```
+
+Both run unconditionally in `make ci` and post-merge master CI, and
+path-selectively on PRs (`ci_expensive_gates.py --gate unit-assets`).
 
 ### `action_outcome_coverage.py`
 Self-audit (#646) for the F4 action-outcome oracle: greps each registered
@@ -340,7 +383,7 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `power_probe.py` | #358 | arena (isolated resource root) | Build-tool-routed power-node placement: `buildTool.commitPlacement` consumes an item off the selected unit for `power.*`-placeable defs, role/parameter reporting, `building.destroy` retires the host's node live (#1206), save → quit → restart → load reconnects the surviving nodes and restores none of the retired one. |
 | `power_workshop_probe.py` | #361 | arena | `requires_power` workshop consumer: unpowered `craft.executeAt` refusal, wired-but-uncharged still unpowered, noon flip powers it, `craft_job` AI stalls at 0 progress while browned out and resumes once powered, battery `storedWh` rises/falls over a simulated day/night with the consumer's drain folded into the balance. |
 | `preview_cli_probe.py` | #886, #887, #888, #1012, #1191 | none (pre-boot only, no window/engine thread) | `--preview` CLI contract: every explicitly unexposed category name (`equipment`/`hud`/`facemap`/`utility`/`vegetation`) is an ordinary unknown-category error listing exactly the canonical set; every grouped category (`units`/`flora`/`buildings`/`structures`) with no item prints the "select a specific ..." guidance and exits 0; a bare `--preview` errors without falling through to a real boot; a nonexistent/directory/path-escaping simple-category item all reject before ever creating a window; and (#887) an unknown unit, a `units/<name>` carrying path structure or `.`/`..`/absolute traversal, and a unit directory with no `animations/` subtree all reject the same pre-boot way. And (#888) the remaining grouped categories reject the identical pre-boot way: an unknown `flora`/`buildings`/`structures` item, a name carrying path structure or `.`/`..`/absolute traversal, a symlinked item directory, and a FILE where a browsable item directory was expected (`flora/unknown_flora.png`). And (#1012/CH-58) one case per row of `incompatibleFlagTable`: a flag given to a boot mode that does not honour it exits 1 naming both the flag and the selected mode. And (#1191) present-but-malformed VALUES in a mode that DOES honour the flag: every affected spelling (`--seed`/`--worldSize`/`--plates`/`--ages`/`--port`), a flag with no operand at all, empty and unknown `--dump=` layer selections plus empty segments, and malformed and non-positive `--size` each exit 1 pre-boot naming the flag and the offending token, with nothing on stdout — plus the two orderings the fix must preserve (validation runs ahead of mode-specific early exits and regardless of consumption; mode-compatibility rejection still outranks it) and the requirement that omitting a flag still keeps its default. |
-| `preview_probe.py` | #886, #887, #888 | real window (no offscreen variant) | `--preview` real-boot browser (a window per target, ~15 boots): simple-category list mode reports boot profile `"preview"` and the parsed target, its discovered entries (`require("scripts.preview_manager").dump()`) match an independently-computed filesystem expectation, the first entry auto-selects and resolves, clicking a different row (located from the dump's own row bounds) changes selection, wheel input changes the reported scroll offset, and a grow/shrink resize reflows without overflowing; focused item mode has no list while its texture resolves; every requested texture path stays under the browsed category's root (#886). Units viewer (#887): the animation list matches a filesystem-derived expectation exactly and in order, the default selection is `idle`/south, effective fps/loop match `data/units/<name>.yaml`, all eight direction cells appear in the game's order with the western three reporting their real mirror source, the frame index advances over wall time, a dump-located row click switches clips and a dump-located mirrored-cell click enlarges that direction, a resize preserves animation/direction/scroll, and a YAML-less unit (`tiller`) falls back to fps=8/loop=true with inferred mirroring. Buildings viewer (#888): the mixed animation-directory + loose-static entry list matches a filesystem+YAML expectation exactly and in order with each row's own static/animation identity, the default selection is the DIRECTORY holding `state_animations.built`'s declared frames (`idle`, not the YAML's `portal-idle` name), its fps/loop come from that entry, the frame index advances, a resize preserves selection/scroll, and a dump-located static-row click selects it and exposes no playback; a building with no `built` state falls back to its `sprite` and still recognizes a YAML-less `demolish/` folder by the numbered-frame convention at fps=8/loop=false; a building with no YAML at all (`dungeon_1`) surfaces its `damaged/` subtree as ordinary statics and defaults to its first entry; `flora/<name>` and `structures/wire` dispatch into the shared simple browser rooted at the item folder; and a final sweep proves every canonical category dispatches with no `placeholder` mode left anywhere. |
+| `preview_probe.py` | #886, #887, #888 | real window (no offscreen variant) | `--preview` real-boot browser (a window per target, ~15 boots): simple-category list mode reports boot profile `"preview"` and the parsed target, its discovered entries (`require("scripts.preview_manager").dump()`) match an independently-computed filesystem expectation, the first entry auto-selects and resolves, clicking a different row (located from the dump's own row bounds) changes selection, wheel input changes the reported scroll offset, and a grow/shrink resize reflows without overflowing; focused item mode has no list while its texture resolves; every requested texture path stays under the browsed category's root (#886). Units viewer (#887): the animation list matches a filesystem-derived expectation exactly and in order, the default selection is `idle`/south, effective fps/loop match `data/units/<name>.yaml`, all eight direction cells appear in the game's order with the western three reporting their real mirror source, the frame index advances over wall time, a dump-located row click switches clips and a dump-located mirrored-cell click enlarges that direction, a resize preserves animation/direction/scroll, and a shipped ASSET-ONLY unit (`tiller`, declared under `asset_units:` since #1257) reports its DECLARED fps=8/loop=true/flip=true with W/SW/NW mirrored from their eastern counterparts. Buildings viewer (#888): the mixed animation-directory + loose-static entry list matches a filesystem+YAML expectation exactly and in order with each row's own static/animation identity, the default selection is the DIRECTORY holding `state_animations.built`'s declared frames (`idle`, not the YAML's `portal-idle` name), its fps/loop come from that entry, the frame index advances, a resize preserves selection/scroll, and a dump-located static-row click selects it and exposes no playback; a building with no `built` state falls back to its `sprite` and still recognizes a YAML-less `demolish/` folder by the numbered-frame convention at fps=8/loop=false; a building with no YAML at all (`dungeon_1`) surfaces its `damaged/` subtree as ordinary statics and defaults to its first entry; `flora/<name>` and `structures/wire` dispatch into the shared simple browser rooted at the item folder; and a final sweep proves every canonical category dispatches with no `placeholder` mode left anywhere. |
 | `remote_warning_page_guard_probe.py` | #844 | arena (no worldgen) | Remote-settlement confirmation cross-page guard: `establishHere()` rejects a stale confirmation when the active world page changed while the modal was open (no spawn, `revalidationRejected` with reason `"active world changed"`), while the same-page happy path and `chooseAnotherSite()` cancel remain unaffected. |
 | `repair_item_probe.py` | #300 | worldgen | `unit.repairItem` primitive. |
 | `repair_probe.py` | #301 | arena | Repair policy layer (station-gated repair on top of #300). |
@@ -454,16 +497,24 @@ python3 tools/ci_probes.py --self-test
 python3 tools/ci_probes.py --status
 ```
 
-### `ci_expensive_gates.py` — CI worldgen/graphical selection
+### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets selection
 
-Selects the two expensive CI gates that are conditional on pull requests:
-quick worldgen-output regression checking and graphical test-suite
-compilation. Both run unconditionally after a merge to master. The mapping is
-intentionally explicit; add a relevant glob when introducing a new worldgen
-output or graphics entry point.
+Selects the three expensive CI gates that are conditional on pull requests:
+quick worldgen-output regression checking, graphical test-suite compilation,
+and the unit-asset inventory pair (`test_pack_atlas.py` +
+`pack_atlas.py --validate-only --strict`, #1257). All three run
+unconditionally after a merge to master. The mapping is intentionally
+explicit; add a relevant glob when introducing a new worldgen output,
+graphics entry point, or unit-asset input.
+
+Patterns are matched with `fnmatch`, where `*` crosses `/` and `**` carries no
+special meaning — write `dir/*` for a whole subtree. `--gate` names are
+cross-checked against the pattern table by `--self-test`, so an unknown gate
+raises instead of silently inheriting another gate's globs.
 
 ```bash
 python3 tools/ci_expensive_gates.py --changed src/World/Geology/Timeline.hs --gate worldgen
+python3 tools/ci_expensive_gates.py --changed data/units/acolyte.yaml --gate unit-assets
 python3 tools/ci_expensive_gates.py --self-test
 ```
 
@@ -721,7 +772,7 @@ tools/
 ├── world_baseline.py       (capture reference outputs)
 ├── world_check.py          (regression suite runner)
 ├── test_audit.py           (unit tests)
-├── ci_expensive_gates.py   (path selector for CI's worldgen/graphical gates)
+├── ci_expensive_gates.py   (path selector for CI's worldgen/graphical/unit-assets gates)
 ├── lua_module_budget.py    (Lua module split line-budget guard)
 ├── action_outcome_coverage.py (F4 action-outcome verb instrumentation self-audit)
 ├── language_report.py      (generated-language native-name report/check, #710/#1094/#1095/#1096)

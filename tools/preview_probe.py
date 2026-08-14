@@ -41,10 +41,12 @@ Checks:
      (located the same way) enlarges it and reports its real source
      direction; a resize preserves the animation, direction, and scroll
      offset; only the requested unit's textures load.
-  4. Missing-YAML defaults (--preview units/tiller, #887): a unit with
-     no data/units/<name>.yaml at all still browses, with fps=8 /
-     loop=true on every animation and all eight direction cells
-     populated by the inferred five-direction mirroring.
+  4. Asset-only declarations (--preview units/tiller, #887/#1257): a
+     shipped tree that is part of the authoritative inventory but is
+     NOT a gameplay unit browses from its `asset_units:` declaration,
+     with the DECLARED fps=8 / loop=true / flip=true on every animation
+     and all eight direction cells populated by that declared
+     mirroring.
   5. Buildings viewer (--preview buildings/acolyte_portal, #888): the
      entry list — animation subdirectories AND loose statics together —
      matches a filesystem+YAML-derived expectation exactly and in order,
@@ -718,16 +720,45 @@ def check_units_mode(port: int) -> bool:
         quit_engine(port, proc)
 
 
-def check_units_without_yaml(port: int) -> bool:
-    print("4. unit with NO data/units YAML (--preview units/tiller): documented defaults")
+def check_units_asset_only(port: int) -> bool:
+    """The asset-only declaration form (#1257).
+
+    `tiller` used to be this probe's "no data/units YAML at all"
+    fixture. Since #1257 every shipped animation folder is declared, and
+    `tiller` is instead the fixture for the OTHER half of that contract:
+    it has a `data/units/tiller.yaml`, written under the top-level
+    `asset_units:` key, so it is fully browsable and carries real
+    playback metadata while `Engine.Asset.YamlUnits.loadUnitYaml` still
+    never returns it as a gameplay unit.
+
+    The visible behaviour asserted here is byte-for-byte what the old
+    inference produced — the declaration states `flip: true` over the
+    canonical five, which is exactly what `effectiveFlip` used to infer
+    from that layout — so this is a change of SOURCE, not of result.
+    """
+    print("4. asset-only declaration (--preview units/tiller): declared metadata")
     unit = "tiller"
     proc = boot(port, log=LOG, mode=("--preview", f"units/{unit}"),
-                label="preview engine (units, no yaml)")
+                label="preview engine (units, asset-only)")
     try:
-        ok_no_yaml = check("the fixture really has no unit YAML (or this "
-                           "check proves nothing)",
-                           not os.path.exists(os.path.join("data", "units",
-                                                           unit + ".yaml")))
+        yaml_path = os.path.join("data", "units", unit + ".yaml")
+        declaration = ""
+        if os.path.exists(yaml_path):
+            with open(yaml_path) as fh:
+                declaration = fh.read()
+        # Pin the fixture's premise: the file exists AND declares the
+        # asset-only key rather than the gameplay one. Without both, the
+        # metadata assertions below could pass against a `units:` entry
+        # and prove nothing about the asset-only path.
+        ok_declared = check(
+            "the fixture really is declared under asset_units: (or this "
+            "check proves nothing)",
+            any(line.rstrip() == "asset_units:"
+                for line in declaration.splitlines())
+            and not any(line.rstrip() == "units:"
+                        for line in declaration.splitlines()),
+            yaml_path)
+
         d = poll_unit_ready(port)
         expected = expected_unit_animations(unit)
         listed = [e.get("label") for e in (d.get("entries") or [])]
@@ -735,25 +766,36 @@ def check_units_without_yaml(port: int) -> bool:
                            "expectation exactly, in order",
                            listed == expected, f"dumped={listed} expected={expected}")
 
-        ok_defaults = check("every animation falls back to fps=8 / loop=true",
-                            all(abs((e.get("fps") or 0) - 8.0) < 1e-6
-                                and e.get("loop") is True
-                                for e in (d.get("entries") or [])),
-                            [(e.get("label"), e.get("fps"), e.get("loop"))
-                             for e in (d.get("entries") or [])])
+        ok_meta = check("every animation reports the DECLARED fps=8 / "
+                        "loop=true / flip=true",
+                        all(abs((e.get("fps") or 0) - 8.0) < 1e-6
+                            and e.get("loop") is True
+                            and e.get("flip") is True
+                            for e in (d.get("entries") or [])),
+                        [(e.get("label"), e.get("fps"), e.get("loop"),
+                          e.get("flip")) for e in (d.get("entries") or [])])
 
-        # The inferred five-direction mirroring still populates all
-        # eight cells for an asset-only unit.
+        # The declared five-direction mirroring populates all eight
+        # cells, exactly as the pre-#1257 inference did.
         pb = d.get("playback") or {}
         dirs = [c.get("direction") for c in (pb.get("directions") or [])]
-        ok_dirs = check("inferred mirroring still populates all eight cells",
+        ok_dirs = check("declared mirroring populates all eight cells",
                         dirs == GAME_DIRECTION_ORDER, dirs)
+        ok_mirrored = check("W/SW/NW are the mirrored cells, sourced from "
+                            "their eastern counterparts",
+                            [c.get("sourceDirection")
+                             for c in (pb.get("directions") or [])
+                             if c.get("mirrored")]
+                            == ["south-east", "east", "north-east"],
+                            [(c.get("direction"), c.get("mirrored"),
+                              c.get("sourceDirection"))
+                             for c in (pb.get("directions") or [])])
 
         root_prefix = os.path.join("assets", "textures", "units", unit) + os.sep
         ok_trimmed = check_trimmed_loading(port, root_prefix, allow_chrome=True)
         ok_no_gameplay = check_no_gameplay_scripts_loaded(port)
 
-        return all([ok_no_yaml, ok_entries, ok_defaults, ok_dirs,
+        return all([ok_declared, ok_entries, ok_meta, ok_dirs, ok_mirrored,
                     ok_trimmed, ok_no_gameplay])
     finally:
         quit_engine(port, proc)
@@ -1175,7 +1217,7 @@ def main() -> int:
         check_simple_list_mode(args.port),
         check_focused_item_mode(args.port),
         check_units_mode(args.port),
-        check_units_without_yaml(args.port),
+        check_units_asset_only(args.port),
         check_buildings_mode(args.port),
         check_buildings_without_built(args.port),
         check_buildings_without_yaml(args.port),
