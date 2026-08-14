@@ -67,6 +67,11 @@ INVARIANTS ENFORCED
     are declared (playback follows that order), and have no gaps or
     duplicates — different directions of one animation may still hold
     different counts;
+  * an asset-only entry declares exactly `name` and `animations` — a
+    whitelist, so an unknown key fails as surely as a gameplay one;
+  * animation and direction keys are strings, never coerced (YAML
+    resolves an unquoted `123:` to an int that would stringify into a
+    valid-looking identifier);
   * `fps` is a finite positive number (`.nan` and `.inf` are real floats
     to PyYAML, and neither fails a positivity test) and `loop` a
     boolean, rejected rather than coerced when they are not;
@@ -250,9 +255,15 @@ class UnitDecl:
     aux_paths: List[Tuple[str, str]]   # (where, path) — sprite/portrait/…
 
 
-# Gameplay-only keys. An asset-only entry carrying one of these is a
-# mistake worth naming: it looks like a unit that was meant to be
-# spawnable and landed in the wrong list.
+# The COMPLETE schema of an asset-only entry. A whitelist, not a
+# blacklist of gameplay fields: an entry declares animation frames and
+# nothing else, so `typo: true` has to fail here just as `sprite:` does.
+# A blacklist only catches the fields someone thought to enumerate.
+ASSET_ONLY_KEYS = {"name", "animations"}
+
+# The subset worth naming specifically, because the mistake is a
+# recognisable one: an entry that was meant to be a spawnable unit and
+# landed in the wrong list.
 GAMEPLAY_ONLY_KEYS = {
     "sprite", "directional_sprites", "portrait", "state_animations",
     "stats", "skills", "knowledge", "body", "body_parts", "eager_stats",
@@ -278,7 +289,18 @@ def parse_animations(
 
     out: List[AnimDecl] = []
     for raw_name, raw_anim in raw_anims.items():
-        anim_name = str(raw_name)
+        # No str() coercion. YAML resolves an unquoted `123:` to an int,
+        # and stringifying it yields "123", which satisfies the
+        # identifier rule — so a non-string key would name a real
+        # animation directory rather than being rejected as malformed.
+        if not isinstance(raw_name, str):
+            report.err(
+                where_unit,
+                f"animation key must be a string, got "
+                f"{type(raw_name).__name__} {raw_name!r} (quote it if the "
+                f"name is meant to be literal)")
+            continue
+        anim_name = raw_name
         where = f"{unit_name}/{anim_name}"
         if not ANIM_IDENT_RE.match(anim_name):
             report.err(
@@ -332,7 +354,13 @@ def parse_animations(
         frames: Dict[str, List[str]] = {}
         seen_spelling: Dict[str, str] = {}
         for raw_dir, paths in raw_frames.items():
-            norm = normalise_dir(str(raw_dir))
+            if not isinstance(raw_dir, str):
+                report.err(
+                    where,
+                    f"direction key must be a string, got "
+                    f"{type(raw_dir).__name__} {raw_dir!r}")
+                continue
+            norm = normalise_dir(raw_dir)
             if norm is None:
                 report.err(where, f"unknown direction key '{raw_dir}'")
                 continue
@@ -342,7 +370,7 @@ def parse_animations(
                     f"duplicate direction '{raw_dir}' (already had "
                     f"'{seen_spelling[norm]}')")
                 continue
-            seen_spelling[norm] = str(raw_dir)
+            seen_spelling[norm] = raw_dir
             if not isinstance(paths, list):
                 report.err(where, f"direction '{raw_dir}' is not a list")
                 continue
@@ -395,14 +423,23 @@ def parse_unit_entry(
         return None
 
     if asset_only:
-        stray = sorted(set(entry) & GAMEPLAY_ONLY_KEYS)
-        if stray:
+        stray = sorted(k for k in entry if k not in ASSET_ONLY_KEYS)
+        gameplay = [k for k in stray if k in GAMEPLAY_ONLY_KEYS]
+        if gameplay:
             report.err(
                 f"{source}:{unit_name}",
                 f"asset-only declaration carries gameplay field(s) "
-                f"{', '.join(stray)}. An `asset_units:` entry declares "
-                f"animation frames and nothing else; move it to `units:` "
-                f"if it is meant to be a real unit.")
+                f"{', '.join(sorted(gameplay))}. An `asset_units:` entry "
+                f"declares animation frames and nothing else; move it to "
+                f"`units:` if it is meant to be a real unit.")
+        unknown = [k for k in stray if k not in GAMEPLAY_ONLY_KEYS]
+        if unknown:
+            report.err(
+                f"{source}:{unit_name}",
+                f"asset-only declaration carries unknown field(s) "
+                f"{', '.join(str(k) for k in sorted(unknown, key=str))}. "
+                f"The schema is exactly "
+                f"{', '.join(sorted(ASSET_ONLY_KEYS))}.")
         if not entry.get("animations"):
             report.err(
                 f"{source}:{unit_name}",

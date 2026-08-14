@@ -290,6 +290,43 @@ def _asset_only_gameplay(fx: Fixture) -> None:
                      "    animations:\n"))
 
 
+@negative("an asset-only entry carrying an unknown field",
+          "unknown field")
+def _asset_only_unknown_field(fx: Fixture) -> None:
+    # A blacklist of gameplay fields would wave this through; the schema
+    # is a whitelist of exactly name + animations.
+    valid_fixture(fx)
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+            .replace("    animations:\n", "    typo: true\n    animations:\n"))
+
+
+@negative("a non-string animation key", "animation key must be a string")
+def _numeric_anim_key(fx: Fixture) -> None:
+    # YAML resolves an unquoted `123:` to an int, and str(123) == "123"
+    # satisfies the identifier rule — so coercion would let a non-string
+    # key name a real animation directory.
+    valid_fixture(fx)
+    fx.frames("prop", "123", CANON5, 2)
+    body = asset_only_yaml("prop", [("123", CANON5, 2, True)])
+    fx.yaml("prop", body.replace("      123:\n", "      123:\n", 1))
+
+
+@negative("a non-string direction key", "direction key must be a string")
+def _numeric_direction_key(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+            .replace("          north:\n", "          123:\n"))
+
+
+@positive("a QUOTED numeric-looking animation name is still accepted")
+def _quoted_numeric_anim(fx: Fixture) -> None:
+    # The rule is about the KEY's YAML type, not about digits: a
+    # deliberately quoted "123" is a string and a legal identifier.
+    fx.frames("prop", "123", CANON5, 2)
+    body = asset_only_yaml("prop", [("123", CANON5, 2, True)])
+    fx.yaml("prop", body.replace("      123:\n", '      "123":\n', 1))
+
+
 @negative("a gameplay entry with no sprite", "missing required `sprite:`")
 def _no_sprite(fx: Fixture) -> None:
     valid_fixture(fx)
@@ -783,7 +820,7 @@ def main() -> int:
 
     # The suite is only meaningful if it actually built fixtures; a
     # refactor that silently emptied a registry must not read as green.
-    if len(POSITIVE) < 7 or len(NEGATIVE) < 50:
+    if len(POSITIVE) < 8 or len(NEGATIVE) < 53:
         failures.append(
             f"case registries look truncated: {len(POSITIVE)} positive, "
             f"{len(NEGATIVE)} negative")

@@ -26,6 +26,9 @@ import UPrelude
 import GHC.Generics (Generic)
 import qualified Data.Map.Strict as Map
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KM
+import Data.List (intercalate)
 import Engine.Core.Log (LoggerState)
 import Engine.Asset.YamlList (loadYamlList)
 import Unit.Types.Combat (BodyPart(..))
@@ -450,10 +453,27 @@ data UnitYamlAssetDef = UnitYamlAssetDef
     , uyadAnimations ∷ !(Map.Map Text UnitYamlAnim)
     } deriving (Show, Eq, Generic)
 
+-- | The COMPLETE key set of an asset-only entry. Aeson ignores keys a
+--   parser does not ask for, which would let @sprite:@ ride along in an
+--   @asset_units:@ entry and decode cleanly — the entry would then be
+--   silently skipped by 'loadUnitYaml' and look like a unit that simply
+--   failed to register. #1257 requires a disallowed field to be an
+--   ERROR, not something ignored, so the key set is checked explicitly.
+--   A whitelist, not a gameplay blacklist: a typo must fail too.
+assetOnlyKeys ∷ [Key.Key]
+assetOnlyKeys = ["name", "animations"]
+
 instance FromJSON UnitYamlAssetDef where
-    parseJSON = withObject "UnitYamlAssetDef" $ \v → UnitYamlAssetDef
-        ⊚ v .: "name"
-        ⊛ v .: "animations"
+    parseJSON = withObject "UnitYamlAssetDef" $ \v → do
+        let extra = filter (∉ assetOnlyKeys) (KM.keys v)
+        unless (null extra) $ fail $
+            "asset-only unit declaration has unexpected field(s) "
+            <> intercalate ", " (map (show ∘ Key.toString) extra)
+            <> "; an `asset_units:` entry declares exactly "
+            <> intercalate ", " (map (show ∘ Key.toString) assetOnlyKeys)
+        UnitYamlAssetDef
+            ⊚ v .: "name"
+            ⊛ v .: "animations"
 
 -- | One @data\/units\/*.yaml@ file: gameplay defs under @units:@ and
 --   asset-only declarations under @asset_units:@. Either key may be

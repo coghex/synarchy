@@ -1621,8 +1621,12 @@ key an entry sits under is the entire runtime distinction:
   returns these, so they register, load textures, list, and spawn.
   `name` and `sprite` are mandatory.
 - `asset_units:` — an ASSET-ONLY unit: `tiller`, `unknown_unit`,
-  `white_tailed_deer`. Declares `name` + `animations` and nothing else
-  (a gameplay field here is an error, not ignored). `loadUnitYaml` never
+  `white_tailed_deer`. Declares exactly `name` + `animations` — a
+  WHITELIST, so an unknown key fails as surely as a gameplay one, and
+  BOTH decoders enforce it (Aeson ignores keys a parser doesn't ask for,
+  so `UnitYamlAssetDef` checks the key set explicitly; a silently
+  accepted `sprite:` would decode fine and then be skipped by
+  `loadUnitYaml`, looking exactly like a unit that failed to register). `loadUnitYaml` never
   returns one — `loadUnitYamlAssets` does — so nothing registers,
   textures, lists, or spawns it. `unknown_unit`'s hard-coded
   missing-texture fallback (`Engine.Scripting.Lua.API.Units.List`) is
@@ -1634,7 +1638,9 @@ rather than decoded as zero units (that is what a mistyped top-level key
 looks like). Three decoders share the shape:
 `Engine.Asset.YamlUnits.UnitYamlFile`, `Engine.Preview.Unit`'s
 `UnitAnimMetaFile` (which reads both, since the preview never
-registers anything), and `tools/pack_atlas.py`.
+registers anything), and `tools/pack_atlas.py`. Animation and direction
+keys are strings, never coerced — YAML resolves an unquoted `123:` to an
+int whose `str()` would look like a valid identifier.
 
 Enforced invariants — a unit identifier is one lowercase `[a-z0-9_]+`
 path component; an animation identifier is the same, plus ONE narrowly

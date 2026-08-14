@@ -165,6 +165,52 @@ spec = do
                 map uydName defs    `shouldBe` ["real_unit"]
                 map uyadName assets `shouldBe` ["props_only"]
 
+        it "an asset-only entry carrying a gameplay field is a decode \
+           \FAILURE, not a silently ignored key" $
+            -- Aeson ignores keys a parser does not ask for, so without
+            -- an explicit key check this decodes cleanly and is then
+            -- skipped by loadUnitYaml — indistinguishable from a unit
+            -- that simply failed to register. #1257 requires it to be
+            -- an error.
+            withTempUnitYaml
+                (T.unpack (T.unlines
+                    [ "asset_units:"
+                    , "  - name: props_only"
+                    , "    sprite: \"assets/textures/units/acolyte/portrait.png\""
+                    , "    animations:"
+                    , "      idle:"
+                    , "        frames:"
+                    , "          south:"
+                    , "            - \"a/b/c.png\""
+                    ])) $ \path → do
+                logger ← silentLogger
+                assets ← loadUnitYamlAssets logger path
+                map uyadName assets `shouldBe` []
+
+        it "an asset-only entry carrying an unknown field fails too — the \
+           \rule is a whitelist, not a gameplay blacklist" $
+            withTempUnitYaml
+                (T.unpack (T.unlines
+                    [ "asset_units:"
+                    , "  - name: props_only"
+                    , "    typo: true"
+                    , "    animations:"
+                    , "      idle:"
+                    , "        frames:"
+                    , "          south:"
+                    , "            - \"a/b/c.png\""
+                    ])) $ \path → do
+                logger ← silentLogger
+                assets ← loadUnitYamlAssets logger path
+                map uyadName assets `shouldBe` []
+
+        it "the shipped asset-only declarations still decode, so the key \
+           \check above is not merely rejecting everything" $ do
+            logger ← silentLogger
+            forM_ assetOnlyUnits $ \(name, _, _, _) → do
+                defs ← loadUnitYamlAssets logger (unitYamlPath name)
+                map uyadName defs `shouldBe` [name]
+
         it "an asset-only entry with no animations: block is a decode \
            \failure, not an empty unit" $
             withTempUnitYaml "asset_units:\n  - name: hollow\n" $ \path → do
