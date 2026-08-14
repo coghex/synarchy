@@ -26,10 +26,25 @@
 --   'Unit.Transfer.TransferEndpoint' / 'Unit.Transfer.TransferItemRef'
 --   are LIVE policy vocabulary — the whole point of that module is that
 --   the vocabulary grows as the transfer contract does — so none of them
---   gets a 'Serialize' instance. Each is mirrored here by a frozen DTO
---   with an explicit, total field-by-field conversion, so a constructor
---   appended to the live policy enum is a deliberate, visible wire event
---   rather than a silent reinterpretation of every saved order.
+--   is ever encoded AS ITSELF on the wire. Each is mirrored here by a
+--   frozen DTO with an explicit, total field-by-field conversion, so a
+--   constructor appended to the live policy enum is a deliberate,
+--   visible wire event rather than a silent reinterpretation of every
+--   saved order.
+--
+--   Those live types DO each carry a 'Data.Serialize.Serialize'
+--   instance, and the distinction is the whole point rather than a
+--   loophole: the instances exist only so
+--   'Unit.Transfer.Orders.TransferOrders' can ride
+--   'World.Save.Types.WorldPageSave', the transitional IN-MEMORY load
+--   bridge, which derives 'Data.Serialize.Serialize' wholesale — the
+--   same arrangement 'Craft.Bills.CraftBill',
+--   'Building.Knowledge.ContainerRecord' and 'Power.Types.PowerNode'
+--   already have. Nothing on the SAVE BOUNDARY reaches them: this
+--   component encodes 'TransferOrdersDTO' and decodes back through it,
+--   so a field or constructor added to the live vocabulary cannot move
+--   a byte of a shipped payload. See "Unit.Transfer"'s own header for
+--   the same split stated from the other side.
 --
 --   __Every durable reference an order carries is typed__
 --   ("World.Save.Reference"'s 'SamePageRef'): the acting unit, both
