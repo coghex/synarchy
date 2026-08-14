@@ -24,6 +24,8 @@ import UPrelude
 import Test.Hspec
 import qualified HsLua as Lua
 import qualified Data.ByteString as BS
+import qualified Data.HashSet as HS
+import qualified Data.List as L
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import System.IO (stderr)
@@ -31,6 +33,9 @@ import System.IO (stderr)
 import Engine.Core.Log
     (initLogger, defaultLogConfig, LogConfig(..), LogBackend(..))
 import Engine.Scripting.Lua.API.Save.Bridge (applyLuaLoad)
+import World.Save.Component (componentKnownIds)
+import World.Save.Component.Types (metadataComponentId)
+import World.Save.Envelope.Types (ComponentId(..))
 
 -- | A minimal @engine@ global -- the only thing these two modules call
 --   outside of a real engine boot (@engine.logWarn@ from
@@ -88,6 +93,36 @@ runsOkWithPayloads payloads chunkText = do
     case result of
         Nothing  → pure ()
         Just msg → expectationFailure (T.unpack msg)
+
+-- | The authoritative set of Haskell-owned top-level component ids that
+--   @scripts/lib/save_modules.lua@'s hand-kept @HASKELL_COMPONENT_IDS@
+--   mirror must equal, sorted (issue #1277).
+--
+--   It is 'metadataComponentId' plus 'componentKnownIds' -- equivalently
+--   @"metadata"@ plus every id in 'World.Save.Component.saveComponentRegistry',
+--   since 'componentKnownIds' is mechanically derived from that registry.
+--   The metadata component is deliberately outside the gameplay registry
+--   (it is the envelope layer's own), which is why the union is the
+--   authority here and 'componentKnownIds' alone is not:
+--   'World.Save.Envelope.knownComponentIds' unions exactly these two the
+--   same way when it builds the reader's real known-id set.
+--
+--   Reading it from the live registry rather than restating a literal
+--   list is the whole point: a component registered on the Haskell side
+--   lands here automatically, so the mirror spec below fails until the
+--   Lua table is updated to match.
+authoritativeHaskellComponentIds ∷ [Text]
+authoritativeHaskellComponentIds =
+    L.sort
+        [ t | ComponentId t
+              ← HS.toList (HS.insert metadataComponentId componentKnownIds) ]
+
+-- | 'authoritativeHaskellComponentIds' as one newline-separated blob,
+--   ready to push as a Lua string global via 'runsOkWithPayloads' (no id
+--   contains a newline -- they are lowercase-and-hyphen literals).
+authoritativeIdsPayload ∷ BS.ByteString
+authoritativeIdsPayload =
+    TE.encodeUtf8 (T.intercalate "\n" authoritativeHaskellComponentIds)
 
 -- | A complete, valid persistent-component spec table literal, as Lua
 --   source text, parameterised by id -- the shortest well-formed
@@ -700,6 +735,100 @@ spec = do
             , "end"
             , "assert(found, 'a dependency naming neither a Lua nor a "
               <> "Haskell component must still be rejected')"
+            ]
+
+        it "the hand-kept Haskell-component mirror equals the \
+           \authoritative Haskell registry exactly, in BOTH directions \
+           \(issue #1277) -- hand-keeping alone already failed once: \
+           \#1087/PR #1126 registered 'container-knowledge' on the \
+           \Haskell side without adding it here, so a Lua component \
+           \declaring that real dependency was rejected as depending on \
+           \an unregistered component, which fails every save/load. This \
+           \compares the ids HASKELL_COMPONENT_IDS actually accepts \
+           \against metadataComponentId + componentKnownIds, naming every \
+           \id missing from the mirror and every stale one left in it" $
+            runsOkWithPayloads
+                [("AUTHORITATIVE_IDS", authoritativeIdsPayload)] $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local authoritative = {}"
+            , "local authoritativeCount = 0"
+            , "for id in AUTHORITATIVE_IDS:gmatch('[^\\n]+') do"
+            , "  authoritative[id] = true"
+            , "  authoritativeCount = authoritativeCount + 1"
+            , "end"
+            , "assert(authoritativeCount > 0, 'the authoritative Haskell "
+              <> "component set must not be empty -- the payload never "
+              <> "reached this chunk')"
+            , "local mirrored = {}"
+            , "for _, id in ipairs(saveModules.haskellComponentIds()) do"
+            , "  mirrored[id] = true"
+            , "end"
+            , "local missing, unexpected = {}, {}"
+            , "for id in pairs(authoritative) do"
+            , "  if not mirrored[id] then missing[#missing + 1] = id end"
+            , "end"
+            , "for id in pairs(mirrored) do"
+            , "  if not authoritative[id] then"
+            , "    unexpected[#unexpected + 1] = id"
+            , "  end"
+            , "end"
+            , "table.sort(missing)"
+            , "table.sort(unexpected)"
+            , "assert(#missing == 0 and #unexpected == 0,"
+            , "  'save_modules.lua HASKELL_COMPONENT_IDS has drifted from "
+              <> "the Haskell registry -- missing from the Lua mirror: [' "
+            , "  .. table.concat(missing, ', ') .. ']; present in the Lua "
+              <> "mirror but not in the Haskell registry: [' "
+            , "  .. table.concat(unexpected, ', ') .. ']')"
+            ]
+
+        it "accepts a Lua component declaring deps = {'container-knowledge'} \
+           \-- and a dependency on every other authoritative Haskell id \
+           \-- while a genuinely unknown dependency is still rejected \
+           \(issue #1277). Goes through registryStaticErrors() rather \
+           \than the mirror accessor, so acceptance is proven on the real \
+           \validation path the save/load boundary runs" $
+            runsOkWithPayloads
+                [("AUTHORITATIVE_IDS", authoritativeIdsPayload)] $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local function mk(dep) return { version = 1,"
+            , "  inputVersions = {1}, required = true, scope = 'global',"
+            , "  deps = { dep },"
+            , "  snapshot = function() end, decode = function() end,"
+            , "  validate = function() end, apply = function() end } end"
+            , "saveModules.register('t_ck_dep', mk('container-knowledge'))"
+            , "local errs0 = saveModules.registryStaticErrors()"
+            , "assert(#errs0 == 0, \"a dependency on the real "
+              <> "'container-knowledge' component must not be reported as "
+              <> "unregistered: \" .. table.concat(errs0, '; '))"
+            , "local sawContainerKnowledge = false"
+            , "local n = 0"
+            , "for id in AUTHORITATIVE_IDS:gmatch('[^\\n]+') do"
+            , "  n = n + 1"
+            , "  if id == 'container-knowledge' then"
+            , "    sawContainerKnowledge = true"
+            , "  end"
+            , "  saveModules.register('t_auth_dep_' .. n, mk(id))"
+            , "end"
+            , "assert(sawContainerKnowledge, \"the authoritative Haskell "
+              <> "registry must contain 'container-knowledge' -- if it no "
+              <> "longer does, this issue's premise is gone and this "
+              <> "example needs rewriting, not deleting\")"
+            , "local errs1 = saveModules.registryStaticErrors()"
+            , "assert(#errs1 == 0, 'no authoritative Haskell component id "
+              <> "may be reported as unregistered: ' "
+            , "  .. table.concat(errs1, '; '))"
+            , "saveModules.register('t_auth_dep_unknown',"
+            , "  mk('not_a_real_component_anywhere'))"
+            , "local errs2 = saveModules.registryStaticErrors()"
+            , "local found = false"
+            , "for _, e in ipairs(errs2) do"
+            , "  if e:find('not_a_real_component_anywhere', 1, true) then"
+            , "    found = true"
+            , "  end"
+            , "end"
+            , "assert(found, 'widening the mirror must not have made every "
+              <> "unknown dependency acceptable')"
             ]
 
         it "rejects registration missing a required callback" $ runsOk $ lns

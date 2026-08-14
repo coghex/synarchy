@@ -15,6 +15,11 @@ synthetic fixture and the real synarchy.cabal, so a future reformat of
 the real file that silently breaks parsing fails here rather than
 turning the audit into a no-op.
 
+The #1280 conflict cases are pinned the same way: each synthetic tree
+is also asserted to pass the bare membership check, so a regression
+that quietly drops the duplicate or mismatch check cannot hide behind
+the unlisted-module diagnostic.
+
 Usage:
   python3 tools/test_cabal_module_audit.py
 Exit codes: 0 = all tests passed, 1 = one or more failed.
@@ -218,6 +223,115 @@ def test_declared_name_wins_over_path() -> None:
                "a file with no module header falls back to its path")
 
 
+def test_duplicate_declaration_orphan_fails() -> None:
+    print("\n[conflict] a second file declaring a LISTED name fails")
+    # The exact hole #1280 closes: `src/Orphan.hs` impersonates the
+    # listed name `Existing`, whose canonical path is `src/Existing.hs`.
+    # Membership alone is satisfied by both files, so the pre-#1280
+    # audit printed `1 module / 2 files` and exited 0 while cabal
+    # compiled only one of them.
+    with tempfile.TemporaryDirectory() as tmp:
+        source_root = _write_tree(Path(tmp), {
+            "UPrelude": "UPrelude",
+            "Orphan": "UPrelude",
+        })
+        files = cma.collect_source_files(source_root)
+        dupes = cma.duplicate_modules(files)
+        expect([name for name, _ in dupes] == ["UPrelude"],
+               "the repeated name is reported exactly once")
+        paths = dupes[0][1] if dupes else []
+        expect(len(paths) == 2
+               and any(p.endswith("UPrelude.hs") for p in paths)
+               and any(p.endswith("Orphan.hs") for p in paths),
+               f"BOTH conflicting paths are named (got {paths})")
+        expect(cma.audit(FIXTURE_CABAL,
+                         [(f.name, f.display) for f in files]) == [],
+               "membership alone still passes -- which is precisely why "
+               "the duplicate check has to exist")
+        expect(cma.run(FIXTURE_CABAL, source_root) == 1,
+               "a duplicate declaration against a listed name exits "
+               "non-zero")
+
+
+def test_declaration_path_mismatch_fails() -> None:
+    print("\n[conflict] a declaration contradicting its path fails")
+    with tempfile.TemporaryDirectory() as tmp:
+        # Reuses a LISTED name from a path that does not spell it: the
+        # file is unselectable, but its declared identity is inventoried.
+        source_root = _write_tree(Path(tmp), {"Orphan": "UPrelude"})
+        files = cma.collect_source_files(source_root)
+        mismatches = cma.path_mismatches(files)
+        expect(len(mismatches) == 1,
+               "the mismatched file is reported exactly once")
+        path, declared, path_name = mismatches[0]
+        expect(path.endswith("Orphan.hs") and declared == "UPrelude"
+               and path_name == "Orphan",
+               "the diagnostic carries the path, the declared name, and "
+               f"the path-derived name (got {mismatches[0]})")
+        expect(cma.audit(FIXTURE_CABAL,
+                         [(f.name, f.display) for f in files]) == [],
+               "the impersonated name passes the membership check on "
+               "its own")
+        expect(cma.run(FIXTURE_CABAL, source_root) == 1,
+               "a declaration/path mismatch reusing a listed name exits "
+               "non-zero")
+
+
+def test_no_declaration_is_not_a_mismatch() -> None:
+    print("\n[conflict] a header-less file is not a mismatch")
+    with tempfile.TemporaryDirectory() as tmp:
+        source_root = Path(tmp) / "src"
+        (source_root / "World").mkdir(parents=True)
+        (source_root / "World" / "Log.hs").write_text(
+            "-- no module header\n", encoding="utf-8")
+        files = cma.collect_source_files(source_root)
+        expect(cma.path_mismatches(files) == [],
+               "a file with no declaration has nothing to contradict "
+               "and is left to the ordinary unlisted check")
+        expect([f.name for f in files] == ["World.Log"],
+               "it is still audited under its path-derived name")
+
+
+def test_path_identity_is_relative_to_source_root() -> None:
+    print("\n[conflict] path identity comes from the audited root")
+    # A synthetic tree lives outside REPO_ROOT; deriving the path name
+    # from anything but the supplied source_root would make every file
+    # here read as a mismatch.
+    with tempfile.TemporaryDirectory() as tmp:
+        source_root = _write_tree(Path(tmp), {
+            "World.Generate.Timeline.Erosion":
+                "World.Generate.Timeline.Erosion",
+        })
+        files = cma.collect_source_files(source_root)
+        expect([f.path_name for f in files]
+               == ["World.Generate.Timeline.Erosion"],
+               "a nested path outside REPO_ROOT derives its real module "
+               "name")
+        expect(cma.path_mismatches(files) == [],
+               "and therefore agrees with its own declaration")
+
+
+def test_conflicts_do_not_suppress_unlisted_findings() -> None:
+    print("\n[run] conflict and unlisted findings both reach the exit")
+    with tempfile.TemporaryDirectory() as tmp:
+        source_root = _write_tree(Path(tmp), {
+            "UPrelude": "UPrelude",
+            "Orphan": "UPrelude",       # duplicate + mismatch
+            "World.Log": "World.Log",   # plain unlisted
+        })
+        files = cma.collect_source_files(source_root)
+        expect([n for n, _ in cma.audit(
+            FIXTURE_CABAL, [(f.name, f.display) for f in files])]
+            == ["World.Log"],
+            "the ordinary unlisted diagnostic is still produced "
+            "alongside the conflicts")
+        expect(len(cma.duplicate_modules(files)) == 1
+               and len(cma.path_mismatches(files)) == 1,
+               "the conflicting file is reported by both conflict checks")
+        expect(cma.run(FIXTURE_CABAL, source_root) == 1,
+               "the combined tree exits non-zero")
+
+
 def test_real_cabal_file() -> None:
     print("\n[real] the parser still matches the real synarchy.cabal")
     text = cma.CABAL_PATH.read_text(encoding="utf-8")
@@ -237,6 +351,18 @@ def test_real_cabal_file() -> None:
         expect(leaked not in listed,
                f"the real executable/test-suite entry `{leaked}` is "
                "not folded into the library inventory")
+
+
+def test_real_source_tree_has_no_conflicts() -> None:
+    print("\n[real] the real src/ tree trips neither conflict check")
+    files = cma.collect_source_files(cma.SOURCE_ROOT)
+    dupes = cma.duplicate_modules(files)
+    expect(dupes == [],
+           f"no module name is claimed by two files (got {dupes[:3]})")
+    mismatches = cma.path_mismatches(files)
+    expect(mismatches == [],
+           "every declaration agrees with its path "
+           f"(got {mismatches[:3]})")
 
 
 def test_runs_from_any_directory() -> None:
@@ -260,7 +386,13 @@ def main() -> int:
     test_audit_reports_unlisted_only()
     test_end_to_end_exit_codes()
     test_declared_name_wins_over_path()
+    test_duplicate_declaration_orphan_fails()
+    test_declaration_path_mismatch_fails()
+    test_no_declaration_is_not_a_mismatch()
+    test_path_identity_is_relative_to_source_root()
+    test_conflicts_do_not_suppress_unlisted_findings()
     test_real_cabal_file()
+    test_real_source_tree_has_no_conflicts()
     test_runs_from_any_directory()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
