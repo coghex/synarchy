@@ -101,6 +101,36 @@ validSpecLua ident = lns
     , "  apply = function(d) _G['" <> ident <> "_applied'] = d end }"
     ]
 
+-- | Issue #900: a per-entity component whose @apply@ is nothing but an
+--   'applyEntityRows' call against @live@, the shape both production
+--   per-entity callbacks have. Module-level since issue #1279's isolation
+--   block needs the same fixture as the #900 filtering block.
+perEntitySpec ∷ Text → Text → Text
+perEntitySpec name live = T.concat
+    [ "{ version=1, inputVersions={1}, required=true, "
+    , "scope='global', deps={},"
+    , "  snapshot=function()"
+    , "    local out = {}"
+    , "    for k, v in pairs(", live, ") do out[k] = v end"
+    , "    return out end,"
+    , "  decode=function(v,d) return d end,"
+    , "  validate=function() return nil end,"
+    , "  apply=function(data, entities)"
+    , "    require('scripts.lib.save_modules').applyEntityRows("
+    , live, ", data, entities,"
+    , "      { kind='unit', component='", name, "' })"
+    , "  end }"
+    ]
+
+-- | Collect @engine.logWarn@ text into a Lua-local @warnings@ array, so a
+--   chunk can assert on the absent-owner drop diagnostic.
+captureWarnings ∷ [Text]
+captureWarnings =
+    [ "local warnings = {}"
+    , "engine.logWarn = function(msg)"
+    , "  warnings[#warnings + 1] = tostring(msg) end"
+    ]
+
 -- | Issue #1200: drive the REAL Haskell bridge
 --   ('Engine.Scripting.Lua.API.Save.Bridge.applyLuaLoad') against a
 --   standalone VM whose registry @setupChunk@ has already registered and
@@ -185,6 +215,54 @@ spec = do
             , "local m1 = {b=2, a=1, [3]=30, [1]=10}"
             , "local m2 = {a=1, [1]=10, b=2, [3]=30}"
             , "assert(codec.encode(m1) == codec.encode(m2))"
+            ]
+
+        -- Issue #1279: the limits are PAYLOAD limits. One caller -- an
+        -- engine-generated snapshot that never reaches disk -- needs them
+        -- lifted, without relaxing them for anything that does.
+        it "takes a per-call limits override that lifts the payload caps \
+           \for that call ALONE, leaving the module defaults and every \
+           \other caller exactly as they were" $ runsOk $ lns
+            [ "local codec = require('scripts.lib.data_codec')"
+            , "local big = {}"
+            , "for i = 1, codec.MAX_TABLE_ENTRIES + 1 do big[i] = true end"
+            , "local capped, err = codec.encode(big)"
+            , "assert(capped == nil, 'the default cap must still reject it')"
+            , "assert(err:find('max entries', 1, true) ~= nil, err)"
+            , "local free = codec.encode(big, codec.UNBOUNDED)"
+            , "assert(free ~= nil, 'UNBOUNDED must encode it')"
+            , "local back = codec.decode(free, codec.UNBOUNDED)"
+            , "assert(back ~= nil and #back == codec.MAX_TABLE_ENTRIES + 1"
+            , "  and back[1] == true and back[#back] == true,"
+            , "  'it must round-trip through the same allowance')"
+            -- A payload written with an allowance its reader lacks would
+            -- be unreadable; the caps stay symmetric on purpose.
+            , "assert(codec.decode(free) == nil, 'the DEFAULT decode must "
+              <> "still refuse it -- the override is not sticky')"
+            , "assert(codec.MAX_TABLE_ENTRIES == 200000"
+            , "  and codec.MAX_DEPTH == 64"
+            , "  and codec.MAX_STRING_BYTES == 4 * 1024 * 1024"
+            , "  and codec.MAX_TOTAL_BYTES == 16 * 1024 * 1024,"
+            , "  'the module defaults must be untouched by an override')"
+            , "assert(codec.decode(codec.encode({a=1})) ~= nil,"
+            , "  'an ordinary call still behaves exactly as before')"
+            ]
+
+        it "honours a PARTIAL limits override, keeping the module default \
+           \for every key the caller did not name" $ runsOk $ lns
+            [ "local codec = require('scripts.lib.data_codec')"
+            , "local big = {}"
+            , "for i = 1, codec.MAX_TABLE_ENTRIES + 1 do big[i] = true end"
+            , "local only = { MAX_TABLE_ENTRIES = math.huge }"
+            , "assert(codec.encode(big, only) ~= nil,"
+            , "  'the named key must be lifted')"
+            , "local deep = {}"
+            , "local cur = deep"
+            , "for _ = 1, codec.MAX_DEPTH + 2 do"
+            , "  cur.next = {}; cur = cur.next end"
+            , "local d, derr = codec.encode(deep, only)"
+            , "assert(d == nil and derr:find('max depth', 1, true) ~= nil,"
+            , "  'an unnamed key must keep its default: ' .. tostring(derr))"
             ]
 
         it "rejects functions, userdata-shaped, threads, and metatables" $
@@ -1365,27 +1443,6 @@ spec = do
                     T.unpack err `shouldNotContain` "ROLLBACK FAILED"
 
     describe "per-entity component application (issue #900)" $ do
-        let perEntitySpec name live = T.concat
-                [ "{ version=1, inputVersions={1}, required=true, "
-                , "scope='global', deps={},"
-                , "  snapshot=function()"
-                , "    local out = {}"
-                , "    for k, v in pairs(", live, ") do out[k] = v end"
-                , "    return out end,"
-                , "  decode=function(v,d) return d end,"
-                , "  validate=function() return nil end,"
-                , "  apply=function(data, entities)"
-                , "    require('scripts.lib.save_modules').applyEntityRows("
-                , live, ", data, entities,"
-                , "      { kind='unit', component='", name, "' })"
-                , "  end }"
-                ]
-            captureWarnings =
-                [ "local warnings = {}"
-                , "engine.logWarn = function(msg)"
-                , "  warnings[#warnings + 1] = tostring(msg) end"
-                ]
-
         it "applies each row against the restored session's own entity \
            \set: a row whose owner is absent is dropped with a diagnostic \
            \while its siblings apply normally" $ runsOk $ lns $
@@ -1554,6 +1611,392 @@ spec = do
             , "saveModules.applyAll()"
             , "assert(live[7] ~= nil and live[9] ~= nil,"
             , "  'no context must mean no ownership filtering')"
+            ]
+
+    -- Issue #1279: #900 requirement 1 promised apply() "a read-only
+    -- restored-entity context" and shipped one shared MUTABLE table, so an
+    -- earlier component could delete or rewrite entries a later one still
+    -- filters against -- making apply ORDER load-correctness-relevant and
+    -- contradicting Haskell's authoritative KnownEntities. The production
+    -- callbacks only read it, so this was latent; nothing enforced it.
+    --
+    -- The mechanism is an independent per-component COPY, so these cases
+    -- assert the observable guarantee (isolation) rather than a raise:
+    -- a component's mutations land on its own copy and reach nobody.
+    describe "restored-entity context isolation (issue #1279)" $ do
+        -- Sorts before the observer, so it applies FIRST -- the ordering
+        -- this whole block exists to make irrelevant. The `entities == nil`
+        -- guard is the ROLLBACK pass, contextless by design (#900).
+        let mutatorSpec body = T.concat
+                [ "{ version=1, inputVersions={1}, required=true, "
+                , "scope='global', deps={},"
+                , "  snapshot=function() return {} end,"
+                , "  decode=function(v,d) return d end,"
+                , "  validate=function() return nil end,"
+                , "  apply=function(data, entities)"
+                , "    if entities == nil then return end "
+                , body, " end }"
+                ]
+
+        it "keeps a LATER component's view of membership and owner pages \
+           \exactly as Haskell supplied it after an earlier component \
+           \deletes, inserts, rewrites an owner page, rebinds an outer \
+           \field and rawsets -- and applyEntityRows still retains the \
+           \present-owner row while dropping the genuinely absent-owner one" $
+            runsOk $ lns $
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            ] ⧺ captureWarnings ⧺
+            [ "local live = {}"
+            , "local seen = {}"
+            -- Every write here SUCCEEDS -- on this component's own copy.
+            -- The point is that none of them is observable downstream.
+            , "saveModules.register('iso_a_mutator', "
+              <> mutatorSpec (T.concat
+                  [ "entities.unit[7] = nil;"
+                  , "entities.unit[9] = true;"
+                  , "entities.unitPage[7] = 'HIJACKED';"
+                  , "entities.building[1] = true;"
+                  , "rawset(entities, 'unit', { [999]=true })"
+                  ]) <> ")"
+            , "saveModules.register('iso_z_observer', { version=1, "
+              <> "inputVersions={1}, required=true, scope='global', deps={},"
+            , "  snapshot=function() return {} end,"
+            , "  decode=function(v,d) return d end,"
+            , "  validate=function() return nil end,"
+            , "  apply=function(data, entities)"
+            , "    seen.unit7 = entities.unit[7]"
+            , "    seen.unit9 = entities.unit[9]"
+            , "    seen.unit999 = entities.unit[999]"
+            , "    seen.page7 = entities.unitPage[7]"
+            , "    seen.building1 = entities.building[1]"
+            , "    saveModules.applyEntityRows(live, data, entities,"
+            , "      { kind='unit', component='iso_z_observer' })"
+            , "  end })"
+            , "local prep = saveModules.prepareLoad("
+            , "  { { id='iso_a_mutator', version=1, payload=codec.encode({}) },"
+            , "    { id='iso_z_observer', version=1,"
+            , "      payload=codec.encode({ [7]={tag='seven'},"
+            , "                             [9]={tag='nine'} }) } },"
+            , "  1, false, { unit = { [7]=true }, building = {},"
+            , "              unitPage = { [7]='alpha' } })"
+            , "assert(prep.ok, tostring(prep.errors and prep.errors[1]))"
+            , "saveModules.applyAll()"
+            , "assert(seen.unit7 == true, 'a deleted membership entry must "
+              <> "still be present downstream, got ' .. tostring(seen.unit7))"
+            , "assert(seen.unit9 == nil, 'an inserted membership entry must "
+              <> "not reach downstream, got ' .. tostring(seen.unit9))"
+            , "assert(seen.unit999 == nil, 'a rawset table must not reach "
+              <> "downstream, got ' .. tostring(seen.unit999))"
+            , "assert(seen.page7 == 'alpha', 'a rewritten owner page must "
+              <> "not reach downstream, got ' .. tostring(seen.page7))"
+            , "assert(seen.building1 == nil, 'a different kind is isolated "
+              <> "too, got ' .. tostring(seen.building1))"
+            , "assert(live[7] ~= nil and live[7].tag == 'seven',"
+            , "  'the present-owner row must still be retained')"
+            , "assert(live[9] == nil, 'the absent-owner row must still be "
+              <> "dropped -- an earlier insert must not have rescued it')"
+            , "assert(#warnings == 1, 'exactly one drop diagnostic, got '"
+            , "  .. #warnings)"
+            ]
+
+        it "hands every component a table that shares NOTHING -- neither \
+           \with Haskell's own table nor with any sibling's copy -- so \
+           \there is no shared source left for a mutation to reach \
+           \through, by any route" $ runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local source = { unit = { [7]=true }, building = {},"
+            , "                 unitPage = { [7]='alpha' } }"
+            , "local got = {}"
+            , "saveModules.register('idn_a', "
+              <> mutatorSpec "got[#got + 1] = entities" <> ")"
+            , "saveModules.register('idn_b', "
+              <> mutatorSpec "got[#got + 1] = entities" <> ")"
+            , "local prep = saveModules.prepareLoad("
+            , "  { { id='idn_a', version=1, payload=codec.encode({}) },"
+            , "    { id='idn_b', version=1, payload=codec.encode({}) } },"
+            , "  1, false, source)"
+            , "assert(prep.ok)"
+            , "saveModules.applyAll()"
+            , "assert(#got == 2, 'both components must have applied')"
+            , "assert(got[1] ~= got[2], 'each component needs its OWN copy')"
+            , "assert(got[1] ~= source and got[2] ~= source,"
+            , "  'no component may receive Haskell own table')"
+            , "assert(got[1].unit ~= got[2].unit"
+            , "  and got[1].unit ~= source.unit,"
+            , "  'the NESTED maps must be copied too, not shared')"
+            , "assert(got[1].unitPage ~= got[2].unitPage"
+            , "  and got[1].unitPage ~= source.unitPage,"
+            , "  'every nested map, not just the ones named unit')"
+            , "-- The values themselves are still exactly Haskell answer."
+            , "assert(got[2].unit[7] == true and got[2].unitPage[7] == 'alpha')"
+            , "assert(source.unit[7] == true and source.unitPage[7] == 'alpha',"
+            , "  'the source itself must come through untouched')"
+            ]
+
+        it "is unaffected by an earlier component reaching AROUND its own \
+           \context to mutate the module's pending source directly, since \
+           \the encoded snapshot every context is rebuilt from is taken -- \
+           \and the raw source dropped -- before the first apply runs" $
+            runsOk $ lns $
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            ] ⧺ captureWarnings ⧺
+            [ "local live = {}"
+            , "local seen = {}"
+            -- _pendingEntities is a public field on the module table, so
+            -- this is a route that needs no debug library and no reference
+            -- captured from the value the component was handed.
+            , "saveModules.register('src_a_mutator', "
+              <> mutatorSpec (T.concat
+                  [ "local sm = require('scripts.lib.save_modules');"
+                  , "seen.pendingCleared = (sm._pendingEntities == nil);"
+                  , "if sm._pendingEntities ~= nil then"
+                  , "  sm._pendingEntities.unit[7] = nil;"
+                  , "  sm._pendingEntities.unitPage[7] = 'HIJACKED' end;"
+                  , "sm._pendingEntities = { unit = { [999]=true },"
+                  , "  building = {}, unitPage = {} }"
+                  ]) <> ")"
+            , "saveModules.register('src_z_observer', { version=1, "
+              <> "inputVersions={1}, required=true, scope='global', deps={},"
+            , "  snapshot=function() return {} end,"
+            , "  decode=function(v,d) return d end,"
+            , "  validate=function() return nil end,"
+            , "  apply=function(data, entities)"
+            , "    seen.unit7 = entities.unit[7]"
+            , "    seen.unit999 = entities.unit[999]"
+            , "    seen.page7 = entities.unitPage[7]"
+            , "    saveModules.applyEntityRows(live, data, entities,"
+            , "      { kind='unit', component='src_z_observer' })"
+            , "  end })"
+            , "local prep = saveModules.prepareLoad("
+            , "  { { id='src_a_mutator', version=1, payload=codec.encode({}) },"
+            , "    { id='src_z_observer', version=1,"
+            , "      payload=codec.encode({ [7]={tag='seven'},"
+            , "                             [9]={tag='nine'} }) } },"
+            , "  1, false, { unit = { [7]=true }, building = {},"
+            , "              unitPage = { [7]='alpha' } })"
+            , "assert(prep.ok, tostring(prep.errors and prep.errors[1]))"
+            , "saveModules.applyAll()"
+            , "assert(seen.pendingCleared, 'the raw source must already be "
+              <> "gone by the time any component runs')"
+            , "assert(seen.unit7 == true, 'the later component must still "
+              <> "see unit 7 present, got ' .. tostring(seen.unit7))"
+            , "assert(seen.unit999 == nil, 'a wholesale replacement of the "
+              <> "pending source must not reach it either')"
+            , "assert(seen.page7 == 'alpha', 'the later component must see "
+              <> "Haskell owner page, got ' .. tostring(seen.page7))"
+            , "assert(live[7] ~= nil and live[7].tag == 'seven',"
+            , "  'the present-owner row must still be retained')"
+            , "assert(live[9] == nil, 'the absent-owner row must still be "
+              <> "dropped')"
+            ]
+
+        it "keeps no sibling context alive to be found: an earlier \
+           \component sweeping the applyAll frame with debug.getlocal \
+           \reaches only its own table and an immutable encoded string, \
+           \never a later component's context" $ runsOk $ lns $
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            ] ⧺ captureWarnings ⧺
+            [ "local live = {}"
+            , "local seen = { mutatedTables = 0, strings = 0 }"
+            -- Walk every local of every active frame above this one,
+            -- exactly as the reachability concern describes, and hijack
+            -- anything shaped like an entity context. `mine` is this
+            -- component's OWN context, which it is of course allowed to
+            -- reach; any OTHER one would be a sibling's. Deliberately
+            -- narrow: `prepared` and the rollback captures also live in
+            -- that frame, and they are legitimately shared per-component
+            -- payloads -- this issue is about the entity CONTEXT.
+            , "saveModules.register('dbg_a_mutator', "
+              <> mutatorSpec (T.concat
+                  [ "local mine = entities;"
+                  , "for level = 2, 12 do"
+                  , "  local i = 1;"
+                  , "  while true do"
+                  , "    local ok, name, value = pcall(debug.getlocal, level, i);"
+                  , "    if not ok or name == nil then break end;"
+                  , "    if type(value) == 'table' and value ~= mine"
+                  , "      and (rawget(value, 'unit') ~= nil"
+                  , "           or rawget(value, 'unitPage') ~= nil) then"
+                  , "      seen.mutatedTables = seen.mutatedTables + 1;"
+                  , "      pcall(function()"
+                  , "        if value.unit ~= nil then value.unit[7] = nil end;"
+                  , "        if value.unitPage ~= nil then"
+                  , "          value.unitPage[7] = 'HIJACKED' end"
+                  , "      end) end;"
+                  , "    if type(value) == 'string' then"
+                  , "      seen.strings = seen.strings + 1 end;"
+                  , "    i = i + 1 end end"
+                  ]) <> ")"
+            , "saveModules.register('dbg_z_observer', { version=1, "
+              <> "inputVersions={1}, required=true, scope='global', deps={},"
+            , "  snapshot=function() return {} end,"
+            , "  decode=function(v,d) return d end,"
+            , "  validate=function() return nil end,"
+            , "  apply=function(data, entities)"
+            , "    seen.unit7 = entities.unit[7]"
+            , "    seen.page7 = entities.unitPage[7]"
+            , "    saveModules.applyEntityRows(live, data, entities,"
+            , "      { kind='unit', component='dbg_z_observer' })"
+            , "  end })"
+            , "local prep = saveModules.prepareLoad("
+            , "  { { id='dbg_a_mutator', version=1, payload=codec.encode({}) },"
+            , "    { id='dbg_z_observer', version=1,"
+            , "      payload=codec.encode({ [7]={tag='seven'},"
+            , "                             [9]={tag='nine'} }) } },"
+            , "  1, false, { unit = { [7]=true }, building = {},"
+            , "              unitPage = { [7]='alpha' } })"
+            , "assert(prep.ok, tostring(prep.errors and prep.errors[1]))"
+            , "saveModules.applyAll()"
+            , "assert(seen.unit7 == true, 'the later component must still "
+              <> "see unit 7 present, got ' .. tostring(seen.unit7))"
+            , "assert(seen.page7 == 'alpha', 'the later component must see "
+              <> "Haskell owner page, got ' .. tostring(seen.page7))"
+            , "assert(live[7] ~= nil and live[7].tag == 'seven',"
+            , "  'the present-owner row must still be retained')"
+            , "assert(live[9] == nil, 'the absent-owner row must still be "
+              <> "dropped')"
+            , "assert(seen.mutatedTables == 0, 'no sibling context may be "
+              <> "reachable at all, found ' .. seen.mutatedTables)"
+            -- The sweep has to have actually run, or this proves nothing.
+            , "assert(seen.strings > 0, 'the sweep must have reached the "
+              <> "applyAll frame -- the encoded context is a local string "
+              <> "there; found none, so the walk never got that far')"
+            ]
+
+        it "is an ORDINARY table under every standard idiom -- next, pairs \
+           \and getmetatable included -- so a component using raw iteration \
+           \cannot silently conclude the restored session is empty" $
+            runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local seen = {}"
+            -- `next` is a primitive: it consults no metatable at all, so a
+            -- proxy shell would report an EMPTY context here.
+            , "saveModules.register('iter_probe', "
+              <> mutatorSpec (T.concat
+                  [ "seen.nextOuter = (next(entities) ~= nil);"
+                  , "seen.nextUnit = (next(entities.unit) ~= nil);"
+                  , "seen.rawUnit7 = rawget(entities.unit, 7);"
+                  , "seen.meta = getmetatable(entities);"
+                  , "seen.outer = 0;"
+                  , "for _ in pairs(entities) do"
+                  , "  seen.outer = seen.outer + 1 end;"
+                  , "seen.units = {};"
+                  , "for uid in next, entities.unit do"
+                  , "  seen.units[#seen.units + 1] = uid end"
+                  ]) <> ")"
+            , "local prep = saveModules.prepareLoad("
+            , "  { { id='iter_probe', version=1, payload=codec.encode({}) } },"
+            , "  1, false, { unit = { [7]=true }, building = {},"
+            , "              unitPage = { [7]='alpha' } })"
+            , "assert(prep.ok)"
+            , "saveModules.applyAll()"
+            , "assert(seen.nextOuter, 'next(entities) must see the context')"
+            , "assert(seen.nextUnit, 'next(entities.unit) must see the "
+              <> "restored membership -- a metatable-only view would not')"
+            , "assert(seen.rawUnit7 == true, 'rawget must find real storage')"
+            , "assert(seen.meta == nil, 'a plain table carries no metatable, "
+              <> "so there is nothing for debug.getmetatable to reach into')"
+            , "assert(seen.outer == 3, 'pairs() must yield every kind "
+              <> "Haskell supplied, got ' .. tostring(seen.outer))"
+            , "assert(#seen.units == 1 and seen.units[1] == 7,"
+            , "  'raw iteration over a nested map must yield its membership')"
+            ]
+
+        -- The encoded snapshot rides data_codec, whose DEFAULT limits are
+        -- PAYLOAD limits: MAX_TABLE_ENTRIES is 200,000 per table, and
+        -- KnownEntities has no matching bound -- the context names every
+        -- entity in the session while a component's payload carries only
+        -- the rows it saved, so a session can exceed the cap with a tiny
+        -- payload. This snapshot never reaches disk, so it passes
+        -- UNBOUNDED; the same session must load, on the SAME immutable
+        -- path as any other (no second, weaker mechanism for big worlds).
+        it "applies a session whose entity set is past the codec's default \
+           \per-table cap on the ordinary immutable path, keeping both the \
+           \real membership and sibling isolation" $
+            runsOk $ lns $
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            ] ⧺ captureWarnings ⧺
+            [ "local live = {}"
+            , "local seen = {}"
+            , "local units = {}"
+            , "for i = 1, codec.MAX_TABLE_ENTRIES + 1 do units[i] = true end"
+            , "saveModules.register('big_a_mutator', "
+              <> mutatorSpec (T.concat
+                  [ "entities.unit[7] = nil;"
+                  , "entities.unitPage[7] = 'HIJACKED'"
+                  ]) <> ")"
+            , "saveModules.register('big_z_observer', { version=1, "
+              <> "inputVersions={1}, required=true, scope='global', deps={},"
+            , "  snapshot=function() return {} end,"
+            , "  decode=function(v,d) return d end,"
+            , "  validate=function() return nil end,"
+            , "  apply=function(data, entities)"
+            , "    seen.unit7 = entities.unit[7]"
+            , "    seen.page7 = entities.unitPage[7]"
+            , "    seen.absent = entities.unit[999999]"
+            , "    saveModules.applyEntityRows(live, data, entities,"
+            , "      { kind='unit', component='big_z_observer' })"
+            , "  end })"
+            , "local prep = saveModules.prepareLoad("
+            , "  { { id='big_a_mutator', version=1, payload=codec.encode({}) },"
+            , "    { id='big_z_observer', version=1,"
+            , "      payload=codec.encode({ [7]={tag='seven'},"
+            , "                             [999999]={tag='gone'} }) } },"
+            , "  1, false, { unit = units, building = {},"
+            , "              unitPage = { [7]='alpha' } })"
+            , "assert(prep.ok, tostring(prep.errors and prep.errors[1]))"
+            , "saveModules.applyAll()"
+            , "assert(seen.unit7 == true, 'the later component must still "
+              <> "see unit 7 present, got ' .. tostring(seen.unit7))"
+            , "assert(seen.page7 == 'alpha', 'an earlier mutation must "
+              <> "still not reach it, got ' .. tostring(seen.page7))"
+            , "assert(seen.absent == nil, 'the oversized set is still the "
+              <> "REAL membership, not an everything-passes stand-in')"
+            , "assert(live[7] ~= nil and live[7].tag == 'seven',"
+            , "  'the present-owner row must still be retained')"
+            , "assert(live[999999] == nil, 'the absent-owner row must still "
+              <> "be dropped -- filtering is not skipped in this path')"
+            -- The DEFAULT limits must be untouched by the override: this
+            -- same context is still refused for anything disk-bound.
+            , "assert(codec.encode({ unit = units }) == nil,"
+            , "  'the payload default cap must still reject this context "
+              <> "-- the allowance is per call, not a global relaxation')"
+            , "assert(#warnings == 1, 'the dropped row must still report "
+              <> "its diagnostic, got ' .. #warnings)"
+            ]
+
+        it "leaves the two documented compatibility semantics untouched: a \
+           \nil context is still 'apply every row' and an EMPTY per-kind \
+           \set still filters" $ runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local liveNil, liveEmpty = {}, {}"
+            , "saveModules.register('compat_nil', "
+              <> perEntitySpec "compat_nil" "liveNil" <> ")"
+            , "local prep = saveModules.prepareLoad("
+            , "  { { id='compat_nil', version=1,"
+            , "      payload=codec.encode({ [7]={tag='seven'} }) } },"
+            , "  1, false, nil)"
+            , "assert(prep.ok)"
+            , "saveModules.applyAll()"
+            , "assert(liveNil[7] ~= nil, 'a nil context must not filter')"
+            , "saveModules.register('compat_empty', "
+              <> perEntitySpec "compat_empty" "liveEmpty" <> ")"
+            , "prep = saveModules.prepareLoad("
+            , "  { { id='compat_nil', version=1, payload=codec.encode({}) },"
+            , "    { id='compat_empty', version=1,"
+            , "      payload=codec.encode({ [7]={tag='seven'} }) } },"
+            , "  2, false, { unit = {}, building = {} })"
+            , "assert(prep.ok)"
+            , "saveModules.applyAll()"
+            , "assert(liveEmpty[7] == nil, 'an empty per-kind set is a real "
+              <> "answer and must still filter')"
             ]
 
     describe "unit_ai save component (issue #761 requirements 13/14)" $ do

@@ -148,8 +148,8 @@ local function keyLess(a, b)
     return a < b
 end
 
-local function encodeValue(v, path, seen, depth)
-    if depth > M.MAX_DEPTH then
+local function encodeValue(v, path, seen, depth, lim)
+    if depth > lim.MAX_DEPTH then
         error("data_codec: exceeded max depth at " .. path)
     end
     local t = type(v)
@@ -180,7 +180,7 @@ local function encodeValue(v, path, seen, depth)
         if not isValidUtf8(v) then
             error("data_codec: invalid UTF-8 string at " .. path)
         end
-        if #v > M.MAX_STRING_BYTES then
+        if #v > lim.MAX_STRING_BYTES then
             error("data_codec: string exceeds max size at " .. path)
         end
         return "S" .. #v .. ":" .. v
@@ -196,13 +196,13 @@ local function encodeValue(v, path, seen, depth)
         local ok, out = pcall(function()
             local isArr, n = tableShape(v)
             if isArr then
-                if n > M.MAX_TABLE_ENTRIES then
+                if n > lim.MAX_TABLE_ENTRIES then
                     error("data_codec: table exceeds max entries at " .. path)
                 end
                 local parts = { "A", tostring(n), ":" }
                 for i = 1, n do
                     parts[#parts + 1] =
-                        encodeValue(v[i], path .. "[" .. i .. "]", seen, depth + 1)
+                        encodeValue(v[i], path .. "[" .. i .. "]", seen, depth + 1, lim)
                 end
                 return table.concat(parts)
             else
@@ -215,7 +215,7 @@ local function encodeValue(v, path, seen, depth)
                     count = count + 1
                     keys[count] = k
                 end
-                if count > M.MAX_TABLE_ENTRIES then
+                if count > lim.MAX_TABLE_ENTRIES then
                     error("data_codec: table exceeds max entries at " .. path)
                 end
                 table.sort(keys, keyLess)
@@ -223,9 +223,9 @@ local function encodeValue(v, path, seen, depth)
                 for _, k in ipairs(keys) do
                     local keyPath = path .. "[" .. tostring(k) .. "]"
                     parts[#parts + 1] =
-                        encodeValue(k, keyPath .. "(key)", seen, depth + 1)
+                        encodeValue(k, keyPath .. "(key)", seen, depth + 1, lim)
                     parts[#parts + 1] =
-                        encodeValue(v[k], keyPath, seen, depth + 1)
+                        encodeValue(v[k], keyPath, seen, depth + 1, lim)
                 end
                 return table.concat(parts)
             end
@@ -238,14 +238,47 @@ local function encodeValue(v, path, seen, depth)
     end
 end
 
+-- Issue #1279: the four limits above are PAYLOAD limits -- they bound
+-- what a save component may write to disk, where an unbounded payload is
+-- a corruption/DoS surface. An optional `limits` table overrides any
+-- subset of them for ONE call, for the narrow case of an engine-generated
+-- snapshot that is never written to a save file and whose size is a
+-- property of the session rather than of anything a payload author
+-- controls (`save_modules.applyAll`'s restored-entity context, whose
+-- `KnownEntities` has no corresponding bound).
+--
+-- Omitted keys keep the module default, read live exactly as before, so
+-- every existing caller is byte-for-byte unaffected. A decode must be
+-- given the same allowance its encode was, or a payload that encoded
+-- successfully will not read back.
+local function resolveLimits(limits)
+    if limits == nil then return M end
+    return {
+        MAX_DEPTH         = limits.MAX_DEPTH         or M.MAX_DEPTH,
+        MAX_TABLE_ENTRIES = limits.MAX_TABLE_ENTRIES or M.MAX_TABLE_ENTRIES,
+        MAX_STRING_BYTES  = limits.MAX_STRING_BYTES  or M.MAX_STRING_BYTES,
+        MAX_TOTAL_BYTES   = limits.MAX_TOTAL_BYTES   or M.MAX_TOTAL_BYTES,
+    }
+end
+
+-- Every limit lifted: for an in-memory snapshot that never reaches disk.
+M.UNBOUNDED = {
+    MAX_DEPTH         = math.huge,
+    MAX_TABLE_ENTRIES = math.huge,
+    MAX_STRING_BYTES  = math.huge,
+    MAX_TOTAL_BYTES   = math.huge,
+}
+
 -- Encode a data-only Lua value. Returns (bytes) on success, or
--- (nil, errorMessage) on any rejection.
-function M.encode(value)
-    local ok, result = pcall(encodeValue, value, "root", {}, 1)
+-- (nil, errorMessage) on any rejection. `limits` is optional -- see
+-- resolveLimits above; omit it for anything that reaches a save file.
+function M.encode(value, limits)
+    local lim = resolveLimits(limits)
+    local ok, result = pcall(encodeValue, value, "root", {}, 1, lim)
     if not ok then
         return nil, tostring(result)
     end
-    if #result > M.MAX_TOTAL_BYTES then
+    if #result > lim.MAX_TOTAL_BYTES then
         return nil, "data_codec: encoded payload exceeds max size ("
             .. #result .. " bytes)"
     end
@@ -273,8 +306,8 @@ local function readPrefix(s, pos, path)
     return n, colon + 1
 end
 
-local function decodeValue(s, pos, depth, path)
-    if depth > M.MAX_DEPTH then
+local function decodeValue(s, pos, depth, path, lim)
+    if depth > lim.MAX_DEPTH then
         error("data_codec: exceeded max depth at " .. path)
     end
     if pos > #s then
@@ -346,7 +379,7 @@ local function decodeValue(s, pos, depth, path)
         return num, rest + len
     elseif tag == "S" then
         local len, rest = readPrefix(s, pos + 1, path)
-        if len > M.MAX_STRING_BYTES then
+        if len > lim.MAX_STRING_BYTES then
             error("data_codec: string exceeds max size at " .. path)
         end
         local str = s:sub(rest, rest + len - 1)
@@ -359,25 +392,25 @@ local function decodeValue(s, pos, depth, path)
         return str, rest + len
     elseif tag == "A" then
         local count, rest = readPrefix(s, pos + 1, path)
-        if count > M.MAX_TABLE_ENTRIES then
+        if count > lim.MAX_TABLE_ENTRIES then
             error("data_codec: table exceeds max entries at " .. path)
         end
         local out, p = {}, rest
         for i = 1, count do
             local v
-            v, p = decodeValue(s, p, depth + 1, path .. "[" .. i .. "]")
+            v, p = decodeValue(s, p, depth + 1, path .. "[" .. i .. "]", lim)
             out[i] = v
         end
         return out, p
     elseif tag == "M" then
         local count, rest = readPrefix(s, pos + 1, path)
-        if count > M.MAX_TABLE_ENTRIES then
+        if count > lim.MAX_TABLE_ENTRIES then
             error("data_codec: table exceeds max entries at " .. path)
         end
         local out, p = {}, rest
         for _ = 1, count do
             local k, v
-            k, p = decodeValue(s, p, depth + 1, path .. "(key)")
+            k, p = decodeValue(s, p, depth + 1, path .. "(key)", lim)
             -- Mirror the encode-side key contract exactly (keyLess/
             -- isIntegerKey): only strings and WHOLE-NUMBER numeric keys
             -- are valid -- a hand-crafted/corrupted payload must not be
@@ -391,7 +424,7 @@ local function decodeValue(s, pos, depth, path)
                 error("data_codec: duplicate map key at " .. path
                     .. "[" .. tostring(k) .. "]")
             end
-            v, p = decodeValue(s, p, depth + 1, path .. "[" .. tostring(k) .. "]")
+            v, p = decodeValue(s, p, depth + 1, path .. "[" .. tostring(k) .. "]", lim)
             out[k] = v
         end
         return out, p
@@ -403,16 +436,18 @@ end
 
 -- Decode a payload produced by M.encode. Returns (value) on success, or
 -- (nil, errorMessage) on any malformed/truncated/oversized input. Never
--- executes the input as code.
-function M.decode(s)
+-- executes the input as code. `limits` is optional and must match the
+-- allowance the payload was ENCODED with (see resolveLimits above).
+function M.decode(s, limits)
+    local lim = resolveLimits(limits)
     if type(s) ~= "string" then
         return nil, "data_codec: input is not a string"
     end
-    if #s > M.MAX_TOTAL_BYTES then
+    if #s > lim.MAX_TOTAL_BYTES then
         return nil, "data_codec: payload exceeds max size (" .. #s .. " bytes)"
     end
     local ok, result = pcall(function()
-        local v, pos = decodeValue(s, 1, 1, "root")
+        local v, pos = decodeValue(s, 1, 1, "root", lim)
         if pos ~= #s + 1 then
             error("data_codec: trailing bytes after decoded value")
         end

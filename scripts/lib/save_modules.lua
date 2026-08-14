@@ -938,6 +938,15 @@ end
 -- absent from the RESTORED context, so filtering it would erase exactly
 -- the state the rollback exists to restore. A contextless apply() means
 -- "apply every row" precisely so that unwinding stays verbatim.
+--
+-- Issue #1279 rebuilds that context per component from an immutable
+-- encoded snapshot taken before the first apply() runs, with the raw
+-- source dropped at that point, so what a component observes no longer
+-- depends on apply order, on what the components before it did with the
+-- value they were handed, or on what they did to `_pendingEntities`
+-- behind its back -- every one of them sees exactly the membership and
+-- owner pages Haskell supplied. See the loop below for why neither a
+-- read-only proxy nor a plain per-component copy was sufficient.
 function saveModules.applyAll()
     local prepared = saveModules._pendingApply
     if prepared == nil then
@@ -1019,11 +1028,118 @@ function saveModules.applyAll()
         return failures
     end
 
+    -- Issue #1279: #900 promised every apply() "a read-only restored-
+    -- entity context" and handed out the single mutable table Haskell
+    -- pushed, shared by every component in dependency order.
+    -- `applyEntityRows` TRUSTS the per-kind subtable for its absent-owner
+    -- filtering, so an earlier component that deleted or rewrote an entry
+    -- changed which rows every LATER component kept, dropped, or
+    -- misassigned -- apply order became load-correctness-relevant,
+    -- contradicting Haskell's authoritative `KnownEntities`.
+    --
+    -- What crosses the apply loop now is an ENCODED context -- an
+    -- immutable Lua string -- and each component's own table is rebuilt
+    -- from it immediately before that component runs.
+    --
+    -- A read-only metatable PROXY was tried first and rejected, for two
+    -- reasons worth recording so it isn't reintroduced as a cheaper
+    -- alternative. It wasn't isolated: a proxy has to close over the
+    -- shared source to read through to it, and `debug.getmetatable` sees
+    -- past `__metatable` while `debug.getupvalue` lifts the source
+    -- straight out of the `__index` closure. And it wasn't a transparent
+    -- table: `next` is a primitive that consults no metatable at all -- no
+    -- `__pairs`, no `__index` -- so an ordinary `next(entities)` or
+    -- `for k in next, entities.unit` walk saw an EMPTY context and would
+    -- silently conclude the restored session has no units.
+    --
+    -- Copies alone were not enough either, twice over. Copying per iteration
+    -- still re-read the live `_pendingEntities`, which is public on the
+    -- module table, so an earlier apply could reach it as
+    -- `require('scripts.lib.save_modules')._pendingEntities.unit[7] = nil`
+    -- and every later copy would carry the deletion. Precomputing all of
+    -- them up front instead left every SIBLING's context alive in this
+    -- frame at once, and the stock `debug` library is loaded here (see
+    -- Engine.Scripting.Lua.Thread / API.Register.Debug -- the engine adds
+    -- to the stdlib table rather than replacing it), so `debug.getlocal`
+    -- could walk this frame and reach a later component's table directly.
+    --
+    -- Encoding closes both: the only thing shared across the loop is a
+    -- string, and Lua strings cannot be mutated -- there is no longer any
+    -- shared MUTABLE state for a callback to find, by any route. No
+    -- sibling's context exists while another component runs, because each
+    -- is materialized on demand and dropped with the iteration.
+    --
+    -- What this does NOT claim is a sandbox. A component that drives the
+    -- debug library adversarially can rewrite this frame's locals, replace
+    -- `applyEntityRows`, or mutate another module's live singleton
+    -- outright; no mechanism at this layer survives that, and it is not
+    -- what this issue is about (a BUGGY or future component silently
+    -- corrupting its siblings). The invariant is "no shared mutable
+    -- state", which is the one that makes ordinary code correct.
+    --
+    -- `dataCodec` is the same data-only codec the components' own payloads
+    -- already ride through: plain booleans, integers and strings, decoded
+    -- by walking, never by evaluating.
+    --
+    -- Its default limits, however, are PAYLOAD limits -- they bound what
+    -- a component may WRITE TO DISK, where an unbounded payload is a
+    -- corruption surface. They do not describe this snapshot, which never
+    -- reaches a save file and whose size is a property of the session:
+    -- `KnownEntities` has no matching bound, and the context names every
+    -- entity in the session while a component's payload carries only the
+    -- rows it actually saved, so a session can exceed
+    -- `MAX_TABLE_ENTRIES` with a tiny payload. Applying a payload limit
+    -- here would fail a load that has nothing wrong with it, so this one
+    -- call site passes `UNBOUNDED` (and decode is given the same
+    -- allowance, or what encoded would not read back).
+    --
+    -- That leaves encode failing only for a context that isn't plain data
+    -- at all -- a function, a metatable, a cycle -- which
+    -- `pushRestoredEntities` cannot produce. It is treated as fail-fast
+    -- (#761) and aborts before any state has changed, exactly like the
+    -- rollback-capture failure above.
+    local encodedContext = nil
+    if entities ~= nil then
+        local encoded, encErr =
+            dataCodec.encode(entities, dataCodec.UNBOUNDED)
+        if encoded == nil then
+            saveModules._pendingApply = nil
+            saveModules._pendingRequestId = nil
+            saveModules._pendingEntities = nil
+            saveModules._loadActive = false
+            error("saveModules.applyAll: could not capture the restored-"
+                .. "entity context -- aborting before any state changed: "
+                .. tostring(encErr))
+        end
+        encodedContext = encoded
+    end
+    -- Nothing reads the raw source past this point (the rollback pass is
+    -- contextless by design), so drop it here rather than at the end: the
+    -- one table every component's view derives from stops being reachable
+    -- the moment it stops being needed.
+    entities = nil
+    saveModules._pendingEntities = nil
+
     local applied = {}
     for _, id in ipairs(applyOrder) do
         if prepared[id] ~= nil then
-            local ok, err = pcall(saveModules.registry[id].apply, prepared[id],
-                                  entities)
+            -- The rebuild happens INSIDE the pcall so that a failure to
+            -- reconstruct the context is that component's apply failure,
+            -- with the ordinary rollback below -- never a nil context
+            -- silently downgrading it to "apply every row".
+            local ok, err = pcall(function()
+                local context = nil
+                if encodedContext ~= nil then
+                    local decoded, decErr =
+                        dataCodec.decode(encodedContext, dataCodec.UNBOUNDED)
+                    if decoded == nil then
+                        error("could not rebuild the restored-entity "
+                            .. "context: " .. tostring(decErr))
+                    end
+                    context = decoded
+                end
+                return saveModules.registry[id].apply(prepared[id], context)
+            end)
             if not ok then
                 -- Round 5 review: `apply` is ordinary Lua code, not
                 -- guaranteed all-or-nothing -- it may have mutated
