@@ -341,20 +341,28 @@ dropping the in-progress stamp.
   §1 applied to the format layer specifically.
 - **A NEW component may be declared OPTIONAL** when a save predating it
   has an honest, non-guessing default — the reader then treats an
-  ABSENT payload as that default instead of failing the load. #1087's
-  `container-knowledge` (the player's last-known container contents) is
-  the first and, so far, only one: every tracked baseline legitimately
-  lacks it, and "absent" means exactly "no container has ever been
-  inspected", which is true rather than invented. This is a narrow
-  exception to the rule above, not a general escape hatch — the
+  ABSENT payload as that default instead of failing the load. Two
+  components in the static Haskell registry qualify so far, and each
+  states its own justification in its module header. #1087's
+  `container-knowledge` (the player's last-known container contents)
+  was the first: every tracked baseline legitimately lacks it, and
+  "absent" means exactly "no container has ever been inspected", which
+  is true rather than invented. #1246's `transfer-orders` (the per-page
+  queue of durable transfer orders) is the second, on identical terms:
+  "absent" means "no order is queued", which is true of every session
+  that predates the component because there was nowhere for an order to
+  be stored at all. (On the Lua side `lua.tutorial_progress` is
+  separately optional under the same rule — §7 — so "second" here counts
+  the static Haskell registry, not the envelope as a whole.) This is a
+  narrow exception to the rule above, not a general escape hatch — the
   decision is made ONCE, from `ccRequired`, in
   `World.Save.Component.Types.registerComponent`, and only the
   MANIFEST-level absence is tolerated: a component that IS declared but
   whose payload is malformed, truncated, or at an unsupported version
-  still fails exactly as a required one would. A second optional
+  still fails exactly as a required one would. A THIRD optional
   component has to justify itself against
   `Test.Headless.World.Save.Components`' explicit required/optional
-  split assertion.
+  split assertion, which names every one of them.
 - **Unknown optional components** (an id present in a save's manifest
   that this build does not recognize, and which the writer itself
   marked optional) must never be silently discarded on the next save to

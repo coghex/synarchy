@@ -53,6 +53,13 @@ module World.Save.Integrity
     , renderIntegrityError
     , renderIntegrityReport
     , sessionIntegrityErrors
+    , sessionIntegrityWarnings
+    , OrderRef(..)
+    , OrderRefTarget(..)
+    , transferOrderRefs
+    , PageEntities(..)
+    , pageEntitiesFrom
+    , danglingOrderRefErrors
     , KnownEntities(..)
     , buildKnownEntities
     , LuaRefEdge(..)
@@ -67,18 +74,28 @@ import qualified Data.List as L
 import qualified Data.Text as T
 import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..))
+import Data.Int (Int64)
 import Craft.Bills (CraftBills(..), CraftBill(..), BillId(..))
 import Power.Types (PowerNodes(..), PowerNode(..), PowerNodeId(..))
+import Unit.Transfer
+    (TransferBatch(..), TransferEndpoint(..), QueuedTransfer(..)
+    , TransferItemRef(..))
+import Unit.Transfer.Orders
+    (TransferOrder(..), TransferOrderId(..), TransferOrders, transferOrderList)
 import World.Page.Types (WorldPageId(..))
 import World.Save.Envelope.Types (ComponentId(..))
 import World.Save.Component.Types
     ( craftBillsComponentId, powerNodesComponentId
-    , buildingsComponentId, unitsComponentId )
+    , buildingsComponentId, unitsComponentId
+    , transferOrdersComponentId )
 import World.Save.Payload (LuaRefEdge(..))
 import World.Save.Reference (RefKind(..), RefScope(..), refKindText)
 import World.Save.Snapshot
     ( SessionSnapshot(..), PageSnapshot(..), allItemInstanceIds )
-import World.Save.Types (BuildingSnapshot(..), UnitSnapshot(..))
+import World.Save.Types
+    ( BuildingSnapshot(..), UnitSnapshot(..), ItemWalkOrder(..)
+    , pageItemContainers, flattenItemInstances )
+import Item.Types (ItemInstance(..))
 import Item.Ground (GroundItems(..))
 import Location.Instance
     (LocationInstance(..), LocationInstanceId(..), instancesToList)
@@ -212,6 +229,7 @@ sessionIntegrityErrors ∷ SessionSnapshot → [IntegrityError]
 sessionIntegrityErrors snap = concat
     [ duplicateGlobalIdErrors snap
     , billStationErrors, billClaimantErrors, nodeBuildingErrors
+    , orderRefErrors snap
     ]
   where
     pages = snapPages snap
@@ -264,6 +282,196 @@ sessionIntegrityErrors snap = concat
                          ScopeSamePage pid (buildingPages (pnBuilding node))
                          (T.pack (show (unBuildingId (pnBuilding node)))) ]
         ]
+
+-- Transfer orders (#1246) -------------------------------------------
+
+-- | What ONE reference a durable transfer order carries points AT. Kept
+--   as a small closed sum rather than three parallel enumerations so the
+--   hard (wrong-page) and tolerated (dangling) checks below cannot drift
+--   apart: both walk the SAME 'transferOrderRefs' list and differ only
+--   in how they resolve it.
+data OrderRefTarget
+    = OrderRefUnit     !UnitId
+    | OrderRefBuilding !BuildingId
+    | OrderRefItem     !Int64
+      -- ^ An 'Unit.Transfer.TransferItemRef.tirInstanceId', held SIGNED
+      --   exactly as the live ref holds it. A value that is negative or
+      --   0 can never name a live instance, so it simply resolves
+      --   nowhere and is reported as dangling — never coerced into a
+      --   large 'Word64' that might collide with a real id.
+    deriving (Show, Eq)
+
+-- | One durable reference an order carries, with the data path, kind
+--   and rendered value a diagnostic needs.
+data OrderRef = OrderRef
+    { orfPath   ∷ !Text
+    , orfKind   ∷ !RefKind
+    , orfValue  ∷ !Text
+    , orfTarget ∷ !OrderRefTarget
+    } deriving (Show, Eq)
+
+-- | Every durable reference one page's transfer orders carry: each
+--   order's acting unit, both of its endpoints, and every requested
+--   item instance — the four things #1246 requirement 5 puts into the
+--   integrity graph.
+--
+--   THE single enumeration. 'orderRefErrors' (wrong-page, fatal) and
+--   'danglingOrderRefErrors' (absent, tolerated) both consume it, and
+--   the load boundary consumes it a third time through
+--   'pageEntitiesFrom', so a reference kind added to an order is
+--   checked everywhere from one edit.
+transferOrderRefs ∷ WorldPageId → TransferOrders → [OrderRef]
+transferOrderRefs pid orders = concatMap orderRefs (transferOrderList orders)
+  where
+    orderRefs o =
+        let at field = "transfer-orders[page=" <> pidText pid <> ",order="
+                       <> T.pack (show (unTransferOrderId (troId o))) <> "]."
+                       <> field
+        in endpointRef (at "unit") (EndpointUnit (troUnit o))
+           ⧺ endpointRef (at "source") (tbSource (troBatch o))
+           ⧺ endpointRef (at "destination") (tbDestination (troBatch o))
+           ⧺ [ OrderRef
+                 { orfPath   = at ("entries[" <> T.pack (show i) <> "].instance")
+                 , orfKind   = RefItemInstance
+                 , orfValue  = T.pack (show iid)
+                 , orfTarget = OrderRefItem iid }
+             | (i, entry) ← zip [(0 ∷ Int) ..] (tbEntries (troBatch o))
+             , let iid = tirInstanceId (qtItem entry) ]
+    endpointRef path e = case e of
+        EndpointUnit uid →
+            [ OrderRef path RefUnit (T.pack (show (unUnitId uid)))
+                       (OrderRefUnit uid) ]
+        EndpointBuilding bid →
+            [ OrderRef path RefBuilding (T.pack (show (unBuildingId bid)))
+                       (OrderRefBuilding bid) ]
+
+-- | The live identities resolvable on ONE page, as the transfer-order
+--   reference checks need them.
+data PageEntities = PageEntities
+    { peUnits     ∷ !(HS.HashSet UnitId)
+    , peBuildings ∷ !(HS.HashSet BuildingId)
+    , peItems     ∷ !(HS.HashSet Word64)
+    } deriving (Show, Eq)
+
+-- | Build a page's resolvable identities from its three item-bearing
+--   projections plus its unit/building instance maps.
+--
+--   Parameterised over the projections rather than over a page type for
+--   the same reason 'World.Save.Types.pageItemContainers' is: the two
+--   page shapes ('World.Save.Snapshot.PageSnapshot' and the transitional
+--   'World.Save.Types.WorldPageSave' bridge) carry identically-typed
+--   fields, so the pre-save boundary and the load boundary
+--   ("World.Load.Stage") resolve an order's references through ONE
+--   implementation instead of two that could disagree about what counts
+--   as present.
+pageEntitiesFrom
+    ∷ (page → GroundItems)
+    → (page → UnitSnapshot)
+    → (page → BuildingSnapshot)
+    → page
+    → PageEntities
+pageEntitiesFrom groundOf unitsOf buildingsOf page = PageEntities
+    { peUnits     = HM.keysSet (usnInstances (unitsOf page))
+    , peBuildings = HM.keysSet (bsnInstances (buildingsOf page))
+    , peItems     = HS.fromList
+        [ iiInstanceId i
+        | (_, insts) ← pageItemContainers ItemsGroundFirst
+                           groundOf unitsOf buildingsOf page
+        , inst ← insts
+        , i    ← flattenItemInstances inst ]
+    }
+
+resolvesOn ∷ PageEntities → OrderRefTarget → Bool
+resolvesOn pe t = case t of
+    OrderRefUnit uid     → HS.member uid (peUnits pe)
+    OrderRefBuilding bid → HS.member bid (peBuildings pe)
+    OrderRefItem iid     → iid > 0 ∧ HS.member (fromIntegral iid) (peItems pe)
+
+-- | Every WRONG-PAGE transfer-order reference: a target that exists, but
+--   on a page other than the order's own. Fatal at both boundaries, like
+--   a craft bill's wrong-page station — an order can only ever be
+--   carried out within one page, so a cross-page target is never
+--   legitimate. A target absent from the WHOLE session is deliberately
+--   NOT reported here; see 'danglingOrderRefErrors'.
+orderRefErrors ∷ SessionSnapshot → [IntegrityError]
+orderRefErrors snap =
+    [ err
+    | (pid, page) ← HM.toList (snapPages snap)
+    , r ← transferOrderRefs pid (pgsTransferOrders page)
+    , Just err ← [ refEdgeError transferOrdersComponentId 1 (orfPath r)
+                     (orfKind r) ScopeSamePage pid
+                     (sessionPagesOf entitiesByPage (orfTarget r)) (orfValue r) ]
+    ]
+  where entitiesByPage = snapshotPageEntities snap
+
+-- | Every page's resolvable identities, built ONCE per traversal. A
+--   page's item-instance set is a full recursive walk of its ground /
+--   inventory / storage containers, so deriving it per REFERENCE (an
+--   order can carry many, and every one is resolved against every page)
+--   would make an ordinary save quadratic in the session's item count
+--   for no gain.
+snapshotPageEntities ∷ SessionSnapshot → HM.HashMap WorldPageId PageEntities
+snapshotPageEntities =
+    HM.map (pageEntitiesFrom pgsGroundItems pgsUnits pgsBuildings) ∘ snapPages
+
+-- | Every page a transfer-order target resolves on, sorted (the input
+--   'refEdgeError' expects: empty ⇒ absent everywhere, one entry ⇒ a
+--   definite page, several ⇒ a duplicate identity reported elsewhere).
+sessionPagesOf
+    ∷ HM.HashMap WorldPageId PageEntities → OrderRefTarget → [WorldPageId]
+sessionPagesOf entitiesByPage t = L.sort
+    [ pid | (pid, pe) ← HM.toList entitiesByPage, resolvesOn pe t ]
+
+-- | Every DANGLING transfer-order reference on one page: a target absent
+--   from the identities @entities@ names. Non-blocking BY CONSTRUCTION —
+--   this is a separate function from 'sessionIntegrityErrors' precisely
+--   because every finding that one returns aborts the save (see
+--   'World.Thread.Command.Save.WriteWorld') or the load (see
+--   'World.Save.Component.assembleSnapshot'), and #1246 requirement 5
+--   wants a demolished destination or a dead carrier REPORTED while the
+--   order itself is retained and both boundaries still succeed. Callers
+--   log these; nothing may fail on them.
+danglingOrderRefErrors
+    ∷ WorldPageId → PageEntities → TransferOrders → [IntegrityError]
+danglingOrderRefErrors pid entities orders =
+    [ IntegrityError
+        { ieComponent     = transferOrdersComponentId
+        , ieVersion       = 1
+        , iePath          = orfPath r
+        , ieRefKind       = orfKind r
+        , ieRefValue      = orfValue r
+        , ieExpectedScope = "same page ('" <> pidText pid <> "')"
+        , ieActual        = "not found in the loaded session"
+        , ieCode          = "dangling-reference"
+        , ieMessage       = refKindText (orfKind r) <> " " <> orfValue r
+            <> " referenced by a transfer order on page '" <> pidText pid
+            <> "' does not resolve (tolerated: the order is retained)"
+        }
+    | r ← transferOrderRefs pid orders
+    , not (resolvesOn entities (orfTarget r))
+    ]
+
+-- | The NON-BLOCKING half of the session integrity graph (#1246): every
+--   finding that must be surfaced as a diagnostic and must never fail a
+--   boundary. Deliberately a sibling of 'sessionIntegrityErrors' rather
+--   than a flag on 'IntegrityError' — the two are consumed at different
+--   severities by different code, and a severity field would make it one
+--   forgotten @filter@ away from a tolerated dangling order rejecting an
+--   otherwise-valid save.
+--
+--   Today this is exactly the dangling transfer-order references above.
+--   Craft bills' and power nodes' equally-tolerated dangling
+--   station/host references are deliberately NOT folded in: they are
+--   silently tolerated today (issues #758/#763) and reporting them here
+--   would change what an existing, unrelated save logs.
+sessionIntegrityWarnings ∷ SessionSnapshot → [IntegrityError]
+sessionIntegrityWarnings snap =
+    [ e
+    | (pid, page) ← HM.toList (snapPages snap)
+    , Just pe ← [HM.lookup pid entitiesByPage]
+    , e ← danglingOrderRefErrors pid pe (pgsTransferOrders page)
+    ]
+  where entitiesByPage = snapshotPageEntities snap
 
 -- | A 'UnitId'/'BuildingId' is a GLOBAL allocator (one counter for the
 --   whole session, see "World.Save.Snapshot"'s 'SessionGlobals'

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 -- | The player-managed transfer contract (#1000 phase A1, generalized
 --   by #1085 phase A2 of epic #1013): one policy for "may these exact
 --   item instances move from this endpoint to that endpoint, and what
@@ -25,6 +25,28 @@
 --   an all-or-nothing verdict. There is deliberately NO batch-wide
 --   transaction: each item still moves through the same single-item
 --   atomic path A1 shipped.
+--
+--   __On the 'Data.Serialize.Serialize' instances below__ (#1246): the
+--   six types a durable transfer ORDER carries — 'TransferEndpoint',
+--   'TransferItemRef', 'TransferReason', 'TransferFailure',
+--   'TransferState' and the 'QueuedTransfer'/'TransferBatch' pair — are
+--   serializable ONLY so 'Unit.Transfer.Orders.TransferOrders' can ride
+--   'World.Save.Types.WorldPageSave', the transitional IN-MEMORY load
+--   bridge (which derives 'Data.Serialize.Serialize' wholesale). That is
+--   the same arrangement every other per-page gameplay layer on that
+--   record already has — 'Craft.Bills.CraftBill',
+--   'Building.Knowledge.ContainerRecord', 'Power.Types.PowerNode'.
+--
+--   These instances are NOT the save WIRE format and must never be used
+--   as one. The wire schema is
+--   "World.Save.Component.Transfer"'s frozen DTO mirror
+--   ('World.Save.Component.Transfer.TransferOrderDTO' and friends), with
+--   an explicit field-by-field conversion, precisely so this policy
+--   vocabulary can keep growing — which it is expected to — without
+--   silently reinterpreting bytes already on disk. Adding a constructor
+--   here is a deliberate, visible wire event: the frozen DTO must gain
+--   the matching case, and @tools\/enum_append_only_audit.py@ guards the
+--   constructor ORDER of both halves.
 --
 --   This module is ADDITIVE. The pre-existing verbs
 --   ('unitTransferItemToUnitFn', 'unitDepositToCargoFn') keep their
@@ -95,6 +117,8 @@ module Unit.Transfer
 
 import UPrelude
 import Data.Int (Int64)
+import Data.Serialize (Serialize)
+import GHC.Generics (Generic)
 import Building.Types (BuildingId(..), footprintDistBetween)
 import Item.Types (ItemInstance(..), itemMatches)
 import Unit.Types.Manager (UnitId(..))
@@ -114,7 +138,7 @@ data TransferEndpoint
       --   @biMaterialsDelivered@: that is locked construction stock
       --   recovered on deconstruct, which 'unitTransferItemToBuildingFn'
       --   serves as a separate operation.
-    deriving (Show, Eq)
+    deriving (Show, Eq, Generic, Serialize)
 
 -- | The kind half of an endpoint, without its id — the vocabulary the
 --   Lua handshake advertises so a caller can name an endpoint without
@@ -149,7 +173,7 @@ data TransferItemRef = TransferItemRef
       --   is a caller bug that must refuse rather than wrap into a
       --   large positive 'Word64'.
     , tirDefName    ∷ !Text
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 -- | One transfer order: an endpoint pair plus an ORDERED batch of item
 --   identities. Order is meaningful — outcomes are reported in it, and
@@ -174,7 +198,7 @@ data TransferReason
     | ReasonOutOfRange
     | ReasonReceiverFull
     | ReasonBecameStale
-    deriving (Show, Eq, Ord, Enum, Bounded)
+    deriving (Show, Eq, Ord, Enum, Bounded, Generic, Serialize)
 
 transferReasonId ∷ TransferReason → Text
 transferReasonId r = case r of
@@ -240,7 +264,7 @@ completionOf succeeded requested
 data TransferFailure = TransferFailure
     { tfReason ∷ !TransferReason
     , tfCause  ∷ !(Maybe TransferReason)
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 -- | A refusal raised while the request was being created.
 requestFailure ∷ TransferReason → TransferFailure
@@ -262,7 +286,7 @@ data TransferState
     | TransferCompleted
     | TransferCancelled
     | TransferFailed !TransferFailure
-    deriving (Show, Eq)
+    deriving (Show, Eq, Generic, Serialize)
 
 transferStateId ∷ TransferState → Text
 transferStateId s = case s of
@@ -294,7 +318,7 @@ isPending = not . isTerminalState
 data QueuedTransfer = QueuedTransfer
     { qtItem  ∷ !TransferItemRef
     , qtState ∷ !TransferState
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 -- | One transfer order: the endpoint pair it was created against, plus
 --   one entry per requested item IN REQUEST ORDER.
@@ -302,7 +326,7 @@ data TransferBatch = TransferBatch
     { tbSource      ∷ !TransferEndpoint
     , tbDestination ∷ !TransferEndpoint
     , tbEntries     ∷ ![QueuedTransfer]
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 -- | What the policy needs to know about a unit endpoint. Projected
 --   from a live 'Unit.Types.UnitInstance'.

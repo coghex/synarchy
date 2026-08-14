@@ -1522,13 +1522,14 @@ attribution because there is nothing left to walk.
   (`World.Save.Envelope`): FNV-1a-checksummed manifest + independently
   versioned components (`core-session`, `world-pages`, `world-edits`,
   `world-activity`, `buildings`, `units`, `unit-sim`, `craft-bills`,
-  `power-nodes`, `texture-palette`, `metadata`, the one OPTIONAL
-  `container-knowledge` (#1087), plus dynamic
-  `lua.<module>` components). Registry:
+  `power-nodes`, `texture-palette`, `metadata`, the two OPTIONAL
+  `container-knowledge` (#1087) and `transfer-orders` (#1246), plus
+  dynamic `lua.<module>` components). Registry:
   `World.Save.Component.saveComponentRegistry`. Every gameplay
-  component is REQUIRED except `container-knowledge`, whose absence has
-  an honest default ("no container has ever been inspected") — see
-  `docs/persistence_contract.md` §5 before declaring a second one.
+  component is REQUIRED except those two, each of whose absence has an
+  honest default ("no container has ever been inspected"; "no transfer
+  order is queued") — see `docs/persistence_contract.md` §5 before
+  declaring a third one.
   Component evolution =
   per-component schema version bumps + explicit migrations from frozen
   vN DTOs — NOT a global save-version bump. `currentSaveVersion`

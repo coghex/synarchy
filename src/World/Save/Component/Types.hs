@@ -101,6 +101,7 @@ module World.Save.Component.Types
     , craftBillsComponentId
     , powerNodesComponentId
     , containerKnowledgeComponentId
+    , transferOrdersComponentId
     ) where
 
 import UPrelude
@@ -207,7 +208,8 @@ data RegisteredComponent = RegisteredComponent
 --   guarantee that registration and assembly cannot diverge.
 --
 --   An OPTIONAL component (@ccRequired = False@, first used by #1087's
---   @"container-knowledge"@) that is entirely ABSENT from the envelope
+--   @"container-knowledge"@ and joined by #1246's @"transfer-orders"@)
+--   that is entirely ABSENT from the envelope
 --   contributes nothing and reports nothing: its decode pass is empty
 --   and its fold is skipped, leaving whatever default the foundational
 --   components already installed. That is decided HERE, once, from
@@ -540,10 +542,20 @@ craftBillsComponentId  = ComponentId "craft-bills"
 powerNodesComponentId  ∷ ComponentId
 powerNodesComponentId  = ComponentId "power-nodes"
 
--- | #1087: the player's last-known container contents. The one
---   OPTIONAL gameplay component — see
+-- | #1087: the player's last-known container contents. The FIRST of the
+--   two OPTIONAL Haskell-owned gameplay components — see
 --   "World.Save.Component.Knowledge"'s header for why a baseline that
 --   predates the feature must be allowed to carry no payload at all,
 --   and what an absent payload means.
 containerKnowledgeComponentId ∷ ComponentId
 containerKnowledgeComponentId = ComponentId "container-knowledge"
+
+-- | #1246: the per-page queue of durable transfer orders. The SECOND
+--   OPTIONAL Haskell-owned gameplay component — see
+--   "World.Save.Component.Transfer"'s header for the justification
+--   @docs\/persistence_contract.md@ §5 requires of each one, and note
+--   that @lua.tutorial_progress@ is already an optional component too;
+--   this pair is the optional set of the STATIC Haskell registry
+--   specifically, not of the envelope as a whole.
+transferOrdersComponentId ∷ ComponentId
+transferOrdersComponentId = ComponentId "transfer-orders"

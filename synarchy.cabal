@@ -447,6 +447,7 @@ library
                      Unit.Anim
                      Unit.Stats
                      Unit.Transfer
+                     Unit.Transfer.Orders
                      Unit.Render
                      Unit.Sprite
                      Unit.Selection
@@ -798,6 +799,7 @@ library
                      World.Save.Component.Page
                      World.Save.Component.Entities
                      World.Save.Component.Knowledge
+                     World.Save.Component.Transfer
                      World.Save.Component
                      World.Save.Autosave
                      World.Save.Compat.MetadataV1
@@ -1085,6 +1087,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Serialize
                    Test.Headless.World.Save.Envelope
                    Test.Headless.World.Save.Components
+                   Test.Headless.World.TransferOrders
                    Test.Headless.World.Save.Compat
                    Test.Headless.World.Save.Integrity
                    Test.Headless.World.Save.Storage

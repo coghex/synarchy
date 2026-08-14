@@ -165,6 +165,7 @@ import qualified Data.Text as T
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import Craft.Bills (emptyCraftBills)
+import Unit.Transfer.Orders (emptyTransferOrders)
 import Building.Knowledge (emptyContainerKnowledge)
 import Power.Types (emptyPowerNodes)
 import World.Save.Component.WorldGen
@@ -1042,7 +1043,7 @@ blankPageSnapshot pid params =
         , pgsChopDesignations = HM.empty
         , pgsCraftBills   = emptyCraftBills
         , pgsPowerNodes   = emptyPowerNodes
-          -- #1087: the ONE default that is genuinely reached in a
+          -- #1087: the FIRST of the two defaults genuinely reached in a
           -- successful load. @"container-knowledge"@ is the first
           -- OPTIONAL gameplay component, so a save written before it
           -- existed carries no such payload at all and every page keeps
@@ -1050,6 +1051,14 @@ blankPageSnapshot pid params =
           -- a pre-#1087 session is never-inspected, never known-empty,
           -- and never inferred from its live contents.
         , pgsContainerKnowledge = emptyContainerKnowledge
+          -- #1246: the SECOND default genuinely reached in a successful
+          -- load, for the same reason. @"transfer-orders"@ is the second
+          -- OPTIONAL gameplay component, so a save written before it
+          -- existed carries no such payload and every page keeps this
+          -- empty queue — which is exactly right: no order could have
+          -- been queued in a session that had nowhere to store one, and
+          -- the allocator starts where a fresh page's does.
+        , pgsTransferOrders = emptyTransferOrders
         , pgsTillDesignations = HM.empty
         , pgsCropPlots    = emptyCropPlots
         , pgsPlantDesignations = HM.empty

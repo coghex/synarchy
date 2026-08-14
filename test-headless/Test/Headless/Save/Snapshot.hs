@@ -33,6 +33,7 @@ import World.Flora.CropPlot (emptyCropPlots)
 import World.Edit.Types (WorldEdit, emptyWorldEdits)
 import World.Chunk.Types (ChunkCoord(..))
 import Craft.Bills (emptyCraftBills)
+import Unit.Transfer.Orders (emptyTransferOrders)
 import Power.Types (emptyPowerNodes)
 import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..))
@@ -68,6 +69,7 @@ minimalPage pid = PageSnapshot
     , pgsFloraHarvests = emptyFloraHarvests
     , pgsChopDesignations = HM.empty
     , pgsCraftBills   = emptyCraftBills
+    , pgsTransferOrders = emptyTransferOrders
     , pgsPowerNodes   = emptyPowerNodes
     , pgsTillDesignations = HM.empty
     , pgsCropPlots    = emptyCropPlots

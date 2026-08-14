@@ -33,7 +33,8 @@ import qualified Data.Text as T
 import World.Save.Reference
 import World.Save.Integrity
 import World.Save.Snapshot
-import World.Save.Component.Types (craftBillsComponentId, powerNodesComponentId)
+import World.Save.Component.Types
+    (craftBillsComponentId, powerNodesComponentId, transferOrdersComponentId)
 import World.Save.Envelope.Types (ComponentId(..))
 import World.Save.Component.Entities
     ( CraftBillDTO(..), CraftBillDTOv1(..), migrateCraftBillDTOv1
@@ -54,6 +55,13 @@ import World.Flora.CropPlot (emptyCropPlots)
 import World.Edit.Types (emptyWorldEdits)
 import Craft.Bills
     (emptyCraftBills, CraftBill(..), CraftBills(..), BillId(..), BillMode(..))
+import Unit.Transfer
+    ( TransferBatch(..), TransferEndpoint(..), TransferItemRef(..)
+    , TransferState(..), QueuedTransfer(..) )
+import Unit.Transfer.Orders
+    (TransferOrders, addTransferOrder, emptyTransferOrders)
+import Item.Types (ItemInstance(..))
+import Data.Int (Int64)
 import Power.Types
     (emptyPowerNodes, PowerNode(..), PowerNodes(..), PowerNodeId(..), PowerRole(..))
 import Building.Types (BuildingId(..))
@@ -88,6 +96,7 @@ minimalPage pid = PageSnapshot
     , pgsFloraHarvests = emptyFloraHarvests
     , pgsChopDesignations = HM.empty
     , pgsCraftBills   = emptyCraftBills
+    , pgsTransferOrders = emptyTransferOrders
     , pgsPowerNodes   = emptyPowerNodes
     , pgsTillDesignations = HM.empty
     , pgsCropPlots    = emptyCropPlots
@@ -155,6 +164,43 @@ nodeWithBuilding nid building = PowerNodes
         { pnId = nid, pnBuilding = building, pnRole = PowerSource
         , pnPeakWatts = 100, pnCapacityWh = 0, pnStoredWh = 0 }
     , pnsNextId = 100 }
+
+-- | #1246: one transfer order whose acting unit, source endpoint,
+--   destination endpoint and single requested item are each supplied
+--   independently, so any ONE of the four can be pointed at a
+--   wrong-page or absent target while the other three resolve.
+orderWith ∷ UnitId → TransferEndpoint → TransferEndpoint → Int64
+          → TransferOrders
+orderWith acting source dest iid = fst $ addTransferOrder acting
+    TransferBatch
+        { tbSource      = source
+        , tbDestination = dest
+        , tbEntries     =
+            [ QueuedTransfer
+                { qtItem = TransferItemRef { tirInstanceId = iid
+                                           , tirDefName = "bandage" }
+                , qtState = TransferQueued } ] }
+    emptyTransferOrders
+
+-- | A unit carrying one item instance, so an order's item reference has
+--   something real to resolve against.
+unitHolding ∷ Word64 → UnitInstanceSnapshot
+unitHolding iid = minimalUnit
+    { uisInventory = [ ItemInstance
+        { iiDefName = "bandage", iiCurrentFill = 1, iiQuality = 100
+        , iiCondition = 100, iiWeight = 0.05, iiSharpness = 0
+        , iiInstanceId = iid, iiTemp = Nothing, iiContents = [] } ] }
+
+-- | The ordinary, fully-resolving arrangement: unit 1 (holding item 500)
+--   moving it into building 1, both on the SAME page as the order.
+wellFormedOrderPage ∷ WorldPageId → PageSnapshot
+wellFormedOrderPage pid = (minimalPage pid)
+    { pgsUnits = UnitSnapshot (HM.singleton (UnitId 1) (unitHolding 500)) 100
+    , pgsBuildings = BuildingSnapshot
+        (HM.singleton (BuildingId 1) minimalBuilding) 100
+    , pgsTransferOrders = orderWith (UnitId 1) (EndpointUnit (UnitId 1))
+                              (EndpointBuilding (BuildingId 1)) 500
+    }
 
 buildSnap ∷ WorldPageId → [PageSnapshot] → SessionSnapshot
 buildSnap active pages = buildSessionSnapshot (minimalGlobals active) pages
@@ -397,6 +443,134 @@ spec = do
                     , pgsPowerNodes = nodeWithBuilding (PowerNodeId 1) (BuildingId 1) }
                 snap = buildSnap page1 [p1]
             sessionIntegrityErrors snap `shouldBe` []
+
+    -- #1246: a transfer order puts FOUR durable references into the
+    -- graph -- the acting unit, both endpoints, and every requested item
+    -- instance -- and they split the same way a craft bill's do: a
+    -- wrong-page target is fatal, an absent one is a tolerated
+    -- diagnostic. The two halves are separate functions
+    -- ('sessionIntegrityErrors' vs 'sessionIntegrityWarnings') precisely
+    -- because everything the first returns aborts a save or a load.
+    describe "integrity graph — transfer orders (#1246)" $ do
+        it "accepts an order whose acting unit, endpoints and item all \
+           \resolve on its OWN page" $
+            sessionIntegrityErrors (buildSnap page1 [wellFormedOrderPage page1])
+                `shouldBe` []
+
+        it "reports NO warning for that order either -- nothing dangles" $
+            sessionIntegrityWarnings
+                (buildSnap page1 [wellFormedOrderPage page1]) `shouldBe` []
+
+        it "rejects an order whose ACTING UNIT resolves on a different \
+           \page" $ do
+            let p1 = (minimalPage page1)
+                    { pgsTransferOrders = orderWith (UnitId 5)
+                        (EndpointBuilding (BuildingId 1))
+                        (EndpointBuilding (BuildingId 1)) 500
+                    , pgsBuildings = BuildingSnapshot
+                        (HM.singleton (BuildingId 1) minimalBuilding) 100
+                    , pgsUnits = UnitSnapshot
+                        (HM.singleton (UnitId 9) (unitHolding 500)) 100 }
+                p2 = (minimalPage page2)
+                    { pgsUnits = UnitSnapshot
+                        (HM.singleton (UnitId 5) minimalUnit) 100 }
+            case sessionIntegrityErrors (buildSnap page1 [p1, p2]) of
+                [e] → do
+                    ieCode e `shouldBe` "wrong-page"
+                    ieComponent e `shouldBe` transferOrdersComponentId
+                    ieRefKind e `shouldBe` RefUnit
+                    T.isInfixOf "order=1" (iePath e) `shouldBe` True
+                    T.isInfixOf ".unit" (iePath e) `shouldBe` True
+                other → expectationFailure
+                    ("expected one finding, got " <> show other)
+
+        it "rejects an order whose DESTINATION building resolves on a \
+           \different page (both endpoints are checked, not just the \
+           \source)" $ do
+            let p1 = (minimalPage page1)
+                    { pgsUnits = UnitSnapshot
+                        (HM.singleton (UnitId 1) (unitHolding 500)) 100
+                    , pgsTransferOrders = orderWith (UnitId 1)
+                        (EndpointUnit (UnitId 1))
+                        (EndpointBuilding (BuildingId 5)) 500 }
+                p2 = (minimalPage page2)
+                    { pgsBuildings = BuildingSnapshot
+                        (HM.singleton (BuildingId 5) minimalBuilding) 100 }
+            case sessionIntegrityErrors (buildSnap page1 [p1, p2]) of
+                [e] → do
+                    ieCode e `shouldBe` "wrong-page"
+                    ieRefKind e `shouldBe` RefBuilding
+                    T.isInfixOf ".destination" (iePath e) `shouldBe` True
+                other → expectationFailure
+                    ("expected one finding, got " <> show other)
+
+        it "rejects an order whose requested ITEM INSTANCE lives on a \
+           \different page" $ do
+            let p1 = (minimalPage page1)
+                    { pgsUnits = UnitSnapshot
+                        (HM.singleton (UnitId 1) minimalUnit) 100
+                    , pgsBuildings = BuildingSnapshot
+                        (HM.singleton (BuildingId 1) minimalBuilding) 100
+                    , pgsTransferOrders = orderWith (UnitId 1)
+                        (EndpointUnit (UnitId 1))
+                        (EndpointBuilding (BuildingId 1)) 500 }
+                p2 = (minimalPage page2)
+                    { pgsUnits = UnitSnapshot
+                        (HM.singleton (UnitId 2) (unitHolding 500)) 100 }
+            case sessionIntegrityErrors (buildSnap page1 [p1, p2]) of
+                [e] → do
+                    ieCode e `shouldBe` "wrong-page"
+                    ieRefKind e `shouldBe` RefItemInstance
+                    T.isInfixOf "entries[0].instance" (iePath e)
+                        `shouldBe` True
+                other → expectationFailure
+                    ("expected one finding, got " <> show other)
+
+        it "TOLERATES a dangling destination (a demolished building) -- \
+           \no hard error, and the order itself is untouched in the \
+           \snapshot" $ do
+            let p1 = (minimalPage page1)
+                    { pgsUnits = UnitSnapshot
+                        (HM.singleton (UnitId 1) (unitHolding 500)) 100
+                    , pgsTransferOrders = orderWith (UnitId 1)
+                        (EndpointUnit (UnitId 1))
+                        (EndpointBuilding (BuildingId 999)) 500 }
+                snap = buildSnap page1 [p1]
+            sessionIntegrityErrors snap `shouldBe` []
+            (pgsTransferOrders <$> HM.lookup page1 (snapPages snap))
+                `shouldBe` Just (pgsTransferOrders p1)
+
+        it "REPORTS that dangling destination as a non-blocking \
+           \diagnostic naming the order, the kind and the value" $
+            case sessionIntegrityWarnings (buildSnap page1
+                    [ (minimalPage page1)
+                        { pgsUnits = UnitSnapshot
+                            (HM.singleton (UnitId 1) (unitHolding 500)) 100
+                        , pgsTransferOrders = orderWith (UnitId 1)
+                            (EndpointUnit (UnitId 1))
+                            (EndpointBuilding (BuildingId 999)) 500 } ]) of
+                [e] → do
+                    ieCode e `shouldBe` "dangling-reference"
+                    ieComponent e `shouldBe` transferOrdersComponentId
+                    ieRefKind e `shouldBe` RefBuilding
+                    ieRefValue e `shouldBe` "999"
+                    T.isInfixOf "tolerated" (ieMessage e) `shouldBe` True
+                other → expectationFailure
+                    ("expected one warning, got " <> show other)
+
+        it "reports a dead carrier and a consumed item the same tolerated \
+           \way -- one diagnostic each, still no hard error" $ do
+            let p1 = (minimalPage page1)
+                    { pgsBuildings = BuildingSnapshot
+                        (HM.singleton (BuildingId 1) minimalBuilding) 100
+                    , pgsTransferOrders = orderWith (UnitId 42)
+                        (EndpointBuilding (BuildingId 1))
+                        (EndpointBuilding (BuildingId 1)) 777 }
+                snap = buildSnap page1 [p1]
+            sessionIntegrityErrors snap `shouldBe` []
+            map (\e → (ieRefKind e, ieRefValue e))
+                (sessionIntegrityWarnings snap)
+                `shouldMatchList` [(RefUnit, "42"), (RefItemInstance, "777")]
 
     describe "integrity graph — Lua AI references (requirement 8, unit_ai/ \
               \building_spawn)" $ do

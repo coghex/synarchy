@@ -56,6 +56,9 @@ import World.Mine.Apply (applyDigSlopes)
 import World.Construct.Apply (applyConstructSlopes)
 import Building.Types (BuildingManager(..), BuildingId(..), BuildingDef)
 import Building.Knowledge (prunedContainerIds, retainContainers)
+import World.Save.Integrity
+    ( pageEntitiesFrom, danglingOrderRefErrors, capIntegrityErrors
+    , renderIntegrityReport )
 import Unit.Types (UnitManager(..), UnitId, UnitDef)
 import Unit.Faction (fallbackFaction, factionTag)
 import Unit.Sim.Types (UnitSimState)
@@ -261,6 +264,27 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     -- nodes #763 requires to be restored.
     writeIORef (wsCraftBillsRef worldState) (wpsCraftBills wps)
     writeIORef (wsPowerNodesRef worldState) (wpsPowerNodes wps)
+
+    -- #1246: transfer orders restore VERBATIM for exactly the same
+    -- reason, and get the diagnostic requirement 5 asks for on the way
+    -- through. An order whose carrier died, whose destination was
+    -- demolished, or whose item was consumed before the save was ever
+    -- taken is TOLERATED gameplay, not corruption — it stays visible and
+    -- cancellable like a bill does — so it is logged and KEPT, never
+    -- pruned and never a load failure. (A reference that resolves on a
+    -- DIFFERENT page is the separate, genuinely fatal case, already
+    -- rejected by "World.Save.Integrity" before staging can run.) The
+    -- resolution set comes from this page's OWN restored entities via
+    -- the same 'pageEntitiesFrom' the pre-save boundary uses, so the two
+    -- boundaries cannot disagree about what counts as present.
+    let orderEntities = pageEntitiesFrom wpsGroundItems wpsUnits
+                                         wpsBuildings wps
+        danglingOrders = danglingOrderRefErrors pid orderEntities
+                             (wpsTransferOrders wps)
+    forM_ (renderIntegrityReport (capIntegrityErrors danglingOrders)) $ \m →
+        logInfo logger CatWorld $
+            "Save load: transfer-order integrity diagnostic: " <> m
+    writeIORef (wsTransferOrdersRef worldState) (wpsTransferOrders wps)
 
     -- #1087: container knowledge is the ONE page-scoped layer that is
     -- deliberately NOT restored verbatim. A bill or node whose building

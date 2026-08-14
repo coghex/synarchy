@@ -52,6 +52,7 @@ import World.Edit.Types (WorldEdit(..), WorldEdits)
 import World.Mine.Types (MineDesignations)
 import World.Construct.Types (ConstructDesignations)
 import Craft.Bills (CraftBills)
+import Unit.Transfer.Orders (TransferOrders)
 import Building.Knowledge (ContainerKnowledge)
 import Power.Types (PowerNodes)
 import World.Chop.Types (ChopDesignations)
@@ -143,6 +144,16 @@ data PageSnapshot = PageSnapshot
       --   contents on this page. Its remembered 'ItemInstance's are
       --   HISTORICAL OBSERVATIONS, deliberately absent from
       --   'allItemInstanceIds' below — see that function's note.
+    , pgsTransferOrders ∷ !TransferOrders
+      -- ^ #1246: this page's queue of durable transfer orders — the
+      --   acting unit, the endpoint pair, and each requested item's own
+      --   lifecycle state, plus the page-local id allocator. Its
+      --   references (unit, both endpoints, each item instance) are
+      --   same-page and validated by
+      --   'World.Save.Integrity.sessionIntegrityErrors'; a target absent
+      --   from the whole session is the tolerated, non-blocking
+      --   diagnostic 'World.Save.Integrity.sessionIntegrityWarnings'
+      --   reports.
     , pgsTillDesignations ∷ !TillDesignations
     , pgsCropPlots    ∷ !CropPlots
     , pgsPlantDesignations ∷ !PlantDesignations

@@ -102,6 +102,13 @@ import World.Chop.Types (ChopDesignation(..))
 import World.Till.Types (TillDesignation(..))
 import World.Plant.Types (PlantDesignation(..))
 import Craft.Bills (emptyCraftBills, CraftBill(..), CraftBills(..), BillId(..), BillMode(..))
+import Unit.Transfer
+    ( TransferBatch(..), TransferEndpoint(..), TransferItemRef(..)
+    , TransferReason(..), TransferState(..), QueuedTransfer(..)
+    , requestFailure, staleFailure )
+import Unit.Transfer.Orders
+    ( TransferOrder(..), TransferOrderId(..), TransferOrders(..)
+    , addTransferOrder, emptyTransferOrders, transferOrderList )
 import Power.Types (emptyPowerNodes, PowerNode(..), PowerNodes(..), PowerNodeId(..), PowerRole(..))
 import Building.Types (BuildingId(..))
 import Building.Knowledge
@@ -180,6 +187,70 @@ richBuilding = BuildingInstanceSnapshot
     , bisMaterialsDelivered = HM.singleton "stone" [richItem 980]
     , bisStorage = [richItem 990]
     }
+
+-- | A SECOND building on the rich page (#1246). It exists so the
+--   populated transfer-order fixture below can carry a genuine
+--   building-to-building order (epic decision D-10) whose acting unit is
+--   neither endpoint — a same-building "pair" would prove nothing about
+--   whether both endpoint identities really survive independently.
+richBuilding2 ∷ BuildingInstanceSnapshot
+richBuilding2 = BuildingInstanceSnapshot
+    { bisDefName = "cargo_hold_S", bisAnchorX = 9, bisAnchorY = 11
+    , bisGridZ = 0
+    , bisSpawnedAt = 0, bisTileW = 1, bisTileH = 1, bisSpawnRemaining = 0
+    , bisBuildProgress = 100
+    , bisMaterialsDelivered = HM.singleton "stone" [richItem 930]
+    , bisStorage = [richItem 940]
+    }
+
+-- | #1246: a POPULATED transfer-order store, built through the REAL
+--   creation surface ('addTransferOrder') rather than by hand, so the
+--   fixture also pins that ids start at 1, advance, and leave the
+--   allocator above every order it issued.
+--
+--   Between the two orders the entries cover ALL SIX
+--   'Unit.Transfer.TransferState' shapes, and 'TransferFailed' appears
+--   twice — once from 'requestFailure' (no cause) and once from
+--   'staleFailure' (a cause present) — because a fixture carrying only
+--   one of those could not tell a persisted @Nothing@ apart from a
+--   dropped @Just@. Every referenced unit, building and item instance
+--   really exists on this page, so the round trip exercises the
+--   RESOLVING path; the dangling and wrong-page paths have their own
+--   coverage in "Test.Headless.World.Save.Integrity".
+richTransferOrders ∷ TransferOrders
+richTransferOrders =
+    let (afterFirst, _)  = addTransferOrder (UnitId 1) unitToBuilding
+                               emptyTransferOrders
+        (afterSecond, _) = addTransferOrder (UnitId 1) buildingToBuilding
+                               afterFirst
+    in afterSecond
+  where
+    -- Request order is meaningful and is asserted positionally below.
+    unitToBuilding = TransferBatch
+        { tbSource      = EndpointUnit (UnitId 1)
+        , tbDestination = EndpointBuilding (BuildingId 1)
+        , tbEntries =
+            [ entry 950 "first_aid_kit" TransferQueued
+            , entry 951 "bandage"       TransferInTransit
+            , entry 960 "first_aid_kit" TransferReadyToCommit
+            , entry 961 "bandage"       TransferCompleted
+            ]
+        }
+    -- D-10: both ends are buildings and the acting unit is neither.
+    buildingToBuilding = TransferBatch
+        { tbSource      = EndpointBuilding (BuildingId 1)
+        , tbDestination = EndpointBuilding (BuildingId 2)
+        , tbEntries =
+            [ entry 990 "first_aid_kit" TransferCancelled
+            , entry 991 "bandage"
+                (TransferFailed (requestFailure ReasonReceiverFull))
+            , entry 980 "first_aid_kit"
+                (TransferFailed (staleFailure ReasonInstanceMissing))
+            ]
+        }
+    entry iid nm st = QueuedTransfer
+        { qtItem = TransferItemRef { tirInstanceId = iid, tirDefName = nm }
+        , qtState = st }
 
 -- | Populated with a real move target, a multi-step local path, a
 --   non-Idle activity, a pending drink timer, and an in-progress pose
@@ -268,13 +339,16 @@ richPage = PageSnapshot
     , pgsGroundItems  = GroundItems 2 (HM.singleton 1 (GroundItem (richItem 900) 5.5 6.5))
     , pgsSpoilPiles   = HM.singleton (5, 6) (SpoilPile (MaterialId 3) (1.0, 1.0, 1.0, 1.0))
     , pgsBuildings    = BuildingSnapshot
-        { bsnInstances = HM.singleton (BuildingId 1) richBuilding, bsnNextId = 2 }
+        { bsnInstances = HM.fromList [ (BuildingId 1, richBuilding)
+                                     , (BuildingId 2, richBuilding2) ]
+        , bsnNextId = 3 }
     , pgsUnits        = UnitSnapshot
         { usnInstances = HM.singleton (UnitId 1) richUnit, usnNextId = 2 }
     , pgsUnitSimStates = HM.singleton (UnitId 1) richSimState
     , pgsFloraHarvests = HM.singleton (15, 16) 1234.5
     , pgsChopDesignations = HM.singleton (7, 8) (ChopDesignation 0)
     , pgsCraftBills   = richBills
+    , pgsTransferOrders = richTransferOrders
     , pgsPowerNodes   = richNodes
     , pgsTillDesignations = HM.singleton (9, 10) (TillDesignation 0)
     , pgsCropPlots    = HM.singleton (11, 12) (CropPlot (FloraId 3) 5 0.9)
@@ -386,12 +460,16 @@ minimalPage2 = PageSnapshot
     , pgsConstructDesignations = HM.empty
     , pgsGroundItems  = GroundItems 0 HM.empty
     , pgsSpoilPiles   = emptySpoilPiles
-    , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 2 }
+      -- bsnNextId mirrors the session-global building allocator
+      -- (sgNextBuildingId), which every page's slice is rewritten to on
+      -- assembly -- see 'World.Save.Snapshot.Adapter'.
+    , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 3 }
     , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 2 }
     , pgsUnitSimStates = HM.empty
     , pgsFloraHarvests = emptyFloraHarvests
     , pgsChopDesignations = HM.empty
     , pgsCraftBills   = emptyCraftBills
+    , pgsTransferOrders = emptyTransferOrders
     , pgsPowerNodes   = emptyPowerNodes
     , pgsTillDesignations = HM.empty
     , pgsCropPlots    = emptyCropPlots
@@ -409,6 +487,14 @@ pageIdentityOf snap pid = pgsIdentity =≪ HM.lookup pid (snapPages snap)
 identityLanguage ∷ SessionSnapshot → WorldPageId → Maybe LanguageProvenance
 identityLanguage snap pid = wiLanguage =≪ pageIdentityOf snap pid
 
+-- | #1246: one page's restored transfer-order store.
+ordersOf ∷ SessionSnapshot → WorldPageId → TransferOrders
+ordersOf snap pid =
+    maybe emptyTransferOrders pgsTransferOrders (HM.lookup pid (snapPages snap))
+
+endpointsOf ∷ TransferBatch → (TransferEndpoint, TransferEndpoint)
+endpointsOf b = (tbSource b, tbDestination b)
+
 riverNamesOf ∷ SessionSnapshot → WorldPageId → HM.HashMap GeoFeatureId RiverName
 riverNamesOf snap pid =
     maybe HM.empty (rvnById ∘ wgpRiverNames ∘ pgsGenParams)
@@ -422,7 +508,7 @@ richGlobals = SessionGlobals
         , tpIdToPath = HM.singleton 1 "structures/test_wall.png"
         , tpNextId   = 2 }
     , sgNextItemId     = 1000
-    , sgNextBuildingId = 2
+    , sgNextBuildingId = 3
     , sgNextUnitId     = 2
     , sgActivePage     = page1
     , sgVisiblePages   = [page1, page2]
@@ -531,6 +617,43 @@ spec = do
                     riverNamesOf snap page2 `shouldBe` HM.empty
                     (wiName <$> pageIdentityOf snap page2)
                         `shouldBe` (wiName <$> customIdentity)
+                    -- #1246, stated explicitly for the same reason as
+                    -- the two above: the derived Eq already covers the
+                    -- order store, but a positional read of what came
+                    -- back is what makes a dropped state, a reordered
+                    -- entry list, or a flattened endpoint pair legible
+                    -- when it breaks.
+                    ordersOf snap page1 `shouldBe` richTransferOrders
+                    ordersOf snap page2 `shouldBe` emptyTransferOrders
+                    map troId (transferOrderList (ordersOf snap page1))
+                        `shouldBe` [TransferOrderId 1, TransferOrderId 2]
+                    trosNextId (ordersOf snap page1) `shouldBe` 3
+                    -- All six lifecycle shapes survive, in request
+                    -- order, with TransferFailed's optional cause both
+                    -- present and absent.
+                    concatMap (map qtState ∘ tbEntries ∘ troBatch)
+                              (transferOrderList (ordersOf snap page1))
+                        `shouldBe`
+                        [ TransferQueued, TransferInTransit
+                        , TransferReadyToCommit, TransferCompleted
+                        , TransferCancelled
+                        , TransferFailed (requestFailure ReasonReceiverFull)
+                        , TransferFailed (staleFailure ReasonInstanceMissing) ]
+                    concatMap (map (tirInstanceId ∘ qtItem) ∘ tbEntries
+                                   ∘ troBatch)
+                              (transferOrderList (ordersOf snap page1))
+                        `shouldBe` [950, 951, 960, 961, 990, 991, 980]
+                    -- D-10: the building-to-building order keeps BOTH
+                    -- endpoints and an acting unit that is neither.
+                    map (endpointsOf ∘ troBatch)
+                        (transferOrderList (ordersOf snap page1))
+                        `shouldBe`
+                        [ (EndpointUnit (UnitId 1)
+                          , EndpointBuilding (BuildingId 1))
+                        , (EndpointBuilding (BuildingId 1)
+                          , EndpointBuilding (BuildingId 2)) ]
+                    map troUnit (transferOrderList (ordersOf snap page1))
+                        `shouldBe` [UnitId 1, UnitId 1]
 
     describe "Lua component encoding pin (issue #1103)" $ do
         it "encodeSessionSnapshot puts each LuaComponentSpec's OWN id, \

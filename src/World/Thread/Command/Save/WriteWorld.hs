@@ -32,7 +32,8 @@ import World.Save.Serialize (encodeSessionSnapshot, writeSaveFiles)
 import World.Save.Snapshot
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
 import World.Save.Integrity
-    (sessionIntegrityErrors, capIntegrityErrors, renderIntegrityReport
+    (sessionIntegrityErrors, sessionIntegrityWarnings
+    , capIntegrityErrors, renderIntegrityReport
     , IntegrityReport(..), buildKnownEntities, LuaRefEdge
     , luaReferenceErrors, integrityErrorCap)
 import World.Save.Payload (LuaComponentSpec(..))
@@ -153,6 +154,8 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 cropPlots ← readIORef (wsCropPlotsRef ws)
                                 plantDesigs ← readIORef (wsPlantDesignationsRef ws)
                                 craftBills ← readIORef (wsCraftBillsRef ws)
+                                transferOrders ← readIORef
+                                    (wsTransferOrdersRef ws)
                                 powerNodes ← readIORef (wsPowerNodesRef ws)
                                 containerKnowledge ← readIORef
                                     (wsContainerKnowledgeRef ws)
@@ -189,6 +192,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                     , pgsFloraHarvests = floraHarvests
                                     , pgsChopDesignations = chopDesigs
                                     , pgsCraftBills  = craftBills
+                                    , pgsTransferOrders = transferOrders
                                     , pgsPowerNodes  = powerNodes
                                     , pgsContainerKnowledge = containerKnowledge
                                     , pgsTillDesignations = tillDesigs
@@ -278,6 +282,23 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                         (luaReferenceErrors
                                             componentVersions knownLua luaRefs)
                                 forM_ (renderIntegrityReport luaReport) $ \m →
+                                    logWarn logger CatWorld $
+                                        "saveWorld '" <> saveName
+                                        <> "': integrity diagnostic: " <> m
+                                -- Issue #1246: the NON-BLOCKING half of the
+                                -- Haskell-side graph, on the same terms. A
+                                -- transfer order whose carrier, endpoint or
+                                -- item is gone is tolerated gameplay, so it is
+                                -- reported HERE — after the hard check above
+                                -- has already passed — and the save proceeds
+                                -- with the order intact. Routing it through
+                                -- 'sessionIntegrityErrors' instead would abort
+                                -- the transaction, which is exactly the
+                                -- distinction 'sessionIntegrityWarnings' exists
+                                -- to keep.
+                                let warnReport = capIntegrityErrors
+                                        (sessionIntegrityWarnings snap)
+                                forM_ (renderIntegrityReport warnReport) $ \m →
                                     logWarn logger CatWorld $
                                         "saveWorld '" <> saveName
                                         <> "': integrity diagnostic: " <> m
