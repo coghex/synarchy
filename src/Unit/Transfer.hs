@@ -530,22 +530,30 @@ applyTransferCommit c scene =
 -- | Resolve the named instance in the source's LOOSE list. An id that
 --   resolves to worn gear instead is refused as not transferable
 --   rather than as missing, so the player gets the accurate reason.
+--
+--   The @(instanceId, defName)@ identity contract is validated FIRST,
+--   in both lists (#1273). 'itemMatches' deliberately ignores the name
+--   for a positive id (#67's exact-instance rule), so a stale pair
+--   whose id resolves to a DIFFERENT def is a bad reference wherever
+--   that instance sits — 'ReasonInstanceMissing', never a "worn"
+--   answer asserting the requested item exists. Only a correctly named
+--   held instance earns the location-specific reason.
 resolveInstance ∷ TransferItemRef → TransferEndpointView
                 → Either TransferFailure TransferPlan
 resolveInstance ref src =
     case findIx matches (endpointLooseItems src) of
         Just (item, ix)
-            | iiDefName item ≡ tirDefName ref →
-                Right TransferPlan { tpItem = item, tpIndex = ix }
-            | otherwise → Left (requestFailure ReasonInstanceMissing)
+            | named item → Right TransferPlan { tpItem = item, tpIndex = ix }
+            | otherwise  → Left (requestFailure ReasonInstanceMissing)
         Nothing
-            | any matches (endpointHeldItems src) →
+            | any (\it → matches it ∧ named it) (endpointHeldItems src) →
                 Left (requestFailure ReasonItemNotTransferable)
             | otherwise → Left (requestFailure ReasonInstanceMissing)
   where
     -- Validated > 0 by planItem before this runs, so the widening is
     -- lossless and can never wrap.
-    matches = itemMatches (fromIntegral (tirInstanceId ref)) (tirDefName ref)
+    matches  = itemMatches (fromIntegral (tirInstanceId ref)) (tirDefName ref)
+    named it = iiDefName it ≡ tirDefName ref
 
 -- | Chebyshev ≤ 1 between the two endpoints' occupied rectangles: 0 =
 --   overlapping, 1 = adjacent incl. diagonals. Deliberately NOT the
