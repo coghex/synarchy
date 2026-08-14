@@ -63,8 +63,12 @@ INVARIANTS ENFORCED
   * `flip: true` declares exactly the canonical five authored directions
     (south, south-east, east, north-east, north) and `flip: false`
     declares exactly all eight;
-  * per direction, frame indices start at 0 with no gaps or duplicates
-    (different directions of one animation may hold different counts);
+  * per direction, frame indices start at 0, ascend in the order they
+    are declared (playback follows that order), and have no gaps or
+    duplicates — different directions of one animation may still hold
+    different counts;
+  * `fps` is a positive number and `loop` a boolean, rejected rather
+    than coerced when they are not;
   * no symlink appears anywhere in the walk (unit directory,
     `animations/` root, animation directory, direction directory, or
     frame), so nothing can be linked past the inventory.
@@ -283,6 +287,26 @@ def parse_animations(
         if not isinstance(flip, bool):
             report.err(where, f"`flip:` must be a boolean, got {flip!r}")
             flip = False
+
+        # `fps` and `loop` are inventory-relevant: the preview reads them
+        # and the atlas compiler will. A wrong scalar type must be
+        # REJECTED here rather than coerced or ignored — Aeson's decoder
+        # on the Haskell side fails the whole file on one, so a value
+        # this tool waves through would take the unit's real animations
+        # down with it at load time.
+        if "fps" in raw_anim:
+            fps = raw_anim["fps"]
+            # bool is an int subclass in Python; `fps: true` is not a
+            # frame rate.
+            if isinstance(fps, bool) or not isinstance(fps, (int, float)):
+                report.err(
+                    where, f"`fps:` must be a number, got {fps!r}")
+            elif fps <= 0:
+                report.err(
+                    where, f"`fps:` must be positive, got {fps!r}")
+        if "loop" in raw_anim and not isinstance(raw_anim["loop"], bool):
+            report.err(
+                where, f"`loop:` must be a boolean, got {raw_anim['loop']!r}")
 
         raw_frames = raw_anim.get("frames")
         if not isinstance(raw_frames, dict) or not raw_frames:
@@ -588,6 +612,20 @@ def validate_numbering(
             where,
             f"duplicate frame index/indices "
             f"{', '.join(f'{i:03d}' for i in dupes)}")
+    # ORDER, not just the set. Runtime playback walks the YAML list in
+    # the order it is written (`uyaFrames` is a list per direction), so
+    # a contiguous-but-shuffled list plays the animation out of
+    # sequence while every set-based check below still passes.
+    if indices != sorted(indices):
+        first = next(i for i in range(1, len(indices))
+                     if indices[i] < indices[i - 1])
+        report.err(
+            where,
+            f"declared frames are out of order: frame_{indices[first]:03d}"
+            f".png is listed after frame_{indices[first - 1]:03d}.png. "
+            f"Playback follows the declared order, so the list must "
+            f"ascend.")
+
     ordered = sorted(counts)
     if ordered[0] != 0:
         report.err(

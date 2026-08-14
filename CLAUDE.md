@@ -1648,9 +1648,13 @@ relative, `..`-free, symlink-free, and resolves inside its EXACT
 `<unit>/animations/<animation>/<direction>/` directory, so cross-unit,
 cross-animation and cross-direction references are each named as such;
 `flip: true` declares exactly the canonical five authored directions and
-`flip: false` exactly all eight; per direction, indices start at 0 with
-no gaps or duplicates, while different directions of one animation may
-hold different counts. No symlink may appear anywhere in the walk — unit
+`flip: false` exactly all eight; per direction, indices start at 0,
+ASCEND in the order they are declared (playback walks the declared list,
+so a contiguous-but-shuffled list plays out of sequence while every
+set-based check still passes), and have no gaps or duplicates, while
+different directions of one animation may hold different counts; `fps`
+is a positive number and `loop` a boolean, rejected rather than coerced
+when they are not. No symlink may appear anywhere in the walk — unit
 directory, `animations/` root, animation directory, direction directory,
 or frame — so nothing can be linked past the inventory: a symlinked
 entry is an ERROR, never a skipped one, or a linked tree would evade the

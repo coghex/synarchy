@@ -500,6 +500,60 @@ def _duplicate_unit(fx: Fixture) -> None:
     fx.yaml("prop_copy", asset_only_yaml("prop", [("spin", CANON5, 2, True)]))
 
 
+@negative("a contiguous but out-of-order frame list", "out of order")
+def _out_of_order(fx: Fixture) -> None:
+    # Every set-based check passes here: indices are {0, 1}, start at 0,
+    # no gap, no duplicate. Only the ORDER is wrong, and playback walks
+    # the declared list in order.
+    valid_fixture(fx)
+    body = asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+    ordered = frame_lines("prop", "spin", "south", 2, " " * 12)
+    reversed_ = "".join(reversed(ordered.splitlines(keepends=True)))
+    body = body.replace(ordered, reversed_)
+    fx.yaml("prop", body)
+
+
+@negative("an `fps:` that is not a number", "`fps:` must be a number")
+def _fps_not_a_number(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+            .replace("        fps: 8\n", "        fps: fast\n"))
+
+
+@negative("an `fps:` of zero", "`fps:` must be positive")
+def _fps_not_positive(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+            .replace("        fps: 8\n", "        fps: 0\n"))
+
+
+@negative("a boolean `fps:`", "`fps:` must be a number")
+def _fps_boolean(fx: Fixture) -> None:
+    # bool is an int subclass in Python, so a naive isinstance check
+    # lets `fps: true` through as the number 1.
+    valid_fixture(fx)
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+            .replace("        fps: 8\n", "        fps: true\n"))
+
+
+@negative("a `loop:` that is not a boolean", "`loop:` must be a boolean")
+def _loop_not_a_boolean(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+            .replace("        loop: true\n", "        loop: sometimes\n"))
+
+
+@positive("a fractional fps and YAML's own boolean spellings are accepted")
+def _legal_scalars(fx: Fixture) -> None:
+    # The other direction: tightening these types must not reject a
+    # legitimate non-integer rate, nor YAML 1.1's `yes`/`no` booleans,
+    # which safe_load resolves to real bools before this code sees them.
+    fx.frames("prop", "spin", CANON5, 2)
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+            .replace("        fps: 8\n", "        fps: 7.5\n")
+            .replace("        loop: true\n", "        loop: yes\n"))
+
+
 @negative("an unknown --unit target", "no such unit",
           unit="definitely_not_a_unit")
 def _unknown_unit_target(fx: Fixture) -> None:
@@ -654,7 +708,7 @@ def main() -> int:
 
     # The suite is only meaningful if it actually built fixtures; a
     # refactor that silently emptied a registry must not read as green.
-    if len(POSITIVE) < 6 or len(NEGATIVE) < 38:
+    if len(POSITIVE) < 7 or len(NEGATIVE) < 43:
         failures.append(
             f"case registries look truncated: {len(POSITIVE)} positive, "
             f"{len(NEGATIVE)} negative")

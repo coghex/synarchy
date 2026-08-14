@@ -67,6 +67,14 @@ UNIT_ASSET_GLOBS = [
     "src/Engine/Asset/YamlUnits.hs", "src/Engine/Asset/YamlList.hs",
     "src/Engine/Preview/Unit.hs",
     "src/Engine/Scripting/Lua/API/Units/Yaml.hs",
+    # The boot path that feeds every data/units/*.yaml to loadUnitYaml:
+    # it is what makes an asset-only file runtime-visible at all, so a
+    # change here can break the exclusion the gate exists to protect.
+    "scripts/startup_loader.lua",
+    # Registration of the headless group and the module list that makes
+    # it compile. Either one silently un-registers Asset.UnitInventory,
+    # which turns its --match gate vacuous rather than failing.
+    "test-headless/Spec.hs", "synarchy.cabal",
     # Their tests and the preview probe.
     "test-headless/Test/Headless/Asset/UnitInventory.hs",
     "test-headless/Test/Headless/Asset/TextureFallback.hs",
@@ -141,6 +149,9 @@ def self_test() -> int:
         ("unit-assets",
          ["test-headless/Test/Headless/Asset/UnitInventory.hs"], True),
         ("unit-assets", ["tools/preview_probe.py"], True),
+        ("unit-assets", ["scripts/startup_loader.lua"], True),
+        ("unit-assets", ["test-headless/Spec.hs"], True),
+        ("unit-assets", ["synarchy.cabal"], True),
         ("unit-assets",
          ["assets/textures/units/tiller/animations/idle/south/frame_000.png"],
          True),
