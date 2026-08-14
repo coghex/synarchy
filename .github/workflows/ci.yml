@@ -364,7 +364,9 @@ jobs:
       # constructor list changes in any way that is not a pure append.
       # The tag is an index, so a reorder/insert/remove/rename silently
       # reinterprets every already-saved value with nothing failing to
-      # compile -- and the compat fixtures above only prove the handful of
+      # compile -- and so does reordering or retyping ONE constructor's
+      # fields, which are positional too and move no tag at all (#1270).
+      # The compat fixtures above only prove the handful of
       # constructors they happen to carry. Deliberately unconditional
       # rather than path-selective: the guarded set is discovered from
       # every `src/`/`app/` module, and the baseline it compares against
