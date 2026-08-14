@@ -1650,20 +1650,27 @@ cross-animation and cross-direction references are each named as such;
 `flip: true` declares exactly the canonical five authored directions and
 `flip: false` exactly all eight; per direction, indices start at 0 with
 no gaps or duplicates, while different directions of one animation may
-hold different counts; every frame decodes as a PNG (standard library
-only — no image package in CI; signature, per-chunk CRC, critical-chunk
-presence and order, refusal of any unknown CRITICAL chunk while unknown
-ancillary chunks are ignored as a decoder ignores them, the IHDR method
-fields, the inflated IDAT length and
-every scanline's filter type, Adam7 interlacing included) and one animation's frames share one pixel size.
-No symlink may appear anywhere in the walk — unit directory,
-`animations/` root, animation directory, direction directory, or frame —
-so nothing can be linked past the inventory.
+hold different counts. No symlink may appear anywhere in the walk — unit
+directory, `animations/` root, animation directory, direction directory,
+or frame — so nothing can be linked past the inventory: a symlinked
+entry is an ERROR, never a skipped one, or a linked tree would evade the
+inventory while its frames still ship. A `--unit` naming neither a
+declaration nor an asset tree exits non-zero rather than reporting a
+clean run of an empty inventory.
 
 **"Duplicate" means duplicate ANIMATION-FRAME claims only.** Reusing an
 animation frame as a unit's `sprite`, a `directional_sprites` entry, or
 its `portrait` is deliberately legal (20 shipped references do this) and
 is never reported.
+
+**The gate validates paths and structure, never file CONTENTS.** It
+establishes that each declared frame exists and is a regular file and
+asserts nothing about what is inside it — not that it decodes, not its
+pixel dimensions, not that one animation's frames agree on a size. That
+boundary is deliberate: validating a real binary format here is its own
+work with its own cost, tracked as **#1311**, and it will depend on a
+maintained decoding library rather than a hand-rolled parser. PyYAML is
+the validator's only third-party dependency.
 
 **Scope is `animations/` — deliberately not the whole unit tree.**
 `assets/textures/units/unknown_unit/rotations/*.png` and the per-unit
@@ -1675,8 +1682,10 @@ present an exact path-level classification first. #1257 itself deleted
 nothing — all 695 previously-unowned paths were retained and declared.
 
 Gates: `python3 tools/test_pack_atlas.py` (fixture-based, isolated temp
-trees, 4 positive + 30 negative cases, never touching the shipped
-assets) and the strict run above. Both run unconditionally in `make ci`
+trees, never touching the shipped assets; every negative case asserts a
+nonzero exit AND a diagnostic naming the real problem, and a rule that
+tightens gets a positive case pinning the other direction) and the
+strict run above. Both run unconditionally in `make ci`
 and post-merge master CI, and path-selectively on PRs via
 `tools/ci_expensive_gates.py --gate unit-assets`. hspec:
 `--match "Asset.UnitInventory"`.

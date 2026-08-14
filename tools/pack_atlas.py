@@ -65,11 +65,6 @@ INVARIANTS ENFORCED
     declares exactly all eight;
   * per direction, frame indices start at 0 with no gaps or duplicates
     (different directions of one animation may hold different counts);
-  * every frame decodes as a PNG — signature, per-chunk CRC,
-    critical-chunk presence and order, the IHDR method fields, the
-    inflated IDAT length, and every scanline's filter type, interlaced
-    images included — and all frames of one animation share one pixel
-    size;
   * no symlink appears anywhere in the walk (unit directory,
     `animations/` root, animation directory, direction directory, or
     frame), so nothing can be linked past the inventory.
@@ -83,7 +78,8 @@ USAGE
 
     python3 tools/pack_atlas.py --validate-only --unit acolyte
         Restrict both the declarations and the filesystem walk to one
-        unit.
+        unit. A name with neither a declaration nor an asset tree is an
+        error, not an empty success.
 
     python3 tools/pack_atlas.py --validate-only --strict
         Also treat warnings as errors. Warnings are advisory only
@@ -95,6 +91,19 @@ USAGE
         `assets/textures/units/`. Used by tools/test_pack_atlas.py so
         its fixtures never touch the shipped assets.
 
+WHAT IT DOES NOT VALIDATE
+-------------------------
+
+This tool never OPENS a frame. It establishes that each declared frame
+exists and is a regular file, and asserts nothing about its contents:
+not that it decodes, not its pixel dimensions, not its colour type, and
+not that one animation's frames agree on a size.
+
+That boundary is deliberate (#1257). Validating a real binary format
+here is its own piece of work with its own cost, tracked as #1311, and
+it will depend on a maintained decoding library rather than a
+hand-rolled parser.
+
 REQUIREMENTS
 ------------
 
@@ -102,18 +111,14 @@ PyYAML — install with:
 
     python3 -m pip install --user pyyaml
 
-PNG decoding uses the standard library only (`zlib`, `binascii`), so no
-image package has to be provisioned in CI.
+That is the only third-party dependency; deliberately no image package.
 
 """
 from __future__ import annotations
 
 import argparse
-import binascii
 import re
-import struct
 import sys
-import zlib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional, Set, Tuple
@@ -185,33 +190,6 @@ FRAME_RE = re.compile(r"^frame_(\d{3})\.png$")
 # Relative to the validation root.
 ASSET_PREFIX: Tuple[str, ...] = ("assets", "textures", "units")
 
-PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
-
-# The four critical chunks the PNG specification defines. A chunk whose
-# FIRST type byte is upper case is critical (bit 5 of that byte is the
-# ancillary flag), and a decoder must REFUSE a critical chunk it does not
-# know — so any other upper-case-initial type is a hard error here, while
-# an unknown ancillary chunk is simply ignored, exactly as a decoder
-# ignores it.
-PNG_CRITICAL_CHUNKS = frozenset({b"IHDR", b"PLTE", b"IDAT", b"IEND"})
-
-# PNG limits both dimensions to 2^31 - 1; the four-byte header field can
-# express more than that.
-PNG_MAX_DIMENSION = (1 << 31) - 1
-
-# PNG colour type -> samples per pixel.
-PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
-
-# Legal (colour type, bit depth) pairs from the PNG specification.
-PNG_DEPTHS = {
-    0: {1, 2, 4, 8, 16},
-    2: {8, 16},
-    3: {1, 2, 4, 8},
-    4: {8, 16},
-    6: {8, 16},
-}
-
-
 @dataclass
 class Issue:
     severity: str  # "error" | "warning"
@@ -236,219 +214,6 @@ class Report:
 
 def normalise_dir(key: str) -> Optional[str]:
     return DIR_ALIASES.get(key.lower())
-
-
-# --------------------------------------------------------------------
-# PNG decoding (standard library only)
-# --------------------------------------------------------------------
-
-class PngError(Exception):
-    """A PNG that does not decode."""
-
-
-# Adam7 interlacing, as the PNG specification tabulates it: the starting
-# row/column and row/column increment of each of the seven passes.
-ADAM7_START_ROW = (0, 0, 4, 0, 2, 0, 1)
-ADAM7_START_COL = (0, 4, 0, 2, 0, 1, 0)
-ADAM7_ROW_STEP = (8, 8, 8, 4, 4, 2, 2)
-ADAM7_COL_STEP = (8, 8, 4, 4, 2, 2, 1)
-
-
-def scanline_layout(
-    width: int, height: int, channels: int, depth: int, interlace: int,
-) -> List[Tuple[int, int]]:
-    """``[(row_bytes, row_count), ...]`` for the inflated IDAT stream.
-
-    One entry for a non-interlaced image; one per non-empty Adam7 pass
-    for an interlaced one. Modelling both the same way is what lets the
-    size and filter-byte checks below cover interlaced files too, rather
-    than skipping them.
-    """
-    def stride(w: int) -> int:
-        return (w * channels * depth + 7) // 8
-
-    if interlace == 0:
-        return [(stride(width), height)]
-
-    passes: List[Tuple[int, int]] = []
-    for p in range(7):
-        pass_w = -(-(width - ADAM7_START_COL[p]) // ADAM7_COL_STEP[p])
-        pass_h = -(-(height - ADAM7_START_ROW[p]) // ADAM7_ROW_STEP[p])
-        if pass_w > 0 and pass_h > 0:
-            passes.append((stride(pass_w), pass_h))
-    return passes
-
-
-def decode_png_size(path: Path) -> Tuple[int, int]:
-    """Structurally decode ``path`` and return its (width, height).
-
-    This walks the whole chunk stream, verifies every chunk CRC, refuses
-    any critical chunk it does not know while ignoring unknown ancillary
-    ones exactly as a decoder does, checks critical-chunk presence and
-    ORDER (IHDR first, PLTE before IDAT and required for indexed colour,
-    IDATs consecutive, IEND empty and final), parses IHDR, and inflates the concatenated IDAT payload,
-    checking both that its length is exactly the raw scanline total the
-    header declares and that every scanline's filter type is one the
-    specification defines. That is enough to reject truncation, byte
-    corruption, a wrong-sized image, a structurally invalid stream, and
-    a non-PNG file wearing a .png name, without needing an image library
-    on the CI box.
-
-    Raises PngError with a specific reason on anything malformed.
-    """
-    try:
-        data = path.read_bytes()
-    except OSError as error:
-        raise PngError(f"unreadable: {error}") from error
-
-    if not data.startswith(PNG_SIGNATURE):
-        raise PngError("not a PNG (bad signature)")
-
-    offset = len(PNG_SIGNATURE)
-    header: Optional[Tuple[int, int, int, int, int]] = None
-    idat = bytearray()
-    saw_iend = False
-    saw_plte = False
-    idat_started = False
-    idat_closed = False
-    chunk_index = 0
-
-    while offset < len(data):
-        if offset + 8 > len(data):
-            raise PngError("truncated chunk header")
-        (length,) = struct.unpack(">I", data[offset:offset + 4])
-        ctype = data[offset + 4:offset + 8]
-        name = ctype.decode("latin-1", "replace")
-        if not all(0x41 <= b <= 0x5A or 0x61 <= b <= 0x7A for b in ctype):
-            raise PngError(f"chunk type is not four letters: {name!r}")
-        if ctype not in PNG_CRITICAL_CHUNKS and not ctype[0] & 0x20:
-            raise PngError(
-                f"unknown critical chunk {name} (a decoder must refuse a "
-                f"critical chunk it does not know; an ancillary chunk would "
-                f"spell its type with a lower-case first letter)")
-        body_start = offset + 8
-        body_end = body_start + length
-        if body_end + 4 > len(data):
-            raise PngError(
-                f"truncated {name} chunk (declared {length} bytes)")
-        body = data[body_start:body_end]
-        (stored_crc,) = struct.unpack(">I", data[body_end:body_end + 4])
-        actual_crc = binascii.crc32(ctype + body) & 0xFFFFFFFF
-        if stored_crc != actual_crc:
-            raise PngError(f"bad CRC on {name} chunk")
-
-        # Critical-chunk ORDER and presence, not just CRCs. Tracking
-        # "have I seen an IHDR/IDAT/IEND anywhere" accepts streams no
-        # decoder does: data after the end marker, an indexed image with
-        # no palette, IDATs split by another chunk.
-        if saw_iend:
-            raise PngError(f"{name} chunk appears after IEND")
-        if ctype == b"IHDR" and chunk_index != 0:
-            raise PngError("duplicate IHDR chunk")
-        if idat_started and ctype != b"IDAT":
-            idat_closed = True
-
-        if chunk_index == 0:
-            if ctype != b"IHDR":
-                raise PngError("first chunk is not IHDR")
-            if length != 13:
-                raise PngError(f"IHDR is {length} bytes, expected 13")
-            width, height, depth, colour, comp, filt, interlace = \
-                struct.unpack(">IIBBBBB", body)
-            if width == 0 or height == 0:
-                raise PngError(f"zero dimension ({width}x{height})")
-            if width > PNG_MAX_DIMENSION or height > PNG_MAX_DIMENSION:
-                raise PngError(
-                    f"dimension exceeds the PNG maximum of "
-                    f"{PNG_MAX_DIMENSION} ({width}x{height})")
-            if colour not in PNG_CHANNELS:
-                raise PngError(f"unknown colour type {colour}")
-            if depth not in PNG_DEPTHS[colour]:
-                raise PngError(
-                    f"bit depth {depth} is illegal for colour type {colour}")
-            # The PNG specification defines exactly one value for each of
-            # these. A CRC-correct header carrying anything else is
-            # malformed even if its IDAT inflates cleanly, and a decoder
-            # is entitled to refuse it — so accepting it would make the
-            # decodability invariant a promise this checker does not keep.
-            if comp != 0:
-                raise PngError(f"unknown compression method {comp}")
-            if filt != 0:
-                raise PngError(f"unknown filter method {filt}")
-            header = (width, height, depth, colour, interlace)
-        elif ctype == b"PLTE":
-            if saw_plte:
-                raise PngError("duplicate PLTE chunk")
-            if idat_started:
-                raise PngError("PLTE chunk appears after IDAT")
-            assert header is not None
-            palette_colour = header[3]
-            if palette_colour in (0, 4):
-                raise PngError(
-                    f"PLTE chunk is not allowed for colour type "
-                    f"{palette_colour}")
-            if length == 0 or length % 3 != 0:
-                raise PngError(
-                    f"PLTE is {length} bytes, expected a non-zero multiple "
-                    f"of 3")
-            if palette_colour == 3 and length // 3 > 1 << header[2]:
-                raise PngError(
-                    f"PLTE holds {length // 3} entries, more than the "
-                    f"{1 << header[2]} a bit depth of {header[2]} can index")
-            saw_plte = True
-        elif ctype == b"IDAT":
-            if idat_closed:
-                raise PngError("IDAT chunks are not consecutive")
-            idat_started = True
-            idat += body
-        elif ctype == b"IEND":
-            if length != 0:
-                raise PngError(f"IEND is {length} bytes, expected 0")
-            saw_iend = True
-        chunk_index += 1
-        offset = body_end + 4
-
-    if header is None:
-        raise PngError("no IHDR chunk")
-    if not saw_iend:
-        raise PngError("no IEND chunk")
-    if not idat:
-        raise PngError("no IDAT data")
-    if header[3] == 3 and not saw_plte:
-        raise PngError("colour type 3 (indexed) requires a PLTE chunk")
-
-    width, height, depth, colour, interlace = header
-    if interlace not in (0, 1):
-        raise PngError(f"unknown interlace method {interlace}")
-    try:
-        raw = zlib.decompress(bytes(idat))
-    except zlib.error as error:
-        raise PngError(f"IDAT does not inflate: {error}") from error
-
-    layout = scanline_layout(width, height, PNG_CHANNELS[colour], depth,
-                             interlace)
-    expected = sum((row_bytes + 1) * rows for row_bytes, rows in layout)
-    if len(raw) != expected:
-        raise PngError(
-            f"inflated IDAT is {len(raw)} bytes, expected {expected} "
-            f"for {width}x{height}")
-
-    # Every scanline is prefixed by its filter type, and the
-    # specification defines only 0-4. A file using anything else still
-    # inflates to exactly the right length, so the size check above
-    # cannot see it — but a decoder rejects it, which is precisely the
-    # "undecodable" this gate promises to catch.
-    offset = 0
-    for row_bytes, rows in layout:
-        for _ in range(rows):
-            method = raw[offset]
-            if method > 4:
-                raise PngError(
-                    f"unknown scanline filter type {method} at byte "
-                    f"{offset} (the specification defines 0-4)")
-            offset += row_bytes + 1
-
-    return width, height
 
 
 # --------------------------------------------------------------------
@@ -974,6 +739,17 @@ def validate(
         decls = [d for d in decls if d.name == only_unit]
 
     physical = walk_physical(report, root, only_unit)
+
+    # A `--unit` naming nothing at all is a typo, not a clean run of an
+    # empty inventory. Without this it exits 0 reporting "0 unit
+    # declaration(s), 0 frame(s)" — which reads exactly like a pass.
+    if only_unit is not None and not decls and not physical:
+        report.err(
+            only_unit,
+            f"no such unit: '{only_unit}' has neither a declaration in "
+            f"data/units/ nor an asset tree under "
+            f"{'/'.join(ASSET_PREFIX)}/")
+        return totals
     claimed: Dict[Path, str] = {}
 
     for decl in decls:
@@ -992,7 +768,6 @@ def validate(
         for anim in decl.anims:
             totals.animations += 1
             validate_direction_set(report, anim)
-            sizes: Dict[Tuple[int, int], str] = {}
             for direction in sorted(anim.frames):
                 declared_paths = anim.frames[direction]
                 names = [PurePosixPath(p).name for p in declared_paths]
@@ -1011,22 +786,6 @@ def validate(
                             f"already owned by {claimed[real]}")
                         continue
                     claimed[real] = owner
-                    try:
-                        size = decode_png_size(real)
-                    except PngError as error:
-                        report.err(
-                            f"{anim.where}/{direction}",
-                            f"undecodable PNG {declared}: {error}")
-                        continue
-                    sizes.setdefault(size, declared)
-            if len(sizes) > 1:
-                detail = ", ".join(
-                    f"{w}x{h} ({sizes[(w, h)]})"
-                    for (w, h) in sorted(sizes))
-                report.err(
-                    anim.where,
-                    f"inconsistent frame dimensions within one animation: "
-                    f"{detail}")
 
     for orphan in sorted(physical - set(claimed)):
         rel = orphan.relative_to(root.resolve()).as_posix() \

@@ -118,8 +118,13 @@ numbering from zero, the
 five-vs-eight direction rule against `flip`, PNG decodability, and one pixel
 size per animation. Reuse of an animation frame as `sprite`,
 `directional_sprites` or `portrait` is legal and never reported as a
-duplicate. Needs PyYAML; PNG decoding is standard-library only. Atlas packing
-is not implemented yet.
+duplicate. A `--unit` naming neither a declaration nor an asset tree exits
+non-zero rather than reporting an empty success.
+
+It never OPENS a frame: contents — decodability, pixel dimensions, size
+consistency within an animation — are deliberately out of scope and tracked in
+issue #1311. PyYAML is the only third-party dependency. Atlas packing is not
+implemented yet.
 
 ```bash
 python3 tools/pack_atlas.py --validate-only --strict
