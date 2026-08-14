@@ -1653,8 +1653,10 @@ ASCEND in the order they are declared (playback walks the declared list,
 so a contiguous-but-shuffled list plays out of sequence while every
 set-based check still passes), and have no gaps or duplicates, while
 different directions of one animation may hold different counts; `fps`
-is a positive number and `loop` a boolean, rejected rather than coerced
-when they are not. No symlink may appear anywhere in the walk — unit
+is a FINITE positive number (PyYAML resolves `.nan` and `.inf` to real
+floats, and neither fails a positivity test — `nan <= 0` is False like
+every NaN comparison, and infinity really is greater) and `loop` a
+boolean, rejected rather than coerced when they are not. No symlink may appear anywhere in the walk — unit
 directory, `animations/` root, animation directory, direction directory,
 or frame — so nothing can be linked past the inventory: a symlinked
 entry is an ERROR, never a skipped one, or a linked tree would evade the

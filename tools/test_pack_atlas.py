@@ -536,6 +536,31 @@ def _fps_boolean(fx: Fixture) -> None:
             .replace("        fps: 8\n", "        fps: true\n"))
 
 
+@negative("a NaN `fps:`", "`fps:` must be finite")
+def _fps_nan(fx: Fixture) -> None:
+    # `nan <= 0` is False — every NaN comparison is — so a positivity
+    # test alone lets this through.
+    valid_fixture(fx)
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+            .replace("        fps: 8\n", "        fps: .nan\n"))
+
+
+@negative("an infinite `fps:`", "`fps:` must be finite")
+def _fps_infinite(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+            .replace("        fps: 8\n", "        fps: .inf\n"))
+
+
+@negative("a negative-infinity `fps:`", "`fps:` must be finite")
+def _fps_negative_infinite(fx: Fixture) -> None:
+    # Caught by the positivity test too, but it must report the FINITE
+    # diagnostic: the finiteness check has to run first.
+    valid_fixture(fx)
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+            .replace("        fps: 8\n", "        fps: -.inf\n"))
+
+
 @negative("a `loop:` that is not a boolean", "`loop:` must be a boolean")
 def _loop_not_a_boolean(fx: Fixture) -> None:
     valid_fixture(fx)
@@ -708,7 +733,7 @@ def main() -> int:
 
     # The suite is only meaningful if it actually built fixtures; a
     # refactor that silently emptied a registry must not read as green.
-    if len(POSITIVE) < 7 or len(NEGATIVE) < 43:
+    if len(POSITIVE) < 7 or len(NEGATIVE) < 46:
         failures.append(
             f"case registries look truncated: {len(POSITIVE)} positive, "
             f"{len(NEGATIVE)} negative")

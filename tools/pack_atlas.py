@@ -67,8 +67,9 @@ INVARIANTS ENFORCED
     are declared (playback follows that order), and have no gaps or
     duplicates — different directions of one animation may still hold
     different counts;
-  * `fps` is a positive number and `loop` a boolean, rejected rather
-    than coerced when they are not;
+  * `fps` is a finite positive number (`.nan` and `.inf` are real floats
+    to PyYAML, and neither fails a positivity test) and `loop` a
+    boolean, rejected rather than coerced when they are not;
   * no symlink appears anywhere in the walk (unit directory,
     `animations/` root, animation directory, direction directory, or
     frame), so nothing can be linked past the inventory.
@@ -121,6 +122,7 @@ That is the only third-party dependency; deliberately no image package.
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import sys
 from dataclasses import dataclass, field
@@ -301,6 +303,15 @@ def parse_animations(
             if isinstance(fps, bool) or not isinstance(fps, (int, float)):
                 report.err(
                     where, f"`fps:` must be a number, got {fps!r}")
+            elif not math.isfinite(fps):
+                # PyYAML resolves `.nan` and `.inf` to real floats, and
+                # neither is caught by a positivity test: `nan <= 0` is
+                # False because every NaN comparison is, and `inf <= 0`
+                # is False because infinity really is greater. Check
+                # finiteness FIRST, or both reach the engine as a frame
+                # rate no clock can advance against.
+                report.err(
+                    where, f"`fps:` must be finite, got {fps!r}")
             elif fps <= 0:
                 report.err(
                     where, f"`fps:` must be positive, got {fps!r}")
