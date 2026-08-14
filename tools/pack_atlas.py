@@ -166,7 +166,12 @@ ALL_DIRS = {
 CANONICAL_DIRS = {"south", "south-east", "east", "north-east", "north"}
 
 # A unit identifier is exactly one lowercase path component.
-UNIT_IDENT_RE = re.compile(r"^[a-z0-9_]+$")
+#
+# All three use \Z, never $: `$` also matches just BEFORE a trailing
+# newline, so `re.match(r"^[a-z0-9_]+$", "unit\n")` succeeds and a
+# directory or key whose name ends in a newline would pass a rule that
+# demands one path component.
+UNIT_IDENT_RE = re.compile(r"\A[a-z0-9_]+\Z")
 
 # An ANIMATION identifier is the same lowercase rule, plus ONE narrowly
 # matched approved exception: the documented asymmetric-weapon infix
@@ -184,14 +189,14 @@ UNIT_IDENT_RE = re.compile(r"^[a-z0-9_]+$")
 # all rejected. The safety property the rule exists for — ONE path
 # component, ASCII word characters only, so nothing carries a separator, a
 # dot, or traversal — holds either way.
-ANIM_IDENT_RE = re.compile(r"^[a-z0-9_]+$|^[a-z0-9_]+_RH_[a-z0-9_]+$")
+ANIM_IDENT_RE = re.compile(r"\A[a-z0-9_]+\Z|\A[a-z0-9_]+_RH_[a-z0-9_]+\Z")
 
 # Exactly three digits: `frame_NNN.png` is the asset format, and the
 # numbering rule below counts from `frame_000.png`. `\d+` would also
 # admit `frame_1.png`, `frame_01.png` and `frame_0000.png`, which are
 # three different spellings of one index and would let a directory hold
 # apparent duplicates that the gap/duplicate check could not see.
-FRAME_RE = re.compile(r"^frame_(\d{3})\.png$")
+FRAME_RE = re.compile(r"\Aframe_(\d{3})\.png\Z")
 
 # Relative to the validation root.
 ASSET_PREFIX: Tuple[str, ...] = ("assets", "textures", "units")

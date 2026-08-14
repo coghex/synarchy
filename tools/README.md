@@ -497,16 +497,24 @@ python3 tools/ci_probes.py --self-test
 python3 tools/ci_probes.py --status
 ```
 
-### `ci_expensive_gates.py` — CI worldgen/graphical selection
+### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets selection
 
-Selects the two expensive CI gates that are conditional on pull requests:
-quick worldgen-output regression checking and graphical test-suite
-compilation. Both run unconditionally after a merge to master. The mapping is
-intentionally explicit; add a relevant glob when introducing a new worldgen
-output or graphics entry point.
+Selects the three expensive CI gates that are conditional on pull requests:
+quick worldgen-output regression checking, graphical test-suite compilation,
+and the unit-asset inventory pair (`test_pack_atlas.py` +
+`pack_atlas.py --validate-only --strict`, #1257). All three run
+unconditionally after a merge to master. The mapping is intentionally
+explicit; add a relevant glob when introducing a new worldgen output,
+graphics entry point, or unit-asset input.
+
+Patterns are matched with `fnmatch`, where `*` crosses `/` and `**` carries no
+special meaning — write `dir/*` for a whole subtree. `--gate` names are
+cross-checked against the pattern table by `--self-test`, so an unknown gate
+raises instead of silently inheriting another gate's globs.
 
 ```bash
 python3 tools/ci_expensive_gates.py --changed src/World/Geology/Timeline.hs --gate worldgen
+python3 tools/ci_expensive_gates.py --changed data/units/acolyte.yaml --gate unit-assets
 python3 tools/ci_expensive_gates.py --self-test
 ```
 
@@ -764,7 +772,7 @@ tools/
 ├── world_baseline.py       (capture reference outputs)
 ├── world_check.py          (regression suite runner)
 ├── test_audit.py           (unit tests)
-├── ci_expensive_gates.py   (path selector for CI's worldgen/graphical gates)
+├── ci_expensive_gates.py   (path selector for CI's worldgen/graphical/unit-assets gates)
 ├── lua_module_budget.py    (Lua module split line-budget guard)
 ├── action_outcome_coverage.py (F4 action-outcome verb instrumentation self-audit)
 ├── language_report.py      (generated-language native-name report/check, #710/#1094/#1095/#1096)

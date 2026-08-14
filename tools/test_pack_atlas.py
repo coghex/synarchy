@@ -335,6 +335,56 @@ def _bad_frame_name(fx: Fixture) -> None:
         png_bytes())
 
 
+@negative("a wrong-case file extension", "must match frame_NNN.png")
+def _wrong_case_extension(fx: Fixture) -> None:
+    # The extension rule is case-SENSITIVE. `.PNG` is still walked as an
+    # image (the suffix test lowercases), so it must be reported as a
+    # bad frame name rather than silently ignored as a non-PNG.
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/prop/animations/spin/south/frame_002.PNG",
+        png_bytes())
+
+
+@negative("a frame FILE whose name ends in a newline",
+          "must match frame_NNN.png")
+def _newline_in_frame_name(fx: Fixture) -> None:
+    # A newline is a legal POSIX filename character, and `$` matches
+    # just before a trailing one — so with `^...$` this file passes the
+    # name rule, exists on disk, and is claimed by its declaration,
+    # leaving NO error at all. Only \Z rejects it. The file is both
+    # created and declared for exactly that reason: a disk-only version
+    # would still fail as "unclassified", masking the bug.
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/prop/animations/spin/south/frame_002.png\n",
+        png_bytes())
+    body = asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+    body = body.replace(
+        frame_lines("prop", "spin", "south", 2, " " * 12),
+        frame_lines("prop", "spin", "south", 2, " " * 12)
+        + '            "assets/textures/units/prop/animations/spin/south/'
+          'frame_002.png\\n"\n'.replace('            "', '            - "'))
+    fx.yaml("prop", body)
+
+
+@negative("an animation key ending in a newline",
+          "unsafe animation identifier")
+def _newline_in_anim_key(fx: Fixture) -> None:
+    # `$` matches just BEFORE a trailing newline, so an `^...$` rule
+    # used with `match` accepts this; only \Z or fullmatch rejects it.
+    valid_fixture(fx)
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+            .replace("      spin:\n", '      "spin\\n":\n'))
+
+
+@negative("a unit name ending in a newline", "unsafe unit identifier")
+def _newline_in_unit_name(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+            .replace("  - name: prop\n", '  - name: "prop\\n"\n'))
+
+
 @negative("an absolute declared path", "absolute path is not allowed")
 def _absolute(fx: Fixture) -> None:
     valid_fixture(fx)
@@ -733,7 +783,7 @@ def main() -> int:
 
     # The suite is only meaningful if it actually built fixtures; a
     # refactor that silently emptied a registry must not read as green.
-    if len(POSITIVE) < 7 or len(NEGATIVE) < 46:
+    if len(POSITIVE) < 7 or len(NEGATIVE) < 50:
         failures.append(
             f"case registries look truncated: {len(POSITIVE)} positive, "
             f"{len(NEGATIVE)} negative")

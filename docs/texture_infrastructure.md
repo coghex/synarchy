@@ -155,10 +155,13 @@ whose freshness cannot be verified.
   authored directions. An atlas format therefore cannot assume one common
   frame count for every row; it must record each direction's real count and pad
   unused cells deterministically.
-- `tools/pack_atlas.py` is currently a validator despite its name. Running
-  `python3 tools/pack_atlas.py --validate-only --strict` reports 120 orphan
-  warnings and exits nonzero. It is not referenced by `Makefile`, the CI
-  workflow, or the local CI driver.
+- `tools/pack_atlas.py` is currently a validator despite its name. As of TEX-1
+  (#1257) it is filesystem-first and enforceable: `python3 tools/pack_atlas.py
+  --validate-only --strict` covers the complete corpus (7 unit trees, 116
+  animations, 4,620 frames) and exits 0 with zero warnings, and it runs
+  unconditionally in `make ci` and post-merge master CI, path-selectively on
+  PRs via `tools/ci_expensive_gates.py --gate unit-assets`. It validates paths
+  and structure only, never file contents; image-content validation is #1311.
 - `docs/asset_generation.md` documents the live source layout and mirroring
   convention. The legacy proposal for a separate
   `assets/units/<unit>/animations.yaml` was never adopted.
@@ -408,8 +411,10 @@ eventually outweighs that convenience.
 - **Scope:** Extend `tools/pack_atlas.py`; classify every current orphan warning
   as referenced art, non-runtime source material, or genuinely obsolete content;
   validate names, containment, duplicate paths, direction sets, asymmetric
-  exceptions, dimensions, numbering, and exact orphan ownership; add self-tests
-  and path-selective CI wiring.
+  exceptions, numbering, and exact orphan ownership; add self-tests
+  and path-selective CI wiring. Image-content validation — decodability and
+  per-animation pixel-size consistency — was descoped by owner decision on
+  2026-08-14 and is tracked as #1311.
 - **Phase:** 1 — establish trustworthy inputs
 - **Depends on:** `none`
 - **Ordering:** `can land first`
