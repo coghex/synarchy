@@ -82,6 +82,7 @@ module World.Save.Component.Types
     , ComponentSpec(..)
     , ComponentVersion(..)
     , atVersion
+    , olderVersionTableError
     , componentCodec
     , decodeComponentValue
     , findDescriptor
@@ -330,8 +331,54 @@ data ComponentSpec d a = ComponentSpec
       --   built by 'atVersion' with its own frozen DTO type. Empty for a
       --   component that has never evolved — the degenerate case of the
       --   same mechanism, not a different one.
+      --
+      --   Every entry must be STRICTLY OLDER than 'csVersion' and appear
+      --   AT MOST ONCE. That is not a convention: 'componentCodec'
+      --   ENFORCES it (issue #1275) and is the authoritative boundary
+      --   for the rule — see 'olderVersionTableError'.
     , csValidate      ∷ a → [ComponentError]
     }
+
+-- | The FIRST way a declared version table breaks the 'csOlderVersions'
+--   contract, in declaration order, or 'Nothing' when the table is
+--   well-formed (issue #1275).
+--
+--   Two independent rules, both structural rather than stylistic,
+--   because 'componentCodec' turns the declarations into a SORTED
+--   association list dispatched by first-match 'lookup':
+--
+--     * every entry is STRICTLY OLDER than the current version. An
+--       entry EQUAL to it is shadowed by the real current decoder
+--       ('L.sortOn' is stable and the current version is prepended), so
+--       its frozen DTO is silently never reached; an entry GREATER than
+--       it is accepted and advertised as though it were history, which
+--       is a reader claiming to understand bytes no writer has ever
+--       produced.
+--     * no version is declared TWICE — the second decoder for a
+--       repeated version is unreachable through 'lookup', so a
+--       migration can be replaced by an older one without a single
+--       type error.
+--
+--   Both are invisible at the type level (the version is an ordinary
+--   'Word32' argument to 'atVersion'), so nothing but this check stands
+--   between a mis-typed declaration and a reader that silently decodes
+--   through the wrong frozen DTO.
+olderVersionTableError ∷ ComponentId → Word32 → [Word32] → Maybe Text
+olderVersionTableError (ComponentId cid) current = go HS.empty
+  where
+    go _    []       = Nothing
+    go seen (v : vs)
+        | v ≡ current      = Just (violation v "is the CURRENT version, not an older one")
+        | v > current      = Just (violation v "is NEWER than the current version")
+        | HS.member v seen = Just (violation v "is declared more than once")
+        | otherwise        = go (HS.insert v seen) vs
+    violation v what =
+        "save component \"" <> cid <> "\": csOlderVersions entry v"
+          <> T.pack (show v) <> " " <> what
+          <> " (csVersion is v" <> T.pack (show current)
+          <> "). Every entry must be strictly older than csVersion and "
+          <> "appear at most once, or the sorted dispatch table silently "
+          <> "shadows a decoder (issue #1275)."
 
 -- | Build a component's codec from its 'ComponentSpec', handling the two
 --   universal decode failures uniformly so no component hand-writes
@@ -344,23 +391,38 @@ data ComponentSpec d a = ComponentSpec
 --   'csOlderVersions', sorted ascending — so a reader cannot accept a
 --   version it has no decoder for, or report an accepted set that
 --   disagrees with what it actually dispatches on.
+--
+--   This is also the AUTHORITATIVE boundary for the 'csOlderVersions'
+--   contract (issue #1275): a table with a duplicate, the current
+--   version, or a future version is rejected HERE, naming the component
+--   and the offending version, before any 'ComponentCodec' exists. That
+--   placement is the point — a malformed table cannot reach a live
+--   dispatch table at all, rather than reaching one and being reported
+--   afterwards. Everything downstream ('tools/save_compat_audit.py'
+--   parsing the same declarations, the registered-codec invariants in
+--   the @save components@ hspec group) observes the SAME rule and is
+--   documented defense-in-depth, not a second source of truth.
 componentCodec ∷ S.Serialize d ⇒ ComponentSpec d a → ComponentCodec a
-componentCodec spec = ComponentCodec
-    { ccId        = cid
-    , ccVersion   = csVersion spec
-    , ccInputVers = map cvVersion accepted
-    , ccRequired  = csRequired spec
-    , ccDeps      = csDeps spec
-    , ccEncode    = \snap → S.encode (csEncode spec snap)
-    , ccDecode    = \v bytes → case lookup v dispatch of
-        Just decode → decode cid bytes
-        Nothing     → Left (ComponentError cid v DecodePhase
-                              ("unsupported schema version (reader supports "
-                               <> T.intercalate ", " renderedVersions <> ")"))
-    , ccValidate  = csValidate spec
-    }
+componentCodec spec =
+    case olderVersionTableError cid (csVersion spec) declaredOlder of
+      Just problem → error (T.unpack problem)
+      Nothing      → ComponentCodec
+        { ccId        = cid
+        , ccVersion   = csVersion spec
+        , ccInputVers = map cvVersion accepted
+        , ccRequired  = csRequired spec
+        , ccDeps      = csDeps spec
+        , ccEncode    = \snap → S.encode (csEncode spec snap)
+        , ccDecode    = \v bytes → case lookup v dispatch of
+            Just decode → decode cid bytes
+            Nothing     → Left (ComponentError cid v DecodePhase
+                                  ("unsupported schema version (reader supports "
+                                   <> T.intercalate ", " renderedVersions <> ")"))
+        , ccValidate  = csValidate spec
+        }
   where
-    cid      = csComponent spec
+    cid           = csComponent spec
+    declaredOlder = map cvVersion (csOlderVersions spec)
     accepted = L.sortOn cvVersion
                    (atVersion (csVersion spec) (csDecode spec)
                       : csOlderVersions spec)

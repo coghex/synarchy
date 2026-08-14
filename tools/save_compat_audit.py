@@ -250,7 +250,15 @@ COMPONENT_ID_LITERAL_RE = re.compile(
 # instead of silently matching into the NEXT codec's fields.
 COMPONENT_SPEC_HEAD_RE = re.compile(
     r"(\w+)\s*=\s*componentCodec\s+ComponentSpec\b")
-AT_VERSION_RE = re.compile(r"\batVersion\s+(\d+)\b")
+# One `csOlderVersions` element, anchored at the element's START and
+# requiring an INTEGER LITERAL version. Deliberately not a `findall` over
+# the whole field value (issue #1275): a scan would silently skip any
+# element it does not recognize -- `atVersion someVersionConstant f`, a
+# hand-built `ComponentVersion { cvVersion = 3, ... }`, a helper
+# expression -- and derive an accepted-version set with entries missing.
+# Each element is matched WHOLE-LIST-AWARE by _parse_older_versions
+# below, which raises on anything this pattern cannot read.
+AT_VERSION_ENTRY_RE = re.compile(r"atVersion\s+(\d+)(?![\w'])")
 LUA_MODULE_VERSION_RE = re.compile(r"\bversion\s*=\s*(\d+)")
 LUA_MODULE_INPUT_VERSIONS_RE = re.compile(
     r"\binputVersions\s*=\s*\{([^}]*)\}")
@@ -324,6 +332,75 @@ def _split_top_level_fields(block: str) -> list[str]:
     return [f for f in (f.strip() for f in fields) if f]
 
 
+def _parse_older_versions(codec: str, raw: str, where: str) -> list[int]:
+    """The `csOlderVersions` versions IN DECLARATION ORDER, keeping
+    duplicates (issue #1275).
+
+    Fails CLOSED. The field must be a literal list whose every element is
+    an `atVersion <integer literal> ...` application; a non-list value (a
+    named helper, a `concat`, a variable), a non-literal version
+    argument, or a directly-constructed `ComponentVersion` raises rather
+    than being skipped. A skipped element is worse than no parse at all
+    here: it would silently narrow the accepted-version set this audit
+    then compares the whole fixture manifest against."""
+    text = raw.strip()
+    if not (text.startswith("[") and text.endswith("]")):
+        raise ValueError(
+            f"{where}: codec '{codec}' has a csOlderVersions value this "
+            f"audit cannot enumerate ({raw!r}); it must be a literal "
+            f"`[ atVersion <n> <build>, ... ]` list, because a partially "
+            f"read table would yield an accepted-version set missing real "
+            f"decoders")
+    versions: list[int] = []
+    for element in _split_top_level_fields(text[1:-1]):
+        m = AT_VERSION_ENTRY_RE.match(element)
+        if m is None:
+            raise ValueError(
+                f"{where}: codec '{codec}' has a csOlderVersions entry this "
+                f"audit cannot enumerate ({element!r}); every entry must be "
+                f"`atVersion <integer literal> <build>` -- a non-literal "
+                f"version, a hand-built ComponentVersion, or a helper "
+                f"expression would otherwise be silently omitted from the "
+                f"accepted-version set")
+        versions.append(int(m.group(1)))
+    return versions
+
+
+def _check_older_versions(codec: str, current: int, older: list[int],
+                          where: str) -> None:
+    """Reject a malformed `csOlderVersions` table, naming the codec and
+    the first offending version in declaration order (issue #1275).
+
+    Defense-in-depth ONLY. The authoritative boundary is
+    `World.Save.Component.Types.componentCodec`, which rejects the same
+    two rules at codec construction so a malformed table never reaches a
+    live dispatch table at all; this audit reads the same declarations
+    from source and must therefore agree with it. Its job here is to stop
+    ERASING the evidence -- before this, `sorted({current} | set(older))`
+    normalized a duplicate, a current-as-older, and a future entry into
+    an apparently valid accepted set, so the one tool that exists to
+    catch schema-evolution mistakes hid this particular one."""
+    seen: set[int] = set()
+    for v in older:
+        if v == current:
+            raise ValueError(
+                f"{where}: codec '{codec}' lists v{v} in csOlderVersions, "
+                f"but that IS its current csVersion -- the real current "
+                f"decoder shadows it, so its frozen DTO is never reached")
+        if v > current:
+            raise ValueError(
+                f"{where}: codec '{codec}' lists v{v} in csOlderVersions, "
+                f"which is NEWER than its current v{current} -- the reader "
+                f"would advertise and accept a version no writer has ever "
+                f"produced")
+        if v in seen:
+            raise ValueError(
+                f"{where}: codec '{codec}' lists v{v} in csOlderVersions "
+                f"more than once -- only the first decoder for a repeated "
+                f"version is ever reached by the dispatch table's lookup")
+        seen.add(v)
+
+
 def discover_component_specs(text: str, where: str = "<source>") -> list[dict]:
     """Every `<codec> = componentCodec ComponentSpec { ... }` declaration
     in one Haskell source, as
@@ -334,7 +411,14 @@ def discover_component_specs(text: str, where: str = "<source>") -> list[dict]:
     the current `csVersion` plus each `csOlderVersions` entry's
     `atVersion <n>`, sorted ascending -- so this audit reads the SAME
     single declaration the reader dispatches on rather than a separately
-    parsed list that could disagree with it (issue #1093)."""
+    parsed list that could disagree with it (issue #1093).
+
+    Issue #1275: that derivation now goes through `_parse_older_versions`
+    (fails closed on any element it cannot enumerate) and
+    `_check_older_versions` (rejects a duplicate, the current version, or
+    a future version). Both mirror the authoritative Haskell-side check
+    in `componentCodec`; for a well-formed table the resulting
+    `inputVersions` is byte-for-byte what it always was."""
     clean = strip_haskell_line_comments(text)
     specs: list[dict] = []
     for head in COMPONENT_SPEC_HEAD_RE.finditer(clean):
@@ -367,12 +451,17 @@ def discover_component_specs(text: str, where: str = "<source>") -> list[dict]:
                 f"{where}: codec '{codec}' has a non-literal csRequired "
                 f"({values['csRequired']!r})")
         current = int(values["csVersion"])
-        older = [int(v) for v in AT_VERSION_RE.findall(values["csOlderVersions"])]
+        # Issue #1275: parse the raw declaration in order, keeping
+        # duplicates, and REJECT a malformed table -- rather than
+        # `sorted({current} | set(older))`, which erased exactly the
+        # evidence a schema-evolution mistake leaves behind.
+        older = _parse_older_versions(codec, values["csOlderVersions"], where)
+        _check_older_versions(codec, current, older, where)
         specs.append({
             "codec": codec,
             "componentIdIdent": values["csComponent"],
             "currentVersion": current,
-            "inputVersions": sorted({current} | set(older)),
+            "inputVersions": sorted(older + [current]),
             "required": values["csRequired"] == "True"})
     return specs
 
