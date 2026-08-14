@@ -1,5 +1,5 @@
 {
-  "_comment": "Golden constructor lists for every positionally-serialized sum type (issue #1145). Generated and checked by tools/enum_append_only_audit.py -- do not hand-edit to make the audit pass: a change that is not a pure append is a save-format break, not a baseline update. The `constructors` list is the contract; `source`/`onSaveWire`/`components`/`carriers` record where each type sat on the save wire when it was captured, so a type that is later renamed, moved, or deleted -- and therefore can no longer be walked -- still reports which components and historical shapes carried it.",
+  "_comment": "Golden constructor lists for every positionally-serialized sum type (issue #1145). Generated and checked by tools/enum_append_only_audit.py -- do not hand-edit to make the audit pass: a change that is not a pure append is a save-format break, not a baseline update. The `constructors` list is the contract: each entry's `name` pins what its positional tag means and its `payload` pins the ordered field slots that follow the tag (`arity` is their count), because cereal writes those fields positionally too. `source`/`onSaveWire`/`components`/`carriers` record where each type sat on the save wire when it was captured, so a type that is later renamed, moved, or deleted -- and therefore can no longer be walked -- still reports which components and historical shapes carried it.",
   "types": {
     "Craft.Bills.BillMode": {
       "source": "src/Craft/Bills.hs",
@@ -24,15 +24,18 @@
       "constructors": [
         {
           "name": "FixedCount",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "RepeatForever",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "UntilStock",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -59,19 +62,23 @@
       "constructors": [
         {
           "name": "FaceSouth",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "FaceWest",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "FaceNorth",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "FaceEast",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -94,11 +101,13 @@
       "constructors": [
         {
           "name": "Singular",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Plural",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -115,19 +124,35 @@
       "constructors": [
         {
           "name": "Bare",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "ConceptId"
+          ]
         },
         {
           "name": "Modifier",
-          "arity": 2
+          "arity": 2,
+          "payload": [
+            "ConceptId",
+            "ConceptId"
+          ]
         },
         {
           "name": "Of",
-          "arity": 3
+          "arity": 3,
+          "payload": [
+            "ConceptId",
+            "GramNumber",
+            "ConceptId"
+          ]
         },
         {
           "name": "Possessive",
-          "arity": 2
+          "arity": 2,
+          "payload": [
+            "ConceptId",
+            "ConceptId"
+          ]
         }
       ]
     },
@@ -150,27 +175,33 @@
       "constructors": [
         {
           "name": "LifecycleUnknown",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "LifecycleHinted",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "LifecycleDiscovered",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "LifecycleActive",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "LifecycleCleared",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "LifecycleDepleted",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -197,11 +228,13 @@
       "constructors": [
         {
           "name": "PowerSource",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "PowerStorage",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -233,35 +266,43 @@
       "constructors": [
         {
           "name": "DirS",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "DirSW",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "DirW",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "DirNW",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "DirN",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "DirNE",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "DirE",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "DirSE",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -288,35 +329,43 @@
       "constructors": [
         {
           "name": "Standing",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Crouching",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Crawling",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Collapsed",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Dead",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Climbing",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Falling",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Sleeping",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -343,31 +392,40 @@
       "constructors": [
         {
           "name": "Idle",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Walking",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Drinking",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Eating",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Picking",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TransitioningTo",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "Pose"
+          ]
         },
         {
           "name": "Running",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -394,15 +452,18 @@
       "constructors": [
         {
           "name": "CsPending",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "CsClaimed",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "CsComplete",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -419,11 +480,17 @@
       "constructors": [
         {
           "name": "CtStructure",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "StructurePiece"
+          ]
         },
         {
           "name": "CtBuilding",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "Text"
+          ]
         }
       ]
     },
@@ -440,47 +507,109 @@
       "constructors": [
         {
           "name": "WeDeleteTile",
-          "arity": 2
+          "arity": 2,
+          "payload": [
+            "Int",
+            "Int"
+          ]
         },
         {
           "name": "WeSetFluidTile",
-          "arity": 3
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "FluidType"
+          ]
         },
         {
           "name": "WeAddTile",
-          "arity": 3
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "MaterialId"
+          ]
         },
         {
           "name": "WeSetSlope",
-          "arity": 4
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "Word8"
+          ]
         },
         {
           "name": "WeSetCell",
-          "arity": 4
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "MaterialId"
+          ]
         },
         {
           "name": "WeSetStructure",
-          "arity": 6
+          "arity": 6,
+          "payload": [
+            "Int",
+            "Int",
+            "Word8",
+            "Int",
+            "Int",
+            "Int"
+          ]
         },
         {
           "name": "WeClearStructure",
-          "arity": 3
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "Word8"
+          ]
         },
         {
           "name": "WeSetVeg",
-          "arity": 4
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "Word8"
+          ]
         },
         {
           "name": "WePlaceFlora",
-          "arity": 5
+          "arity": 5,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraId",
+            "Int",
+            "Float"
+          ]
         },
         {
           "name": "WeSetFluidSnapshot",
-          "arity": 4
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "FluidType",
+            "Int"
+          ]
         },
         {
           "name": "WeClearFluidSnapshot",
-          "arity": 2
+          "arity": 2,
+          "payload": [
+            "Int",
+            "Int"
+          ]
         }
       ]
     },
@@ -492,23 +621,28 @@
       "constructors": [
         {
           "name": "CycleDormant",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "CycleBudding",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "CycleFlowering",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "CycleFruiting",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "CycleSenescing",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -520,39 +654,48 @@
       "constructors": [
         {
           "name": "PhaseSprout",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "PhaseSeedling",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "PhaseVegetating",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "PhaseBudding",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "PhaseFlowering",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "PhaseRipening",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "PhaseMatured",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "PhaseWithering",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "PhaseDead",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -564,19 +707,27 @@
       "constructors": [
         {
           "name": "Evergreen",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Perennial",
-          "arity": 3
+          "arity": 3,
+          "payload": [
+            "lcMinLifespan ∷ Float",
+            "lcMaxLifespan ∷ Float",
+            "lcDeathChance ∷ Float"
+          ]
         },
         {
           "name": "Annual",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Biennial",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -603,19 +754,23 @@
       "constructors": [
         {
           "name": "Ocean",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Lake",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "River",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Lava",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -642,51 +797,89 @@
       "constructors": [
         {
           "name": "CraterEvent",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "CraterParams"
+          ]
         },
         {
           "name": "VolcanicEvent",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "FeatureShape"
+          ]
         },
         {
           "name": "VolcanicModify",
-          "arity": 2
+          "arity": 2,
+          "payload": [
+            "GeoFeatureId",
+            "FeatureEvolution"
+          ]
         },
         {
           "name": "LandslideEvent",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "LandslideParams"
+          ]
         },
         {
           "name": "GlaciationEvent",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "GlacierParams"
+          ]
         },
         {
           "name": "FloodEvent",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "FloodParams"
+          ]
         },
         {
           "name": "HydroEvent",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "HydroFeature"
+          ]
         },
         {
           "name": "HydroModify",
-          "arity": 2
+          "arity": 2,
+          "payload": [
+            "GeoFeatureId",
+            "HydroEvolution"
+          ]
         },
         {
           "name": "RiverSegmentEvent",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "RiverSegmentCarve"
+          ]
         },
         {
           "name": "RiverDeltaEvent",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "RiverDeltaParams"
+          ]
         },
         {
           "name": "OreSheetEvent",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "OreSheetParams"
+          ]
         },
         {
           "name": "GlacierMoraineEvent",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "GlacierMoraineParams"
+          ]
         }
       ]
     },
@@ -713,19 +906,23 @@
       "constructors": [
         {
           "name": "FActive",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "FDormant",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "FExtinct",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "FCollapsed",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -752,27 +949,62 @@
       "constructors": [
         {
           "name": "Reactivate",
-          "arity": 5
+          "arity": 5,
+          "payload": [
+            "feHeightGain ∷ Int",
+            "feLavaExtension ∷ Int",
+            "feCenter ∷ GeoCoord",
+            "feRadius ∷ Int",
+            "feCenterElev ∷ Int"
+          ]
         },
         {
           "name": "GoDormant",
-          "arity": 2
+          "arity": 2,
+          "payload": [
+            "feCenter ∷ GeoCoord",
+            "feRadius ∷ Int"
+          ]
         },
         {
           "name": "GoExtinct",
-          "arity": 2
+          "arity": 2,
+          "payload": [
+            "feCenter ∷ GeoCoord",
+            "feRadius ∷ Int"
+          ]
         },
         {
           "name": "CollapseToCaldera",
-          "arity": 5
+          "arity": 5,
+          "payload": [
+            "feCollapseDepth ∷ Int",
+            "feCollapseRatio ∷ Float",
+            "feCenter ∷ GeoCoord",
+            "feRadius ∷ Int",
+            "feCenterElev ∷ Int"
+          ]
         },
         {
           "name": "ParasiticEruption",
-          "arity": 4
+          "arity": 4,
+          "payload": [
+            "feChildFeature ∷ VolcanicFeature",
+            "feChildId ∷ GeoFeatureId",
+            "feCenter ∷ GeoCoord",
+            "feRadius ∷ Int"
+          ]
         },
         {
           "name": "FlankCollapse",
-          "arity": 5
+          "arity": 5,
+          "payload": [
+            "feCollapseAngle ∷ Float",
+            "feCollapseWidth ∷ Float",
+            "feDebrisRadius ∷ Int",
+            "feCenter ∷ GeoCoord",
+            "feRadius ∷ Int"
+          ]
         }
       ]
     },
@@ -799,11 +1031,17 @@
       "constructors": [
         {
           "name": "VolcanicShape",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "VolcanicFeature"
+          ]
         },
         {
           "name": "HydroShape",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "HydroFeature"
+          ]
         }
       ]
     },
@@ -815,19 +1053,23 @@
       "constructors": [
         {
           "name": "Active",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Dormant",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Extinct",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Collapsed",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -854,35 +1096,59 @@
       "constructors": [
         {
           "name": "ShieldVolcano",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "ShieldParams"
+          ]
         },
         {
           "name": "CinderCone",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "CinderConeParams"
+          ]
         },
         {
           "name": "LavaDome",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "LavaDomeParams"
+          ]
         },
         {
           "name": "Caldera",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "CalderaParams"
+          ]
         },
         {
           "name": "FissureVolcano",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "FissureParams"
+          ]
         },
         {
           "name": "LavaTube",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "LavaTubeParams"
+          ]
         },
         {
           "name": "SuperVolcano",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "SuperVolcanoParams"
+          ]
         },
         {
           "name": "HydrothermalVent",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "HydrothermalParams"
+          ]
         }
       ]
     },
@@ -909,23 +1175,28 @@
       "constructors": [
         {
           "name": "Eon",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Era",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Period",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Epoch",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Age",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -937,19 +1208,23 @@
       "constructors": [
         {
           "name": "Advancing",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Stable",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Retreating",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "Melted",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -976,47 +1251,91 @@
       "constructors": [
         {
           "name": "RiverBranch",
-          "arity": 4
+          "arity": 4,
+          "payload": [
+            "heBranchPoint ∷ GeoCoord",
+            "heBranchAngle ∷ Float",
+            "heBranchLength ∷ Int",
+            "heChildId ∷ GeoFeatureId"
+          ]
         },
         {
           "name": "RiverMeander",
-          "arity": 2
+          "arity": 2,
+          "payload": [
+            "heMeanderSeed ∷ Word64",
+            "heMeanderAmount ∷ Float"
+          ]
         },
         {
           "name": "RiverCapture",
-          "arity": 2
+          "arity": 2,
+          "payload": [
+            "heCapturedId ∷ GeoFeatureId",
+            "heCapturePoint ∷ GeoCoord"
+          ]
         },
         {
           "name": "RiverDam",
-          "arity": 3
+          "arity": 3,
+          "payload": [
+            "heDamPoint ∷ GeoCoord",
+            "heLakeId ∷ GeoFeatureId",
+            "heDamHeight ∷ Int"
+          ]
         },
         {
           "name": "RiverDryUp",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "GlacierAdvance",
-          "arity": 2
+          "arity": 2,
+          "payload": [
+            "heAdvanceLength ∷ Int",
+            "heAdvanceWidth ∷ Int"
+          ]
         },
         {
           "name": "GlacierRetreat",
-          "arity": 2
+          "arity": 2,
+          "payload": [
+            "heRetreatLength ∷ Int",
+            "heMoraineDeposit ∷ Int"
+          ]
         },
         {
           "name": "GlacierBranch",
-          "arity": 4
+          "arity": 4,
+          "payload": [
+            "heBranchPoint ∷ GeoCoord",
+            "heBranchAngle ∷ Float",
+            "heBranchLength ∷ Int",
+            "heChildId ∷ GeoFeatureId"
+          ]
         },
         {
           "name": "GlacierMelt",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "heMoraineDep ∷ Int"
+          ]
         },
         {
           "name": "LakeDrain",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "heDrainRate ∷ Float"
+          ]
         },
         {
           "name": "LakeExpand",
-          "arity": 2
+          "arity": 2,
+          "payload": [
+            "heNewRadius ∷ Int",
+            "heNewSurface ∷ Int"
+          ]
         }
       ]
     },
@@ -1043,15 +1362,24 @@
       "constructors": [
         {
           "name": "RiverFeature",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "RiverParams"
+          ]
         },
         {
           "name": "GlacierFeature",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "GlacierParams"
+          ]
         },
         {
           "name": "LakeFeature",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "LakeParams"
+          ]
         }
       ]
     },
@@ -1078,19 +1406,29 @@
       "constructors": [
         {
           "name": "DammedRiver",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "GeoFeatureId"
+          ]
         },
         {
           "name": "GlacialBasin",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "GeoFeatureId"
+          ]
         },
         {
           "name": "TectonicBasin",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "CalderaLake",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "GeoFeatureId"
+          ]
         }
       ]
     },
@@ -1117,35 +1455,43 @@
       "constructors": [
         {
           "name": "ZMDefault",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ZMTemp",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ZMSeaTemp",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ZMPressure",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ZMHumidity",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ZMPrecipitation",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ZMPrecipType",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ZMEvaporation",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -1168,11 +1514,17 @@
       "constructors": [
         {
           "name": "CtStructureD",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "StructurePieceDTO"
+          ]
         },
         {
           "name": "CtBuildingD",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "Text"
+          ]
         }
       ]
     },
@@ -1195,47 +1547,109 @@
       "constructors": [
         {
           "name": "WeDeleteTileD",
-          "arity": 2
+          "arity": 2,
+          "payload": [
+            "Int",
+            "Int"
+          ]
         },
         {
           "name": "WeSetFluidTileD",
-          "arity": 3
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "FluidType"
+          ]
         },
         {
           "name": "WeAddTileD",
-          "arity": 3
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "MaterialId"
+          ]
         },
         {
           "name": "WeSetSlopeD",
-          "arity": 4
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "Word8"
+          ]
         },
         {
           "name": "WeSetCellD",
-          "arity": 4
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "MaterialId"
+          ]
         },
         {
           "name": "WeSetStructureD",
-          "arity": 6
+          "arity": 6,
+          "payload": [
+            "Int",
+            "Int",
+            "Word8",
+            "Int",
+            "Int",
+            "Int"
+          ]
         },
         {
           "name": "WeClearStructureD",
-          "arity": 3
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "Word8"
+          ]
         },
         {
           "name": "WeSetVegD",
-          "arity": 4
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "Word8"
+          ]
         },
         {
           "name": "WePlaceFloraD",
-          "arity": 5
+          "arity": 5,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraId",
+            "Int",
+            "Float"
+          ]
         },
         {
           "name": "WeSetFluidSnapshotD",
-          "arity": 4
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "FluidType",
+            "Int"
+          ]
         },
         {
           "name": "WeClearFluidSnapshotD",
-          "arity": 2
+          "arity": 2,
+          "payload": [
+            "Int",
+            "Int"
+          ]
         }
       ]
     },
@@ -1254,19 +1668,35 @@
       "constructors": [
         {
           "name": "BareD",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "ConceptId"
+          ]
         },
         {
           "name": "ModifierD",
-          "arity": 2
+          "arity": 2,
+          "payload": [
+            "ConceptId",
+            "ConceptId"
+          ]
         },
         {
           "name": "OfD",
-          "arity": 3
+          "arity": 3,
+          "payload": [
+            "ConceptId",
+            "GramNumber",
+            "ConceptId"
+          ]
         },
         {
           "name": "PossessiveD",
-          "arity": 2
+          "arity": 2,
+          "payload": [
+            "ConceptId",
+            "ConceptId"
+          ]
         }
       ]
     },
@@ -1283,39 +1713,48 @@
       "constructors": [
         {
           "name": "ContentUnit",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ContentItem",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ContentBuilding",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ContentMaterial",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ContentRecipe",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ContentFlora",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ContentConstruct",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ContentLocation",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ContentInfection",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -1332,39 +1771,50 @@
       "constructors": [
         {
           "name": "RefPage",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "RefUnit",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "RefBuilding",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "RefItemInstance",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "RefBill",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "RefPowerNode",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "RefGroundItem",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "RefContent",
-          "arity": 1
+          "arity": 1,
+          "payload": [
+            "ContentKind"
+          ]
         },
         {
           "name": "RefLocationInstance",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -1381,15 +1831,18 @@
       "constructors": [
         {
           "name": "ScopeGlobal",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ScopeSamePage",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ScopeCrossPage",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -1410,35 +1863,43 @@
       "constructors": [
         {
           "name": "DefaultTool",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "InfoTool",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "MineTool",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "BuildTool",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ConstructTool",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "ChopTool",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "TillTool",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "PlantTool",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -1465,11 +1926,13 @@
       "constructors": [
         {
           "name": "HighPressure",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "LowPressure",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     },
@@ -1496,43 +1959,53 @@
       "constructors": [
         {
           "name": "SurfIceSheet",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "SurfTundra",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "SurfBoreal",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "SurfTempForest",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "SurfGrassland",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "SurfDesert",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "SurfTropical",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "SurfSavanna",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "SurfWetland",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         },
         {
           "name": "SurfOcean",
-          "arity": 0
+          "arity": 0,
+          "payload": []
         }
       ]
     }
