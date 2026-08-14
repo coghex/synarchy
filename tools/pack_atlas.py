@@ -56,7 +56,8 @@ INVARIANTS ENFORCED
     `<unit>/animations/<animation>/<direction>/` directory — cross-unit,
     cross-animation and cross-direction references are all named as
     such;
-  * every declared frame exists and every physical frame is declared;
+  * every declared frame exists AS A REGULAR FILE, and every physical
+    frame is declared;
   * one physical frame is claimed by at most one animation-frame slot
     (reuse as a unit's `sprite`, `directional_sprites` entry or
     `portrait` is deliberately legal and is NOT a duplicate claim);
@@ -423,21 +424,26 @@ def parse_unit_entry(
         return None
 
     if asset_only:
-        stray = sorted(k for k in entry if k not in ASSET_ONLY_KEYS)
+        # `sorted` on raw YAML keys is a crash waiting to happen: a
+        # mapping may mix types, and `123` is not orderable against
+        # `"typo"`. Sort by the rendered form instead, which is what the
+        # diagnostic shows anyway.
+        stray = sorted((k for k in entry if k not in ASSET_ONLY_KEYS),
+                       key=repr)
         gameplay = [k for k in stray if k in GAMEPLAY_ONLY_KEYS]
         if gameplay:
             report.err(
                 f"{source}:{unit_name}",
                 f"asset-only declaration carries gameplay field(s) "
-                f"{', '.join(sorted(gameplay))}. An `asset_units:` entry "
-                f"declares animation frames and nothing else; move it to "
-                f"`units:` if it is meant to be a real unit.")
+                f"{', '.join(str(k) for k in gameplay)}. An `asset_units:` "
+                f"entry declares animation frames and nothing else; move it "
+                f"to `units:` if it is meant to be a real unit.")
         unknown = [k for k in stray if k not in GAMEPLAY_ONLY_KEYS]
         if unknown:
             report.err(
                 f"{source}:{unit_name}",
                 f"asset-only declaration carries unknown field(s) "
-                f"{', '.join(str(k) for k in sorted(unknown, key=str))}. "
+                f"{', '.join(repr(k) for k in unknown)}. "
                 f"The schema is exactly "
                 f"{', '.join(sorted(ASSET_ONLY_KEYS))}.")
         if not entry.get("animations"):
@@ -600,7 +606,12 @@ def resolve_frame_path(
 
     abs_p = root / pure
     if not abs_p.is_file():
-        report.err(where, f"missing file: {declared}")
+        if abs_p.is_dir():
+            report.err(
+                where,
+                f"declared frame is a directory, not a file: {declared}")
+        else:
+            report.err(where, f"missing file: {declared}")
         return None
 
     expected_dir = (root / PurePosixPath(*parts[:7])).resolve()

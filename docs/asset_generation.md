@@ -103,10 +103,16 @@ walks the filesystem first, so a newly generated folder with no declaration
 fails CI — there is no exemption mechanism to reach for. Declare a gameplay
 unit's animations under `units:` as usual; declare a tree that ships as art but
 is not a spawnable unit under the asset-only `asset_units:` key (`name` +
-`animations` only). Frames must be contiguous from `frame_000.png`, share one
-pixel size across the whole animation, and match the `flip` rule below exactly:
-`flip: true` ⇒ exactly the five stored directions, `flip: false` ⇒ all eight.
+`animations` only). Frames must be contiguous from `frame_000.png`, declared in
+ascending order, and match the `flip` rule below exactly: `flip: true` ⇒ exactly
+the five stored directions, `flip: false` ⇒ all eight.
 See **Unit asset inventory** in `CLAUDE.md` for the full contract.
+
+The gate validates paths and structure only — it never opens a frame, so it
+will not catch a corrupt PNG or a frame whose pixel size differs from its
+siblings. Keeping one size across an animation is still an authoring
+requirement (the future atlas compiler needs it), just not one CI enforces yet;
+issue #1311 owns adding content validation.
 
 - **Directions**: store 5 (`east`, `north`, `north-east`, `south`, `south-east`); the engine
   mirrors W/SW/NW at runtime. **Exception**: asymmetric animations (e.g. `*_RH_dagger`) store all

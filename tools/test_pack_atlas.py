@@ -29,6 +29,7 @@ import shutil
 import struct
 import sys
 import tempfile
+import traceback
 import zlib
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -298,6 +299,30 @@ def _asset_only_unknown_field(fx: Fixture) -> None:
     valid_fixture(fx)
     fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
             .replace("    animations:\n", "    typo: true\n    animations:\n"))
+
+
+@negative("an asset-only entry mixing non-string and string unknown keys",
+          "unknown field")
+def _mixed_type_unknown_keys(fx: Fixture) -> None:
+    # `sorted` over raw YAML keys crashes here: 123 is not orderable
+    # against "typo". A crash is not a clear malformed-declaration
+    # diagnostic, so the keys are sorted by their rendered form.
+    valid_fixture(fx)
+    fx.yaml("prop", asset_only_yaml("prop", [("spin", CANON5, 2, True)])
+            .replace("    animations:\n",
+                     "    123: true\n    typo: true\n    animations:\n"))
+
+
+@negative("a declared frame path that is a DIRECTORY",
+          "declared frame is a directory")
+def _declared_path_is_a_directory(fx: Fixture) -> None:
+    # The invariant is "exists as a regular file", not merely "exists" —
+    # and a directory deserves its own diagnostic rather than the
+    # missing-file one.
+    valid_fixture(fx)
+    fx.rm("assets/textures/units/prop/animations/spin/south/frame_001.png")
+    (fx.root / "assets/textures/units/prop/animations/spin/south"
+             / "frame_001.png").mkdir()
 
 
 @negative("a non-string animation key", "animation key must be a string")
@@ -779,11 +804,23 @@ def _symlinked_direction(fx: Fixture) -> None:
 # --------------------------------------------------------------------
 
 def run_case(build: Case, unit: Optional[str] = None) -> tuple[int, str]:
+    """Run one fixture, reporting a validator CRASH as that case's own
+    failure rather than letting it abort the suite.
+
+    A traceback escaping here would kill the run before any case was
+    reported, so a checker that raises on malformed input would look
+    like a suite-wide breakage instead of one failing case — and a
+    negative case whose rule was mutated into a crash would silently
+    produce no `FAIL:` line at all.
+    """
     parent = tempfile.mkdtemp(prefix="pack_atlas_test_")
     try:
         fixture = Fixture(Path(parent) / "repo")
         build(fixture)
         return fixture.run(unit)
+    except Exception:  # noqa: BLE001 - a crash IS the finding here
+        return 70, ("the validator raised instead of reporting:\n"
+                    + traceback.format_exc())
     finally:
         shutil.rmtree(parent, ignore_errors=True)
 
@@ -820,7 +857,7 @@ def main() -> int:
 
     # The suite is only meaningful if it actually built fixtures; a
     # refactor that silently emptied a registry must not read as green.
-    if len(POSITIVE) < 8 or len(NEGATIVE) < 53:
+    if len(POSITIVE) < 8 or len(NEGATIVE) < 55:
         failures.append(
             f"case registries look truncated: {len(POSITIVE)} positive, "
             f"{len(NEGATIVE)} negative")
