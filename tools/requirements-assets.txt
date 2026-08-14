@@ -1,0 +1,22 @@
+# Pinned Python toolchain for the unit-asset tools (#1257 inventory
+# validator, #1258 atlas compiler) — tools/pack_atlas.py.
+#
+# `docs/texture_infrastructure.md` P-3 requires the compiler's versions
+# to be pinned and reproducible from a fresh checkout, because compiled
+# atlases are tracked artifacts (D-12): byte-identical output needs a
+# byte-identical encoder.
+#
+# This file is the REFERENCE toolchain. `.github/ci/Dockerfile` installs
+# exactly these pins, and tools/test_pack_atlas.py fails if the two ever
+# disagree — so there is one place to change a version, not two.
+#
+# Validation does NOT require this exact toolchain. Every digest the
+# index records is over canonical decoded RGBA8 samples rather than
+# encoded file bytes, so any reasonably recent Pillow verifies a
+# committed atlas correctly; the pin is about reproducing bytes, not
+# about trusting them.
+#
+#     python3 -m pip install --user -r tools/requirements-assets.txt
+#
+PyYAML==6.0.2
+Pillow==11.3.0
