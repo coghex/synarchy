@@ -1724,14 +1724,15 @@ animation frame as a unit's `sprite`, a `directional_sprites` entry, or
 its `portrait` is deliberately legal (20 shipped references do this) and
 is never reported.
 
-**The gate validates paths and structure, never file CONTENTS.** It
-establishes that each declared frame exists and is a regular file and
-asserts nothing about what is inside it — not that it decodes, not its
-pixel dimensions, not that one animation's frames agree on a size. That
-boundary is deliberate: validating a real binary format here is its own
-work with its own cost, tracked as **#1311**, and it will depend on a
-maintained decoding library rather than a hand-rolled parser. PyYAML is
-the validator's only third-party dependency.
+**The INVENTORY gate validates paths and structure, never file
+CONTENTS.** For a unit with no compiled index it establishes that each
+declared frame exists and is a regular file and asserts nothing about
+what is inside it — not that it decodes, not its pixel dimensions, not
+that one animation's frames agree on a size. That boundary is
+deliberate: validating a real binary format there is its own work with
+its own cost, tracked as **#1311**. The COMPILER below necessarily
+decodes, so an animation that is actually compiled does get those
+checks.
 
 **Scope is `animations/` — deliberately not the whole unit tree.**
 `assets/textures/units/unknown_unit/rotations/*.png` and the per-unit
@@ -1742,10 +1743,83 @@ non-animation YAML fields; they are outside this inventory.
 present an exact path-level classification first. #1257 itself deleted
 nothing — all 695 previously-unowned paths were retained and declared.
 
+## Unit animation atlas compiler
+
+`python3 tools/pack_atlas.py --compile [--unit <name>]` is the same
+tool's other half (#1258, `docs/texture_infrastructure.md` TEX-2). It
+compiles the validated declarations into DERIVED artifacts; source PNG
+frames stay the editable artwork (D-1) and unit YAML stays the only
+hand-edited semantic authority (D-11). Runtime sampling is TEX-3's and
+KTX2 encoding TEX-5's — neither exists yet.
+
+Output is **one atlas per ANIMATION** (D-2),
+`assets/textures/units/<unit>/atlas/<animation>.png`, beside a generated
+`assets/textures/units/<unit>/atlas/index.json`. That directory is a
+SIBLING of `animations/`, which is what keeps generated artifacts
+outside the filesystem-first inventory walk.
+
+- **Rows** are the AUTHORED directions in `ATLAS_DIRECTION_ORDER` — the
+  engine's own `Unit.Direction` order `S, SW, W, NW, N, NE, E, SE` — so
+  `flip: true` yields five rows and `flip: false` eight (D-4). Each row
+  index is nevertheless recorded explicitly, so nothing downstream
+  re-derives the order.
+- **Columns** are the animation's maximum authored frame count.
+  Unequal per-direction lengths are real (D-5): the index records each
+  direction's TRUE count, shorter rows are rectangularized with
+  transparent RGBA8 zero cells, and no padding cell is addressable as a
+  frame — `frame_count` is the sole frame authority.
+- **Cells are exact integers**: frame `c` of row `r` is at
+  `(c * cell_width, r * cell_height)`. Every frame of one animation must
+  decode to that same size; a mismatch is a compile error, never an
+  implicit rescale (D-6 — nothing here resamples or blends). Each cell
+  is a byte-for-byte copy of its source frame's canonical decoded RGBA8
+  samples, alpha included — decoded SAMPLES, not PNG file bytes.
+- **The index** carries a `schema_version` (the format TEX-3 parses)
+  separately from `tool_version` (this compiler's revision), a
+  documented `direction_order`, and per animation its storage format
+  and path, atlas/cell dimensions, columns, rows, per-direction row and
+  frame count, `flip`/`fps`/`loop` as the engine will hold them (`fps`
+  narrowed to 32-bit), and two `sha256` digests: a PER-ANIMATION
+  `source_digest` over that animation's own declarations and decoded
+  pixels, and an `atlas_digest` over the atlas's decoded CONTENT rather
+  than its file bytes. Per-animation is the point — one animation's
+  edit must not invalidate an unrelated atlas (D-12). Nobody hand-edits
+  this file.
+- **Determinism and locality.** A clean rebuild under an unchanged
+  toolchain is byte-identical. An incremental run compares each
+  artifact against what it would generate and writes only on a real
+  difference, so an animation edit rewrites that atlas and its unit
+  index and nothing else. An mtime-only touch changes nothing — the
+  digest is over content. Obsolete atlases are removed from the unit's
+  own `atlas/` directory and nowhere else.
+- **`--validate-only` is index-aware.** A unit with NO index is valid
+  (every shipped unit is, until TEX-4 begins production tracking).
+  Where one exists it is REGENERATED from the sources and compared, so
+  a stale digest, a hand-edited or non-canonically serialized index, a
+  missing indexed atlas and tampered pixels all report — and a tampered
+  index cannot certify a tampered atlas, because the comparison is
+  against a fresh regeneration rather than the numbers the file carries
+  about itself. `--compile --check` reports what is out of date and
+  writes nothing. Compilation refuses outright on an inventory that
+  does not validate.
+- **No production atlases are committed yet** (#1258 requirement 7).
+  D-12's tracking gate is the acolyte pilot, TEX-4.
+
+**Dependencies are pinned in `tools/requirements-assets.txt`** (PyYAML +
+Pillow), which `.github/ci/Dockerfile` installs verbatim — the pins are
+spelled in the Dockerfile rather than COPYed because the image tag is
+that file's own hash, and `test_pack_atlas.py` fails if the two drift.
+Pillow is imported lazily, so the inventory gate on an index-free
+corpus still runs without it. Validation never needs the exact pinned
+toolchain: every recorded digest is over decoded RGBA8, so any Pillow
+verifies a committed atlas.
+
 Gates: `python3 tools/test_pack_atlas.py` (fixture-based, isolated temp
 trees, never touching the shipped assets; every negative case asserts a
-nonzero exit AND a diagnostic naming the real problem, and a rule that
-tightens gets a positive case pinning the other direction) and the
+nonzero exit AND a diagnostic naming the real problem, a rule that
+tightens gets a positive case pinning the other direction, and each
+compiler SCENARIO asserts on real emitted pixels, the index document,
+or which files a second run actually wrote) and the
 strict run above. Both run unconditionally in `make ci`
 and post-merge master CI, and path-selectively on PRs via
 `tools/ci_expensive_gates.py --gate unit-assets`. hspec:

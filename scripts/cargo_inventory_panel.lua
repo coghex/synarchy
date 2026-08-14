@@ -21,10 +21,16 @@
 -- A building endpoint's rendered rows, tabs, header and row menu are
 -- deliberately unchanged by that generalization.
 --
--- Contents are read LIVE on every tick. Last-known contents
--- (building.getContainerKnowledge) belong to UIT-1B and are
--- deliberately not consulted here — mixing the two would make a
--- regression in either impossible to attribute.
+-- Since #1237 an endpoint's contents are either LIVE TRUTH or the
+-- player's REMEMBERED view, and the endpoint kind decides which: a
+-- unit reports live (an entity knows what it is carrying), while a
+-- building reports whatever building.getContainerKnowledge last
+-- recorded (a container must be inspected). A remembering endpoint
+-- says so by returning a `knowledge` sub-table from its `view`, and
+-- everything below the ENDPOINTS table branches on THAT rather than on
+-- the kind, so the window stays kind-blind. Nothing here ever WRITES
+-- knowledge: opening the window reveals nothing, and the snapshot
+-- refreshes only because a unit completed a real item movement.
 --
 -- Singleton: opening for a new endpoint destroys the old popup.
 -- Pinned at the mouse position when opened; doesn't follow the
@@ -72,6 +78,8 @@ local TITLE_FONT     = 16
 local TITLE_H        = 22
 local SUBTITLE_FONT  = 13
 local SUBTITLE_H     = 18
+local AGE_FONT       = 12
+local AGE_H          = 16
 local TAB_H          = 28
 local TAB_TILE       = 16
 local TAB_FONT       = 13
@@ -87,6 +95,7 @@ local NAME_RIGHT_GAP = 24    -- gap between name and weight columns
 local MAX_ROWS       = 10
 local TITLE_COL      = { 1.0, 1.0, 1.0, 1.0 }
 local SUBTITLE_COL   = { 0.85, 0.85, 0.85, 1.0 }
+local AGE_COL        = { 0.70, 0.70, 0.70, 1.0 }
 local ROW_NAME_COL   = { 1.0, 1.0, 1.0, 1.0 }
 local ROW_WEIGHT_COL = { 0.85, 0.85, 0.85, 1.0 }
 
@@ -121,6 +130,7 @@ cargoInventoryPanel.state = cargoInventoryPanel.state or {
     activeTab     = "All",
     titleId       = nil,
     subtitleId    = nil,
+    ageId         = nil,
     listId        = nil,
 }
 
@@ -233,10 +243,16 @@ end
 --
 -- ONE window, two data sources. Each entry answers exactly the
 -- questions that differ between kinds; everything below this table is
--- kind-blind. `view` is the SINGLE live read — nil means "not an
+-- kind-blind. `view` is the SINGLE read — nil means "not an
 -- eligible endpoint", which covers an unknown id, a destroyed
 -- instance, and a unit that is not player-commandable alike, so open
 -- and the per-tick lifecycle check share one definition of eligible.
+--
+-- A kind whose contents can be STALE (#1237) returns a `knowledge`
+-- sub-table beside them (`state` plus the observation's `revealedAt`);
+-- omitting it declares the view live truth. `stored` is likewise
+-- nil-able: nil means "not known", which is a different fact from the
+-- 0 kg a never-inspected container's engine record reports.
 --
 -- `stillThere` exists only where liveness is a DIFFERENT question from
 -- eligibility: a cargo's capacity is def-declared, so a building's
@@ -252,17 +268,39 @@ end
 local ENDPOINTS = {
     building = {
         weightLabel = "Storage",
+        -- A container reports the player's REMEMBERED contents (#1237),
+        -- so this reads building.getContainerKnowledge rather than the
+        -- live building.getStorage / getStorageWeight pair. That call
+        -- is a pure READ: merely opening this window must not reveal
+        -- anything, which is why building.refreshContainerKnowledge is
+        -- deliberately absent from this file entirely.
+        --
+        -- `capacity` is the knowledge record's own field and is ALWAYS
+        -- LIVE — the player knows how big a thing they built — so it
+        -- keeps doubling as the "is this an endpoint at all?" gate the
+        -- pre-#1237 getStorageCapacity read was.
         view = function(id)
-            local cap = building.getStorageCapacity(id)
-            if not cap or cap <= 0 then return nil end
+            local k = building.getContainerKnowledge(id)
+            if not k then return nil end
+            local cap = k.capacity or 0
+            if cap <= 0 then return nil end
             local binfo = building.getInfo(id)
-            return {
+            local state = k.state or "unknown"
+            local view = {
                 title    = (binfo and (binfo.displayName or binfo.defName))
                              or "Cargo",
                 capacity = cap,
-                stored   = building.getStorageWeight(id) or 0,
-                contents = building.getStorage(id) or {},
+                stored   = nil,
+                contents = {},
+                knowledge = { state = state, revealedAt = k.revealedAt },
             }
+            -- Never-inspected keeps `stored` nil and no rows: its
+            -- remembered weight and item list are absences, not zeroes.
+            if state ~= "unknown" then
+                view.stored   = k.storedWeight or 0
+                view.contents = k.items or {}
+            end
+            return view
         end,
         stillThere = function(id) return building.getInfo(id) ~= nil end,
         rowMenu = buildingRowMenu,
@@ -295,6 +333,94 @@ local function endpointView(kind, id)
     return def.view(id)
 end
 
+-----------------------------------------------------------
+-- Remembered-contents presentation (#1237)
+--
+-- These are the ONLY places the window knows that contents can be
+-- stale, and each answers one question about a `view`. A view with no
+-- `knowledge` sub-table is live truth and every one of them degrades to
+-- exactly the pre-#1237 rendering, which is what keeps a unit endpoint
+-- unchanged without any kind test down here.
+-----------------------------------------------------------
+
+-- "unknown" / "empty" / "known" for a remembering endpoint, "live" for
+-- one that reports the truth. Distinct strings for all four so a
+-- presentation key can never conflate never-inspected with known-empty.
+local function knowledgeState(view)
+    local k = view.knowledge
+    if not k then return "live" end
+    return k.state or "unknown"
+end
+
+-- Format an elapsed span of GAME-CLOCK seconds (engine.gameTime()'s own
+-- currency — it freezes while the player is paused and skips the
+-- real-world gap across a save/load) as player-legible text.
+--
+-- Deliberately NOT converted into calendar days/hours: the calendar
+-- advances on its own per-page clock whose length is a worldgen
+-- parameter, so no fixed factor relates the two, and spelling a game
+-- second as an in-world hour would be wrong by whatever that world
+-- chose. What this reads as is elapsed PLAY time, which is exactly what
+-- the clock measures.
+local function formatAge(elapsed)
+    local s = math.floor(elapsed or 0)
+    if s < 0 then s = 0 end
+    if s < 5 then return "just now" end
+    if s < 60 then return string.format("%ds ago", s) end
+    if s < 3600 then
+        local m, rs = math.floor(s / 60), s % 60
+        if m < 10 and rs > 0 then return string.format("%dm %ds ago", m, rs) end
+        return string.format("%dm ago", m)
+    end
+    if s < 86400 then
+        local hr, m = math.floor(s / 3600), math.floor((s % 3600) / 60)
+        if m > 0 then return string.format("%dh %dm ago", hr, m) end
+        return string.format("%dh ago", hr)
+    end
+    local d, hr = math.floor(s / 86400), math.floor((s % 86400) / 3600)
+    if hr > 0 then return string.format("%dd %dh ago", d, hr) end
+    return string.format("%dd ago", d)
+end
+
+-- The "as of…" line, or nil when there is no observation to date: a
+-- live endpoint, a never-inspected container (whose revealedAt is
+-- deliberately absent), or an engine with no game clock to compare
+-- against. Recomputed on every read rather than cached, which is what
+-- makes it ADVANCE as game time passes.
+local function ageText(view)
+    local k = view.knowledge
+    if not k or type(k.revealedAt) ~= "number" then return nil end
+    if knowledgeState(view) == "unknown" then return nil end
+    if type(engine.gameTime) ~= "function" then return nil end
+    local now = engine.gameTime()
+    if type(now) ~= "number" then return nil end
+    return "as of " .. formatAge(now - k.revealedAt)
+end
+
+-- The stored-weight half of the header. A never-inspected container's
+-- remembered weight is not 0 kg — it is not known at all, and the
+-- engine's own numeric 0 there must never be rendered as a measurement.
+-- Capacity is always shown: the player knows how big a thing they built.
+local function weightText(kind, view)
+    local def = ENDPOINTS[kind]
+    local wlabel = (def and def.weightLabel) or "Storage"
+    if view.stored == nil then
+        return string.format("%s: unknown / %.2f kg", wlabel, view.capacity)
+    end
+    return string.format("%s: %.2f / %.2f kg", wlabel, view.stored,
+                         view.capacity)
+end
+
+-- What an empty row list MEANS, which is a different fact in each
+-- state. A live endpoint keeps its pre-#1237 blank (nothing here claims
+-- to know anything about a unit's inventory it did not render).
+local function emptyText(view)
+    local st = knowledgeState(view)
+    if st == "unknown" then return "Contents unknown (never inspected)" end
+    if st == "empty"   then return "(empty)" end
+    return nil
+end
+
 -- The item-list parameters that describe THIS panel's data and
 -- presentation policy. Everything the widget needs to group, tab,
 -- render and invalidate; bounds are added by buildLayout once the
@@ -303,10 +429,16 @@ end
 -- The host-owned title/subtitle chrome rides in `presentationKey`
 -- because the widget cannot see it: a unit's stored weight moves when
 -- it equips something its loose inventory never listed, and without
--- this the header would keep reporting the load it had at open.
+-- this the header would keep reporting the load it had at open. The
+-- knowledge STATE rides there too (#1237) — an unknown container and a
+-- known-empty one both render zero rows, so without it the transition
+-- between them would leave the header still reading "unknown". The
+-- "as of…" line deliberately does NOT: it changes every game second and
+-- is refreshed in place by update() instead of rebuilding the window.
 local function listDataParams(kind, view, activeTab)
     local def = ENDPOINTS[kind]
     return {
+        emptyText = emptyText(view),
         items     = view.contents,
         activeTab = activeTab,
         uiscale   = scale.get(),
@@ -324,9 +456,10 @@ local function listDataParams(kind, view, activeTab)
             return string.format("%.2f kg", (g.weight or 0) * (g.count or 1))
         end,
         rowColor  = function() return ROW_NAME_COL end,
-        presentationKey = string.format("%s|%s|%.3f/%.3f", tostring(kind),
+        presentationKey = string.format("%s|%s|%s|%.3f/%.3f", tostring(kind),
                                         tostring(view.title),
-                                        view.stored, view.capacity),
+                                        knowledgeState(view),
+                                        view.stored or -1, view.capacity),
         onTabChange     = cargoInventoryPanel.onTabChange,
         onRowRightClick = (def and def.rowMenu)
                             and cargoInventoryPanel.showRowMenu or nil,
@@ -348,6 +481,7 @@ local function destroyTitle()
     local s = cargoInventoryPanel.state
     if s.titleId    then label.destroy(s.titleId);    s.titleId    = nil end
     if s.subtitleId then label.destroy(s.subtitleId); s.subtitleId = nil end
+    if s.ageId      then label.destroy(s.ageId);      s.ageId      = nil end
 end
 
 local function destroyAll()
@@ -363,11 +497,33 @@ end
 -----------------------------------------------------------
 -- Render: title row
 -----------------------------------------------------------
+-- Every header baseline is measured in SCALED units, matching the
+-- scaled band heights buildLayout reserves (titleH/subH/ageH) and the
+-- scaled font label.new actually rasterises. Round-1 review: the
+-- pre-#1237 code advanced by the RAW TITLE_H/SUBTITLE_H constants and
+-- offset each baseline by a raw fontSize, so above 1x the lines
+-- advanced more slowly than their own glyphs grew — at 2x the third
+-- line's glyph mass reached back up into the second's, and the reserved
+-- space below stayed empty. Identical arithmetic at uiscale 1.
+--
+-- A text element's position IS its baseline and its glyph mass sits
+-- ABOVE it (scripts/ui/label.lua), so band N's baseline is its band top
+-- plus a fraction of the scaled font — the ascent — not its band
+-- height.
+local function headerBaselines(uiscale)
+    local titleH = math.floor(TITLE_H    * uiscale)
+    local subH   = math.floor(SUBTITLE_H * uiscale)
+    return math.floor(TITLE_FONT * uiscale * 0.85),
+           titleH + math.floor(SUBTITLE_FONT * uiscale * 0.85),
+           titleH + subH + math.floor(AGE_FONT * uiscale * 0.85)
+end
+
 local function buildTitle(originX, originY, kind, view)
     local s = cargoInventoryPanel.state
     local h = cargoInventoryPanel.hud
     if not h then return end
     local uiscale = scale.get()
+    local titleBase, subBase, ageBase = headerBaselines(uiscale)
 
     s.titleId = label.new({
         name     = "cargo_inv_title",
@@ -379,16 +535,12 @@ local function buildTitle(originX, originY, kind, view)
         uiscale  = uiscale,
     })
     local th = label.getElementHandle(s.titleId)
-    UI.addToPage(h.page, th, originX,
-                 originY + math.floor(TITLE_FONT * 0.85))
+    UI.addToPage(h.page, th, originX, originY + titleBase)
     UI.setZIndex(th, 132)
 
-    local def   = ENDPOINTS[kind]
-    local wlabel = (def and def.weightLabel) or "Storage"
     s.subtitleId = label.new({
         name     = "cargo_inv_subtitle",
-        text     = string.format("%s: %.2f / %.2f kg", wlabel,
-                                 view.stored, view.capacity),
+        text     = weightText(kind, view),
         font     = h.menuFont,
         fontSize = SUBTITLE_FONT,
         color    = SUBTITLE_COL,
@@ -396,9 +548,37 @@ local function buildTitle(originX, originY, kind, view)
         uiscale  = uiscale,
     })
     local sh = label.getElementHandle(s.subtitleId)
-    UI.addToPage(h.page, sh, originX,
-                 originY + TITLE_H + math.floor(SUBTITLE_FONT * 0.85))
+    UI.addToPage(h.page, sh, originX, originY + subBase)
     UI.setZIndex(sh, 132)
+
+    -- The "as of…" line exists only for a snapshot there is an
+    -- observation time for, so a live endpoint and a never-inspected
+    -- container both render no third line at all — and buildLayout
+    -- reserves its height from the SAME predicate (ageLineHeight below),
+    -- so the panel can never size for a line it does not draw.
+    local age = ageText(view)
+    if age then
+        s.ageId = label.new({
+            name     = "cargo_inv_age",
+            text     = age,
+            font     = h.menuFont,
+            fontSize = AGE_FONT,
+            color    = AGE_COL,
+            page     = h.page,
+            uiscale  = uiscale,
+        })
+        local ah = label.getElementHandle(s.ageId)
+        UI.addToPage(h.page, ah, originX, originY + ageBase)
+        UI.setZIndex(ah, 132)
+    end
+end
+
+-- The vertical space buildLayout must reserve for that line. Keyed on
+-- the same ageText() answer buildTitle draws from, never on the state
+-- alone: they must agree or the list overlaps the header.
+local function ageLineHeight(view, uiscale)
+    if not ageText(view) then return 0 end
+    return math.floor(AGE_H * uiscale)
 end
 
 
@@ -428,6 +608,7 @@ local function buildLayout(view)
     local padBot  = math.floor(PANEL_PAD_BOT * uiscale)
     local titleH  = math.floor(TITLE_H    * uiscale)
     local subH    = math.floor(SUBTITLE_H * uiscale)
+    local ageH    = ageLineHeight(view, uiscale)
     local tabH    = math.floor(TAB_H      * uiscale)
     local rowH    = math.floor(ROW_H      * uiscale)
     local rowPad  = math.floor(ROW_PAD    * uiscale)
@@ -438,7 +619,8 @@ local function buildLayout(view)
     if visibleCount < 1 then visibleCount = 1 end
 
     local rowsH    = visibleCount * rowH + (visibleCount - 1) * rowPad
-    local panelH   = padTop + titleH + subH + 6 + tabH + 8 + rowsH + padBot
+    local panelH   = padTop + titleH + subH + ageH + 6 + tabH + 8
+                       + rowsH + padBot
 
     -- #750 round-7 review: cap against the actual framebuffer — the
     -- pre-existing px/py clamp below only ever repositions the panel,
@@ -487,7 +669,7 @@ local function buildLayout(view)
     dataParams.page         = h.page
     dataParams.font         = h.menuFont
     dataParams.x            = cx
-    dataParams.y            = cy + titleH + subH + 6
+    dataParams.y            = cy + titleH + subH + ageH + 6
     dataParams.width        = cw
     dataParams.height       = tabH + 8 + rowsH
     dataParams.tabBottomPadPx = 8   -- literal, matching panelH's own gap
@@ -614,12 +796,16 @@ function cargoInventoryPanel.showRowMenu(item)
 end
 
 -----------------------------------------------------------
--- Per-tick refresh, reading the endpoint's contents LIVE. The rebuild
--- comparison belongs to the shared widget (this panel keeps no hash of
--- its own); the "target went away" check below is host-owned
--- lifecycle, not invalidation — the popup must not outlive the
--- endpoint it describes. A cargo that is demolished, a unit that dies,
--- and a unit that stops being player-commandable all close it.
+-- Per-tick refresh, re-reading the endpoint's own source: live truth
+-- for a unit, the knowledge record for a container (#1237) — which is
+-- how a completed deposit or withdrawal reaches an OPEN window with no
+-- plumbing of its own, since the engine already replaced the record at
+-- the moment that movement committed. The rebuild comparison belongs to
+-- the shared widget (this panel keeps no hash of its own); the "target
+-- went away" check below is host-owned lifecycle, not invalidation —
+-- the popup must not outlive the endpoint it describes. A cargo that is
+-- demolished, a unit that dies, and a unit that stops being
+-- player-commandable all close it.
 -----------------------------------------------------------
 function cargoInventoryPanel.update(dt)
     local s = cargoInventoryPanel.state
@@ -632,6 +818,15 @@ function cargoInventoryPanel.update(dt)
     end
     if itemList.isStale(s.listId, listDataParams(s.kind, view, s.activeTab)) then
         buildLayout(view)
+    end
+    -- The age advances every game second, which nothing else in the
+    -- window does. Retexting the one label in place is deliberately NOT
+    -- part of the staleness comparison: routing it through
+    -- presentationKey would tear the whole popup down and rebuild it
+    -- once a second for as long as a container window is open.
+    if s.ageId then
+        local age = ageText(view)
+        if age then label.setText(s.ageId, age) end
     end
 end
 

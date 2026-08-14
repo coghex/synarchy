@@ -32,7 +32,7 @@ RUN apt-get update \
     locales \
     pkg-config \
     python3 \
-    python3-yaml \
+    python3-pip \
     tar \
     xorg-dev \
     xz-utils \
@@ -42,6 +42,21 @@ RUN apt-get update \
 
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
+
+# The Python toolchain the unit-asset tools run on (#1257 validator,
+# #1258 atlas compiler). These pins are duplicated from
+# tools/requirements-assets.txt ON PURPOSE and must stay identical to
+# it: the image tag is the hash of THIS file plus ci-image.yml, so a
+# `COPY` of the requirements file would let a pin change silently reuse
+# a stale image. tools/test_pack_atlas.py fails if the two drift, which
+# is what makes the duplication safe.
+#
+# python3-yaml (apt) was replaced by the pip pin so exactly one PyYAML
+# is importable; Pillow is new, and the compiler needs a real decoder
+# rather than a hand-rolled PNG parser.
+RUN python3 -m pip install --no-cache-dir \
+      "PyYAML==6.0.2" \
+      "Pillow==11.3.0"
 
 # Toolchain baked into the image (#671): the ghcup-cache approach in
 # ci.yml never hit once the job moved into this container (the action

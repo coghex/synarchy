@@ -121,22 +121,44 @@ Reuse of an animation frame as `sprite`,
 duplicate. A `--unit` naming neither a declaration nor an asset tree exits
 non-zero rather than reporting an empty success.
 
-It never OPENS a frame: contents — decodability, pixel dimensions, size
-consistency within an animation — are deliberately out of scope and tracked in
-issue #1311. PyYAML is the only third-party dependency. Atlas packing is not
-implemented yet.
+Validation never OPENS a frame for a unit with no compiled index:
+contents — decodability, pixel dimensions, size consistency within an
+animation — are deliberately out of scope there and tracked in issue #1311.
+
+`--compile` (#1258) is the other half: it packs the declared frames into one
+lossless PNG atlas per ANIMATION under
+`assets/textures/units/<unit>/atlas/`, beside a generated `index.json`
+recording rows in a fixed direction order, real per-direction frame counts,
+integer cell geometry, mirroring, storage paths, a per-animation source
+digest and an atlas content digest, plus separate schema and tool versions.
+Rows shorter than the animation's longest are padded with transparent cells
+that no frame count can address. Compilation refuses to run on an inventory
+that does not validate, writes only artifacts whose content actually changed
+(so editing one animation cannot rewrite an unrelated atlas), and removes
+obsolete atlases from the unit's own output directory and nowhere else.
+Where an index exists, `--validate-only` regenerates it from the sources and
+reports staleness, hand edits, missing atlases and tampered pixels; a unit
+with no index stays valid until TEX-4 begins production tracking.
+
+PyYAML and Pillow are the dependencies, pinned in
+`tools/requirements-assets.txt`; Pillow is imported lazily, so the inventory
+gate on an index-free corpus does not need it.
 
 ```bash
 python3 tools/pack_atlas.py --validate-only --strict
 python3 tools/pack_atlas.py --validate-only --unit acolyte
 python3 tools/pack_atlas.py --validate-only --root <alternative tree>
+python3 tools/pack_atlas.py --compile --unit acolyte
+python3 tools/pack_atlas.py --compile --check      # report, write nothing
 ```
 
 ### `test_pack_atlas.py`
 Fixture self-test for `pack_atlas.py`. Every case builds a complete isolated
-unit tree in a temp directory and runs the real validator against it via
-`--root`, so nothing reads or mutates the shipped assets. Each negative case
-asserts BOTH a nonzero exit and a diagnostic naming the actual problem.
+unit tree in a temp directory and runs the real tool against it via `--root`,
+so nothing reads or mutates the shipped assets. Each negative case asserts
+BOTH a nonzero exit and a diagnostic naming the actual problem; each compiler
+SCENARIO drives a real compile and asserts on the emitted pixels, the index
+document, or which files a second run actually wrote.
 
 ```bash
 python3 tools/test_pack_atlas.py
