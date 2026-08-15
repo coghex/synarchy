@@ -810,8 +810,9 @@ continueLoad env logger requestId saveName descriptors = do
                 -- #911: a pre-instance-identity save carries its
                 -- locations as per-chunk discovered / contents-spawned
                 -- sets with no instance table. Turning those into
-                -- instances needs each definition's bounds / margin /
-                -- label, which no component decoder can reach — so the
+                -- instances needs each definition's bounds / label
+                -- (since #1230 there is no margin to resolve), which no
+                -- component decoder can reach — so the
                 -- pure decode left them PENDING and they are resolved
                 -- HERE, against the same registry the check above just
                 -- validated every location id against, before anything

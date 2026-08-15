@@ -1625,7 +1625,8 @@ data WorldGenParamsDTOv1 = WorldGenParamsDTOv1
 -- | Rebuild the live record from a v1 DTO. The instance table comes
 --   back EMPTY with the v1 chunk flags held pending
 --   ('Location.Instance.pendingLegacyFlags'): turning them into
---   instances needs each definition's bounds / margin / label, and no
+--   instances needs each definition's bounds / label (since #1230 there
+--   is no margin to resolve), and no
 --   component decoder has the location registry. The load path resolves
 --   them at its content-validation stage — the same stage that already
 --   rejects a save naming an unregistered location def — before

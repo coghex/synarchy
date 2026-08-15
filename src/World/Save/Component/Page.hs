@@ -1224,8 +1224,9 @@ migrateWorldPagesV2 (WorldPagesDTOv2 ps) = WorldPages
 --   'fromWorldGenParamsDTOv1' — which leaves the instance table empty and
 --   the page's old per-chunk discovered / contents-spawned sets PENDING
 --   on it. Turning those into instances needs each definition's
---   bounds / margin / label, and no component decoder has the location
---   registry, so the load path resolves them
+--   bounds / label — since #1230 there is no margin to resolve, reveal
+--   being sight against those bounds — and no component decoder has the
+--   location registry, so the load path resolves them
 --   ('Location.Instance.resolveLegacyLocationInstances') at its
 --   content-validation stage before publication.
 --   @wgpLocationStamped@ rides across untouched — it stays a chunk
