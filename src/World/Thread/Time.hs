@@ -74,13 +74,16 @@ tickWorldTime env dt = do
                     -- day/night cycle.
                     tickPowerNetworks env pageId worldState dtGame
 
-    -- Location discovery (#780): every LOADED page, not just the
-    -- visible one(s) — a player-controlled unit can be simulated on a
-    -- hidden page and must still trigger discovery there — and
-    -- independent of the pause flag above, since a freshly loaded
-    -- (auto-paused) save with a unit already standing in a location's
-    -- margin must discover it on the very next tick rather than
-    -- waiting for an unpause.
+    -- Location discovery (#780, sight-based since #1230): every LOADED
+    -- page, not just the visible one(s) — a player-controlled unit can
+    -- be simulated on a hidden page and must still trigger discovery
+    -- there, which is exactly why the tick calls
+    -- 'Unit.LineOfSight.visibleTilesOnPage' against the page's own
+    -- WorldState rather than the public 'unitVisibleTiles' query, whose
+    -- wmVisible gate would blind it. Independent of the pause flag
+    -- above, since a freshly loaded (auto-paused) save with a unit
+    -- already LOOKING AT a location must discover it on the very next
+    -- tick rather than waiting for an unpause.
     --
     -- Issue #763: gated on a load transaction NOT
     -- being in flight, which is a DIFFERENT thing from the pause flag
@@ -90,7 +93,9 @@ tickWorldTime env dt = do
     -- (that only happens later, once staging hands off to
     -- handleLoadStaged) — so without this gate, an ordinary tick landing
     -- during that unlocked staging window would mutate the LIVE, still-
-    -- current (pre-load) session's wgpLocationDiscovered and emit real
+    -- current (pre-load) session's location lifecycles (the per-chunk
+    -- @wgpLocationDiscovered@ set this was written against, until #911
+    -- replaced it with 'Location.Instance.liLifecycle') and emit real
     -- discovery events, even though staging might still fail and the
     -- #763 contract requires a failed/aborted load to leave the
     -- pre-load session completely unchanged. Once a load DOES publish,

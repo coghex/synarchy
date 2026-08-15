@@ -117,8 +117,10 @@ LOG_B = "/tmp/expedition_retrieval_probe_b.log"
 # instance lying in a real placed ruin, ~HOME_MIN_DIST tiles from home.
 TARGET_DEF = "radio"
 
-# Home sits this far from the ruin anchor — comfortably outside the
-# def's 6-tile discovery halo, and (at the acolyte's ~0.7 tiles/s
+# Home sits this far from the ruin anchor — comfortably beyond any
+# sightline that could reveal the ruin (#1230 replaced the def's 6-tile
+# discovery halo with a night-aware sight radius of at most 12 tiles),
+# and (at the acolyte's ~0.7 tiles/s
 # comfort speed) well past the ~21 tiles the old total-trip
 # pickup_timeout allowed, so a regression to that shape fails check 2.
 HOME_MIN_DIST = 26
