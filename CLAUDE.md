@@ -1724,15 +1724,35 @@ animation frame as a unit's `sprite`, a `directional_sprites` entry, or
 its `portrait` is deliberately legal (20 shipped references do this) and
 is never reported.
 
-**The INVENTORY gate validates paths and structure, never file
-CONTENTS.** For a unit with no compiled index it establishes that each
-declared frame exists and is a regular file and asserts nothing about
-what is inside it — not that it decodes, not its pixel dimensions, not
-that one animation's frames agree on a size. That boundary is
-deliberate: validating a real binary format there is its own work with
-its own cost, tracked as **#1311**. The COMPILER below necessarily
-decodes, so an animation that is actually compiled does get those
-checks.
+**The INVENTORY gate validates CONTENTS as well as structure** (#1311).
+Every declared frame is opened and decoded, in two passes because
+neither alone suffices: a full `decode_rgba8` covers the compressed
+pixel stream (truncation, corrupt deflate data, a non-image, and — via
+its own format check — a valid image of another format renamed
+`.png`), and Pillow's `verify()` then recomputes every chunk's CRC,
+which is the only thing that sees an intact payload under a WRONG
+checksum (the decoder reads and discards IDAT CRCs while streaming).
+Every frame of one animation must then decode to the same pixel size —
+the atlas cell is that size and nothing resamples — while frame COUNTS
+may still differ per direction, unchanged. Each of the two passes has a
+fixture that the OTHER accepts, so neither can be dropped as
+redundant. The rule is "decodes as a PNG", never "is already RGBA8":
+paletted, greyscale, greyscale+alpha, 16-bit and interlaced frames all
+pass. Content findings are ERRORS in plain `--validate-only` as much as
+under `--strict`; `--strict` still only promotes warnings.
+
+Pillow is therefore load-bearing for validation, not just for
+compilation: an absent decoder is one loud error naming the install
+command, never a silent skip that would print OK while checking
+nothing. It is still imported lazily, which now only spares a run with
+no declared frames. The content pass adds roughly half a second over
+the whole 4,620-frame corpus (~1 s structural, ~1.5 s total), so it is
+unconditional rather than hidden behind a flag.
+
+Still NOT content-validated: non-animation unit textures (`sprite`,
+`directional_sprites`, `portrait`, `unknown_unit/rotations/*.png`),
+which are existence-checked only — the inventory's scope is
+`animations/`.
 
 **Scope is `animations/` — deliberately not the whole unit tree.**
 `assets/textures/units/unknown_unit/rotations/*.png` and the per-unit
@@ -1809,10 +1829,10 @@ outside the filesystem-first inventory walk.
 Pillow), which `.github/ci/Dockerfile` installs verbatim — the pins are
 spelled in the Dockerfile rather than COPYed because the image tag is
 that file's own hash, and `test_pack_atlas.py` fails if the two drift.
-Pillow is imported lazily, so the inventory gate on an index-free
-corpus still runs without it. Validation never needs the exact pinned
-toolchain: every recorded digest is over decoded RGBA8, so any Pillow
-verifies a committed atlas.
+Both are load-bearing for validation as well as compilation since
+#1311. Validation never needs the exact pinned toolchain, though: it
+decodes rather than encodes, and every recorded digest is over decoded
+RGBA8, so any reasonably recent Pillow verifies a committed atlas.
 
 Gates: `python3 tools/test_pack_atlas.py` (fixture-based, isolated temp
 trees, never touching the shipped assets; every negative case asserts a
