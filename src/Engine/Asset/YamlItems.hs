@@ -21,6 +21,7 @@ import qualified Data.Text as T
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Types as Aeson (Parser)
 import Engine.Core.Log (LoggerState)
 import Engine.Asset.YamlList (loadYamlList)
@@ -112,13 +113,21 @@ data ItemYamlStorage = ItemYamlStorage
 --   not reachable from inside one, and a nameless
 --   @Error in $.items[7].storage.bulk_capacity@ is the diagnostic
 --   requirement 2 exists to rule out.
+--   The object check is spelled out rather than delegated to
+--   'withObject' for the same reason: @storage: 23@ would otherwise fail
+--   with aeson's own "expected Object, but encountered Number", which
+--   names neither the definition nor the block.
 parseItemYamlStorage ∷ Text → Aeson.Value → Aeson.Parser ItemYamlStorage
-parseItemYamlStorage defName =
-    withObject "ItemYamlStorage" $ \v → ItemYamlStorage
+parseItemYamlStorage defName val = case val of
+    Aeson.Object v → ItemYamlStorage
         ⊚ requirePositiveQuantity defName "storage weight capacity"
               "kilograms" v "weight_capacity"
         ⊛ requirePositiveQuantity defName "storage bulk capacity"
               "litres" v "bulk_capacity"
+    _ → fail ∘ T.unpack $
+        "item definition '" <> defName <> "': storage must be a block \
+        \authoring weight_capacity (kilograms) and bulk_capacity \
+        \(litres), got " <> T.pack (show val)
 
 -- | One entry in an item-container's default contents (first-aid kit /
 --   toolbox): which item, how many, and an optional fill for fillable
@@ -297,12 +306,30 @@ data ItemYamlDef = ItemYamlDef
 --   monadically against it, so every rejection names the offending
 --   definition rather than a bare JSON index; everything else keeps its
 --   original applicative shape and its original defaults.
+--
+--   @storage:@ is read with an explicit key lookup rather than @.:?@,
+--   because those two disagree about the one case that matters here:
+--   @.:?@ reports an explicit @storage: null@ (or @~@, or a bare
+--   @storage:@ with no value) as ABSENT, which would accept a definition
+--   that visibly authored the block as though it had never mentioned it —
+--   quietly turning "this crate stores things" into "this crate does
+--   not". A key the author WROTE is present, so a null value is a
+--   half-authored block and fails like any other invalid one
+--   (requirement 3), while a truly missing key stays the legitimate
+--   optional case. Same trap CLAUDE.md records for @asset_units:@.
 instance FromJSON ItemYamlDef where
     parseJSON = withObject "ItemYamlDef" $ \v → do
-        name     ← v .: "name"
-        bulk     ← requirePositiveQuantity name "bulk" "litres" v "bulk"
-        mStorage ← v .:? "storage"
-        storage  ← traverse (parseItemYamlStorage name) mStorage
+        name    ← v .: "name"
+        bulk    ← requirePositiveQuantity name "bulk" "litres" v "bulk"
+        storage ← case KM.lookup "storage" v of
+            Nothing         → pure Nothing
+            Just Aeson.Null → fail ∘ T.unpack $
+                "item definition '" <> name <> "': storage is present but \
+                \null — a storage: block must author both a positive \
+                \weight_capacity (kilograms) and a positive bulk_capacity \
+                \(litres); omit the key entirely for an item that is not \
+                \portable storage"
+            Just val        → Just <$> parseItemYamlStorage name val
         ItemYamlDef name
             ⊚ v .:? "display_name" .!= ""
             ⊛ v .:  "sprite"

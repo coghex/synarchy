@@ -192,6 +192,26 @@ spec = do
             (iydStorage <$> decodeDef (defWithStorage ""))
                 `shouldBe` Right Nothing
 
+        -- An AUTHORED-but-null block is the one case `.:?` gets wrong:
+        -- it reports it as absent, which would accept a definition that
+        -- visibly declared storage as though it never mentioned it. A key
+        -- the author wrote is present, so a null value is a half-authored
+        -- block and fails like any other invalid one. All three YAML
+        -- spellings of null are covered, since the rejection is on the
+        -- decoded Null rather than on the source text.
+        it "rejects an explicitly null storage: block rather than reading \
+           \it as absent" $
+            rejectsNaming (defWithStorage "    storage: null\n")
+
+        it "rejects a storage: key written with no value at all" $
+            rejectsNaming (defWithStorage "    storage:\n")
+
+        it "rejects a tilde-null storage: block" $
+            rejectsNaming (defWithStorage "    storage: ~\n")
+
+        it "rejects a non-object storage: value" $
+            rejectsNaming (defWithStorage "    storage: 23.0\n")
+
         it "rejects a storage: block missing weight_capacity" $
             rejectsNaming (defWithStorage
                 "    storage:\n      bulk_capacity: 23.0\n")
