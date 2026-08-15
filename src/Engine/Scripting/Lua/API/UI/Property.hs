@@ -637,11 +637,17 @@ uiSetSpriteTextureFn env = do
 
 -- | UI.setSpriteUV(elementHandle, u0, v0, u1, v1)
 --   Narrow the sprite to a sub-rect of its texture (#1259). Visual
---   only, like 'uiSetSpriteFlipXFn'. The one caller is a compiled
---   unit-animation atlas frame, whose texture is the WHOLE animation:
---   without this the portrait would draw the entire sheet. Any missing
---   argument leaves the sprite untouched rather than silently resetting
---   it to the whole image.
+--   only, like 'uiSetSpriteFlipXFn', and LOW-LEVEL: it mutates the UVs
+--   and nothing else.
+--
+--   Displaying a unit's live animation frame does NOT go through here.
+--   A frame is a texture AND a sub-rect AND a mirror flag, and setting
+--   them separately leaves the element holding a new atlas handle with
+--   the previous frame's rect for a moment — which the render thread,
+--   reading the manager concurrently, can observe. Use
+--   'uiSetSpriteFrameFn' (@UI.setSpriteFrame@), which publishes all
+--   three in one transition. Any missing argument leaves the sprite
+--   untouched rather than silently resetting it to the whole image.
 uiSetSpriteUVFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiSetSpriteUVFn env = do
     elemArg ← Lua.tointeger 1

@@ -6,6 +6,12 @@
 -- in `World/Render/CursorQuads.hs::renderWorldCursorQuads::hitTest` and
 -- the per-unit sprite math in `Unit/Render.hs::unitToQuad`.
 --
+-- The hit box is sized from the frame the renderer is DRAWING
+-- (`Unit.Render.pickFrame`, via `unitHitRect`), not from the static
+-- T-pose it once used: with atlas storage a frame's texture handle
+-- names the whole animation sheet, so only the sample knows the cell
+-- size (#1259).
+--
 -- Returns the unit with the highest gridZ that contains the click —
 -- so clicking a tile with two stacked units selects the one on top.
 module Unit.HitTest

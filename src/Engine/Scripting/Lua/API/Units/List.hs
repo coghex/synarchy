@@ -296,7 +296,11 @@ unknownUnitAnimFrame animName dir frameIdx =
 -- | unit.getFrameTexture(uid) → texture handle integer (0 if missing).
 --   Returns the texture for the unit's current animation frame at the
 --   active camera facing — re-query each tick to follow the animation.
---   Used by the v2 info pane to mirror the unit's sprite as a portrait.
+--
+--   A handle ALONE cannot describe an atlas-backed frame (#1259), so
+--   nothing that displays a unit's live frame uses this any more: the
+--   v2 info pane moved to 'unitGetFrameSampleFn'. It remains for
+--   callers that genuinely want only the handle.
 unitGetFrameTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetFrameTextureFn env = do
     idArg ← Lua.tointeger 1
@@ -390,7 +394,8 @@ unitGetFrameSampleFn env = do
 -- | unit.getPortraitTexture(uid) → texture handle integer (0 if the
 --   unit is missing or its def declares no authored `portrait:`).
 --   The info pane prefers this static authored portrait and falls back
---   to `getFrameTexture` (the live animation frame) when it returns 0.
+--   to `getFrameSample` (the live animation frame, with its UV sub-rect
+--   and mirror flag) when it returns 0.
 unitGetPortraitTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetPortraitTextureFn env = do
     idArg ← Lua.tointeger 1

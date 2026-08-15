@@ -1,13 +1,19 @@
 {-# LANGUAGE Strict #-}
--- | Camera-rotation-aware directional sprite resolution, shared by the
---   renderer ('Unit.Render') and the click/box hit-tester
---   ('Unit.HitTest'). Both must resolve the SAME texture for a given
---   unit facing + camera rotation: the renderer to draw it, the
+-- | Camera-rotation-aware directional sprite resolution — the T-POSE
+--   path, shared by the renderer ('Unit.Render') and the click/box
+--   hit-tester ('Unit.HitTest'). Both must resolve the SAME texture for
+--   a given unit facing + camera rotation: the renderer to draw it, the
 --   hit-tester to size the selection quad. Keeping the resolution in one
 --   place stops the two from diverging — historically 'Unit.HitTest'
 --   carried a stripped copy that omitted the 'mirrorDir' fallback, so
 --   the hit-box of W/SW/NW-facing units (drawn as the mirrored eastern
 --   sprite) was sized from the default texture instead (#389).
+--
+--   Since #1259 this is reached only when there is no animation frame
+--   to show: an ANIMATED unit is both drawn and hit-tested from
+--   'Unit.Render.pickFrame''s sample, which is the same shared-resolution
+--   principle applied one level up (a frame's size is its atlas CELL,
+--   which no texture-handle lookup can report).
 --
 --   This module is deliberately light — Direction math + 'CameraFacing'
 --   + 'TextureHandle' only — so 'Unit.HitTest' can share it without

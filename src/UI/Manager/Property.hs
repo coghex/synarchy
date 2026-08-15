@@ -158,10 +158,12 @@ setSpriteColor handle color = modifyElement handle `flip` \elem →
 
 -- | Narrow this sprite to a sub-rect of its texture (#1259).
 --
---   The one caller today is a compiled unit-animation atlas cell, whose
---   texture holds the whole animation. Purely visual, like
---   'setSpriteFlipX': it changes neither the element's geometry nor its
---   interactive bounds.
+--   Purely visual, like 'setSpriteFlipX': it changes neither the
+--   element's geometry nor its interactive bounds. This is the LOW-LEVEL
+--   setter — it mutates the UVs alone. Publishing an animation frame
+--   means texture, sub-rect and mirror TOGETHER, which is
+--   'setSpriteFrame'; see its note for why doing it in pieces is a
+--   race against the render thread.
 setSpriteUV ∷ ElementHandle → (Float, Float, Float, Float)
             → UIPageManager → UIPageManager
 setSpriteUV handle uv = modifyElement handle `flip` \elem →

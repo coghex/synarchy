@@ -278,12 +278,13 @@ data UISpriteStyle = UISpriteStyle
     --   sheet as though it were a single frame.
   , ussFlipX   ∷ Bool
     -- ^ Draw the sprite horizontally mirrored (#887): the renderer
-    --   swaps the quad's U coordinates, the same mechanism
-    --   'Unit.Render' already uses for the W/SW/NW mirror fallback.
-    --   'False' for every sprite that never asks for it — the only
-    --   caller today is the @--preview units/\<name\>@ animation
-    --   viewer's mirrored direction cells, which must actually LOOK
-    --   mirrored, not merely report a flag.
+    --   swaps the quad's U coordinates WITHIN 'ussUV', the same
+    --   mechanism 'Unit.Render' uses for the W/SW/NW mirror fallback.
+    --   'False' for every sprite that never asks for it. Two callers
+    --   ask: the @--preview units/\<name\>@ animation viewer's mirrored
+    --   direction cells, which must actually LOOK mirrored rather than
+    --   merely report a flag, and (since #1259) any surface showing a
+    --   unit's live frame, whose mirror state is part of the frame.
   } deriving (Show)
 
 -- | Visual content for a tooltip. A tooltip can carry any combination
