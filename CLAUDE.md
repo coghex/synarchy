@@ -1732,12 +1732,17 @@ non-image, and — via its own format check — a valid image of another
 format renamed `.png`); Pillow's `verify()` then CRCs the chunks,
 which is the only thing that sees an intact payload under a WRONG
 checksum (the decoder reads and discards IDAT CRCs while streaming);
-and a constant tail comparison covers **IEND**, which `verify()`
-breaks ON without checksumming and the decoder never reads. That last
-one needs no parsing — IEND's payload is empty by specification, so
-the whole chunk is a 12-byte constant and the spec makes it final, so
-one comparison catches both a tampered terminal checksum and data
-appended past the image. Do not "simplify" the three into one:
+and `locate_png_stream_end` covers the terminal **IEND** chunk, which
+`verify()` breaks ON without checksumming and the decoder never reads,
+plus anything appended after the image ends. That last one walks chunk
+FRAMING only — length, type, payload, CRC — decoding nothing, knowing
+no chunk type but IEND, and running only after Pillow has CRC-validated
+that sequence, so it cannot disagree with the real decoder about where
+a chunk lies; keep it that narrow (a second hand-rolled PNG parser is
+what sank the previous attempt at this issue). Checking the FILE's last
+bytes is NOT equivalent and was the round-2 review finding: appending a
+second canonical IEND leaves a perfect tail while the real image ended
+12 bytes earlier. Do not "simplify" the three into one:
 `tools/test_pack_atlas.py`'s `every content check earns its keep`
 exists because each has a fixture the other two accept.
 Every frame of one animation must then decode to the same pixel size —

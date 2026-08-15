@@ -236,12 +236,18 @@ checks, because each one covers ground the others cannot:
   * Pillow's own `verify()` then CRCs the chunks, which is what catches
     an intact payload under a wrong checksum. It never decompresses, so
     it could not have replaced the pass above;
-  * and a constant tail comparison covers IEND, which `verify()` breaks
-    ON without checksumming and the decoder never reads at all. That
-    needs no parsing: IEND's payload is empty by specification, so the
-    whole chunk is a 12-byte constant and the spec makes it final, so
-    one comparison catches both a tampered terminal checksum and data
-    appended past the end of the image.
+  * and `locate_png_stream_end` covers the terminal chunk, which
+    `verify()` breaks ON without checksumming and the decoder never
+    reads at all, plus anything appended after the image ends. It walks
+    chunk FRAMING only — length, type, payload, CRC — decoding nothing
+    and knowing no chunk type but IEND, and it runs only after Pillow
+    has CRC-validated that sequence, so it cannot disagree with the
+    real decoder about where a chunk lies. Its answer feeds two
+    constant comparisons: that IEND's own 12 bytes are the fixed
+    constant its empty payload makes them, and that the file ends
+    there. Checking the FILE's last bytes would not do: appending a
+    second canonical IEND leaves a perfect tail while the real image
+    ended 12 bytes earlier.
 
 Together they reject a truncated file, corrupt compressed data, a bad
 chunk checksum anywhere including the terminal one, a structurally
@@ -378,6 +384,8 @@ FRAME_RE = re.compile(r"\Aframe_(\d{3})\.png\Z")
 # Relative to the validation root.
 ASSET_PREFIX: Tuple[str, ...] = ("assets", "textures", "units")
 
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
 # The terminal PNG chunk, in full. IEND's payload is EMPTY by
 # specification, so its length, type and CRC are all fixed: this is a
 # constant to compare against, not a chunk to parse. `verify_png_container`
@@ -502,6 +510,50 @@ def decode_rgba8(path: Path) -> Frame:
         raise ValueError(f"cannot decode as an image: {error}") from error
 
 
+def locate_png_stream_end(path: Path) -> Tuple[int, int, bytes]:
+    """Find where the PNG datastream ends: `(end, file size, IEND bytes)`.
+
+    `end` is the offset just past the FIRST IEND chunk — the one that
+    terminates the image per the specification. `IEND bytes` are that
+    chunk's own 12 bytes, for the caller to compare against
+    `PNG_IEND_CHUNK`. Raises `ValueError` when no IEND terminates the
+    stream, rather than returning a sentinel the caller would have to
+    re-check on a path Pillow has already made unreachable.
+
+    This is chunk FRAMING and nothing else: a four-byte big-endian
+    length, a four-byte type, the payload, a four-byte CRC. It decodes
+    nothing, checksums nothing, and knows nothing about any chunk type
+    beyond the four letters that end the stream.
+
+    That narrowness is deliberate and must be preserved (#1311 —
+    hand-rolling a second PNG parser is what sank the previous
+    attempt). Two things keep it honest: it runs only AFTER Pillow has
+    CRC-validated the chunk sequence, which fixes the framing uniquely,
+    so this cannot disagree with the real decoder about where a chunk
+    lies; and its entire output is one offset, which the caller uses to
+    ask a single question the library will not answer — is there
+    anything after the image?
+    """
+    with path.open("rb") as handle:
+        size = handle.seek(0, io.SEEK_END)
+        handle.seek(len(PNG_SIGNATURE))
+        while True:
+            header = handle.read(8)
+            if len(header) < 8:
+                break
+            (length,) = struct.unpack(">I", header[:4])
+            chunk_start = handle.tell() - 8
+            end = handle.seek(length + 4, io.SEEK_CUR)
+            if end > size:
+                # A chunk claiming more bytes than the file holds.
+                break
+            if header[4:] == b"IEND":
+                handle.seek(chunk_start)
+                return end, size, handle.read(end - chunk_start)
+    raise ValueError(
+        "corrupt PNG structure: no IEND chunk terminates the stream")
+
+
 def verify_png_container(path: Path) -> None:
     """Check the chunk stream's checksums, without decompressing.
 
@@ -512,7 +564,8 @@ def verify_png_container(path: Path) -> None:
 
     It stops ON the terminal chunk without checksumming it, though, and
     the decoder never reads that far, so IEND is the one chunk neither
-    library pass covers and it is checked separately below.
+    library pass covers — nor does either notice bytes appended after
+    it. `locate_png_stream_end` supplies the offset both questions need.
 
     Deliberately does NOT re-check the format: this only ever runs on a
     file `decode_rgba8` has already accepted as a decodable PNG, and a
@@ -528,28 +581,25 @@ def verify_png_container(path: Path) -> None:
     except Exception as error:  # noqa: BLE001 - any rejection is one finding
         raise ValueError(f"corrupt PNG structure: {error}") from error
 
-    # Checking IEND needs no parsing, which is the point: its payload
-    # is EMPTY by specification, so length, type and CRC together are a
-    # fixed 12-byte constant, and the spec makes it the final chunk. A
-    # tail comparison therefore covers a tampered terminal checksum and
-    # data appended past the end of the stream in one constant-time
-    # read — no chunk walking, and nothing that could drift into a
-    # second format parser.
     try:
-        with path.open("rb") as handle:
-            handle.seek(0, io.SEEK_END)
-            if handle.tell() < len(PNG_IEND_CHUNK):
-                tail = b""
-            else:
-                handle.seek(-len(PNG_IEND_CHUNK), io.SEEK_END)
-                tail = handle.read(len(PNG_IEND_CHUNK))
+        end, size, terminal = locate_png_stream_end(path)
     except OSError as error:
         raise ValueError(f"cannot read: {error}") from error
-    if tail != PNG_IEND_CHUNK:
+
+    # Trailing data is not part of the image. Comparing the FILE's last
+    # bytes would not establish this: appending a second canonical IEND
+    # leaves a perfect tail while the real image ended 12 bytes earlier.
+    if end != size:
         raise ValueError(
-            "corrupt PNG structure: the stream does not end with a valid "
-            "IEND chunk — its terminal checksum is wrong, or data follows "
-            "the end of the image")
+            f"corrupt PNG structure: {size - end} byte(s) follow the IEND "
+            f"chunk that ends the image")
+    # And the terminal chunk itself, which needs no parsing to check:
+    # IEND's payload is EMPTY by specification, so its length, type and
+    # CRC together are a fixed 12-byte constant.
+    if terminal != PNG_IEND_CHUNK:
+        raise ValueError(
+            "corrupt PNG structure: the IEND chunk that ends the image "
+            "carries a wrong terminal checksum")
 
 
 def validate_frame_image(path: Path) -> Tuple[int, int]:

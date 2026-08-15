@@ -184,11 +184,31 @@ def trailing_data_png() -> bytes:
     """A complete PNG with junk appended past IEND.
 
     The spec makes IEND the final chunk, so this is a structurally
-    invalid stream — and it is what the terminal check's other half
-    catches, since a tail comparison sees appended bytes as readily as
-    a damaged checksum.
+    invalid stream.
     """
     return png_bytes(32, 32) + b"\x00leftover editor metadata"
+
+
+def duplicate_iend_png() -> bytes:
+    """A complete PNG with a SECOND canonical IEND chunk appended.
+
+    The adversarial version of the case above, and the reason the check
+    cannot simply compare the file's last bytes: this file's tail IS a
+    perfect IEND chunk, while the image it belongs to actually ended
+    twelve bytes earlier. Pillow's `verify()` stops at the first IEND
+    and the decoder never reads that far, so nothing else notices.
+    """
+    return png_bytes(32, 32) + pack_atlas.PNG_IEND_CHUNK
+
+
+def chunk_then_iend_png() -> bytes:
+    """A complete PNG with a whole extra chunk before a second IEND.
+
+    Same shape as `duplicate_iend_png`, but with real chunk content in
+    between, so a check that only looked one chunk back would miss it.
+    """
+    return (png_bytes(32, 32) + png_chunk(b"tEXt", b"Comment\x00appended")
+            + pack_atlas.PNG_IEND_CHUNK)
 
 
 def not_an_image() -> bytes:
@@ -631,7 +651,7 @@ def _bad_checksum_frame(fx: Fixture) -> None:
 
 
 @negative("a frame whose TERMINAL chunk checksum is wrong",
-          "does not end with a valid IEND chunk")
+          "wrong terminal checksum")
 def _tampered_iend_frame(fx: Fixture) -> None:
     # Neither library pass reaches IEND — `verify()` breaks on it and
     # the decoder never gets there — so without the terminal check this
@@ -644,15 +664,35 @@ def _tampered_iend_frame(fx: Fixture) -> None:
 
 
 @negative("a frame with data appended past IEND",
-          "does not end with a valid IEND chunk")
+          "byte(s) follow the IEND chunk")
 def _trailing_data_frame(fx: Fixture) -> None:
-    # The other half of the same constant comparison: IEND is the final
-    # chunk by specification, so anything after it is not part of the
-    # image.
+    # IEND is the final chunk by specification, so anything after it is
+    # not part of the image.
     valid_fixture(fx)
     fx.write_file(
         "assets/textures/units/hero/animations/walk/west/frame_000.png",
         trailing_data_png())
+
+
+@negative("a frame with a SECOND canonical IEND appended",
+          "byte(s) follow the IEND chunk")
+def _duplicate_iend_frame(fx: Fixture) -> None:
+    # The adversarial trailing-data case: the file's last twelve bytes
+    # are a perfect IEND chunk, so comparing the FILE's tail accepts it
+    # while the real image ended twelve bytes earlier.
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/hero/animations/walk/south-west/frame_000.png",
+        duplicate_iend_png())
+
+
+@negative("a frame with an extra chunk before a second IEND",
+          "byte(s) follow the IEND chunk")
+def _chunk_then_iend_frame(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/hero/animations/walk/north-west/frame_000.png",
+        chunk_then_iend_png())
 
 
 @negative("a non-image file wearing a .png name",
@@ -1823,6 +1863,49 @@ def _case_insensitive_atlas_collision(fx: Fixture) -> None:
         f"{[issue.msg for issue in report.errors]}")
 
 
+@scenario("locating the end of a PNG stream is framing-only and total")
+def _stream_end_contract(fx: Fixture) -> None:
+    """`locate_png_stream_end` answers where the image ends, or says why not.
+
+    Covered directly rather than only through validation because two of
+    its branches are unreachable from there — Pillow rejects an
+    IEND-less or overlong-chunk stream first — and an uncovered branch
+    is exactly where a crash hides instead of a diagnostic.
+    """
+    good = png_bytes(32, 32)
+    clean = fx.write_file("loose/good.png", good)
+    end, size, terminal = pack_atlas.locate_png_stream_end(clean)
+    assert (end, size) == (len(good), len(good)), (
+        f"a clean PNG should end where the file does, got {end}/{size}")
+    assert terminal == pack_atlas.PNG_IEND_CHUNK
+
+    # Trailing data moves the FILE's end, never the stream's.
+    doubled = fx.write_file("loose/doubled.png", duplicate_iend_png())
+    end, size, terminal = pack_atlas.locate_png_stream_end(doubled)
+    assert end == len(good), f"the stream end moved with the appended data: {end}"
+    assert size == len(good) + len(pack_atlas.PNG_IEND_CHUNK)
+    assert terminal == pack_atlas.PNG_IEND_CHUNK
+
+    for label, data in [
+        ("no IEND at all", good[:-12]),
+        ("a chunk claiming more bytes than the file holds",
+         good[:-12] + struct.pack(">I", 1 << 30) + b"IDAT" + b"\x00" * 8),
+        # The overlong chunk is itself labelled IEND. Without the
+        # bounds guard the walk accepts it and reports a NEGATIVE count
+        # of trailing bytes, so this is the case that guard exists for.
+        ("a TERMINAL chunk claiming more bytes than the file holds",
+         good[:-12] + struct.pack(">I", 1 << 30) + b"IEND" + b"\x00" * 8),
+    ]:
+        broken = fx.write_file("loose/broken.png", data)
+        try:
+            pack_atlas.locate_png_stream_end(broken)
+        except ValueError as error:
+            assert "IEND" in str(error), (
+                f"{label}: rejected for the wrong reason: {error}")
+        else:
+            raise AssertionError(f"{label}: accepted, or returned a sentinel")
+
+
 @scenario("every content check earns its keep")
 def _both_decode_passes_earn_their_keep(fx: Fixture) -> None:
     """No part of `validate_frame_image` is redundant.
@@ -1867,7 +1950,7 @@ def _both_decode_passes_earn_their_keep(fx: Fixture) -> None:
 
     # A wrong TERMINAL checksum: both library passes accept it, because
     # verify() breaks on IEND before checksumming and the decoder never
-    # reads that far. Only the constant tail comparison sees it.
+    # reads that far. Only the terminal comparison sees it.
     terminal = fx.write_file("loose/tampered_iend.png", tampered_iend_png())
     frame = pack_atlas.decode_rgba8(terminal)
     assert (frame.width, frame.height) == (32, 32), (
@@ -1877,11 +1960,35 @@ def _both_decode_passes_earn_their_keep(fx: Fixture) -> None:
     try:
         pack_atlas.validate_frame_image(terminal)
     except ValueError as error:
-        assert "IEND" in str(error), f"rejected for the wrong reason: {error}"
+        assert "terminal checksum" in str(error), (
+            f"rejected for the wrong reason: {error}")
     else:
         raise AssertionError(
             "a wrong IEND checksum passed the full check: no part of the "
             "content pass validates the terminal chunk")
+
+    # A SECOND canonical IEND appended: both library passes accept it,
+    # AND so would a comparison of the file's own last bytes. Only
+    # locating the real end of the stream catches it — which is why
+    # that walk exists rather than a tail constant.
+    doubled = fx.write_file("loose/duplicate_iend.png", duplicate_iend_png())
+    frame = pack_atlas.decode_rgba8(doubled)
+    assert (frame.width, frame.height) == (32, 32), (
+        "the duplicate-IEND fixture should still DECODE")
+    with image_mod.open(doubled) as handle:
+        handle.verify()
+    assert doubled.read_bytes()[-12:] == pack_atlas.PNG_IEND_CHUNK, (
+        "this fixture only means something while its TAIL is a valid IEND")
+    try:
+        pack_atlas.validate_frame_image(doubled)
+    except ValueError as error:
+        assert "follow the IEND chunk" in str(error), (
+            f"rejected for the wrong reason: {error}")
+    else:
+        raise AssertionError(
+            "data after a complete image passed the full check: the "
+            "terminal check is comparing the file's tail rather than "
+            "locating where the stream actually ends")
 
 
 @scenario("a missing image decoder fails validation with an install hint")
@@ -2036,7 +2143,7 @@ def main() -> int:
 
     # The suite is only meaningful if it actually built fixtures; a
     # refactor that silently emptied a registry must not read as green.
-    if len(POSITIVE) < 12 or len(NEGATIVE) < 70 or len(SCENARIO) < 32:
+    if len(POSITIVE) < 12 or len(NEGATIVE) < 72 or len(SCENARIO) < 33:
         failures.append(
             f"case registries look truncated: {len(POSITIVE)} positive, "
             f"{len(NEGATIVE)} negative, {len(SCENARIO)} scenario")

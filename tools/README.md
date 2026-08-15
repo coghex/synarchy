@@ -126,9 +126,11 @@ because each covers ground the others cannot: a full decode covers the
 compressed pixel stream — truncation, corrupt deflate data, a non-image, and a
 valid image of another format renamed `.png`; Pillow's `verify()` CRCs the
 chunks, the only thing that catches an intact payload under a wrong checksum;
-and a constant tail comparison covers IEND, which `verify()` breaks on without
-checksumming and the decoder never reads, catching both a tampered terminal
-checksum and data appended past the image. Every frame of one animation must then decode to the
+and `locate_png_stream_end` covers the terminal IEND chunk, which `verify()`
+breaks on without checksumming and the decoder never reads, catching both a
+tampered terminal checksum and data appended past the image (a second canonical
+IEND included, which is why it locates the stream's end rather than comparing
+the file's last bytes). Every frame of one animation must then decode to the
 same pixel size; frame COUNTS may still differ per direction. Any legitimate
 PNG colour type passes, including paletted, greyscale, 16-bit and interlaced.
 Content findings are errors with or without `--strict`. Non-animation
