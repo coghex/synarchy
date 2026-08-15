@@ -35,8 +35,8 @@ import Structure.Palette (emptyTexPalette)
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Types
-    (Animation(..), UnitId(..), UnitInstance(..), UnitManager(..)
-    , emptyUnitManager)
+    (legacyAnimation, UnitId(..), UnitInstance(..)
+    , UnitManager(..), emptyUnitManager)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
 import World.Save.Component (componentKnownIds)
@@ -102,9 +102,8 @@ animatedCargoDef ∷ BuildingDef
 animatedCargoDef = (bareDef "unfolding_pod")
     { bdBuildWork = 0, bdStorageCapacity = 150
     , bdStateAnims = HM.singleton "appearing" "unfold"
-    , bdAnimations = HM.singleton "unfold" Animation
-        { aFps = 2, aLoop = False, aFlip = False
-        , aFrames = Map.singleton DirS (V.replicate 4 (TextureHandle 0)) }
+    , bdAnimations = HM.singleton "unfold" (legacyAnimation 2 False False
+        (Map.singleton DirS (V.replicate 4 (TextureHandle 0))))
     }
 
 bareDef ∷ Text → BuildingDef

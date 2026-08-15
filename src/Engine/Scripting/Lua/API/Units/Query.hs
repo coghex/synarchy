@@ -22,8 +22,6 @@ import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Vector as V
-import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
 import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv)
@@ -115,9 +113,7 @@ unitGetAnimDurationFn env = do
                             Nothing → return Nothing
                             Just an →
                                 let fps     = aFps an
-                                    nFrames = maximum
-                                        (0 : map V.length
-                                                 (Map.elems (aFrames an)))
+                                    nFrames = storageMaxFrameCount (aStorage an)
                                 in if fps ≤ 0 ∨ nFrames ≡ 0
                                    then return Nothing
                                    else return

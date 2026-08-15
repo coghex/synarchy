@@ -99,9 +99,14 @@ createBindlessTextureSystem pdev dev cmdPool cmdQueue config = do
 
   let slotAllocator = createSlotAllocator (bcMaxTextures config)
 
-  -- Acquire the single shared texture sampler matching the current
-  -- global filter. Every atlas slot (and the undefined fallback) points
-  -- at this one sampler; a filter toggle swaps it via 'setTextureFilter'.
+  -- Acquire the shared texture sampler matching the current global
+  -- filter. Every UNPINNED slot (and the undefined fallback) points at
+  -- this one sampler, and a filter toggle swaps it via
+  -- 'setTextureFilter'. A slot registered through
+  -- 'registerPinnedTexture' — the world preview, the zoom atlas, and
+  -- since #1259 every compiled unit-animation atlas, which must stay
+  -- NEAREST for D-6 — is recorded in 'btsPinned' instead and keeps its
+  -- own sampler across that toggle.
   env ← ask
   filterMode ← liftIO $ readIORef (rcTextureFilterRef (toRenderCapability env))
   let texKind = textureSamplerKind (textureFilterToVulkan filterMode)
@@ -308,9 +313,10 @@ writeHandleSlotEntry sys hid slot
   | hid < 0 ∨ hid ≥ handleSlotTableSize = pure ()
   | otherwise = pokeElemOff (btsHandleSlotPtr sys) hid slot
 
--- | Register a texture in the bindless system. The atlas/global path:
---   the slot follows the global filter and is repainted by
---   'setTextureFilter' on a toggle. Callers pass 'btsTextureSampler'.
+-- | Register a texture in the bindless system, following the GLOBAL
+--   filter: the slot is repainted by 'setTextureFilter' on a toggle.
+--   Callers pass 'btsTextureSampler'. A texture whose filtering must
+--   survive that toggle uses 'registerPinnedTexture' instead.
 registerTexture ∷ Device
                 → TextureHandle
                 → ImageView

@@ -17,8 +17,6 @@ import Engine.Core.Capability.UnitCombat
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Map.Strict as Map
-import qualified Data.Vector as V
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv)
 import Unit.Anim (stateKey)
@@ -179,9 +177,8 @@ handleUnitDrinkCommand env utsRef uid = do
                     in case HM.lookup animName (udAnimations def) of
                         Nothing → 0
                         Just a  →
-                            let counts = V.length <$> Map.elems (aFrames a)
-                                maxN   = if null counts then 0 else maximum counts
-                                fps    = aFps a
+                            let maxN = storageMaxFrameCount (aStorage a)
+                                fps  = aFps a
                             in if fps > 0 ∧ maxN > 0
                                then fromIntegral maxN / realToFrac fps ∷ Double
                                else 0
@@ -218,9 +215,8 @@ handleUnitEatCommand env utsRef uid = do
                     in case HM.lookup animName (udAnimations def) of
                         Nothing → 0
                         Just a  →
-                            let counts = V.length <$> Map.elems (aFrames a)
-                                maxN   = if null counts then 0 else maximum counts
-                                fps    = aFps a
+                            let maxN = storageMaxFrameCount (aStorage a)
+                                fps  = aFps a
                             in if fps > 0 ∧ maxN > 0
                                then fromIntegral maxN / realToFrac fps ∷ Double
                                else 0
@@ -256,9 +252,8 @@ handleUnitPickupCommand env utsRef uid = do
                     in case HM.lookup animName (udAnimations def) of
                         Nothing → 0
                         Just a  →
-                            let counts = V.length <$> Map.elems (aFrames a)
-                                maxN   = if null counts then 0 else maximum counts
-                                fps    = aFps a
+                            let maxN = storageMaxFrameCount (aStorage a)
+                                fps  = aFps a
                             in if fps > 0 ∧ maxN > 0
                                then fromIntegral maxN / realToFrac fps ∷ Double
                                else 0
@@ -298,9 +293,8 @@ handleUnitTransitionToCommand env utsRef uid target stride = do
                         in case HM.lookup animName (udAnimations def) of
                             Nothing → 0
                             Just a  →
-                                let counts = V.length <$> Map.elems (aFrames a)
-                                    maxN   = if null counts then 0 else maximum counts
-                                    fps    = aFps a
+                                let maxN = storageMaxFrameCount (aStorage a)
+                                    fps  = aFps a
                                     -- The renderer (Unit.Render.pickFrame)
                                     -- plays strided frames 0, s, 2s, … and
                                     -- clamps the last step to the destination

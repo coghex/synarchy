@@ -442,6 +442,10 @@ library
                      Unit.Types.Wound
                      Unit.Types.Combat
                      Unit.Types.Def
+                     Unit.Atlas.Types
+                     Unit.Atlas.Digest
+                     Unit.Atlas.Index
+                     Unit.Atlas.Load
                      Unit.Types.Instance
                      Unit.Types.Manager
                      Unit.Types.Trail
@@ -912,6 +916,7 @@ library
                  , cereal
                  , yaml
                  , aeson
+                 , cryptohash-sha256
                  , random
                  , deepseq
                  , parallel
@@ -1063,6 +1068,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Pathing.AStar
                    Test.Headless.Unit.Pathing.Config
                    Test.Headless.Unit.Render.PickFrame
+                   Test.Headless.Unit.Atlas
+                   Test.Headless.Unit.Atlas.Loader
                    Test.Headless.Unit.Anim
                    Test.Headless.Unit.Injury
                    Test.Headless.Unit.InjurySpeed

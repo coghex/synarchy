@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict #-}
 module Unit.Render
     ( renderUnitQuads
+    , unitToQuad
     , pickFrame
     , screenDirOf
     , resolveTexture
@@ -9,7 +10,6 @@ module Unit.Render
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
-import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.IORef (readIORef)
@@ -44,20 +44,31 @@ unitSortNudge = 0.0003
 -- `cameraRotSteps`, `screenDirOf`, and `resolveTexture` now live in
 -- `Unit.Sprite` (shared with `Unit.HitTest`); re-exported above.
 
--- | Choose a texture for a unit. If the unit has an active animation and
+-- | Choose a frame for a unit. If the unit has an active animation and
 --   the requested frames exist, pick by elapsed time; otherwise fall back
---   to the T-pose. Used by the render path.
+--   to the T-pose. Used by the render path and the hit-tester.
 --
---   Returns @(handle, flipX)@. `flipX` is `True` when the texture was
---   resolved via `mirrorDir` (the western directions falling back to
---   their eastern counterparts); the renderer swaps U coordinates to
---   produce the horizontal flip.
+--   Returns a storage-neutral 'FrameSample': the stable bindless handle
+--   (#286), the frame's own UV endpoints within that handle's image,
+--   the frame's pixel dimensions when the storage knows them, and the
+--   flip flag. `fsFlipX` is `True` when the frame was resolved via
+--   `mirrorDir` (the western directions falling back to their eastern
+--   counterparts); the renderer mirrors the sampled sub-rect to produce
+--   the horizontal flip.
+--
+--   THE FRAME-INDEX ARITHMETIC BELOW IS FROZEN (#1259, D-3). Atlas
+--   storage changed where a frame's pixels live and how they are
+--   addressed; it changed nothing about WHICH logical frame plays. The
+--   only storage-dependent step is the per-direction frame COUNT —
+--   'storageFrameCount', which for an atlas is the index's real count,
+--   never the padded column count (D-5), so padding is unreachable by
+--   construction.
 pickFrame
     ∷ Double            -- ^ now (POSIX seconds)
     → CameraFacing
     → UnitInstance
     → UnitDef           -- ^ animation library + T-pose fallback
-    → (TextureHandle, Bool)
+    → FrameSample
 pickFrame now cam inst def
     | T.null (uiCurrentAnim inst) = tpose
     | otherwise =
@@ -65,14 +76,14 @@ pickFrame now cam inst def
             Nothing  → tpose
             Just an  →
                 let dir = screenDirOf cam (uiFacing inst)
-                in case lookupFlip (aFlip an) dir (aFrames an) of
+                    st  = aStorage an
+                in case lookupFlip (aFlip an) dir st of
                     Nothing            → tpose
-                    Just (fs, flipX)
-                        | V.null fs → tpose
+                    Just (srcDir, n, flipX)
+                        | n ≤ 0 → tpose
                         | otherwise →
                             let elapsed = max 0 (now - uiAnimStart inst)
                                 raw     = floor (elapsed * realToFrac (aFps an)) ∷ Int
-                                n       = V.length fs
                                 -- Stride > 1 skips frames: stride 2
                                 -- shows frames 0, 2, 4, … so a 9-frame
                                 -- transition completes in half the time.
@@ -98,21 +109,30 @@ pickFrame now cam inst def
                                 idx     = if uiAnimReverse inst
                                           then (n - 1) - fwdIdx
                                           else fwdIdx
-                            in (fs V.! idx, flipX)
+                            -- The index is already inside the REAL
+                            -- count, so a Nothing here would be a
+                            -- storage bug rather than a padding cell;
+                            -- the T-pose is the safe visible answer.
+                            in fromMaybe tpose (storageSampleAt st srcDir idx flipX)
   where
-    tpose = resolveTexture cam (uiFacing inst)
-                           (uiDirSprites inst) (uiTexture inst)
+    tpose = uncurry wholeImageSample $
+        resolveTexture cam (uiFacing inst) (uiDirSprites inst) (uiTexture inst)
     -- `flipOK` from the animation's `aFlip` flag gates the mirror
     -- fallback. When False we deliberately do NOT mirror — an anim
     -- with an asymmetric held prop (weapon in right hand) would
     -- otherwise have the prop visually swap sides on western
     -- directions. Author sets `flip: false` (or omits) to opt out.
-    lookupFlip flipOK d m = case Map.lookup d m of
-        Just v  → Just (v, False)
+    --
+    -- Returns the direction the frames were actually found under, so
+    -- the sample is read from the SOURCE row (a mirrored SW reads
+    -- SE's cells and flips them) — the mirror is a sampling effect,
+    -- never a second copy of the art.
+    lookupFlip flipOK d st = case storageFrameCount st d of
+        Just n  → Just (d, n, False)
         Nothing
           | not flipOK → Nothing
           | otherwise  → case mirrorDir d of
-              Just md → (\v → (v, True)) <$> Map.lookup md m
+              Just md → (\n → (md, n, True)) <$> storageFrameCount st md
               Nothing → Nothing
 
 renderUnitQuads ∷ EngineEnv → CameraFacing → Int → Int → Float → IO (V.Vector SortableQuad)
@@ -155,6 +175,9 @@ renderUnitQuads env facing zSlice effDepth tileAlpha = do
                               ) [] instances
                     return quads
 
+-- | The pure per-unit quad the renderer emits — exported so a test can
+--   gate the ACTUAL consumer geometry (vertex positions and UVs)
+--   rather than only the 'FrameSample' metadata that feeds it.
 unitToQuad
     ∷ (TextureHandle → Word32)
     → Float
@@ -183,14 +206,19 @@ unitToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst mDef
     in if gridZ > zSlice ∨ gridZ < (zSlice - effDepth)
        then Nothing
        else
-        let (texHandle, flipX) = case mDef of
+        let sample = case mDef of
                 Just def → pickFrame now facing inst def
-                Nothing  → resolveTexture facing (uiFacing inst)
-                                          (uiDirSprites inst) (uiTexture inst)
+                Nothing  → uncurry wholeImageSample $
+                    resolveTexture facing (uiFacing inst)
+                                   (uiDirSprites inst) (uiTexture inst)
+            texHandle = fsTexture sample
+            flipX     = fsFlipX sample
 
-            (texW, texH) = case HM.lookup texHandle texSizes of
-                Just (w, h) → (fromIntegral w, fromIntegral h)
-                Nothing     → (baseTileW, baseTileH)
+            -- An atlas sample reports its CELL's dimensions; only a
+            -- legacy sample (whose image IS the frame) falls through to
+            -- the whole-image texture-size map. Measuring an atlas
+            -- handle there would size every unit to the whole sheet.
+            (texW, texH) = frameDimensions texSizes (baseTileW, baseTileH) sample
 
             scaleX = texW / baseTileW
             scaleY = texH / baseTileH
@@ -262,22 +290,31 @@ unitToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst mDef
             flags = if isSel then renderFlagSelected else 0
             wuv = uncurry packWorldUV baseTile
 
-            -- Horizontal flip: swap U coordinates between left and right
-            -- vertices. The geometry stays the same; only the texture
-            -- sampling reads right-to-left. Lets western directions
-            -- (SW/W/NW) be drawn from their eastern (SE/E/NE) sprites.
-            (u0, u1, u2, u3) = if flipX
-                               then (1, 0, 0, 1)
-                               else (0, 1, 1, 0)
+            -- The frame's own UV sub-rect. A legacy frame is the whole
+            -- image, so (su0,sv0,su1,sv1) = (0,0,1,1) and the vertices
+            -- below are byte-for-byte the coordinates this path has
+            -- always emitted; an atlas frame narrows it to one cell.
+            (su0, sv0, su1, sv1) = fsUV sample
+
+            -- Horizontal flip: swap U between left and right vertices.
+            -- The geometry stays the same; only the texture sampling
+            -- reads right-to-left. Lets western directions (SW/W/NW) be
+            -- drawn from their eastern (SE/E/NE) sprites. Note the swap
+            -- is WITHIN the frame's own sub-rect — mirroring across the
+            -- whole image would, for an atlas, land in a different cell
+            -- entirely (the #887 flip-the-clipped-slice ordering, which
+            -- with atlases governs every sample rather than just the
+            -- preview's).
+            (uL, uR) = if flipX then (su1, su0) else (su0, su1)
 
             v0 = Vertex (Vec2 drawX drawY)
-                         (Vec2 u0 0) tint (fromIntegral actualSlot) defFmSlot flags wuv
+                         (Vec2 uL sv0) tint (fromIntegral actualSlot) defFmSlot flags wuv
             v1 = Vertex (Vec2 (drawX + quadW) drawY)
-                         (Vec2 u1 0) tint (fromIntegral actualSlot) defFmSlot flags wuv
+                         (Vec2 uR sv0) tint (fromIntegral actualSlot) defFmSlot flags wuv
             v2 = Vertex (Vec2 (drawX + quadW) (drawY + quadH))
-                         (Vec2 u2 1) tint (fromIntegral actualSlot) defFmSlot flags wuv
+                         (Vec2 uR sv1) tint (fromIntegral actualSlot) defFmSlot flags wuv
             v3 = Vertex (Vec2 drawX (drawY + quadH))
-                         (Vec2 u3 1) tint (fromIntegral actualSlot) defFmSlot flags wuv
+                         (Vec2 uL sv1) tint (fromIntegral actualSlot) defFmSlot flags wuv
 
         in Just SortableQuad
             { sqSortKey = sortKey
