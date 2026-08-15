@@ -1865,7 +1865,12 @@ Validation runs in three passes, cheapest first, stopping at the first
 failure. **(1)** The index parses and is structurally sound: supported
 `schema_version` and `digest_algorithm`, the unit's own identity,
 duplicate animation names, containment of `atlas_path` inside that
-unit's `atlas/` directory, positive geometry, every reachable cell lying
+unit's `atlas/` directory AND its equality with that animation's
+canonical `<animation>.png` (which is what makes D-2's one-atlas-per-
+animation hold by construction: no two animations can name one file, so
+the upload path's otherwise-correct same-path aliasing can never
+collapse two animations onto one image and one bindless slot), positive
+geometry, every reachable cell lying
 inside the sheet, unique and in-range direction rows, real frame counts
 bounded by row capacity, a positive finite `fps`. **(2)** It still
 describes what the unit YAML declares: animation set, `fps`/`loop`/

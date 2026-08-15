@@ -682,6 +682,37 @@ spec = do
             parse (indexWith [] [setField "atlas_digest" (str "") idleFields])
                 `shouldReject` "atlas_digest is empty"
 
+        -- D-2 is one atlas per ANIMATION. Two animations naming one
+        -- file each validate on their own, and the upload path would
+        -- then legitimately alias the second onto the first's image and
+        -- bindless slot — two animations reading one sheet.
+        it "rejects two animations sharing one atlas_path" $
+            let stepAsIdle = setField "atlas_path"
+                    (str "assets/textures/units/acolyte/atlas/idle.png")
+                    swingFields
+            in parse (indexWith [] [idleFields, stepAsIdle])
+                `shouldReject` "one atlas_path for more than one animation"
+
+        -- The rule that makes the collision unreachable in the first
+        -- place: the file is the animation's own canonical name, which
+        -- is exactly what the compiler emits.
+        it "rejects an atlas_path that is not the animation's canonical file" $ do
+            parse (indexWith [] [setField "atlas_path"
+                    (str "assets/textures/units/acolyte/atlas/walk.png")
+                    idleFields])
+                `shouldReject` "is not this animation's canonical atlas"
+            parse (indexWith [] [setField "atlas_path"
+                    (str "assets/textures/units/acolyte/atlas/idle.PNG")
+                    idleFields])
+                `shouldReject` "is not this animation's canonical atlas"
+
+        it "accepts the canonical file the compiler emits" $
+            case parse goodIndex of
+                Right anims → map aaPath anims `shouldBe`
+                    [ "assets/textures/units/acolyte/atlas/idle.png"
+                    , "assets/textures/units/acolyte/atlas/swing.png" ]
+                Left e → expectationFailure (T.unpack (renderAtlasLoadError e))
+
         -- A corrupt index must not be able to make the engine load an
         -- arbitrary file.
         it "rejects an atlas_path that escapes the unit's atlas directory" $ do

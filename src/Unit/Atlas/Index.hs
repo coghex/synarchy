@@ -208,6 +208,17 @@ parseAtlasIndex unit path raw = do
     unless (null dupes) $
         Left (fail' $ "index declares duplicate animation names: "
                 <> T.intercalate ", " dupes)
+    -- Two animations sharing one atlas file would each validate on
+    -- their own, and the upload path would then legitimately alias the
+    -- second request onto the first's image and bindless slot — leaving
+    -- two animations reading one sheet. The canonical-name rule in
+    -- 'validateAnimation' already makes that unreachable; this states
+    -- the invariant the rest of the pipeline depends on, so a future
+    -- relaxation of the naming rule cannot silently reintroduce it.
+    let pathDupes = duplicates (map rawAtlasPath (idAnimations doc))
+    unless (null pathDupes) $
+        Left (fail' $ "index declares one atlas_path for more than one "
+                <> "animation: " <> T.intercalate ", " pathDupes)
     mapM (validateAnimation unit path) (idAnimations doc)
   where
     fail' = indexError unit path
@@ -226,15 +237,27 @@ validateAnimation unit path raw = do
     fmt ← case rawStorageFormat raw of
         "png" → Right AtlasFormatPng
         other → bad ("unsupported storage_format '" <> other <> "'")
-    -- Containment: a corrupt or foreign index must not be able to name
-    -- an arbitrary file for the engine to load. The atlas has to live
-    -- in this unit's own compiler-owned directory, addressed by a
+    -- Containment FIRST: a corrupt or foreign index must not be able to
+    -- name an arbitrary file for the engine to load. The atlas has to
+    -- live in this unit's own compiler-owned directory, addressed by a
     -- plain file name.
     let atlasPath = T.unpack (rawAtlasPath raw)
         expectedDir = unitAtlasDir unit
     unless (atlasPathContained expectedDir (rawAtlasPath raw)) $
         bad ("atlas_path '" <> rawAtlasPath raw <> "' is not a plain file in "
              <> T.pack expectedDir)
+    -- Then the CANONICAL name the compiler emits: @<animation>.png@
+    -- (its @atlas_file_rel@). Requiring it is what makes "one atlas per
+    -- animation" (D-2) hold by construction — animation names are
+    -- already unique, so no two animations can name one file, and
+    -- therefore no two can be collapsed onto one image and one bindless
+    -- slot by the upload path's same-path aliasing (which is otherwise
+    -- correct: two requests for one file SHOULD share, D-10).
+    let canonicalPath = T.pack (unitAtlasDir unit) <> "/" <> name <> ".png"
+    when (rawAtlasPath raw ≢ canonicalPath) $
+        bad ("atlas_path '" <> rawAtlasPath raw
+             <> "' is not this animation's canonical atlas '"
+             <> canonicalPath <> "'")
     -- Positive geometry, before anything divides by it.
     let dims = [ ("atlas_width", rawAtlasWidth raw)
                , ("atlas_height", rawAtlasHeight raw)
