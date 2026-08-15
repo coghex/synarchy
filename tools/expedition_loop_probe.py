@@ -34,7 +34,7 @@ own:
             objective set at its expected value
   travel    both travellers walk ONE identical move leg to the ruin (no
             teleport) and are measured together at the ruin, and the
-            ruin is DISCOVERED by proximity — lifecycle, player event,
+            ruin is DISCOVERED by sight (#1230) — lifecycle, player event,
             and per-unit knowledge
   extract   the retrieval order is issued at the ruin and the ruin's own
             seed-stable loot-table output is picked up through the real
@@ -1568,7 +1568,7 @@ def main() -> int:
 
             # --------------------------------------------------- travel
             chk.enter("travel", "both travellers walk the same route; "
-                                "the ruin is discovered by proximity")
+                                "the ruin is discovered by sight")
             # Muster both travellers at a common departure point first.
             # A shared DESTINATION is not a shared journey: hunger drains
             # with time on the road, so two travellers setting out from

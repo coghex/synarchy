@@ -4,7 +4,12 @@
 --   real 'World.Thread.Discovery.tickLocationDiscovery' promoting a
 --   placed location's instance lifecycle (#911) through
 --   'wsGenParamsRef' and emitting a player event through the real
---   'Engine.PlayerEvent.Emit' surface.
+--   'Engine.PlayerEvent.Emit' surface — and, since #1230, that the tick
+--   really does run the real sight calculation. The pure spec injects
+--   precomputed 'Location.Discovery.UnitSight' values, so it pins the
+--   contact rule but cannot tell whether radius, facing cone, terrain
+--   occlusion and the page clock reach it; the sight scenarios here
+--   drive the tick against real tile heights and a real time of day.
 --   No world/unit thread is started — mirrors
 --   'Test.Headless.Unit.LineOfSight's synthetic-page pattern (a bare
 --   'initializeEngineHeadless', hand-built 'WorldManager' +
@@ -17,6 +22,8 @@ import UPrelude
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
+import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
 import Data.IORef (writeIORef, readIORef)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
@@ -36,7 +43,12 @@ import Location.Bounds (RelBounds(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Types
-import World.Chunk.Types (ChunkCoord(..))
+import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), chunkSize)
+import World.Tile.Types (WorldTileData(..))
+import World.Fluid.Types (emptyIceMap)
+import World.Flora.Types (emptyFloraChunkData)
+import Structure.Types (emptyChunkStructures)
+import World.Time.Types (WorldTime(..))
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types (WorldState(..), WorldManager(..), emptyWorldState)
@@ -71,9 +83,10 @@ registry1 = registerLocation LocationDef
 overlay1 ∷ LocationOverlay
 overlay1 = HM.singleton (ChunkCoord 0 0) "loc1"
 
--- | Minimal unit fixture — only the fields 'World.Thread.Discovery'
---   reads (uiPage, uiFactionId, uiGridX/Y) matter; the rest are inert
---   placeholders, mirroring 'Test.Headless.Unit.LineOfSight.testUnit'.
+-- | Minimal unit fixture. Since #1230 the tick runs the REAL sight
+--   calculation, so 'uiFacing', 'uiGridZ' and the @perception@ stat
+--   matter as much as page/faction/position — 'facingUnit' below sets
+--   them; this keeps the pre-existing cases' south-facing default.
 testUnit ∷ WorldPageId → Faction → Float → Float → UnitInstance
 testUnit page faction gx gy = UnitInstance
     { uiDefName = "test", uiName = "", uiPage = page
@@ -92,12 +105,69 @@ testUnit page faction gx gy = UnitInstance
     , uiTrailState = Nothing
     }
 
+-- | A player unit at (gx, gy) facing @dir@ with an explicit perception.
+--   Perception 1.0 gives 'Unit.LineOfSight.awareRangeTiles' × 1.0 = a
+--   6-tile daytime radius, which is what makes the distances in the
+--   sight scenarios below concrete.
+facingUnit ∷ WorldPageId → Float → Float → Direction → Float → UnitInstance
+facingUnit page gx gy dir perception =
+    (testUnit page FactionPlayer gx gy)
+        { uiFacing = dir
+        , uiStats  = HM.singleton "perception" perception
+        }
+
+-- ---- Terrain fixtures (mirrors Test.Headless.Unit.LineOfSight) ----
+
+-- | A flat chunk at z, as one loaded chunk at (0,0) — the ruin fixture
+--   sits at anchor (8,8), inside chunk (0,0).
+flatChunk ∷ Int → LoadedChunk
+flatChunk z =
+    let area = chunkSize * chunkSize
+        v = VU.replicate area z
+    in LoadedChunk
+        { lcCoord = ChunkCoord 0 0, lcTiles = V.empty
+        , lcSurfaceMap = v, lcTerrainSurfaceMap = v
+        , lcFluidMap = V.replicate area Nothing
+        , lcIceMap = emptyIceMap, lcFlora = emptyFloraChunkData
+        , lcSideDeco = VU.empty, lcWaterTableMap = VU.empty
+        , lcMagma = Nothing, lcStructures = emptyChunkStructures
+        }
+
+-- | Flat at @flatZ@ except a wall of height @wallZ@ at local x = @wallX@
+--   (every y) — high enough to block a sightline crossing that column.
+wallChunk ∷ Int → Int → Int → LoadedChunk
+wallChunk flatZ wallZ wallX =
+    let area = chunkSize * chunkSize
+        v = VU.generate area $ \i →
+                if i `mod` chunkSize ≡ wallX then wallZ else flatZ
+    in (flatChunk flatZ) { lcSurfaceMap = v, lcTerrainSurfaceMap = v }
+
+wtdWith ∷ LoadedChunk → WorldTileData
+wtdWith lc = WorldTileData
+    { wtdChunks = HM.singleton (ChunkCoord 0 0) lc, wtdMaxChunks = 1 }
+
 -- | A fresh page carrying loc1's overlay, registered as the sole
 --   (visible) page in a hand-built WorldManager.
 newPage ∷ EngineEnv → WorldPageId → IO WorldState
 newPage env pageId = do
     ws ← emptyWorldState
     writeIORef (wsGenParamsRef ws) $ Just pageParams
+    writeIORef (worldManagerRef env) $ WorldManager [(pageId, ws)] [pageId]
+    pure ws
+
+-- | A fresh page carrying loc1's overlay AND real terrain + a real
+--   clock, registered as the sole visible page. The plain 'newPage'
+--   above leaves both unset, which the pre-#1230 cases could afford
+--   because they stood a unit ON the anchor; the sight scenarios below
+--   need the tick to read genuine tile heights and a genuine time of
+--   day.
+newSightPage
+    ∷ EngineEnv → WorldPageId → LoadedChunk → WorldTime → IO WorldState
+newSightPage env pageId chunk time = do
+    ws ← emptyWorldState
+    writeIORef (wsGenParamsRef ws) $ Just pageParams
+    writeIORef (wsTilesRef ws) (wtdWith chunk)
+    writeIORef (wsTimeRef ws) time
     writeIORef (worldManagerRef env) $ WorldManager [(pageId, ws)] [pageId]
     pure ws
 
@@ -127,9 +197,9 @@ spec ∷ Spec
 spec = beforeAll initEnv $
     describe "Location discovery (#780) — tickLocationDiscovery" $ do
 
-        it "a player-faction unit entering the margin marks the location \
+        it "a player-faction unit standing ON the location marks it \
            \discovered and emits exactly one attributable event; \
-           \re-ticking with the same unit still inside emits no duplicate" $ \env → do
+           \re-ticking with the same unit still there emits no duplicate" $ \env → do
             let pageId = WorldPageId "disc_player"
             ws ← newPage env pageId
             writeIORef (unitManagerRef env) $ emptyUnitManager
@@ -154,7 +224,7 @@ spec = beforeAll initEnv $
             evs2 ← eventsFor env 101
             length evs2 `shouldBe` 1
 
-        it "a non-player unit standing inside the margin discovers \
+        it "a non-player unit standing ON the location discovers \
            \nothing and emits no event" $ \env → do
             let pageId = WorldPageId "disc_hostile"
             ws ← newPage env pageId
@@ -168,7 +238,7 @@ spec = beforeAll initEnv $
             evs ← eventsFor env 202
             evs `shouldBe` []
 
-        it "a DEBUG-faction unit standing inside the margin discovers \
+        it "a DEBUG-faction unit standing ON the location discovers \
            \nothing and emits no event, even though it is allied with \
            \the player and takes player orders (#912)" $ \env → do
             -- The regression an ownership→alliance collapse would break.
@@ -228,6 +298,114 @@ spec = beforeAll initEnv $
             map peSourcePage evsHidden `shouldBe` [Just "disc_hidden"]
             map peCoords evsHidden `shouldBe` [Nothing]
 
+        -- #1230: the tick now runs the REAL sight calculation
+        -- ('Unit.LineOfSight.visibleTilesOnPage') rather than a
+        -- point-in-halo test. The pure specs in
+        -- 'Test.Headless.Location.Discovery' inject precomputed
+        -- 'UnitSight' values, so they prove the CONTACT rule but say
+        -- nothing about whether the tick actually consults radius,
+        -- cone, terrain and clock. These cases drive the tick itself.
+        --
+        -- One geometry throughout, so exactly one variable moves per
+        -- case: the ruin's bounds are (6,6)..(10,10); the unit stands
+        -- at (14,8) OUTSIDE them, four tiles east of the nearest
+        -- occupied tile (10,8). Terrain is flat z=5 and the unit's
+        -- footing is z=5, so its eye sits at z=6. With perception 1.0
+        -- the daytime radius is 5 tiles (6.0 × a longitude-local noon
+        -- factor just under 1) and the midnight radius is 3, which is
+        -- what makes four tiles the discriminating distance.
+        it "a player unit standing OUTSIDE the bounds that can SEE into \
+           \them discovers the location — reveal follows sight, never \
+           \the unit's own position" $ \env → do
+            let pageId = WorldPageId "sight_visible"
+            ws ← newSightPage env pageId (flatChunk 5) (WorldTime 12 0)
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 501)
+                    (facingUnit pageId 14 8 DirW 1.0) }
+
+            tickLocationDiscovery env pageId ws
+            mp ← readIORef (wsGenParamsRef ws)
+            lifecyclesOf mp `shouldBe` Just [LifecycleDiscovered]
+            evs ← eventsFor env 501
+            map peCategory evs `shouldBe` ["location_discovery"]
+
+        it "the same unit BEYOND its perception radius discovers nothing" $ \env → do
+            -- (20,8) is ten tiles from the nearest occupied tile, twice
+            -- the daytime radius. Everything else is identical to the
+            -- passing case above.
+            let pageId = WorldPageId "sight_far"
+            ws ← newSightPage env pageId (flatChunk 5) (WorldTime 12 0)
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 502)
+                    (facingUnit pageId 20 8 DirW 1.0) }
+
+            tickLocationDiscovery env pageId ws
+            mp ← readIORef (wsGenParamsRef ws)
+            lifecyclesOf mp `shouldBe` Just [LifecycleUnknown]
+            eventsFor env 502 >>= (`shouldBe` [])
+
+        it "the same unit at the same distance FACING AWAY discovers \
+           \nothing — the 120° cone applies" $ \env → do
+            -- Identical position to the passing case; only uiFacing
+            -- differs. Every occupied tile lies west of the unit, so
+            -- facing east puts all of them behind it.
+            let pageId = WorldPageId "sight_cone"
+            ws ← newSightPage env pageId (flatChunk 5) (WorldTime 12 0)
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 503)
+                    (facingUnit pageId 14 8 DirE 1.0) }
+
+            tickLocationDiscovery env pageId ws
+            mp ← readIORef (wsGenParamsRef ws)
+            lifecyclesOf mp `shouldBe` Just [LifecycleUnknown]
+            eventsFor env 503 >>= (`shouldBe` [])
+
+        it "the same unit BEHIND BLOCKING TERRAIN discovers nothing — \
+           \a ruin behind a hill stays unknown" $ \env → do
+            -- Identical position and facing to the passing case; only
+            -- the terrain differs. A wall of height 40 at x=12 sits
+            -- between the unit (x=14) and every occupied tile (x ≤ 10),
+            -- so every sightline crosses it.
+            let pageId = WorldPageId "sight_blocked"
+            ws ← newSightPage env pageId (wallChunk 5 40 12) (WorldTime 12 0)
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 504)
+                    (facingUnit pageId 14 8 DirW 1.0) }
+
+            tickLocationDiscovery env pageId ws
+            mp ← readIORef (wsGenParamsRef ws)
+            lifecyclesOf mp `shouldBe` Just [LifecycleUnknown]
+            eventsFor env 504 >>= (`shouldBe` [])
+
+        it "the same unit AT NIGHT discovers nothing, and the identical \
+           \daytime scene discovers it — the tick reads its own page's \
+           \clock through the night-scaled radius" $ \env → do
+            -- The pair that proves the night factor reaches the binary
+            -- set through the tick: same position, same facing, same
+            -- flat terrain, same perception; only the page CLOCK moves.
+            -- Four tiles is inside the daytime radius (5) and outside
+            -- the midnight one (3).
+            let nightPage = WorldPageId "sight_night"
+                dayPage   = WorldPageId "sight_day"
+            wsNight ← newSightPage env nightPage (flatChunk 5) (WorldTime 0 0)
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 505)
+                    (facingUnit nightPage 14 8 DirW 1.0) }
+            tickLocationDiscovery env nightPage wsNight
+            mpNight ← readIORef (wsGenParamsRef wsNight)
+            lifecyclesOf mpNight `shouldBe` Just [LifecycleUnknown]
+            eventsFor env 505 >>= (`shouldBe` [])
+
+            wsDay ← newSightPage env dayPage (flatChunk 5) (WorldTime 12 0)
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 506)
+                    (facingUnit dayPage 14 8 DirW 1.0) }
+            tickLocationDiscovery env dayPage wsDay
+            mpDay ← readIORef (wsGenParamsRef wsDay)
+            lifecyclesOf mpDay `shouldBe` Just [LifecycleDiscovered]
+            evsDay ← eventsFor env 506
+            map peCategory evsDay `shouldBe` ["location_discovery"]
+
         -- Round 12 review (issue #763): World.Load.Stage.stageSession
         -- runs on the world thread BEFORE the save barrier's capture
         -- lock is ever entered, so an ordinary tickWorldTime landing
@@ -242,7 +420,7 @@ spec = beforeAll initEnv $
         -- contract, not something this fix should disturb).
         it "a tick landing while a load transaction is in flight does \
            \NOT discover a location a player-faction unit is already \
-           \standing in, even though the same tick would normally \
+           \standing on, even though the same tick would normally \
            \discover it instantly; discovery resumes once the \
            \transaction ends (simulated here as a failed/aborted load, \
            \mirroring the #763 'nothing changed' contract)" $ \env → do

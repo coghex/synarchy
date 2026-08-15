@@ -117,7 +117,7 @@ PROBES = [
      "the first expedition end to end — the arc's final integrated gate: "
      "colony from a real portal roster, water secured by a real FOV scan, "
      "provisioning off the technomule, a two-traveller journey whose "
-     "unprepared control is measurably worse off, discovery by proximity, "
+     "unprepared control is measurably worse off, discovery by sight, "
      "extraction of the ruin's own loot roll, return and deposit, and a "
      "fresh-process reload verifying every durable identity (#923)"),
     ("expedition_retrieval", "expedition_retrieval_probe.py",
