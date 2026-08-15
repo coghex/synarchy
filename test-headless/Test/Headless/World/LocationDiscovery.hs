@@ -69,8 +69,11 @@ testNaming = LocationNaming
 
 
 -- * Fixtures — same ruin shape as Test.Headless.Location.Discovery:
---   anchor (8,8), physical bounds (6,6)..(10,10), margin-6 expanded
---   bounds (0,0)..(16,16).
+--   anchor (8,8), bounds (6,6)..(10,10). That box IS the reveal
+--   footprint (#1230): sight is tested against the instance's stored
+--   bounds and nothing expands them, the @discovery_margin@ halo this
+--   fixture used to describe having been removed with the proximity
+--   trigger it served.
 
 registry1 ∷ LocationRegistry
 registry1 = registerLocation LocationDef
