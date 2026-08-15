@@ -15,6 +15,8 @@
 --   working unchanged.
 module Unit.Types
     ( Animation(..)
+    , legacyAnimation
+    , module Unit.Atlas.Types
     , StatModifier(..)
     , Wound(..)
     , woundEffSeverity
@@ -38,6 +40,7 @@ module Unit.Types
     , unitsOnPage
     ) where
 
+import Unit.Atlas.Types
 import Unit.Types.Wound
 import Unit.Types.Combat
 import Unit.Types.Def

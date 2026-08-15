@@ -114,6 +114,7 @@ module Engine.Scripting.Lua.API.Units
     , unitSetItemTempFn
     , unitGetVisibleTilesFn
     , unitGetFrameTextureFn
+    , unitGetFrameSampleFn
     , unitGetPortraitTextureFn
     , unknownUnitTexture
     , unknownUnitAnimFrame

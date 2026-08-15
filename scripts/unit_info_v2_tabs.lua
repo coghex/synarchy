@@ -398,11 +398,36 @@ end
 
 -- Refresh every visible tab's portrait. Prefer the unit def's
 -- authored portrait (static), falling back to the live animation
--- frame for defs that ship no `portrait:`. Skip setSpriteTexture
--- when the handle hasn't changed to avoid needless mutations — for
--- an authored portrait this means it's set once and then left
--- alone. We only refresh VISIBLE tabs — scrolled-off tabs would
--- just thrash invisibly.
+-- frame for defs that ship no `portrait:`. Skip the mutation when
+-- nothing changed; only VISIBLE tabs refresh, since scrolled-off
+-- ones would just thrash invisibly.
+--
+-- The live-frame path uses unit.getFrameSample, not
+-- getFrameTexture (#1259): an atlas-backed animation holds every
+-- direction and frame in ONE texture, so that handle alone would
+-- draw the whole sheet. The sample adds the frame's own UV
+-- sub-rect and mirror flag, and all three are published with
+-- UI.setSpriteFrame in ONE manager transition — separate setters
+-- leave a window where the new atlas handle is paired with the
+-- previous frame's rect, and the render thread reads the manager
+-- concurrently. An authored portrait is its own whole image, so it
+-- publishes the full rect and no flip through the same call.
+local FULL_UV = { u0 = 0, v0 = 0, u1 = 1, v1 = 1, flipX = false }
+
+local function applyPortrait(tab, tex, uv)
+    local changed = tex ~= tab.lastTex
+        or uv.u0 ~= tab.lastU0 or uv.v0 ~= tab.lastV0
+        or uv.u1 ~= tab.lastU1 or uv.v1 ~= tab.lastV1
+        or (uv.flipX == true) ~= (tab.lastFlipX == true)
+    if not changed then return end
+    UI.setSpriteFrame(tab.spriteId, tex, uv.u0, uv.v0, uv.u1, uv.v1,
+                      uv.flipX == true)
+    tab.lastTex   = tex
+    tab.lastU0, tab.lastV0 = uv.u0, uv.v0
+    tab.lastU1, tab.lastV1 = uv.u1, uv.v1
+    tab.lastFlipX = uv.flipX == true
+end
+
 function M.refreshPortraits()
     if not (unitInfoV2.tabLayout and #unitInfoV2.tabs > 0) then return end
     local visible = unitInfoV2.tabLayout.visibleCount
@@ -412,12 +437,18 @@ function M.refreshPortraits()
         local tab = unitInfoV2.tabs[i]
         if tab then
             local tex = unit.getPortraitTexture(tab.uid)
+            local uv  = FULL_UV
             if not tex or tex == 0 then
-                tex = unit.getFrameTexture(tab.uid)
+                local smp = unit.getFrameSample(tab.uid)
+                if smp then
+                    tex = smp.texture
+                    uv  = smp
+                else
+                    tex = nil
+                end
             end
-            if tex and tex > 0 and tex ~= tab.lastTex then
-                UI.setSpriteTexture(tab.spriteId, tex)
-                tab.lastTex = tex
+            if tex and tex > 0 then
+                applyPortrait(tab, tex, uv)
             end
         end
     end

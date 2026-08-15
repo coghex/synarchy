@@ -31,6 +31,8 @@ module Engine.Scripting.Lua.API.UI.Property
   , uiSetColorFn
   , uiSetTextFn
   , uiSetSpriteTextureFn
+  , uiSetSpriteUVFn
+  , uiSetSpriteFrameFn
   , uiSetSpriteFlipXFn
   , uiSetBoxTexturesFn
   ) where
@@ -629,6 +631,65 @@ uiSetSpriteTextureFn env = do
     case (elemArg, texArg) of
         (Just e, Just t) → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (setSpriteTexture (ElementHandle $ fromIntegral e) (TextureHandle $ fromIntegral t) mgr, ())
+        _ → pure ()
+
+    return 0
+
+-- | UI.setSpriteUV(elementHandle, u0, v0, u1, v1)
+--   Narrow the sprite to a sub-rect of its texture (#1259). Visual
+--   only, like 'uiSetSpriteFlipXFn', and LOW-LEVEL: it mutates the UVs
+--   and nothing else.
+--
+--   Displaying a unit's live animation frame does NOT go through here.
+--   A frame is a texture AND a sub-rect AND a mirror flag, and setting
+--   them separately leaves the element holding a new atlas handle with
+--   the previous frame's rect for a moment — which the render thread,
+--   reading the manager concurrently, can observe. Use
+--   'uiSetSpriteFrameFn' (@UI.setSpriteFrame@), which publishes all
+--   three in one transition. Any missing argument leaves the sprite
+--   untouched rather than silently resetting it to the whole image.
+uiSetSpriteUVFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiSetSpriteUVFn env = do
+    elemArg ← Lua.tointeger 1
+    u0Arg   ← Lua.tonumber 2
+    v0Arg   ← Lua.tonumber 3
+    u1Arg   ← Lua.tonumber 4
+    v1Arg   ← Lua.tonumber 5
+
+    case (elemArg, u0Arg, v0Arg, u1Arg, v1Arg) of
+        (Just e, Just u0, Just v0, Just u1, Just v1) →
+            Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
+                (setSpriteUV (ElementHandle $ fromIntegral e)
+                    ( realToFrac u0, realToFrac v0
+                    , realToFrac u1, realToFrac v1 ) mgr, ())
+        _ → pure ()
+
+    return 0
+
+-- | UI.setSpriteFrame(elementHandle, textureHandle, u0, v0, u1, v1, flipX)
+--   Publish a whole animation frame at once (#1259) — the ONE verb a
+--   caller displaying a unit's live frame should use. Texture, sub-rect
+--   and mirror land in a single manager transition, so the render
+--   thread can never observe a new atlas handle paired with the
+--   previous frame's UVs. Any missing or non-numeric argument leaves
+--   the sprite untouched rather than publishing half a frame.
+uiSetSpriteFrameFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiSetSpriteFrameFn env = do
+    elemArg ← Lua.tointeger 1
+    texArg  ← Lua.tointeger 2
+    u0Arg   ← Lua.tonumber 3
+    v0Arg   ← Lua.tonumber 4
+    u1Arg   ← Lua.tonumber 5
+    v1Arg   ← Lua.tonumber 6
+    flipArg ← Lua.toboolean 7
+
+    case (elemArg, texArg, u0Arg, v0Arg, u1Arg, v1Arg) of
+        (Just e, Just t, Just u0, Just v0, Just u1, Just v1) →
+            Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
+                (setSpriteFrame (ElementHandle $ fromIntegral e)
+                    (TextureHandle $ fromIntegral t)
+                    ( realToFrac u0, realToFrac v0
+                    , realToFrac u1, realToFrac v1 ) flipArg mgr, ())
         _ → pure ()
 
     return 0

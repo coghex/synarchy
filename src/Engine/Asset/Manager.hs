@@ -14,10 +14,12 @@
 --   The teardown path is kept deliberately. The live texture upload
 --   path ('Engine.Scripting.Lua.Message.Texture') registers atlases
 --   through 'Engine.Graphics.Vulkan.Texture.Bindless.registerTexture'
---   directly and stores a cleanup closure on every atlas it loads
---   ('taCleanup', freeing that atlas's image view, image, and device
---   memory — an atlas owns no sampler, it shares the bindless system's
---   one). The functions below are the ONLY code that ever runs those
+--   directly — or 'registerPinnedTexture', for a compiled
+--   unit-animation atlas that must stay nearest (#1259) — and stores a
+--   cleanup closure on every atlas it loads ('taCleanup', freeing that
+--   atlas's image view, image, and device memory; no sampler, since a
+--   slot's sampler always comes from the shared refcounted cache rather
+--   than being owned by the atlas). The functions below are the ONLY code that ever runs those
 --   closures, so they are the only path capable of releasing a loaded
 --   texture's GPU resources. Whether to wire them up is a separate
 --   GPU-resource-lifetime question.
