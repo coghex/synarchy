@@ -26,7 +26,12 @@ local label     = require("scripts.ui.label")
 local button    = require("scripts.ui.button")
 local tabbar    = require("scripts.ui.tabbar")
 local scrollbar = require("scripts.ui.scrollbar")
-local utf8Safe  = require("scripts.ui.utf8_safe")
+-- #1157: every row field is bounded by the ONE shared width-bounded
+-- truncator. This panel used to carry its own copy, whose "..."
+-- disagreed with the ".." the inventory panels rendered for the very
+-- same operation, and whose lo = 1 search could return a first
+-- character wider than the column it was fitting.
+local textWrap  = require("scripts.ui.text_wrap")
 
 -- Singleton (mirrors pause.lua / popup.lua so engine.loadScript and
 -- require both reach the same table).
@@ -391,32 +396,6 @@ local function formatGameTime(t)
     end
 end
 
--- Truncate text to fit within maxWidthPx, suffixing "...". Uses the
--- engine's text-measurement so the result is pixel-accurate rather
--- than guessing by character count. Every candidate cut point is snapped
--- to a complete UTF-8 character boundary (utf8Safe) so a multi-byte
--- character is never split into a dangling lead byte -- string.sub cuts
--- by byte offset, not codepoint.
-local function truncateToWidth(text, font, fontSize, maxWidthPx)
-    if engine.getTextWidth(font, text, fontSize) <= maxWidthPx then
-        return text
-    end
-    local ellipsis = "..."
-    -- Binary search the cut length.
-    local lo, hi = 1, #text
-    while lo < hi do
-        local mid = math.floor((lo + hi + 1) / 2)
-        local cut = utf8Safe.snapToCharBoundary(text, mid)
-        local candidate = string.sub(text, 1, cut) .. ellipsis
-        if engine.getTextWidth(font, candidate, fontSize) <= maxWidthPx then
-            lo = mid
-        else
-            hi = mid - 1
-        end
-    end
-    return string.sub(text, 1, utf8Safe.snapToCharBoundary(text, lo)) .. ellipsis
-end
-
 -- Position the visible row labels for the current activeTabKey +
 -- scrollOffset. Never touches the scrollbar — safe to call from
 -- the scrollbar's onScroll callback without recursing.
@@ -552,12 +531,12 @@ renderRows = function()
         end
 
         place("evlog_time_" .. tostring(idx),
-              truncateToWidth(timeStr, eventLog.font,
-                              L.s.fontSize, L.timeColW),
+              textWrap.truncateToWidth(timeStr, eventLog.font,
+                                       L.s.fontSize, L.timeColW),
               L.contentX, {0.7, 0.7, 0.7, 1.0})
         place("evlog_cat_"  .. tostring(idx),
-              truncateToWidth(lookup.displayName, eventLog.font,
-                              L.s.fontSize, L.catColW),
+              textWrap.truncateToWidth(lookup.displayName, eventLog.font,
+                                       L.s.fontSize, L.catColW),
               catX, lookup.color)
         -- Coalesced repeats show "(xN)"; the message takes the category
         -- colour so failures (red unit_warning) stand out, not just the
@@ -567,8 +546,8 @@ renderRows = function()
             msg = msg .. " (x" .. ev.count .. ")"
         end
         place("evlog_text_" .. tostring(idx),
-              truncateToWidth(msg, eventLog.font,
-                              L.s.fontSize, textColW),
+              textWrap.truncateToWidth(msg, eventLog.font,
+                                       L.s.fontSize, textColW),
               textX, lookup.color)
 
         table.insert(eventLog.rowEntries, {
