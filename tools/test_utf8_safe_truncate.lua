@@ -1,32 +1,30 @@
--- Offline regression harness for issue #618's requirement 3: the five
--- `truncateToWidth` ellipsis helpers (scripts/popup.lua, event_log.lua,
--- unit_info_v2_inventory.lua, item_contents_panel.lua,
--- cargo_inventory_panel.lua -- the last three merged into
--- scripts/ui/item_list.lua's single shared helper by #1088)
--- binary-search a pixel-width cut point over
--- RAW BYTE offsets. Lua strings are byte arrays -- string.sub cuts by
--- byte, not codepoint -- so an unguarded search can land its cut point
--- inside a multi-byte UTF-8 sequence (e.g. right after the 0xC3 lead
--- byte of "é"), producing a candidate that ends in a dangling lead byte
--- with no continuation byte. All five helpers were fixed the same way:
--- snap every candidate cut point to a full character boundary via the
--- shared scripts/ui/utf8_safe.lua module before building or measuring a
--- substring. Per the issue's own acceptance text, testing that shared
--- helper (used identically by all five call sites) covers all of them.
+-- Offline regression harness for issue #618's requirement 3, retargeted by
+-- #1157 onto the ONE production helper it now guards:
+-- `textWrap.truncateToWidth` in scripts/ui/text_wrap.lua.
 --
--- This harness (a) unit-tests the real utf8_safe.snapToCharBoundary
--- directly against known multi-byte sequences, and (b) reimplements the
--- exact binary-search shape used by popup.lua/event_log.lua (the other
--- three files use the same snap primitive with a different loop
--- invariant -- see CLAUDE.md's requirement-3 note) against the REAL
--- utf8Safe module, asserting every candidate string constructed during
--- the search -- not just the final result -- decodes as valid UTF-8, and
--- that pure-ASCII output is byte-identical to the pre-fix (unsnapped)
--- algorithm, proving no behavior change for well-formed non-multi-byte
--- text (requirement 4).
+-- Lua strings are byte arrays -- string.sub cuts by byte, not codepoint --
+-- so a pixel-width binary search over raw byte offsets can land its cut
+-- inside a multi-byte UTF-8 sequence (e.g. right after the 0xC3 lead byte
+-- of "e-acute"), producing a candidate that ends in a dangling lead byte
+-- with no continuation byte. #618 fixed that by snapping every candidate
+-- cut point to a full character boundary via scripts/ui/utf8_safe.lua.
+--
+-- #618 fixed five private copies of that search (scripts/popup.lua,
+-- event_log.lua, unit_info_v2_inventory.lua, item_contents_panel.lua and
+-- cargo_inventory_panel.lua) the same way, and this harness used to
+-- REIMPLEMENT the popup/event-log copy in order to test the shape. There
+-- is now exactly one implementation -- #1088 merged the three inventory
+-- panels into scripts/ui/item_list.lua, #1107 moved the body into
+-- scripts/ui/text_wrap.lua, and #1157 retired the popup's and the event
+-- log's last two private copies -- so Part 2 below calls that production
+-- function directly instead. A reimplementation could only ever have
+-- tested itself.
+--
+-- Part 1 still unit-tests utf8_safe.snapToCharBoundary directly against
+-- known multi-byte sequences, since that primitive is what the boundary
+-- safety rests on.
 --
 -- Run from the repo root: luajit tools/test_utf8_safe_truncate.lua
-
 package.path = "./?.lua;" .. package.path
 local utf8Safe = require("scripts.ui.utf8_safe")
 
@@ -119,52 +117,39 @@ assert_eq(utf8Safe.snapToCharBoundary(leadOnly, 1), 0, "snap mid-first-char with
 assert_eq(utf8Safe.snapToCharBoundary(leadOnly, 0), 0, "snap at 0 is a no-op")
 
 -----------------------------------------------------------
--- Part 2: the real production binary-search shape (popup.lua /
--- event_log.lua's algorithm, reimplemented here verbatim except for a
--- stubbed getWidth) against the REAL utf8Safe module.
+-- Part 2: the REAL shared helper (scripts/ui/text_wrap.lua), driven
+-- through a stubbed engine.getTextWidth. Byte length stands in for pixel
+-- width: monotonic in prefix length, which is all the binary search's
+-- correctness depends on. Every measured argument is recorded, so the
+-- boundary check covers each intermediate candidate rather than only the
+-- returned string.
 -----------------------------------------------------------
 
-local function truncateToWidthSafe(text, getWidth, maxWidthPx, measured)
-    if getWidth(text) <= maxWidthPx then return text end
-    local lo, hi = 1, #text
-    while lo < hi do
-        local mid = math.floor((lo + hi + 1) / 2)
-        local cut = utf8Safe.snapToCharBoundary(text, mid)
-        local candidate = string.sub(text, 1, cut) .. "..."
-        if measured then measured[#measured + 1] = candidate end
-        if getWidth(candidate) <= maxWidthPx then lo = mid else hi = mid - 1 end
-    end
-    local final = string.sub(text, 1, utf8Safe.snapToCharBoundary(text, lo)) .. "..."
-    if measured then measured[#measured + 1] = final end
-    return final
+local measured = {}
+_G.engine = _G.engine or {}
+engine.getTextWidth = function(_, s, _)
+    measured[#measured + 1] = s
+    return #s
 end
 
--- Pre-fix shape (no snapping) -- used only as a reference to show the
--- bug is real and to prove the fix is behavior-preserving for ASCII.
-local function truncateToWidthNaive(text, getWidth, maxWidthPx)
-    if getWidth(text) <= maxWidthPx then return text end
-    local lo, hi = 1, #text
-    while lo < hi do
-        local mid = math.floor((lo + hi + 1) / 2)
-        local candidate = string.sub(text, 1, mid) .. "..."
-        if getWidth(candidate) <= maxWidthPx then lo = mid else hi = mid - 1 end
-    end
-    return string.sub(text, 1, lo) .. "..."
-end
+local textWrap = require("scripts.ui.text_wrap")
+local ELLIPSIS = ".."   -- the one form, chosen by #1157
 
--- Byte length stands in for pixel width: monotonic in prefix length,
--- which is all the binary search's correctness depends on.
-local function byteWidth(s) return #s end
+local function truncate(text, maxWidthPx)
+    return textWrap.truncateToWidth(text, 1, 10, maxWidthPx)
+end
 
 -- Mixed ASCII + accented + CJK + emoji, long enough to truncate at many
 -- different byte budgets.
 local mixed = "cafe caf\195\169 x\228\184\173 y\240\159\142\137 more plain text after"
 
 local sawShorterThanFull = false
-for maxW = 4, #mixed + 4 do
-    local measured = {}
-    local result = truncateToWidthSafe(mixed, byteWidth, maxW, measured)
+local sawEllipsisOnly = false
+for maxW = 0, #mixed + 4 do
+    measured = {}
+    local result = truncate(mixed, maxW)
     if #result < #mixed then sawShorterThanFull = true end
+    if result == ELLIPSIS then sawEllipsisOnly = true end
     if not isValidUtf8(result) then
         failures = failures + 1
         print(string.format("FAIL: final result invalid UTF-8 at maxW=%d: %q", maxW, result))
@@ -172,30 +157,63 @@ for maxW = 4, #mixed + 4 do
     for _, candidate in ipairs(measured) do
         if not isValidUtf8(candidate) then
             failures = failures + 1
-            print(string.format("FAIL: mid-search candidate invalid UTF-8 at maxW=%d: %q", maxW, candidate))
+            print(string.format("FAIL: measured candidate invalid UTF-8 at maxW=%d: %q", maxW, candidate))
         end
+    end
+    -- The result must actually fit the budget it was given (an empty
+    -- result is the defined answer when even the ellipsis does not).
+    if #result > maxW then
+        failures = failures + 1
+        print(string.format("FAIL: result wider than maxW=%d: %q", maxW, result))
     end
 end
 assert_true(sawShorterThanFull, "the sweep actually exercised truncation (not just the already-fits branch)")
-print("ok: every candidate + final result across the maxWidthPx sweep is valid UTF-8")
+assert_true(sawEllipsisOnly, "the sweep reached the width where only the ellipsis fits")
+print("ok: every measured candidate + final result across the maxWidthPx sweep is valid UTF-8")
+print("ok: no result across the sweep exceeds its own maxWidthPx")
 
--- Prove the bug is real: the naive (unsnapped) version produces invalid
--- UTF-8 somewhere in the same sweep -- this is what requirement 3 fixes.
+-- The bug #618 fixed is real: the same binary search WITHOUT the boundary
+-- snap produces invalid UTF-8 somewhere in the same sweep. This is the
+-- only reimplementation left, and it exists to fail, not to stand in for
+-- production code.
+local function truncateUnsnapped(text, maxWidthPx)
+    if #text <= maxWidthPx then return text end
+    local lo, hi = 0, #text
+    while lo < hi do
+        local mid = math.floor((lo + hi + 1) / 2)
+        local candidate = string.sub(text, 1, mid) .. ELLIPSIS
+        if #candidate <= maxWidthPx then lo = mid else hi = mid - 1 end
+    end
+    return string.sub(text, 1, lo) .. ELLIPSIS
+end
+
 local naiveBroke = false
 for maxW = 4, #mixed + 4 do
-    local result = truncateToWidthNaive(mixed, byteWidth, maxW)
-    if not isValidUtf8(result) then naiveBroke = true end
+    if not isValidUtf8(truncateUnsnapped(mixed, maxW)) then naiveBroke = true end
 end
-assert_true(naiveBroke, "the pre-fix (unsnapped) algorithm does produce invalid UTF-8 somewhere in the sweep")
+assert_true(naiveBroke, "the unsnapped algorithm does produce invalid UTF-8 somewhere in the sweep")
 
--- Requirement 4: pure-ASCII text is byte-identical between the safe and
--- naive algorithms at every width, since snapping is a no-op for ASCII.
+-- Pure-ASCII text is byte-identical between the production helper and the
+-- unsnapped shape at every width, since snapping is a no-op for ASCII:
+-- boundary safety costs nothing for well-formed single-byte text.
 local asciiText = "the quick brown fox jumps over the lazy dog"
 for maxW = 4, #asciiText + 4 do
-    local safe = truncateToWidthSafe(asciiText, byteWidth, maxW)
-    local naive = truncateToWidthNaive(asciiText, byteWidth, maxW)
-    assert_eq(safe, naive, "ASCII output unchanged at maxW=" .. maxW)
+    assert_eq(truncate(asciiText, maxW), truncateUnsnapped(asciiText, maxW),
+        "ASCII output matches the unsnapped shape at maxW=" .. maxW)
 end
+
+-- The defensive contract #1157 settled, at the production helper's own
+-- boundaries. ".." is 2 wide under this stub.
+assert_eq(truncate(nil, 100), nil, "nil text returns nil")
+assert_eq(truncate("", 100), "", "empty text returns empty")
+assert_eq(truncate("abcdef", 0), "", "a zero budget drops the field")
+assert_eq(truncate("abcdef", -50), "", "a negative budget drops the field")
+assert_eq(textWrap.truncateToWidth("abcdef", 1, 10, nil), "abcdef",
+    "a nil budget is no bound at all")
+assert_eq(truncate("abcdef", 1), "", "a budget too narrow for the ellipsis drops the field")
+assert_eq(truncate("abcdef", 2), ELLIPSIS, "a budget fitting only the ellipsis returns it alone")
+assert_eq(truncate("abcdef", 3), "a" .. ELLIPSIS, "one character plus the ellipsis")
+assert_eq(truncate("abc", 3), "abc", "text that already fits is returned unchanged")
 
 if failures == 0 then
     print("\nALL PASS")

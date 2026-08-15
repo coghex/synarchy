@@ -285,9 +285,11 @@ spec = after drainLuaToEngineQueue $ describe "Item list widget" $ do
             p ← decodeOr r ∷ IO TruncProbe
             trNilText p `shouldBe` "nil"
             trEmpty p `shouldBe` ""
-            -- maxPx <= 0 returns the ORIGINAL text, never a bare "..".
-            trZero p `shouldBe` "abcdef"
-            trNegative p `shouldBe` "abcdef"
+            -- #1157 replaced #1107's return-the-original carve-out with
+            -- the uniform rule: a budget that cannot fit the ellipsis
+            -- drops the field, and a non-positive budget cannot.
+            trZero p `shouldBe` ""
+            trNegative p `shouldBe` ""
             trFits p `shouldBe` "abc"
             -- A positive width too narrow for ".." itself -> "".
             trNoEllipsis p `shouldBe` ""
