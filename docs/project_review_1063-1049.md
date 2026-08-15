@@ -6,12 +6,12 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## Status
 
-- [ ] PRR-1. Canonical texture unload leaves aliases bound to a reusable slot
-- [ ] PRR-2. Bindless descriptors use an update-after-bind feature that the device never enables
+- [x] PRR-1. Canonical texture unload leaves aliases bound to a reusable slot — [#1281]
+- [x] PRR-2. Bindless descriptors use an update-after-bind feature that the device never enables — [#1282]
 
 ## 1. Bindless texture lifecycle
 
-### PRR-1. Canonical texture unload leaves aliases bound to a reusable slot
+### [#1281] PRR-1. Canonical texture unload leaves aliases bound to a reusable slot
 
 > **Captured note:** Invalidate every stable handle that shares an atlas before freeing its bindless slot. Cached aliases exist only in the handle map and shader handle table, while `unloadAsset` unregisters only the canonical handle; the aliases can therefore survive after their shared slot is returned to the allocator and later resolve to an unrelated texture.
 
@@ -39,7 +39,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## 2. Vulkan bindless capability
 
-### PRR-2. Bindless descriptors use an update-after-bind feature that the device never enables
+### [#1282] PRR-2. Bindless descriptors use an update-after-bind feature that the device never enables
 
 > **Captured note:** Query and enable the exact Vulkan descriptor-indexing features the bindless layout uses. The logical device enables the umbrella `descriptorIndexing` bit and several siblings but omits `descriptorBindingSampledImageUpdateAfterBind`, while the bindless combined-image-sampler binding is created with `VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT`.
 

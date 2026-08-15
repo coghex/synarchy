@@ -6,15 +6,15 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## Status
 
-- [ ] PRR-1. Stale held-item references report the wrong refusal
-- [ ] PRR-2. Cross-manager rollback silently assumes the source survives
-- [ ] PRR-3. Component codecs permit malformed historical version tables
-- [ ] PRR-4. Bound-form review left consonant-scoping documentation inverted
-- [ ] PRR-5. Architecture guide still names the deleted World.ZoomMap facade
+- [x] PRR-1. Stale held-item references report the wrong refusal — [#1273]
+- [x] PRR-2. Cross-manager rollback silently assumes the source survives — [#1274]
+- [x] PRR-3. Component codecs permit malformed historical version tables — [#1275]
+- [x] PRR-4. Bound-form review left consonant-scoping documentation inverted — [#1276]
+- [x] PRR-5. Architecture guide still names the deleted World.ZoomMap facade — [#1222]
 
 ## 1. Transfer identity and atomicity
 
-### PRR-1. Stale held-item references report the wrong refusal
+### [#1273] PRR-1. Stale held-item references report the wrong refusal
 
 > **Captured note:** Validate `defName` before classifying a held instance as non-transferable. A stale `(instanceId, defName)` pair that points at equipped gear currently returns `item_not_transferable`, although the same stale pair in loose inventory correctly returns `instance_missing`.
 
@@ -34,7 +34,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 - **Scope and constraints:** Surfaced while reviewing PR #1129 / issue #1085. Preserve the useful distinction for a correctly named equipped or accessory item and the positive-ID exact-instance semantics shared with older inventory actions.
 - **Remaining uncertainty:** None at capture time; the incorrect branch is deterministic, though no current production caller is known to construct stale names intentionally.
 
-### PRR-2. Cross-manager rollback silently assumes the source survives
+### [#1274] PRR-2. Cross-manager rollback silently assumes the source survives
 
 > **Captured note:** Define and enforce the cross-manager rollback result when the source disappears between the pop and a failed destination push. Both restore callbacks silently no-op for a missing source, while `commitCross` reports only the destination-side stale failure.
 
@@ -58,7 +58,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## 2. Save codec invariants
 
-### PRR-3. Component codecs permit malformed historical version tables
+### [#1275] PRR-3. Component codecs permit malformed historical version tables
 
 > **Captured note:** Reject duplicate, current, and future version entries in `csOlderVersions`. `componentCodec` currently builds an ambiguous dispatch table from them, while `save_compat_audit.py` converts the same declaration through a set and hides the malformed entries.
 
@@ -81,7 +81,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## 3. Generated-language contracts
 
-### PRR-4. Bound-form review left consonant-scoping documentation inverted
+### [#1276] PRR-4. Bound-form review left consonant-scoping documentation inverted
 
 > **Captured note:** Correct `Language.Generated.Onset.consonantOnly`'s canonical-contract comment after the dual-role-`y` review. It still says bound-form legality shares the consonant-only scope and skips `y`, while the reviewed implementation and tests deliberately require the wider consonant-capable scope.
 
@@ -104,7 +104,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## 4. Repository architecture documentation
 
-### PRR-5. Architecture guide still names the deleted World.ZoomMap facade
+### [#1222] PRR-5. Architecture guide still names the deleted World.ZoomMap facade
 
 > **Captured note:** Update the world-generation architecture map after removing the `World.ZoomMap` facade. The guide still presents that exact module beside `World.Render.Zoom.*`, although only the more specific `World.ZoomMap.Cache.*`, texture, and palette modules remain.
 

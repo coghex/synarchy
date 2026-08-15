@@ -6,11 +6,11 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## Status
 
-- [ ] PRR-1. Cabal inventory audit accepts duplicate declared modules
+- [x] PRR-1. Cabal inventory audit accepts duplicate declared modules — [#1280]
 
 ## 1. Cabal library inventory enforcement
 
-### PRR-1. Cabal inventory audit accepts duplicate declared modules
+### [#1280] PRR-1. Cabal inventory audit accepts duplicate declared modules
 
 > **Captured note:** Validate each `src/` file's Cabal-resolvable path as well as its declared module name. The audit lets an orphan file impersonate an already-listed module, so two source paths declaring one inventoried name still produce a successful result even though Cabal compiles only the canonical path.
 

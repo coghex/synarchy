@@ -6,15 +6,15 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## Status
 
-- [ ] PRR-1. Item stacks collapse temperature-distinct instances
-- [ ] PRR-2. Item-list invalidation omits callback-visible row data
-- [ ] PRR-3. Exact-container popup titles discard the instance identity
-- [ ] PRR-4. Enum audit cannot see same-arity payload changes
-- [ ] PRR-5. World-name suggestion accepts unbounded linear work
+- [x] PRR-1. Item stacks collapse temperature-distinct instances — [#1268]
+- [x] PRR-2. Item-list invalidation omits callback-visible row data — [#1269]
+- [ ] PRR-3. Exact-container popup titles discard the instance identity — [deferred]: #1238 folds the panel in first
+- [x] PRR-4. Enum audit cannot see same-arity payload changes — [#1270]
+- [x] PRR-5. World-name suggestion accepts unbounded linear work — [#1272]
 
 ## 1. Shared item-list contracts
 
-### PRR-1. Item stacks collapse temperature-distinct instances
+### [#1268] PRR-1. Item stacks collapse temperature-distinct instances
 
 > **Captured note:** Treat tracked item temperature as part of raw-item equivalence, or establish another observable way to keep temperature-distinct instances selectable. `unit.getInventory` exports each instance's tracked temperature, but the unit-inventory adapter drops it and the shared stack key omits it even though temperature changes consumable effects.
 
@@ -35,7 +35,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 - **Scope and constraints:** Surfaced while reviewing PR #1169 / issue #1088. The PR faithfully implemented the issue's seven-field key, so the processor should judge the specification as well as the extraction. Preserve exact `instanceId` routing and avoid splitting on fields that truly have no behavioral or visible effect.
 - **Remaining uncertainty:** The current inventory context menu equips, stores, repairs, or opens contents rather than consuming the row directly. A focused fixture with two co-carried, otherwise identical hot/cold consumables would settle the player-visible impact and desired grouping policy.
 
-### PRR-2. Item-list invalidation omits callback-visible row data
+### [#1269] PRR-2. Item-list invalidation omits callback-visible row data
 
 > **Captured note:** Re-check the shared item-list dirty signature against every field consumed by host callbacks. The widget promises complete callback-derived invalidation, but `rowSignature` omits make, material, capacity, weapon details, and buffs while the unit inventory's tooltip callback renders all of them and its presentation key covers only repair state.
 
@@ -56,7 +56,9 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 - **Scope and constraints:** Surfaced while reviewing PR #1169 / issue #1088 requirement 11. Preserve the no-churn path and keep callback-derived state explicit; do not require the shared widget to know host-specific tooltip semantics.
 - **Remaining uncertainty:** The listed fields currently come from item definitions and are generally stable during one panel lifetime. The processor should identify whether another callback-visible live field provides a present production repro or disposition this as an API-contract hardening gap.
 
-### PRR-3. Exact-container popup titles discard the instance identity
+### [deferred] PRR-3. Exact-container popup titles discard the instance identity
+
+> **Deferred:** The fix targets `scripts/item_contents_panel.lua`, which open, approved #1238 (nested container-window stack, D-13) folds into the container-window manager — filing now specifies a file scheduled for rewrite. Precondition: #1238 merges; then file the exact-instance title contract (title resolves via the stored `instanceId` when set, first-by-defName only for the nil compatibility path) against the surviving container-window surface. No current data reproduces the mismatch (only authored container `first_aid_kit` has no condition spec), so waiting costs nothing observable.
 
 > **Captured note:** Carry exact container identity through the item-contents popup title as well as its contents query. `openFor` deliberately targets `instanceId`, but `buildTitle` searches inventory by `defName` and uses the first same-definition item's display name.
 
@@ -79,7 +81,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## 2. Save compatibility enforcement
 
-### PRR-4. Enum audit cannot see same-arity payload changes
+### [#1270] PRR-4. Enum audit cannot see same-arity payload changes
 
 > **Captured note:** The append-only enum audit freezes constructor name and arity, but not the ordered types of a constructor's serialized fields. Reordering two fields or changing a field type without changing arity leaves the baseline identical even though Generic `Serialize` changes the payload wire shape.
 
@@ -104,7 +106,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## 3. Synchronous scripting APIs
 
-### PRR-5. World-name suggestion accepts unbounded linear work
+### [#1272] PRR-5. World-name suggestion accepts unbounded linear work
 
 > **Captured note:** Bound the public `world.suggestName` ordinal contract or make large ordinals complete without replaying every prior head choice. The Lua API accepts an arbitrary integer, and `headIndexAt` walks from ordinal zero to that value synchronously.
 
