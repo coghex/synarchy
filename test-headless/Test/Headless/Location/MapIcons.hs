@@ -92,7 +92,7 @@ registryWithIcons =
 -- | Every def id the icon-quad scenarios below place. #911 builds
 --   instances from the overlay through the registry, so a placed id
 --   must be registered to become an instance at all — including
---   "no_icons" (registered, but declaring no @map_icons@ pair, which
+--   "no_icons" (registered, but declaring no @map_icon@, which
 --   is what that scenario is about) and the two extra ids the
 --   deterministic-ordering scenario places.
 registryForQuads ∷ LocationRegistry

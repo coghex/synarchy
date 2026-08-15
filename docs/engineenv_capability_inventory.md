@@ -986,8 +986,9 @@ State that one subsystem owns belongs with that subsystem:
 **Worked example (#911, placed-location instance identity).** A placed
 location needed a stable, persisted, per-page identity: an id
 allocated at placement time, its definition id, anchor, resolved
-absolute bounds, discovery margin, display name, one-time
-content-spawn flag, and lifecycle. That is a substantial pile of new
+absolute bounds, display name, one-time
+content-spawn flag, and lifecycle (#911 also stored a discovery margin;
+#1230 removed it when reveal became sight-based). That is a substantial pile of new
 mutable, persisted, cross-tick state — and it needed **zero** new
 `EngineEnv` fields. The records live in `WorldGenParams` inside
 `WorldState`, reached through `wsGenParamsRef`, alongside the page's

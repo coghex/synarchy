@@ -518,7 +518,7 @@ spec = do
         -- runs them.
         describe "anchor vocabulary (#801)" $ do
             let anchorDef anchorYaml =
-                    "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
+                    "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
                     \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
                     \  anchor: " <> anchorYaml <> " }"
 

@@ -114,10 +114,11 @@ end
 -----------------------------------------------------------
 -- Acquisition
 --
--- world.getLocationAwareness() reports every PLAYER-OWNED unit
--- currently inside a placed location's discovery-margin halo, on every
--- LOADED page. It shares its predicate with the player-wide discovery
--- tick by construction (both are Location.Discovery.haloContacts), so
+-- world.getLocationAwareness() reports every PLAYER-OWNED unit that can
+-- currently SEE a placed location (#1230: its night-aware visible-tile
+-- set intersects the instance's own stored bounds), on every LOADED
+-- page. It shares its predicate with the player-wide discovery tick by
+-- construction (both are Location.Discovery.sightContactsWhere), so
 -- the two layers can never disagree about geometry or about which units
 -- count -- but unlike that tick it reports EVERY qualifying unit and
 -- ignores lifecycle, which is what makes a second acolyte arriving at

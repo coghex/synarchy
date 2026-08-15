@@ -951,13 +951,19 @@ keep the field and keep decoding.
 
 D-14 requires exactly one new texture: a shared question-mark map symbol drawn
 for every location whose type is not yet known, at the same 32 logical pixels
-`locationIconTargetPixels` uses. It does not exist —
-`assets/textures/icons/location/` holds only `ruin_hidden.png` and
+`locationIconTargetPixels` uses. At the time of writing it did not exist —
+`assets/textures/icons/location/` held only `ruin_hidden.png` and
 `ruin_discovered.png`. The sibling icon families use a `*_unknown.png`
 convention (`skill_unknown.png`, `injury_unknown.png`,
 `infection_unknown.png`), so `location_unknown.png` is the name that fits.
 
 **Resolved 2026-08-11: the project owner will make this icon themselves.**
+
+**Landed 2026-08-15 in #1230.** The owner supplied
+`assets/textures/icons/location/location_unknown.png` (32x32 RGBA), and
+authorized retiring `ruin_hidden.png` and repurposing
+`ruin_discovered.png` as `ruin.png` — the one bitmap now serving
+`discovered`, `active`, and (darkened) `cleared`/`depleted`.
 
 It is nonetheless recorded as an explicit **art blocker in #1230** rather than
 resolved ahead of time. The standing workflow rule is that a solver

@@ -76,8 +76,9 @@ data WorldGenParams = WorldGenParams
       --   per overlay entry, keyed by a stable
       --   'Location.Instance.LocationInstanceId' allocated at placement
       --   time from the deterministic overlay above. Carries each
-      --   location's definition id, anchor, absolute bounds (#777),
-      --   discovery margin, display name, gameplay LIFECYCLE, and its
+      --   location's definition id, anchor, absolute bounds (#777 —
+      --   the ONLY footprint since #1230 removed the discovery margin),
+      --   display name, gameplay LIFECYCLE, and its
       --   one-time content-spawn flag (#90).
       --
       --   This replaced two former chunk-keyed sets — a chunk is not a
