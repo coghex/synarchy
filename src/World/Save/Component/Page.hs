@@ -253,9 +253,11 @@ tshow = T.pack . show
 
 -- Frozen leaf DTOs (requirement 4) -----------------------------------
 
--- | Frozen mirror of 'WorldIdentity' — the CURRENT (world-pages v6)
+-- | Frozen mirror of 'WorldIdentity' — the CURRENT (world-pages v7)
 --   shape: the optional language provenance #1092 added, plus the
---   optional etymology source #1104 added.
+--   optional etymology source #1104 added. #1230 took the component to
+--   v7 without touching the identity, so 'PageCoreDTOv6' embeds this
+--   same type.
 --
 --   The two are independently optional, exactly as they are on the live
 --   record: provenance says WHICH language named the world, the source
