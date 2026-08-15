@@ -36,7 +36,7 @@ local locations = {}
 -- always reflects what's registered — no local cache to invalidate.
 -- Each engine LocationDef table is:
 --   { id, label, type, builder, anchor={tag,…},
---     bounds={min_x,min_y,max_x,max_y}, discovery_margin,
+--     bounds={min_x,min_y,max_x,max_y},
 --     contents={{kind,id,count},…} }.
 -- `bounds` (#777) is the authoritative footprint, relative to the
 -- anchor tile: the builders and content scatter below both derive
@@ -66,9 +66,8 @@ end
 --     gx, gy,    -- chunk-centre tile (anchor for stamping)
 --     id,        -- LocationDef id (join with locations.getDef for
 --                --   label/type/builder)
---     bounds,    -- absolute, inclusive tile bounds (#777), or nil if
+--     bounds }   -- absolute, inclusive tile bounds (#777), or nil if
 --                --   `id` has no matching registered def
---     discovery_margin }
 -- With no argument the active world is read; pass a page id to read a
 -- specific world's overlay. Returns {} when no such world or nothing placed.
 function locations.listPlaced(worldId)

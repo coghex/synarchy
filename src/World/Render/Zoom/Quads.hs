@@ -93,15 +93,15 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
 
                 !visibleQuads = makeMapQuads params mapMode baked facing
                                              vb camX camY alpha layer
-                -- Discovery-state map icons (#781): a dedicated overlay
-                -- above every terrain/climate mode, texture-selected
-                -- live from 'params' each frame — never routed through
-                -- 'mapMode's color function, so it's never tinted/dimmed
-                -- by whichever climate palette is active.
-                iconMap  = buildLocationIconMap registry nameReg (wtNoTexture textures)
+                -- Lifecycle-state map icons (#781, #1230): a dedicated
+                -- overlay above every terrain/climate mode, texture- and
+                -- colour-selected live from 'params' each frame — never
+                -- routed through 'mapMode's color function, so it's never
+                -- tinted/dimmed by whichever climate palette is active.
+                iconSet  = buildLocationIconMap registry nameReg (wtNoTexture textures)
                 iconSize = iconWorldSize locationIconTargetPixels (camZoom camera)
                                           (fromIntegral winH)
-                !iconQuads = makeLocationIconQuads params iconMap facing vb
+                !iconQuads = makeLocationIconQuads params iconSet facing vb
                                  camX camY alpha iconSize layer lookupSlot defFmSlot
             cursorQuad ← makeCursorQuad facing camera winW winH
                                         fbW fbH ws (wsCursorRef worldState)

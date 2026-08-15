@@ -9,6 +9,8 @@ module Location.Types
     , lookupLocation
     , allLocations
     , locationIconTextureName
+    , locationUnknownIconTextureName
+    , locationUnknownIconPath
     ) where
 
 import UPrelude
@@ -85,14 +87,16 @@ data LocationDef = LocationDef
                                       --   ruin geometry + content scatter
                                       --   in scripts/locations.lua — no
                                       --   independent Lua-side radius.
-    , ldDiscoveryMargin ∷ !Int        -- ^ non-negative tile halo around
-                                      --   'ldBounds' later discovery-
-                                      --   trigger work (#780) expands by.
-    , ldMapIcons ∷ !(Maybe (Text, Text))
-                                      -- ^ zoom-map annotation texture
-                                      --   paths, (undiscovered, discovered)
-                                      --   (#781). 'Nothing' = this location
-                                      --   places no map annotation at all.
+    , ldMapIcon  ∷ !(Maybe Text)      -- ^ the zoom-map annotation texture
+                                      --   path for this location's TYPE
+                                      --   (#781, singular since #1230).
+                                      --   'Nothing' = this location places
+                                      --   no map annotation at all. While
+                                      --   the type is still unknown every
+                                      --   annotated location instead draws
+                                      --   the ONE shared
+                                      --   'locationUnknownIconPath', which
+                                      --   no definition declares.
     , ldNaming   ∷ !LocationNaming    -- ^ authored concept pools every
                                       --   generated instance name draws
                                       --   from (#1101). Required on
@@ -131,13 +135,27 @@ allLocations ∷ LocationRegistry → [LocationDef]
 allLocations = sortOn ldId . lrDefs
 
 -- | Deterministic 'Engine.Asset.TextureNameRegistry.TextureNameRegistry' key
---   for one state of a location's map-icon pair (#781) — shared between
---   the YAML loader ('Engine.Scripting.Lua.API.Locations', which
---   registers under this name) and the zoom-map renderer
---   ('World.Render.Zoom.Icons', which looks it up under the same name),
---   mirroring the @mat_tile_\<name\>@-style convention
+--   for one location definition's TYPE icon (#781; singular since
+--   #1230) — shared between the YAML loader
+--   ('Engine.Scripting.Lua.API.Locations', which registers under this
+--   name) and the zoom-map renderer ('World.Render.Zoom.Icons', which
+--   looks it up under the same name), mirroring the
+--   @mat_tile_\<name\>@-style convention
 --   'Engine.Asset.TextureNameRegistry' already documents.
-locationIconTextureName ∷ Text → Bool → Text
-locationIconTextureName lid isDiscovered =
-    "loc_icon_" <> lid <> "_"
-        <> (if isDiscovered then "discovered" else "undiscovered")
+locationIconTextureName ∷ Text → Text
+locationIconTextureName lid = "loc_icon_" <> lid
+
+-- | Registry key for the ONE shared unknown-location icon (#1230). Not
+--   derived from any definition id — every annotated location draws this
+--   same marker while its type is unknown, which is the whole point:
+--   the zoom map must not leak WHAT a location is before a unit has
+--   seen it.
+locationUnknownIconTextureName ∷ Text
+locationUnknownIconTextureName = "loc_icon_unknown"
+
+-- | The canonical on-disk path of that shared icon (#1230). Declared in
+--   code rather than in any definition's YAML, and loaded once
+--   independently of the definitions, for the same reason its registry
+--   key is: it belongs to no location type.
+locationUnknownIconPath ∷ FilePath
+locationUnknownIconPath = "assets/textures/icons/location/location_unknown.png"

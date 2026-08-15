@@ -159,8 +159,8 @@ spec = do
                 { ldId = lid, ldLabel = lid, ldType = "test"
                 , ldBuilder = "noop", ldAnchor = anchors
                 , ldMaxCount = 8, ldMinSpacing = 3, ldContents = []
-                , ldBounds = RelBounds (-2) (-2) 2 2, ldDiscoveryMargin = 6
-                , ldMapIcons = Nothing, ldNaming = testNaming }
+                , ldBounds = RelBounds (-2) (-2) 2 2
+                , ldMapIcon = Nothing, ldNaming = testNaming }
             flatDef = mkDef "flat_test"     ["flat"]
             mtnDef  = mkDef "mountain_test" ["mountain"]
             -- A chunk's anchor tile — mirrors Location.Instance's
@@ -477,8 +477,8 @@ spec = do
                 -- The guaranteed entry is an ordinary overlay entry: it
                 -- flows through the SAME `buildLocationInstances` every
                 -- strict placement does, so it acquires an id, an
-                -- anchor, resolved bounds, a discovery margin and save
-                -- coverage with no parallel construction path.
+                -- anchor, resolved bounds and save coverage with no
+                -- parallel construction path.
                 let registry = registerLocation flatDef emptyLocationRegistry
                     insts = instancesToList
                                 (buildLocationInstances Nothing registry (lpOverlay wetPlacement))
@@ -488,7 +488,6 @@ spec = do
                         [liChunk i] `shouldBe` HM.keys (lpOverlay wetPlacement)
                         liAnchor i `shouldBe` chunkCentre (liChunk i)
                         liBounds i `shouldBe` translateBounds (liAnchor i) (ldBounds flatDef)
-                        liDiscoveryMargin i `shouldBe` ldDiscoveryMargin flatDef
                         liDisplayName i `shouldBe` ldLabel flatDef
                         liLifecycle i `shouldBe` LifecycleUnknown
                         liContentsSpawned i `shouldBe` False

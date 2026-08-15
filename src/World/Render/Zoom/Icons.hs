@@ -1,14 +1,22 @@
 {-# LANGUAGE Strict #-}
--- | Zoom-map location discovery-state icon annotations (#781): a
+-- | Zoom-map location lifecycle-state icon annotations (#781): a
 --   dedicated dynamic overlay, entirely separate from
 --   'World.Render.Zoom.Quads.makeMapQuads' so switching 'ZoomMapMode'
 --   never tints, dims, or hides it. One square, screen-upright quad per
---   placed location that declares a @map_icons@ pair, texture-selected
---   live from the page's 'WorldGenParams' discovery state every frame
---   (no atlas rebake, no cached per-instance flag).
+--   placed location whose definition declares a @map_icon@,
+--   texture-selected live from the page's 'WorldGenParams' lifecycle
+--   state every frame (no atlas rebake, no cached per-instance flag).
+--
+--   #1230 replaced #781's per-definition (undiscovered, discovered)
+--   PAIR with three explicitly enumerated appearances over the six
+--   'LocationLifecycle' constructors — see 'LocationIconAppearance'.
 module World.Render.Zoom.Icons
     ( locationIconTargetPixels
     , iconWorldSize
+    , LocationIconSet(..)
+    , LocationIconAppearance(..)
+    , locationIconAppearance
+    , clearedIconTint
     , buildLocationIconMap
     , makeLocationIconQuads
     ) where
@@ -22,9 +30,11 @@ import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld, packWorldUV)
 import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types (SortableQuad(..))
-import Location.Types (LocationDef(..), LocationRegistry, allLocations, locationIconTextureName)
+import Location.Types
+    ( LocationDef(..), LocationRegistry, allLocations
+    , locationIconTextureName, locationUnknownIconTextureName )
 import Location.Instance
-    (LocationInstance(..), instancesToList, isDiscoveredLifecycle)
+    (LocationInstance(..), LocationLifecycle(..), instancesToList)
 import World.Types (WorldGenParams(..))
 import World.Grid (gridToWorld)
 import World.Render.Zoom.ViewBounds (ZoomViewBounds, isChunkInView, bestZoomWrapOffset)
@@ -61,27 +71,81 @@ iconWorldSize targetPx zoom winH
 
 -- * Icon Texture Resolution
 
--- | Resolve every location def's declared icon pair to loaded texture
---   handles, keyed by def id. A def with no 'ldMapIcons' contributes NO
---   entry at all — the render side treats a missing id as "no
---   annotation", exactly matching the "definitions may deliberately
---   omit map_icons" requirement. A def that DOES declare icons but
---   whose registered texture name isn't loaded yet this session (or
+-- | How one placed location draws right now (#1230 requirement 3) —
+--   the ONE mapping from lifecycle to appearance, enumerated over every
+--   constructor rather than derived from a discovered\/undiscovered
+--   boolean, so adding a lifecycle state is a compile error here rather
+--   than a silent reuse of whichever half of a pair the boolean picked.
+data LocationIconAppearance
+    = IconUnknownMarker
+      -- ^ @unknown@ \/ @hinted@: the ONE shared unknown icon, identical
+      --   for every definition. The zoom map must not leak WHAT is
+      --   there before a unit has seen it.
+    | IconTypeNormal
+      -- ^ @discovered@ \/ @active@: the definition's own 'ldMapIcon',
+      --   drawn at full brightness.
+    | IconTypeDark
+      -- ^ @cleared@ \/ @depleted@: the SAME type icon, darkened through
+      --   the quad's own colour. No second bitmap is authored for it.
+    deriving (Show, Eq)
+
+locationIconAppearance ∷ LocationLifecycle → LocationIconAppearance
+locationIconAppearance LifecycleUnknown    = IconUnknownMarker
+locationIconAppearance LifecycleHinted     = IconUnknownMarker
+locationIconAppearance LifecycleDiscovered = IconTypeNormal
+locationIconAppearance LifecycleActive     = IconTypeNormal
+locationIconAppearance LifecycleCleared    = IconTypeDark
+locationIconAppearance LifecycleDepleted   = IconTypeDark
+
+-- | RGB multiplier for a spent ('IconTypeDark') location's icon quad.
+--   Strictly below the normal 1.0 on every channel, so a cleared ruin
+--   reads as spent without a second authored bitmap.
+--
+--   This is a deliberate, ENUMERATED exception to the project's
+--   no-tinting rule, authorized by @docs\/expedition_gameplay_loop.md@
+--   D-16 alongside the existing underwater, fluid-surface and lava
+--   tints. It is confined to this one icon quad's own 'Vec4': no
+--   texture is re-authored and nothing else on the zoom map is tinted.
+clearedIconTint ∷ Float
+clearedIconTint = 0.45
+
+-- | Every texture the icon overlay can draw: the ONE shared
+--   unknown-location marker, plus each definition's own type icon keyed
+--   by def id.
+--
+--   A def with no 'ldMapIcon' contributes NO entry at all — the render
+--   side treats a missing id as "no annotation", exactly matching the
+--   "definitions may deliberately omit a map icon" requirement.
+data LocationIconSet = LocationIconSet
+    { lisUnknown ∷ !TextureHandle
+      -- ^ the shared unknown marker, registered independently of every
+      --   definition under 'locationUnknownIconTextureName' (#1230)
+    , lisTypeIcons ∷ !(HM.HashMap Text TextureHandle)
+      -- ^ per-definition type icons, keyed by 'ldId'
+    } deriving (Show, Eq)
+
+-- | Resolve the shared unknown marker and every location def's declared
+--   type icon to loaded texture handles. A def that DOES declare an icon
+--   but whose registered texture name isn't loaded yet this session (or
 --   never finished loading) falls back to 'fallback' — the caller's own
---   world.wtNoTexture — for that state, so a location marker is never
---   silently dropped for a texture-load timing reason.
+--   world.wtNoTexture — so a location marker is never silently dropped
+--   for a texture-load timing reason. The shared unknown marker falls
+--   back the same way, and is resolved unconditionally: it belongs to no
+--   definition, so an empty registry still yields a drawable set.
 buildLocationIconMap
     ∷ LocationRegistry → TextureNameRegistry → TextureHandle
-    → HM.HashMap Text (TextureHandle, TextureHandle)
-buildLocationIconMap registry nameReg fallback =
-    HM.fromList
-        [ (lid, (resolveState False, resolveState True))
+    → LocationIconSet
+buildLocationIconMap registry nameReg fallback = LocationIconSet
+    { lisUnknown   = resolve locationUnknownIconTextureName
+    , lisTypeIcons = HM.fromList
+        [ (lid, resolve (locationIconTextureName lid))
         | def ← allLocations registry
-        , Just _ ← [ldMapIcons def]
+        , Just _ ← [ldMapIcon def]
         , let lid = ldId def
-              resolveState isDiscovered = fromMaybe fallback
-                  (lookupTextureName (locationIconTextureName lid isDiscovered) nameReg)
         ]
+    }
+  where
+    resolve name = fromMaybe fallback (lookupTextureName name nameReg)
 
 -- * Icon Quad Generation
 
@@ -103,22 +167,25 @@ iconSortKeyBase = 1000.0
 --   deterministic quad ordering call over call — no two frames with
 --   unchanged inputs can reorder or flicker.
 --
---   Texture selection preserves the pre-#911 boolean split exactly:
---   'isDiscoveredLifecycle' picks the discovered texture at
---   'Location.Instance.LifecycleDiscovered' and every later lifecycle
---   state, the undiscovered one at @unknown@ / @hinted@.
+--   Texture and colour selection is 'locationIconAppearance' — the one
+--   explicit per-lifecycle mapping (#1230). An instance whose def
+--   declares no type icon still draws the shared unknown marker while
+--   its type is unknown, but has nothing to reveal into, so it is
+--   dropped once it is discovered: an annotation must never silently
+--   become world.wtNoTexture.
 --
 --   Always axis-aligned / screen-upright: the facing rotation is already
 --   baked into 'gridToWorld's world position for the anchor, and the
 --   quad itself carries no additional rotation, so it stays upright
 --   regardless of camera facing. 'alpha' is passed
 --   through as-is (the caller supplies the same zoomAlpha terrain
---   fades with) and is the ONLY thing 'ZoomMapMode' or day/night could
---   otherwise dim — icon color is always plain white × alpha, never
---   routed through a mode's color function.
+--   fades with) in ALL six lifecycle states — 'clearedIconTint' scales
+--   only RGB — and is the ONLY thing 'ZoomMapMode' or day/night could
+--   otherwise dim: icon color is never routed through a mode's color
+--   function.
 makeLocationIconQuads
     ∷ WorldGenParams
-    → HM.HashMap Text (TextureHandle, TextureHandle)
+    → LocationIconSet
     → CameraFacing → ZoomViewBounds
     → Float → Float             -- ^ camX, camY
     → Float                     -- ^ alpha (zoomAlpha)
@@ -126,7 +193,7 @@ makeLocationIconQuads
     → LayerId
     → (TextureHandle → Int) → Float   -- ^ lookupSlot, defFmSlot
     → V.Vector SortableQuad
-makeLocationIconQuads params iconMap facing vb camX camY alpha iconSize layer lookupSlot defFmSlot
+makeLocationIconQuads params iconSet facing vb camX camY alpha iconSize layer lookupSlot defFmSlot
     | iconSize ≤ 0 = V.empty
     | otherwise =
         let ws = wgpWorldSize params
@@ -134,7 +201,12 @@ makeLocationIconQuads params iconMap facing vb camX camY alpha iconSize layer lo
             entries = zip [iconSortKeyBase ..]
                           (instancesToList (wgpLocationInstances params))
         in V.mapMaybe (\(sortKey, inst) → do
-               (undiscTex, discTex) ← HM.lookup (liDefId inst) iconMap
+               let mTypeTex = HM.lookup (liDefId inst) (lisTypeIcons iconSet)
+               (tex, rgb) ← case locationIconAppearance (liLifecycle inst) of
+                   IconUnknownMarker →
+                       (\_ → (lisUnknown iconSet, 1.0)) ⊚ mTypeTex
+                   IconTypeNormal    → (\t → (t, 1.0)) ⊚ mTypeTex
+                   IconTypeDark      → (\t → (t, clearedIconTint)) ⊚ mTypeTex
                let (gx, gy) = liAnchor inst
                    (baseX, baseY) = gridToWorld facing gx gy
                    (offX, offY) = bestZoomWrapOffset facing ws camX camY baseX baseY
@@ -142,24 +214,23 @@ makeLocationIconQuads params iconMap facing vb camX camY alpha iconSize layer lo
                    wrappedY = baseY + offY
                    drawX = wrappedX - half
                    drawY = wrappedY - half
-                   tex = if isDiscoveredLifecycle (liLifecycle inst)
-                            then discTex else undiscTex
                if isChunkInView vb drawX drawY iconSize iconSize
-                   then Just (emitIconQuad tex drawX drawY iconSize layer alpha
+                   then Just (emitIconQuad tex rgb drawX drawY iconSize layer alpha
                                             sortKey gx gy lookupSlot defFmSlot)
                    else Nothing
               ) (V.fromList entries)
 
 -- | Emit one screen-upright square quad at (drawX, drawY)..(+size,+size)
---   in world space. 'wuv' is packed from the anchor tile so the shared
+--   in world space, with @rgb@ on all three colour channels and the
+--   caller's zoom fade untouched in alpha. 'wuv' is packed from the anchor tile so the shared
 --   bindless pipeline has a representative (not centered-on-nothing)
 --   value, mirroring 'World.Render.Zoom.Cursor.emitCursorQuad'.
 emitIconQuad
-    ∷ TextureHandle → Float → Float → Float → LayerId → Float → Float
+    ∷ TextureHandle → Float → Float → Float → Float → LayerId → Float → Float
     → Int → Int → (TextureHandle → Int) → Float → SortableQuad
-emitIconQuad tex drawX drawY size layer alpha sortKey gx gy lookupSlot defFmSlot =
+emitIconQuad tex rgb drawX drawY size layer alpha sortKey gx gy lookupSlot defFmSlot =
     let slot  = fromIntegral (lookupSlot tex)
-        color = Vec4 1.0 1.0 1.0 alpha
+        color = Vec4 rgb rgb rgb alpha
         wuv   = packWorldUV gx gy
     in SortableQuad
         { sqSortKey = sortKey

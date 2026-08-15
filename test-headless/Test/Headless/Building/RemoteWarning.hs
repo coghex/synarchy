@@ -82,8 +82,7 @@ baseLoc lid bounds = LocationDef
     , ldMinSpacing      = 0
     , ldContents        = []
     , ldBounds          = bounds
-    , ldDiscoveryMargin = 6
-    , ldMapIcons        = Nothing
+    , ldMapIcon         = Nothing
     , ldNaming          = testNaming
     }
 

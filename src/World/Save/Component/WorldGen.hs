@@ -68,6 +68,7 @@ module World.Save.Component.WorldGen
     , WorldGenParamsDTOv2(..)
     , WorldGenParamsDTOv3(..)
     , WorldGenParamsDTOv4(..)
+    , WorldGenParamsDTOv5(..)
     , NameExprDTO(..)
     , EtymologySourceDTO(..)
     , RiverNameDTO(..)
@@ -81,6 +82,8 @@ module World.Save.Component.WorldGen
     , LocationInstancesDTOv1(..)
     , LocationInstanceDTOv2(..)
     , LocationInstancesDTOv2(..)
+    , LocationInstanceDTOv3(..)
+    , LocationInstancesDTOv3(..)
     , TectonicPlateDTO(..)
     , CalendarConfigDTO(..)
     , SunConfigDTO(..)
@@ -112,6 +115,8 @@ module World.Save.Component.WorldGen
     , toWorldGenParamsDTOv3
     , fromWorldGenParamsDTOv4
     , toWorldGenParamsDTOv4
+    , fromWorldGenParamsDTOv5
+    , toWorldGenParamsDTOv5
     , toEtymologySourceDTO
     , fromEtymologySourceDTO
     , toRiverNamesDTO
@@ -123,6 +128,7 @@ module World.Save.Component.WorldGen
     , toLocationInstancesDTOv1
     , fromLocationInstancesDTOv1
     , toLocationInstancesDTOv2
+    , toLocationInstancesDTOv3
     , fromLocationInstancesDTOv2
     , toClimateStateDTO
     , fromClimateStateDTO
@@ -663,10 +669,13 @@ fromAbsBoundsDTO d = AbsBounds (abdMinX d) (abdMinY d) (abdMaxX d) (abdMaxY d)
 --   id and 'LocationLifecycle' a payload-free append-only enum, both
 --   reused as-is exactly like 'ChunkCoord' / 'ZoomMapMode'.
 --
---   This is the CURRENT shape, carried by @world-pages@ v6: #1101's
---   English gloss beside the display name, plus #1104's optional
---   etymology source. 'LocationInstanceDTOv2' below is the frozen
---   pre-#1104 shape and 'LocationInstanceDTOv1' the pre-#1101 one.
+--   This is the CURRENT shape, carried by @world-pages@ v7: #1101's
+--   English gloss beside the display name and #1104's optional
+--   etymology source, and — since #1230 — NO discovery margin, the live
+--   record having lost it when reveal became sight-based.
+--   'LocationInstanceDTOv3' below is the frozen pre-#1230 shape (v6),
+--   'LocationInstanceDTOv2' the pre-#1104 one and
+--   'LocationInstanceDTOv1' the pre-#1101 one.
 data LocationInstanceDTO = LocationInstanceDTO
     { lidId              ∷ !LocationInstanceId
     , lidDefId           ∷ !Text
@@ -674,7 +683,6 @@ data LocationInstanceDTO = LocationInstanceDTO
     , lidAnchorX         ∷ !Int
     , lidAnchorY         ∷ !Int
     , lidBounds          ∷ !AbsBoundsDTO
-    , lidDiscoveryMargin ∷ !Int
     , lidDisplayName     ∷ !Text
     , lidGloss           ∷ !(Maybe Text)
     , lidEtymology       ∷ !(Maybe EtymologySourceDTO)
@@ -690,7 +698,6 @@ toLocationInstanceDTO i = LocationInstanceDTO
     , lidAnchorX         = fst (liAnchor i)
     , lidAnchorY         = snd (liAnchor i)
     , lidBounds          = toAbsBoundsDTO (liBounds i)
-    , lidDiscoveryMargin = liDiscoveryMargin i
     , lidDisplayName     = liDisplayName i
     , lidGloss           = liGloss i
     , lidEtymology       = toEtymologySourceDTO <$> liEtymology i
@@ -705,7 +712,6 @@ fromLocationInstanceDTO d = LocationInstance
     , liChunk           = lidChunk d
     , liAnchor          = (lidAnchorX d, lidAnchorY d)
     , liBounds          = fromAbsBoundsDTO (lidBounds d)
-    , liDiscoveryMargin = lidDiscoveryMargin d
     , liDisplayName     = lidDisplayName d
     , liGloss           = lidGloss d
     , liEtymology       = fromEtymologySourceDTO <$> lidEtymology d
@@ -755,6 +761,11 @@ data LocationInstanceDTOv1 = LocationInstanceDTOv1
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | A pre-#1101 instance keeps the name it was stored with, EXACTLY —
+--   and its stored @discovery_margin@ is DROPPED (#1230): the live
+--   record has no such field any more, and the wire shape above is
+--   frozen, so the value is decoded off the wire and discarded rather
+--   than the historical bytes being edited.
+--
 --   it was rendered once when the instance was placed and is never
 --   re-derived (#1101 requirements 4 and 7) — and decodes with NO gloss.
 --   A gloss is the English reading of a generated name; a stored label
@@ -767,7 +778,6 @@ fromLocationInstanceDTOv1 d = LocationInstance
     , liChunk           = lid1Chunk d
     , liAnchor          = (lid1AnchorX d, lid1AnchorY d)
     , liBounds          = fromAbsBoundsDTO (lid1Bounds d)
-    , liDiscoveryMargin = lid1DiscoveryMargin d
     , liDisplayName     = lid1DisplayName d
     , liGloss           = Nothing
     , liEtymology       = Nothing
@@ -798,7 +808,7 @@ toLocationInstancesDTOv1 l = LocationInstancesDTOv1
         , lid1AnchorX         = fst (liAnchor i)
         , lid1AnchorY         = snd (liAnchor i)
         , lid1Bounds          = toAbsBoundsDTO (liBounds i)
-        , lid1DiscoveryMargin = liDiscoveryMargin i
+        , lid1DiscoveryMargin = historicalDiscoveryMargin
         , lid1DisplayName     = liDisplayName i
         , lid1Lifecycle       = liLifecycle i
         , lid1ContentsSpawned = liContentsSpawned i
@@ -832,7 +842,9 @@ data LocationInstanceDTOv2 = LocationInstanceDTOv2
     , lid2ContentsSpawned ∷ !Bool
     } deriving (Show, Eq, Generic, Serialize)
 
--- | A pre-#1104 instance keeps its stored name AND gloss exactly, and
+-- | A pre-#1104 instance keeps its stored name AND gloss exactly, its
+--   stored @discovery_margin@ is dropped (#1230, exactly as in
+--   'fromLocationInstanceDTOv1'), and
 --   decodes with NO etymology source. The expression behind a name was
 --   simply not recorded then; inventing one would attach a fabricated
 --   derivation to a real location, which #1104 requirement 1 forbids as
@@ -844,7 +856,6 @@ fromLocationInstanceDTOv2 d = LocationInstance
     , liChunk           = lid2Chunk d
     , liAnchor          = (lid2AnchorX d, lid2AnchorY d)
     , liBounds          = fromAbsBoundsDTO (lid2Bounds d)
-    , liDiscoveryMargin = lid2DiscoveryMargin d
     , liDisplayName     = lid2DisplayName d
     , liGloss           = lid2Gloss d
     , liEtymology       = Nothing
@@ -874,7 +885,7 @@ toLocationInstancesDTOv2 l = LocationInstancesDTOv2
         , lid2AnchorX         = fst (liAnchor i)
         , lid2AnchorY         = snd (liAnchor i)
         , lid2Bounds          = toAbsBoundsDTO (liBounds i)
-        , lid2DiscoveryMargin = liDiscoveryMargin i
+        , lid2DiscoveryMargin = historicalDiscoveryMargin
         , lid2DisplayName     = liDisplayName i
         , lid2Gloss           = liGloss i
         , lid2Lifecycle       = liLifecycle i
@@ -887,6 +898,100 @@ fromLocationInstancesDTOv2 d = LocationInstances
     , lisById          = HM.map fromLocationInstanceDTOv2 (lisd2ById d)
     , lisPendingLegacy = Nothing
     }
+
+-- | The FROZEN pre-#1230 instance shape, preserved verbatim for
+--   decode-only backward compatibility: everything the current DTO
+--   carries PLUS the @discovery_margin@ the live record used to store
+--   (#911) and lost when reveal became sight-based. This is what
+--   @world-pages@ v6 (#1104) encoded. Never edited; a further change
+--   freezes the CURRENT shape as a v4 instead (frozen-DTO boundary
+--   rule).
+data LocationInstanceDTOv3 = LocationInstanceDTOv3
+    { lid3Id              ∷ !LocationInstanceId
+    , lid3DefId           ∷ !Text
+    , lid3Chunk           ∷ !ChunkCoord
+    , lid3AnchorX         ∷ !Int
+    , lid3AnchorY         ∷ !Int
+    , lid3Bounds          ∷ !AbsBoundsDTO
+    , lid3DiscoveryMargin ∷ !Int
+    , lid3DisplayName     ∷ !Text
+    , lid3Gloss           ∷ !(Maybe Text)
+    , lid3Etymology       ∷ !(Maybe EtymologySourceDTO)
+    , lid3Lifecycle       ∷ !LocationLifecycle
+    , lid3ContentsSpawned ∷ !Bool
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | A pre-#1230 instance carries EVERYTHING across unchanged —
+--   allocator id, definition id, chunk, anchor, bounds, display name,
+--   gloss, etymology source, lifecycle and content-spawn flag — and
+--   drops exactly one thing: its stored discovery margin, which has no
+--   live counterpart any more (#1230 requirement 11). Reveal is
+--   sight-based against 'liBounds', so the halo the margin described
+--   describes nothing; it is decoded off the wire and discarded rather
+--   than being remapped onto some other field.
+fromLocationInstanceDTOv3 ∷ LocationInstanceDTOv3 → LocationInstance
+fromLocationInstanceDTOv3 d = LocationInstance
+    { liId              = lid3Id d
+    , liDefId           = lid3DefId d
+    , liChunk           = lid3Chunk d
+    , liAnchor          = (lid3AnchorX d, lid3AnchorY d)
+    , liBounds          = fromAbsBoundsDTO (lid3Bounds d)
+    , liDisplayName     = lid3DisplayName d
+    , liGloss           = lid3Gloss d
+    , liEtymology       = fromEtymologySourceDTO <$> lid3Etymology d
+    , liLifecycle       = lid3Lifecycle d
+    , liContentsSpawned = lid3ContentsSpawned d
+    }
+
+-- | The FROZEN pre-#1230 instance table. Structurally identical to
+--   'LocationInstancesDTO' but over the frozen per-instance shape.
+data LocationInstancesDTOv3 = LocationInstancesDTOv3
+    { lisd3NextId ∷ !Int
+    , lisd3ById   ∷ !(HM.HashMap LocationInstanceId LocationInstanceDTOv3)
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | Encoder for the frozen table — the round-trip partner every frozen
+--   DTO version's tests build fixture bytes with.
+toLocationInstancesDTOv3 ∷ LocationInstances → LocationInstancesDTOv3
+toLocationInstancesDTOv3 l = LocationInstancesDTOv3
+    { lisd3NextId = lisNextId l
+    , lisd3ById   = HM.map toV3 (lisById l)
+    }
+  where
+    toV3 i = LocationInstanceDTOv3
+        { lid3Id              = liId i
+        , lid3DefId           = liDefId i
+        , lid3Chunk           = liChunk i
+        , lid3AnchorX         = fst (liAnchor i)
+        , lid3AnchorY         = snd (liAnchor i)
+        , lid3Bounds          = toAbsBoundsDTO (liBounds i)
+        , lid3DiscoveryMargin = historicalDiscoveryMargin
+        , lid3DisplayName     = liDisplayName i
+        , lid3Gloss           = liGloss i
+        , lid3Etymology       = toEtymologySourceDTO <$> liEtymology i
+        , lid3Lifecycle       = liLifecycle i
+        , lid3ContentsSpawned = liContentsSpawned i
+        }
+
+fromLocationInstancesDTOv3 ∷ LocationInstancesDTOv3 → LocationInstances
+fromLocationInstancesDTOv3 d = LocationInstances
+    { lisNextId        = lisd3NextId d
+    , lisById          = HM.map fromLocationInstanceDTOv3 (lisd3ById d)
+    , lisPendingLegacy = Nothing
+    }
+
+-- | The discovery margin every FROZEN instance encoder writes (#1230).
+--
+--   Those encoders exist only to build fixture bytes for the historical
+--   wire shapes, and they are handed a LIVE 'LocationInstance', which no
+--   longer records a margin at all. There is therefore nothing truthful
+--   to copy: zero is written as the honest "no margin recorded", and it
+--   is never read back — every @fromLocationInstanceDTOv{1,2,3}@ drops
+--   the field. A fixture that needs to prove a NONZERO historical margin
+--   survives its migration constructs the frozen DTO directly instead,
+--   which is exactly what the v6→v7 migration test does.
+historicalDiscoveryMargin ∷ Int
+historicalDiscoveryMargin = 0
 
 -- WorldGenParams ----------------------------------------------------
 
@@ -983,16 +1088,19 @@ fromRiverNamesDTOv1 = RiverNames . HM.map fromRiverNameDTOv1 . rvd1ById
 --   record is a frozen DTO (see this module's haddock); 'GeoTimeline'
 --   and the content-collection aliases are reused as leaves.
 --
---   This is the CURRENT shape, carried by @world-pages@ v6: #1102's
---   per-page river-name table beside the location instances, both now
---   carrying #1104's optional etymology source.
---   'WorldGenParamsDTOv4' below is the frozen shape @world-pages@ v5
+--   This is the CURRENT shape, carried by @world-pages@ v7: #1102's
+--   per-page river-name table beside the location instances, both
+--   carrying #1104's optional etymology source, over the #1230 instance
+--   shape that no longer stores a discovery margin.
+--   'WorldGenParamsDTOv5' below is the frozen shape @world-pages@ v6
+--   carries (the same tables, instances still carrying that margin),
+--   'WorldGenParamsDTOv4' the frozen shape v5
 --   carries (river names and instances, no etymology),
 --   'WorldGenParamsDTOv3' the frozen shape v4 carries (#1101's
 --   per-instance gloss, no river names), 'WorldGenParamsDTOv2' the
 --   frozen shape v2 and v3 carry (the #911 instance table, no gloss),
 --   and 'WorldGenParamsDTOv1' the frozen pre-#911 shape (three
---   chunk-keyed location sets); all four are decode-only.
+--   chunk-keyed location sets); all five are decode-only.
 data WorldGenParamsDTO = WorldGenParamsDTO
     { gpSeed                    ∷ !Word64
     , gpWorldSize               ∷ !Int
@@ -1077,6 +1185,108 @@ fromWorldGenParamsDTO d = withVolcanoCtx WorldGenParams
     , wgpLocationInstances       = fromLocationInstancesDTO (gpLocationInstances d)
     , wgpLocationStamped         = gpLocationStamped d
     , wgpRiverNames              = fromRiverNamesDTO (gpRiverNames d)
+    , wgpVolcanoCtx              = emptyVolcanoCtx
+    }
+
+-- Frozen pre-#1230 worldgen params (@world-pages@ v6) ----------------
+
+-- | The FROZEN pre-#1230 shape of 'WorldGenParamsDTO', preserved
+--   verbatim for decode-only backward compatibility: identical to the
+--   current type except that its location instances are the frozen
+--   'LocationInstancesDTOv3', whose per-instance shape still carries a
+--   @discovery_margin@. This is what @world-pages@ v6 (#1104) encoded.
+--   Never edited; a further gen-params change freezes the CURRENT type
+--   as a v6 instead (frozen-DTO boundary rule).
+data WorldGenParamsDTOv5 = WorldGenParamsDTOv5
+    { gp5Seed                    ∷ !Word64
+    , gp5WorldSize               ∷ !Int
+    , gp5PlateCount              ∷ !Int
+    , gp5Plates                  ∷ ![TectonicPlateDTO]
+    , gp5Calender                ∷ !CalendarConfigDTO
+    , gp5SunConfig               ∷ !SunConfigDTO
+    , gp5MoonConfig              ∷ !MoonConfigDTO
+    , gp5GeoTimeline             ∷ !GeoTimeline
+    , gp5OceanMap                ∷ !OceanMap
+    , gp5OceanDist               ∷ !OceanDistMap
+    , gp5ClimateParams           ∷ !ClimateParamsDTO
+    , gp5ClimateState            ∷ !ClimateStateDTO
+    , gp5ErosionIntensity        ∷ !Float
+    , gp5VolcanicActivity        ∷ !Float
+    , gp5LavaPoolDepth           ∷ !Int
+    , gp5LavaPoolRadius          ∷ !Int
+    , gp5WaterfallQuantum        ∷ !Int
+    , gp5OreLevers               ∷ !OreLeversDTO
+    , gp5TimelineParams          ∷ !TimelineParamsDTO
+    , gp5LocationOverlay         ∷ !LocationOverlay
+    , gp5LocationInstances       ∷ !LocationInstancesDTOv3
+    , gp5LocationStamped         ∷ !(HS.HashSet ChunkCoord)
+    , gp5RiverNames              ∷ !RiverNamesDTO
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | Encoder for the frozen v6 shape — the round-trip partner a
+--   frozen-DTO fixture is built with (the same reason
+--   'toWorldGenParamsDTOv4' exists). Every instance it writes carries
+--   'historicalDiscoveryMargin', since the live record it reads from no
+--   longer has one.
+toWorldGenParamsDTOv5 ∷ WorldGenParams → WorldGenParamsDTOv5
+toWorldGenParamsDTOv5 p = WorldGenParamsDTOv5
+    { gp5Seed                    = wgpSeed p
+    , gp5WorldSize               = wgpWorldSize p
+    , gp5PlateCount              = wgpPlateCount p
+    , gp5Plates                  = map toTectonicPlateDTO (wgpPlates p)
+    , gp5Calender                = toCalendarConfigDTO (wgpCalender p)
+    , gp5SunConfig               = toSunConfigDTO (wgpSunConfig p)
+    , gp5MoonConfig              = toMoonConfigDTO (wgpMoonConfig p)
+    , gp5GeoTimeline             = wgpGeoTimeline p
+    , gp5OceanMap                = wgpOceanMap p
+    , gp5OceanDist               = wgpOceanDist p
+    , gp5ClimateParams           = toClimateParamsDTO (wgpClimateParams p)
+    , gp5ClimateState            = toClimateStateDTO (wgpClimateState p)
+    , gp5ErosionIntensity        = wgpErosionIntensity p
+    , gp5VolcanicActivity        = wgpVolcanicActivity p
+    , gp5LavaPoolDepth           = wgpLavaPoolDepth p
+    , gp5LavaPoolRadius          = wgpLavaPoolRadius p
+    , gp5WaterfallQuantum        = wgpWaterfallQuantum p
+    , gp5OreLevers               = toOreLeversDTO (wgpOreLevers p)
+    , gp5TimelineParams          = toTimelineParamsDTO (wgpTimelineParams p)
+    , gp5LocationOverlay         = wgpLocationOverlay p
+    , gp5LocationInstances       = toLocationInstancesDTOv3 (wgpLocationInstances p)
+    , gp5LocationStamped         = wgpLocationStamped p
+    , gp5RiverNames              = toRiverNamesDTO (wgpRiverNames p)
+    }
+
+-- | Decode the frozen v6 shape. Everything rides across untouched
+--   except each location instance's stored discovery margin, which is
+--   dropped ('fromLocationInstanceDTOv3'): #1230 made reveal
+--   sight-based against the instance's own bounds, so the margin has no
+--   live counterpart to restore into. Names, glosses, etymology
+--   sources, lifecycles, content-spawn flags, river names, terrain and
+--   climate are all unchanged.
+fromWorldGenParamsDTOv5 ∷ WorldGenParamsDTOv5 → WorldGenParams
+fromWorldGenParamsDTOv5 d = withVolcanoCtx WorldGenParams
+    { wgpSeed                    = gp5Seed d
+    , wgpWorldSize               = gp5WorldSize d
+    , wgpPlateCount              = gp5PlateCount d
+    , wgpPlates                  = map fromTectonicPlateDTO (gp5Plates d)
+    , wgpCalender                = fromCalendarConfigDTO (gp5Calender d)
+    , wgpSunConfig               = fromSunConfigDTO (gp5SunConfig d)
+    , wgpMoonConfig              = fromMoonConfigDTO (gp5MoonConfig d)
+    , wgpGeoTimeline             = gp5GeoTimeline d
+    , wgpOceanMap                = gp5OceanMap d
+    , wgpOceanDist               = gp5OceanDist d
+    , wgpClimateParams           = fromClimateParamsDTO (gp5ClimateParams d)
+    , wgpClimateState            = fromClimateStateDTO (gp5ClimateState d)
+    , wgpErosionIntensity        = gp5ErosionIntensity d
+    , wgpVolcanicActivity        = gp5VolcanicActivity d
+    , wgpLavaPoolDepth           = gp5LavaPoolDepth d
+    , wgpLavaPoolRadius          = gp5LavaPoolRadius d
+    , wgpWaterfallQuantum        = gp5WaterfallQuantum d
+    , wgpOreLevers               = fromOreLeversDTO (gp5OreLevers d)
+    , wgpTimelineParams          = fromTimelineParamsDTO (gp5TimelineParams d)
+    , wgpLocationOverlay         = gp5LocationOverlay d
+    , wgpLocationInstances       = fromLocationInstancesDTOv3 (gp5LocationInstances d)
+    , wgpLocationStamped         = gp5LocationStamped d
+    , wgpRiverNames              = fromRiverNamesDTO (gp5RiverNames d)
     , wgpVolcanoCtx              = emptyVolcanoCtx
     }
 

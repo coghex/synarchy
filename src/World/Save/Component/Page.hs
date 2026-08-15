@@ -95,12 +95,15 @@ module World.Save.Component.Page
     , WorldPagesDTOv4(..)
     , PageCoreDTOv5(..)
     , WorldPagesDTOv5(..)
+    , PageCoreDTOv6(..)
+    , WorldPagesDTOv6(..)
     , WorldPages(..)
     , migrateWorldPagesV1
     , migrateWorldPagesV2
     , migrateWorldPagesV3
     , migrateWorldPagesV4
     , migrateWorldPagesV5
+    , migrateWorldPagesV6
     , PageEditsDTO(..)
     , WorldEditsDTO(..)
     , PageActivityDTO(..)
@@ -144,6 +147,9 @@ module World.Save.Component.Page
     , toWorldGenParamsDTOv3
     , fromWorldGenParamsDTOv4
     , toWorldGenParamsDTOv4
+    , WorldGenParamsDTOv5(..)
+    , fromWorldGenParamsDTOv5
+    , toWorldGenParamsDTOv5
     , toEtymologySourceDTO
     , fromEtymologySourceDTO
     , toItemInstanceDTO
@@ -178,6 +184,8 @@ import World.Save.Component.WorldGen
     , toWorldGenParamsDTOv3
     , WorldGenParamsDTOv4(..), fromWorldGenParamsDTOv4
     , toWorldGenParamsDTOv4
+    , WorldGenParamsDTOv5(..), fromWorldGenParamsDTOv5
+    , toWorldGenParamsDTOv5
     , EtymologySourceDTO(..)
     , toEtymologySourceDTO, fromEtymologySourceDTO
     , RiverNameDTO(..), RiverNamesDTO(..) )
@@ -623,8 +631,9 @@ fromEditsDTO = HM.map (map fromWorldEditDTO)
 
 -- | One page's identity / clock / camera core. All evolving records are
 --   frozen DTOs; 'ZoomMapMode' is a payload-free append-only leaf enum.
---   This is the CURRENT (v6) wire shape — see 'PageCoreDTOv5' for the
---   frozen pre-#1104 one, 'PageCoreDTOv4' for the pre-#1102 one,
+--   This is the CURRENT (v7) wire shape — see 'PageCoreDTOv6' for the
+--   frozen pre-#1230 one, 'PageCoreDTOv5' for the
+--   pre-#1104 one, 'PageCoreDTOv4' for the pre-#1102 one,
 --   'PageCoreDTOv3' for the pre-#1101 one, 'PageCoreDTOv2' for the
 --   pre-#1092 one, and 'PageCoreDTOv1' for the pre-#911 one.
 data PageCoreDTO = PageCoreDTO
@@ -767,6 +776,32 @@ newtype WorldPagesDTOv5 = WorldPagesDTOv5 { wpd5Pages ∷ [PageCoreDTOv5] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
+-- | The FROZEN v6 wire shape (#1104 through #1230), preserved verbatim
+--   for decode-only backward compatibility: #1104's identity (carrying
+--   its own etymology source) over #1104's gen params, whose location
+--   instances still carry the @discovery_margin@ #1230 removed. Never edited; a further schema
+--   change adds a newer type instead (frozen-DTO boundary rule).
+data PageCoreDTOv6 = PageCoreDTOv6
+    { pc6PageId      ∷ !WorldPageId
+    , pc6GenParams   ∷ !WorldGenParamsDTOv5
+    , pc6CameraX     ∷ !Float
+    , pc6CameraY     ∷ !Float
+    , pc6TimeHour    ∷ !Int
+    , pc6TimeMinute  ∷ !Int
+    , pc6DateYear    ∷ !Int
+    , pc6DateMonth   ∷ !Int
+    , pc6DateDay     ∷ !Int
+    , pc6MapMode     ∷ !ZoomMapMode
+    , pc6Identity    ∷ !(Maybe WorldIdentityDTO)
+      -- ^ the CURRENT identity shape, not 'WorldIdentityDTOv2': #1104
+      --   put an etymology source on the page identity in v6 and #1230
+      --   changed nothing about it.
+    } deriving (Show, Generic, Serialize)
+
+newtype WorldPagesDTOv6 = WorldPagesDTOv6 { wpd6Pages ∷ [PageCoreDTOv6] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
 -- | The canonical decoded value of the @world-pages@ component, kept
 --   separate from either wire DTO ("World.Save.Component.Types": the
 --   canonical type a codec decodes INTO is the migration target). It is
@@ -779,8 +814,9 @@ data WorldPages = WorldPages
     , wpBase    ∷ !(HM.HashMap WorldPageId PageSnapshot)
     } deriving (Show)
 
--- | Encoding always writes the current v6 shape; v5 payloads decode
---   through their own frozen DTO via 'migrateWorldPagesV5' (#1104), v4
+-- | Encoding always writes the current v7 shape; v6 payloads decode
+--   through their own frozen DTO via 'migrateWorldPagesV6' (#1230), v5
+--   via 'migrateWorldPagesV5' (#1104), v4
 --   via 'migrateWorldPagesV4' (#1102), v3 via 'migrateWorldPagesV3'
 --   (#1101), v2 via 'migrateWorldPagesV2'
 --   (#1092), and v1 via 'migrateWorldPagesV1' (#911). Issue #1093: this
@@ -790,13 +826,14 @@ data WorldPages = WorldPages
 worldPagesCodec ∷ ComponentCodec WorldPages
 worldPagesCodec = componentCodec ComponentSpec
     { csComponent     = worldPagesComponentId
-    , csVersion       = 6
+    , csVersion       = 7
     , csRequired      = True
     , csDeps          = []
     , csEncode        = \snap →
         WorldPagesDTO (map toPageCore (orderedPages snap))
     , csDecode        = basePageSnapshots
-    , csOlderVersions = [ atVersion 5 migrateWorldPagesV5
+    , csOlderVersions = [ atVersion 6 migrateWorldPagesV6
+                        , atVersion 5 migrateWorldPagesV5
                         , atVersion 4 migrateWorldPagesV4
                         , atVersion 3 migrateWorldPagesV3
                         , atVersion 2 migrateWorldPagesV2
@@ -838,9 +875,9 @@ validatePages wp
           , msg ← locationInstanceAllocatorErrors
                       (wgpLocationInstances (pgsGenParams p))
           ]
-  where err = ComponentError worldPagesComponentId 6 ValidatePhase
+  where err = ComponentError worldPagesComponentId 7 ValidatePhase
 
--- | Turn the decoded v6 page cores into the base 'PageSnapshot' map every
+-- | Turn the decoded v7 page cores into the base 'PageSnapshot' map every
 --   other page-scoped component then writes onto (assembly). All entity/
 --   activity/edit fields start empty and are overwritten by their own
 --   REQUIRED components; a valid save leaves none of these placeholders.
@@ -861,6 +898,37 @@ basePageSnapshots (WorldPagesDTO ps) = WorldPages
         , pgsDateDay    = pcDateDay p
         , pgsMapMode    = pcMapMode p
         , pgsIdentity   = fromWorldIdentityDTO <$> pcIdentity p
+        }
+
+-- | The v6 migration (#1230): decode the frozen v6 page cores into the
+--   same base 'PageSnapshot' map. The ONLY difference is each location
+--   instance's stored @discovery_margin@, which is DROPPED — the live
+--   'Location.Instance.LocationInstance' has no such field any more,
+--   because reveal became sight-based against the instance's own
+--   bounds. Everything else about every instance rides across
+--   untouched: its allocator, id, definition id, chunk, anchor, bounds,
+--   display name, gloss, etymology source, lifecycle and
+--   contents-spawned flag — as do the page's own identity, river names,
+--   clocks, camera and map mode. A ruin a pre-#1230 save had already
+--   discovered therefore stays discovered, and one it had not is
+--   rediscovered by sight rather than by walking into a halo.
+migrateWorldPagesV6 ∷ WorldPagesDTOv6 → WorldPages
+migrateWorldPagesV6 (WorldPagesDTOv6 ps) = WorldPages
+    { wpPageIds = map pc6PageId ps
+    , wpBase    = HM.fromList [ (pc6PageId p, toBase p) | p ← ps ]
+    }
+  where
+    toBase p = (blankPageSnapshot (pc6PageId p)
+                    (fromWorldGenParamsDTOv5 (pc6GenParams p)))
+        { pgsCameraX    = pc6CameraX p
+        , pgsCameraY    = pc6CameraY p
+        , pgsTimeHour   = pc6TimeHour p
+        , pgsTimeMinute = pc6TimeMinute p
+        , pgsDateYear   = pc6DateYear p
+        , pgsDateMonth  = pc6DateMonth p
+        , pgsDateDay    = pc6DateDay p
+        , pgsMapMode    = pc6MapMode p
+        , pgsIdentity   = fromWorldIdentityDTO <$> pc6Identity p
         }
 
 -- | The v5 migration (#1104): decode the frozen v5 page cores into the

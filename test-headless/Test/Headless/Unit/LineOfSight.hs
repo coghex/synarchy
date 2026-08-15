@@ -23,7 +23,8 @@ import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.State (EngineEnv(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
-import Unit.LineOfSight (unitVisibleTiles, unitAwareness, nightPerceptionFactor)
+import Unit.LineOfSight
+    (unitVisibleTiles, visibleTilesOnPage, unitAwareness, nightPerceptionFactor)
 import Unit.Types
 import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), chunkSize)
 import World.Tile.Types (WorldTileData(..))
@@ -84,7 +85,8 @@ testUnit page gx gy gz facing = UnitInstance
     , uiRealZ = fromIntegral gz, uiFacing = facing
     , uiCurrentAnim = "", uiAnimStart = 0, uiAnimReverse = False
     , uiActivity = "idle", uiPose = "standing", uiAnimStride = 1
-    , uiStats = HM.empty, uiModifiers = HM.empty, uiSkills = HM.empty
+    , uiStats = HM.singleton "perception" testPerception
+    , uiModifiers = HM.empty, uiSkills = HM.empty
     , uiKnowledge = HM.empty, uiInventory = [], uiEquipment = HM.empty
     , uiAccessories = [], uiFactionId = FactionPlayer, uiWounds = []
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
@@ -93,6 +95,19 @@ testUnit page gx gy gz facing = UnitInstance
     , uiClimbDest = Nothing
     , uiTrailState = Nothing
     }
+
+-- | Perception carried by every unit below. Deliberately ABOVE the
+--   1.0 default: since #1230 the visible-tile radius is scaled by the
+--   page-local night factor, and page B's fixture clock is midnight
+--   (factor 0.5). At the default perception that alone would shrink
+--   pageB's radius past the wall these #797 specs exist to test,
+--   letting them pass for the wrong reason. At 3.0 the (5,8)→(11,8)
+--   sightline is inside the radius on BOTH pages, so terrain — the
+--   thing #797 is about — stays the only variable between them.
+--   'nightRadiusSpec' below covers the radius itself, on its own
+--   fixture.
+testPerception ∷ Float
+testPerception = 3.0
 
 pageA, pageB, pageGone ∷ WorldPageId
 pageA    = WorldPageId "los_test_a"
@@ -230,6 +245,111 @@ spec = beforeAll initEnv $ do
             closeTo 1e-4 awA expectA `shouldBe` True
             closeTo 1e-4 awB expectB `shouldBe` True
             awA `shouldNotBe` awB
+
+    describe "night-scaled sight radius (#1230)" $ do
+        -- One page, one unit, one facing, one terrain: the ONLY thing
+        -- that differs between the two reads is the page clock. Both
+        -- pages are worldSize 256 and the unit sits on the u = 0
+        -- meridian (gx ≡ gy), so its longitude-local sun angle IS the
+        -- global one — noon reads factor 1.0 and midnight the
+        -- 'nightPerceptionFloor' 0.5 exactly, with no longitude term
+        -- muddying which radius is under test.
+        let dayPage   = WorldPageId "los_day"
+            nightPage = WorldPageId "los_night"
+            clockPages ∷ IO WorldManager
+            clockPages = do
+                wsDay ← emptyWorldState
+                writeIORef (wsTilesRef wsDay) (wtdWith (flatChunk 5))
+                writeIORef (wsTimeRef wsDay) (WorldTime 12 0)
+                writeIORef (wsGenParamsRef wsDay)
+                    (Just defaultWorldGenParams { wgpWorldSize = 256 })
+                wsNight ← emptyWorldState
+                writeIORef (wsTilesRef wsNight) (wtdWith (flatChunk 5))
+                writeIORef (wsTimeRef wsNight) (WorldTime 0 0)
+                writeIORef (wsGenParamsRef wsNight)
+                    (Just defaultWorldGenParams { wgpWorldSize = 256 })
+                pure (WorldManager [(dayPage, wsDay), (nightPage, wsNight)]
+                                   [dayPage, nightPage])
+            -- Facing east from (8,8) with perception 1.0: radius 6 by
+            -- day, 3 at midnight. (13,8) is 5 tiles east — inside the
+            -- daytime radius, outside the night one, and inside the
+            -- facing cone either way.
+            plainUnit page = (testUnit page 8 8 5 DirE)
+                { uiStats = HM.singleton "perception" 1.0 }
+
+        it "a tile visible under the daytime condition is NOT visible \
+           \under the otherwise-identical nighttime one" $ \env → do
+            wm ← clockPages
+            writeIORef (worldManagerRef env) wm
+            putUnits env [(UnitId 1, plainUnit dayPage)]
+            dayTiles ← unitVisibleTiles env (UnitId 1)
+            putUnits env [(UnitId 1, plainUnit nightPage)]
+            nightTiles ← unitVisibleTiles env (UnitId 1)
+            dayTiles `shouldSatisfy` elem (13, 8)
+            nightTiles `shouldNotSatisfy` elem (13, 8)
+
+        it "the night set is a strict SUBSET of the day set — the factor \
+           \shrinks the radius, it never moves or reshapes the cone" $ \env → do
+            wm ← clockPages
+            writeIORef (worldManagerRef env) wm
+            putUnits env [(UnitId 1, plainUnit dayPage)]
+            dayTiles ← unitVisibleTiles env (UnitId 1)
+            putUnits env [(UnitId 1, plainUnit nightPage)]
+            nightTiles ← unitVisibleTiles env (UnitId 1)
+            nightTiles `shouldSatisfy` all (`elem` dayTiles)
+            length nightTiles `shouldSatisfy` (< length dayTiles)
+
+        it "a unit is never stone-blind at midnight: its own tile stays \
+           \visible however far the factor scales the radius down" $ \env → do
+            wm ← clockPages
+            writeIORef (worldManagerRef env) wm
+            putUnits env [(UnitId 1, plainUnit nightPage)]
+            tiles ← unitVisibleTiles env (UnitId 1)
+            tiles `shouldSatisfy` elem (8, 8)
+
+        it "perception still widens the radius at night — the factor \
+           \scales the perception range rather than replacing it" $ \env → do
+            wm ← clockPages
+            writeIORef (worldManagerRef env) wm
+            putUnits env [(UnitId 1, plainUnit nightPage)]
+            weak ← unitVisibleTiles env (UnitId 1)
+            putUnits env [(UnitId 1, testUnit nightPage 8 8 5 DirE)]
+            keen ← unitVisibleTiles env (UnitId 1)   -- testPerception 3.0
+            length keen `shouldSatisfy` (> length weak)
+            keen `shouldSatisfy` elem (13, 8)
+
+    describe "visibleTilesOnPage: the shared page-resolved core (#1230)" $ do
+        it "answers on a LOADED BUT HIDDEN page, where the public query \
+           \must stay empty — the split that lets location reveal keep \
+           \working on a hidden page without weakening #797's contract" $ \env → do
+            -- pageB is in wmWorlds but NOT in wmVisible.
+            wm ← setupPages [pageA]
+            writeIORef (worldManagerRef env) wm
+            let hidden = testUnit pageB 5 8 5 DirE
+            putUnits env [(UnitId 1, hidden)]
+            public ← unitVisibleTiles env (UnitId 1)
+            public `shouldBe` []
+            case lookup pageB (wmWorlds wm) of
+                Nothing → expectationFailure "pageB should still be in wmWorlds"
+                Just ws → do
+                    core ← visibleTilesOnPage ws hidden
+                    core `shouldSatisfy` elem (5, 8)
+                    -- …and it reads THAT page's own wall, not pageA's
+                    -- open terrain: the hidden page keeps its geometry.
+                    core `shouldNotSatisfy` elem (11, 8)
+
+        it "is exactly what the public query returns for a VISIBLE page — \
+           \one calculation, two entry points" $ \env → do
+            wm ← setupPages [pageA, pageB]
+            writeIORef (worldManagerRef env) wm
+            let unit = testUnit pageA 5 8 5 DirE
+            putUnits env [(UnitId 1, unit)]
+            public ← unitVisibleTiles env (UnitId 1)
+            case lookup pageA (wmWorlds wm) of
+                Nothing → expectationFailure "pageA should be in wmWorlds"
+                Just ws → do
+                    core ← visibleTilesOnPage ws unit
+                    core `shouldMatchList` public
 
     describe "cross-page and missing-page safety (#797)" $ do
         it "a defender and attacker on different pages get zero awareness" $ \env → do

@@ -122,10 +122,13 @@ data LocationYamlDef = LocationYamlDef
     , lydMinSpacing ∷ !Int   -- ^ min chunk separation (#89); default 4
     , lydContents   ∷ ![LocationYamlContent]
     , lydBounds     ∷ !LocationYamlBounds
-    , lydDiscoveryMargin ∷ !Int
-    , lydMapIcons   ∷ !(Maybe (Text, Text))
-                      -- ^ (undiscovered, discovered) zoom-map annotation
-                      --   texture paths (#781); 'Nothing' = no annotation.
+    , lydMapIcon    ∷ !(Maybe Text)
+                      -- ^ the zoom-map annotation texture path for this
+                      --   location's TYPE (#781; singular @map_icon@
+                      --   since #1230). 'Nothing' = no annotation. The
+                      --   shared unknown marker is NOT declared here —
+                      --   it belongs to no location type
+                      --   ('Location.Types.locationUnknownIconPath').
     , lydNaming     ∷ !LocationYamlNaming
                       -- ^ required concept pools for generated instance
                       --   names (#1101).
@@ -147,41 +150,36 @@ requireField lid fieldName v = do
                 <> fieldName <> "' field (" <> T.pack err <> ")"))
             Right a  → pure a
 
--- | Parse the optional @map_icons: { undiscovered, discovered }@ block
---   (#781). Absent entirely → 'Nothing' (this location places no zoom-map
---   annotation). Present → BOTH sub-fields are required; a missing or
---   wrong-shaped sub-field, or a @map_icons@ value that isn't an object
---   at all, fails with a message naming the location and the offending
---   field — the same location-id-attributed contract 'requireField'
---   already gives 'bounds' / 'discovery_margin'.
-parseMapIcons ∷ Text → Object → Parser (Maybe (Text, Text))
-parseMapIcons lid v = do
-    mRaw ← v .:? "map_icons"
+-- | Parse the optional @map_icon: \<path\>@ field (#781, singular since
+--   #1230). Absent entirely → 'Nothing' (this location places no
+--   zoom-map annotation). Present → it must be a string path; anything
+--   else (the old @map_icons@ object, a number, a list) fails with a
+--   message naming the location and the offending field — the same
+--   location-id-attributed contract 'requireField' already gives
+--   'bounds'.
+parseMapIcon ∷ Text → Object → Parser (Maybe Text)
+parseMapIcon lid v = do
+    mRaw ← v .:? "map_icon"
     case mRaw of
         Nothing → pure Nothing
         Just raw → case raw of
-            Object iconsObj → do
-                undisc ← requireField lid "undiscovered" iconsObj
-                disc   ← requireField lid "discovered" iconsObj
-                pure (Just (undisc, disc))
+            String path → pure (Just path)
             _ → fail (T.unpack ("location '" <> lid
-                <> "': 'map_icons' must be an object with 'undiscovered' "
-                <> "and 'discovered' fields"))
+                <> "': 'map_icon' must be a texture path string"))
 
 instance FromJSON LocationYamlDef where
     parseJSON = withObject "LocationYamlDef" $ \v → do
         lid      ← v .: "id"
         bounds   ← requireField lid "bounds" v
-        margin   ← requireField lid "discovery_margin" v
-        mapIcons ← parseMapIcons lid v
+        mapIcon  ← parseMapIcon lid v
         naming   ← requireField lid "naming" v
         contents ← v .:? "contents" .!= []
         anchor   ← v .:? "anchor" .!= []
-        -- Reject inverted bounds / a negative margin / an out-of-bounds
-        -- fixed content position HERE, at the only entry point for this
-        -- def's spatial contract, so a bad YAML fails the whole file's
-        -- load with a message naming the def and the offending field
-        -- rather than silently substituting geometry downstream (#777).
+        -- Reject inverted bounds / an out-of-bounds fixed content
+        -- position HERE, at the only entry point for this def's spatial
+        -- contract, so a bad YAML fails the whole file's load with a
+        -- message naming the def and the offending field rather than
+        -- silently substituting geometry downstream (#777).
         when (lybMinX bounds > lybMaxX bounds) $
             fail (T.unpack ("location '" <> lid <> "': bounds.min_x ("
                 <> T.pack (show (lybMinX bounds)) <> ") > bounds.max_x ("
@@ -190,10 +188,6 @@ instance FromJSON LocationYamlDef where
             fail (T.unpack ("location '" <> lid <> "': bounds.min_y ("
                 <> T.pack (show (lybMinY bounds)) <> ") > bounds.max_y ("
                 <> T.pack (show (lybMaxY bounds)) <> ")"))
-        when (margin < 0) $
-            fail (T.unpack ("location '" <> lid
-                <> "': discovery_margin must be non-negative, got "
-                <> T.pack (show margin)))
         forM_ contents $ \c → forM_ (lycPosition c) $ \p →
             unless (relBoundsContains bounds (lypX p) (lypY p)) $
                 fail (T.unpack ("location '" <> lid <> "': content '"
@@ -225,8 +219,7 @@ instance FromJSON LocationYamlDef where
             ⊛ v .:? "min_spacing" .!= 4
             ⊛ pure contents
             ⊛ pure bounds
-            ⊛ pure margin
-            ⊛ pure mapIcons
+            ⊛ pure mapIcon
             ⊛ pure naming
 
 newtype LocationYamlFile = LocationYamlFile

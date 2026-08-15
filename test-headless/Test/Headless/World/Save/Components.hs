@@ -863,7 +863,7 @@ spec = do
         it "declares a stable id and current version of 1" $ do
             ccId coreSessionCodec `shouldBe` coreSessionComponentId
             ccVersion coreSessionCodec `shouldBe` 1
-            ccVersion worldPagesCodec `shouldBe` 6
+            ccVersion worldPagesCodec `shouldBe` 7
 
         it "rejects a NEWER unsupported version, naming the phase" $
             case ccDecode worldPagesCodec 999 (ccEncode worldPagesCodec richSnapshot) of
@@ -1076,13 +1076,13 @@ spec = do
                     DecodePhase
                     "unsupported schema version (reader supports v1, v2)")
 
-        it "reports an unsupported version identically for a SIX-version \
+        it "reports an unsupported version identically for a SEVEN-version \
            \reader" $
-            decodeErrorOf worldPagesCodec 7 BS.empty
-                `shouldBe` Just (ComponentError worldPagesComponentId 7
+            decodeErrorOf worldPagesCodec 8 BS.empty
+                `shouldBe` Just (ComponentError worldPagesComponentId 8
                     DecodePhase
                     "unsupported schema version \
-                    \(reader supports v1, v2, v3, v4, v5, v6)")
+                    \(reader supports v1, v2, v3, v4, v5, v6, v7)")
 
         it "reports a malformed payload identically -- same component, \
            \supplied version, DecodePhase, and cereal-derived message -- at \

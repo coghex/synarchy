@@ -1,12 +1,13 @@
 {-# LANGUAGE Strict #-}
 -- | Per-unit line-of-sight. A unit's visible tile set is the
 -- intersection of:
---   * a circular radius (perception × 'awareRangeTiles' tiles),
+--   * a circular radius (perception × 'awareRangeTiles' tiles, scaled
+--     by the page-local 'nightPerceptionFactor' — #1230),
 --   * a 120° cone centered on the unit's facing direction,
 --   * line-of-sight against terrain Z (a hill in the way blocks vision).
 --
--- Used by the AI to discover water sources, locate allies, and (in the
--- future) drive fog of war.
+-- Used by the AI to discover water sources, to reveal placed locations
+-- (#1230), and (in the future) to drive fog of war.
 --
 -- Every query below resolves terrain/clock/world-size against the
 -- OWNING unit's own world page ('Unit.Types.uiPage'), never
@@ -18,8 +19,19 @@
 -- be resolved — missing, destroyed, not visible, or simply different
 -- pages — gets a safe empty\/zero result rather than silently falling
 -- back to an unrelated page.
+--
+-- #1230 split that resolution in two so location reveal and the public
+-- query can share ONE sight definition without sharing one visibility
+-- policy: 'visibleTilesOnPage' is the whole calculation over an
+-- ALREADY-RESOLVED page, and 'unitVisibleTiles' is the public wrapper
+-- that resolves the unit's page and keeps its 'wmVisible' gate. A
+-- caller that already holds the unit's own 'WorldState' (the
+-- per-loaded-page discovery tick, the per-loaded-page awareness query)
+-- calls the core directly and therefore keeps working on a page that is
+-- loaded but hidden.
 module Unit.LineOfSight
     ( unitVisibleTiles
+    , visibleTilesOnPage
     , unitAwareness
     , nightPerceptionFactor
     ) where
@@ -44,6 +56,13 @@ import World.Time.Local (localSunAngle)
 -- | All tiles the unit can currently see. Empty list if the unit
 --   doesn't exist or its own page isn't loaded/visible. Includes the
 --   unit's own tile (always visible).
+--
+--   The 'wmVisible' gate is this PUBLIC query's own contract (#797) and
+--   is deliberately preserved (#1230 requirement 6): a unit on a page
+--   the player has hidden reports no vision here. Location reveal needs
+--   the same sight on a loaded-but-hidden page, so it calls
+--   'visibleTilesOnPage' with that page's own 'WorldState' instead —
+--   the same calculation, without this wrapper's visibility policy.
 unitVisibleTiles ∷ EngineEnv → UnitId → IO [(Int, Int)]
 unitVisibleTiles env uid = do
     um ← readIORef (unitManagerRef env)
@@ -54,36 +73,60 @@ unitVisibleTiles env uid = do
             if uiPage inst `notElem` wmVisible wm then return []
             else case lookup (uiPage inst) (wmWorlds wm) of
                 Nothing → return []
-                Just ws → do
-                    wtd ← readIORef (wsTilesRef ws)
-                    let perception = HM.lookupDefault 1.0 "perception"
-                                        (uiStats inst)
-                        radius = max 1 (floor (realToFrac perception
-                                               * awareRangeTiles) ∷ Int)
-                        ux = floor (uiGridX inst) ∷ Int
-                        uy = floor (uiGridY inst) ∷ Int
-                        uz = uiGridZ inst
-                        -- Eye Z is one tile above the unit's footing.
-                        eyeZ = fromIntegral (uz + 1) ∷ Double
-                        (fx, fy) = facingVector (uiFacing inst)
+                Just ws → visibleTilesOnPage ws inst
 
-                        inFOV (dx, dy)
-                          | dx ≡ 0 ∧ dy ≡ 0 = True   -- own tile
-                          | otherwise =
-                              let dd = dx * dx + dy * dy
-                              in dd ≤ radius * radius
-                                 ∧ inCone fx fy dx dy
+-- | THE sight calculation (#1230 requirement 5) — every tile @inst@ can
+--   see, given the 'WorldState' of the page it is standing on. Both the
+--   public 'unitVisibleTiles' query (and therefore Lua's
+--   @unit.getVisibleTiles@) and location reveal / per-unit location
+--   knowledge run through this one function, so they can never disagree
+--   about radius, night, cone, or occlusion.
+--
+--   Terrain, clock and world size all come from the PASSED page's own
+--   refs — never 'activeWorldSizeChunks', whose @wmVisible@ fallback
+--   would compute a hidden page's 'localSunAngle' (and therefore its
+--   night radius) from the world-default 128-chunk circumference
+--   instead of that page's real one.
+--
+--   The radius is the perception range scaled by the page-local
+--   'nightPerceptionFactor' (#1230 requirement 4): a tile that is
+--   visible under an otherwise-identical daytime condition can be
+--   beyond the night-scaled radius and therefore invisible. The
+--   @max 1@ floor is unchanged, so a unit is never stone-blind — its
+--   own tile and immediate ring stay visible at midnight.
+visibleTilesOnPage ∷ WorldState → UnitInstance → IO [(Int, Int)]
+visibleTilesOnPage ws inst = do
+    wtd     ← readIORef (wsTilesRef ws)
+    wt      ← readIORef (wsTimeRef ws)
+    mParams ← readIORef (wsGenParamsRef ws)
+    let worldSize = maybe fallbackWorldSizeChunks wgpWorldSize mParams
+        ux = floor (uiGridX inst) ∷ Int
+        uy = floor (uiGridY inst) ∷ Int
+        uz = uiGridZ inst
+        -- Eye Z is one tile above the unit's footing.
+        eyeZ = fromIntegral (uz + 1) ∷ Double
+        (fx, fy) = facingVector (uiFacing inst)
+        perception = HM.lookupDefault 1.0 "perception" (uiStats inst)
+        night = nightPerceptionFactor
+                    (localSunAngle worldSize ux uy (worldTimeToSunAngle wt))
+        radius = max 1 (floor (realToFrac perception * awareRangeTiles
+                               * realToFrac night) ∷ Int)
 
-                        visible =
-                            [ (ux + dx, uy + dy)
-                            | dx ← [-radius .. radius]
-                            , dy ← [-radius .. radius]
-                            , inFOV (dx, dy)
-                            , (dx ≡ 0 ∧ dy ≡ 0)
-                              ∨ notBlocked wtd ux uy eyeZ
-                                          (ux + dx) (uy + dy)
-                            ]
-                    return visible
+        inFOV (dx, dy)
+          | dx ≡ 0 ∧ dy ≡ 0 = True   -- own tile
+          | otherwise =
+              let dd = dx * dx + dy * dy
+              in dd ≤ radius * radius ∧ inCone fx fy dx dy
+
+        visible =
+            [ (ux + dx, uy + dy)
+            | dx ← [-radius .. radius]
+            , dy ← [-radius .. radius]
+            , inFOV (dx, dy)
+            , (dx ≡ 0 ∧ dy ≡ 0)
+              ∨ notBlocked wtd ux uy eyeZ (ux + dx) (uy + dy)
+            ]
+    return visible
 
 -- | How aware is @defender@ of @attacker@ right now (0..1)? Used by
 --   combat to gate the active DODGE — you can't slip a blow you never
@@ -146,22 +189,36 @@ unitAwareness env defender attacker
                         else 0.0
 
 -- | The given page's size (in chunks), for 'localSunAngle'. Falls back
---   to 128 (the same default 'World.Render.Quads' uses when gen params
---   aren't loaded yet) rather than failing — a defender's local time of
---   day just degrades to the world-default circumference in that window.
+--   to 'fallbackWorldSizeChunks' rather than failing — a defender's
+--   local time of day just degrades to the world-default circumference
+--   in that window.
+--
+--   Only 'unitAwareness' uses this, and only AFTER its own 'wmVisible'
+--   check has already passed, so the fallback below is reachable here
+--   solely for a page with no live gen params. 'visibleTilesOnPage'
+--   deliberately does NOT route through it: it is handed the page's own
+--   'WorldState' precisely so a hidden page reports its real size.
 activeWorldSizeChunks ∷ EngineEnv → WorldPageId → IO Int
 activeWorldSizeChunks env pageId = do
     wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
-    if pageId `notElem` wmVisible wm then pure 128
+    if pageId `notElem` wmVisible wm then pure fallbackWorldSizeChunks
     else case lookup pageId (wmWorlds wm) of
-        Nothing → pure 128
+        Nothing → pure fallbackWorldSizeChunks
         Just ws → do
             mParams ← readIORef (wsGenParamsRef ws)
-            pure (maybe 128 wgpWorldSize mParams)
+            pure (maybe fallbackWorldSizeChunks wgpWorldSize mParams)
 
--- | Multiplier on awareness from time of day: 1.0 at noon, dipping to
+-- | World size (chunks) assumed when a page's gen params aren't live
+--   yet — the same default 'World.Render.Quads' uses in that window.
+fallbackWorldSizeChunks ∷ Int
+fallbackWorldSizeChunks = 128
+
+-- | Multiplier on perception from time of day: 1.0 at noon, dipping to
 --   'nightPerceptionFloor' at midnight, ramping smoothly through
---   dawn/dusk. A cosine keyed to 'sunAngle' peaking at 0.5 (noon) and
+--   dawn/dusk. Applied by 'unitAwareness' to its scalar 0..1 result and
+--   (since #1230) by 'visibleTilesOnPage' to its binary radius — each
+--   exactly ONCE, on independent quantities: the two paths never
+--   compose, so nothing applies it twice. A cosine keyed to 'sunAngle' peaking at 0.5 (noon) and
 --   troughing at 0.0\/1.0 (midnight) — the mapping 'WorldTime' documents
 --   (@World.Time.Types@) — rather than reusing 'computeAmbientLight'
 --   (@Engine.Loop.Frame@), whose own phase is tuned for the lighting

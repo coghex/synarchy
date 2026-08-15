@@ -1,7 +1,7 @@
 -- | "Location spatial bounds" (#777): the authoritative footprint every
 --   location definition declares — YAML parsing/rejection, the pure
---   translate/contain/intersect/expand/distance operations later
---   location work (#778/#779/#780) shares, cylindrical-seam behavior,
+--   translate/contain/intersect/distance operations later
+--   location work (#778/#779/#780/#1230) shares, cylindrical-seam behavior,
 --   and the shipped ruin_small's exact 5x5 contract.
 module Test.Headless.Location.Bounds
     ( spec
@@ -46,20 +46,20 @@ spec = describe "Location spatial bounds" $ do
 
         it "rejects a definition missing bounds entirely, naming the location" $
             decodeDef
-                "{ id: t, builder: b, discovery_margin: 6,\
+                "{ id: t, builder: b,\
                 \  naming: { heads: [KEEP], modifiers: [ASH] } }"
                 `shouldSatisfy` rejectedNaming "t"
 
         it "rejects a definition missing the naming block entirely (#1101), \
            \naming the location" $
             decodeDef
-                "{ id: t, builder: b, discovery_margin: 6,\
+                "{ id: t, builder: b,\
                 \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 } }"
                 `shouldSatisfy` rejectedNaming "t"
 
         it "rejects a naming block missing one of its two pools (#1101)" $
             decodeDef
-                "{ id: t, builder: b, discovery_margin: 6,\
+                "{ id: t, builder: b,\
                 \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
                 \  naming: { heads: [KEEP] } }"
                 `shouldSatisfy` rejectedNaming "t"
@@ -68,56 +68,63 @@ spec = describe "Location spatial bounds" $ do
            \authored data silently meaning 'fall back to the label', which \
            \is what an absent language means and must not be forgeable" $ do
             decodeDef
-                "{ id: t, builder: b, discovery_margin: 6,\
+                "{ id: t, builder: b,\
                 \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
                 \  naming: { heads: [], modifiers: [ASH] } }"
                 `shouldSatisfy` rejectedNaming "t"
             decodeDef
-                "{ id: t, builder: b, discovery_margin: 6,\
+                "{ id: t, builder: b,\
                 \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
                 \  naming: { heads: [KEEP], modifiers: [] } }"
                 `shouldSatisfy` rejectedNaming "t"
 
-        it "rejects a definition missing discovery_margin, naming the location" $
+        it "no longer requires discovery_margin (#1230) — a definition \
+           \declaring only bounds and naming is complete" $
+            -- The inversion of the removed "rejects a definition missing
+            -- discovery_margin" case: what used to be a required field
+            -- is now absent from the contract entirely, and an authored
+            -- file that omits it must load rather than fail.
             decodeDef
                 "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
                 \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 } }"
-                `shouldSatisfy` rejectedNaming "t"
+                `shouldSatisfy` isRight'
+
+        it "IGNORES a leftover discovery_margin (#1230) rather than \
+           \rejecting the file — an unmigrated authored def still loads" $
+            decodeDef
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                \  discovery_margin: 6,\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 } }"
+                `shouldSatisfy` isRight'
 
         it "rejects a malformed bounds block, naming the location" $
             decodeDef
-                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
                 \  bounds: { min_x: nope, min_y: -2, max_x: 2, max_y: 2 } }"
                 `shouldSatisfy` rejectedNaming "t"
 
         it "rejects inverted bounds (min_x > max_x), naming the location" $
             decodeDef
-                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
                 \  bounds: { min_x: 5, min_y: -2, max_x: 2, max_y: 2 } }"
                 `shouldSatisfy` rejectedNaming "t"
 
         it "rejects inverted bounds (min_y > max_y), naming the location" $
             decodeDef
-                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
                 \  bounds: { min_x: -2, min_y: 5, max_x: 2, max_y: 2 } }"
-                `shouldSatisfy` rejectedNaming "t"
-
-        it "rejects a negative discovery margin, naming the location" $
-            decodeDef
-                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: -1,\
-                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 } }"
                 `shouldSatisfy` rejectedNaming "t"
 
         it "rejects a fixed content position outside the declared bounds, naming the location" $
             decodeDef
-                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
                 \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
                 \  contents: [ { kind: item, id: x, position: {x: 5, y: 0} } ] }"
                 `shouldSatisfy` rejectedNaming "t"
 
         it "accepts a fixed content position on the bounds edge (inclusive)" $
             decodeDef
-                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
                 \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
                 \  contents: [ { kind: item, id: x, position: {x: 2, y: -2} } ] }"
                 `shouldSatisfy` isRight'
@@ -129,7 +136,6 @@ spec = describe "Location spatial bounds" $ do
                 Right lf → case lyfLocations lf of
                     [def] → do
                         lydBounds def `shouldBe` LocationYamlBounds (-2) (-2) 2 2
-                        lydDiscoveryMargin def `shouldBe` 6
                     defs → expectationFailure
                         ("expected exactly one location def, got "
                             <> show (length defs))
@@ -165,12 +171,6 @@ spec = describe "Location spatial bounds" $ do
         it "false for boxes separated by a gap" $
             boundsIntersect 0 (AbsBounds 0 0 4 4) (AbsBounds 6 0 10 4)
                 `shouldBe` False
-
-    describe "expandBounds" $ do
-        it "grows the box outward on all four sides by the margin" $
-            expandBounds 3 (AbsBounds 0 0 4 4) `shouldBe` AbsBounds (-3) (-3) 7 7
-        it "a zero margin is a no-op" $
-            expandBounds 0 (AbsBounds 1 1 3 3) `shouldBe` AbsBounds 1 1 3 3
 
     describe "distancePointToBounds (non-wrapping)" $ do
         let box = AbsBounds 0 0 4 4

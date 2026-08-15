@@ -64,8 +64,8 @@ registry1 = registerLocation LocationDef
     { ldId = "loc1", ldLabel = "Small Ruin", ldType = "ruin"
     , ldBuilder = "room_small", ldAnchor = [], ldMaxCount = 0
     , ldMinSpacing = 0, ldContents = []
-    , ldBounds = RelBounds (-2) (-2) 2 2, ldDiscoveryMargin = 6
-    , ldMapIcons = Nothing, ldNaming = testNaming
+    , ldBounds = RelBounds (-2) (-2) 2 2
+    , ldMapIcon = Nothing, ldNaming = testNaming
     } emptyLocationRegistry
 
 overlay1 ∷ LocationOverlay

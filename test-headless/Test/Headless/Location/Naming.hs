@@ -56,8 +56,7 @@ ruinDef = LocationDef
     , ldMinSpacing      = 5
     , ldContents        = []
     , ldBounds          = RelBounds (-2) (-2) 2 2
-    , ldDiscoveryMargin = 6
-    , ldMapIcons        = Nothing
+    , ldMapIcon         = Nothing
     , ldNaming          = ruinNaming
     }
 

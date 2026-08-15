@@ -1,13 +1,15 @@
 {-# LANGUAGE Strict #-}
--- | "Location map icons" (#781): paired undiscovered/discovered
---   zoom-map annotation textures — the @map_icons@ YAML schema
---   ('Engine.Asset.YamlLocations'), texture-name resolution
---   ('World.Render.Zoom.Icons.buildLocationIconMap'), and the pure,
+-- | "Location map icons" (#781, reshaped by #1230): the singular
+--   @map_icon@ YAML schema ('Engine.Asset.YamlLocations'), texture-name
+--   resolution including the ONE shared unknown marker
+--   ('World.Render.Zoom.Icons.buildLocationIconMap'), the explicit
+--   per-lifecycle appearance mapping
+--   ('World.Render.Zoom.Icons.locationIconAppearance'), and the pure,
 --   GPU-free icon-quad generator ('World.Render.Zoom.Icons.
 --   makeLocationIconQuads') — mirroring 'Test.Headless.Location.Bounds'
 --   / 'Test.Headless.Location.Discovery' fixture style. No engine
 --   needed: 'makeLocationIconQuads' is a pure function over world/
---   camera/discovery params, exactly like the existing terrain
+--   camera/lifecycle params, exactly like the existing terrain
 --   'World.Render.Zoom.Quads.makeMapQuads' it sits beside.
 module Test.Headless.Location.MapIcons (spec) where
 
@@ -17,6 +19,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Vector as V
 import qualified Data.Yaml as Yaml
+import System.Directory (doesFileExist)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.TextureNameRegistry (emptyTextureNameRegistry)
 import Engine.Graphics.Camera (CameraFacing(..))
@@ -27,11 +30,13 @@ import Engine.Asset.YamlLocations (LocationYamlDef(..), LocationYamlFile(..))
 import Location.Types
     ( LocationDef(..), LocationNaming(..), LocationRegistry
     , emptyLocationRegistry, registerLocation, locationIconTextureName
+    , locationUnknownIconTextureName, locationUnknownIconPath
     )
 import Location.Overlay.Types (LocationOverlay)
 import Location.Instance
-    ( LocationInstance(..), LocationLifecycle(..), buildLocationInstances
-    , instancesToList, setLocationLifecycle )
+    ( LocationInstance(..), LocationInstanceId, LocationInstances
+    , LocationLifecycle(..), buildLocationInstances, instancesToList
+    , setLocationLifecycle )
 import Location.Bounds (RelBounds(..))
 import World.Chunk.Types (ChunkCoord(..))
 import World.Grid (gridToWorld)
@@ -39,7 +44,8 @@ import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Render.Zoom.ViewBounds (ZoomViewBounds(..), bestZoomWrapOffset)
 import World.Render.Zoom.Icons
     ( locationIconTargetPixels, iconWorldSize, buildLocationIconMap
-    , makeLocationIconQuads
+    , makeLocationIconQuads, LocationIconSet(..)
+    , LocationIconAppearance(..), locationIconAppearance, clearedIconTint
     )
 import Test.Headless.Location.Bounds (decodeDef, rejectedNaming)
 import Language.Semantic.Types (ConceptId(..))
@@ -59,8 +65,8 @@ testNaming = LocationNaming
 
 -- | One ruin-shaped def at chunk (0,0) → anchor tile (8,8), matching
 --   'Test.Headless.Location.Discovery''s fixture shape.
-locDef ∷ Text → Maybe (Text, Text) → LocationDef
-locDef lid icons = LocationDef
+locDef ∷ Text → Maybe Text → LocationDef
+locDef lid icon = LocationDef
     { ldId              = lid
     , ldLabel           = "Test Ruin"
     , ldType            = "ruin"
@@ -70,20 +76,18 @@ locDef lid icons = LocationDef
     , ldMinSpacing      = 0
     , ldContents        = []
     , ldBounds          = RelBounds (-2) (-2) 2 2
-    , ldDiscoveryMargin = 6
-    , ldMapIcons        = icons
+    , ldMapIcon         = icon
     , ldNaming          = testNaming
     }
 
-undiscoveredTex, discoveredTex, fallbackTex ∷ TextureHandle
-undiscoveredTex = TextureHandle 101
-discoveredTex   = TextureHandle 102
-fallbackTex     = TextureHandle 1
+unknownTex, typeTex, fallbackTex ∷ TextureHandle
+unknownTex  = TextureHandle 101   -- the ONE shared unknown marker
+typeTex     = TextureHandle 102   -- loc1's own type icon
+fallbackTex = TextureHandle 1
 
 registryWithIcons ∷ LocationRegistry
 registryWithIcons =
-    registerLocation (locDef "loc1" (Just ("hidden.png", "discovered.png")))
-        emptyLocationRegistry
+    registerLocation (locDef "loc1" (Just "ruin.png")) emptyLocationRegistry
 
 -- | Every def id the icon-quad scenarios below place. #911 builds
 --   instances from the overlay through the registry, so a placed id
@@ -94,15 +98,18 @@ registryWithIcons =
 registryForQuads ∷ LocationRegistry
 registryForQuads = foldr registerLocation registryWithIcons
     [ locDef "no_icons" Nothing
-    , locDef "loc2" (Just ("hidden2.png", "discovered2.png"))
-    , locDef "loc3" (Just ("hidden3.png", "discovered3.png"))
+    , locDef "loc2" (Just "ruin2.png")
+    , locDef "loc3" (Just "ruin3.png")
     ]
 
 overlayAt ∷ Int → Int → Text → LocationOverlay
 overlayAt cx cy lid = HM.singleton (ChunkCoord cx cy) lid
 
-iconMap1 ∷ HM.HashMap Text (TextureHandle, TextureHandle)
-iconMap1 = HM.singleton "loc1" (undiscoveredTex, discoveredTex)
+iconSet1 ∷ LocationIconSet
+iconSet1 = LocationIconSet
+    { lisUnknown   = unknownTex
+    , lisTypeIcons = HM.singleton "loc1" typeTex
+    }
 
 -- | Wide-open view bounds — every test below cares about wrap/culling
 --   behaviour through explicit scenarios, not accidental clipping.
@@ -116,127 +123,234 @@ openView = ZoomViewBounds
 --   discovery tick would — build the instances from the overlay, then
 --   promote the named chunks' instances to 'LifecycleDiscovered'.
 paramsWith ∷ LocationOverlay → HS.HashSet ChunkCoord → WorldGenParams
-paramsWith overlay discovered = defaultWorldGenParams
-    { wgpLocationOverlay   = overlay
-    , wgpLocationInstances = foldr promote base
-        [ liId i | i ← instancesToList base
+paramsWith overlay discovered =
+    paramsAtLifecycle overlay LifecycleDiscovered
+        [ liId i | i ← instancesToList (baseFor overlay)
                  , HS.member (liChunk i) discovered ]
+
+baseFor ∷ LocationOverlay → LocationInstances
+baseFor = buildLocationInstances Nothing registryForQuads
+
+-- | The same fixture generalised to ANY lifecycle state, for the
+--   six-constructor appearance sweep (#1230 requirement 3).
+paramsAtLifecycle
+    ∷ LocationOverlay → LocationLifecycle → [LocationInstanceId]
+    → WorldGenParams
+paramsAtLifecycle overlay lifecycle ids = defaultWorldGenParams
+    { wgpLocationOverlay   = overlay
+    , wgpLocationInstances = foldr promote (baseFor overlay) ids
     }
   where
-    base = buildLocationInstances Nothing registryForQuads overlay
-    promote iid lis =
-        fromMaybe lis (setLocationLifecycle iid LifecycleDiscovered lis)
+    promote iid lis = fromMaybe lis (setLocationLifecycle iid lifecycle lis)
+
+-- | Every instance in the overlay, moved to @lifecycle@. 'LifecycleUnknown'
+--   is where they already start, so it is the identity — which is
+--   exactly right: 'setLocationLifecycle' refuses a same-state move.
+paramsAll ∷ LocationOverlay → LocationLifecycle → WorldGenParams
+paramsAll overlay lifecycle =
+    paramsAtLifecycle overlay lifecycle
+        [ liId i | i ← instancesToList (baseFor overlay) ]
 
 -- | Run the generator with FaceSouth, camera at the origin, full alpha,
 --   a fixed 4-unit icon size — the common case most scenarios below
 --   only need to vary the overlay/discovered-set/camera for.
 runDefault ∷ LocationOverlay → HS.HashSet ChunkCoord → V.Vector SortableQuad
 runDefault overlay discovered =
-    makeLocationIconQuads (paramsWith overlay discovered) iconMap1
+    runParams (paramsWith overlay discovered)
+
+runParams ∷ WorldGenParams → V.Vector SortableQuad
+runParams params =
+    makeLocationIconQuads params iconSet1
         FaceSouth openView 0 0 1.0 4.0 (LayerId 2) (\(TextureHandle n) → n) (-1)
 
 spec ∷ Spec
 spec = describe "Location map icons" $ do
 
-    describe "map_icons YAML schema (#781)" $ do
-        it "parses a valid undiscovered/discovered pair" $
+    describe "map_icon YAML schema (#781, singular since #1230)" $ do
+        it "parses a valid single type-icon path" $
             case decodeDef
-                    "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
+                    "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                    \  map_icon: a.png }" of
+                Left err → expectationFailure err
+                Right def → lydMapIcon def `shouldBe` Just "a.png"
+
+        it "no map_icon field parses as Nothing (no annotation)" $
+            case decodeDef
+                    "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 } }" of
+                Left err → expectationFailure err
+                Right def → lydMapIcon def `shouldBe` Nothing
+
+        it "rejects a non-string map_icon value, naming the location" $
+            decodeDef
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                \  map_icon: 7 }"
+                `shouldSatisfy` rejectedNaming "t"
+
+        it "rejects the OLD paired map_icons object under the new key, \
+           \naming the location" $
+            -- The migration hazard: an unconverted definition that moved
+            -- the key but kept the object must fail loudly rather than
+            -- silently registering with no annotation.
+            decodeDef
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                \  map_icon: { undiscovered: a.png, discovered: b.png } }"
+                `shouldSatisfy` rejectedNaming "t"
+
+        it "IGNORES a leftover map_icons block — it is no longer part of \
+           \the schema, so an unmigrated def loads with no annotation" $
+            case decodeDef
+                    "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
                     \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
                     \  map_icons: { undiscovered: a.png, discovered: b.png } }" of
                 Left err → expectationFailure err
-                Right def → lydMapIcons def `shouldBe` Just ("a.png", "b.png")
+                Right def → lydMapIcon def `shouldBe` Nothing
 
-        it "no map_icons block parses as Nothing (no annotation)" $
-            case decodeDef
-                    "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
-                    \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 } }" of
-                Left err → expectationFailure err
-                Right def → lydMapIcons def `shouldBe` Nothing
-
-        it "rejects a map_icons block missing 'discovered', naming the location" $
-            decodeDef
-                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
-                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
-                \  map_icons: { undiscovered: a.png } }"
-                `shouldSatisfy` rejectedNaming "t"
-
-        it "rejects a map_icons block missing 'undiscovered', naming the location" $
-            decodeDef
-                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
-                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
-                \  map_icons: { discovered: b.png } }"
-                `shouldSatisfy` rejectedNaming "t"
-
-        it "rejects a non-object map_icons value, naming the location" $
-            decodeDef
-                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] }, discovery_margin: 6,\
-                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
-                \  map_icons: nope }"
-                `shouldSatisfy` rejectedNaming "t"
-
-        it "the shipped ruin_small.yaml declares its map_icons pair" $ do
+        it "the shipped ruin_small.yaml declares one singular map_icon" $ do
             result ← Yaml.decodeFileEither "data/locations/ruin_small.yaml"
             case result of
                 Left err → expectationFailure (show (err ∷ Yaml.ParseException))
                 Right lf → case lyfLocations lf of
-                    [def] → lydMapIcons def `shouldBe` Just
-                        ( "assets/textures/icons/location/ruin_hidden.png"
-                        , "assets/textures/icons/location/ruin_discovered.png"
-                        )
+                    [def] → lydMapIcon def `shouldBe`
+                        Just "assets/textures/icons/location/ruin.png"
                     ds → expectationFailure
                         ("expected exactly one location def, got " <> show (length ds))
 
+    describe "locationIconAppearance: every lifecycle constructor (#1230)" $ do
+        it "unknown and hinted draw the shared unknown marker" $ do
+            locationIconAppearance LifecycleUnknown `shouldBe` IconUnknownMarker
+            locationIconAppearance LifecycleHinted  `shouldBe` IconUnknownMarker
+        it "discovered and active draw the definition's own type icon" $ do
+            locationIconAppearance LifecycleDiscovered `shouldBe` IconTypeNormal
+            locationIconAppearance LifecycleActive     `shouldBe` IconTypeNormal
+        it "cleared and depleted draw that same type icon, darkened" $ do
+            locationIconAppearance LifecycleCleared  `shouldBe` IconTypeDark
+            locationIconAppearance LifecycleDepleted `shouldBe` IconTypeDark
+        it "the dark tint is strictly below the normal white value" $ do
+            clearedIconTint `shouldSatisfy` (< 1.0)
+            clearedIconTint `shouldSatisfy` (> 0.0)
+
     describe "buildLocationIconMap" $ do
-        it "a def with no ldMapIcons contributes no entry" $
+        it "a def with no ldMapIcon contributes no type-icon entry" $
             HM.lookup "loc1"
-                (buildLocationIconMap
+                (lisTypeIcons (buildLocationIconMap
                     (registerLocation (locDef "loc1" Nothing) emptyLocationRegistry)
-                    emptyTextureNameRegistry fallbackTex)
+                    emptyTextureNameRegistry fallbackTex))
                 `shouldBe` Nothing
 
-        it "resolves both states via the registry's shared naming convention" $ do
+        it "resolves a def's type icon via the shared naming convention" $
+            lisTypeIcons (buildLocationIconMap registryWithIcons
+                (HM.singleton (locationIconTextureName "loc1") typeTex)
+                fallbackTex)
+                `shouldBe` HM.singleton "loc1" typeTex
+
+        it "resolves the shared unknown marker independently of every \
+           \definition — an EMPTY registry still yields it" $
+            lisUnknown (buildLocationIconMap emptyLocationRegistry
+                (HM.singleton locationUnknownIconTextureName unknownTex)
+                fallbackTex)
+                `shouldBe` unknownTex
+
+        it "the unknown marker's registry key is not derived from any \
+           \def id, so two definitions share ONE handle" $ do
             let reg = HM.fromList
-                    [ (locationIconTextureName "loc1" False, undiscoveredTex)
-                    , (locationIconTextureName "loc1" True,  discoveredTex)
+                    [ (locationUnknownIconTextureName, unknownTex)
+                    , (locationIconTextureName "loc1", typeTex)
+                    , (locationIconTextureName "loc2", TextureHandle 103)
                     ]
-            buildLocationIconMap registryWithIcons reg fallbackTex
-                `shouldBe` HM.singleton "loc1" (undiscoveredTex, discoveredTex)
+                iconSet = buildLocationIconMap
+                    (registerLocation (locDef "loc2" (Just "ruin2.png"))
+                                      registryWithIcons)
+                    reg fallbackTex
+            -- Two annotated definitions, two DISTINCT type icons, and
+            -- exactly one unknown marker covering both.
+            HM.size (lisTypeIcons iconSet) `shouldBe` 2
+            lisUnknown iconSet `shouldBe` unknownTex
 
         it "missing/not-yet-loaded textures fall back to the caller's handle, \
-           \never dropping the entry" $
-            buildLocationIconMap registryWithIcons emptyTextureNameRegistry fallbackTex
-                `shouldBe` HM.singleton "loc1" (fallbackTex, fallbackTex)
+           \never dropping the entry" $ do
+            let iconSet = buildLocationIconMap registryWithIcons
+                              emptyTextureNameRegistry fallbackTex
+            lisTypeIcons iconSet `shouldBe` HM.singleton "loc1" fallbackTex
+            lisUnknown iconSet `shouldBe` fallbackTex
 
-    describe "makeLocationIconQuads: texture selection" $ do
-        it "an undiscovered placement selects the undiscovered texture" $
-            V.map sqTexture (runDefault (overlayAt 0 0 "loc1") HS.empty)
-                `shouldBe` V.singleton undiscoveredTex
+        it "the shared unknown icon's canonical path is the one the issue \
+           \specifies, and it ships" $ do
+            locationUnknownIconPath `shouldBe`
+                "assets/textures/icons/location/location_unknown.png"
+            doesFileExist locationUnknownIconPath >>= (`shouldBe` True)
 
-        it "a discovered placement selects the discovered texture" $
-            V.map sqTexture
-                (runDefault (overlayAt 0 0 "loc1") (HS.singleton (ChunkCoord 0 0)))
-                `shouldBe` V.singleton discoveredTex
+    describe "makeLocationIconQuads: texture selection per lifecycle" $ do
+        let overlay = overlayAt 0 0 "loc1"
+            texAt l = V.map sqTexture (runParams (paramsAll overlay l))
+            rgbAt l = case V.toList (runParams (paramsAll overlay l)) of
+                [q] → let c = color (sqV0 q) in (r c, g c, b c)
+                qs  → error ("expected exactly one quad, got " <> show (length qs))
+
+        forM_ [LifecycleUnknown, LifecycleHinted] $ \l →
+            it (show l <> " selects the SHARED unknown marker, not the type icon") $
+                texAt l `shouldBe` V.singleton unknownTex
+
+        forM_ [LifecycleDiscovered, LifecycleActive] $ \l →
+            it (show l <> " selects the definition's own type icon") $
+                texAt l `shouldBe` V.singleton typeTex
+
+        forM_ [LifecycleCleared, LifecycleDepleted] $ \l →
+            it (show l <> " selects that SAME type icon, not a third texture") $
+                texAt l `shouldBe` V.singleton typeTex
+
+        forM_ [LifecycleUnknown, LifecycleHinted, LifecycleDiscovered
+              , LifecycleActive] $ \l →
+            it (show l <> " draws at full white RGB") $
+                rgbAt l `shouldBe` (1.0, 1.0, 1.0)
+
+        forM_ [LifecycleCleared, LifecycleDepleted] $ \l →
+            it (show l <> " darkens EVERY RGB component below white") $ do
+                let (rr, gg, bb) = rgbAt l
+                rr `shouldSatisfy` (< 1.0)
+                gg `shouldSatisfy` (< 1.0)
+                bb `shouldSatisfy` (< 1.0)
+                (rr, gg, bb) `shouldBe`
+                    (clearedIconTint, clearedIconTint, clearedIconTint)
 
         it "a state change re-selects the texture live, with no other input changed" $ do
-            let overlay = overlayAt 0 0 "loc1"
-                before = runDefault overlay HS.empty
-                after  = runDefault overlay (HS.singleton (ChunkCoord 0 0))
-            V.map sqTexture before `shouldBe` V.singleton undiscoveredTex
-            V.map sqTexture after  `shouldBe` V.singleton discoveredTex
+            texAt LifecycleUnknown    `shouldBe` V.singleton unknownTex
+            texAt LifecycleDiscovered `shouldBe` V.singleton typeTex
 
-        it "a location id absent from iconMap (no map_icons declared) renders nothing" $
-            V.null (makeLocationIconQuads (paramsWith (overlayAt 0 0 "no_icons") HS.empty)
-                iconMap1 FaceSouth openView 0 0 1.0 4.0 (LayerId 2)
-                (\(TextureHandle n) → n) (-1))
-                `shouldBe` True
+        it "two definitions that are both unknown draw the IDENTICAL icon, \
+           \so the map leaks nothing about which is which" $ do
+            let overlay2 = HM.fromList
+                    [ (ChunkCoord 0 0, "loc1"), (ChunkCoord 5 5, "loc2") ]
+                iconSet = LocationIconSet
+                    { lisUnknown   = unknownTex
+                    , lisTypeIcons = HM.fromList
+                        [ ("loc1", typeTex), ("loc2", TextureHandle 103) ]
+                    }
+                quads = makeLocationIconQuads
+                    (paramsAll overlay2 LifecycleUnknown) iconSet
+                    FaceSouth openView 0 0 1.0 4.0 (LayerId 2)
+                    (\(TextureHandle n) → n) (-1)
+            V.map sqTexture quads
+                `shouldBe` V.fromList [unknownTex, unknownTex]
+
+        it "a location whose def declares no map_icon renders nothing, in \
+           \EVERY lifecycle state" $
+            forM_ [minBound .. maxBound ∷ LocationLifecycle] $ \l →
+                V.null (makeLocationIconQuads
+                    (paramsAll (overlayAt 0 0 "no_icons") l)
+                    iconSet1 FaceSouth openView 0 0 1.0 4.0 (LayerId 2)
+                    (\(TextureHandle n) → n) (-1))
+                    `shouldBe` True
 
     describe "makeLocationIconQuads: alpha (fade transition)" $ do
         let alphaOf v = case V.toList v of
                 [q] → a (color (sqV0 q))
                 qs  → error ("expected exactly one quad, got " <> show (length qs))
             withAlpha alpha = makeLocationIconQuads
-                (paramsWith (overlayAt 0 0 "loc1") HS.empty) iconMap1
+                (paramsWith (overlayAt 0 0 "loc1") HS.empty) iconSet1
                 FaceSouth openView 0 0 alpha 4.0 (LayerId 2)
                 (\(TextureHandle n) → n) (-1)
         it "alpha 0 below the fade start (visually absent)" $
@@ -246,6 +360,19 @@ spec = describe "Location map icons" $ do
         it "full alpha at full map visibility, independent of ZoomMapMode \
            \(icon color never routes through a mode's color function)" $
             alphaOf (withAlpha 1.0) `shouldBe` 1.0
+
+        it "the supplied fade alpha survives EXACTLY in all six lifecycle \
+           \states — darkening scales RGB only (#1230 requirement 3)" $
+            forM_ [minBound .. maxBound ∷ LocationLifecycle] $ \l →
+                forM_ [0.0, 0.42, 1.0 ∷ Float] $ \alpha →
+                    case V.toList (makeLocationIconQuads
+                            (paramsAll (overlayAt 0 0 "loc1") l) iconSet1
+                            FaceSouth openView 0 0 alpha 4.0 (LayerId 2)
+                            (\(TextureHandle n) → n) (-1)) of
+                        [q] → a (color (sqV0 q)) `shouldBe` alpha
+                        qs  → expectationFailure
+                                ("expected one quad for " <> show l <> ", got "
+                                    <> show (length qs))
 
     describe "iconWorldSize: constant logical screen size" $ do
         -- worldSize -> projected LOGICAL pixels, replaying the full
@@ -284,7 +411,7 @@ spec = describe "Location map icons" $ do
     describe "makeLocationIconQuads: screen-upright + anchor centering" $ do
         let iconSize = 4.0 ∷ Float
             quadAt facing = V.head $ makeLocationIconQuads
-                (paramsWith (overlayAt 0 0 "loc1") HS.empty) iconMap1
+                (paramsWith (overlayAt 0 0 "loc1") HS.empty) iconSet1
                 facing openView 0 0 1.0 iconSize (LayerId 2)
                 (\(TextureHandle n) → n) (-1)
             corners q = (pos (sqV0 q), pos (sqV1 q), pos (sqV2 q), pos (sqV3 q))
@@ -320,7 +447,7 @@ spec = describe "Location map icons" $ do
                 (expOffX, _) = bestZoomWrapOffset FaceSouth ws camX camY ax ay
                 overlay = overlayAt 0 0 "loc1"
                 params  = paramsWith overlay HS.empty
-                q = V.head $ makeLocationIconQuads params iconMap1
+                q = V.head $ makeLocationIconQuads params iconSet1
                         FaceSouth openView camX camY 1.0 4.0 (LayerId 2)
                         (\(TextureHandle n) → n) (-1)
                 centerX = (x (pos (sqV0 q)) + x (pos (sqV1 q))) / 2.0
@@ -336,22 +463,25 @@ spec = describe "Location map icons" $ do
             let overlay = overlayAt 0 0 "loc1"
                 pageA = runDefault overlay HS.empty
                 pageB = runDefault overlay (HS.singleton (ChunkCoord 0 0))
-            V.map sqTexture pageA `shouldBe` V.singleton undiscoveredTex
-            V.map sqTexture pageB `shouldBe` V.singleton discoveredTex
+            V.map sqTexture pageA `shouldBe` V.singleton unknownTex
+            V.map sqTexture pageB `shouldBe` V.singleton typeTex
 
     describe "makeLocationIconQuads: deterministic ordering" $ do
-        let iconMap3 = HM.fromList
-                [ ("loc1", (TextureHandle 11, TextureHandle 21))
-                , ("loc2", (TextureHandle 12, TextureHandle 22))
-                , ("loc3", (TextureHandle 13, TextureHandle 23))
-                ]
+        let iconSet3 = LocationIconSet
+                { lisUnknown   = unknownTex
+                , lisTypeIcons = HM.fromList
+                    [ ("loc1", TextureHandle 11)
+                    , ("loc2", TextureHandle 12)
+                    , ("loc3", TextureHandle 13)
+                    ]
+                }
             overlay3 = HM.fromList
                 [ (ChunkCoord 2 (-1), "loc1")
                 , (ChunkCoord (-3) 4, "loc2")
                 , (ChunkCoord 0 0,    "loc3")
                 ]
             run () = makeLocationIconQuads
-                (paramsWith overlay3 HS.empty) iconMap3
+                (paramsAll overlay3 LifecycleDiscovered) iconSet3
                 FaceSouth openView 0 0 1.0 4.0 (LayerId 2)
                 (\(TextureHandle n) → n) (-1)
         it "matches instance-id order, allocated in overlayToList's \
