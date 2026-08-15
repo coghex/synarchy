@@ -46,6 +46,15 @@
 --   so an entry that could not fit when the order was made stays
 --   refused even if room appeared during the walk.
 --
+--   __A stored order the job can execute always has an approach.__
+--   The acting unit is recorded ALONGSIDE the endpoint pair, so a
+--   carrier that is neither end is expressible — and for a unit↔unit or
+--   unit↔building pair that would be a queued order with nowhere to
+--   walk, skipped on every tick and cancellable by nothing in this
+--   slice. 'carrierCanExecute' refuses it at creation. The single
+--   exception is D-10's building→building pair, which is deliberately
+--   inert until a later slice can ferry between two buildings.
+--
 --   __Every verb is addressed by ACTING UNIT__, not by order id alone.
 --   Order ids are allocated per PAGE (#1246), so an id on its own names
 --   an order only once a page is known; the acting unit supplies it,
@@ -170,17 +179,52 @@ withOwnedOrder env uid oid f = do
 
 -- | Which endpoint the ACTING unit approaches, and its role name.
 --
---   The counterpart is simply the end the unit is not. A
---   building→building order (D-10) is expressible in the store and
---   perfectly valid there, but the acting unit is neither end of it, so
---   this answers 'Nothing' and the unit job leaves such an order alone
---   rather than silently claiming it as a walk it has no defined
---   destination for.
+--   The counterpart is simply the end the unit is not, so this answers
+--   'Nothing' exactly when the carrier is neither end — and an order
+--   with no approach is one the unit job can never execute
+--   ('actionableOrder' skips it on every tick).
+--
+--   'carrierCanExecute' is what keeps that from becoming a leak: the
+--   ONE shape allowed to store an order this answers 'Nothing' for is
+--   D-10's building→building, which is deliberately inert until a later
+--   slice gives it an executor.
+approachEndpointOf ∷ UnitId → TransferEndpoint → TransferEndpoint
+                   → Maybe (Text, TransferEndpoint)
+approachEndpointOf uid from to
+    | from ≡ EndpointUnit uid = Just ("destination", to)
+    | to   ≡ EndpointUnit uid = Just ("source", from)
+    | otherwise               = Nothing
+
 approachEndpoint ∷ UnitId → TransferBatch → Maybe (Text, TransferEndpoint)
-approachEndpoint uid b
-    | tbSource b ≡ EndpointUnit uid      = Just ("destination", tbDestination b)
-    | tbDestination b ≡ EndpointUnit uid = Just ("source", tbSource b)
-    | otherwise                          = Nothing
+approachEndpoint uid b = approachEndpointOf uid (tbSource b) (tbDestination b)
+
+-- | May @uid@ be the carrier for this endpoint pair at all?
+--
+--   Two ways to qualify, and they are not the same thing:
+--
+--   * The carrier IS one of the endpoints, so 'approachEndpointOf'
+--     resolves and the order has somewhere to walk. This is every
+--     executable order.
+--   * BOTH endpoints are buildings (D-10). The acting unit is then
+--     deliberately neither end — that is the whole point of recording
+--     it alongside the pair rather than deriving it — and the order is
+--     storable, valid, and simply not this executor's (S1). It waits,
+--     inert, for the slice that ferries between two buildings.
+--
+--   Anything else — a unit↔unit or unit↔building pair carried by a
+--   BYSTANDER — is neither. It would queue an order that has no
+--   approach, so the job skips it on every tick, and nothing in this
+--   slice can cancel or retire it: it would sit pending forever and
+--   ride every save. Refusing at creation is the only point where that
+--   is still cheap, which is why this is a precondition rather than
+--   something the job is left to notice.
+carrierCanExecute ∷ UnitId → TransferEndpoint → TransferEndpoint → Bool
+carrierCanExecute uid from to =
+    isJust (approachEndpointOf uid from to) ∨ bothBuildings
+  where
+    bothBuildings = case (from, to) of
+        (EndpointBuilding _, EndpointBuilding _) → True
+        _                                        → False
 
 -- * Result encoding
 
@@ -301,6 +345,13 @@ unitCreateTransferOrderFn env = do
             case mWs of
                 Nothing → pushErr "unit.createTransferOrder: no such unit, \
                                   \or its world page is not loaded"
+                Just _ | not (carrierCanExecute uid (trSource req)
+                                                    (trDestination req)) →
+                    pushErr "unit.createTransferOrder: the acting unit is \
+                            \neither endpoint, so the order would have \
+                            \nowhere to walk and could never run; only a \
+                            \building-to-building order (D-10) may name a \
+                            \carrier that is neither end"
                 Just (page, ws) → do
                     ls ← Lua.liftIO $ readLiveState env
                     let scene = sceneFor ls (trSource req) (trDestination req)
