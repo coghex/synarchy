@@ -21,9 +21,14 @@ Three registries:
              it inspects the emitted atlas pixels and index document,
              or observes which files a second run actually wrote.
 
-Validation has no image-content cases — the validator never opens a
-frame for a unit with no index (#1257), and #1311 tracks lifting that.
-Compilation necessarily decodes, so the scenarios do assert pixels.
+Validation opens every declared frame (#1311), so the content cases
+below corrupt real PNG bytes at exact offsets — a truncated stream, a
+garbled payload under a correct checksum, a correct payload under a
+wrong checksum, a non-image, a valid image of another format — and pair
+each with a positive that would fail on over-rejection. Two scenarios
+pin why BOTH decode passes exist by showing a file that each one alone
+accepts. Compilation necessarily decodes too, so its scenarios assert
+pixels.
 
     python3 tools/test_pack_atlas.py           # run every case
     python3 tools/test_pack_atlas.py -v        # print each case's output
@@ -70,25 +75,165 @@ EXPECTED_ROW_ORDER = [
 # --------------------------------------------------------------------
 
 
-def png_bytes() -> bytes:
-    """A real, minimal 4x4 8-bit RGBA PNG.
+def png_chunk(ctype: bytes, body: bytes) -> bytes:
+    """One PNG chunk, with a CORRECT CRC over type and payload."""
+    return (struct.pack(">I", len(body)) + ctype + body
+            + struct.pack(">I", binascii.crc32(ctype + body) & 0xFFFFFFFF))
 
-    The validator never opens a frame (#1257 dropped image-content
-    validation; #1311 tracks adding it), so nothing here depends on
-    these bytes being well-formed. They are anyway: a fixture that wrote
-    garbage would quietly stop being a realistic asset tree the day
-    content checks arrive.
+
+def png_bytes(width: int = 4, height: int = 4) -> bytes:
+    """A real, minimal 8-bit RGBA PNG, built without an encoder.
+
+    Since #1311 the validator opens every declared frame, so these
+    bytes must genuinely decode — every positive case in the suite now
+    depends on that.
+
+    Hand-built rather than emitted by Pillow because the content cases
+    below damage this output at exact chunk offsets: the fixture has to
+    be a known quantity, not whatever an encoder happened to choose.
+    Pixels vary across the image so the compressed payload is large
+    enough to corrupt meaningfully at a chosen offset.
     """
-    raw = b"".join(b"\x00" + b"\x7f\x20\x40\xff" * 4 for _ in range(4))
-
-    def chunk(ctype: bytes, body: bytes) -> bytes:
-        return (struct.pack(">I", len(body)) + ctype + body
-                + struct.pack(">I", binascii.crc32(ctype + body) & 0xFFFFFFFF))
-
+    rows = []
+    for y in range(height):
+        row = bytearray(b"\x00")           # filter type 0, one per scanline
+        for x in range(width):
+            row += bytes(((x * 37 + y * 11) % 256, (x * 5 + 32) % 256,
+                          (y * 7 + 64) % 256, 255))
+        rows.append(bytes(row))
     return (PNG_SIGNATURE
-            + chunk(b"IHDR", struct.pack(">IIBBBBB", 4, 4, 8, 6, 0, 0, 0))
-            + chunk(b"IDAT", zlib.compress(raw))
-            + chunk(b"IEND", b""))
+            + png_chunk(b"IHDR",
+                        struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+            + png_chunk(b"IDAT", zlib.compress(b"".join(rows)))
+            + png_chunk(b"IEND", b""))
+
+
+def find_png_chunk(data: bytes, want: bytes) -> tuple[int, int]:
+    """Offset of the first `want` chunk's LENGTH field, and its length."""
+    offset = len(PNG_SIGNATURE)
+    while offset < len(data):
+        length = struct.unpack(">I", data[offset:offset + 4])[0]
+        if data[offset + 4:offset + 8] == want:
+            return offset, length
+        offset += 12 + length
+    raise AssertionError(f"fixture PNG has no {want!r} chunk")
+
+
+def corruptible_png() -> tuple[bytes, int, int]:
+    """A PNG big enough to damage precisely, with its IDAT located."""
+    data = png_bytes(32, 32)
+    offset, length = find_png_chunk(data, b"IDAT")
+    assert length > 64, f"fixture IDAT is too small to corrupt: {length} bytes"
+    return data, offset, length
+
+
+def truncated_png() -> bytes:
+    """A PNG whose pixel stream stops part-way through.
+
+    The cut is INSIDE the IDAT payload, past the header, so the file
+    still identifies as a 32x32 PNG and reports its dimensions
+    correctly. Only something that reads the pixel data notices.
+    """
+    data, offset, length = corruptible_png()
+    return data[:offset + 8 + length // 2]
+
+
+def corrupt_stream_png() -> bytes:
+    """A PNG whose compressed data is garbage under a CORRECT checksum.
+
+    The enclosing chunk's CRC is RECOMPUTED over the damaged payload,
+    so the container is byte-perfect and only the deflate stream is
+    broken. That is the whole point of this fixture: a check that
+    validated chunk checksums alone would wave this file through.
+    """
+    data, offset, length = corruptible_png()
+    payload = bytearray(data[offset + 8:offset + 8 + length])
+    for i in range(16, 48):
+        payload[i] ^= 0xFF
+    return (data[:offset] + png_chunk(b"IDAT", bytes(payload))
+            + data[offset + 12 + length:])
+
+
+def bad_checksum_png() -> bytes:
+    """A PNG whose IDAT payload is intact but whose CRC is wrong.
+
+    The mirror image of `corrupt_stream_png`, and it needs its own
+    fixture: Pillow reads and DISCARDS those four CRC bytes while
+    streaming pixel data, so a full decode alone accepts this file
+    without complaint.
+    """
+    data, offset, length = corruptible_png()
+    return (data[:offset + 8 + length] + b"\x00\x00\x00\x00"
+            + data[offset + 12 + length:])
+
+
+def tampered_iend_png() -> bytes:
+    """A PNG whose TERMINAL chunk carries a wrong checksum.
+
+    Its own fixture because IEND is the one chunk no library pass
+    reaches: Pillow's `verify()` breaks on it before checksumming, and
+    the decoder stops once it has enough scanlines and never reads that
+    far. Everything before it here is byte-perfect.
+    """
+    data = png_bytes(32, 32)
+    assert data[-12:-4] == struct.pack(">I", 0) + b"IEND", "fixture tail moved"
+    return data[:-4] + b"\xde\xad\xbe\xef"
+
+
+def trailing_data_png() -> bytes:
+    """A complete PNG with junk appended past IEND.
+
+    The spec makes IEND the final chunk, so this is a structurally
+    invalid stream.
+    """
+    return png_bytes(32, 32) + b"\x00leftover editor metadata"
+
+
+def duplicate_iend_png() -> bytes:
+    """A complete PNG with a SECOND canonical IEND chunk appended.
+
+    The adversarial version of the case above, and the reason the check
+    cannot simply compare the file's last bytes: this file's tail IS a
+    perfect IEND chunk, while the image it belongs to actually ended
+    twelve bytes earlier. Pillow's `verify()` stops at the first IEND
+    and the decoder never reads that far, so nothing else notices.
+    """
+    return png_bytes(32, 32) + pack_atlas.PNG_IEND_CHUNK
+
+
+def chunk_then_iend_png() -> bytes:
+    """A complete PNG with a whole extra chunk before a second IEND.
+
+    Same shape as `duplicate_iend_png`, but with real chunk content in
+    between, so a check that only looked one chunk back would miss it.
+    """
+    return (png_bytes(32, 32) + png_chunk(b"tEXt", b"Comment\x00appended")
+            + pack_atlas.PNG_IEND_CHUNK)
+
+
+def not_an_image() -> bytes:
+    """A text file wearing a `.png` name."""
+    return b"# notes about this animation, saved to the wrong path\n" * 8
+
+
+def other_format_png() -> bytes:
+    """A perfectly valid BMP, wearing a `.png` name.
+
+    Pillow will happily decode it; the engine's loader will not, so the
+    inventory must reject it on FORMAT rather than on readability.
+    """
+    image_mod = pack_atlas.image_module()
+    buffer = io.BytesIO()
+    image_mod.new("RGBA", (4, 4), (12, 34, 56, 255)).save(buffer, format="BMP")
+    return buffer.getvalue()
+
+
+def png_in_mode(mode: str, size: tuple[int, int] = (4, 4), **save: object) -> bytes:
+    """A valid PNG in some colour type other than plain 8-bit RGBA."""
+    image_mod = pack_atlas.image_module()
+    buffer = io.BytesIO()
+    image_mod.new(mode, size).save(buffer, format="PNG", **save)
+    return buffer.getvalue()
 
 
 class Fixture:
@@ -420,8 +565,177 @@ def _rh_exception(fx: Fixture) -> None:
         ("attack_heavy_RH_dagger", ALL8, 2, False)]))
 
 
+@positive("every legitimate PNG colour type decodes")
+def _png_colour_types(fx: Fixture) -> None:
+    # The content rule (#1311) is "decodes as a PNG", NOT "is already
+    # 8-bit RGBA". Paletted, greyscale, greyscale+alpha, 16-bit and
+    # interlaced frames are all valid art the engine's own upload path
+    # normalises, so rejecting any of them would be over-rejection —
+    # and each is a distinct decode path inside the library.
+    valid_fixture(fx)
+    base = "assets/textures/units/prop/animations/spin"
+    variants = [
+        ("south/frame_000.png", png_in_mode("P")),
+        ("south/frame_001.png", png_in_mode("L")),
+        ("south-east/frame_000.png", png_in_mode("LA")),
+        ("east/frame_000.png", png_in_mode("I;16")),
+        ("north/frame_000.png", png_in_mode("RGBA", interlace=True)),
+    ]
+    for rel, data in variants:
+        fx.write_file(f"{base}/{rel}", data)
+
+
+@positive("two ANIMATIONS of one unit may use different pixel sizes")
+def _per_animation_size(fx: Fixture) -> None:
+    # One size per ANIMATION is the atlas cell constraint; it says
+    # nothing across animations, which get their own atlases. A rule
+    # applied per unit would reject this legitimate tree.
+    fx.frames("hero", "idle", CANON5, 2)
+    fx.write_file("assets/textures/units/hero/idle.png", png_bytes())
+    fx.yaml("hero", gameplay_yaml("hero", [
+        ("idle", CANON5, 2, True), ("walk", CANON5, 2, True)]))
+    for direction in CANON5:
+        for index in range(2):
+            fx.write_file(
+                f"assets/textures/units/hero/animations/walk/{direction}/"
+                f"frame_{index:03d}.png", png_bytes(9, 5))
+
+
+@positive("a corrupt NON-animation texture is outside the inventory")
+def _aux_contents_out_of_scope(fx: Fixture) -> None:
+    # `sprite`, `directional_sprites` and `portrait` are checked for
+    # EXISTENCE only: the inventory's scope is `animations/`, and these
+    # files are also reached from hard-coded Haskell. Widening the
+    # content pass to them is a separate decision, not a side effect.
+    valid_fixture(fx)
+    fx.write_file("assets/textures/units/hero/idle.png", not_an_image())
+
 
 # -- negative ---------------------------------------------------------
+
+@negative("a truncated frame",
+          "spin/south/frame_000.png: cannot decode as an image")
+def _truncated_frame(fx: Fixture) -> None:
+    # Reading a header alone would accept this: the IHDR is intact and
+    # the dimensions it reports are correct. Only reading the pixel
+    # stream reaches the missing bytes.
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/prop/animations/spin/south/frame_000.png",
+        truncated_png())
+
+
+@negative("a frame whose compressed data is corrupt under a valid checksum",
+          "idle/north/frame_002.png: cannot decode as an image")
+def _corrupt_stream_frame(fx: Fixture) -> None:
+    # The chunk CRC is recomputed over the damaged payload, so the
+    # container is byte-perfect. This is the case a checksum-only check
+    # cannot see, and it is why the pass actually DECODES.
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/hero/animations/idle/north/frame_002.png",
+        corrupt_stream_png())
+
+
+@negative("a frame with a bad chunk checksum",
+          "bad header checksum")
+def _bad_checksum_frame(fx: Fixture) -> None:
+    # And the converse: the payload here is intact, so a full decode
+    # accepts it (Pillow discards IDAT CRCs while streaming). Only the
+    # container pass rejects it. `_both_decode_passes_earn_their_keep`
+    # pins that asymmetry directly.
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/prop/animations/spin/east/frame_001.png",
+        bad_checksum_png())
+
+
+@negative("a frame whose TERMINAL chunk checksum is wrong",
+          "wrong terminal checksum")
+def _tampered_iend_frame(fx: Fixture) -> None:
+    # Neither library pass reaches IEND — `verify()` breaks on it and
+    # the decoder never gets there — so without the terminal check this
+    # file validates clean. `_both_decode_passes_earn_their_keep` pins
+    # that both of them really do accept it.
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/hero/animations/walk/north/frame_000.png",
+        tampered_iend_png())
+
+
+@negative("a frame with data appended past IEND",
+          "byte(s) follow the IEND chunk")
+def _trailing_data_frame(fx: Fixture) -> None:
+    # IEND is the final chunk by specification, so anything after it is
+    # not part of the image.
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/hero/animations/walk/west/frame_000.png",
+        trailing_data_png())
+
+
+@negative("a frame with a SECOND canonical IEND appended",
+          "byte(s) follow the IEND chunk")
+def _duplicate_iend_frame(fx: Fixture) -> None:
+    # The adversarial trailing-data case: the file's last twelve bytes
+    # are a perfect IEND chunk, so comparing the FILE's tail accepts it
+    # while the real image ended twelve bytes earlier.
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/hero/animations/walk/south-west/frame_000.png",
+        duplicate_iend_png())
+
+
+@negative("a frame with an extra chunk before a second IEND",
+          "byte(s) follow the IEND chunk")
+def _chunk_then_iend_frame(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/hero/animations/walk/north-west/frame_000.png",
+        chunk_then_iend_png())
+
+
+@negative("a non-image file wearing a .png name",
+          "walk/east/frame_001.png: cannot decode as an image")
+def _non_image_frame(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/hero/animations/walk/east/frame_001.png",
+        not_an_image())
+
+
+@negative("a valid image of another format renamed to .png",
+          "expected a PNG, got BMP")
+def _other_format_frame(fx: Fixture) -> None:
+    # Decodable is not enough: the engine's loader is a PNG loader, so
+    # a readable BMP under a `.png` name is still a broken asset.
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/prop/animations/spin/north/frame_000.png",
+        other_format_png())
+
+
+@negative("frames of one animation disagreeing on size ACROSS directions",
+          "inconsistent frame dimensions")
+def _size_mismatch_across_directions(fx: Fixture) -> None:
+    # EVERY frame of the odd direction is resized, so that direction is
+    # internally consistent and only the animation-wide comparison can
+    # see the problem. A check that reset per direction would pass.
+    valid_fixture(fx)
+    for index in range(2):
+        fx.write_file(
+            f"assets/textures/units/prop/animations/spin/east/"
+            f"frame_{index:03d}.png", png_bytes(8, 8))
+
+
+@negative("frames of one animation disagreeing on size WITHIN a direction",
+          "inconsistent frame dimensions")
+def _size_mismatch_within_direction(fx: Fixture) -> None:
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/hero/animations/idle/south/frame_001.png",
+        png_bytes(6, 3))
+
 
 @negative("malformed YAML", "YAML parse error")
 def _bad_yaml(fx: Fixture) -> None:
@@ -1549,6 +1863,178 @@ def _case_insensitive_atlas_collision(fx: Fixture) -> None:
         f"{[issue.msg for issue in report.errors]}")
 
 
+@scenario("locating the end of a PNG stream is framing-only and total")
+def _stream_end_contract(fx: Fixture) -> None:
+    """`locate_png_stream_end` answers where the image ends, or says why not.
+
+    Covered directly rather than only through validation because two of
+    its branches are unreachable from there — Pillow rejects an
+    IEND-less or overlong-chunk stream first — and an uncovered branch
+    is exactly where a crash hides instead of a diagnostic.
+    """
+    good = png_bytes(32, 32)
+    clean = fx.write_file("loose/good.png", good)
+    end, size, terminal = pack_atlas.locate_png_stream_end(clean)
+    assert (end, size) == (len(good), len(good)), (
+        f"a clean PNG should end where the file does, got {end}/{size}")
+    assert terminal == pack_atlas.PNG_IEND_CHUNK
+
+    # Trailing data moves the FILE's end, never the stream's.
+    doubled = fx.write_file("loose/doubled.png", duplicate_iend_png())
+    end, size, terminal = pack_atlas.locate_png_stream_end(doubled)
+    assert end == len(good), f"the stream end moved with the appended data: {end}"
+    assert size == len(good) + len(pack_atlas.PNG_IEND_CHUNK)
+    assert terminal == pack_atlas.PNG_IEND_CHUNK
+
+    for label, data in [
+        ("no IEND at all", good[:-12]),
+        ("a chunk claiming more bytes than the file holds",
+         good[:-12] + struct.pack(">I", 1 << 30) + b"IDAT" + b"\x00" * 8),
+        # The overlong chunk is itself labelled IEND. Without the
+        # bounds guard the walk accepts it and reports a NEGATIVE count
+        # of trailing bytes, so this is the case that guard exists for.
+        ("a TERMINAL chunk claiming more bytes than the file holds",
+         good[:-12] + struct.pack(">I", 1 << 30) + b"IEND" + b"\x00" * 8),
+    ]:
+        broken = fx.write_file("loose/broken.png", data)
+        try:
+            pack_atlas.locate_png_stream_end(broken)
+        except ValueError as error:
+            assert "IEND" in str(error), (
+                f"{label}: rejected for the wrong reason: {error}")
+        else:
+            raise AssertionError(f"{label}: accepted, or returned a sentinel")
+
+
+@scenario("every content check earns its keep")
+def _both_decode_passes_earn_their_keep(fx: Fixture) -> None:
+    """No part of `validate_frame_image` is redundant.
+
+    Each fixture here is accepted by every check except one, which is
+    the only evidence that removing that check would let a broken frame
+    through. Without this, a later "simplification" down to a single
+    call would keep the whole suite green.
+    """
+    image_mod = pack_atlas.image_module()
+
+    # A correct payload under a wrong CRC: the full decode accepts it,
+    # because Pillow never checks an IDAT checksum.
+    checksum = fx.write_file("loose/bad_checksum.png", bad_checksum_png())
+    frame = pack_atlas.decode_rgba8(checksum)
+    assert (frame.width, frame.height) == (32, 32), (
+        f"the bad-checksum fixture should still DECODE, got "
+        f"{frame.width}x{frame.height}")
+    try:
+        pack_atlas.validate_frame_image(checksum)
+    except ValueError as error:
+        assert "checksum" in str(error), (
+            f"rejected for the wrong reason: {error}")
+    else:
+        raise AssertionError(
+            "the container pass accepted a wrong IDAT checksum, so the "
+            "decode pass alone is doing all the work")
+
+    # Garbage payload under a correct CRC: the container pass accepts
+    # it, because verify() never decompresses.
+    stream = fx.write_file("loose/corrupt_stream.png", corrupt_stream_png())
+    with image_mod.open(stream) as handle:
+        handle.verify()          # raises if the container pass would object
+    try:
+        pack_atlas.validate_frame_image(stream)
+    except ValueError as error:
+        assert "decode" in str(error), f"rejected for the wrong reason: {error}"
+    else:
+        raise AssertionError(
+            "a corrupt compressed stream passed the full check, so the "
+            "content pass is not decoding pixel data at all")
+
+    # A wrong TERMINAL checksum: both library passes accept it, because
+    # verify() breaks on IEND before checksumming and the decoder never
+    # reads that far. Only the terminal comparison sees it.
+    terminal = fx.write_file("loose/tampered_iend.png", tampered_iend_png())
+    frame = pack_atlas.decode_rgba8(terminal)
+    assert (frame.width, frame.height) == (32, 32), (
+        "the tampered-IEND fixture should still DECODE")
+    with image_mod.open(terminal) as handle:
+        handle.verify()          # raises if Pillow objected to the tail
+    try:
+        pack_atlas.validate_frame_image(terminal)
+    except ValueError as error:
+        assert "terminal checksum" in str(error), (
+            f"rejected for the wrong reason: {error}")
+    else:
+        raise AssertionError(
+            "a wrong IEND checksum passed the full check: no part of the "
+            "content pass validates the terminal chunk")
+
+    # A SECOND canonical IEND appended: both library passes accept it,
+    # AND so would a comparison of the file's own last bytes. Only
+    # locating the real end of the stream catches it — which is why
+    # that walk exists rather than a tail constant.
+    doubled = fx.write_file("loose/duplicate_iend.png", duplicate_iend_png())
+    frame = pack_atlas.decode_rgba8(doubled)
+    assert (frame.width, frame.height) == (32, 32), (
+        "the duplicate-IEND fixture should still DECODE")
+    with image_mod.open(doubled) as handle:
+        handle.verify()
+    assert doubled.read_bytes()[-12:] == pack_atlas.PNG_IEND_CHUNK, (
+        "this fixture only means something while its TAIL is a valid IEND")
+    try:
+        pack_atlas.validate_frame_image(doubled)
+    except ValueError as error:
+        assert "follow the IEND chunk" in str(error), (
+            f"rejected for the wrong reason: {error}")
+    else:
+        raise AssertionError(
+            "data after a complete image passed the full check: the "
+            "terminal check is comparing the file's tail rather than "
+            "locating where the stream actually ends")
+
+
+@scenario("a missing image decoder fails validation with an install hint")
+def _missing_decoder(fx: Fixture) -> None:
+    """An absent Pillow is a loud error, never a silent skip.
+
+    Skipping would be the worst possible outcome: the run would print
+    OK while checking no contents at all. Deterministic because it
+    blocks the import rather than depending on what is installed.
+    """
+    valid_fixture(fx)
+    fx.validate_ok()             # the same tree passes with a decoder present
+
+    saved_memo = pack_atlas._IMAGE_MODULE
+    sentinel = object()
+    saved = {name: sys.modules.get(name, sentinel)
+             for name in ("PIL", "PIL.Image")}
+    pack_atlas._IMAGE_MODULE = None
+    # A None entry in sys.modules makes `from PIL import Image` raise
+    # ImportError, which is exactly what an uninstalled Pillow does.
+    for name in saved:
+        sys.modules[name] = None            # type: ignore[assignment]
+    try:
+        code, output = fx.run()
+    finally:
+        pack_atlas._IMAGE_MODULE = saved_memo
+        for name, module in saved.items():
+            if module is sentinel:
+                del sys.modules[name]
+            else:
+                sys.modules[name] = module  # type: ignore[assignment]
+
+    assert code != 0, f"validation passed without a decoder:\n{output}"
+    assert "Pillow is required" in output, (
+        f"the missing decoder was not named:\n{output}")
+    assert "requirements-assets.txt" in output, (
+        f"no install hint was printed:\n{output}")
+    # One condition about the environment, not one finding per frame.
+    assert output.count("Pillow is required") == 1, (
+        f"the missing decoder was reported more than once:\n{output}")
+
+    # And the tree still validates once the decoder is back, so the
+    # case cannot pass by having corrupted global state.
+    fx.validate_ok()
+
+
 @scenario("the pinned CI toolchain matches tools/requirements-assets.txt")
 def _pinned_toolchain_agrees(_fx: Fixture) -> None:
     # The image tag is the hash of the Dockerfile plus ci-image.yml, so
@@ -1657,7 +2143,7 @@ def main() -> int:
 
     # The suite is only meaningful if it actually built fixtures; a
     # refactor that silently emptied a registry must not read as green.
-    if len(POSITIVE) < 9 or len(NEGATIVE) < 61 or len(SCENARIO) < 30:
+    if len(POSITIVE) < 12 or len(NEGATIVE) < 72 or len(SCENARIO) < 33:
         failures.append(
             f"case registries look truncated: {len(POSITIVE)} positive, "
             f"{len(NEGATIVE)} negative, {len(SCENARIO)} scenario")

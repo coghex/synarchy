@@ -67,8 +67,11 @@ INVARIANTS ENFORCED
     `<unit>/animations/<animation>/<direction>/` directory — cross-unit,
     cross-animation and cross-direction references are all named as
     such;
-  * every declared frame exists AS A REGULAR FILE, and every physical
-    frame is declared;
+  * every declared frame exists AS A REGULAR FILE, DECODES as a real
+    PNG, and every physical frame is declared;
+  * every frame of ONE animation decodes to the same pixel size —
+    different DIRECTIONS of that animation may still hold different
+    frame COUNTS, which is a separate axis;
   * one physical frame is claimed by at most one animation-frame slot
     (reuse as a unit's `sprite`, `directional_sprites` entry or
     `portrait` is deliberately legal and is NOT a duplicate claim);
@@ -194,7 +197,9 @@ USAGE
     python3 tools/pack_atlas.py --validate-only --strict
         Also treat warnings as errors. Warnings are advisory only
         (non-PNG debris in the animation tree); every inventory
-        violation above is an ERROR regardless of this flag.
+        violation above is an ERROR regardless of this flag, and that
+        includes every frame-content finding — `--strict` promotes
+        existing warnings and adds no checks of its own.
 
     python3 tools/pack_atlas.py --compile [--unit acolyte]
         Compile atlases and indices. Refuses to run at all if the
@@ -213,25 +218,73 @@ USAGE
 Exactly one of `--validate-only` / `--compile` is required: writing
 derived artifacts is never something this tool does by default.
 
-WHAT IT DOES NOT VALIDATE
--------------------------
+FRAME CONTENTS (issue #1311)
+----------------------------
 
-`--validate-only` never OPENS a frame unless an atlas index exists for
-that unit. For a unit with no index it establishes that each declared
-frame exists and is a regular file, and asserts nothing about its
-contents: not that it decodes, not its pixel dimensions, not its colour
-type, and not that one animation's frames agree on a size.
+Every DECLARED frame is opened and decoded, not merely stat-ed. #1257
+stopped at the file boundary, so a truncated, corrupt or mislabelled
+frame passed the gate and failed later — at texture-upload time, or
+visibly in game. `validate_frame_image` closes that gap in three
+checks, because each one covers ground the others cannot:
 
-That boundary is deliberate (#1257) and #1311 tracks lifting it. The
-COMPILER necessarily decodes, so those properties are enforced for any
-animation that is actually compiled.
+  * a full `decode_rgba8` runs the filters, interlace passes and colour
+    conversion — catching a truncated stream, corrupt compressed data,
+    a non-image, and (through its own format check) a valid image of
+    some other format renamed to `.png` — but never looks at an IDAT
+    chunk's checksum, because Pillow reads and discards those four
+    bytes while streaming pixel data;
+  * Pillow's own `verify()` then CRCs the chunks, which is what catches
+    an intact payload under a wrong checksum. It never decompresses, so
+    it could not have replaced the pass above;
+  * and `locate_png_stream_end` covers the terminal chunk, which
+    `verify()` breaks ON without checksumming and the decoder never
+    reads at all, plus anything appended after the image ends. It walks
+    chunk FRAMING only — length, type, payload, CRC — decoding nothing
+    and knowing no chunk type but IEND, and it runs only after Pillow
+    has CRC-validated that sequence, so it cannot disagree with the
+    real decoder about where a chunk lies. Its answer feeds two
+    constant comparisons: that IEND's own 12 bytes are the fixed
+    constant its empty payload makes them, and that the file ends
+    there. Checking the FILE's last bytes would not do: appending a
+    second canonical IEND leaves a perfect tail while the real image
+    ended 12 bytes earlier.
+
+Together they reject a truncated file, corrupt compressed data, a bad
+chunk checksum anywhere including the terminal one, a structurally
+invalid stream, a non-image wearing a `.png` name, and a valid image of
+some OTHER format renamed to `.png` (the engine's loader is a PNG
+loader). Every legitimate PNG colour type
+— paletted, greyscale, greyscale+alpha, 16-bit, interlaced — is
+accepted: the rule is "decodes as a PNG", never "is already RGBA8".
+
+The pixel size each frame decodes to is then compared ACROSS one
+animation, which is the constraint the atlas cell geometry rests on
+(D-6 forbids resampling, so the compiler has no way to reconcile a
+mismatch). This says nothing about frame COUNTS: different directions
+of one animation legitimately hold different numbers of frames.
+
+Content findings are ERRORS, in plain `--validate-only` as much as
+under `--strict`.
+
+WHAT IT STILL DOES NOT VALIDATE
+-------------------------------
+
+Non-animation unit textures. `portrait.png`, `directional_sprites`
+entries, `sprite`, and `unknown_unit/rotations/*.png` are checked for
+EXISTENCE only: the inventory's scope is `animations/`, and those files
+are referenced from hard-coded Haskell or non-animation YAML fields.
 
 REQUIREMENTS
 ------------
 
-PyYAML for the declarations, Pillow for image decode/encode. Pillow is
-imported LAZILY: the inventory gate on an index-free corpus — which is
-every shipped unit until TEX-4 — runs without it.
+PyYAML for the declarations, Pillow for image decode/encode. Both are
+now load-bearing for `--validate-only`: since #1311 the inventory gate
+decodes every declared frame, so an absent Pillow is a loud ERROR
+naming the install command, never a silent skip of the content checks
+— a gate that skipped them would print OK while validating nothing.
+
+Pillow is still imported LAZILY, but that now only spares a run with no
+declared frames to decode (`--help`, an empty root, an argument error).
 
 `tools/requirements-assets.txt` pins both, is what the CI image
 installs, and is therefore the reference toolchain for byte-identical
@@ -254,6 +307,7 @@ import math
 import re
 import struct
 import sys
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
@@ -330,6 +384,17 @@ FRAME_RE = re.compile(r"\Aframe_(\d{3})\.png\Z")
 # Relative to the validation root.
 ASSET_PREFIX: Tuple[str, ...] = ("assets", "textures", "units")
 
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+# The terminal PNG chunk, in full. IEND's payload is EMPTY by
+# specification, so its length, type and CRC are all fixed: this is a
+# constant to compare against, not a chunk to parse. `verify_png_container`
+# needs it because Pillow's `verify()` breaks ON this chunk before
+# checksumming it, leaving the terminal CRC the one thing no library pass
+# validates.
+PNG_IEND_CHUNK = (struct.pack(">I", 0) + b"IEND"
+                  + struct.pack(">I", zlib.crc32(b"IEND") & 0xFFFFFFFF))
+
 # --- compiler constants (#1258) --------------------------------------
 
 # The FORMAT contract. TEX-3 parses this document, and
@@ -390,11 +455,12 @@ _IMAGE_MODULE: Any = None
 def image_module() -> Any:
     """Import Pillow on demand.
 
-    Lazy on purpose: `--validate-only` over a corpus with no generated
-    index never decodes anything, and that is the shipped state of
-    every unit until TEX-4 begins production tracking. Making the
-    inventory gate hard-depend on an image package would be a
-    regression in what it takes to run it.
+    Still lazy, but no longer optional in practice: since #1311 the
+    inventory gate decodes every declared frame, so any run with frames
+    to check needs it. Laziness now spares only the runs that decode
+    nothing at all — `--help`, an argument error, a root with no
+    declarations — and keeps the import failure reportable as one
+    finding rather than an import-time crash.
     """
     global _IMAGE_MODULE
     if _IMAGE_MODULE is None:
@@ -402,8 +468,9 @@ def image_module() -> Any:
             from PIL import Image  # type: ignore[import-not-found]
         except ImportError as error:
             raise ImageBackendMissing(
-                "Pillow is required to compile or verify atlases. Install "
-                "the pinned toolchain with:\n"
+                "Pillow is required to validate frame contents and to "
+                "compile or verify atlases. Install the pinned toolchain "
+                "with:\n"
                 "    python3 -m pip install --user -r "
                 "tools/requirements-assets.txt"
             ) from error
@@ -441,6 +508,116 @@ def decode_rgba8(path: Path) -> Frame:
         raise
     except Exception as error:  # noqa: BLE001 - any decode failure is one finding
         raise ValueError(f"cannot decode as an image: {error}") from error
+
+
+def locate_png_stream_end(path: Path) -> Tuple[int, int, bytes]:
+    """Find where the PNG datastream ends: `(end, file size, IEND bytes)`.
+
+    `end` is the offset just past the FIRST IEND chunk — the one that
+    terminates the image per the specification. `IEND bytes` are that
+    chunk's own 12 bytes, for the caller to compare against
+    `PNG_IEND_CHUNK`. Raises `ValueError` when no IEND terminates the
+    stream, rather than returning a sentinel the caller would have to
+    re-check on a path Pillow has already made unreachable.
+
+    This is chunk FRAMING and nothing else: a four-byte big-endian
+    length, a four-byte type, the payload, a four-byte CRC. It decodes
+    nothing, checksums nothing, and knows nothing about any chunk type
+    beyond the four letters that end the stream.
+
+    That narrowness is deliberate and must be preserved (#1311 —
+    hand-rolling a second PNG parser is what sank the previous
+    attempt). Two things keep it honest: it runs only AFTER Pillow has
+    CRC-validated the chunk sequence, which fixes the framing uniquely,
+    so this cannot disagree with the real decoder about where a chunk
+    lies; and its entire output is one offset, which the caller uses to
+    ask a single question the library will not answer — is there
+    anything after the image?
+    """
+    with path.open("rb") as handle:
+        size = handle.seek(0, io.SEEK_END)
+        handle.seek(len(PNG_SIGNATURE))
+        while True:
+            header = handle.read(8)
+            if len(header) < 8:
+                break
+            (length,) = struct.unpack(">I", header[:4])
+            chunk_start = handle.tell() - 8
+            end = handle.seek(length + 4, io.SEEK_CUR)
+            if end > size:
+                # A chunk claiming more bytes than the file holds.
+                break
+            if header[4:] == b"IEND":
+                handle.seek(chunk_start)
+                return end, size, handle.read(end - chunk_start)
+    raise ValueError(
+        "corrupt PNG structure: no IEND chunk terminates the stream")
+
+
+def verify_png_container(path: Path) -> None:
+    """Check the chunk stream's checksums, without decompressing.
+
+    Pillow's `verify()` walks the chunks and CRCs each one, which is
+    the ONLY thing here that looks at an IDAT checksum — the decoder
+    reads and discards those four bytes while streaming pixel data, so
+    a correct payload under a wrong checksum decodes happily.
+
+    It stops ON the terminal chunk without checksumming it, though, and
+    the decoder never reads that far, so IEND is the one chunk neither
+    library pass covers — nor does either notice bytes appended after
+    it. `locate_png_stream_end` supplies the offset both questions need.
+
+    Deliberately does NOT re-check the format: this only ever runs on a
+    file `decode_rgba8` has already accepted as a decodable PNG, and a
+    second copy of that rule would mean neither copy could be removed
+    detectably.
+    """
+    image_mod = image_module()
+    try:
+        with image_mod.open(path) as handle:
+            handle.verify()
+    except ImageBackendMissing:
+        raise
+    except Exception as error:  # noqa: BLE001 - any rejection is one finding
+        raise ValueError(f"corrupt PNG structure: {error}") from error
+
+    try:
+        end, size, terminal = locate_png_stream_end(path)
+    except OSError as error:
+        raise ValueError(f"cannot read: {error}") from error
+
+    # Trailing data is not part of the image. Comparing the FILE's last
+    # bytes would not establish this: appending a second canonical IEND
+    # leaves a perfect tail while the real image ended 12 bytes earlier.
+    if end != size:
+        raise ValueError(
+            f"corrupt PNG structure: {size - end} byte(s) follow the IEND "
+            f"chunk that ends the image")
+    # And the terminal chunk itself, which needs no parsing to check:
+    # IEND's payload is EMPTY by specification, so its length, type and
+    # CRC together are a fixed 12-byte constant.
+    if terminal != PNG_IEND_CHUNK:
+        raise ValueError(
+            "corrupt PNG structure: the IEND chunk that ends the image "
+            "carries a wrong terminal checksum")
+
+
+def validate_frame_image(path: Path) -> Tuple[int, int]:
+    """Prove one declared frame is real art, and report its pixel size.
+
+    TWO passes, neither sufficient alone — see the module docstring's
+    FRAME CONTENTS section. The decode comes first: it settles the
+    format question and covers the compressed pixel stream, so the
+    container pass that follows is reached only for a genuine,
+    decodable PNG and has exactly one job left, the checksums.
+
+    Raises `ValueError` naming the reason for any unreadable frame.
+    `ImageBackendMissing` propagates untouched: an absent decoder is one
+    condition for the whole run, not a finding about this file.
+    """
+    frame = decode_rgba8(path)
+    verify_png_container(path)
+    return frame.width, frame.height
 
 
 @dataclass
@@ -1046,6 +1223,77 @@ def validate_numbering(
             where,
             f"gap in frame numbering: missing "
             f"{', '.join(f'frame_{i:03d}.png' for i in gaps)}")
+
+
+class ContentGate:
+    """Whether the inventory's content pass can decode, reported once.
+
+    An absent Pillow is an ERROR rather than a skip: a gate that
+    quietly stopped opening frames would still print OK while
+    validating nothing, which is the exact failure the content checks
+    exist to prevent (#1311). It is reported ONCE rather than once per
+    frame, because it is one condition about the environment and 4,620
+    copies of it would bury every real finding.
+
+    Probing is deferred to first use, so a run with no declared frames
+    to decode still needs no decoder installed.
+    """
+
+    def __init__(self) -> None:
+        self._reason: Optional[str] = None
+        self._probed = False
+        self._reported = False
+
+    def usable(self, report: Report) -> bool:
+        if not self._probed:
+            self._probed = True
+            try:
+                image_module()
+            except ImageBackendMissing as error:
+                self._reason = str(error)
+        if self._reason is None:
+            return True
+        if not self._reported:
+            self._reported = True
+            report.err("image decoder", self._reason)
+        return False
+
+
+def validate_animation_contents(
+    report: Report, anim: AnimDecl, frames: Sequence[Tuple[str, Path]],
+) -> None:
+    """Decode one animation's frames and pin them to a single size.
+
+    `frames` is every successfully resolved, singly-owned declared
+    frame of this animation, as `(declared path, resolved file)`.
+
+    A frame that fails to decode is reported and SKIPPED rather than
+    aborting the animation: three corrupt frames should surface as
+    three findings in one run, not across three consecutive re-runs.
+    The size comparison then runs over whatever did decode, so an
+    undecodable frame is never also reported as a size mismatch.
+    """
+    sizes: Dict[Tuple[int, int], str] = {}
+    for declared, real in frames:
+        try:
+            size = validate_frame_image(real)
+        except ValueError as error:
+            report.err(anim.where, f"{declared}: {error}")
+            continue
+        # The first declaration of each distinct size wins as that
+        # size's example, so the diagnostic is stable across runs.
+        sizes.setdefault(size, declared)
+
+    if len(sizes) > 1:
+        detail = "; ".join(
+            f"{width}x{height} (e.g. {example})"
+            for (width, height), example in sorted(sizes.items()))
+        report.err(
+            anim.where,
+            f"inconsistent frame dimensions: {detail}. Every frame of one "
+            f"animation must decode to one pixel size — the atlas cell IS "
+            f"that size and nothing here resamples. Frame COUNTS may still "
+            f"differ between directions.")
 
 
 # --------------------------------------------------------------------
@@ -1957,13 +2205,19 @@ class Totals:
 def validate_sources(
     root: Path, only_unit: Optional[str], report: Report,
 ) -> Tuple[Totals, List[UnitDecl]]:
-    """The #1257 inventory gate: declarations against the filesystem.
+    """The inventory gate: declarations against the filesystem, and
+    since #1311 against each declared frame's actual CONTENTS.
 
     Split out from `validate` because `--compile` needs exactly this
     half — an out-of-date generated index is the very thing a compile
-    fixes, so refusing to compile on one would be a deadlock.
+    fixes, so refusing to compile on one would be a deadlock. Compile
+    consequently decodes each frame here as well as in `plan_animation`;
+    that second read costs roughly half a second over the whole corpus
+    and buys one statement — the compiler runs THE inventory gate, not a
+    reduced variant of it.
     """
     totals = Totals()
+    content = ContentGate()
     decls = load_declarations(report, root / "data" / "units")
     if only_unit is not None:
         decls = [d for d in decls if d.name == only_unit]
@@ -1998,6 +2252,10 @@ def validate_sources(
         for anim in decl.anims:
             totals.animations += 1
             validate_direction_set(report, anim)
+            # Contents are checked per ANIMATION, not per direction: one
+            # pixel size spans the whole animation, so the comparison
+            # needs every direction's frames together.
+            openable: List[Tuple[str, Path]] = []
             for direction in sorted(anim.frames):
                 declared_paths = anim.frames[direction]
                 names = [PurePosixPath(p).name for p in declared_paths]
@@ -2016,6 +2274,9 @@ def validate_sources(
                             f"already owned by {claimed[real]}")
                         continue
                     claimed[real] = owner
+                    openable.append((declared, real))
+            if openable and content.usable(report):
+                validate_animation_contents(report, anim, openable)
 
     for orphan in sorted(physical - set(claimed)):
         rel = orphan.relative_to(root.resolve()).as_posix() \
