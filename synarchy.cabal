@@ -443,6 +443,7 @@ library
                      Unit.Types.Combat
                      Unit.Types.Def
                      Unit.Atlas.Types
+                     Unit.Atlas.Digest
                      Unit.Atlas.Index
                      Unit.Atlas.Load
                      Unit.Types.Instance

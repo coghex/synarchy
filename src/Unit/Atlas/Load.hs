@@ -27,17 +27,21 @@
 --     2. it still describes what the unit YAML declares — animation set,
 --        @fps@ \/ @loop@ \/ @flip@, direction set, per-direction frame
 --        counts, columns ('Unit.Atlas.Index.planUnitAtlasStorage');
---     3. each atlas decodes to the image the index describes, AND every
+--     3. each atlas decodes to the image the index describes; every
 --        declared SOURCE frame decodes to exactly the pixels its atlas
---        cell holds ('Unit.Atlas.Index.validateSourceFrame').
+--        cell holds ('Unit.Atlas.Index.validateSourceFrame'); and the
+--        animation's whole @source_digest@ is recomputed from those
+--        same inputs and compared
+--        ('Unit.Atlas.Index.validateSourceDigest').
 --
 --   Pass 3 is what catches a source PNG repainted while its compiled
 --   atlas and index were left in place: the atlas is still internally
 --   consistent and its own digest still matches, so nothing short of
---   reading the source art can see it. Together, passes 2 and 3 verify
---   every input the compiler's @source_digest@ is taken over — see
---   'Unit.Atlas.Index.validateSourceFrame' for why they verify those
---   inputs directly instead of recomputing the digest.
+--   reading the source art can see it. The per-frame comparison runs
+--   BEFORE the digest so a stale artifact is reported against one
+--   direction and one frame; the digest then closes what a per-field
+--   comparison cannot — a forged digest, and a frame whose PATH changed
+--   while its pixels did not.
 --
 --   Reading the source frames here is a MIGRATION-PHASE cost, and an
 --   accepted one: the legacy per-frame path is still live (requirement
@@ -195,25 +199,48 @@ checkSourceFrames root unit yamlAnims anim atlas =
     -- cannot happen.
     case Map.lookup (aaName anim) yamlAnims of
         Nothing → pure (Left (miss "the unit YAML declares no such animation"))
-        Just ya → go (Map.toList (aaDirections anim)) ya
+        Just ya → do
+            -- `Map.toAscList` over a `Map Direction _` is already the
+            -- compiler's atlas row order (the engine's own constructor
+            -- order restricted to authored directions), which is the
+            -- order `sourceDigest` requires.
+            r ← go (Map.toAscList (aaDirections anim)) ya []
+            pure $ case r of
+                Left err → Left err
+                Right dirInputs →
+                    validateSourceDigest unit anim SourceAnimInput
+                        { saiUnit       = unit
+                        , saiName       = aaName anim
+                        , saiFlip       = aaFlip anim
+                        , saiLoop       = aaLoop anim
+                        , saiFps        = aaFps anim
+                        , saiCellWidth  = aaCellWidth anim
+                        , saiCellHeight = aaCellHeight anim
+                        , saiColumns    = aaColumns anim
+                        , saiDirections = reverse dirInputs
+                        }
   where
     miss reason = AtlasLoadError
         { aleUnit = unit, aleAnimation = Just (aaName anim)
         , aleArtifact = aaPath anim, aleReason = reason }
 
-    go [] _ = pure (Right ())
-    go ((dir, row) : rest) ya =
+    go [] _ acc = pure (Right acc)
+    go ((dir, row) : rest) ya acc =
         case Map.lookup dir (yafFrames ya) of
             Nothing → pure (Left (miss ("the unit YAML declares no frames for "
                                         <> T.pack (show dir))))
             Just paths → do
-                r ← goFrames dir row (zip [0 ..] paths)
+                r ← goFrames dir row (zip [0 ..] paths) []
                 case r of
                     Left err → pure (Left err)
-                    Right () → go rest ya
+                    Right frames → go rest ya
+                        (SourceDirectionInput
+                            { sdiDirection = indexDirectionToken dir
+                            , sdiRow = adrRow row
+                            , sdiFrames = reverse frames } : acc)
 
-    goFrames _ _ [] = pure (Right ())
-    goFrames dir row ((col, framePath) : rest) = do
+    goFrames _ _ [] acc = pure (Right acc)
+    goFrames dir row ((col, framePath) : rest) acc = do
         present ← doesFileExist (under root framePath)
         if not present
             then pure ∘ Left $ AtlasLoadError
@@ -232,6 +259,11 @@ checkSourceFrames root unit yamlAnims anim atlas =
                                  (adrRow row) col framePath frame of
                             Left err → pure (Left err)
                             Right () → goFrames dir row rest
+                                (SourceFrameInput
+                                    { sfiPath = T.pack framePath
+                                    , sfiWidth = diWidth frame
+                                    , sfiHeight = diHeight frame
+                                    , sfiPixels = diPixels frame } : acc)
 
 -- | Decode an image to its canonical RGBA8 samples — the same
 --   'JP.convertRGBA8' normalization the upload path

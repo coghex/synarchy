@@ -45,7 +45,7 @@ import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import System.Directory
     ( createDirectoryIfMissing, getTemporaryDirectory, removeDirectoryRecursive
-    , removeFile )
+    , removeFile, renameFile )
 import System.FilePath ((</>), takeDirectory)
 import UI.Manager
     ( createPage, createSprite, getElement, setSpriteFrame, setSpriteTexture )
@@ -469,7 +469,7 @@ fixtureIndex = BLC.pack ∘ T.unpack ∘ obj $
                 [ obj [ ("direction", str (T.pack (dirToken d)))
                       , ("row", tshow r), ("frame_count", tshow n) ]
                 | (r, (d, n)) ← zip [(0 ∷ Int) ..] ordered ])
-            , ("source_digest", str "fixture-source-digest")
+            , ("source_digest", str (fixtureSourceDigest name flipV fps loop ds))
             , ("atlas_digest", str (atlasContentDigest
                   (JP.imageWidth img) (JP.imageHeight img)
                   (packImage img)))
@@ -477,6 +477,27 @@ fixtureIndex = BLC.pack ∘ T.unpack ∘ obj $
 
 packImage ∷ JP.Image JP.PixelRGBA8 → BS.ByteString
 packImage = BS.pack ∘ SV.toList ∘ JP.imageData
+
+-- | The fixture's own @source_digest@, computed the way the compiler
+--   would — so the tree on disk is internally consistent and each
+--   negative case below breaks exactly one thing.
+fixtureSourceDigest ∷ Text → Bool → Float → Bool → [(Direction, Int)] → Text
+fixtureSourceDigest name flipV fps loop ds = sourceDigest SourceAnimInput
+    { saiUnit = fixtureUnit, saiName = name
+    , saiFlip = flipV, saiLoop = loop, saiFps = fps
+    , saiCellWidth = fixtureCell, saiCellHeight = fixtureCell
+    , saiColumns = maximum (1 : map snd ordered)
+    , saiDirections =
+        [ SourceDirectionInput (indexDirectionToken d) r
+            [ SourceFrameInput
+                { sfiPath = T.pack (framePath name d i)
+                , sfiWidth = fixtureCell, sfiHeight = fixtureCell
+                , sfiPixels = packImage (frameImage name d i) }
+            | i ← [0 .. n - 1] ]
+        | (r, (d, n)) ← zip [0 ..] ordered ]
+    }
+  where
+    ordered = orderedRows ds
 
 -- | Build the whole tree in a temp directory and tear it down after.
 withAtlasFixture ∷ (FilePath → IO ()) → IO ()
@@ -524,6 +545,15 @@ showLoad ∷ LoadResult → String
 showLoad (Left e)          = T.unpack (renderAtlasLoadError e)
 showLoad (Right Nothing)   = "<<no index>>"
 showLoad (Right (Just m))  = show (HM.keys m)
+
+-- | Replace the first occurrence of @needle@ with @repl@.
+replaceFirst ∷ BL.ByteString → BL.ByteString → BS.ByteString → BS.ByteString
+replaceFirst needle repl hay =
+    let n = BL.toStrict needle
+        r = BL.toStrict repl
+        (before, rest) = BS.breakSubstring n hay
+    in if BS.null rest then hay
+       else before <> r <> BS.drop (BS.length n) rest
 
 isRejected ∷ Either AtlasLoadError a → Bool
 isRejected (Left _) = True
@@ -1180,6 +1210,38 @@ spec = do
                 r `shouldSatisfy` isRejectedLoad
                 selectionOf r `shouldBe` []
 
+        -- Only the digest can see a forged digest.
+        it "a forged source_digest rejects" $
+            withAtlasFixture $ \root → do
+                let ix = root </> unitAtlasIndexPath fixtureUnit
+                raw ← BS.readFile ix
+                BS.writeFile ix (replaceFirst
+                    (BLC.pack (T.unpack (fixtureSourceDigest "step" False 12 False
+                        [(DirS, 2), (DirN, 3)])))
+                    (BLC.pack (replicate 64 'a')) raw)
+                r ← loadUnitAtlasIndexIn root fixtureUnit fixtureYaml
+                r `shouldSatisfy` isRejectedLoad
+                T.pack (showLoad r) `shouldSatisfy` T.isInfixOf "source digest"
+                selectionOf r `shouldBe` []
+
+        -- And only the digest can see a frame RENAMED to a file with
+        -- byte-identical pixels: the atlas still holds exactly those
+        -- pixels, so every per-frame comparison passes.
+        it "a path-only source change with identical pixels rejects" $
+            withAtlasFixture $ \root → do
+                let old' = framePath "step" DirS 1
+                    new' = "assets/textures/units/" ⧺ T.unpack fixtureUnit
+                               ⧺ "/animations/step/south/frame_009.png"
+                renameFile (root </> old') (root </> new')
+                let renamed = Map.adjust
+                        (\ya → ya { yafFrames = Map.adjust
+                            (map (\q → if q ≡ old' then new' else q)) DirS
+                            (yafFrames ya) }) "step" fixtureYaml
+                r ← loadUnitAtlasIndexIn root fixtureUnit renamed
+                r `shouldSatisfy` isRejectedLoad
+                T.pack (showLoad r) `shouldSatisfy` T.isInfixOf "source digest"
+                selectionOf r `shouldBe` []
+
         it "ONE broken animation rejects the other, unbroken one as well" $
             withAtlasFixture $ \root → do
                 repaint (root </> framePath "blink" DirS 0)
@@ -1287,3 +1349,150 @@ spec = do
                 styleOf el halfway `shouldNotBe`
                     styleOf el (setSpriteFrame el (TextureHandle 900)
                                     (0.5, 0, 1, 1) False mgr)
+
+    -- Reproducing @source_digest@ means reproducing Python's @repr()@ of
+    -- the narrowed fps. These expectations are CPython's own output for
+    -- each value, so a formatting divergence fails HERE rather than by
+    -- rejecting every atlas of a unit whose fps happens to land outside
+    -- the range where Haskell's `show` and Python's `repr` agree.
+    describe "Unit.Atlas.Digest — Python float repr" $ do
+        it "matches CPython for every reference value" $
+            forM_ pythonReprReference $ \(v, expected) →
+                (v, pythonFloatRepr v) `shouldBe` (v, expected)
+
+        it "switches to scientific exactly where CPython does" $ do
+            -- decpt <= -4 or decpt > 16 — thresholds Haskell's own
+            -- `show` does not share (it switches at 0.1 and 1e7).
+            pythonFloatRepr 1.0e7 `shouldBe` "10000000.0"
+            pythonFloatRepr 0.01 `shouldNotSatisfy` T.isInfixOf "e"
+            pythonFloatRepr 9.999999747378752e-05
+                `shouldSatisfy` T.isInfixOf "e-05"
+
+        it "pads the exponent to two digits and always signs it" $ do
+            pythonFloatRepr 1.401298464324817e-45
+                `shouldSatisfy` T.isInfixOf "e-45"
+            pythonFloatRepr 9.999999747378752e-06
+                `shouldSatisfy` T.isInfixOf "e-06"
+            pythonFloatRepr 1.0000000272564224e16
+                `shouldSatisfy` T.isInfixOf "e+16"
+
+    describe "Unit.Atlas.Digest — source digest" $ do
+        -- The reference value comes from tools/pack_atlas.py's own
+        -- `source_digest`, run on exactly these inputs, so this pins the
+        -- CROSS-LANGUAGE agreement rather than self-consistency.
+        it "reproduces pack_atlas.py's digest for a known animation" $
+            sourceDigest referenceSourceAnim `shouldBe`
+                "deec36be0a6efa397dda89db29535223f9c26df2ffd81dba6fcd9056a8d07a02"
+
+        -- Every field is IN the stream, and the length prefixes make it
+        -- injective: perturbing any one input must change the digest.
+        it "changes when any single input changes" $ do
+            let base = sourceDigest referenceSourceAnim
+                perturbations =
+                    [ ("unit",      referenceSourceAnim { saiUnit = "other" })
+                    , ("animation", referenceSourceAnim { saiName = "walk" })
+                    , ("flip",      referenceSourceAnim { saiFlip = True })
+                    , ("loop",      referenceSourceAnim { saiLoop = True })
+                    , ("fps",       referenceSourceAnim { saiFps = 8 })
+                    , ("cell w",    referenceSourceAnim { saiCellWidth = 3 })
+                    , ("cell h",    referenceSourceAnim { saiCellHeight = 3 })
+                    , ("columns",   referenceSourceAnim { saiColumns = 4 })
+                    , ("dir set",   referenceSourceAnim
+                          { saiDirections = take 1 (saiDirections referenceSourceAnim) })
+                    , ("row",       overFirstDir (\d → d { sdiRow = 7 }))
+                    , ("dir token", overFirstDir (\d → d { sdiDirection = "east" }))
+                      -- The path-only change: same pixels, renamed file.
+                      -- NOTHING else in the index records frame paths, so
+                      -- only the digest can see this.
+                    , ("frame path", overFirstFrame (\f → f { sfiPath = "renamed.png" }))
+                    , ("frame size", overFirstFrame (\f → f { sfiWidth = 4 }))
+                    , ("frame pixels", overFirstFrame (\f →
+                          f { sfiPixels = BS.pack (0xFF : drop 1 (BS.unpack (sfiPixels f))) }))
+                    ]
+            forM_ perturbations $ \(label, perturbed) →
+                (label, sourceDigest perturbed ≡ base) `shouldBe` (label, False)
+
+        -- Moving a byte across a field boundary must not collide — what
+        -- the length prefixes exist for.
+        it "does not collide when text moves across a field boundary" $
+            sourceDigest (referenceSourceAnim { saiUnit = "fixture_unitstep"
+                                              , saiName = "" })
+                `shouldNotBe` sourceDigest referenceSourceAnim
+
+-- | The animation @tools/pack_atlas.py@'s `source_digest` was run on to
+--   produce the reference value above: two directions, unequal frame
+--   counts, 2x2 cells, fps 12 narrowed through 32-bit.
+referenceSourceAnim ∷ SourceAnimInput
+referenceSourceAnim = SourceAnimInput
+    { saiUnit = "fixture_unit", saiName = "step"
+    , saiFlip = False, saiLoop = False, saiFps = 12
+    , saiCellWidth = 2, saiCellHeight = 2, saiColumns = 3
+    , saiDirections =
+        [ SourceDirectionInput "south" 0
+            [ refFrame "a/south/frame_000.png" 0
+            , refFrame "a/south/frame_001.png" 1 ]
+        , SourceDirectionInput "north" 1
+            [ refFrame "a/north/frame_000.png" 2
+            , refFrame "a/north/frame_001.png" 3
+            , refFrame "a/north/frame_002.png" 4 ]
+        ]
+    }
+
+refFrame ∷ Text → Int → SourceFrameInput
+refFrame path seed = SourceFrameInput
+    { sfiPath = path, sfiWidth = 2, sfiHeight = 2
+    , sfiPixels = BS.pack
+        [ fromIntegral ((x * 13 + y * 29 + seed * 7) `mod` 256)
+        | y ← [0 .. 1 ∷ Int], x ← [0 .. 1 ∷ Int], _ ← [0 .. 3 ∷ Int] ] }
+
+overFirstDir ∷ (SourceDirectionInput → SourceDirectionInput) → SourceAnimInput
+overFirstDir f = case saiDirections referenceSourceAnim of
+    (d:rest) → referenceSourceAnim { saiDirections = f d : rest }
+    []       → referenceSourceAnim
+
+overFirstFrame ∷ (SourceFrameInput → SourceFrameInput) → SourceAnimInput
+overFirstFrame f = overFirstDir $ \d → case sdiFrames d of
+    (fr:rest) → d { sdiFrames = f fr : rest }
+    []        → d
+
+-- | CPython @repr()@ output for float32-exact values across the whole
+--   representable range, including both sides of each notation
+--   threshold. Generated with @tools/pack_atlas.py@'s own narrowing.
+pythonReprReference ∷ [(Float, Text)]
+pythonReprReference =
+    [ (1.0, "1.0")
+    , (2.0, "2.0")
+    , (4.0, "4.0")
+    , (6.0, "6.0")
+    , (8.0, "8.0")
+    , (10.0, "10.0")
+    , (12.0, "12.0")
+    , (15.0, "15.0")
+    , (24.0, "24.0")
+    , (30.0, "30.0")
+    , (60.0, "60.0")
+    , (120.0, "120.0")
+    , (240.0, "240.0")
+    , (0.5, "0.5")
+    , (12.5, "12.5")
+    , (8.100000381469727, "8.100000381469727")
+    , (0.3333333432674408, "0.3333333432674408")
+    , (9.999999747378752e-06, "9.999999747378752e-06")
+    , (9.999999747378752e-05, "9.999999747378752e-05")
+    , (0.0010000000474974513, "0.0010000000474974513")
+    , (0.10000000149011612, "0.10000000149011612")
+    , (0.009999999776482582, "0.009999999776482582")
+    , (10000000.0, "10000000.0")
+    , (100000000.0, "100000000.0")
+    , (999999986991104.0, "999999986991104.0")
+    , (1.0000000272564224e16, "1.0000000272564224e+16")
+    , (9.999999843067494e16, "9.999999843067494e+16")
+    , (1.0000000200408773e20, "1.0000000200408773e+20")
+    , (3.4028234663852886e38, "3.4028234663852886e+38")
+    , (1.1754943508222875e-38, "1.1754943508222875e-38")
+    , (1.401298464324817e-45, "1.401298464324817e-45")
+    , (1.4999999621068127e-05, "1.4999999621068127e-05")
+    , (123456.7890625, "123456.7890625")
+    , (1.2676506002282294e30, "1.2676506002282294e+30")
+    , (7.888609052210118e-31, "7.888609052210118e-31")
+    ]

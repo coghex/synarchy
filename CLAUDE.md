@@ -1879,19 +1879,26 @@ atlas decodes to the image the index describes (dimensions plus
 `atlas_digest` over decoded RGBA8), AND every declared SOURCE frame
 decodes to exactly the pixels its atlas cell holds.
 
-Pass 3 is what catches a source PNG repainted while its compiled atlas
-and index were left in place — the atlas stays internally consistent and
-its own digest still matches, so nothing short of reading the source art
-sees it. Passes 2 and 3 together verify every input the compiler's
-`source_digest` is taken over, **directly rather than by recomputing the
-digest**: that verifies the property the digest is a proxy for, localizes
-a failure to one direction and one frame, and avoids reproducing the
-compiler's field encoding (including `repr()` of a Python float, whose
-decimal formatting diverges from Haskell's at exponent extremes — a
-parity bug there would REJECT valid art). Reading source frames at load
-is a migration-phase cost: the legacy path is still live and every unit
-still ships its frames. TEX-6, which removes source loading, is where
-this becomes the compile-time gate's alone.
+**Both** recorded digests are verified. `atlas_digest` catches an
+artifact the index does not describe; `source_digest`
+(`Unit.Atlas.Digest.sourceDigest`, recomputed from the same inputs the
+compiler digests) catches a forged digest and a frame whose PATH changed
+while its pixels did not — nothing else in the index records paths. The
+per-frame pixel comparison still runs first, because it localizes a
+stale artifact to one direction and one frame where the digest can only
+say that something moved.
+
+Reproducing `source_digest` means reproducing Python's `repr()` of the
+narrowed fps (`pythonFloatRepr`), whose positional/scientific thresholds
+Haskell's own `show` does not share. That is pinned against
+CPython-generated reference values across the whole float32 range: a
+formatting divergence must fail in the test, not by rejecting every
+atlas of a unit whose fps lands in the disagreeing range.
+
+Reading source frames at load is a migration-phase cost: the legacy path
+is still live and every unit still ships its frames. TEX-6, which
+removes source loading, is where this becomes the compile-time gate's
+alone.
 
 **`pickFrame` returns a `FrameSample`, and its arithmetic is FROZEN**
 (D-3). Every consumer reads the stable handle (#286 — never a slot), the

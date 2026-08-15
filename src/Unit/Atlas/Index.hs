@@ -20,21 +20,20 @@
 --   art it was compiled from. "Unit.Atlas.Load" runs them in that
 --   order.
 --
---   The compiler records TWO digests (see @tools\/pack_atlas.py@'s
---   @digest_stream@), and they are treated differently here:
+--   BOTH digests the compiler records are verified:
 --
---     * @atlas_digest@ — over the atlas's decoded RGBA8 CONTENT. It is
---       VERIFIED ('validateAtlasImage'), because the loader decodes the
---       image anyway, and it is what catches an artifact this index
---       does not actually describe.
---     * @source_digest@ — over the animation's own SOURCE frames. It is
---       parsed, required, and carried on 'aaSourceDigest' for
---       reporting, but never recomputed. Source freshness IS checked at
---       runtime — 'planUnitAtlasStorage' covers every declaration the
---       digest is taken over and 'validateSourceFrame' covers the frame
---       pixels — just not by reproducing the compiler's field encoding.
---       'validateSourceFrame' explains why that is the safer form of
---       the same check.
+--     * @atlas_digest@, over the atlas's decoded RGBA8 CONTENT
+--       ('validateAtlasImage') — what catches an artifact this index
+--       does not actually describe;
+--     * @source_digest@, over everything the animation was compiled
+--       FROM ('validateSourceDigest') — what catches a forged digest,
+--       and a source edit that changed a frame's PATH without changing
+--       its pixels, which nothing else in the index records.
+--
+--   'validateSourceFrame' still compares each frame against its atlas
+--   cell, and still runs first: it localizes a stale artifact to one
+--   direction and one frame, where the digest can only report that
+--   something among the inputs moved.
 module Unit.Atlas.Index
     ( AtlasLoadError(..)
     , renderAtlasLoadError
@@ -50,24 +49,24 @@ module Unit.Atlas.Index
     , DecodedImage(..)
     , validateAtlasImage
     , validateSourceFrame
+    , validateSourceDigest
     , atlasCellRows
-    , atlasContentDigest
+    , indexDirectionToken
+    , module Unit.Atlas.Digest
     ) where
 
 import UPrelude
-import qualified Crypto.Hash.SHA256 as SHA256
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Types as A
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import Data.List (sort, sortOn)
-import Numeric (showHex)
 import System.FilePath ((</>))
+import Unit.Atlas.Digest
 import Unit.Atlas.Types
 import Unit.Direction (Direction(..))
 
@@ -81,12 +80,6 @@ atlasIndexSchemaVersion = 1
 -- | The digest algorithm this build can verify.
 supportedDigestAlgorithm ∷ Text
 supportedDigestAlgorithm = "sha256"
-
--- | The compiler's @ATLAS_DIGEST_TAG@ — the domain tag of the content
---   digest. Versioned by the compiler so a change to what goes INTO a
---   digest invalidates every recorded one.
-atlasDigestTag ∷ BS.ByteString
-atlasDigestTag = "synarchy-atlas-content-v1"
 
 atlasIndexFileName ∷ FilePath
 atlasIndexFileName = "index.json"
@@ -363,7 +356,12 @@ parseAtlasDirection t = case t of
     "south-east" → Just DirSE
     _            → Nothing
 
--- | The index's own spelling of a direction, for diagnostics.
+-- | The index's own spelling of a direction — @pack_atlas.py@'s
+--   @ATLAS_DIRECTION_ORDER@ tokens. Used for diagnostics AND as a
+--   digest input, so it is the one spelling both sides agree on.
+indexDirectionToken ∷ Direction → Text
+indexDirectionToken = renderDir
+
 renderDir ∷ Direction → Text
 renderDir d = case d of
     DirS  → "south"      ; DirSW → "south-west"
@@ -585,32 +583,32 @@ validateSourceFrame unit anim atlas dir row col path frame
         | y ← [0 .. diHeight frame - 1] ]
     bad = Left ∘ animError unit (aaPath anim) (aaName anim)
 
--- | The compiler's @content_digest@, reproduced.
+-- | Verify one animation's @source_digest@ against everything it was
+--   compiled from.
 --
---   A canonical, length-prefixed stream: the domain tag, then each
---   labelled field as @\<u64 LE length\>\<bytes\>@. The length prefixes
---   are what make it injective — a bare concatenation would let a
---   character move across a field boundary without changing the hash.
-atlasContentDigest ∷ Int → Int → BS.ByteString → Text
-atlasContentDigest w h pixels =
-    hex $ SHA256.finalize $ SHA256.updates SHA256.init $
-        [ lengthPrefix (BS.length atlasDigestTag), atlasDigestTag ]
-        <> concatMap field
-            [ ("width",  BC.pack (show w))
-            , ("height", BC.pack (show h))
-            , ("pixels", pixels)
-            ]
+--   This is the LAST validation step and the most expensive, so it runs
+--   only once every cheaper check has passed. It subsumes them: the
+--   digest covers the animation's identity, its @flip@ \/ @loop@ \/
+--   @fps@, its cell geometry and column count, its direction set with
+--   each row and real frame count, and every frame's DECLARED PATH,
+--   size, and decoded pixels. Two things only it can catch:
+--
+--     * a forged or corrupt digest — every other check would pass an
+--       index carrying an arbitrary value here;
+--     * a source edit that changed a frame's PATH without changing its
+--       pixels. Nothing else in the index records paths, so nothing
+--       else can notice.
+validateSourceDigest
+    ∷ Text → AtlasAnimation → SourceAnimInput → Either AtlasLoadError ()
+validateSourceDigest unit anim inputs
+    | actual ≡ aaSourceDigest anim = Right ()
+    | otherwise = Left ∘ animError unit (aaPath anim) (aaName anim) $
+        "source digest " <> actual <> " does not match the index's "
+        <> aaSourceDigest anim
+        <> " — the compiled artifact is stale or the index was modified; "
+        <> "re-run tools/pack_atlas.py --compile"
   where
-    field (label, value) =
-        [ lengthPrefix (BS.length label), label
-        , lengthPrefix (BS.length value), value ]
-    lengthPrefix n = BS.pack
-        [ fromIntegral ((n `shiftR` (8 * i)) ⌃ 0xff) | i ← [0 .. 7 ∷ Int] ]
-
-hex ∷ BS.ByteString → Text
-hex = T.pack ∘ concatMap byte ∘ BS.unpack
-  where
-    byte b = let s = showHex b "" in if length s ≡ 1 then '0' : s else s
+    actual = sourceDigest inputs
 
 -- * The raw document
 
