@@ -109,13 +109,17 @@ atlasTextureName unit anim = "unit_" <> unit <> "_" <> anim <> "_atlas"
 -- | The atlas texture requests a unit's selection produces: EXACTLY one
 --   per atlas-backed animation, each naming that animation's own atlas.
 --
---   The unit loader folds over the same selection, so this is the
---   request set it issues — and a selection that does not exist (a
---   rejected index yields no selection at all) issues none.
+--   This IS the loader's upload set, not a description of it — the unit
+--   loader issues one request per element of this list and looks the
+--   resulting handles back up by animation name — so a selection that
+--   does not exist (a rejected index yields none) issues nothing.
 --   Deterministically ordered by animation name so it is assertable.
-atlasTextureRequests ∷ Text → HM.HashMap Text AtlasAnimation → [(Text, FilePath)]
+--
+--   Each element is @(animation, registry name, atlas path)@.
+atlasTextureRequests
+    ∷ Text → HM.HashMap Text AtlasAnimation → [(Text, Text, FilePath)]
 atlasTextureRequests unit sel =
-    [ (atlasTextureName unit name, aaPath aa)
+    [ (name, atlasTextureName unit name, aaPath aa)
     | (name, aa) ← sortOn fst (HM.toList sel) ]
 
 -- | Why an atlas-backed animation could not be loaded.

@@ -1942,9 +1942,15 @@ reference values, mode selection, and the real consumer geometry —
 texel-level comparison of an atlas cell against its legacy frame with
 the mirrored case included, the pinned-nearest survival of a global
 filter toggle through `planFilterRebind`, the cache's policy awareness,
-and a real on-disk fixture tree driven through `loadUnitAtlasIndexIn`
-proving one request per indexed animation and NO selection at all when
-any artifact is stale).
+and a real on-disk fixture tree driven through `loadUnitAtlasIndexIn`).
+`--match "the real unit registration boundary"` drives
+`registerUnitDefs` — what `loadUnitYamlFn` delegates to — against a live
+headless engine, a real asset pool and a real Lua→engine queue, and
+asserts on the messages actually queued and the definitions actually
+published: one atlas upload per selected animation with its own handle,
+no per-frame textures for an atlas-backed one, an unselected animation
+still legacy, and a rejected index queueing nothing and publishing
+nothing.
 
 ## AI Asset Generation
 

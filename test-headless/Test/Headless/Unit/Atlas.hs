@@ -1115,9 +1115,11 @@ spec = do
                         -- each naming its OWN atlas — not the unit's,
                         -- and not another animation's.
                         atlasTextureRequests fixtureUnit sel `shouldBe`
-                            [ ( "unit_" <> fixtureUnit <> "_blink_atlas"
+                            [ ( "blink"
+                              , "unit_" <> fixtureUnit <> "_blink_atlas"
                               , unitAtlasDir fixtureUnit </> "blink.png" )
-                            , ( "unit_" <> fixtureUnit <> "_step_atlas"
+                            , ( "step"
+                              , "unit_" <> fixtureUnit <> "_step_atlas"
                               , unitAtlasDir fixtureUnit </> "step.png" ) ]
                     other → expectationFailure ("expected a selection, got "
                                                 ⧺ showLoad other)

@@ -4,7 +4,9 @@ module Engine.Scripting.Lua.API.YamlTextures
     , loadVegetationYamlFn
     , loadFloraYamlFn
     , loadAndRegister
+    , loadAndRegisterWithPool
     , loadAndRegisterAtlas
+    , loadAndRegisterAtlasWithPool
     , isTextureNameRegistered
     , resolveTexturePath
     , getTextureHandleFn
@@ -27,6 +29,7 @@ import Engine.Core.Capability.RenderView
 import Engine.Core.Log (LogCategory(..), logInfo, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
+import Engine.Asset.Types (AssetPool)
 import Engine.Asset.Manager (generateTextureHandle, updateTextureState)
 import Engine.Asset.TextureNameRegistry (lookupTextureName, registerTextureName)
 import Engine.Asset.YamlMaterials (MaterialDef(..), loadMaterialYaml)
@@ -179,8 +182,19 @@ loadVegetationYamlFn env backendState = do
 -- | Helper: generate a handle, register the name, queue the load request.
 loadAndRegister ∷ EngineEnv → LuaBackendState → Q.Queue LuaToEngineMsg
                 → Text → FilePath → IO TextureHandle
-loadAndRegister env backendState lteq name path = do
-    pool ← readIORef (lbsAssetPool backendState)
+loadAndRegister env backendState =
+    loadAndRegisterWithPool env (lbsAssetPool backendState)
+
+-- | 'loadAndRegister' against an asset pool directly.
+--
+--   The 'LuaBackendState' is only ever consulted for its pool, so
+--   taking the pool instead lets a caller outside the Lua thread — an
+--   asset-loading test with a real 'EngineEnv' but no Lua state — drive
+--   the same registration path.
+loadAndRegisterWithPool ∷ EngineEnv → IORef AssetPool → Q.Queue LuaToEngineMsg
+                        → Text → FilePath → IO TextureHandle
+loadAndRegisterWithPool env poolRef lteq name path = do
+    pool ← readIORef poolRef
     handle ← generateTextureHandle pool
     updateTextureState handle (AssetLoading path [] 0.0) pool
     -- Register name → handle
@@ -200,8 +214,16 @@ loadAndRegister env backendState lteq name path = do
 --   would also bleed neighbouring cells across every frame edge.
 loadAndRegisterAtlas ∷ EngineEnv → LuaBackendState → Q.Queue LuaToEngineMsg
                      → Text → FilePath → IO TextureHandle
-loadAndRegisterAtlas env backendState lteq name path = do
-    pool ← readIORef (lbsAssetPool backendState)
+loadAndRegisterAtlas env backendState =
+    loadAndRegisterAtlasWithPool env (lbsAssetPool backendState)
+
+-- | 'loadAndRegisterAtlas' against an asset pool directly — see
+--   'loadAndRegisterWithPool'.
+loadAndRegisterAtlasWithPool ∷ EngineEnv → IORef AssetPool
+                             → Q.Queue LuaToEngineMsg
+                             → Text → FilePath → IO TextureHandle
+loadAndRegisterAtlasWithPool env poolRef lteq name path = do
+    pool ← readIORef poolRef
     handle ← generateTextureHandle pool
     updateTextureState handle (AssetLoading path [] 0.0) pool
     registerTextureName (rvTextureNameRegistryRef (toRenderViewCapability env)) name handle

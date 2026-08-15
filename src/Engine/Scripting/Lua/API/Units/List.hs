@@ -341,8 +341,12 @@ unitGetFrameTextureFn env = do
 --   an atlas handle names the whole animation sheet, so a UI that pushed
 --   it straight into @UI.setSpriteTexture@ would draw every direction
 --   and every frame at once. Anything DISPLAYING a unit's live frame
---   must come through here and pass the sub-rect on via
---   @UI.setSpriteUV@.
+--   must come through here and publish the whole sample with
+--   @UI.setSpriteFrame@ — texture, sub-rect and mirror in ONE manager
+--   transition. Setting them one at a time is not equivalent: the render
+--   thread reads the manager concurrently, so a reader landing between
+--   the writes gets the new atlas handle paired with the previous
+--   frame's rect.
 unitGetFrameSampleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetFrameSampleFn env = do
     idArg ← Lua.tointeger 1
