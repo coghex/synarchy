@@ -169,10 +169,14 @@ iconSortKeyBase = 1000.0
 --
 --   Texture and colour selection is 'locationIconAppearance' — the one
 --   explicit per-lifecycle mapping (#1230). An instance whose def
---   declares no type icon still draws the shared unknown marker while
---   its type is unknown, but has nothing to reveal into, so it is
---   dropped once it is discovered: an annotation must never silently
---   become world.wtNoTexture.
+--   declares no 'ldMapIcon' draws NOTHING, in every lifecycle state
+--   including the unknown ones: every branch below is gated on that
+--   def's own type icon being present. "Definitions with no map-icon
+--   declaration produce no zoom-map annotation" is the contract, and
+--   drawing the shared marker for one would both annotate a location
+--   the author opted out of annotating and promise a reveal that has
+--   no icon to reveal into. Gate: the "renders nothing, in EVERY
+--   lifecycle state" case in the "Location map icons" spec.
 --
 --   Always axis-aligned / screen-upright: the facing rotation is already
 --   baked into 'gridToWorld's world position for the anchor, and the
