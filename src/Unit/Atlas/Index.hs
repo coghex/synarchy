@@ -42,6 +42,8 @@ module Unit.Atlas.Index
     , atlasIndexFileName
     , unitAtlasDir
     , unitAtlasIndexPath
+    , atlasTextureName
+    , atlasTextureRequests
     , parseAtlasIndex
     , YamlAnimFacts(..)
     , planUnitAtlasStorage
@@ -63,7 +65,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Text as T
-import Data.List (sort)
+import Data.List (sort, sortOn)
 import Numeric (showHex)
 import System.FilePath ((</>))
 import Unit.Atlas.Types
@@ -97,6 +99,24 @@ unitAtlasDir unit = "assets/textures/units" </> T.unpack unit </> "atlas"
 
 unitAtlasIndexPath ∷ Text → FilePath
 unitAtlasIndexPath unit = unitAtlasDir unit </> atlasIndexFileName
+
+-- | The texture-registry name one animation's atlas is registered
+--   under. One name, one handle, one upload, one bindless slot per
+--   animation (D-2/D-10).
+atlasTextureName ∷ Text → Text → Text
+atlasTextureName unit anim = "unit_" <> unit <> "_" <> anim <> "_atlas"
+
+-- | The atlas texture requests a unit's selection produces: EXACTLY one
+--   per atlas-backed animation, each naming that animation's own atlas.
+--
+--   The unit loader folds over the same selection, so this is the
+--   request set it issues — and a selection that does not exist (a
+--   rejected index yields no selection at all) issues none.
+--   Deterministically ordered by animation name so it is assertable.
+atlasTextureRequests ∷ Text → HM.HashMap Text AtlasAnimation → [(Text, FilePath)]
+atlasTextureRequests unit sel =
+    [ (atlasTextureName unit name, aaPath aa)
+    | (name, aa) ← sortOn fst (HM.toList sel) ]
 
 -- | Why an atlas-backed animation could not be loaded.
 --

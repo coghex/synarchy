@@ -56,6 +56,7 @@
 --   loading changes.
 module Unit.Atlas.Load
     ( loadUnitAtlasIndex
+    , loadUnitAtlasIndexIn
     , decodeImageFile
     ) where
 
@@ -70,6 +71,7 @@ import qualified Data.Text as T
 import qualified Data.Vector.Storable as SV
 import Control.Exception (SomeException, try)
 import System.Directory (doesFileExist)
+import System.FilePath ((</>))
 import Unit.Atlas.Index
 import Unit.Atlas.Types
 
@@ -87,13 +89,29 @@ loadUnitAtlasIndex
     ∷ Text
     → Map.Map Text YamlAnimFacts     -- ^ what the unit YAML declares
     → IO (Either AtlasLoadError (Maybe (HM.HashMap Text AtlasAnimation)))
-loadUnitAtlasIndex unit yamlAnims = do
+loadUnitAtlasIndex = loadUnitAtlasIndexIn ""
+
+-- | 'loadUnitAtlasIndex' against an explicit filesystem ROOT.
+--
+--   Production passes @\"\"@: every resource path is already relative to
+--   the resource root the executable chdir'd into ("App.ResourceRoot"),
+--   so prefixing nothing is the real behaviour. A root is supplied only
+--   to point the loader at a fixture tree, which is what makes the
+--   whole read-parse-decode-verify pipeline testable without a live
+--   engine. The root prefixes only where a file is OPENED — declared
+--   paths, and therefore every diagnostic, stay resource-relative.
+loadUnitAtlasIndexIn
+    ∷ FilePath
+    → Text
+    → Map.Map Text YamlAnimFacts
+    → IO (Either AtlasLoadError (Maybe (HM.HashMap Text AtlasAnimation)))
+loadUnitAtlasIndexIn root unit yamlAnims = do
     let indexPath = unitAtlasIndexPath unit
-    present ← doesFileExist indexPath
+    present ← doesFileExist (under root indexPath)
     if not present
         then pure (Right Nothing)
         else do
-            eRaw ← readFileBytes indexPath
+            eRaw ← readFileBytes (under root indexPath)
             case eRaw of
                 Left msg → pure ∘ Left $ AtlasLoadError
                     { aleUnit = unit, aleAnimation = Nothing
@@ -104,46 +122,50 @@ loadUnitAtlasIndex unit yamlAnims = do
                     Right anims → case planUnitAtlasStorage unit yamlAnims anims of
                         Left err → pure (Left err)
                         Right plan → do
-                            checked ← checkAll unit yamlAnims anims
+                            checked ← checkAll root unit yamlAnims anims
                             pure (Just plan <$ checked)
+
+-- | Resolve a resource-relative path for OPENING only.
+under ∷ FilePath → FilePath → FilePath
+under root p = if null root then p else root </> p
 
 -- | Decode and check every declared atlas. Stops at the first failure —
 --   there is nothing useful to do with the rest of a broken index.
 checkAll
-    ∷ Text → Map.Map Text YamlAnimFacts → [AtlasAnimation]
+    ∷ FilePath → Text → Map.Map Text YamlAnimFacts → [AtlasAnimation]
     → IO (Either AtlasLoadError ())
-checkAll _ _ [] = pure (Right ())
-checkAll unit yamlAnims (a:rest) = do
-    r ← checkOne unit yamlAnims a
+checkAll _ _ _ [] = pure (Right ())
+checkAll root unit yamlAnims (a:rest) = do
+    r ← checkOne root unit yamlAnims a
     case r of
         Left err → pure (Left err)
-        Right () → checkAll unit yamlAnims rest
+        Right () → checkAll root unit yamlAnims rest
 
 checkOne
-    ∷ Text → Map.Map Text YamlAnimFacts → AtlasAnimation
+    ∷ FilePath → Text → Map.Map Text YamlAnimFacts → AtlasAnimation
     → IO (Either AtlasLoadError ())
-checkOne unit yamlAnims anim = do
+checkOne root unit yamlAnims anim = do
     let path = aaPath anim
         reject reason = Left AtlasLoadError
             { aleUnit = unit, aleAnimation = Just (aaName anim)
             , aleArtifact = path, aleReason = reason }
-    present ← doesFileExist path
+    present ← doesFileExist (under root path)
     if not present
         then pure (reject "indexed atlas is missing from disk")
         else do
-            eImg ← decodeImageFile path
+            eImg ← decodeImageFile (under root path)
             case eImg of
                 Left msg → pure (reject ("cannot decode atlas: " <> msg))
                 Right atlas → case validateAtlasImage unit anim atlas of
                     Left err → pure (Left err)
-                    Right () → checkSourceFrames unit yamlAnims anim atlas
+                    Right () → checkSourceFrames root unit yamlAnims anim atlas
 
 -- | Pass 3: every declared source frame must decode to exactly the
 --   pixels its atlas cell holds.
 checkSourceFrames
-    ∷ Text → Map.Map Text YamlAnimFacts → AtlasAnimation → DecodedImage
-    → IO (Either AtlasLoadError ())
-checkSourceFrames unit yamlAnims anim atlas =
+    ∷ FilePath → Text → Map.Map Text YamlAnimFacts → AtlasAnimation
+    → DecodedImage → IO (Either AtlasLoadError ())
+checkSourceFrames root unit yamlAnims anim atlas =
     -- `planUnitAtlasStorage` already proved the animation is declared
     -- and that its direction set and per-direction counts agree, so
     -- every lookup below is total; a missing one would be a caller
@@ -170,14 +192,14 @@ checkSourceFrames unit yamlAnims anim atlas =
 
     goFrames _ _ [] = pure (Right ())
     goFrames dir row ((col, framePath) : rest) = do
-        present ← doesFileExist framePath
+        present ← doesFileExist (under root framePath)
         if not present
             then pure ∘ Left $ AtlasLoadError
                 { aleUnit = unit, aleAnimation = Just (aaName anim)
                 , aleArtifact = framePath
                 , aleReason = "declared source frame is missing from disk" }
             else do
-                eImg ← decodeImageFile framePath
+                eImg ← decodeImageFile (under root framePath)
                 case eImg of
                     Left msg → pure ∘ Left $ AtlasLoadError
                         { aleUnit = unit, aleAnimation = Just (aaName anim)

@@ -24,7 +24,7 @@ import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister
                                              , loadAndRegisterAtlas
                                              , resolveTexturePath)
 import Unit.Atlas.Index (AtlasLoadError(..), YamlAnimFacts(..)
-                        , renderAtlasLoadError)
+                        , atlasTextureName, renderAtlasLoadError)
 import Unit.Atlas.Load (loadUnitAtlasIndex)
 import Engine.Asset.YamlUnits (UnitYamlDef(..), UnitYamlAnim(..), UnitYamlStat(..), UnitYamlSkill(..), UnitYamlBody(..), UnitYamlBodyAttr(..), UnitYamlInventoryEntry(..), UnitYamlModifier(..), UnitYamlNaturalWeapon(..), UnitYamlStrike(..), UnitYamlNaturalResistance(..), loadUnitYaml, unitYamlBodyPartToBodyPart)
 import Engine.Asset.YamlNames (loadNamePool)
@@ -125,8 +125,7 @@ loadUnitYamlFn env backendState = do
                             storage ← case HM.lookup animName atlasByName of
                                 Just aa → do
                                     h ← loadAndRegisterAtlas env backendState lteq
-                                            ("unit_" <> name <> "_" <> animName
-                                             <> "_atlas")
+                                            (atlasTextureName name animName)
                                             (aaPath aa)
                                     return (StorageAtlas (ResidentAtlas aa h))
                                 Nothing → StorageLegacy <$> foldM (\accF (dirKey, framePaths) →

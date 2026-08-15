@@ -20,11 +20,15 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BLC
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
+import qualified Codec.Picture as JP
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as SV
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (CameraFacing(..))
+import Control.Exception (finally)
+import Engine.Scripting.Lua.Message.Texture
+    (UploadSampler(..), cacheEntryReusable)
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
 import Engine.Graphics.Vulkan.Texture.Rebind
     (FilterRebindPlan(..), SlotRebind(..), planFilterRebind)
@@ -39,6 +43,11 @@ import Unit.Atlas.Index
 import Unit.Atlas.Types
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
+import System.Directory
+    ( createDirectoryIfMissing, getTemporaryDirectory, removeDirectoryRecursive
+    , removeFile )
+import System.FilePath ((</>), takeDirectory)
+import Unit.Atlas.Load (loadUnitAtlasIndexIn)
 import Unit.HitTest (unitHitRect)
 import Unit.Render (unitToQuad)
 import Unit.Types
@@ -331,6 +340,170 @@ factsFor aa = YamlAnimFacts
                     ⧺ "/frame_" ⧺ show i ⧺ ".png"
               | i ← [0 .. adrFrameCount row - 1] ])
         | (d, row) ← Map.toList (aaDirections aa) ] }
+
+-- * The loader fixture: a real on-disk unit tree
+--
+--   Source frames, compiled atlases composed from them, and an index
+--   whose digests are the library's own — so the whole
+--   read-parse-decode-verify pipeline runs against files, and a test
+--   can break exactly one of them.
+
+fixtureUnit ∷ Text
+fixtureUnit = "fixture_unit"
+
+fixtureCell ∷ Int
+fixtureCell = 2
+
+-- | @(name, flip, fps, loop, [(direction, real frame count)])@.
+fixtureAnims ∷ [(Text, Bool, Float, Bool, [(Direction, Int)])]
+fixtureAnims =
+    [ ("blink", False, 8, True,  [(DirS, 2), (DirN, 2)])
+      -- Unequal rows, so the atlas is padded and the padding must stay
+      -- unreachable through the real loader too.
+    , ("step",  False, 12, False, [(DirS, 2), (DirN, 3)])
+    ]
+
+dirToken ∷ Direction → String
+dirToken d = case d of
+    DirS → "south"      ; DirSW → "south-west"
+    DirW → "west"       ; DirNW → "north-west"
+    DirN → "north"      ; DirNE → "north-east"
+    DirE → "east"       ; DirSE → "south-east"
+
+framePath ∷ Text → Direction → Int → FilePath
+framePath anim d i =
+    "assets/textures/units" </> T.unpack fixtureUnit </> "animations"
+        </> T.unpack anim </> dirToken d </> ("frame_" ⧺ pad3 i ⧺ ".png")
+  where
+    pad3 n = let t = show n in replicate (3 - length t) '0' ⧺ t
+
+-- | Deterministic, per-frame-distinct art.
+framePixel ∷ Text → Direction → Int → Int → Int → JP.PixelRGBA8
+framePixel anim d i x y = JP.PixelRGBA8
+    (fromIntegral ((T.length anim * 37 + x * 11) `mod` 256))
+    (fromIntegral ((fromEnum d * 53 + y * 17) `mod` 256))
+    (fromIntegral ((i * 71 + x * 3 + y * 5) `mod` 256))
+    255
+
+frameImage ∷ Text → Direction → Int → JP.Image JP.PixelRGBA8
+frameImage anim d i =
+    JP.generateImage (framePixel anim d i) fixtureCell fixtureCell
+
+-- | The rows of one animation, in the compiler's own direction order.
+orderedRows ∷ [(Direction, Int)] → [(Direction, Int)]
+orderedRows ds = [ (d, n) | d ← [minBound .. maxBound], Just n ← [lookup d ds] ]
+
+-- | The atlas for one animation: cells at exact integer offsets, every
+--   unused cell fully transparent.
+atlasImage ∷ Text → [(Direction, Int)] → JP.Image JP.PixelRGBA8
+atlasImage anim ds =
+    JP.generateImage px (cols * fixtureCell) (rows * fixtureCell)
+  where
+    ordered = orderedRows ds
+    rows = length ordered
+    cols = maximum (1 : map snd ordered)
+    px x y =
+        let (r, yy) = y `divMod` fixtureCell
+            (c, xx) = x `divMod` fixtureCell
+        in case drop r ordered of
+            ((d, n) : _) | c < n → framePixel anim d c xx yy
+            _ → JP.PixelRGBA8 0 0 0 0
+
+fixtureYaml ∷ Map.Map Text YamlAnimFacts
+fixtureYaml = Map.fromList
+    [ (name, YamlAnimFacts fps loop flipV (Map.fromList
+        [ (d, [framePath name d i | i ← [0 .. n - 1]]) | (d, n) ← ds ]))
+    | (name, flipV, fps, loop, ds) ← fixtureAnims ]
+
+-- | The index the compiler would emit for this tree, digests included.
+fixtureIndex ∷ BL.ByteString
+fixtureIndex = BLC.pack ∘ T.unpack ∘ obj $
+    [ ("schema_version", "1")
+    , ("generator", str "tools/pack_atlas.py")
+    , ("tool_version", "1")
+    , ("digest_algorithm", str "sha256")
+    , ("unit", str fixtureUnit)
+    , ("direction_order", arr (map (str ∘ T.pack ∘ dirToken)
+          [minBound .. maxBound]))
+    , ("animations", arr (map animEntry fixtureAnims))
+    ]
+  where
+    animEntry (name, flipV, fps, loop, ds) =
+        let ordered = orderedRows ds
+            rows = length ordered
+            cols = maximum (1 : map snd ordered)
+            img = atlasImage name ds
+        in obj
+            [ ("name", str name)
+            , ("storage_format", str "png")
+            , ("atlas_path", str (T.pack (unitAtlasDir fixtureUnit
+                                          </> T.unpack name ⧺ ".png")))
+            , ("atlas_width", tshow (cols * fixtureCell))
+            , ("atlas_height", tshow (rows * fixtureCell))
+            , ("cell_width", tshow fixtureCell)
+            , ("cell_height", tshow fixtureCell)
+            , ("columns", tshow cols), ("rows", tshow rows)
+            , ("flip", if flipV then "true" else "false")
+            , ("fps", tshow fps), ("loop", if loop then "true" else "false")
+            , ("directions", arr
+                [ obj [ ("direction", str (T.pack (dirToken d)))
+                      , ("row", tshow r), ("frame_count", tshow n) ]
+                | (r, (d, n)) ← zip [(0 ∷ Int) ..] ordered ])
+            , ("source_digest", str "fixture-source-digest")
+            , ("atlas_digest", str (atlasContentDigest
+                  (JP.imageWidth img) (JP.imageHeight img)
+                  (packImage img)))
+            ]
+
+packImage ∷ JP.Image JP.PixelRGBA8 → BS.ByteString
+packImage = BS.pack ∘ SV.toList ∘ JP.imageData
+
+-- | Build the whole tree in a temp directory and tear it down after.
+withAtlasFixture ∷ (FilePath → IO ()) → IO ()
+withAtlasFixture action = do
+    tmp ← getTemporaryDirectory
+    let root = tmp </> "synarchy-unit-atlas-spec"
+        write path bytes = do
+            createDirectoryIfMissing True (takeDirectory (root </> path))
+            BS.writeFile (root </> path) bytes
+    forM_ fixtureAnims $ \(name, _, _, _, ds) → do
+        forM_ ds $ \(d, n) → forM_ [0 .. n - 1] $ \i →
+            write (framePath name d i)
+                  (BL.toStrict (JP.encodePng (frameImage name d i)))
+        write (unitAtlasDir fixtureUnit </> T.unpack name ⧺ ".png")
+              (BL.toStrict (JP.encodePng (atlasImage name ds)))
+    write (unitAtlasIndexPath fixtureUnit) (BL.toStrict fixtureIndex)
+    (`finally` removeDirectoryRecursive root) (action root)
+
+-- | Change one texel of an existing PNG in place.
+repaint ∷ FilePath → IO ()
+repaint path = do
+    r ← JP.readImage path
+    case r of
+        Left e → expectationFailure ("fixture image unreadable: " ⧺ e)
+        Right dyn → do
+            let img = JP.convertRGBA8 dyn
+                bump x y = let JP.PixelRGBA8 rr g b a = JP.pixelAt img x y
+                           in if x ≡ 0 ∧ y ≡ 0
+                              then JP.PixelRGBA8 (rr + 91) g b a
+                              else JP.PixelRGBA8 rr g b a
+            JP.writePng path (JP.generateImage bump
+                (JP.imageWidth img) (JP.imageHeight img))
+
+type LoadResult = Either AtlasLoadError (Maybe (HM.HashMap Text AtlasAnimation))
+
+isRejectedLoad ∷ LoadResult → Bool
+isRejectedLoad (Left _) = True
+isRejectedLoad _        = False
+
+selectionOf ∷ LoadResult → [Text]
+selectionOf (Right (Just m)) = HM.keys m
+selectionOf _                = []
+
+showLoad ∷ LoadResult → String
+showLoad (Left e)          = T.unpack (renderAtlasLoadError e)
+showLoad (Right Nothing)   = "<<no index>>"
+showLoad (Right (Just m))  = show (HM.keys m)
 
 isRejected ∷ Either AtlasLoadError a → Bool
 isRejected (Left _) = True
@@ -889,3 +1062,79 @@ spec = do
 
         it "leaves nothing unrecoverable" $
             frpUnrecoverable plan `shouldBe` []
+
+    -- The loader end of the contract, against a REAL fixture tree: the
+    -- pure checks above answer from values, these answer from files.
+    describe "Unit.Atlas.Load — one request per animation, none when rejected" $ do
+        it "a unit with no index selects nothing and stays wholly legacy" $
+            withAtlasFixture $ \root → do
+                removeFile (root </> unitAtlasIndexPath fixtureUnit)
+                r ← loadUnitAtlasIndexIn root fixtureUnit fixtureYaml
+                r `shouldBe` Right Nothing
+
+        it "a valid index yields exactly ONE request per indexed animation" $
+            withAtlasFixture $ \root → do
+                r ← loadUnitAtlasIndexIn root fixtureUnit fixtureYaml
+                case r of
+                    Right (Just sel) → do
+                        HM.keys sel `shouldMatchList` ["blink", "step"]
+                        -- One upload/handle/slot each (D-2/D-10), and
+                        -- each naming its OWN atlas — not the unit's,
+                        -- and not another animation's.
+                        atlasTextureRequests fixtureUnit sel `shouldBe`
+                            [ ( "unit_" <> fixtureUnit <> "_blink_atlas"
+                              , unitAtlasDir fixtureUnit </> "blink.png" )
+                            , ( "unit_" <> fixtureUnit <> "_step_atlas"
+                              , unitAtlasDir fixtureUnit </> "step.png" ) ]
+                    other → expectationFailure ("expected a selection, got "
+                                                ⧺ showLoad other)
+
+        it "a repainted SOURCE frame rejects, so nothing is ever selected" $
+            withAtlasFixture $ \root → do
+                repaint (root </> framePath "step" DirS 1)
+                r ← loadUnitAtlasIndexIn root fixtureUnit fixtureYaml
+                r `shouldSatisfy` isRejectedLoad
+                -- No selection means no map to derive requests from:
+                -- the caller cannot allocate a handle or queue an upload
+                -- for ANY of this unit's animations, not just the broken
+                -- one.
+                selectionOf r `shouldBe` []
+
+        it "a tampered ATLAS rejects the whole unit too" $
+            withAtlasFixture $ \root → do
+                repaint (root </> unitAtlasDir fixtureUnit </> "blink.png")
+                r ← loadUnitAtlasIndexIn root fixtureUnit fixtureYaml
+                r `shouldSatisfy` isRejectedLoad
+                selectionOf r `shouldBe` []
+
+        it "a missing source frame rejects rather than skipping it" $
+            withAtlasFixture $ \root → do
+                removeFile (root </> framePath "step" DirN 0)
+                r ← loadUnitAtlasIndexIn root fixtureUnit fixtureYaml
+                r `shouldSatisfy` isRejectedLoad
+                selectionOf r `shouldBe` []
+
+        it "ONE broken animation rejects the other, unbroken one as well" $
+            withAtlasFixture $ \root → do
+                repaint (root </> framePath "blink" DirS 0)
+                r ← loadUnitAtlasIndexIn root fixtureUnit fixtureYaml
+                case r of
+                    Left e → do
+                        aleAnimation e `shouldBe` Just "blink"
+                        selectionOf r `shouldBe` []
+                    other → expectationFailure ("expected a rejection, got "
+                                                ⧺ showLoad other)
+
+    -- The path cache is keyed by path alone, so reuse across an upload
+    -- policy boundary would hand the new handle the wrong sampler.
+    describe "Unit.Atlas — the texture cache will not reuse across policies" $ do
+        let pinnedMap = Map.singleton (TextureHandle 7) (Sampler 0x0E4E57)
+            reuse policy h' = cacheEntryReusable policy pinnedMap h'
+        it "an atlas request may reuse only an already-pinned entry" $ do
+            reuse UploadPinnedNearest (TextureHandle 7) `shouldBe` True
+            -- The regression: an atlas inheriting an ordinary slot would
+            -- follow global filter toggles and stop being nearest.
+            reuse UploadPinnedNearest (TextureHandle 8) `shouldBe` False
+        it "an ordinary request may reuse only an unpinned entry" $ do
+            reuse UploadGlobalSampler (TextureHandle 8) `shouldBe` True
+            reuse UploadGlobalSampler (TextureHandle 7) `shouldBe` False

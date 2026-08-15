@@ -1914,7 +1914,15 @@ cannot describe an atlas frame and would draw the whole sheet.
 Atlas slots are registered PINNED to the nearest sampler with one mip
 level (D-6), so a runtime `setTextureFilter` toggle cannot start
 bilinearly resampling unit art — which on a sheet would additionally
-bleed neighbouring cells across every frame edge. Cell UVs sit on exact
+bleed neighbouring cells across every frame edge. The upload path's
+path cache is therefore **policy-aware**: `apAssetPaths` is keyed by
+path alone while a slot's sampler was fixed by whichever policy first
+uploaded it, so a cache hit is taken only when the canonical texture's
+pinned-ness matches the request (`cacheEntryReusable` against
+`btsPinned`) and otherwise re-uploads into its own slot. Both directions
+matter — an atlas inheriting an ordinary slot would stop being nearest,
+and an ordinary texture inheriting a pinned one would be stuck on a
+filter it never asked for. Cell UVs sit on exact
 cell EDGES with no half-texel inset: unit art is nearest and pixel-
 snapped, so a fragment centre lands inside its cell, and an inset would
 shift the sampled texels and break pixel-identity with the legacy path.
@@ -1923,10 +1931,13 @@ Gates: hspec `--match "pickFrame"` (the whole logical-choice matrix run
 against BOTH storage modes from one table) and `--match "Unit.Atlas"`
 (index parsing/validation, the digest against `pack_atlas.py`'s own
 reference values, mode selection, and the real consumer geometry —
-`unitToQuad`'s vertices, `unitHitRect`, `renderSpriteBatch`, plus a
-texel-level comparison of an atlas cell against its legacy frame,
-mirrored included, and the pinned-nearest survival of a global filter
-toggle through `planFilterRebind`).
+`unitToQuad`'s vertices, `unitHitRect`, `renderSpriteBatch`, a
+texel-level comparison of an atlas cell against its legacy frame with
+the mirrored case included, the pinned-nearest survival of a global
+filter toggle through `planFilterRebind`, the cache's policy awareness,
+and a real on-disk fixture tree driven through `loadUnitAtlasIndexIn`
+proving one request per indexed animation and NO selection at all when
+any artifact is stale).
 
 ## AI Asset Generation
 
