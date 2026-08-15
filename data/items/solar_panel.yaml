@@ -6,6 +6,7 @@ items:
     display_name: "Solar Panel"
     sprite: "assets/textures/items/material/solar_panel.png"
     weight: 8.0
+    bulk: 20.0        # litres of external bulk
     category: Materials
     make: factory
     condition:

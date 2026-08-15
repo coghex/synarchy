@@ -5,16 +5,19 @@ items:
     display_name: "Bandage"
     sprite: "assets/textures/items/medical/bandage.png"
     weight: 0.02
+    bulk: 0.1        # litres of external bulk
     category: Medical
   - name: "gauze"
     display_name: "Gauze Pad"
     sprite: "assets/textures/items/medical/gauze.png"
     weight: 0.015
+    bulk: 0.08        # litres of external bulk
     category: Medical
   - name: "elastic_wrap"
     display_name: "Elastic Wrap"
     sprite: "assets/textures/items/medical/elastic_wrap.png"
     weight: 0.06
+    bulk: 0.2        # litres of external bulk
     category: Medical
 
   # Bottles are FILLABLE containers: carried weight = empty bottle
@@ -26,6 +29,7 @@ items:
     display_name: "Antiseptic"
     sprite: "assets/textures/items/medical/antiseptic.png"
     weight: 0.12          # empty bottle (full 1 L ≈ +1 kg of fluid)
+    bulk: 1.2        # litres of external bulk
     category: Medical
     container:
       capacity: 1.0       # litres
@@ -35,6 +39,7 @@ items:
     display_name: "Antibiotics"
     sprite: "assets/textures/items/medical/antibiotics.png"
     weight: 0.022         # empty 22 g plastic bottle
+    bulk: 0.15        # litres of external bulk
     category: Medical
     container:
       capacity: 60          # pills
@@ -49,6 +54,7 @@ items:
     display_name: "Makeshift Tourniquet"
     sprite: "assets/textures/items/medical/tourniquet.png"
     weight: 0.05
+    bulk: 0.15        # litres of external bulk
     category: Medical
 
   # Reusable tools — units draw and RETURN these; they wear (condition).
@@ -56,6 +62,7 @@ items:
     display_name: "Tweezers"
     sprite: "assets/textures/items/medical/tweezers.png"
     weight: 0.02
+    bulk: 0.03        # litres of external bulk
     category: Medical
     condition:
       min: 70
@@ -64,6 +71,7 @@ items:
     display_name: "Scissors"
     sprite: "assets/textures/items/medical/scissors.png"
     weight: 0.06
+    bulk: 0.1        # litres of external bulk
     category: Medical
     condition:
       min: 70

@@ -3,6 +3,7 @@ items:
     display_name: "Rations"
     sprite: "assets/textures/items/supply/rations.png"
     weight: 0.1        # kg per ration
+    bulk: 0.20        # litres of external bulk
     category: Supplies
     food:
       # Nutrition is a sub-object so future diet work (protein / fat /

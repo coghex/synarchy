@@ -1009,8 +1009,11 @@ before touching each area:
   those. Canonicalising one end alone was MEASURED worse
   than the old seam-blind behaviour; don't do it. Away from the seam,
   and in arena / non-wrapping worlds, every step is the identity.
-  Persistence: `world-activity` v2 (same bytes, canonical-key
-  invariant); a v1 payload is re-keyed on load. The init QUEUE
+  Persistence: the canonical-key invariant arrived as `world-activity`
+  v2 (same bytes as v1, different promise); a v1 payload is re-keyed on
+  load, and since #1233 bumped the component to v3 for the item shape,
+  v1 and v2 share one frozen layout and BOTH take that repair. The init
+  QUEUE
   (`world.loadChunksInRegion`, `World.Load.Stage`'s saved-camera radius,
   world init) is wrapped at the drain, so every loader stores canonically
   — before that, a seam-crossing region generated a SECOND chunk for one

@@ -102,6 +102,8 @@ mkItem name iid = ItemInstance
     , iiContents    = []
     , iiInstanceId  = iid
     , iiTemp        = Nothing
+    , iiBulk        = Just 2.5
+    , iiStorage     = Nothing
     }
 
 -- | Mirrors 'Test.Headless.Unit.TransferApi.minimalDef': none of these

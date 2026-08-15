@@ -13,6 +13,7 @@ items:
     display_name: "Quinoa Sack"
     sprite: "assets/textures/items/supply/quinoa_sack.png"
     weight: 0.15       # empty burlap sack; full mass = weight + 5 kg grain
+    bulk: 7.0        # litres of external bulk
     category: Supplies
     container:
       capacity: 5.0    # kg of quinoa

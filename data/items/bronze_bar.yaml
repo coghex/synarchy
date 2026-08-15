@@ -6,6 +6,7 @@ items:
     display_name: "Bronze Bar"
     sprite: "assets/textures/items/material/bar_bronze.png"
     weight: 0.5
+    bulk: 0.75        # litres of external bulk
     category: Materials
     make: foundry
     material: bronze

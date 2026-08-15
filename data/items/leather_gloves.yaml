@@ -3,6 +3,7 @@ items:
     display_name: "Leather Gloves"
     sprite: "assets/textures/items/wearable/gloves_leather.png"
     weight: 0.3
+    bulk: 0.8        # litres of external bulk
     kind: gauntlets
     category: Armor
     insulation: 0.15  # warm hands

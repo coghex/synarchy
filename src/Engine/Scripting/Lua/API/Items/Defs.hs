@@ -105,6 +105,16 @@ loadItemYamlFn core regs env backendState = do
                                 , icDefaultFill = iycDefaultFill c
                                 })
                             (iydContainer def)
+                        -- #1233: the optional portable ITEM-storage
+                        -- capacities, carried across independently of
+                        -- `container` above — neither block supplies the
+                        -- other's values (D-12).
+                        storage = fmap
+                            (\s → ItemStorage
+                                { isWeightCapacity = iysWeightCapacity s
+                                , isBulkCapacity   = iysBulkCapacity s
+                                })
+                            (iydStorage def)
                         food = fmap
                             (\f → ItemFood
                                 { ifCalories      = iyfCalories f
@@ -143,6 +153,7 @@ loadItemYamlFn core regs env backendState = do
                             , idTexture     = handle
                             , idWeight      = wMean
                             , idWeightSpec  = wSpec
+                            , idBulk        = iydBulk def
                             , idKind        = iydKind def
                             , idCategory    = iydCategory def
                             , idMake        = iydMake def
@@ -158,6 +169,7 @@ loadItemYamlFn core regs env backendState = do
                             , idDefaultContents =
                                 [ (iycoItem c, iycoCount c, iycoFill c)
                                 | c ← iydContents def ]
+                            , idStorage     = storage
                             , idFood        = food
                             , idWeapon      = weapon
                             , idArmor       = armor

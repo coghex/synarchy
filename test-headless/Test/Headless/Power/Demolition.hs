@@ -111,6 +111,8 @@ mkItem name iid = ItemInstance
     , iiContents    = []
     , iiInstanceId  = iid
     , iiTemp        = Nothing
+    , iiBulk        = Just 1
+    , iiStorage     = Nothing
     }
 
 -- | Only the fields this path reads carry any weight; mirrors

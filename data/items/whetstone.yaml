@@ -9,6 +9,7 @@ items:
     display_name: "Whetstone"
     sprite: "assets/textures/items/material/whetstone.png"
     weight: 0.3
+    bulk: 0.2        # litres of external bulk
     category: "Materials"
     make: "acolyte"
     material: "stone"

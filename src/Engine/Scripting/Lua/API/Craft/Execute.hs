@@ -257,4 +257,7 @@ rollOutputs env outputTemp (ing, def) = replicateM (max 0 (riCount ing)) $ do
         , iiContents    = []
         , iiInstanceId  = iid
         , iiTemp        = outputTemp
+          -- #1233: snapshotted from the def, like iiWeight.
+        , iiBulk        = Just (idBulk def)
+        , iiStorage     = idStorage def
         }

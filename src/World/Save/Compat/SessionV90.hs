@@ -26,8 +26,9 @@
 --   and today except 'World.Save.Types.SaveData'\'s own since-removed
 --   @sdLuaModules@ field (#761, v91) — so v90's wire bytes for gen
 --   params/edits/designations/ground items/buildings/units/craft
---   bills/power nodes/unit-sim are EXACTLY what @"world-pages"@/
---   @"world-edits"@/@"world-activity"@/@"buildings"@/@"units"@/
+--   bills/power nodes/unit-sim are EXACTLY what @"world-pages"@ (v1)/
+--   @"world-edits"@/@"world-activity"@ (v1)/@"buildings"@ (v1)/
+--   @"units"@ (v1)/
 --   @"craft-bills"@ (v1)/@"power-nodes"@ (v1)/@"unit-sim"@ (v1) already
 --   decode today. 'migrateSessionV90' reshapes the decoded v90 tree into
 --   those very same per-component DTOs and drives them through the
@@ -35,6 +36,14 @@
 --   assembly helpers ('basePageSnapshots'/'applyWorldEdits'/etc.) the
 --   modern registry-driven path uses, so a migrated B1 session is
 --   reconstructed by the identical code that reconstructs a modern one.
+--
+--   That is why every item-bearing field below names a FROZEN v1 DTO
+--   ('GroundItemsDTOv1'/'BuildingInstanceDTOv1'/'UnitInstanceDTOv1')
+--   rather than the current one: #1233 appended physical values to the
+--   recursive item tree, so the shapes those three components CURRENTLY
+--   write are no longer v90's bytes. The migration reaches the modern
+--   shapes through the very same @migrate…V1@ functions a v1 envelope
+--   takes — one translation, not a second hand-written copy of it.
 --
 --   Two v90 fields have no modern home and are decoded-then-discarded,
 --   matching 'World.Save.Snapshot.Adapter'\'s existing "these are load
@@ -110,16 +119,17 @@ import World.Save.Component.Page
     , WorldIdentityDTOv1(..), WorldEditDTO(..), MineDesignationDTO(..)
     , ConstructDesignationDTO(..), ChopDesignationDTO(..)
     , TillDesignationDTO(..), PlantDesignationDTO(..), CropPlotDTO(..)
-    , GroundItemsDTO(..), SpoilPileDTO(..)
+    , GroundItemsDTOv1(..), SpoilPileDTO(..)
     , PageCoreDTOv1(..), WorldPagesDTOv1(..), WorldPages(..)
     , PageEditsDTO(..), WorldEditsDTO(..)
-    , PageActivityDTO(..), WorldActivityDTO(..)
+    , PageActivityDTOv2(..), WorldActivityDTOv2(..), migrateWorldActivityV2
     , migrateWorldPagesV1, applyWorldEdits, applyWorldActivity
     , validatePages, validateWorldActivity )
 import World.Save.Component.Entities
-    ( BuildingInstanceDTO, PageBuildingsDTO(..), BuildingsDTO(..)
-    , applyBuildings
-    , UnitInstanceDTO, PageUnitsDTO(..), UnitsDTO(..), applyUnits
+    ( BuildingInstanceDTOv1, PageBuildingsDTOv1(..), BuildingsDTOv1(..)
+    , migrateBuildingsDTOv1, applyBuildings
+    , UnitInstanceDTOv1, PageUnitsDTOv1(..), UnitsDTOv1(..)
+    , migrateUnitsDTOv1, applyUnits
     , UnitSimStateDTO, PageSimDTOv1(..), UnitSimDTOv1(..)
     , migrateUnitSimDTOv1, applyUnitSim
     , BillQueueDTOv1(..), PageCraftBillsDTOv1(..)
@@ -145,13 +155,13 @@ sessionComponentVersion = 90
 --   PER-PAGE allocator that existed before it became a single global
 --   counter). Field order matches the original exactly.
 data BuildingSnapshotV90 = BuildingSnapshotV90
-    { bsn90Instances ∷ !(HM.HashMap BuildingId BuildingInstanceDTO)
+    { bsn90Instances ∷ !(HM.HashMap BuildingId BuildingInstanceDTOv1)
     , bsn90NextId    ∷ !Word32
     } deriving (Show, Generic, Serialize)
 
 -- | Frozen mirror of the v90 'UnitSnapshot', same reasoning.
 data UnitSnapshotV90 = UnitSnapshotV90
-    { usn90Instances ∷ !(HM.HashMap UnitId UnitInstanceDTO)
+    { usn90Instances ∷ !(HM.HashMap UnitId UnitInstanceDTOv1)
     , usn90NextId    ∷ !Word32
     } deriving (Show, Generic, Serialize)
 
@@ -180,7 +190,7 @@ data WorldPageSaveV90 = WorldPageSaveV90
     , wp90Edits        ∷ !(HM.HashMap ChunkCoord [WorldEditDTO])
     , wp90MineDesignations      ∷ !(HM.HashMap (Int, Int) MineDesignationDTO)
     , wp90ConstructDesignations ∷ !(HM.HashMap (Int, Int) ConstructDesignationDTO)
-    , wp90GroundItems  ∷ !GroundItemsDTO
+    , wp90GroundItems  ∷ !GroundItemsDTOv1
     , wp90SpoilPiles   ∷ !(HM.HashMap (Int, Int) SpoilPileDTO)
     , wp90Buildings    ∷ !BuildingSnapshotV90
     , wp90Units        ∷ !UnitSnapshotV90
@@ -306,7 +316,11 @@ migrateSessionV90 meta sd = do
                     \rather than silently discard persisted Lua state")]
     let ps = sd90Worlds sd
         pagesValue = migrateWorldPagesV1 (WorldPagesDTOv1 (map toPageCoreV90 ps))
-        activityDTO = WorldActivityDTO (map toPageActivityV90 ps)
+        -- #1233: v90's ground items are the pre-#1233 item tree, so they
+        -- reshape into the FROZEN v1/v2 activity slice and reach the
+        -- current one through the same migration a v1/v2 envelope takes.
+        activityDTO = migrateWorldActivityV2
+            (WorldActivityDTOv2 (map toPageActivityV90 ps))
         craftBillsDTO =
             migrateCraftBillsDTOv1 (CraftBillsDTOv1 (map toPageCraftBillsV90 ps))
         powerNodesDTO =
@@ -323,9 +337,11 @@ migrateSessionV90 meta sd = do
         (WorldEditsDTO (map toPageEditsV90 ps)) base
     afterActivity ← applyWorldActivity 1 activityDTO afterEdits
     afterBuildings ← applyBuildings 1 nextBuildingId
-        (BuildingsDTO (map toPageBuildingsV90 ps)) afterActivity
+        (migrateBuildingsDTOv1 (BuildingsDTOv1 (map toPageBuildingsV90 ps)))
+        afterActivity
     afterUnits ← applyUnits 1 nextUnitId
-        (UnitsDTO (map toPageUnitsV90 ps)) afterBuildings
+        (migrateUnitsDTOv1 (UnitsDTOv1 (map toPageUnitsV90 ps)))
+        afterBuildings
     afterSim ← applyUnitSim 1
         (migrateUnitSimDTOv1 (UnitSimDTOv1 (map toPageSimV90 ps))) afterUnits
     afterCraft ← applyCraftBills 1 craftBillsDTO afterSim
@@ -410,26 +426,26 @@ toPageCoreV90 p = PageCoreDTOv1
 toPageEditsV90 ∷ WorldPageSaveV90 → PageEditsDTO
 toPageEditsV90 p = PageEditsDTO (wp90PageId p) (wp90Edits p)
 
-toPageActivityV90 ∷ WorldPageSaveV90 → PageActivityDTO
-toPageActivityV90 p = PageActivityDTO
-    { padPageId        = wp90PageId p
-    , padMine          = wp90MineDesignations p
-    , padConstruct     = wp90ConstructDesignations p
-    , padChop          = wp90ChopDesignations p
-    , padTill          = wp90TillDesignations p
-    , padPlant         = wp90PlantDesignations p
-    , padFloraHarvests = wp90FloraHarvests p
-    , padCropPlots     = wp90CropPlots p
-    , padGroundItems   = wp90GroundItems p
-    , padSpoilPiles    = wp90SpoilPiles p
+toPageActivityV90 ∷ WorldPageSaveV90 → PageActivityDTOv2
+toPageActivityV90 p = PageActivityDTOv2
+    { pad2PageId        = wp90PageId p
+    , pad2Mine          = wp90MineDesignations p
+    , pad2Construct     = wp90ConstructDesignations p
+    , pad2Chop          = wp90ChopDesignations p
+    , pad2Till          = wp90TillDesignations p
+    , pad2Plant         = wp90PlantDesignations p
+    , pad2FloraHarvests = wp90FloraHarvests p
+    , pad2CropPlots     = wp90CropPlots p
+    , pad2GroundItems   = wp90GroundItems p
+    , pad2SpoilPiles    = wp90SpoilPiles p
     }
 
-toPageBuildingsV90 ∷ WorldPageSaveV90 → PageBuildingsDTO
+toPageBuildingsV90 ∷ WorldPageSaveV90 → PageBuildingsDTOv1
 toPageBuildingsV90 p =
-    PageBuildingsDTO (wp90PageId p) (bsn90Instances (wp90Buildings p))
+    PageBuildingsDTOv1 (wp90PageId p) (bsn90Instances (wp90Buildings p))
 
-toPageUnitsV90 ∷ WorldPageSaveV90 → PageUnitsDTO
-toPageUnitsV90 p = PageUnitsDTO (wp90PageId p) (usn90Instances (wp90Units p))
+toPageUnitsV90 ∷ WorldPageSaveV90 → PageUnitsDTOv1
+toPageUnitsV90 p = PageUnitsDTOv1 (wp90PageId p) (usn90Instances (wp90Units p))
 
 toPageSimV90 ∷ WorldPageSaveV90 → PageSimDTOv1
 toPageSimV90 p = PageSimDTOv1 (wp90PageId p) (wp90UnitSimStates p)

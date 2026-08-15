@@ -3,6 +3,7 @@ items:
     display_name: "Steel Plate"
     sprite: "assets/textures/items/material/plate_steel.png"
     weight: 1.2
+    bulk: 1.50        # litres of external bulk
     category: Materials
     make: foundry
     material: steel

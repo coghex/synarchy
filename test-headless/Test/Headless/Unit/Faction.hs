@@ -283,8 +283,19 @@ spec = describe "Unit faction model" $ do
             map uisFactionId (HM.elems (usnInstances back))
                 `shouldBe` [factionTag fallbackFaction]
 
-        it "the units component keeps schema version 1 — typing the \
-           \runtime field is not a wire change" $
-            [ rcVersion c
-            | c ← saveComponentRegistry
-            , rcId c ≡ ComponentId "units" ] `shouldBe` [1]
+        it "typing the runtime field is not a wire change — the units \
+           \component still accepts the version it did before, and the \
+           \faction tag is still carried as Text" $ do
+            -- The original assertion pinned the component at v1. #1233
+            -- later bumped it to v2 for an unrelated reason (the item
+            -- tree gained physical values), so what this case actually
+            -- means is that the FACTION work added no version of its own:
+            -- v1 is still an accepted input, and the tag round-trips
+            -- through it unchanged.
+            [ rcInputVers c
+              | c ← saveComponentRegistry
+              , rcId c ≡ ComponentId "units" ] `shouldBe` [[1, 2]]
+            let (um, _, _) = loadTags [(UnitId 1, "player")]
+                back = toUnitSnapshot pageA um { umDefs = defs }
+            map uisFactionId (HM.elems (usnInstances back))
+                `shouldBe` [factionTag FactionPlayer]

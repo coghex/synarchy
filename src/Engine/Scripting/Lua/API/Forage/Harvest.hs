@@ -187,6 +187,10 @@ spawnYields env ws gx gy yields = do
                             , iiContents    = []
                             , iiInstanceId  = iid
                             , iiTemp        = Nothing
+                              -- #1233: snapshotted from the def, like
+                              -- iiWeight.
+                            , iiBulk        = Just (idBulk def)
+                            , iiStorage     = idStorage def
                             }
                     gid ← atomicModifyIORef' (wsGroundItemsRef ws) $
                         spawnGroundItem inst

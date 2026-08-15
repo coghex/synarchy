@@ -22,6 +22,8 @@ mkItem wght mTemp = ItemInstance
     , iiContents    = []
     , iiInstanceId  = 1
     , iiTemp        = mTemp
+    , iiBulk        = Just 1
+    , iiStorage     = Nothing
     }
 
 im ∷ ItemManager

@@ -367,6 +367,11 @@ rollInstance env itemMgr name mFill =
                 , iiContents    = contents
                 , iiInstanceId  = iid
                 , iiTemp        = Nothing
+                  -- #1233: the physical values are SNAPSHOTTED from the
+                  -- def here, exactly like iiWeight above, so a later
+                  -- content edit never re-values this instance.
+                , iiBulk        = Just (idBulk def)
+                , iiStorage     = idStorage def
                 }
 
 -- | Resolve a unit def's starting_equipment into a slot→ItemInstance
@@ -439,6 +444,8 @@ buildStartingEquipment env logger itemMgr mClass entries =
                                           , iiContents    = []
                                           , iiInstanceId  = iid
                                           , iiTemp        = Nothing
+                                          , iiBulk        = Just (idBulk iDef)
+                                          , iiStorage     = idStorage iDef
                                           }
                                         m
                 ) (return HM.empty) entries
@@ -511,4 +518,6 @@ buildStartingAccessories env logger itemMgr names = do
                 , iiContents    = []
                 , iiInstanceId  = iid
                 , iiTemp        = Nothing
+                , iiBulk        = Just (idBulk def)
+                , iiStorage     = idStorage def
                 }

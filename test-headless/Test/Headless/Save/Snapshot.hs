@@ -103,6 +103,7 @@ minimalItem iid = ItemInstance
     { iiDefName = "test_item", iiCurrentFill = 0, iiQuality = 100
     , iiCondition = 100, iiWeight = 1, iiSharpness = 100, iiContents = []
     , iiInstanceId = iid, iiTemp = Nothing
+    , iiBulk = Just 1, iiStorage = Nothing
     }
 
 minimalUnitInstance ∷ [ItemInstance] → UnitInstanceSnapshot
