@@ -7,6 +7,7 @@ items:
     display_name: "Wheat Grain"
     sprite: "assets/textures/items/supply/quinoa_sack.png"  # placeholder — reused, no dedicated art yet
     weight: 0.3
+    bulk: 0.5        # litres of external bulk
     category: Supplies
     food:
       nutrition:

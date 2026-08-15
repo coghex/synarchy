@@ -43,7 +43,8 @@ import World.Page.Types (WorldPageId(..))
 accDef ∷ Text → Text → [ItemBuff] → ItemDef
 accDef name disp buffs = ItemDef
     { idName = name, idDisplayName = disp, idTexture = TextureHandle 0
-    , idWeight = 0.2, idWeightSpec = Nothing, idKind = "accessory"
+    , idWeight = 0.2, idWeightSpec = Nothing, idBulk = 0.8
+    , idStorage = Nothing, idKind = "accessory"
     , idCategory = "Misc", idMake = "", idMaterial = ""
     , idQualitySpec = Nothing, idQualityTiers = [], idConditionSpec = Nothing
     , idContainer = Nothing, idDefaultContents = [], idFood = Nothing
@@ -84,6 +85,8 @@ acc defName iid condition = ItemInstance
     , iiContents    = []
     , iiInstanceId  = iid
     , iiTemp        = Nothing
+    , iiBulk        = Just 0.8
+    , iiStorage     = Nothing
     }
 
 -- | A modifier from a source no accessory owns. Requirement 3's guard:

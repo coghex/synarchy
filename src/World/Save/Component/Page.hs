@@ -60,7 +60,15 @@
 --   - 'CropPlot'            → 'CropPlotDTO'
 --   - 'GroundItem'/'GroundItems' → 'GroundItemDTO'/'GroundItemsDTO', its
 --                             nested 'ItemInstance' frozen recursively via
---                             'ItemInstanceDTO'
+--                             'ItemInstanceDTO' (whose optional storage
+--                             capacities are frozen as 'ItemStorageDTO';
+--                             the pre-#1233 tree stays as
+--                             'ItemInstanceDTOv1'/'GroundItemDTOv1'/
+--                             'GroundItemsDTOv1', reached by
+--                             @world-activity@ v1+v2 through the frozen
+--                             'PageActivityDTOv2'/'WorldActivityDTOv2'
+--                             slice, and by three other components plus
+--                             the v90 legacy tree)
 --   - 'SpoilPile'           → 'SpoilPileDTO'
 --
 --   'WorldGenParamsDTO' and its full nested worldgen config/state tree
@@ -105,6 +113,10 @@ module World.Save.Component.Page
     , WorldEditsDTO(..)
     , PageActivityDTO(..)
     , WorldActivityDTO(..)
+    , PageActivityDTOv2(..)
+    , WorldActivityDTOv2(..)
+    , migratePageActivityV2
+    , migrateWorldActivityV2
       -- * Frozen leaf DTOs (requirement 4)
     , WorldGenParamsDTO(..)
     , WorldGenParamsDTOv1(..)
@@ -130,9 +142,13 @@ module World.Save.Component.Page
     , TillDesignationDTO(..)
     , PlantDesignationDTO(..)
     , CropPlotDTO(..)
+    , ItemStorageDTO(..)
     , ItemInstanceDTO(..)
+    , ItemInstanceDTOv1(..)
     , GroundItemDTO(..)
+    , GroundItemDTOv1(..)
     , GroundItemsDTO(..)
+    , GroundItemsDTOv1(..)
     , SpoilPileDTO(..)
     , toWorldGenParamsDTO
     , fromWorldGenParamsDTO
@@ -146,10 +162,20 @@ module World.Save.Component.Page
     , toWorldGenParamsDTOv4
     , toEtymologySourceDTO
     , fromEtymologySourceDTO
+    , toItemStorageDTO
+    , fromItemStorageDTO
     , toItemInstanceDTO
     , fromItemInstanceDTO
+    , toItemInstanceDTOv1
+    , migrateItemInstanceDTOv1
     , toGroundItemDTO
     , fromGroundItemDTO
+    , toGroundItemDTOv1
+    , migrateGroundItemDTOv1
+    , toGroundItemsDTO
+    , fromGroundItemsDTO
+    , toGroundItemsDTOv1
+    , migrateGroundItemsDTOv1
     , basePageSnapshots
     , blankPageSnapshot
     , applyWorldEdits
@@ -204,7 +230,7 @@ import World.Spoil.Types (SpoilPile(..), SpoilPiles, emptySpoilPiles)
 import World.Flora.Harvest (FloraHarvests, emptyFloraHarvests)
 import World.Flora.CropPlot (CropPlot(..), CropPlots, emptyCropPlots)
 import Item.Ground (GroundItem(..), GroundItems(..), emptyGroundItems)
-import Item.Types (ItemInstance(..))
+import Item.Types (ItemInstance(..), ItemStorage(..))
 import World.Save.Types
     ( BuildingSnapshot(..), UnitSnapshot(..) )
 import World.Save.Snapshot (SessionSnapshot(..), PageSnapshot(..))
@@ -485,18 +511,48 @@ toCropPlotDTO c = CropPlotDTO (cpSpecies c) (cpPlantedDay c) (cpHealth c)
 fromCropPlotDTO ∷ CropPlotDTO → CropPlot
 fromCropPlotDTO d = CropPlot (cpiSpecies d) (cpiPlantedDay d) (cpiHealth d)
 
+-- | Frozen mirror of 'Item.Types.ItemStorage' — a portable item's
+--   INTERNAL weight + bulk capacities (#1233). Frozen rather than reused
+--   as a leaf under boundary-rule clause (2): it is an ordinary live
+--   gameplay record that could plausibly gain fields (accepted kinds,
+--   openings, rigidity) for reasons that have nothing to do with save
+--   compatibility, and it rides inside the recursive item tree where such
+--   drift would silently re-layout every item-bearing component's bytes.
+data ItemStorageDTO = ItemStorageDTO
+    { isdWeightCapacity ∷ !Float
+    , isdBulkCapacity   ∷ !Float
+    } deriving (Show, Eq, Generic, Serialize)
+
+toItemStorageDTO ∷ ItemStorage → ItemStorageDTO
+toItemStorageDTO s =
+    ItemStorageDTO (isWeightCapacity s) (isBulkCapacity s)
+
+fromItemStorageDTO ∷ ItemStorageDTO → ItemStorage
+fromItemStorageDTO d =
+    ItemStorage (isdWeightCapacity d) (isdBulkCapacity d)
+
 -- | Frozen mirror of 'ItemInstance' (a mutable runtime record whose
 --   fields — fill / quality / condition / sharpness / temperature — are
---   live gameplay state, appended to across saves v36/v42/v56/v68). Per
---   the component frozen-DTO boundary rule ("World.Save.Component.Types"),
+--   live gameplay state, appended to across saves v36/v42/v56/v68 and
+--   #1233's physical values). Per the component frozen-DTO boundary rule
+--   ("World.Save.Component.Types"),
 --   this live record is frozen with an explicit field-by-field conversion
 --   rather than embedded — and it is frozen RECURSIVELY: 'iiContents' is
 --   itself a @['ItemInstance']@ (a first-aid kit holds items, a kit can
 --   hold a kit), so 'itdContents' recurses through 'ItemInstanceDTO' too;
 --   a shallow wrapper re-embedding the live nested list would still drift.
---   Every other field is a leaf scalar/'Maybe' scalar. Field order mirrors
---   'ItemInstance''s positional 'Generic Serialize' layout exactly, so the
---   bytes are unchanged from embedding the live type directly.
+--   Every other field is a leaf scalar/'Maybe' scalar, except #1233's
+--   optional storage capacities (frozen as 'ItemStorageDTO'). Field order
+--   mirrors 'ItemInstance''s positional 'Generic Serialize' layout
+--   exactly.
+--
+--   __This is the CURRENT (#1233) shape.__ The pre-#1233 one is frozen
+--   verbatim as 'ItemInstanceDTOv1' below and is what every historical
+--   item-bearing payload still decodes through; this type was NOT edited
+--   in place, because four independently-versioned components
+--   (@world-activity@, @buildings@, @units@, @container-knowledge@) plus
+--   the v90 legacy tree all carry it, and editing it would have silently
+--   re-laid-out every one of their shipped payloads.
 data ItemInstanceDTO = ItemInstanceDTO
     { itdDefName     ∷ !Text
     , itdCurrentFill ∷ !Float
@@ -507,6 +563,8 @@ data ItemInstanceDTO = ItemInstanceDTO
     , itdContents    ∷ ![ItemInstanceDTO]
     , itdInstanceId  ∷ !Word64
     , itdTemp        ∷ !(Maybe Float)
+    , itdBulk        ∷ !(Maybe Float)
+    , itdStorage     ∷ !(Maybe ItemStorageDTO)
     } deriving (Show, Eq, Generic, Serialize)
 
 toItemInstanceDTO ∷ ItemInstance → ItemInstanceDTO
@@ -520,6 +578,8 @@ toItemInstanceDTO i = ItemInstanceDTO
     , itdContents    = map toItemInstanceDTO (iiContents i)
     , itdInstanceId  = iiInstanceId i
     , itdTemp        = iiTemp i
+    , itdBulk        = iiBulk i
+    , itdStorage     = toItemStorageDTO <$> iiStorage i
     }
 
 fromItemInstanceDTO ∷ ItemInstanceDTO → ItemInstance
@@ -533,6 +593,87 @@ fromItemInstanceDTO d = ItemInstance
     , iiContents    = map fromItemInstanceDTO (itdContents d)
     , iiInstanceId  = itdInstanceId d
     , iiTemp        = itdTemp d
+    , iiBulk        = itdBulk d
+    , iiStorage     = fromItemStorageDTO <$> itdStorage d
+    }
+
+-- | The FROZEN pre-#1233 item shape, preserved verbatim for decode-only
+--   backward compatibility: every field the current DTO has except the
+--   physical values (#1233's external bulk + internal storage
+--   capacities). Recursive through ITSELF, so a historical nested
+--   @iiContents@ tree decodes at the old layout all the way down.
+--
+--   Reached by @world-activity@ v1/v2, @buildings@ v1, @units@ v1,
+--   @container-knowledge@ v1, and "World.Save.Compat.SessionV90"'s v90
+--   tree. Never edited; a further item schema change freezes the CURRENT
+--   shape as 'ItemInstanceDTOv2' rather than touching this one
+--   (frozen-DTO boundary rule).
+data ItemInstanceDTOv1 = ItemInstanceDTOv1
+    { itd1DefName     ∷ !Text
+    , itd1CurrentFill ∷ !Float
+    , itd1Quality     ∷ !Float
+    , itd1Condition   ∷ !Float
+    , itd1Weight      ∷ !Float
+    , itd1Sharpness   ∷ !Float
+    , itd1Contents    ∷ ![ItemInstanceDTOv1]
+    , itd1InstanceId  ∷ !Word64
+    , itd1Temp        ∷ !(Maybe Float)
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | Encoder for the frozen shape — the round-trip partner a frozen-DTO
+--   fixture and a migration test are built with (the same reason
+--   'toWorldIdentityDTOv2' exists).
+toItemInstanceDTOv1 ∷ ItemInstance → ItemInstanceDTOv1
+toItemInstanceDTOv1 i = ItemInstanceDTOv1
+    { itd1DefName     = iiDefName i
+    , itd1CurrentFill = iiCurrentFill i
+    , itd1Quality     = iiQuality i
+    , itd1Condition   = iiCondition i
+    , itd1Weight      = iiWeight i
+    , itd1Sharpness   = iiSharpness i
+    , itd1Contents    = map toItemInstanceDTOv1 (iiContents i)
+    , itd1InstanceId  = iiInstanceId i
+    , itd1Temp        = iiTemp i
+    }
+
+-- | __The #1233 absence policy, stated once and applied everywhere.__
+--
+--   A pre-#1233 item decodes with its physical values ABSENT
+--   ('Nothing'), recursively through its whole contents tree. That is a
+--   deliberate choice between three options, and the other two are both
+--   wrong:
+--
+--     * Fabricating @Just 0@ would write an INVALID bulk (the loader
+--       rejects a zero) into the session and then to disk, where nothing
+--       downstream could tell it apart from an authored value.
+--     * Re-deriving it from the item's CURRENT definition would be
+--       exactly the retroactive reinterpretation #1233 requirement 6
+--       forbids: which build first loaded the save would decide what a
+--       long-materialized crate is worth, and two players on different
+--       content versions would get different answers for the same bytes.
+--
+--   Representing the absence instead keeps it honest AND non-silent —
+--   every reader has to destructure a 'Maybe', so nothing can quietly
+--   fall back to a definition that has since been edited. Nothing in
+--   this slice consumes either value (#1233 requirement 8 is data only),
+--   so PLC-4 (the epic's former PLC-3B) — the first slice that
+--   ENFORCES a capacity — is what
+--   decides how an absent value behaves under enforcement. A migrated
+--   item that is re-saved keeps the absence verbatim: it is a fact about
+--   that item's history, not a placeholder waiting to be filled.
+migrateItemInstanceDTOv1 ∷ ItemInstanceDTOv1 → ItemInstanceDTO
+migrateItemInstanceDTOv1 d = ItemInstanceDTO
+    { itdDefName     = itd1DefName d
+    , itdCurrentFill = itd1CurrentFill d
+    , itdQuality     = itd1Quality d
+    , itdCondition   = itd1Condition d
+    , itdWeight      = itd1Weight d
+    , itdSharpness   = itd1Sharpness d
+    , itdContents    = map migrateItemInstanceDTOv1 (itd1Contents d)
+    , itdInstanceId  = itd1InstanceId d
+    , itdTemp        = itd1Temp d
+    , itdBulk        = Nothing
+    , itdStorage     = Nothing
     }
 
 -- | Frozen mirror of 'GroundItem'. Its 'ItemInstance' recurses through
@@ -549,6 +690,22 @@ toGroundItemDTO g = GroundItemDTO (toItemInstanceDTO (giInst g)) (giX g) (giY g)
 fromGroundItemDTO ∷ GroundItemDTO → GroundItem
 fromGroundItemDTO d = GroundItem (fromItemInstanceDTO (giiInst d)) (giiX d) (giiY d)
 
+-- | The FROZEN pre-#1233 ground item (#1233): identical but for the item
+--   shape it carries.
+data GroundItemDTOv1 = GroundItemDTOv1
+    { gii1Inst ∷ !ItemInstanceDTOv1
+    , gii1X    ∷ !Float
+    , gii1Y    ∷ !Float
+    } deriving (Show, Eq, Generic, Serialize)
+
+toGroundItemDTOv1 ∷ GroundItem → GroundItemDTOv1
+toGroundItemDTOv1 g =
+    GroundItemDTOv1 (toItemInstanceDTOv1 (giInst g)) (giX g) (giY g)
+
+migrateGroundItemDTOv1 ∷ GroundItemDTOv1 → GroundItemDTO
+migrateGroundItemDTOv1 d = GroundItemDTO
+    (migrateItemInstanceDTOv1 (gii1Inst d)) (gii1X d) (gii1Y d)
+
 -- | Frozen mirror of the 'GroundItems' registry (its id counter + map).
 data GroundItemsDTO = GroundItemsDTO
     { gisiNextId ∷ !Int
@@ -562,6 +719,20 @@ toGroundItemsDTO g =
 fromGroundItemsDTO ∷ GroundItemsDTO → GroundItems
 fromGroundItemsDTO d =
     GroundItems (gisiNextId d) (HM.map fromGroundItemDTO (gisiItems d))
+
+-- | The FROZEN pre-#1233 ground-items registry (#1233).
+data GroundItemsDTOv1 = GroundItemsDTOv1
+    { gisi1NextId ∷ !Int
+    , gisi1Items  ∷ !(HM.HashMap Int GroundItemDTOv1)
+    } deriving (Show, Eq, Generic, Serialize)
+
+toGroundItemsDTOv1 ∷ GroundItems → GroundItemsDTOv1
+toGroundItemsDTOv1 g =
+    GroundItemsDTOv1 (gisNextId g) (HM.map toGroundItemDTOv1 (gisItems g))
+
+migrateGroundItemsDTOv1 ∷ GroundItemsDTOv1 → GroundItemsDTO
+migrateGroundItemsDTOv1 d =
+    GroundItemsDTO (gisi1NextId d) (HM.map migrateGroundItemDTOv1 (gisi1Items d))
 
 -- | Frozen mirror of 'SpoilPile'.
 data SpoilPileDTO = SpoilPileDTO
@@ -1115,6 +1286,54 @@ newtype WorldActivityDTO = WorldActivityDTO { wadPages ∷ [PageActivityDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
+-- | The FROZEN pre-#1233 activity slice (@world-activity@ v1 AND v2 —
+--   #1175's bump was semantic, so both encoded versions share this one
+--   byte layout). Identical to the current slice except for the ground
+--   items it carries, which is the whole reason it exists: #1233 appended
+--   physical values to the recursive item tree, and the shipped v1/v2
+--   payloads must keep decoding at their original layout.
+data PageActivityDTOv2 = PageActivityDTOv2
+    { pad2PageId        ∷ !WorldPageId
+    , pad2Mine          ∷ !(HM.HashMap (Int, Int) MineDesignationDTO)
+    , pad2Construct     ∷ !(HM.HashMap (Int, Int) ConstructDesignationDTO)
+    , pad2Chop          ∷ !(HM.HashMap (Int, Int) ChopDesignationDTO)
+    , pad2Till          ∷ !(HM.HashMap (Int, Int) TillDesignationDTO)
+    , pad2Plant         ∷ !(HM.HashMap (Int, Int) PlantDesignationDTO)
+    , pad2FloraHarvests ∷ !FloraHarvests
+    , pad2CropPlots     ∷ !(HM.HashMap (Int, Int) CropPlotDTO)
+    , pad2GroundItems   ∷ !GroundItemsDTOv1
+    , pad2SpoilPiles    ∷ !(HM.HashMap (Int, Int) SpoilPileDTO)
+    } deriving (Show, Generic, Serialize)
+
+newtype WorldActivityDTOv2 =
+    WorldActivityDTOv2 { wad2Pages ∷ [PageActivityDTOv2] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+migratePageActivityV2 ∷ PageActivityDTOv2 → PageActivityDTO
+migratePageActivityV2 s = PageActivityDTO
+    { padPageId        = pad2PageId s
+    , padMine          = pad2Mine s
+    , padConstruct     = pad2Construct s
+    , padChop          = pad2Chop s
+    , padTill          = pad2Till s
+    , padPlant         = pad2Plant s
+    , padFloraHarvests = pad2FloraHarvests s
+    , padCropPlots     = pad2CropPlots s
+    , padGroundItems   = migrateGroundItemsDTOv1 (pad2GroundItems s)
+    , padSpoilPiles    = pad2SpoilPiles s
+    }
+
+-- | v1/v2 → v3: every designation map crosses unchanged and each ground
+--   item's physical values decode absent (see 'migrateItemInstanceDTOv1'
+--   for why). #1175's v1 canonical-frame repair is deliberately NOT done
+--   here — 'applyWorldActivity' re-keys for EVERY accepted version, so
+--   the repair stays in one place rather than being split between a
+--   migration and an apply step.
+migrateWorldActivityV2 ∷ WorldActivityDTOv2 → WorldActivityDTO
+migrateWorldActivityV2 (WorldActivityDTOv2 slices) =
+    WorldActivityDTO (map migratePageActivityV2 slices)
+
 -- | Component-local invariant (#760, mirrors
 --   @worldPagesCodec@'s @validatePages@ precedent above): every ground
 --   item's own id must sit below that page's ground-items allocator
@@ -1125,7 +1344,7 @@ newtype WorldActivityDTO = WorldActivityDTO { wadPages ∷ [PageActivityDTO] }
 --   key), so there is nothing further to check there.
 validateWorldActivity ∷ WorldActivityDTO → [ComponentError]
 validateWorldActivity (WorldActivityDTO slices) =
-    [ ComponentError worldActivityComponentId 1 ValidatePhase
+    [ ComponentError worldActivityComponentId 3 ValidatePhase
         ("page '" <> tshow (padPageId s) <> "': ground item #"
          <> tshow gid <> " is not below the page's ground-item \
             \allocator (" <> tshow (gisiNextId (padGroundItems s)) <> ")")
@@ -1144,17 +1363,26 @@ validateWorldActivity (WorldActivityDTO slices) =
 --   v1 therefore stays explicitly accepted through its own frozen entry
 --   rather than having its meaning quietly rewritten underneath it, and
 --   'applyWorldActivity' canonicalises a v1 payload's keys on the way
---   into the session (it re-saves as v2, so the repair is durable).
+--   into the session (it re-saves as the current version, so the repair
+--   is durable).
+--
+--   v3 (#1233) is the first SHAPE change: ground items carry the physical
+--   values #1233 added to the recursive item tree. v1 and v2 are
+--   byte-identical to each other (#1175 changed only what their keys
+--   PROMISE), so both decode through the one frozen 'WorldActivityDTOv2'
+--   layout and both take 'applyWorldActivity''s re-keying — a v2 payload
+--   is already canonical, so for it that step is the identity.
 worldActivityCodec ∷ ComponentCodec WorldActivityDTO
 worldActivityCodec = componentCodec ComponentSpec
     { csComponent     = worldActivityComponentId
-    , csVersion       = 2
+    , csVersion       = 3
     , csRequired      = True
     , csDeps          = [worldPagesComponentId]
     , csEncode        = \snap →
         WorldActivityDTO (map toActivity (orderedPages snap))
     , csDecode        = id
-    , csOlderVersions = [ atVersion 1 (id ∷ WorldActivityDTO → WorldActivityDTO) ]
+    , csOlderVersions = [ atVersion 2 migrateWorldActivityV2
+                        , atVersion 1 migrateWorldActivityV2 ]
     , csValidate      = validateWorldActivity
     }
   where

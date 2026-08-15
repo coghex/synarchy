@@ -3,6 +3,7 @@ items:
     display_name: "Acolyte's Habit"
     sprite: "assets/textures/items/wearable/acolyte_habit.png"
     weight: 1.2
+    bulk: 6.0        # litres of external bulk
     kind: accessory     # not slot-equipment; lives on uiAccessories
     category: Armor     # appears under the Armor inventory tab
     insulation: 0.6     # a robe — moderate warmth over the body

@@ -3,6 +3,7 @@ items:
     display_name: "Steel Hardware"
     sprite: "assets/textures/items/material/hardware_steel.png"
     weight: 0.2
+    bulk: 0.15        # litres of external bulk
     category: Materials
     make: foundry
     material: steel

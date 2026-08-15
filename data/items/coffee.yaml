@@ -4,6 +4,7 @@ items:
     display_name: "Coffee Grounds"
     sprite: "assets/textures/items/material/coffee_grounds.png"
     weight: 0.06       # 60 g per unit — data/recipes/basic_food.yaml's dose
+    bulk: 0.12        # litres of external bulk
     category: Materials
 
   # Fluid item (#344) held in a container, like the canteen holds
@@ -17,6 +18,7 @@ items:
     display_name: "Coffee Pot"
     sprite: "assets/textures/items/supply/coffee_pot.png"
     weight: 0.4        # empty ceramic pot; full mass = weight + 1 kg coffee
+    bulk: 1.6        # litres of external bulk
     category: Supplies
     container:
       capacity: 1.0    # litres

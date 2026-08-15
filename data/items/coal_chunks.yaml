@@ -8,6 +8,7 @@ items:
     display_name: "Lignite Chunk"
     sprite: "assets/textures/items/material/lignite_chunk.png"
     weight: 5.0
+    bulk: 4.0        # litres of external bulk
     category: Materials
     make: world
     material: lignite
@@ -15,6 +16,7 @@ items:
     display_name: "Bituminous Coal Chunk"
     sprite: "assets/textures/items/material/bituminous_coal_chunk.png"
     weight: 5.0
+    bulk: 3.5        # litres of external bulk
     category: Materials
     make: world
     material: bituminous_coal
@@ -22,6 +24,7 @@ items:
     display_name: "Anthracite Chunk"
     sprite: "assets/textures/items/material/anthracite_chunk.png"
     weight: 5.0
+    bulk: 3.2        # litres of external bulk
     category: Materials
     make: world
     material: anthracite

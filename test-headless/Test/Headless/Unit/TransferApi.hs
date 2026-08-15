@@ -100,6 +100,8 @@ mkItem name iid w = ItemInstance
     , iiContents    = []
     , iiInstanceId  = iid
     , iiTemp        = Nothing
+    , iiBulk        = Just 1
+    , iiStorage     = Nothing
     }
 
 -- | Mirrors 'Test.Headless.Unit.Faction.minimalDef': only the fields

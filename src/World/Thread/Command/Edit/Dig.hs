@@ -255,6 +255,9 @@ spawnYieldItems env rngRef logger ws defName (gx, gy) n = do
                     , iiContents    = []
                     , iiInstanceId  = iid
                     , iiTemp        = Nothing
+                      -- #1233: snapshotted from the def, like iiWeight.
+                    , iiBulk        = Just (idBulk iDef)
+                    , iiStorage     = idStorage iDef
                     }
             gis ← readIORef (wsGroundItemsRef ws)
             (px, py) ← pickScatterPos gis

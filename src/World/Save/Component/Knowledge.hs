@@ -13,8 +13,9 @@
 --   required, and 'World.Save.Envelope.Codec.decodeEnvelope' refuses a
 --   modern envelope missing one. A container-knowledge payload cannot
 --   be required, because every supported baseline the compatibility
---   manifest tracks (@docs/save_compat/manifest.json@) predates this
---   feature and legitimately carries no such component. An ABSENT
+--   manifest tracks (@docs/save_compat/manifest.json@) from before
+--   #1087 predates this feature and legitimately carries no such
+--   component. An ABSENT
 --   payload therefore leaves every page at 'blankPageSnapshot''s empty
 --   default — so every container in a pre-#1087 session reads as
 --   NEVER-INSPECTED, never as known-empty, and never with its live
@@ -37,6 +38,12 @@ module World.Save.Component.Knowledge
     , ContainerRecordDTO(..)
     , toContainerRecordDTO
     , fromContainerRecordDTO
+    , ContainerRecordDTOv1(..)
+    , PageContainerKnowledgeDTOv1(..)
+    , ContainerKnowledgeDTOv1(..)
+    , toContainerRecordDTOv1
+    , migrateContainerRecordDTOv1
+    , migrateContainerKnowledgeDTOv1
     ) where
 
 import UPrelude
@@ -50,7 +57,8 @@ import Building.Knowledge (ContainerKnowledge(..), ContainerRecord(..))
 import Building.Types (BuildingId(..))
 import World.Page.Types (WorldPageId(..))
 import World.Save.Component.Page
-    ( ItemInstanceDTO(..), toItemInstanceDTO, fromItemInstanceDTO )
+    ( ItemInstanceDTO(..), toItemInstanceDTO, fromItemInstanceDTO
+    , ItemInstanceDTOv1, toItemInstanceDTOv1, migrateItemInstanceDTOv1 )
 import World.Save.Component.Types
 import World.Save.Snapshot (SessionSnapshot(..), PageSnapshot(..))
 
@@ -89,6 +97,38 @@ fromContainerRecordDTO d = ContainerRecord
     , crRevealedAt   = crdRevealedAt d
     }
 
+-- | The FROZEN v1 record (#1233): identical but for the item shape it
+--   remembers ('ItemInstanceDTOv1', the pre-#1233 recursive tree).
+data ContainerRecordDTOv1 = ContainerRecordDTOv1
+    { crd1Items        ∷ ![ItemInstanceDTOv1]
+    , crd1StoredWeight ∷ !Float
+    , crd1RevealedAt   ∷ !Double
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | Encoder for the frozen shape — the round-trip partner a v1 fixture
+--   and a migration test are built with.
+toContainerRecordDTOv1 ∷ ContainerRecord → ContainerRecordDTOv1
+toContainerRecordDTOv1 r = ContainerRecordDTOv1
+    { crd1Items        = map toItemInstanceDTOv1 (crItems r)
+    , crd1StoredWeight = crStoredWeight r
+    , crd1RevealedAt   = crRevealedAt r
+    }
+
+-- | v1 → v2: the remembered weight and reveal time cross unchanged and
+--   each remembered item migrates through 'migrateItemInstanceDTOv1'.
+--
+--   Absence is especially clearly right here: these items are
+--   OBSERVATIONS of how a container looked at reveal time, and nothing
+--   observed a bulk then. 'crd1StoredWeight' is deliberately not
+--   re-derived either (see 'validateContainerKnowledge') — the same
+--   reasoning, one field older.
+migrateContainerRecordDTOv1 ∷ ContainerRecordDTOv1 → ContainerRecordDTO
+migrateContainerRecordDTOv1 d = ContainerRecordDTO
+    { crdItems        = map migrateItemInstanceDTOv1 (crd1Items d)
+    , crdStoredWeight = crd1StoredWeight d
+    , crdRevealedAt   = crd1RevealedAt d
+    }
+
 -- | One page's slice, in the same shape every other page-scoped
 --   component uses ('applyPageSlices' enforces the page-set contract).
 data PageContainerKnowledgeDTO = PageContainerKnowledgeDTO
@@ -100,6 +140,25 @@ newtype ContainerKnowledgeDTO =
     ContainerKnowledgeDTO { ckdPages ∷ [PageContainerKnowledgeDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
+
+-- | The FROZEN v1 page slice (#1233), carrying the frozen v1 records.
+data PageContainerKnowledgeDTOv1 = PageContainerKnowledgeDTOv1
+    { pck1PageId  ∷ !WorldPageId
+    , pck1Records ∷ !(HM.HashMap BuildingId ContainerRecordDTOv1)
+    } deriving (Show, Eq, Generic, Serialize)
+
+newtype ContainerKnowledgeDTOv1 =
+    ContainerKnowledgeDTOv1 { ckd1Pages ∷ [PageContainerKnowledgeDTOv1] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+migrateContainerKnowledgeDTOv1
+    ∷ ContainerKnowledgeDTOv1 → ContainerKnowledgeDTO
+migrateContainerKnowledgeDTOv1 (ContainerKnowledgeDTOv1 slices) =
+    ContainerKnowledgeDTO
+        [ PageContainerKnowledgeDTO (pck1PageId s)
+              (HM.map migrateContainerRecordDTOv1 (pck1Records s))
+        | s ← slices ]
 
 -- | The fault in a remembered scalar, or 'Nothing' when it is a
 --   finite, non-negative number.
@@ -160,17 +219,24 @@ validateContainerKnowledge (ContainerKnowledgeDTO slices) = concat
       | s ← slices, (bid, r) ← HM.toList (pckRecords s)
       , Just fault ← [scalarFault (crdRevealedAt r)] ]
     ]
-  where err = ComponentError containerKnowledgeComponentId 1 ValidatePhase
+  where err = ComponentError containerKnowledgeComponentId 2 ValidatePhase
 
--- | v1, and OPTIONAL — see the module header for why the absent case is
+-- | v2, and OPTIONAL — see the module header for why the absent case is
 --   a legitimate default rather than a decode failure. Depends on
 --   @"world-pages"@ (the page-set authority every slice is checked
 --   against) and @"buildings"@ (whose restored instance set the load
 --   boundary scrubs dangling records against).
+--
+--   v2 (#1233): a remembered item carries the physical values #1233
+--   appended to the recursive item tree, so the shape changed and v1
+--   decodes through its own frozen tree. Note that "optional" governs
+--   ABSENCE only — a PRESENT v1 payload is migrated exactly like any
+--   required component's would be, and a present payload at an
+--   unsupported version still fails the load.
 containerKnowledgeCodec ∷ ComponentCodec ContainerKnowledgeDTO
 containerKnowledgeCodec = componentCodec ComponentSpec
     { csComponent     = containerKnowledgeComponentId
-    , csVersion       = 1
+    , csVersion       = 2
     , csRequired      = False
     , csDeps          = [worldPagesComponentId, buildingsComponentId]
     , csEncode        = \snap → ContainerKnowledgeDTO
@@ -179,7 +245,7 @@ containerKnowledgeCodec = componentCodec ComponentSpec
                     (ckRecords (pgsContainerKnowledge p)))
         | p ← orderedPages snap ]
     , csDecode        = id
-    , csOlderVersions = []
+    , csOlderVersions = [ atVersion 1 migrateContainerKnowledgeDTOv1 ]
     , csValidate      = validateContainerKnowledge
     }
 

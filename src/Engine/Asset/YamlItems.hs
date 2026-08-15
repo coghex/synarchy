@@ -3,6 +3,7 @@ module Engine.Asset.YamlItems
     ( ItemYamlDef(..)
     , ItemYamlWeight(..)
     , ItemYamlContainer(..)
+    , ItemYamlStorage(..)
     , ItemYamlContent(..)
     , ItemYamlFood(..)
     , ItemYamlRollSpec(..)
@@ -16,10 +17,63 @@ module Engine.Asset.YamlItems
 
 import UPrelude
 import GHC.Generics (Generic)
+import qualified Data.Text as T
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import qualified Data.Aeson as Aeson
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KM
+import qualified Data.Aeson.Types as Aeson (Parser)
 import Engine.Core.Log (LoggerState)
 import Engine.Asset.YamlList (loadYamlList)
+
+-- | Parse a REQUIRED authored physical quantity that must be a finite,
+--   strictly positive number, diagnosing every rejection BY DEFINITION
+--   NAME (#1233 requirement 2).
+--
+--   Naming the definition is the whole reason this exists rather than a
+--   bare @v .: key@ plus a check. 'Engine.Asset.YamlList.loadYamlList'
+--   supplies the failing FILE path in its warning, but an ordinary Aeson
+--   field error only reaches for a JSON path like @$.items[7].bulk@ —
+--   an index nobody can map back to a definition in a 14-entry file
+--   without counting. So every fault below (absent, wrong type, zero,
+--   negative, non-finite) is raised as ONE uniformly-shaped message
+--   carrying @defName@, and the two halves together name the file AND
+--   the definition.
+--
+--   Taking the whole 'Aeson.Value' rather than decoding to 'Float'
+--   first is also deliberate: YAML's @.nan@/@.inf@ resolve to STRINGS
+--   (the yaml package's scalar resolver only recognizes ordinary
+--   numeric syntax), so decoding first would surface those as a type
+--   error naming neither the definition nor what was actually wrong.
+--   The finiteness check still has to run AFTER narrowing, because a
+--   perfectly ordinary @1.0e+100@ is a valid 'Scientific' that becomes
+--   'Infinity' in the engine's 32-bit 'Float' field.
+requirePositiveQuantity
+    ∷ Text        -- ^ the definition's @name@, for the diagnostic
+    → Text        -- ^ what the quantity is, e.g. @"bulk"@
+    → Text        -- ^ its unit, e.g. @"litres"@
+    → Aeson.Object
+    → Text        -- ^ the YAML key to read
+    → Aeson.Parser Float
+requirePositiveQuantity defName label unit v key = do
+    mval ← v .:? Key.fromText key
+    case mval of
+        Nothing  → bad "is required and has no default"
+        Just val → case val of
+            Aeson.Number s →
+                let f = realToFrac s ∷ Float
+                in if isNaN f ∨ isInfinite f
+                     then bad ("must be finite, got " <> tshow val)
+                     else if f ≤ 0
+                       then bad ("must be strictly positive, got " <> tshow f)
+                       else pure f
+            _ → bad ("must be a number of " <> unit <> ", got " <> tshow val)
+  where
+    tshow ∷ Show a ⇒ a → Text
+    tshow = T.pack ∘ show
+    bad why = fail ∘ T.unpack $
+        "item definition '" <> defName <> "': " <> label <> " (key '"
+        <> key <> "', " <> unit <> ") " <> why
 
 -- | Optional container block. Items without this can't hold a fluid.
 data ItemYamlContainer = ItemYamlContainer
@@ -35,6 +89,45 @@ instance FromJSON ItemYamlContainer where
         ⊛ v .:? "holds" .!= "water"
         ⊛ v .:? "fill_weight" .!= 1.0
         ⊛ v .:? "default_fill" .!= 0.0
+
+-- | Optional @storage:@ block — portable ITEM-storage capacity (#1233).
+--   Entirely separate from 'ItemYamlContainer' above: that one is a
+--   homogeneous fluid/pill FILL, this one is an inventory of nested
+--   items. A definition may carry both; neither inherits the other's
+--   defaults or validation (@docs\/portable_loot_containers.md@ D-12).
+--
+--   BOTH capacities are required whenever the block is present, and
+--   neither has a default — an omitted @weight_capacity@ is a
+--   half-authored container, not "unlimited", and silently defaulting
+--   either one would invent a physical limit the designer never chose.
+--   They are also independent of each other and of the item's own
+--   external @bulk@; see 'parseItemYamlStorage'.
+data ItemYamlStorage = ItemYamlStorage
+    { iysWeightCapacity ∷ !Float   -- ^ kg of contents (storage.weight_capacity)
+    , iysBulkCapacity   ∷ !Float   -- ^ litres of contents (storage.bulk_capacity)
+    } deriving (Show, Eq, Generic)
+
+-- | Parse a @storage:@ block, threading the OWNING definition's name
+--   through so a bad capacity is diagnosed the same way a bad top-level
+--   @bulk@ is. There is deliberately no 'FromJSON' instance: the name is
+--   not reachable from inside one, and a nameless
+--   @Error in $.items[7].storage.bulk_capacity@ is the diagnostic
+--   requirement 2 exists to rule out.
+--   The object check is spelled out rather than delegated to
+--   'withObject' for the same reason: @storage: 23@ would otherwise fail
+--   with aeson's own "expected Object, but encountered Number", which
+--   names neither the definition nor the block.
+parseItemYamlStorage ∷ Text → Aeson.Value → Aeson.Parser ItemYamlStorage
+parseItemYamlStorage defName val = case val of
+    Aeson.Object v → ItemYamlStorage
+        ⊚ requirePositiveQuantity defName "storage weight capacity"
+              "kilograms" v "weight_capacity"
+        ⊛ requirePositiveQuantity defName "storage bulk capacity"
+              "litres" v "bulk_capacity"
+    _ → fail ∘ T.unpack $
+        "item definition '" <> defName <> "': storage must be a block \
+        \authoring weight_capacity (kilograms) and bulk_capacity \
+        \(litres), got " <> T.pack (show val)
 
 -- | One entry in an item-container's default contents (first-aid kit /
 --   toolbox): which item, how many, and an optional fill for fillable
@@ -172,6 +265,10 @@ data ItemYamlDef = ItemYamlDef
     , iydDisplayName ∷ !Text
     , iydSprite      ∷ !Text                       -- ^ texture path
     , iydWeight      ∷ !ItemYamlWeight             -- ^ empty weight (kg)
+    , iydBulk        ∷ !Float                      -- ^ external bulk (litres),
+                                                   --   REQUIRED: finite,
+                                                   --   strictly positive, no
+                                                   --   default (#1233)
     , iydKind        ∷ !Text                       -- ^ equipment slot kind;
                                                    --   defaults to "misc"
     , iydCategory    ∷ !Text                       -- ^ inventory tab;
@@ -187,6 +284,8 @@ data ItemYamlDef = ItemYamlDef
                                                    --   [] ⇒ default set
     , iydContainer   ∷ !(Maybe ItemYamlContainer)
     , iydContents    ∷ ![ItemYamlContent]            -- ^ item-container defaults
+    , iydStorage     ∷ !(Maybe ItemYamlStorage)      -- ^ portable item-storage
+                                                     --   capacity (#1233)
     , iydFood        ∷ !(Maybe ItemYamlFood)
     , iydWeapon      ∷ !(Maybe ItemYamlWeapon)
     , iydArmor       ∷ !(Maybe ItemYamlArmor)
@@ -197,27 +296,61 @@ data ItemYamlDef = ItemYamlDef
                                                    --   defaults to 0
     } deriving (Show, Eq, Generic)
 
+-- | Every entry under @items:@ is a PHYSICAL item — this schema has no
+--   abstract/incorporeal item class — so @bulk@ is unconditionally
+--   required (#1233 requirement 1) and the definition is rejected
+--   outright when it is missing or not a finite positive number
+--   (requirement 2).
+--
+--   The name is read FIRST and the two physical blocks parsed
+--   monadically against it, so every rejection names the offending
+--   definition rather than a bare JSON index; everything else keeps its
+--   original applicative shape and its original defaults.
+--
+--   @storage:@ is read with an explicit key lookup rather than @.:?@,
+--   because those two disagree about the one case that matters here:
+--   @.:?@ reports an explicit @storage: null@ (or @~@, or a bare
+--   @storage:@ with no value) as ABSENT, which would accept a definition
+--   that visibly authored the block as though it had never mentioned it —
+--   quietly turning "this crate stores things" into "this crate does
+--   not". A key the author WROTE is present, so a null value is a
+--   half-authored block and fails like any other invalid one
+--   (requirement 3), while a truly missing key stays the legitimate
+--   optional case. Same trap CLAUDE.md records for @asset_units:@.
 instance FromJSON ItemYamlDef where
-    parseJSON = withObject "ItemYamlDef" $ \v → ItemYamlDef
-        ⊚ v .:  "name"
-        ⊛ v .:? "display_name" .!= ""
-        ⊛ v .:  "sprite"
-        ⊛ v .:? "weight"       .!= WeightFixed 0.0
-        ⊛ v .:? "kind"         .!= "misc"
-        ⊛ v .:? "category"     .!= "Misc"
-        ⊛ v .:? "make"         .!= ""
-        ⊛ v .:? "material"     .!= ""
-        ⊛ v .:? "quality"
-        ⊛ v .:? "condition"
-        ⊛ v .:? "quality_tiers" .!= []
-        ⊛ v .:? "container"
-        ⊛ v .:? "contents"     .!= []
-        ⊛ v .:? "food"
-        ⊛ v .:? "weapon"
-        ⊛ v .:? "armor"
-        ⊛ v .:? "unequippable" .!= False
-        ⊛ v .:? "buffs"        .!= []
-        ⊛ v .:? "insulation"   .!= 0.0
+    parseJSON = withObject "ItemYamlDef" $ \v → do
+        name    ← v .: "name"
+        bulk    ← requirePositiveQuantity name "bulk" "litres" v "bulk"
+        storage ← case KM.lookup "storage" v of
+            Nothing         → pure Nothing
+            Just Aeson.Null → fail ∘ T.unpack $
+                "item definition '" <> name <> "': storage is present but \
+                \null — a storage: block must author both a positive \
+                \weight_capacity (kilograms) and a positive bulk_capacity \
+                \(litres); omit the key entirely for an item that is not \
+                \portable storage"
+            Just val        → Just <$> parseItemYamlStorage name val
+        ItemYamlDef name
+            ⊚ v .:? "display_name" .!= ""
+            ⊛ v .:  "sprite"
+            ⊛ v .:? "weight"       .!= WeightFixed 0.0
+            ⊛ pure bulk
+            ⊛ v .:? "kind"         .!= "misc"
+            ⊛ v .:? "category"     .!= "Misc"
+            ⊛ v .:? "make"         .!= ""
+            ⊛ v .:? "material"     .!= ""
+            ⊛ v .:? "quality"
+            ⊛ v .:? "condition"
+            ⊛ v .:? "quality_tiers" .!= []
+            ⊛ v .:? "container"
+            ⊛ v .:? "contents"     .!= []
+            ⊛ pure storage
+            ⊛ v .:? "food"
+            ⊛ v .:? "weapon"
+            ⊛ v .:? "armor"
+            ⊛ v .:? "unequippable" .!= False
+            ⊛ v .:? "buffs"        .!= []
+            ⊛ v .:? "insulation"   .!= 0.0
 
 newtype ItemYamlFile = ItemYamlFile
     { iyfItems ∷ [ItemYamlDef]

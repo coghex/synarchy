@@ -3,6 +3,7 @@ items:
     display_name: "Steel Axe"
     sprite: "assets/textures/items/tool/axe_steel.png"
     weight: 1.0
+    bulk: 3.0        # litres of external bulk
     kind: weapon
     category: Tools
     make: acolyte

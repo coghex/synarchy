@@ -3,6 +3,7 @@ items:
     display_name: "Field Radio"
     sprite: "assets/textures/items/supply/radio.png"
     weight: 0.3
+    bulk: 1.0        # litres of external bulk
     category: Supplies
     # Lets the AI broadcast water-source locations (and, later, other
     # intel) to every other radio-bearer at unlimited range — see

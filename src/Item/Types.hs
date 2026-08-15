@@ -2,6 +2,7 @@
 module Item.Types
     ( ItemDef(..)
     , ItemContainer(..)
+    , ItemStorage(..)
     , ItemFood(..)
     , ItemWeapon(..)
     , ItemArmor(..)
@@ -49,6 +50,37 @@ data ItemContainer = ItemContainer
                               --   the spawn site still wins. A quinoa sack
                               --   sets this to its capacity so loot is
                               --   never an empty bag.
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | Portable ITEM-storage capacity (#1233, epic #1231) — the optional
+--   @storage:@ component. Deliberately SEPARATE from 'ItemContainer'
+--   above, which means something physically different (a homogeneous
+--   fluid/pill FILL, tracked by 'iiCurrentFill'): a crate stores exact
+--   nested 'ItemInstance' values, a canteen holds litres of water, and
+--   an item may eventually carry both without either capacity
+--   inheriting the other's defaults or validation
+--   (@docs\/portable_loot_containers.md@ D-12).
+--
+--   Both capacities are INTERNAL — they bound the CONTENTS, never the
+--   empty container itself — and both are independently authored: not
+--   derived from each other, not derived from the item's own external
+--   'idBulk', and with no default (see
+--   "Engine.Asset.YamlItems"'s @storage:@ parser, which rejects a
+--   missing / non-positive / non-finite capacity by definition name).
+--
+--   NOTHING enforces either capacity yet (#1233 is data only; PLC-4,
+--   the epic's former PLC-3B, owns capacity-safe ownership moves), so a
+--   value here is authored, materialized and persisted, but never
+--   consulted on insert, transfer, pickup or drop.
+data ItemStorage = ItemStorage
+    { isWeightCapacity ∷ !Float  -- ^ kilograms of CONTENTS this item can
+                                 --   structurally support. Independent of
+                                 --   the item's own empty weight.
+    , isBulkCapacity   ∷ !Float  -- ^ litres of usable INTERNAL packing
+                                 --   space. Direct children consume their
+                                 --   own external 'idBulk' against this;
+                                 --   distinct from — and never derived
+                                 --   from — the item's own external bulk.
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | A single stat-modifier conferred by wearing/holding this item.
@@ -145,6 +177,25 @@ data ItemDef = ItemDef
                                         --   (truncated normal, like
                                         --   stats). Nothing = every
                                         --   instance weighs idWeight.
+    , idBulk        ∷ !Float            -- ^ EXTERNAL bulk in litres
+                                        --   (#1233): how much practical
+                                        --   packing space one of these
+                                        --   consumes inside a container.
+                                        --   An abstract authored scalar,
+                                        --   NOT geometric volume and not
+                                        --   a density input — it folds in
+                                        --   casing, awkward dimensions
+                                        --   and ordinary packing slack,
+                                        --   so a compact 15 kg battery
+                                        --   authors less than a lighter,
+                                        --   broad steel plate. Always
+                                        --   explicitly authored, finite
+                                        --   and strictly positive; there
+                                        --   is NO default and it is never
+                                        --   inferred from weight or
+                                        --   material (the YAML loader
+                                        --   rejects a definition lacking
+                                        --   it).
     , idKind        ∷ !Text             -- ^ equipment-slot kind ("weapon",
                                         --   "headwear", …). "misc" for
                                         --   non-equippable items. Matched
@@ -195,6 +246,12 @@ data ItemDef = ItemDef
       --   fill for fillable contents like a pill/fluid bottle). Each entry
       --   is materialised into `iiContents` (rolled like any item) at
       --   creation. Empty for everything that doesn't hold items.
+    , idStorage     ∷ !(Maybe ItemStorage)
+      -- ^ Optional portable ITEM-storage capacity (#1233): the internal
+      --   weight + bulk limits this item offers its contents. Nothing for
+      --   everything that isn't portable storage. Completely independent
+      --   of 'idContainer' above — neither implies, defaults, or
+      --   validates the other (D-12).
     , idFood        ∷ !(Maybe ItemFood)
     , idWeapon      ∷ !(Maybe ItemWeapon)
     , idArmor       ∷ !(Maybe ItemArmor)
@@ -284,6 +341,47 @@ data ItemInstance = ItemInstance
                                 --   setters). Field order is load-bearing
                                 --   (positional Generic Serialize) — appended
                                 --   for save v68 (#344).
+    , iiBulk        ∷ !(Maybe Float)
+                                -- ^ THIS instance's own EXTERNAL bulk
+                                --   (litres), snapshotted from 'idBulk' at
+                                --   creation — the same materialize-once
+                                --   discipline 'iiWeight' has, so editing a
+                                --   definition's bulk never retroactively
+                                --   changes what an already-created item is
+                                --   worth (#1233 requirement 6).
+                                --
+                                --   @Nothing@ means exactly one thing: this
+                                --   instance was materialized BEFORE bulk
+                                --   existed, so it genuinely has no
+                                --   authored value to recover. Historical
+                                --   saves decode that way deliberately —
+                                --   never as a fabricated 0 (which would be
+                                --   an invalid bulk masquerading as data)
+                                --   and never re-derived from the current
+                                --   definition, which is precisely the
+                                --   retroactive reinterpretation
+                                --   requirement 6 forbids. Absence is
+                                --   REPRESENTED rather than papered over,
+                                --   so no reader can silently fall back to
+                                --   a definition that has since been
+                                --   edited; PLC-4 (the epic's former
+                                --   PLC-3B), the first slice that
+                                --   ENFORCES a capacity, decides what an
+                                --   absent bulk means to it. Field order is
+                                --   load-bearing (positional Generic
+                                --   Serialize) — appended for #1233.
+    , iiStorage     ∷ !(Maybe ItemStorage)
+                                -- ^ THIS instance's own INTERNAL storage
+                                --   capacities, snapshotted from 'idStorage'
+                                --   at creation. @Nothing@ for an item that
+                                --   is not portable storage AND for a
+                                --   pre-#1233 instance — the same honest
+                                --   absence 'iiBulk' documents (a crate in
+                                --   an old save was never stamped, so its
+                                --   capacity is unrecoverable rather than
+                                --   zero). Field order is load-bearing
+                                --   (positional Generic Serialize) —
+                                --   appended for #1233.
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | A stable, order-independent signature of an item's nested contents
