@@ -43,7 +43,8 @@ import Location.Bounds (RelBounds(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Types
-import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), chunkSize)
+import World.Chunk.Types
+    (ChunkCoord(..), LoadedChunk(..), chunkSize, wrapChunkCoordU)
 import World.Tile.Types (WorldTileData(..))
 import World.Fluid.Types (emptyIceMap)
 import World.Flora.Types (emptyFloraChunkData)
@@ -143,8 +144,16 @@ wallChunk flatZ wallZ wallX =
     in (flatChunk flatZ) { lcSurfaceMap = v, lcTerrainSurfaceMap = v }
 
 wtdWith ∷ LoadedChunk → WorldTileData
-wtdWith lc = WorldTileData
-    { wtdChunks = HM.singleton (ChunkCoord 0 0) lc, wtdMaxChunks = 1 }
+wtdWith = wtdAt (ChunkCoord 0 0)
+
+-- | One loaded chunk stored under an explicit key — which for a
+--   seam-crossing fixture is the CANONICAL ('wrapChunkCoordU') key,
+--   exactly as the chunk pipeline stores it, not the raw key a tile's
+--   'globalToChunk' produces.
+wtdAt ∷ ChunkCoord → LoadedChunk → WorldTileData
+wtdAt coord lc = WorldTileData
+    { wtdChunks = HM.singleton coord (lc { lcCoord = coord })
+    , wtdMaxChunks = 1 }
 
 -- | A fresh page carrying loc1's overlay, registered as the sole
 --   (visible) page in a hand-built WorldManager.
@@ -178,6 +187,31 @@ pageParams = defaultWorldGenParams
     { wgpLocationOverlay   = overlay1
     , wgpLocationInstances = buildLocationInstances Nothing registry1 overlay1
     }
+
+-- | The seam fixture (#1230): a 2-chunk-wide world with loc1 placed at
+--   chunk (1,0) — anchor tile (24,8), bounds (22,6)..(26,10). Mirrors
+--   'Test.Headless.Location.Discovery''s pure seam fixture, which is
+--   what makes the pair comparable.
+--
+--   The point is the coordinate FRAME: at world size 2 the chunk holding
+--   those tiles is STORED under its canonical key (0,1), while every
+--   tile in it produces the raw key (1,0) through 'globalToChunk'. A
+--   terrain lookup that skips 'wrapChunkCoordU' therefore misses a chunk
+--   that is loaded, reads \"not loaded → assume flat\", and concludes
+--   nothing blocks.
+seamOverlay ∷ LocationOverlay
+seamOverlay = HM.singleton (ChunkCoord 1 0) "loc1"
+
+seamPageParams ∷ WorldGenParams
+seamPageParams = defaultWorldGenParams
+    { wgpWorldSize         = 2
+    , wgpLocationOverlay   = seamOverlay
+    , wgpLocationInstances = buildLocationInstances Nothing registry1 seamOverlay
+    }
+
+-- | The canonical key the seam fixture's terrain must be stored under.
+seamChunkKey ∷ ChunkCoord
+seamChunkKey = wrapChunkCoordU 2 (ChunkCoord 1 0)
 
 -- | Each placed location's lifecycle on a page, in instance-id order —
 --   what the per-chunk discovered set used to answer.
@@ -405,6 +439,64 @@ spec = beforeAll initEnv $
             lifecyclesOf mpDay `shouldBe` Just [LifecycleDiscovered]
             evsDay ← eventsFor env 506
             map peCategory evsDay `shouldBe` ["location_discovery"]
+
+        -- #1230 round 2 (Codex): sight now drives SEAM-AWARE reveal —
+        -- 'Location.Bounds.boundsContainsPoint' tries the bounds' u-wrap
+        -- aliases — while terrain lookup resolves a chunk key. Chunks
+        -- are STORED u-wrapped, so a raw key from an alias frame misses
+        -- a chunk that IS loaded, and the miss reads as "assume flat",
+        -- i.e. "nothing blocks". A ruin behind a hill on the seam would
+        -- then be revealed through solid ground.
+        --
+        -- Geometry: world size 2, loc1 at chunk (1,0) → bounds
+        -- (22,6)..(26,10), terrain stored under the CANONICAL key (0,1)
+        -- that raw key (1,0) wraps to. The unit stands at (28,8) facing
+        -- west, two tiles from the nearest occupied tile, with a wall
+        -- at x=27 between them — every sightline from x=28 to x≤26
+        -- crosses it.
+        it "a seam-frame unit does NOT see through a hill stored under \
+           \the canonical chunk key — terrain occlusion survives the \
+           \u-wrap that reveal's bounds test already honours" $ \env → do
+            let pageId = WorldPageId "sight_seam_blocked"
+            ws ← emptyWorldState
+            writeIORef (wsGenParamsRef ws) $ Just seamPageParams
+            writeIORef (wsTilesRef ws)
+                (wtdAt seamChunkKey (wallChunk 5 40 11))   -- x=27 → local 11
+            writeIORef (wsTimeRef ws) (WorldTime 12 0)
+            writeIORef (worldManagerRef env) $
+                WorldManager [(pageId, ws)] [pageId]
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 601)
+                    (facingUnit pageId 28 8 DirW 1.0) }
+
+            tickLocationDiscovery env pageId ws
+            mp ← readIORef (wsGenParamsRef ws)
+            lifecyclesOf mp `shouldBe` Just [LifecycleUnknown]
+            eventsFor env 601 >>= (`shouldBe` [])
+
+        it "…and the identical seam scene with the hill removed DOES \
+           \discover it, so the case above is occlusion working rather \
+           \than the geometry being out of reach" $ \env → do
+            -- Same page size, same location, same unit position, facing
+            -- and clock, same canonical chunk key — only the wall is
+            -- gone. Without this pair, a fixture that simply could not
+            -- see the ruin would pass the negative above forever.
+            let pageId = WorldPageId "sight_seam_open"
+            ws ← emptyWorldState
+            writeIORef (wsGenParamsRef ws) $ Just seamPageParams
+            writeIORef (wsTilesRef ws) (wtdAt seamChunkKey (flatChunk 5))
+            writeIORef (wsTimeRef ws) (WorldTime 12 0)
+            writeIORef (worldManagerRef env) $
+                WorldManager [(pageId, ws)] [pageId]
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 602)
+                    (facingUnit pageId 28 8 DirW 1.0) }
+
+            tickLocationDiscovery env pageId ws
+            mp ← readIORef (wsGenParamsRef ws)
+            lifecyclesOf mp `shouldBe` Just [LifecycleDiscovered]
+            evs ← eventsFor env 602
+            map peCategory evs `shouldBe` ["location_discovery"]
 
         -- Round 12 review (issue #763): World.Load.Stage.stageSession
         -- runs on the world thread BEFORE the save barrier's capture

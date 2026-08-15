@@ -48,7 +48,7 @@ import Unit.Direction (Direction(..))
 import World.Types (WorldManager(..), WorldState(..), WorldGenParams(..),
                     WorldPageId)
 import World.Time.Types (worldTimeToSunAngle)
-import World.Chunk.Types (LoadedChunk(..), columnIndex)
+import World.Chunk.Types (LoadedChunk(..), columnIndex, wrapChunkCoordU)
 import World.Tile.Types (lookupChunk, WorldTileData(..))
 import World.Generate.Coordinates (globalToChunk)
 import World.Time.Local (localSunAngle)
@@ -124,7 +124,7 @@ visibleTilesOnPage ws inst = do
             , dy ← [-radius .. radius]
             , inFOV (dx, dy)
             , (dx ≡ 0 ∧ dy ≡ 0)
-              ∨ notBlocked wtd ux uy eyeZ (ux + dx) (uy + dy)
+              ∨ notBlocked worldSize wtd ux uy eyeZ (ux + dx) (uy + dy)
             ]
     return visible
 
@@ -260,12 +260,20 @@ losBlockedBetween env defender attacker
                     Nothing → pure True
                     Just ws → do
                         wtd ← readIORef (wsTilesRef ws)
-                        let ux   = floor (uiGridX defender) ∷ Int
+                        -- The page's own world size, for the canonical
+                        -- chunk-key resolution 'tileTerrainZ' does: a
+                        -- combat sightline near the seam must find the
+                        -- same hill the visible-tile rasterization does,
+                        -- or the two disagree about what blocks.
+                        mParams ← readIORef (wsGenParamsRef ws)
+                        let worldSize =
+                                maybe fallbackWorldSizeChunks wgpWorldSize mParams
+                            ux   = floor (uiGridX defender) ∷ Int
                             uy   = floor (uiGridY defender) ∷ Int
                             gx   = floor (uiGridX attacker) ∷ Int
                             gy   = floor (uiGridY attacker) ∷ Int
                             eyeZ = fromIntegral (uiGridZ defender + 1) ∷ Double
-                        pure (not (notBlocked wtd ux uy eyeZ gx gy))
+                        pure (not (notBlocked worldSize wtd ux uy eyeZ gx gy))
 
 -- | Vision/awareness radius per point of perception (tiles).
 awareRangeTiles ∷ Double
@@ -309,33 +317,54 @@ inCone fx fy dx dy =
 --   at that horizontal step. Endpoints excluded — the source can't
 --   block itself, and the target's own elevation IS the line's
 --   terminus (not an occluder).
-notBlocked ∷ WorldTileData → Int → Int → Double → Int → Int → Bool
-notBlocked wtd ux uy eyeZ gx gy =
-    let targetZ = case tileTerrainZ wtd gx gy of
+notBlocked ∷ Int → WorldTileData → Int → Int → Double → Int → Int → Bool
+notBlocked worldSize wtd ux uy eyeZ gx gy =
+    let targetZ = case tileTerrainZ worldSize wtd gx gy of
             Just z  → fromIntegral z
             Nothing → 0     -- chunk not loaded → assume flat (arena)
         steps = max (abs (gx - ux)) (abs (gy - uy))
         n     = fromIntegral steps ∷ Double
-    in steps ≤ 1 ∨ all (unblockedStep wtd ux uy gx gy eyeZ targetZ n) [1 .. steps - 1]
+    in steps ≤ 1
+       ∨ all (unblockedStep worldSize wtd ux uy gx gy eyeZ targetZ n)
+             [1 .. steps - 1]
 
 unblockedStep
-    ∷ WorldTileData → Int → Int → Int → Int → Double → Double → Double
+    ∷ Int → WorldTileData → Int → Int → Int → Int → Double → Double → Double
     → Int → Bool
-unblockedStep wtd ux uy gx gy eyeZ targetZ n i =
+unblockedStep worldSize wtd ux uy gx gy eyeZ targetZ n i =
     let t = fromIntegral i / n ∷ Double
         interpX = fromIntegral ux + t * fromIntegral (gx - ux)
         interpY = fromIntegral uy + t * fromIntegral (gy - uy)
         tx = floor interpX
         ty = floor interpY
         lineZ = eyeZ + t * (targetZ - eyeZ)
-        groundZ = case tileTerrainZ wtd tx ty of
+        groundZ = case tileTerrainZ worldSize wtd tx ty of
             Just z  → fromIntegral z
             Nothing → 0
     in groundZ ≤ lineZ
 
-tileTerrainZ ∷ WorldTileData → Int → Int → Maybe Int
-tileTerrainZ wtd gx gy =
+-- | Terrain surface Z at a global tile, resolved against the CANONICAL
+--   chunk key (#1230).
+--
+--   Chunks are STORED u-wrapped ('wrapChunkCoordU', see the tile-coordinate
+--   frame contract in @CLAUDE.md@), and 'lookupChunk' is a plain hashmap
+--   lookup that does no wrapping of its own. A raw 'globalToChunk' key
+--   from an alias frame near the cylindrical seam therefore misses a
+--   chunk that IS loaded, and the miss reads as \"chunk not loaded →
+--   assume flat\" — which for occlusion means \"nothing blocks\". Sight
+--   drives seam-aware location reveal since #1230, so a hill sitting on
+--   the canonical seam tile would silently stop blocking and a ruin
+--   behind it would be revealed through solid ground.
+--
+--   Canonicalizing here fixes every caller at once — the visible-tile
+--   rasterization and the combat sightline both — which is the point:
+--   two terrain lookups that disagreed about where a hill is would be
+--   worse than either behaviour alone. Away from the seam, and in
+--   arena / non-wrapping (@worldSize ≤ 0@) worlds, 'wrapChunkCoordU' is
+--   the identity, so this changes nothing.
+tileTerrainZ ∷ Int → WorldTileData → Int → Int → Maybe Int
+tileTerrainZ worldSize wtd gx gy =
     let (coord, (lx, ly)) = globalToChunk gx gy
-    in case lookupChunk coord wtd of
+    in case lookupChunk (wrapChunkCoordU worldSize coord) wtd of
         Nothing → Nothing
         Just lc → Just (lcTerrainSurfaceMap lc VU.! columnIndex lx ly)

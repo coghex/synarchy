@@ -1009,6 +1009,16 @@ before touching each area:
   those. Canonicalising one end alone was MEASURED worse
   than the old seam-blind behaviour; don't do it. Away from the seam,
   and in arena / non-wrapping worlds, every step is the identity.
+  **Terrain LOOKUPS take the same frame** (#1230):
+  `World.Tile.Types.lookupChunk` is a plain hashmap lookup that wraps
+  nothing, so any consumer resolving a tile to a chunk must
+  `wrapChunkCoordU` the key first — `Unit.LineOfSight.tileTerrainZ` now
+  does, for both the visible-tile rasterization and the combat
+  sightline. A raw key from an alias frame misses a chunk that IS
+  loaded, and every one of these lookups reads a miss as "not loaded →
+  assume flat", which for occlusion means "nothing blocks": before that
+  fix a seam-side unit revealed a location straight through a hill.
+  Gate: hspec `--match "a seam-frame unit"`.
   Persistence: `world-activity` v2 (same bytes, canonical-key
   invariant); a v1 payload is re-keyed on load. The init QUEUE
   (`world.loadChunksInRegion`, `World.Load.Stage`'s saved-camera radius,
