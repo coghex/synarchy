@@ -29,6 +29,7 @@ import qualified Test.Headless.Unit.AccessoryUnequip as AccessoryUnequip
 import qualified Test.Headless.Unit.SpawnShed as SpawnShedTest
 import qualified Test.Headless.Unit.Transfer as UnitTransfer
 import qualified Test.Headless.Unit.TransferApi as UnitTransferApi
+import qualified Test.Headless.Unit.TransferOrderApi as UnitTransferOrderApi
 import qualified Test.Headless.Unit.NightPerception as NightPerception
 import qualified Test.Headless.Unit.LineOfSight as LineOfSightTest
 import qualified Test.Headless.World.TimeLocal as TimeLocal
@@ -267,6 +268,12 @@ main = hspec $ do
     -- mutation paths, which would corrupt the shared-worlds engine
     -- above (same precedent as World identity / autosave guards).
     aroundAll withHeadlessEngine UnitTransferApi.spec
+    -- Own engine for the same reason (#1247): the order executor writes
+    -- the unit/building manager refs AND installs its own two-page world
+    -- manager so each page brings its own live wsTransferOrdersRef.
+    -- Its describe begins "Unit transfer Lua API" so that --match reaches
+    -- the contract verbs and the order verbs in one gate.
+    aroundAll withHeadlessEngine UnitTransferOrderApi.spec
     -- Own engine (#1205): the live power.placeNode path WRITES the
     -- unit/building manager refs and installs its own two-page world
     -- manager, so it cannot share the worldgen engine above.

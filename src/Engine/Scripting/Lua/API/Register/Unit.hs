@@ -8,6 +8,9 @@ import Engine.Scripting.Lua.API.Units
 -- the Units facade: that facade's export list is deliberately frozen at
 -- the pre-split surface (see its header).
 import Engine.Scripting.Lua.API.Units.Transfer
+-- Durable transfer ORDERS (#1247) — the walk-then-commit executor's
+-- own verbs, kept in their own module beside the contract they drive.
+import Engine.Scripting.Lua.API.Units.TransferOrder
 import Engine.Core.State (EngineEnv)
 import qualified HsLua as Lua
 
@@ -71,6 +74,11 @@ registerUnitAPI env = do
   registerLuaFunction "commitTransfer"     (unitCommitTransferFn env)
   registerLuaFunction "transferContract"   (unitTransferContractFn env)
   registerLuaFunction "transferEndpointInfo" (unitTransferEndpointInfoFn env)
+  registerLuaFunction "createTransferOrder"  (unitCreateTransferOrderFn env)
+  registerLuaFunction "getTransferOrders"    (unitGetTransferOrdersFn env)
+  registerLuaFunction "advanceTransferOrder" (unitAdvanceTransferOrderFn env)
+  registerLuaFunction "commitTransferOrder"  (unitCommitTransferOrderFn env)
+  registerLuaFunction "failTransferOrder"    (unitFailTransferOrderFn env)
   registerLuaFunction "transitionTo" (unitTransitionToFn env)
   registerLuaFunction "getPose"      (unitGetPoseFn env)
   registerLuaFunction "getFaction"   (unitGetFactionFn env)

@@ -22,7 +22,8 @@
 --   dire SELF survival (drink/eat ~10–15, derived from need)
 --   combat / treatment        (engage·retreat 8.0+, treat_ally 8.0)
 --   ───── player orders ─────  (follow_command 7.0, pickup 7.5,
---                               dry-canteen refill peak 7.5)
+--                               transfer_order 7.5, dry-canteen
+--                               refill peak 7.5)
 --   situational goals          (find_water 3.0–6.0 derived from thirst,
 --                               notify_allies 4.0) — a routine goal
 --                               yields to a command; it only wins on
@@ -32,6 +33,10 @@
 -- a routine goal; and a goal only climbs above a command when the
 -- underlying NEED (thirst→drink/refill) does, which is derived. See the
 -- FOLLOW_COMMAND_UTILITY block and the per-action notes for the values.
+-- transfer_order (#1247) is species-independent like follow_command, so
+-- its two numbers are module constants in unit_ai_transfer.lua rather
+-- than per-species keys here — every unit that can carry an order gets
+-- the same lock without each species config restating it.
 --
 -- Derived roles (#265) reshuffle preference WITHIN the routine band
 -- only: work ENTRY utilities are multiplied by ×1.4 (on-role) / ×0.7

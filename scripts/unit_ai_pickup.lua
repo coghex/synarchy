@@ -212,5 +212,10 @@ end
 
 M.pickupUtility = pickupUtility
 M.pickupExecute = pickupExecute
+-- Shared with unit_ai_transfer.lua (#1247): a transfer order files the
+-- same kind of unit-and-item warning this one does, so it reuses these
+-- rather than growing a second set of labels free to disagree.
+M.itemLabel     = itemLabel
+M.unitLabel     = unitLabel
 
 return M

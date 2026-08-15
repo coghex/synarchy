@@ -55,6 +55,28 @@ module Engine.Scripting.Lua.API.Units.Transfer
   , PopStep
   , PushStep
   , RestoreStep
+    -- * Internals shared with the ORDER executor (#1247)
+    --
+    --   "Engine.Scripting.Lua.API.Units.TransferOrder" drives the same
+    --   contract at a distance: it creates a durable order from the
+    --   identical request table, and commits it through the identical
+    --   per-endpoint-pair atomic paths once the carrier arrives. These
+    --   are exported so it REUSES the one parser, the one live-scene
+    --   projection, the one commit dispatcher and the one result
+    --   encoder rather than growing a second copy of any of them —
+    --   a second request parser in particular would be free to drift on
+    --   exactly the malformed-versus-refused boundary this module's
+    --   own haddock spells out.
+  , LiveState(..)
+  , readLiveState
+  , sceneFor
+  , endpointView
+  , readRequest
+  , commitOneLive
+  , pushBatchResult
+  , pushRequestError
+  , pushArgError
+  , pushTextField
   )
     where
 
@@ -172,18 +194,24 @@ sceneFor ls from to = TransferScene
 
 -- * Request parsing
 
--- | The whole request table at stack index 1. Anything structurally
---   wrong is Nothing — an ARGUMENT error, distinct from a policy
---   refusal. An empty @items@ array parses fine and is refused by
---   'validateBatch' as @empty_batch@; a MISSING or non-table @items@ is
---   malformed and rejected here.
-readRequest ∷ Lua.LuaE Lua.Exception (Maybe TransferRequest)
-readRequest = do
-    ty ← Lua.ltype 1
+-- | The whole request table at the given stack index. Anything
+--   structurally wrong is Nothing — an ARGUMENT error, distinct from a
+--   policy refusal. An empty @items@ array parses fine and is refused
+--   by 'validateBatch' as @empty_batch@; a MISSING or non-table @items@
+--   is malformed and rejected here.
+--
+--   The index must be ABSOLUTE (positive): the field reads below push
+--   and pop around it, so a relative index would slide underneath them.
+--   @unit.checkTransfer@/@unit.commitTransfer@ pass 1;
+--   @unit.createTransferOrder@ (#1247) passes 2, the request sitting
+--   after the acting unit's id.
+readRequest ∷ Lua.StackIndex → Lua.LuaE Lua.Exception (Maybe TransferRequest)
+readRequest idx = do
+    ty ← Lua.ltype idx
     if ty ≢ Lua.TypeTable then pure Nothing else do
-        mSrc   ← readEndpointField 1 "source"
-        mDst   ← readEndpointField 1 "destination"
-        mItems ← readItemsField 1
+        mSrc   ← readEndpointField idx "source"
+        mDst   ← readEndpointField idx "destination"
+        mItems ← readItemsField idx
         pure $ TransferRequest ⊚ mSrc ⊛ mDst ⊛ mItems
 
 -- | @{ kind = "unit"|"building", id = n }@ at the given stack index.
@@ -349,7 +377,7 @@ pushArgError = Lua.pushnil >> return 1
 --   construction — commitTransfer revalidates.
 unitCheckTransferFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitCheckTransferFn env = do
-    mReq ← readRequest
+    mReq ← readRequest 1
     case mReq of
         Nothing  → pushArgError
         Just req → do
@@ -367,7 +395,7 @@ unitCheckTransferFn env = do
 --   batch-wide transaction or prepare phase.
 unitCommitTransferFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitCommitTransferFn env = do
-    mReq ← readRequest
+    mReq ← readRequest 1
     case mReq of
         Nothing  → pushArgError
         Just req → do
