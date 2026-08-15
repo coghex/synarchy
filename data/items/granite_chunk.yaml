@@ -6,6 +6,7 @@ items:
     # digging granite (dig yields, deterministic accumulator —
     # see data/materials igneous_intrusive dig_chunk).
     weight: 10.0
+    bulk: 5.0        # litres of external bulk
     category: Materials
     make: world
     material: granite

@@ -6,24 +6,31 @@
 -- in `World/Render/CursorQuads.hs::renderWorldCursorQuads::hitTest` and
 -- the per-unit sprite math in `Unit/Render.hs::unitToQuad`.
 --
+-- The hit box is sized from the frame the renderer is DRAWING
+-- (`Unit.Render.pickFrame`, via `unitHitRect`), not from the static
+-- T-pose it once used: with atlas storage a frame's texture handle
+-- names the whole animation sheet, so only the sample knows the cell
+-- size (#1259).
+--
 -- Returns the unit with the highest gridZ that contains the click —
 -- so clicking a tile with two stacked units selects the one on top.
 module Unit.HitTest
     ( hitTestUnitAt
     , hitTestUnitsInRect
+    , unitHitRect
+    , frameSampleOf
     ) where
 
 import UPrelude
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Map.Strict as Map
 import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv, unitManagerRef
   , resolveActiveWorld )
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
-import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Asset.Handle (TextureHandle)
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import Engine.Graphics.Viewport (windowDegenerate)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
@@ -31,7 +38,7 @@ import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , applyFacingF, GridConfig(..), defaultGridConfig)
 import World.Generate (viewDepth)
 import Unit.Types
-import Unit.Direction (Direction)
+import Unit.Render (pickFrame)
 import Unit.Sprite (resolveTexture)
 
 baseTileW ∷ Float
@@ -50,6 +57,9 @@ hitTestUnitAt env pixX pixY = do
     (winW, winH) ← readIORef (rvWindowSizeRef rv)
     texSizes ← readIORef (rvTextureSizeRef rv)
     mgr      ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+    -- Same game clock the renderer reads, so the hit box is sized from
+    -- the frame that is actually on screen this tick.
+    now      ← readIORef (wsGameTimeRef (toWorldSimCapability env))
 
     -- Only the active world's units are clickable (#78).
     let instances = case resolveActiveWorld mgr of
@@ -89,34 +99,12 @@ hitTestUnitAt env pixX pixY = do
                 candidates =
                     [ (gridZ, dist, uid)
                     | (uid, inst) ← HM.toList instances
-                    , let gridZ     = uiGridZ inst
-                          relativeZ = gridZ - zSlice
+                    , let gridZ = uiGridZ inst
                     , gridZ ≤ zSlice
                     , gridZ ≥ zSlice - effDepth
-                    , let texHandle = resolveTextureH facing (uiFacing inst)
-                                                      (uiDirSprites inst)
-                                                      (uiTexture inst)
-                          (texW, texH) = case HM.lookup texHandle texSizes of
-                              Just (w, h) → (fromIntegral w, fromIntegral h)
-                              Nothing     → (baseTileW, baseTileH)
-                          scaleX = texW / baseTileW
-                          scaleY = texH / baseTileH
-                          quadW  = tileWidth  * scaleX
-                          quadH  = tileHeight * scaleY
-                          gxF    = uiGridX inst
-                          gyF    = uiGridY inst
-                          (faF, fbF) = applyFacingF facing gxF gyF
-                          rawX = (faF - fbF) * tileHalfWidth - tileHalfWidth
-                          rawY = (faF + fbF) * tileHalfDiamondHeight
-                          heightOffset = fromIntegral relativeZ * tileSideHeight
-                          baseRadius   = uiBaseWidth inst * 0.5
-                                       / baseTileH * tileHeight
-                          drawX = rawX + (tileWidth - quadW) * 0.5
-                          -- Must match Unit.Render.unitToQuad: continuous
-                          -- position → rawY is already the ground point,
-                          -- so NO tileHalfDiamondHeight (that's the
-                          -- apex→centre shift only flora/items need).
-                          drawY = rawY - heightOffset - quadH + baseRadius
+                    , let (drawX, drawY, quadW, quadH) =
+                              unitHitRect facing zSlice texSizes
+                                  (frameSampleOf now facing (umDefs um) inst) inst
                           -- Sprite quad center
                           cx    = drawX + quadW * 0.5
                           cy    = drawY + quadH * 0.5
@@ -147,6 +135,7 @@ hitTestUnitsInRect env x1d y1d x2d y2d = do
     (winW, winH) ← readIORef (rvWindowSizeRef rv)
     texSizes ← readIORef (rvTextureSizeRef rv)
     mgr      ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+    now      ← readIORef (wsGameTimeRef (toWorldSimCapability env))
 
     let x1 = realToFrac (min x1d x2d) ∷ Float
         x2 = realToFrac (max x1d x2d) ∷ Float
@@ -170,30 +159,9 @@ hitTestUnitsInRect env x1d y1d x2d y2d = do
         -- World coord of the unit's sprite-quad center. Mirrors the
         -- math in hitTestUnitAt for consistency with click selection.
         unitCenter inst =
-            let texHandle = resolveTextureH facing (uiFacing inst)
-                                              (uiDirSprites inst)
-                                              (uiTexture inst)
-                (texW, texH) = case HM.lookup texHandle texSizes of
-                    Just (w, h) → (fromIntegral w, fromIntegral h)
-                    Nothing     → (baseTileW, baseTileH)
-                scaleX = texW / baseTileW
-                scaleY = texH / baseTileH
-                quadW  = tileWidth  * scaleX
-                quadH  = tileHeight * scaleY
-                gxF    = uiGridX inst
-                gyF    = uiGridY inst
-                (faF, fbF) = applyFacingF facing gxF gyF
-                rawX = (faF - fbF) * tileHalfWidth - tileHalfWidth
-                rawY = (faF + fbF) * tileHalfDiamondHeight
-                relativeZ    = uiGridZ inst - zSlice
-                heightOffset = fromIntegral relativeZ * tileSideHeight
-                baseRadius   = uiBaseWidth inst * 0.5
-                             / baseTileH * tileHeight
-                drawX = rawX + (tileWidth - quadW) * 0.5
-                -- Match Unit.Render.unitToQuad (no tileHalfDiamondHeight —
-                -- rawY from the continuous position is already the ground
-                -- point; see the render note).
-                drawY = rawY - heightOffset - quadH + baseRadius
+            let (drawX, drawY, quadW, quadH) =
+                    unitHitRect facing zSlice texSizes
+                        (frameSampleOf now facing (umDefs um) inst) inst
             in (drawX + quadW * 0.5, drawY + quadH * 0.5)
 
         -- World → screen pixel (inverse of hitTestUnitAt's projection).
@@ -216,19 +184,68 @@ hitTestUnitsInRect env x1d y1d x2d y2d = do
                 then []
                 else [uid | (uid, inst) ← HM.toList instances, inRect inst]
 
--- | Resolve which texture handle the unit displays for a given camera
---   facing, for hit-box SIZING. Delegates to the shared
---   'Unit.Sprite.resolveTexture' so the hit-box is sized from the same
---   sprite the renderer draws — including the 'mirrorDir' fallback that
---   produces W/SW/NW from their eastern counterparts. (A previous copy
---   here omitted that fallback, so those units' hit-boxes were sized
---   from the default texture instead — #389.) The flip flag doesn't
---   affect sprite dimensions, so we drop it.
-resolveTextureH
+-- | The screen-space rect a unit's sprite quad occupies, as
+--   @(x, y, width, height)@ — the ONE hit-box geometry, shared by click
+--   and box selection so the two cannot drift from each other.
+--
+--   The size comes from the FRAME ('frameDimensions'), which for an
+--   atlas sample is the cell and never the whole sheet (#1259
+--   requirement 4). The rest mirrors 'Unit.Render.unitToQuad': the
+--   continuous position means @rawY@ is already the ground point, so
+--   there is NO @tileHalfDiamondHeight@ term (that apex→centre shift is
+--   only flora's and ground items'). The one deliberate difference from
+--   the renderer is the height offset, which uses the INTEGER
+--   @uiGridZ@ here against the renderer's continuous @uiRealZ@ — hit
+--   testing is per-tile.
+unitHitRect
     ∷ CameraFacing
-    → Direction
-    → Map.Map Direction TextureHandle
-    → TextureHandle
-    → TextureHandle
-resolveTextureH camFacing unitFacing dirSprites fallback =
-    fst (resolveTexture camFacing unitFacing dirSprites fallback)
+    → Int                                    -- ^ camera z-slice
+    → HM.HashMap TextureHandle (Int, Int)
+    → FrameSample
+    → UnitInstance
+    → (Float, Float, Float, Float)
+unitHitRect facing zSlice texSizes sample inst =
+    let (texW, texH) = frameDimensions texSizes (baseTileW, baseTileH) sample
+        scaleX = texW / baseTileW
+        scaleY = texH / baseTileH
+        quadW  = tileWidth  * scaleX
+        quadH  = tileHeight * scaleY
+        (faF, fbF) = applyFacingF facing (uiGridX inst) (uiGridY inst)
+        rawX = (faF - fbF) * tileHalfWidth - tileHalfWidth
+        rawY = (faF + fbF) * tileHalfDiamondHeight
+        relativeZ    = uiGridZ inst - zSlice
+        heightOffset = fromIntegral relativeZ * tileSideHeight
+        baseRadius   = uiBaseWidth inst * 0.5 / baseTileH * tileHeight
+        drawX = rawX + (tileWidth - quadW) * 0.5
+        drawY = rawY - heightOffset - quadH + baseRadius
+    in (drawX, drawY, quadW, quadH)
+
+-- | The frame the renderer is drawing for this unit right now, for
+--   hit-box SIZING.
+--
+--   Delegates to 'Unit.Render.pickFrame' — the very function
+--   'Unit.Render.unitToQuad' calls — so the hit box is sized from the
+--   same frame that is on screen, including the 'mirrorDir' fallback
+--   that produces W/SW/NW from their eastern counterparts. (A copy here
+--   once omitted that fallback, so those units' hit-boxes were sized
+--   from the default texture instead — #389.)
+--
+--   This deliberately supersedes the older T-pose-only sizing (#1259
+--   requirement 4): with atlas storage the whole-image dimensions of a
+--   frame's texture are the SHEET's, so "size it from the handle" no
+--   longer means "size it from the frame", and the only way for click
+--   and box selection to agree with what is painted is to resolve the
+--   same 'FrameSample'. A unit whose def is not loaded keeps the
+--   directional T-pose fallback, exactly as the renderer does.
+frameSampleOf
+    ∷ Double
+    → CameraFacing
+    → HM.HashMap Text UnitDef
+    → UnitInstance
+    → FrameSample
+frameSampleOf now facing defs inst =
+    case HM.lookup (uiDefName inst) defs of
+        Just def → pickFrame now facing inst def
+        Nothing  → uncurry wholeImageSample $
+            resolveTexture facing (uiFacing inst)
+                           (uiDirSprites inst) (uiTexture inst)

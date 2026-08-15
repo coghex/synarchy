@@ -3,6 +3,7 @@ items:
     display_name: "Wool Gambeson"
     sprite: "assets/textures/items/wearable/gambeson_wool.png"
     weight: 1.8
+    bulk: 8.0        # litres of external bulk
     kind: armor
     category: Armor
     insulation: 1.0   # thick padded wool — warm

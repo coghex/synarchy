@@ -3,6 +3,7 @@ items:
     display_name: "Steel Shovel"
     sprite: "assets/textures/items/tool/shovel_steel.png"
     weight: 1.5
+    bulk: 4.5        # litres of external bulk
     kind: weapon
     category: Tools
     make: acolyte

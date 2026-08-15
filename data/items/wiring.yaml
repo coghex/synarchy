@@ -8,6 +8,7 @@ items:
     display_name: "Wiring"
     sprite: "assets/textures/items/material/wiring.png"
     weight: 0.5
+    bulk: 0.75        # litres of external bulk
     category: Materials
     make: factory
     condition:

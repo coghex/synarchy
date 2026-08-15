@@ -3,6 +3,7 @@ items:
     display_name: "Electric Motor"
     sprite: "assets/textures/items/material/electric_motor.png"
     weight: 2.5
+    bulk: 1.25        # litres of external bulk
     category: Materials
     make: factory
     # No quality spec — motors are mass-produced and uniform; only

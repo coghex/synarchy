@@ -7,6 +7,7 @@ items:
     display_name: "First Aid Kit"
     sprite: "assets/textures/items/medical/first_aid_kit.png"
     weight: 0.5           # empty case (contents not yet summed into weight)
+    bulk: 4.0        # litres of external bulk
     kind: container
     category: Medical
     contents:

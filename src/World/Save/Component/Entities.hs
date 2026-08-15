@@ -56,9 +56,14 @@
 --     content references with no independent mutable identity (boundary
 --     rule leaf clause (a), see "World.Save.Component.Types"). The frozen
 --     DTOs mirror the originals' exact field order and leaf types, so the
---     derived cereal layout is byte-identical to the earlier direct
---     embedding and the components stay schema v1 (verified by the frozen
---     tracked fixture in "Test.Headless.World.Save.Components").
+--     derived cereal layout was byte-identical to the earlier direct
+--     embedding and the components stayed at schema v1 through that
+--     freeze (verified by the frozen tracked fixture in
+--     "Test.Headless.World.Save.Components"). Both have since moved to
+--     v2 for a real SHAPE change: #1233 appended the recursive item
+--     tree's physical values, so the pre-#1233 trees are frozen as
+--     'BuildingInstanceDTOv1'/'UnitInstanceDTOv1' and the shared item
+--     DTO carries them (see "World.Save.Component.Page").
 --   - The @"buildings"@/@"units"@ components carry ONLY the per-page
 --     instance maps — NOT the per-page @bsnNextId@/@usnNextId@ counters.
 --     The building- and unit-id allocators are global, owned once by the
@@ -78,6 +83,12 @@ module World.Save.Component.Entities
     , BuildingInstanceDTO(..)
     , toBuildingInstanceDTO
     , fromBuildingInstanceDTO
+    , BuildingInstanceDTOv1(..)
+    , PageBuildingsDTOv1(..)
+    , BuildingsDTOv1(..)
+    , toBuildingInstanceDTOv1
+    , migrateBuildingInstanceDTOv1
+    , migrateBuildingsDTOv1
     , PageUnitsDTO(..)
     , UnitsDTO(..)
     , UnitInstanceDTO(..)
@@ -86,6 +97,12 @@ module World.Save.Component.Entities
     , ScarDTO(..)
     , toUnitInstanceDTO
     , fromUnitInstanceDTO
+    , UnitInstanceDTOv1(..)
+    , PageUnitsDTOv1(..)
+    , UnitsDTOv1(..)
+    , toUnitInstanceDTOv1
+    , migrateUnitInstanceDTOv1
+    , migrateUnitsDTOv1
     , PageSimDTO(..)
     , UnitSimDTO(..)
     , PageSimDTOv1(..)
@@ -152,7 +169,8 @@ import World.Save.Types
     ( BuildingSnapshot(..), BuildingInstanceSnapshot(..)
     , UnitSnapshot(..), UnitInstanceSnapshot(..) )
 import World.Save.Component.Page
-    ( ItemInstanceDTO(..), toItemInstanceDTO, fromItemInstanceDTO )
+    ( ItemInstanceDTO(..), toItemInstanceDTO, fromItemInstanceDTO
+    , ItemInstanceDTOv1, toItemInstanceDTOv1, migrateItemInstanceDTOv1 )
 import World.Save.Snapshot (SessionSnapshot(..), PageSnapshot(..))
 import World.Save.Component.Types
 import World.Save.Reference (SamePageRef(..))
@@ -174,8 +192,9 @@ tshow = T.pack . show
 --   ("World.Save.Component.Types") forbids. The two item fields reuse the
 --   shared 'ItemInstanceDTO' (frozen recursively there); every other
 --   field is a leaf scalar/'Text'. Field order mirrors
---   'BuildingInstanceSnapshot' exactly, so the derived cereal bytes are
---   unchanged from the earlier direct embedding (component stays v1).
+--   'BuildingInstanceSnapshot' exactly, so the derived cereal bytes were
+--   unchanged from the earlier direct embedding. This is the CURRENT (v2)
+--   shape; the pre-#1233 one is 'BuildingInstanceDTOv1' below.
 data BuildingInstanceDTO = BuildingInstanceDTO
     { bidDefName            ∷ !Text
     , bidAnchorX            ∷ !Int
@@ -222,6 +241,65 @@ fromBuildingInstanceDTO d = BuildingInstanceSnapshot
     , bisStorage            = map fromItemInstanceDTO (bidStorage d)
     }
 
+-- | The FROZEN v1 building instance (#1233), preserved verbatim for
+--   decode-only backward compatibility: identical to the current DTO but
+--   for the item shape its two item fields carry
+--   ('ItemInstanceDTOv1' — the pre-#1233 recursive tree). Never edited; a
+--   further building schema change freezes the CURRENT shape as
+--   'BuildingInstanceDTOv2' rather than touching this one.
+data BuildingInstanceDTOv1 = BuildingInstanceDTOv1
+    { bid1DefName            ∷ !Text
+    , bid1AnchorX            ∷ !Int
+    , bid1AnchorY            ∷ !Int
+    , bid1GridZ              ∷ !Int
+    , bid1SpawnedAt          ∷ !Double
+    , bid1TileW              ∷ !Int
+    , bid1TileH              ∷ !Int
+    , bid1SpawnRemaining     ∷ !Int
+    , bid1BuildProgress      ∷ !Float
+    , bid1MaterialsDelivered ∷ !(HM.HashMap Text [ItemInstanceDTOv1])
+    , bid1Storage            ∷ ![ItemInstanceDTOv1]
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | Encoder for the frozen shape — the round-trip partner a v1 fixture
+--   and a migration test are built with.
+toBuildingInstanceDTOv1 ∷ BuildingInstanceSnapshot → BuildingInstanceDTOv1
+toBuildingInstanceDTOv1 b = BuildingInstanceDTOv1
+    { bid1DefName            = bisDefName b
+    , bid1AnchorX            = bisAnchorX b
+    , bid1AnchorY            = bisAnchorY b
+    , bid1GridZ              = bisGridZ b
+    , bid1SpawnedAt          = bisSpawnedAt b
+    , bid1TileW              = bisTileW b
+    , bid1TileH              = bisTileH b
+    , bid1SpawnRemaining     = bisSpawnRemaining b
+    , bid1BuildProgress      = bisBuildProgress b
+    , bid1MaterialsDelivered =
+        HM.map (map toItemInstanceDTOv1) (bisMaterialsDelivered b)
+    , bid1Storage            = map toItemInstanceDTOv1 (bisStorage b)
+    }
+
+-- | v1 → v2: every non-item field crosses unchanged; both item
+--   collections migrate through 'migrateItemInstanceDTOv1', so a stored
+--   crate and a delivered plank alike decode with their physical values
+--   ABSENT (that function documents why absence, not a fabricated zero
+--   or a re-derivation from the current definition).
+migrateBuildingInstanceDTOv1 ∷ BuildingInstanceDTOv1 → BuildingInstanceDTO
+migrateBuildingInstanceDTOv1 d = BuildingInstanceDTO
+    { bidDefName            = bid1DefName d
+    , bidAnchorX            = bid1AnchorX d
+    , bidAnchorY            = bid1AnchorY d
+    , bidGridZ              = bid1GridZ d
+    , bidSpawnedAt          = bid1SpawnedAt d
+    , bidTileW              = bid1TileW d
+    , bidTileH              = bid1TileH d
+    , bidSpawnRemaining     = bid1SpawnRemaining d
+    , bidBuildProgress      = bid1BuildProgress d
+    , bidMaterialsDelivered =
+        HM.map (map migrateItemInstanceDTOv1) (bid1MaterialsDelivered d)
+    , bidStorage            = map migrateItemInstanceDTOv1 (bid1Storage d)
+    }
+
 -- | Per-page building slice. Carries ONLY the instance map — the
 --   building-id allocator (@bsnNextId@) is deliberately absent, since it
 --   is a global counter owned once by @"core-session"@ (requirement 9).
@@ -236,13 +314,33 @@ newtype BuildingsDTO = BuildingsDTO { bdPages ∷ [PageBuildingsDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Eq, Serialize)
 
+-- | The FROZEN v1 page slice (#1233), carrying the frozen v1 instances.
+data PageBuildingsDTOv1 = PageBuildingsDTOv1
+    { pb1PageId    ∷ !WorldPageId
+    , pb1Instances ∷ !(HM.HashMap BuildingId BuildingInstanceDTOv1)
+    } deriving (Show, Eq, Generic, Serialize)
+
+newtype BuildingsDTOv1 = BuildingsDTOv1 { bd1Pages ∷ [PageBuildingsDTOv1] }
+    deriving stock (Generic)
+    deriving newtype (Show, Eq, Serialize)
+
+migrateBuildingsDTOv1 ∷ BuildingsDTOv1 → BuildingsDTO
+migrateBuildingsDTOv1 (BuildingsDTOv1 slices) = BuildingsDTO
+    [ PageBuildingsDTO (pb1PageId s)
+          (HM.map migrateBuildingInstanceDTOv1 (pb1Instances s))
+    | s ← slices ]
+
 -- Depends on @"core-session"@ too: assembly refills each page's
 -- @bsnNextId@ from the GLOBAL building-id allocator that @"core-session"@
 -- installs, so it must fold first (requirement 9).
+--
+-- v2 (#1233): a building's delivered materials and loose storage carry
+-- the physical values #1233 appended to the recursive item tree, so the
+-- shape changed and v1 decodes through its own frozen tree.
 buildingsCodec ∷ ComponentCodec BuildingsDTO
 buildingsCodec = componentCodec ComponentSpec
     { csComponent     = buildingsComponentId
-    , csVersion       = 1
+    , csVersion       = 2
     , csRequired      = True
     , csDeps          = [worldPagesComponentId, coreSessionComponentId]
     , csEncode        = \snap → BuildingsDTO
@@ -250,7 +348,7 @@ buildingsCodec = componentCodec ComponentSpec
               (HM.map toBuildingInstanceDTO (bsnInstances (pgsBuildings p)))
         | p ← orderedPages snap ]
     , csDecode        = id
-    , csOlderVersions = []
+    , csOlderVersions = [ atVersion 1 migrateBuildingsDTOv1 ]
     , csValidate      = const []
     }
 
@@ -371,8 +469,9 @@ fromScarDTO d = Scar
 --   via the shared 'ItemInstanceDTO', the three unit records via
 --   'StatModifierDTO'/'WoundDTO'/'ScarDTO' above. 'Direction' is an
 --   append-only leaf enum, reused as-is. Field order + leaf types mirror
---   'UnitInstanceSnapshot' exactly, so the derived cereal bytes are
---   unchanged from the earlier direct embedding (component stays v1).
+--   'UnitInstanceSnapshot' exactly, so the derived cereal bytes were
+--   unchanged from the earlier direct embedding. This is the CURRENT (v2)
+--   shape; the pre-#1233 one is 'UnitInstanceDTOv1' below.
 data UnitInstanceDTO = UnitInstanceDTO
     { uidDefName        ∷ !Text
     , uidBaseWidth      ∷ !Float
@@ -462,6 +561,106 @@ fromUnitInstanceDTO d = UnitInstanceSnapshot
     , uisName           = uidName d
     }
 
+-- | The FROZEN pre-#1233 unit instance, preserved verbatim for
+--   decode-only backward compatibility: identical to the current DTO but
+--   for the item shape its three item fields carry
+--   ('ItemInstanceDTOv1'). Never edited; a further unit schema change
+--   freezes the CURRENT shape as 'UnitInstanceDTOv2' rather than touching
+--   this one.
+data UnitInstanceDTOv1 = UnitInstanceDTOv1
+    { uid1DefName        ∷ !Text
+    , uid1BaseWidth      ∷ !Float
+    , uid1GridX          ∷ !Float
+    , uid1GridY          ∷ !Float
+    , uid1GridZ          ∷ !Int
+    , uid1Facing         ∷ !Direction
+    , uid1CurrentAnim    ∷ !Text
+    , uid1AnimStart      ∷ !Double
+    , uid1AnimReverse    ∷ !Bool
+    , uid1Activity       ∷ !Text
+    , uid1Pose           ∷ !Text
+    , uid1AnimStride     ∷ !Int
+    , uid1Stats          ∷ !(HM.HashMap Text Float)
+    , uid1Modifiers      ∷ !(HM.HashMap Text [StatModifierDTO])
+    , uid1Skills         ∷ !(HM.HashMap Text Float)
+    , uid1Knowledge      ∷ !(HM.HashMap Text Float)
+    , uid1Inventory      ∷ ![ItemInstanceDTOv1]
+    , uid1Equipped       ∷ !(HM.HashMap Text ItemInstanceDTOv1)
+    , uid1Accessories    ∷ ![ItemInstanceDTOv1]
+    , uid1FactionId      ∷ !Text
+    , uid1Wounds         ∷ ![WoundDTO]
+    , uid1Scars          ∷ ![ScarDTO]
+    , uid1ImmuneResponse ∷ !Float
+    , uid1Immunities     ∷ !(HM.HashMap Text Float)
+    , uid1Blood          ∷ !Float
+    , uid1Name           ∷ !Text
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | Encoder for the frozen shape — the round-trip partner a v1 fixture
+--   and a migration test are built with.
+toUnitInstanceDTOv1 ∷ UnitInstanceSnapshot → UnitInstanceDTOv1
+toUnitInstanceDTOv1 u = UnitInstanceDTOv1
+    { uid1DefName        = uisDefName u
+    , uid1BaseWidth      = uisBaseWidth u
+    , uid1GridX          = uisGridX u
+    , uid1GridY          = uisGridY u
+    , uid1GridZ          = uisGridZ u
+    , uid1Facing         = uisFacing u
+    , uid1CurrentAnim    = uisCurrentAnim u
+    , uid1AnimStart      = uisAnimStart u
+    , uid1AnimReverse    = uisAnimReverse u
+    , uid1Activity       = uisActivity u
+    , uid1Pose           = uisPose u
+    , uid1AnimStride     = uisAnimStride u
+    , uid1Stats          = uisStats u
+    , uid1Modifiers      = HM.map (map toStatModifierDTO) (uisModifiers u)
+    , uid1Skills         = uisSkills u
+    , uid1Knowledge      = uisKnowledge u
+    , uid1Inventory      = map toItemInstanceDTOv1 (uisInventory u)
+    , uid1Equipped       = HM.map toItemInstanceDTOv1 (uisEquipped u)
+    , uid1Accessories    = map toItemInstanceDTOv1 (uisAccessories u)
+    , uid1FactionId      = uisFactionId u
+    , uid1Wounds         = map toWoundDTO (uisWounds u)
+    , uid1Scars          = map toScarDTO (uisScars u)
+    , uid1ImmuneResponse = uisImmuneResponse u
+    , uid1Immunities     = uisImmunities u
+    , uid1Blood          = uisBlood u
+    , uid1Name           = uisName u
+    }
+
+-- | v1 → v2: every non-item field crosses unchanged; the inventory,
+--   equipment and accessory items each migrate through
+--   'migrateItemInstanceDTOv1' (physical values decode absent).
+migrateUnitInstanceDTOv1 ∷ UnitInstanceDTOv1 → UnitInstanceDTO
+migrateUnitInstanceDTOv1 d = UnitInstanceDTO
+    { uidDefName        = uid1DefName d
+    , uidBaseWidth      = uid1BaseWidth d
+    , uidGridX          = uid1GridX d
+    , uidGridY          = uid1GridY d
+    , uidGridZ          = uid1GridZ d
+    , uidFacing         = uid1Facing d
+    , uidCurrentAnim    = uid1CurrentAnim d
+    , uidAnimStart      = uid1AnimStart d
+    , uidAnimReverse    = uid1AnimReverse d
+    , uidActivity       = uid1Activity d
+    , uidPose           = uid1Pose d
+    , uidAnimStride     = uid1AnimStride d
+    , uidStats          = uid1Stats d
+    , uidModifiers      = uid1Modifiers d
+    , uidSkills         = uid1Skills d
+    , uidKnowledge      = uid1Knowledge d
+    , uidInventory      = map migrateItemInstanceDTOv1 (uid1Inventory d)
+    , uidEquipped       = HM.map migrateItemInstanceDTOv1 (uid1Equipped d)
+    , uidAccessories    = map migrateItemInstanceDTOv1 (uid1Accessories d)
+    , uidFactionId      = uid1FactionId d
+    , uidWounds         = uid1Wounds d
+    , uidScars          = uid1Scars d
+    , uidImmuneResponse = uid1ImmuneResponse d
+    , uidImmunities     = uid1Immunities d
+    , uidBlood          = uid1Blood d
+    , uidName           = uid1Name d
+    }
+
 -- | Per-page unit slice. Carries ONLY the instance map — the unit-id
 --   allocator (@usnNextId@) is absent for the same global-allocator
 --   reason as @bsnNextId@ above. Each instance is the frozen
@@ -476,12 +675,32 @@ newtype UnitsDTO = UnitsDTO { udPages ∷ [PageUnitsDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Eq, Serialize)
 
+-- | The FROZEN v1 page slice (#1233), carrying the frozen v1 instances.
+data PageUnitsDTOv1 = PageUnitsDTOv1
+    { pu1PageId    ∷ !WorldPageId
+    , pu1Instances ∷ !(HM.HashMap UnitId UnitInstanceDTOv1)
+    } deriving (Show, Eq, Generic, Serialize)
+
+newtype UnitsDTOv1 = UnitsDTOv1 { ud1Pages ∷ [PageUnitsDTOv1] }
+    deriving stock (Generic)
+    deriving newtype (Show, Eq, Serialize)
+
+migrateUnitsDTOv1 ∷ UnitsDTOv1 → UnitsDTO
+migrateUnitsDTOv1 (UnitsDTOv1 slices) = UnitsDTO
+    [ PageUnitsDTO (pu1PageId s)
+          (HM.map migrateUnitInstanceDTOv1 (pu1Instances s))
+    | s ← slices ]
+
 -- Depends on @"core-session"@ too, for the global unit-id allocator
 -- (@usnNextId@), same reasoning as @"buildings"@ above.
+--
+-- v2 (#1233): a unit's inventory, equipment and accessories carry the
+-- physical values #1233 appended to the recursive item tree, so the shape
+-- changed and v1 decodes through its own frozen tree.
 unitsCodec ∷ ComponentCodec UnitsDTO
 unitsCodec = componentCodec ComponentSpec
     { csComponent     = unitsComponentId
-    , csVersion       = 1
+    , csVersion       = 2
     , csRequired      = True
     , csDeps          = [worldPagesComponentId, coreSessionComponentId]
     , csEncode        = \snap → UnitsDTO
@@ -489,7 +708,7 @@ unitsCodec = componentCodec ComponentSpec
               (HM.map toUnitInstanceDTO (usnInstances (pgsUnits p)))
         | p ← orderedPages snap ]
     , csDecode        = id
-    , csOlderVersions = []
+    , csOlderVersions = [ atVersion 1 migrateUnitsDTOv1 ]
     , csValidate      = const []
     }
 

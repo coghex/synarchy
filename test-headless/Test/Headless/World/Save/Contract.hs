@@ -87,7 +87,7 @@ import World.Tool.Types (ToolMode(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Structure.Palette (TexPalette(..))
 import Item.Ground (GroundItems(..), GroundItem(..))
-import Item.Types (ItemInstance(..))
+import Item.Types (ItemInstance(..), ItemStorage(..))
 import World.Spoil.Types (emptySpoilPiles, SpoilPile(..))
 import World.Flora.Harvest (emptyFloraHarvests)
 import World.Flora.CropPlot (emptyCropPlots, CropPlot(..))
@@ -137,11 +137,18 @@ richItem iid = ItemInstance
     { iiDefName = "first_aid_kit", iiCurrentFill = 3, iiQuality = 82
     , iiCondition = 74.5, iiWeight = 1.25, iiSharpness = 0
     , iiInstanceId = iid, iiTemp = Just 21.5
+      -- #1233: distinctive physical values, and a kit that really
+      -- offers storage, so a dropped/mis-mapped bulk or capacity shows
+      -- up in the whole-session round trip. The nested bandage carries
+      -- a bulk but NO storage, so the optional half is exercised in
+      -- both directions inside one recursive tree.
+    , iiBulk = Just 4.25, iiStorage = Just (ItemStorage 8.5 6.75)
     , iiContents =
         [ ItemInstance
             { iiDefName = "bandage", iiCurrentFill = 1, iiQuality = 100
             , iiCondition = 100, iiWeight = 0.05, iiSharpness = 0
-            , iiInstanceId = iid + 1, iiTemp = Nothing, iiContents = [] } ]
+            , iiInstanceId = iid + 1, iiTemp = Nothing, iiContents = []
+            , iiBulk = Just 0.1, iiStorage = Nothing } ]
     }
 
 -- | A unit with populated stats/skills/knowledge/modifiers/inventory/

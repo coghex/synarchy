@@ -22,7 +22,7 @@ import Engine.Asset.YamlBuildings (BuildingYamlDef(..), BuildingYamlAnim(..),
                                    BuildingYamlTileSize(..), loadBuildingYaml)
 import Building.Types
 import Unit.Direction (Direction(..))
-import Unit.Types (Animation(..))
+import Unit.Types (legacyAnimation)
 
 -- * YAML loading
 
@@ -69,16 +69,17 @@ loadBuildingYamlFn env backendState = do
                             return (Map.insert DirS
                                       (V.fromList handles) accF)
                             ) Map.empty (Map.toList (byaFrames animDef))
-                        let anim = Animation
-                                { aFps    = byaFps animDef
-                                , aLoop   = byaLoop animDef
-                                , aFlip   = False  -- buildings have a
-                                                   -- single direction
-                                                   -- (DirS); the mirror
-                                                   -- path never fires
-                                                   -- for them.
-                                , aFrames = frameMap
-                                }
+                        -- Buildings stay on the legacy per-frame
+                        -- representation (#1259): the atlas compiler
+                        -- covers unit animations only, and nothing here
+                        -- reads a compiled index.
+                        let anim = legacyAnimation
+                                (byaFps animDef)
+                                (byaLoop animDef)
+                                False  -- buildings have a single
+                                       -- direction (DirS); the mirror
+                                       -- path never fires for them.
+                                frameMap
                         return (HM.insert animName anim accA)
                         ) HM.empty (Map.toList (bydAnimations def))
 

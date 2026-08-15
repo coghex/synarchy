@@ -3,6 +3,7 @@ items:
     display_name: "Processing Unit"
     sprite: "assets/textures/items/material/processing_unit.png"
     weight: 0.4
+    bulk: 0.40        # litres of external bulk
     category: Materials
     make: factory
     # Brand-new at spawn; condition persists through building lifespan.

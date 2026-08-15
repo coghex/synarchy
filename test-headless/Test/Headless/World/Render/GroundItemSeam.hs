@@ -99,7 +99,8 @@ bareItemDef ∷ ItemDef
 bareItemDef = ItemDef
     { idName = "probe_rock", idDisplayName = "probe_rock"
     , idTexture = TextureHandle 0
-    , idWeight = 1.0, idWeightSpec = Nothing, idKind = "misc"
+    , idWeight = 1.0, idWeightSpec = Nothing, idBulk = 1.0
+    , idStorage = Nothing, idKind = "misc"
     , idCategory = "Misc", idMake = "", idMaterial = ""
     , idQualitySpec = Nothing, idQualityTiers = [], idConditionSpec = Nothing
     , idContainer = Nothing, idDefaultContents = [], idFood = Nothing
@@ -119,7 +120,7 @@ itemAt x y = GroundItem
         { iiDefName = "probe_rock", iiCurrentFill = 0
         , iiQuality = 100, iiCondition = 100, iiWeight = 1.0
         , iiSharpness = 100, iiContents = [], iiInstanceId = 1
-        , iiTemp = Nothing
+        , iiTemp = Nothing, iiBulk = Just 1, iiStorage = Nothing
         }
     , giX = x, giY = y
     }

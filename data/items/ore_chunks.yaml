@@ -7,6 +7,7 @@ items:
     display_name: "Iron Ore Chunk"
     sprite: "assets/textures/items/material/iron_ore_chunk.png"
     weight: 10.0
+    bulk: 5.5        # litres of external bulk
     category: Materials
     make: world
     material: iron_ore
@@ -14,6 +15,7 @@ items:
     display_name: "Copper Ore Chunk"
     sprite: "assets/textures/items/material/copper_ore_chunk.png"
     weight: 10.0
+    bulk: 5.5        # litres of external bulk
     category: Materials
     make: world
     material: copper_ore
@@ -21,6 +23,7 @@ items:
     display_name: "Tin Ore Chunk"
     sprite: "assets/textures/items/material/tin_ore_chunk.png"
     weight: 10.0
+    bulk: 5.5        # litres of external bulk
     category: Materials
     make: world
     material: tin_ore

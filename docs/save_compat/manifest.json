@@ -1,9 +1,9 @@
 {
   "$comment": "Save-compatibility manifest (issue #766, save-overhaul C4). Tracks every save-format baseline this build is declared to keep loadable through explicit migrations, plus the tracked fixtures proving it. Never hand-edit a fixture's sha256 after it has been recorded here -- see tools/save_compat_audit.py (--add-baseline registers a fixture's checksum/summary together).",
   "envelopeFramingVersion": 1,
-  "frozenDtoFingerprint": "e5794ba34262de8f39eb9234777069cfbe313f87aff150edabb98075dd85dcd0",
+  "frozenDtoFingerprint": "3ba82bdaeb0506a33a6a91b0323b05213fac774590e5350270f7c6e46cd48973",
   "frozenDtoFingerprintOf": "src/World/Save/Compat/SessionV90.hs, plus every leaf DTO its frozen types embed, transitively resolved wherever actually defined (World.Save.Component.Page/.Entities/.Session/.WorldGen)",
-  "frozenDtoFingerprintComment": "sha256 over every frozen `data ... deriving (...)` block's field list (whitespace-normalized) in SessionV90.hs, PLUS (round-16 review) every leaf DTO type those blocks embed (WorldGenParamsDTO and its whole nested worldgen config/state tree, WorldEditDTO, GroundItemsDTO/ItemInstanceDTO, BuildingInstanceDTO, UnitInstanceDTO, etc.), transitively resolved wherever each is actually defined -- SessionV90.hs's own blocks alone said nothing about a field reordered on one of those EMBEDDED types, even though the real B1 wire bytes for it would silently change. See tools/save_compat_audit.py's frozen_dto_fingerprint()/_transitive_dto_blocks(). Changes only when a field is added/removed/reordered anywhere in this transitive closure, never on a comment-only edit. Recompute with: python3 -c \"import sys; sys.path.insert(0,'tools'); from save_compat_audit import frozen_dto_fingerprint; print(frozen_dto_fingerprint())\". Last updated deliberately by issue #1092: WorldPageSaveV90.wp90Identity was repointed from WorldIdentityDTO to the newly-frozen WorldIdentityDTOv1, which carries the IDENTICAL two fields (name, optional gloss) the old type did -- a rename of the frozen shape, not a field added/removed/reordered, so every tracked v90 fixture's bytes are unchanged (the unsuffixed name now belongs to the current world-pages v3 identity, which additionally carries language provenance). Same pattern #911 used when it froze WorldGenParamsDTOv1.",
+  "frozenDtoFingerprintComment": "sha256 over every frozen `data ... deriving (...)` block's field list (whitespace-normalized) in SessionV90.hs, PLUS (round-16 review) every leaf DTO type those blocks embed (WorldGenParamsDTO and its whole nested worldgen config/state tree, WorldEditDTO, GroundItemsDTO/ItemInstanceDTO, BuildingInstanceDTO, UnitInstanceDTO, etc.), transitively resolved wherever each is actually defined -- SessionV90.hs's own blocks alone said nothing about a field reordered on one of those EMBEDDED types, even though the real B1 wire bytes for it would silently change. See tools/save_compat_audit.py's frozen_dto_fingerprint()/_transitive_dto_blocks(). Changes only when a field is added/removed/reordered anywhere in this transitive closure, never on a comment-only edit. Recompute with: python3 -c \"import sys; sys.path.insert(0,'tools'); from save_compat_audit import frozen_dto_fingerprint; print(frozen_dto_fingerprint())\". Last updated deliberately by issue #1092: WorldPageSaveV90.wp90Identity was repointed from WorldIdentityDTO to the newly-frozen WorldIdentityDTOv1, which carries the IDENTICAL two fields (name, optional gloss) the old type did -- a rename of the frozen shape, not a field added/removed/reordered, so every tracked v90 fixture's bytes are unchanged (the unsuffixed name now belongs to the current world-pages v3 identity, which additionally carries language provenance). Same pattern #911 used when it froze WorldGenParamsDTOv1. Last updated deliberately by issue #1233: BuildingSnapshotV90.bsn90Instances, UnitSnapshotV90.usn90Instances and WorldPageSaveV90.wp90GroundItems were repointed from BuildingInstanceDTO/UnitInstanceDTO/GroundItemsDTO to the newly-frozen BuildingInstanceDTOv1/UnitInstanceDTOv1/GroundItemsDTOv1, which carry the IDENTICAL fields those types carried before #1233 appended ItemInstance's external bulk and optional internal storage capacities -- a rename of the frozen shapes, not a field added/removed/reordered within them, so every tracked v90 fixture's bytes are unchanged (the unsuffixed names now belong to the current buildings v2 / units v2 / world-activity v3 shapes, which additionally carry those physical values). Exactly the #1092 pattern one row up.",
   "envelopeFramingFingerprint": "b1b43fcecce096bb902440b11f92de904b2c9762cdac02dfe2c6d9db1c3fa05f",
   "envelopeFramingFingerprintOf": "src/World/Save/Envelope/Codec.hs + the wire-relevant bindings in src/World/Save/Envelope/Types.hs (ComponentId/ComponentDescriptor/EnvelopeManifest/envelopeMagic/fnv1a64/encodeW32/decodeW32/encodeW64/decodeW64)",
   "envelopeFramingFingerprintComment": "round-15 review: envelopeFramingVersion alone is just an integer someone has to remember to bump -- this sha256 (whitespace-normalized, comment-insensitive, same technique as frozenDtoFingerprint) catches an ACTUAL byte-layout change (header/manifest/checksum framing) shipping with envelopeFramingVersion left untouched, which would otherwise be a new wire format with no format epoch. See tools/save_compat_audit.py's envelope_framing_fingerprint(). Recompute with: python3 -c \"import sys; sys.path.insert(0,'tools'); from save_compat_audit import envelope_framing_fingerprint; print(envelope_framing_fingerprint())\"",
@@ -1258,7 +1258,99 @@
       ]
     },
     {
-      "id": "m1-location-sight-reveal",
+      "id": "m1-item-bulk-storage",
+      "description": "Physical bulk and portable-storage capacity on item instances (issue #1233, epic #1231): the four item-bearing components bumped together -- world-activity to v3, buildings to v2, units to v2, container-knowledge to v2 -- because ItemInstance gained an external bulk and optional internal storage capacities and all four carry the same recursive item tree. This fixture actually HOLDS items in four places a save can carry one: a unit inventory item, a building loose-storage item, a remembered container observation, and a ground item, each materialized through a real production mint path so its bulk was snapshotted from the live definition. The pre-#1233 tree, whose items carry no physical values at all, stays tracked by b1/b2/b3/c3/d1/e1/f1/g1/h1/i1/j1/k1/l1 and decodes with them honestly absent.",
+      "declaredAt": "2026-08-15",
+      "declaredByIssue": 1233,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "identity for world-activity v3 / buildings v2 / units v2 / container-knowledge v2 (this baseline IS those shapes); the pre-#1233 item tree stays tracked by every earlier baseline and reaches the current shape through migrateWorldActivityV2 / migrateBuildingsDTOv1 / migrateUnitsDTOv1 / migrateContainerKnowledgeDTOv1",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "container-knowledge",
+          "version": 2,
+          "required": false
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 5,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "m1-item-bulk-storage-session",
+          "path": "test-headless/data/save-compat/m1-item-bulk-storage.bin",
+          "kind": "complete-session",
+          "sha256": "7c71c69d59cf9af55d70138b5c5c18055642de370b27eb7485ce5bf6d0bd88bc",
+          "sizeBytes": 908799,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then return unit.addItem({uid}, 'steel_bar'); return unit.addItem({uid}, 'rations'); return unit.depositToCargo({uid}, {bid}, 'steel_bar'); return item.spawnGround('wood_log', 1.5, 1.5) >= 0, settled 6.0s and held until `building.getContainerKnowledge(1).state == 'known' and #item.listGround() > 0`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/m1-item-bulk-storage.expected.json"
+        }
+      ]
+    },
+    {
+      "id": "n1-location-sight-reveal",
       "description": "Locations revealed by unit sight instead of a proximity halo (issue #1230, epic #1229): world-pages became v7, dropping LocationInstance's discovery_margin. Reveal is now the intersection of a player-owned unit's night-aware visible-tile set with the instance's own stored bounds (#777), so the halo the margin described describes nothing. This baseline tracks a REAL current-format session written by the live engine at world-pages v7, whose page carries placed location instances holding bounds and a lifecycle but NO margin field at all -- so the new shape is exercised by the fixture registered to cover its version. The pre-#1230 v6 shape stays tracked by k1/l1, v5 by j1, v4 by i1, v3 by g1/h1, v2 by d1/e1/f1, and v1 by b2/b3/c3; every one of them decodes with its stored margin read off the wire and discarded, and with every other instance field carried across exactly.",
       "declaredAt": "2026-08-15",
       "declaredByIssue": 1230,
@@ -1334,13 +1426,13 @@
       ],
       "fixtures": [
         {
-          "id": "m1-location-sight-reveal",
-          "path": "test-headless/data/save-compat/m1-location-sight-reveal.bin",
+          "id": "n1-location-sight-reveal",
+          "path": "test-headless/data/save-compat/n1-location-sight-reveal.bin",
           "kind": "complete-session",
           "sha256": "3f90088657fcccf1ae26e171504a2ffc4a9b67598f7e9e862a96507321cde00f",
           "sizeBytes": 908436,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), settled 6.0s and held until `(function() local ls = world.listPlacedLocations(); if #ls == 0 then return false end; local l = ls[1]; return l.discovery_margin == nil and l.bounds ~= nil and l.lifecycle ~= nil end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/m1-location-sight-reveal.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/n1-location-sight-reveal.expected.json"
         }
       ]
     }

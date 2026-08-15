@@ -112,6 +112,10 @@ itemSpawnGroundFn env = do
                             , iiContents = []
                             , iiInstanceId = iid
                             , iiTemp = mTemp
+                              -- #1233: snapshotted from the def, like
+                              -- iiWeight.
+                            , iiBulk = Just (idBulk iDef)
+                            , iiStorage = idStorage iDef
                             }
                     gid ← Lua.liftIO $
                         atomicModifyIORef' (wsGroundItemsRef ws) $

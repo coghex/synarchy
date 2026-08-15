@@ -3,6 +3,7 @@ items:
     display_name: "Technogoggles"
     sprite: "assets/textures/items/wearable/technogoggles.png"
     weight: 0.3
+    bulk: 0.8        # litres of external bulk
     kind: accessory
     category: Armor
     # No quality — these are factory-tuned, not crafted with variance.

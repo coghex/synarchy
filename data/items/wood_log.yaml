@@ -11,6 +11,7 @@ items:
     # harvestable wood yields), and build-job material sourcing (#96)
     # consumes these — dungeon_1 posts cost one.
     weight: 8.0
+    bulk: 25.0        # litres of external bulk
     category: Materials
     make: world
     material: wood

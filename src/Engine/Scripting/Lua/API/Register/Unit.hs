@@ -113,6 +113,7 @@ registerUnitAPI env = do
   registerLuaFunction "setItemTemp"    (unitSetItemTempFn env)
   registerLuaFunction "getVisibleTiles" (unitGetVisibleTilesFn env)
   registerLuaFunction "getFrameTexture" (unitGetFrameTextureFn env)
+  registerLuaFunction "getFrameSample" (unitGetFrameSampleFn env)
   registerLuaFunction "getPortraitTexture" (unitGetPortraitTextureFn env)
   registerLuaFunction "addModifier"    (unitAddModifierFn env)
   registerLuaFunction "removeModifier" (unitRemoveModifierFn env)

@@ -11,4 +11,5 @@ items:
     display_name: "Water"
     sprite: "assets/textures/items/material/water.png"
     weight: 1.0        # 1 L at water density
+    bulk: 1.0        # litres of external bulk
     category: Materials

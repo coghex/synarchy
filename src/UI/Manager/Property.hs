@@ -19,6 +19,8 @@ module UI.Manager.Property
   , setTextColor
   , setSpriteTexture
   , setSpriteColor
+  , setSpriteUV
+  , setSpriteFrame
   , setSpriteFlipX
   , setElementTooltip
   , clearElementTooltip
@@ -152,6 +154,44 @@ setSpriteColor ∷ ElementHandle → (Float, Float, Float, Float) → UIPageMana
 setSpriteColor handle color = modifyElement handle `flip` \elem →
     case ueRenderData elem of
         RenderSprite style → elem { ueRenderData = RenderSprite style { ussColor = color } }
+        _ → elem
+
+-- | Narrow this sprite to a sub-rect of its texture (#1259).
+--
+--   Purely visual, like 'setSpriteFlipX': it changes neither the
+--   element's geometry nor its interactive bounds. This is the LOW-LEVEL
+--   setter — it mutates the UVs alone. Publishing an animation frame
+--   means texture, sub-rect and mirror TOGETHER, which is
+--   'setSpriteFrame'; see its note for why doing it in pieces is a
+--   race against the render thread.
+setSpriteUV ∷ ElementHandle → (Float, Float, Float, Float)
+            → UIPageManager → UIPageManager
+setSpriteUV handle uv = modifyElement handle `flip` \elem →
+    case ueRenderData elem of
+        RenderSprite style → elem { ueRenderData = RenderSprite style { ussUV = uv } }
+        _ → elem
+
+-- | Publish a complete animation frame — texture, source sub-rect, and
+--   mirror — in ONE manager transition (#1259).
+--
+--   The three are not independent: a frame is that texture AND that
+--   sub-rect AND that flip. Setting them one at a time leaves the
+--   element momentarily holding a new atlas handle with the PREVIOUS
+--   frame's sub-rect, and the render thread reads the manager
+--   concurrently — so a reader landing in that window draws the wrong
+--   cell, or on the first switch from a whole-image portrait to an
+--   atlas frame, the entire sheet. That is the exact failure the atlas
+--   sample path exists to prevent, so the publish is atomic.
+setSpriteFrame
+    ∷ ElementHandle
+    → TextureHandle
+    → (Float, Float, Float, Float)   -- ^ source sub-rect
+    → Bool                           -- ^ mirrored
+    → UIPageManager → UIPageManager
+setSpriteFrame handle texture uv flipX = modifyElement handle `flip` \elem →
+    case ueRenderData elem of
+        RenderSprite style → elem { ueRenderData = RenderSprite style
+            { ussTexture = texture, ussUV = uv, ussFlipX = flipX } }
         _ → elem
 
 -- | Draw this sprite horizontally mirrored (#887). Purely visual — it

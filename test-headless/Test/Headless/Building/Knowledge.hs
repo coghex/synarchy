@@ -30,13 +30,13 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Item.Types
     (ItemDef(..), ItemInstance(..), ItemManager(..), ItemContainer(..)
-    , itemTotalWeight)
+    , ItemStorage(..), itemTotalWeight)
 import Structure.Palette (emptyTexPalette)
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Types
-    (Animation(..), UnitId(..), UnitInstance(..), UnitManager(..)
-    , emptyUnitManager)
+    (legacyAnimation, UnitId(..), UnitInstance(..)
+    , UnitManager(..), emptyUnitManager)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
 import World.Save.Component (componentKnownIds)
@@ -102,9 +102,8 @@ animatedCargoDef ∷ BuildingDef
 animatedCargoDef = (bareDef "unfolding_pod")
     { bdBuildWork = 0, bdStorageCapacity = 150
     , bdStateAnims = HM.singleton "appearing" "unfold"
-    , bdAnimations = HM.singleton "unfold" Animation
-        { aFps = 2, aLoop = False, aFlip = False
-        , aFrames = Map.singleton DirS (V.replicate 4 (TextureHandle 0)) }
+    , bdAnimations = HM.singleton "unfold" (legacyAnimation 2 False False
+        (Map.singleton DirS (V.replicate 4 (TextureHandle 0))))
     }
 
 bareDef ∷ Text → BuildingDef
@@ -157,7 +156,7 @@ mkUnit page faction = UnitInstance
     , uiTrailState = Nothing
     }
 
--- | A stored item with every one of 'ItemInstance''s nine fields set to
+-- | A stored item with every one of 'ItemInstance''s eleven fields set to
 --   a DISTINCT, non-default value, and a nested content item of its own
 --   — so a remembered copy that dropped or defaulted any single field is
 --   observably different from the original.
@@ -171,11 +170,14 @@ kitAt iid condition = ItemInstance
     , iiSharpness   = 41
     , iiInstanceId  = iid
     , iiTemp        = Just 21.5
+    , iiBulk        = Just 4.0
+    , iiStorage     = Just (ItemStorage 8 6)
     , iiContents    =
         [ ItemInstance
             { iiDefName = "bandage", iiCurrentFill = 1, iiQuality = 100
             , iiCondition = 100, iiWeight = 0.05, iiSharpness = 0
-            , iiInstanceId = iid + 1, iiTemp = Nothing, iiContents = [] } ]
+            , iiInstanceId = iid + 1, iiTemp = Nothing, iiContents = []
+            , iiBulk = Just 0.1, iiStorage = Nothing } ]
     }
 
 -- | An item registry that gives the kit a real container def, so
@@ -194,7 +196,8 @@ testItems = ItemManager $ HM.fromList
 bareItemDef ∷ Text → Float → ItemDef
 bareItemDef name w = ItemDef
     { idName = name, idDisplayName = name, idTexture = TextureHandle 0
-    , idWeight = w, idWeightSpec = Nothing, idKind = "misc"
+    , idWeight = w, idWeightSpec = Nothing, idBulk = 1.0
+    , idStorage = Nothing, idKind = "misc"
     , idCategory = "Misc", idMake = "", idMaterial = ""
     , idQualitySpec = Nothing, idQualityTiers = [], idConditionSpec = Nothing
     , idContainer = Nothing, idDefaultContents = [], idFood = Nothing
@@ -341,7 +344,11 @@ theFault ∷ Float → Double → IO ComponentError
 theFault weight revealedAt = case faultsFor weight revealedAt of
     [e] → do
         ceComponent e `shouldBe` containerKnowledgeComponentId
-        ceVersion   e `shouldBe` 1
+        -- The component's CURRENT version (#1233 bumped it to v2 for the
+        -- item shape): ccValidate always runs on the migrated canonical
+        -- value, whatever version the payload was encoded at, which is
+        -- the same convention validateCraftBills follows.
+        ceVersion   e `shouldBe` 2
         cePhase     e `shouldBe` ValidatePhase
         -- The page and container are named, so a diagnostic points at
         -- the offending record rather than at the component.
@@ -351,7 +358,7 @@ theFault weight revealedAt = case faultsFor weight revealedAt of
     other → do
         expectationFailure
             ("expected exactly one validation error, got: " <> show other)
-        pure (ComponentError knowledgeComponentId 1 ValidatePhase "")
+        pure (ComponentError knowledgeComponentId 2 ValidatePhase "")
 
 -- | An envelope whose container-knowledge payload is replaced by a
 --   STRUCTURALLY VALID encoding of the given record — the real
@@ -371,7 +378,7 @@ expectEnvelopeRejected fault bytes = case decodeFor bytes of
         "a decodable non-finite container-knowledge payload loaded anyway"
     Left err → do
         err `shouldSatisfy`
-            T.isInfixOf "[container-knowledge v1 ValidatePhase]"
+            T.isInfixOf "[container-knowledge v2 ValidatePhase]"
         err `shouldSatisfy` T.isInfixOf fault
 
 -- | Rewrite an envelope's component set: drop the container-knowledge
@@ -638,7 +645,7 @@ spec = describe "Container knowledge" $ do
             recordOf sc cargoBid `shouldReturn` before
 
     describe "what a record remembers" $ do
-        it "every one of ItemInstance's nine fields is copied AS OF the \
+        it "every one of ItemInstance's eleven fields is copied AS OF the \
            \reveal, and survives the live instance changing afterwards" $ do
             sc ← newScene
             let observed = kitAt 100 74.5
@@ -650,6 +657,7 @@ spec = describe "Container knowledge" $ do
                            , iiCondition = 2, iiWeight = 99
                            , iiSharpness = 3, iiInstanceId = 12345
                            , iiTemp = Nothing, iiContents = []
+                           , iiBulk = Nothing, iiStorage = Nothing
                            , iiDefName = "bandage" } ]
             Just r ← recordOf sc cargoBid
             crItems r `shouldBe` [observed]
@@ -663,6 +671,9 @@ spec = describe "Container knowledge" $ do
                     iiSharpness   remembered `shouldBe` 41
                     iiInstanceId  remembered `shouldBe` 100
                     iiTemp        remembered `shouldBe` Just 21.5
+                    iiBulk        remembered `shouldBe` Just 4.0
+                    iiStorage     remembered `shouldBe`
+                        Just (ItemStorage 8 6)
                     map iiDefName (iiContents remembered)
                         `shouldBe` ["bandage"]
                 other → expectationFailure ("expected one item, got "

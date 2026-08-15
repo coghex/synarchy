@@ -84,6 +84,10 @@ unitAddItemFn env = do
                                 , iiContents    = []
                                 , iiInstanceId  = iid
                                 , iiTemp        = Nothing
+                                  -- #1233: snapshotted from the def,
+                                  -- like iiWeight.
+                                , iiBulk        = Just (idBulk def)
+                                , iiStorage     = idStorage def
                                 }
                         atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                             case HM.lookup uid (umInstances um) of

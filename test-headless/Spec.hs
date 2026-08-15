@@ -38,11 +38,14 @@ import qualified Test.Headless.Item.GroundPageOwnership as GroundPageOwnership
 import qualified Test.Headless.Item.Temperature as ItemTemp
 import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Item.QualityTier as ItemQualityTier
+import qualified Test.Headless.Item.BulkStorage as ItemBulkStorage
 import qualified Test.Headless.Asset.TextureFallback as TextureFallback
 import qualified Test.Headless.Asset.UnitInventory as AssetUnitInventory
 import qualified Test.Headless.Asset.Types as AssetTypes
 import qualified Test.Headless.Asset.YamlList as AssetYamlList
 import qualified Test.Headless.Preview.Discovery as PreviewDiscovery
+import qualified Test.Headless.Unit.Atlas as UnitAtlas
+import qualified Test.Headless.Unit.Atlas.Loader as UnitAtlasLoader
 import qualified Test.Headless.Preview.UnitAnimation as PreviewUnitAnimation
 import qualified Test.Headless.Preview.Building as PreviewBuilding
 import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
@@ -315,6 +318,8 @@ main = hspec $ do
     describe "Unit.Pathing.AStar" PathingAStar.spec
     describe "Unit.Pathing.Config" PathingConfig.spec
     describe "Unit.Render.pickFrame" PickFrame.spec
+    UnitAtlas.spec
+    aroundAll withHeadlessEngine UnitAtlasLoader.spec
     describe "Unit.Anim" AnimTest.spec
     describe "Unit.Injury" InjuryTest.spec
     describe "Unit.InjurySpeed" InjurySpeedTest.spec
@@ -329,6 +334,7 @@ main = hspec $ do
     describe "Item.Temperature" ItemTemp.spec
     describe "Item.BuffYaml" ItemBuffYaml.spec
     describe "Item.QualityTier" ItemQualityTier.spec
+    describe "Item.BulkStorage" ItemBulkStorage.spec
     describe "World.Save.Sanitize" SaveSanitize.spec
     describe "World.Save.Serialize" SaveSerialize.spec
     describe "save envelope" SaveEnvelope.spec

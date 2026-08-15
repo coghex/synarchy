@@ -31,7 +31,11 @@ import World.Save.Component.Types
 import World.Save.Component.Session
 import World.Save.Component.Page
 import World.Save.Component.Entities
-import World.Save.Component.Knowledge (containerKnowledgeCodec)
+import World.Save.Component.Knowledge
+    ( containerKnowledgeCodec, ContainerKnowledgeDTO(..)
+    , ContainerKnowledgeDTOv1(..), PageContainerKnowledgeDTOv1(..)
+    , PageContainerKnowledgeDTO(..), ContainerRecordDTO(..)
+    , toContainerRecordDTOv1 )
 import World.Save.Component.Transfer
     ( transferOrdersCodec, validateTransferOrders
     , TransferOrdersDTO(..), PageTransferOrdersDTO(..)
@@ -71,7 +75,7 @@ import World.Tool.Types (ToolMode(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Structure.Palette (emptyTexPalette, TexPalette(..))
 import Item.Ground (emptyGroundItems, GroundItems(..), GroundItem(..))
-import Item.Types (ItemInstance(..))
+import Item.Types (ItemInstance(..), ItemStorage(..))
 import World.Spoil.Types (emptySpoilPiles)
 import World.Flora.Harvest (emptyFloraHarvests)
 import World.Flora.CropPlot (emptyCropPlots)
@@ -97,7 +101,7 @@ import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..))
 import Unit.Sim.Types (UnitSimState(..), MoveTarget(..), Pose(..), UnitActivity(..))
 import Unit.Direction (Direction(..))
-import Building.Knowledge (emptyContainerKnowledge)
+import Building.Knowledge (emptyContainerKnowledge, ContainerRecord(..))
 
 -- ---------------------------------------------------------------------
 -- Fixtures (mirror Test.Headless.Save.Snapshot's minimal* pattern)
@@ -185,7 +189,7 @@ minimalWorldPageSaveV90 pid = WorldPageSaveV90
     , wp90Edits        = HM.empty
     , wp90MineDesignations      = HM.empty
     , wp90ConstructDesignations = HM.empty
-    , wp90GroundItems  = GroundItemsDTO 0 HM.empty
+    , wp90GroundItems  = GroundItemsDTOv1 0 HM.empty
     , wp90SpoilPiles   = HM.empty
     , wp90Buildings    = BuildingSnapshotV90 HM.empty 1
     , wp90Units        = UnitSnapshotV90 HM.empty 1
@@ -367,16 +371,69 @@ richItem = ItemInstance
     { iiDefName = "first_aid_kit", iiCurrentFill = 0, iiQuality = 82
     , iiCondition = 74.5, iiWeight = 1.25, iiSharpness = 0
     , iiInstanceId = 900, iiTemp = Just 21.5
+      -- #1233: a DIFFERENT physical shape at each of the three nesting
+      -- levels (storage + bulk / bulk only / neither), so the recursive
+      -- conversion cannot pass by copying one level's answer down.
+    , iiBulk = Just 4.25, iiStorage = Just (ItemStorage 8.5 6.75)
     , iiContents =
         [ ItemInstance
             { iiDefName = "bandage", iiCurrentFill = 3, iiQuality = 100
             , iiCondition = 100, iiWeight = 0.05, iiSharpness = 0
             , iiInstanceId = 901, iiTemp = Nothing
+            , iiBulk = Just 0.1, iiStorage = Nothing
             , iiContents =
                 [ ItemInstance
                     { iiDefName = "mini_kit", iiCurrentFill = 0, iiQuality = 50
                     , iiCondition = 33, iiWeight = 0.2, iiSharpness = 12.5
-                    , iiInstanceId = 902, iiTemp = Just (-4.0), iiContents = [] } ] } ] }
+                    , iiInstanceId = 902, iiTemp = Just (-4.0), iiContents = []
+                    , iiBulk = Nothing, iiStorage = Nothing } ] } ] }
+
+-- #1233 pre-#1233-payload helpers ------------------------------------
+
+-- | An empty CURRENT activity slice for a page — the shape
+-- 'worldActivityCodec' writes.
+toActivity ∷ WorldPageId → PageActivityDTO
+toActivity pid = PageActivityDTO
+    { padPageId        = pid
+    , padMine          = HM.empty
+    , padConstruct     = HM.empty
+    , padChop          = HM.empty
+    , padTill          = HM.empty
+    , padPlant         = HM.empty
+    , padFloraHarvests = emptyFloraHarvests
+    , padCropPlots     = HM.empty
+    , padGroundItems   = toGroundItemsDTO emptyGroundItems
+    , padSpoilPiles    = HM.empty
+    }
+
+-- | The same at the FROZEN pre-#1233 layout (@world-activity@ v1/v2).
+toActivityV2 ∷ WorldPageId → PageActivityDTOv2
+toActivityV2 pid = PageActivityDTOv2
+    { pad2PageId        = pid
+    , pad2Mine          = HM.empty
+    , pad2Construct     = HM.empty
+    , pad2Chop          = HM.empty
+    , pad2Till          = HM.empty
+    , pad2Plant         = HM.empty
+    , pad2FloraHarvests = emptyFloraHarvests
+    , pad2CropPlots     = HM.empty
+    , pad2GroundItems   = toGroundItemsDTOv1 emptyGroundItems
+    , pad2SpoilPiles    = HM.empty
+    }
+
+-- | Every level of a decoded item tree's physical values, root first —
+--   so an assertion covers the WHOLE recursion rather than only the item
+--   a migration happened to touch at the top.
+physicals ∷ ItemInstanceDTO → [(Maybe Float, Maybe ItemStorageDTO)]
+physicals d =
+    (itdBulk d, itdStorage d) : concatMap physicals (itdContents d)
+
+-- | The same live item with its physical values cleared everywhere — what
+--   a migrated pre-#1233 instance must equal, field for field.
+stripPhysicals ∷ ItemInstance → ItemInstance
+stripPhysicals i = i
+    { iiBulk = Nothing, iiStorage = Nothing
+    , iiContents = map stripPhysicals (iiContents i) }
 
 -- Item-container coverage fixture (#1090) ----------------------------
 
@@ -391,6 +448,7 @@ coverItem ∷ Word64 → Text → ItemInstance
 coverItem iid nm = ItemInstance
     { iiDefName = nm, iiCurrentFill = 0, iiQuality = 0, iiCondition = 100
     , iiWeight = 1, iiSharpness = 0, iiInstanceId = iid, iiTemp = Nothing
+    , iiBulk = Just 1, iiStorage = Nothing
     , iiContents = [] }
 
 -- | One page carrying a DISTINCT item id in every one of the six item
@@ -676,7 +734,11 @@ goldenFullPayloads =
     , ("texture-palette",     (16,  "88201fb960ff6465"))
     , ("world-pages",         (683, "d30d2ebf9922cf3d"))
     , ("world-edits",         (70,  "814069e34515f996"))
-    , ("world-activity",      (332, "0292cc7e9c1053e3"))
+      -- #1233 re-pinned: this fixture's page carries a ground item, and
+      -- world-activity v3 appends the item tree's physical values (an
+      -- absent Maybe pair per item, ×3 nesting levels). Every other row
+      -- is unchanged, because no other fixture slice holds an item.
+    , ("world-activity",      (354, "f6900c182f08a441"))
     , ("buildings",           (130, "2b6c80ab8c216329"))
     , ("units",               (228, "4b3dd9531385aafc"))
     , ("unit-sim",            (102, "2977ea9721e11313"))
@@ -1252,6 +1314,151 @@ spec = do
            \being reported after the fact" $
             map (T.null . componentIdText . rcId) saveComponentRegistry
                 `shouldSatisfy` all not
+
+    -- #1233 appended physical values (external bulk + optional internal
+    -- storage capacities) to the recursive item tree, which FOUR
+    -- independently versioned components carry. Each therefore bumped and
+    -- froze its previous tree, and each must still decode a real
+    -- NON-EMPTY historical payload: a component whose migration were
+    -- wired to the wrong DTO, or forgotten, would only show up on a
+    -- payload that actually holds items.
+    --
+    -- These drive each component's REAL 'ccDecode' at the OLD version
+    -- over bytes encoded from the frozen v1 tree, rather than calling the
+    -- migration function directly — so the version dispatch, the frozen
+    -- layout and the migration are all exercised together, exactly as a
+    -- shipped save exercises them.
+    describe "pre-#1233 item payloads still decode (all four components)" $ do
+        let expectDecode label = either
+                (\e → do expectationFailure
+                             (label ⧺ ": " ⧺ T.unpack (renderComponentError e))
+                         pure Nothing)
+                (pure ∘ Just)
+
+        it "world-activity accepts v1 and v2, and a ground item's whole \
+           \contents tree decodes with its physical values absent" $ do
+            let legacy = WorldActivityDTOv2
+                    [ (toActivityV2 page1)
+                        { pad2GroundItems = toGroundItemsDTOv1
+                            (GroundItems 2 (HM.singleton 1
+                                (GroundItem richItem 3.5 4.5))) } ]
+                bytes = S.encode legacy
+            ccInputVers worldActivityCodec `shouldBe` [1, 2, 3]
+            forM_ [1, 2] $ \ver → do
+                mv ← expectDecode ("v" ⧺ show ver)
+                          (ccDecode worldActivityCodec ver bytes)
+                case mv of
+                    Nothing → pure ()
+                    Just (WorldActivityDTO slices) → do
+                        let gs = concatMap
+                                   (HM.elems ∘ gisiItems ∘ padGroundItems)
+                                   slices
+                        map giiX gs `shouldBe` [3.5]
+                        -- Every level of the recursive tree, not just the
+                        -- root: three items in richItem's kit-in-kit.
+                        concatMap (physicals ∘ giiInst) gs `shouldBe`
+                            replicate 3 (Nothing, Nothing)
+                        -- The rest of the item survives untouched.
+                        map (fromItemInstanceDTO ∘ giiInst) gs `shouldBe`
+                            [stripPhysicals richItem]
+
+        it "buildings accepts v1, migrating BOTH a delivered-materials \
+           \item and a loose-storage item" $ do
+            let inst = (minimalBuildingInstance [richItem])
+                    { bisMaterialsDelivered =
+                        HM.singleton "steel_bar" [richItem] }
+                bytes = S.encode (BuildingsDTOv1
+                    [ PageBuildingsDTOv1 page1
+                        (HM.singleton (BuildingId 1)
+                            (toBuildingInstanceDTOv1 inst)) ])
+            ccInputVers buildingsCodec `shouldBe` [1, 2]
+            mv ← expectDecode "buildings v1"
+                     (ccDecode buildingsCodec 1 bytes)
+            case mv of
+                Nothing → pure ()
+                Just (BuildingsDTO slices) → do
+                    let insts = concatMap (HM.elems ∘ pbInstances) slices
+                    concatMap (concatMap physicals ∘ bidStorage) insts
+                        `shouldBe` replicate 3 (Nothing, Nothing)
+                    concatMap (concatMap physicals ∘ concat ∘ HM.elems
+                               ∘ bidMaterialsDelivered) insts
+                        `shouldBe` replicate 3 (Nothing, Nothing)
+                    map fromBuildingInstanceDTO insts `shouldBe`
+                        [ inst { bisStorage = [stripPhysicals richItem]
+                               , bisMaterialsDelivered = HM.singleton
+                                   "steel_bar" [stripPhysicals richItem] } ]
+
+        it "units accepts v1, migrating inventory, equipment AND \
+           \accessories" $ do
+            let inst = (minimalUnitInstance [richItem])
+                    { uisEquipped = HM.singleton "head" richItem
+                    , uisAccessories = [richItem] }
+                bytes = S.encode (UnitsDTOv1
+                    [ PageUnitsDTOv1 page1
+                        (HM.singleton (UnitId 1)
+                            (toUnitInstanceDTOv1 inst)) ])
+            ccInputVers unitsCodec `shouldBe` [1, 2]
+            mv ← expectDecode "units v1" (ccDecode unitsCodec 1 bytes)
+            case mv of
+                Nothing → pure ()
+                Just (UnitsDTO slices) → do
+                    let insts = concatMap (HM.elems ∘ puInstances) slices
+                        allItems u = uidInventory u
+                                       ⧺ HM.elems (uidEquipped u)
+                                       ⧺ uidAccessories u
+                    -- Three containers × three nesting levels.
+                    concatMap (concatMap physicals ∘ allItems) insts
+                        `shouldBe` replicate 9 (Nothing, Nothing)
+                    map fromUnitInstanceDTO insts `shouldBe`
+                        [ inst { uisInventory = [stripPhysicals richItem]
+                               , uisEquipped = HM.singleton "head"
+                                   (stripPhysicals richItem)
+                               , uisAccessories =
+                                   [stripPhysicals richItem] } ]
+
+        it "container-knowledge accepts v1 — being OPTIONAL governs \
+           \ABSENCE, not migration of a payload that IS present" $ do
+            let rec' = ContainerRecord
+                    { crItems = [richItem], crStoredWeight = 12.5
+                    , crRevealedAt = 99.25 }
+                bytes = S.encode (ContainerKnowledgeDTOv1
+                    [ PageContainerKnowledgeDTOv1 page1
+                        (HM.singleton (BuildingId 1)
+                            (toContainerRecordDTOv1 rec')) ])
+            ccInputVers containerKnowledgeCodec `shouldBe` [1, 2]
+            mv ← expectDecode "container-knowledge v1"
+                     (ccDecode containerKnowledgeCodec 1 bytes)
+            case mv of
+                Nothing → pure ()
+                Just (ContainerKnowledgeDTO slices) → do
+                    let recs = concatMap (HM.elems ∘ pckRecords) slices
+                    concatMap (concatMap physicals ∘ crdItems) recs
+                        `shouldBe` replicate 3 (Nothing, Nothing)
+                    -- The remembered scalars are observations and must
+                    -- not be re-derived.
+                    map crdStoredWeight recs `shouldBe` [12.5]
+                    map crdRevealedAt recs `shouldBe` [99.25]
+
+        it "a CURRENT-version payload round-trips the physical values \
+           \for real, so absence is the migration's answer and not the \
+           \codec's" $ do
+            -- The counterpart to the four cases above: if the current
+            -- shape silently dropped bulk/storage, every one of them
+            -- would still pass.
+            let bytes = S.encode (WorldActivityDTO
+                    [ (toActivity page1)
+                        { padGroundItems = toGroundItemsDTO
+                            (GroundItems 2 (HM.singleton 1
+                                (GroundItem richItem 3.5 4.5))) } ])
+            mv ← expectDecode "world-activity v3"
+                     (ccDecode worldActivityCodec 3 bytes)
+            case mv of
+                Nothing → pure ()
+                Just (WorldActivityDTO slices) →
+                    map (fromItemInstanceDTO ∘ giiInst)
+                        (concatMap (HM.elems ∘ gisiItems ∘ padGroundItems)
+                                   slices)
+                        `shouldBe` [richItem]
 
     describe "frozen entity DTOs (requirement 4)" $ do
         -- The mutable runtime STATE records (UnitSimState, CraftBill,

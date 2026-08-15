@@ -50,7 +50,7 @@ createSprite ∷ Text → Float → Float → TextureHandle → (Float, Float, F
              → PageHandle → UIPageManager → (ElementHandle, UIPageManager)
 createSprite name width height texture color pageHandle mgr =
     createElementInternal name width height pageHandle
-        (RenderSprite (UISpriteStyle texture color False)) mgr
+        (RenderSprite (UISpriteStyle texture color (0, 0, 1, 1) False)) mgr
 
 createElementInternal ∷ Text → Float → Float → PageHandle → UIRenderData
                       → UIPageManager → (ElementHandle, UIPageManager)

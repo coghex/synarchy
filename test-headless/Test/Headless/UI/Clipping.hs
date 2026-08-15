@@ -393,7 +393,7 @@ spec = do
 
     describe "renderSpriteBatch — the real RenderSprite call site (UI.Render)" $ do
         it "unclipped: one batch spanning the sprite's full rect and UV" $
-            let (batches, items) = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) False 10 10 50 50 (LayerId 0) Nothing
+            let (batches, items) = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) (0, 0, 1, 1) False 10 10 50 50 (LayerId 0) Nothing
             in do
                 V.length batches `shouldBe` 1
                 V.length items `shouldBe` 1
@@ -401,7 +401,7 @@ spec = do
                 uvBounds (rbVertices (V.head batches)) `shouldBe` ((0, 0), (1, 1))
 
         it "a partial clip produces one batch with clipped vertex bounds and a proportionally shrunk UV rect" $
-            let (batches, _) = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) False 50 0 100 50 (LayerId 0) (Just (0, 0, 100, 100))
+            let (batches, _) = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) (0, 0, 1, 1) False 50 0 100 50 (LayerId 0) (Just (0, 0, 100, 100))
             in case V.toList batches of
                 [b] → do
                     vertexBounds (rbVertices b) `shouldBe` ((50, 0), (100, 50))
@@ -409,7 +409,7 @@ spec = do
                 other → expectationFailure ("expected exactly one batch, got " ⧺ show (length other))
 
         it "a clip fully excluding the sprite produces no batch at all" $
-            let (batches, items) = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) False 200 200 50 50 (LayerId 0) (Just (0, 0, 100, 100))
+            let (batches, items) = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) (0, 0, 1, 1) False 200 200 50 50 (LayerId 0) (Just (0, 0, 100, 100))
             in do
                 batches `shouldSatisfy` V.null
                 items `shouldSatisfy` V.null
@@ -418,7 +418,7 @@ spec = do
         -- units/<name> viewer must actually LOOK mirrored, which means
         -- real swapped U coordinates, not just a reported flag.
         it "flipX swaps the U coordinates while leaving the screen rect alone" $
-            let (batches, _) = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) True 10 10 50 50 (LayerId 0) Nothing
+            let (batches, _) = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) (0, 0, 1, 1) True 10 10 50 50 (LayerId 0) Nothing
             in case V.toList batches of
                 [b] → do
                     vertexBounds (rbVertices b) `shouldBe` ((10, 10), (60, 60))
@@ -440,7 +440,7 @@ spec = do
         -- viewport animate its own content rather than be revealed.
         it "a clipped mirror agrees with an unclipped mirror at the same \
            \screen position" $
-            let sprite clip = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) True 50 0 100 50 (LayerId 0) clip
+            let sprite clip = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) (0, 0, 1, 1) True 50 0 100 50 (LayerId 0) clip
                 (full, _) = sprite Nothing
                 (clipped, _) = sprite (Just (0, 0, 100, 100))
             in case (V.toList full, V.toList clipped) of

@@ -17,7 +17,11 @@ Phases:
 
   1. Writers — all seven `load*Yaml` verbs over the shipped data files:
      substance, item, equipment, infection, recipe, location, loot
-     table. Each must report a positive count.
+     table. Each file must report a positive count of its OWN (a
+     rejected file is invisible in a summed total, #1233), and the item
+     registry additionally has to load exactly as many definitions as
+     `data/items/*.yaml` authors — the completeness check that makes
+     this the gate proving the shipped item corpus is fully valid.
   2. Readers — one public query per registry: substance.get/getNames,
      item.listDefs, equipment.getClass/getClassNames,
      infection.get/getNames, craft.get/getNames (+ repair.get/getNames,
@@ -50,6 +54,7 @@ Usage: python3 tools/content_registry_probe.py [--port 9341]
 """
 import argparse
 import glob
+import re
 import json
 import sys
 
@@ -97,13 +102,43 @@ def check(passed, ok, label, detail=""):
 
 
 def load_all(port, fn, pattern):
-    """Run `fn` over every file matching `pattern`; return the total count
-    reported by the loader (so 0 means the writer path did nothing)."""
-    total = 0
+    """Run `fn` over every file matching `pattern`.
+
+    Returns `(total, rejected)`: the summed count the loader reported, and
+    the list of files that reported no answer at all or a count of zero.
+
+    Per-file accounting is the point. Summing alone made this probe blind
+    to exactly the failure it looks like it covers (#1233 review): one
+    invalid file returns 0 while its siblings still push the total above
+    zero, so a `total > 0` check passes on a partially-broken corpus. A
+    file in any of these seven directories that contributes no
+    definitions is a broken file, never a legitimate empty one.
+    """
+    total, rejected = 0, []
     for path in sorted(glob.glob(pattern)):
         n = num(port, f"return {fn}('{path}')")
-        if n is not None:
+        if n is None or int(n) <= 0:
+            rejected.append(path)
+        else:
             total += int(n)
+    return total, rejected
+
+
+def authored_item_defs():
+    """How many item definitions the shipped YAML actually declares.
+
+    Derived from the files on disk rather than pinned, so this probe
+    proves the ENGINE loaded everything that is authored without also
+    becoming a second place to update when an item is added. The exact
+    inventory (35 files / 61 definitions) is pinned separately, in the
+    `Item.BulkStorage` hspec group.
+    """
+    total = 0
+    for path in sorted(glob.glob("data/items/*.yaml")):
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                if re.match(r"^\s*-\s+name:", line):
+                    total += 1
     return total
 
 
@@ -127,10 +162,27 @@ def main():
             ("location", "engine.loadLocationYaml", "data/locations/*.yaml"),
             ("loot table", "engine.loadLootTableYaml", "data/loot_tables/*.yaml"),
         ]
+        item_total = None
         for label, fn, pattern in writers:
-            n = load_all(port, fn, pattern)
-            passed = check(passed, n > 0, f"{label} writer loaded defs",
-                           f"{fn} over {pattern} reported {n}")
+            n, rejected = load_all(port, fn, pattern)
+            passed = check(passed, n > 0 and not rejected,
+                           f"{label} writer loaded defs",
+                           f"{fn} over {pattern} reported {n}; "
+                           f"files contributing nothing: {rejected}")
+            if label == "item":
+                item_total = n
+
+        # #1233: every authored item definition must have loaded, not
+        # merely "some". A definition the loader REJECTS (a missing or
+        # non-finite `bulk`, say) is silently absent from the registry
+        # otherwise, since its file still returns the count of whatever
+        # else parsed.
+        expected_items = authored_item_defs()
+        passed = check(passed,
+                       item_total is not None and item_total == expected_items,
+                       "every authored item definition loaded",
+                       f"engine loaded {item_total}, data/items/*.yaml "
+                       f"declares {expected_items}")
 
         # --- Phase 2: one public reader per registry -------------------
         print("\n-- phase 2: registry readers --")
@@ -297,7 +349,7 @@ def main():
                        f"steel={steel2} count={len(after3) if isinstance(after3, list) else after3}")
 
         n_recipes_before = jget(port, "return craft.getNames()")
-        load_all(port, "engine.loadRecipeYaml", "data/recipes/*.yaml")
+        load_all(port, "engine.loadRecipeYaml", "data/recipes/*.yaml")  # noqa: F841
         n_recipes_after = jget(port, "return craft.getNames()")
         ok = (isinstance(n_recipes_before, list) and isinstance(n_recipes_after, list)
               and len(n_recipes_after) == len(n_recipes_before))

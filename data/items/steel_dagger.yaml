@@ -3,6 +3,7 @@ items:
     display_name: "Steel Dagger"
     sprite: "assets/textures/items/weapon/dagger_steel_acolyte.png"
     weight: 0.4
+    bulk: 0.5        # litres of external bulk
     kind: weapon
     category: Weapons
     make: acolyte      # design family / crafting tradition

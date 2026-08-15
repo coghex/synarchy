@@ -3,6 +3,7 @@ items:
     display_name: "Steel Pick"
     sprite: "assets/textures/items/tool/pick_steel.png"
     weight: 2.0
+    bulk: 4.0        # litres of external bulk
     kind: weapon
     category: Tools
     make: acolyte

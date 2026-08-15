@@ -3,6 +3,7 @@ items:
     display_name: "Steel Bar"
     sprite: "assets/textures/items/material/bar_steel.png"
     weight: 0.5
+    bulk: 0.75        # litres of external bulk
     category: Materials
     make: foundry
     material: steel

@@ -199,7 +199,8 @@ unitHolding iid = minimalUnit
     { uisInventory = [ ItemInstance
         { iiDefName = "bandage", iiCurrentFill = 1, iiQuality = 100
         , iiCondition = 100, iiWeight = 0.05, iiSharpness = 0
-        , iiInstanceId = iid, iiTemp = Nothing, iiContents = [] } ] }
+        , iiInstanceId = iid, iiTemp = Nothing, iiContents = []
+        , iiBulk = Just 0.1, iiStorage = Nothing } ] }
 
 -- | The ordinary, fully-resolving arrangement: unit 1 (holding item 500)
 --   moving it into building 1, both on the SAME page as the order.
