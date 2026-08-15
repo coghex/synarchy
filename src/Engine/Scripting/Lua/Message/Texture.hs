@@ -7,6 +7,7 @@
 module Engine.Scripting.Lua.Message.Texture
     ( invalidateAllWorldRenderCaches
     , handleLoadTextureBatch
+    , handleLoadAtlasTextureBatch
     , handleLoadTexture
     , handleLoadFont
     ) where
@@ -46,7 +47,11 @@ import Engine.Graphics.Vulkan.Buffer (createVulkanBuffer)
 import Engine.Graphics.Vulkan.Command (runCommandsOnce)
 import Engine.Graphics.Vulkan.Texture (transitionImageLayout
                                       , ImageLayoutTransition(..))
-import Engine.Graphics.Vulkan.Texture.Bindless (registerTexture, writeHandleSlotEntry)
+import Engine.Graphics.Vulkan.Sampler.Cache (acquireSampler)
+import Engine.Graphics.Vulkan.Sampler.Types (SamplerKind(..))
+import Engine.Graphics.Vulkan.Texture.Bindless (registerPinnedTexture
+                                               , registerTexture
+                                               , writeHandleSlotEntry)
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
 import Engine.Graphics.Vulkan.Texture.Slot (TextureSlot(..))
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
@@ -159,9 +164,36 @@ prepareTextureUpload pool dev pdev (handle, path) = do
         , tupCleanImage = cleanImage
         }
 
+-- | Which sampler a freshly uploaded slot is registered with.
+--
+--   The two policies are mutually exclusive per batch, which is why
+--   'Engine.Scripting.Lua.Message' bursts atlas requests separately
+--   from ordinary ones.
+data UploadSampler
+    = UploadGlobalSampler
+      -- ^ Follow the shared global sampler: the slot is repainted by a
+      --   runtime 'setTextureFilter' toggle. Every ordinary texture.
+    | UploadPinnedNearest
+      -- ^ Pinned to NEAREST regardless of the global filter (D-6).
+      --   Compiled unit-animation atlases (#1259): a filter toggle must
+      --   not start bilinearly resampling unit art, and on a sheet it
+      --   would additionally bleed neighbouring cells across every
+      --   frame edge.
+
 handleLoadTextureBatch ∷ [(TextureHandle, FilePath)] → EngineM σ ()
-handleLoadTextureBatch [] = pure ()
-handleLoadTextureBatch requests = do
+handleLoadTextureBatch = handleLoadTextureBatchWith UploadGlobalSampler
+
+-- | Upload compiled unit-animation atlases (#1259) — ONE image, one
+--   handle, and one bindless slot per animation (D-2/D-10), pinned to
+--   the nearest sampler. The image allocator already creates exactly
+--   one mip level, so no mipmapped sampling of unit art is possible.
+handleLoadAtlasTextureBatch ∷ [(TextureHandle, FilePath)] → EngineM σ ()
+handleLoadAtlasTextureBatch = handleLoadTextureBatchWith UploadPinnedNearest
+
+handleLoadTextureBatchWith
+    ∷ UploadSampler → [(TextureHandle, FilePath)] → EngineM σ ()
+handleLoadTextureBatchWith _ [] = pure ()
+handleLoadTextureBatchWith samplerPolicy requests = do
     env ← ask
     poolRef ← asks (rcAssetPoolRef . toRenderCapability)
     pool ← liftIO $ readIORef poolRef
@@ -230,8 +262,20 @@ handleLoadTextureBatch requests = do
                         let VulkanImage image imageMemory = tupImage prep
                         (imageView, cleanView) ← createVulkanImageView' dev (tupImage prep)
                             FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
-                        (mbHandle, bindless') ← registerTexture dev (tupHandle prep)
-                            imageView (btsTextureSampler bindless) bindless
+                        (mbHandle, bindless') ← case samplerPolicy of
+                            UploadGlobalSampler → registerTexture dev (tupHandle prep)
+                                imageView (btsTextureSampler bindless) bindless
+                            UploadPinnedNearest → do
+                                -- Acquired from the shared refcounted
+                                -- cache and deliberately never
+                                -- released: an atlas slot lives for the
+                                -- whole session, exactly like the unit
+                                -- textures it replaces.
+                                nearest ← liftIO $ acquireSampler dev
+                                    (rcSamplerCacheRef (toRenderCapability env))
+                                    SamplerTextureNearest
+                                registerPinnedTexture dev (tupHandle prep)
+                                    imageView nearest bindless
                         when (isNothing mbHandle) $
                             logWarnM CatTexture $
                                 "Failed to allocate bindless slot for texture: "

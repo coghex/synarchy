@@ -4,6 +4,7 @@ module Engine.Scripting.Lua.API.YamlTextures
     , loadVegetationYamlFn
     , loadFloraYamlFn
     , loadAndRegister
+    , loadAndRegisterAtlas
     , isTextureNameRegistered
     , resolveTexturePath
     , getTextureHandleFn
@@ -186,6 +187,25 @@ loadAndRegister env backendState lteq name path = do
     registerTextureName (rvTextureNameRegistryRef (toRenderViewCapability env)) name handle
     -- Queue for actual GPU loading on the engine thread
     Q.writeQueue lteq (LuaLoadTextureRequest handle path)
+    return handle
+
+-- | 'loadAndRegister' for a compiled unit-animation atlas (#1259).
+--
+--   Identical bookkeeping — ONE handle, ONE name, ONE queued upload per
+--   animation (D-2/D-10) — but the request carries the atlas policy, so
+--   the engine registers the slot PINNED to the nearest sampler with a
+--   single mip level (D-6). Unit art must stay nearest-neighbour even
+--   after a runtime @setTextureFilter@ toggle repaints every ordinary
+--   slot to the new global sampler; a whole sheet resampled bilinearly
+--   would also bleed neighbouring cells across every frame edge.
+loadAndRegisterAtlas ∷ EngineEnv → LuaBackendState → Q.Queue LuaToEngineMsg
+                     → Text → FilePath → IO TextureHandle
+loadAndRegisterAtlas env backendState lteq name path = do
+    pool ← readIORef (lbsAssetPool backendState)
+    handle ← generateTextureHandle pool
+    updateTextureState handle (AssetLoading path [] 0.0) pool
+    registerTextureName (rvTextureNameRegistryRef (toRenderViewCapability env)) name handle
+    Q.writeQueue lteq (LuaLoadAtlasTextureRequest handle path)
     return handle
 
 -- | Has @name@ already been registered in the shared texture-name

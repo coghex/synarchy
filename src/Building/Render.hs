@@ -26,7 +26,7 @@ import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, applyFacingF, GridConfig(..), defaultGridConfig)
 import Unit.Direction (Direction(..))
-import Unit.Types (Animation(..))
+import Unit.Types (Animation(..), storageLegacyFrames)
 import World.State.Types (wmVisible)
 import Building.Types
 
@@ -63,7 +63,11 @@ pickBuildingFrame now inst def =
                     _ → (Nothing, False)
     in case mAnim of
         Nothing → bdTexture def
-        Just a  → case Map.lookup DirS (aFrames a) of
+        -- Buildings are never compiled to atlases (#1259): they reuse
+        -- the shared `Animation` but stay on the legacy per-frame
+        -- representation, and an atlas-backed animation would take the
+        -- same `bdTexture` branch a missing one already does.
+        Just a  → case storageLegacyFrames (aStorage a) ⌦ Map.lookup DirS of
             Nothing → bdTexture def
             Just fs
                 | V.null fs → bdTexture def

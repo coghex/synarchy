@@ -267,6 +267,15 @@ data UITextStyle = UITextStyle
 data UISpriteStyle = UISpriteStyle
   { ussTexture ∷ TextureHandle
   , ussColor   ∷ (Float, Float, Float, Float)
+  , ussUV      ∷ (Float, Float, Float, Float)
+    -- ^ Source sub-rect @(u0, v0, u1, v1)@ within 'ussTexture' — the
+    --   SOURCE of the sprite, before any ancestor clip narrows it.
+    --   @(0, 0, 1, 1)@ (the whole image) for every sprite that never
+    --   asks for less, which is all of them except a compiled
+    --   unit-animation atlas cell (#1259): an atlas is one image per
+    --   animation, so drawing a frame from it means drawing one
+    --   sub-rect. Without this a portrait would render the entire
+    --   sheet as though it were a single frame.
   , ussFlipX   ∷ Bool
     -- ^ Draw the sprite horizontally mirrored (#887): the renderer
     --   swaps the quad's U coordinates, the same mechanism

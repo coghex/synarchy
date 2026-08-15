@@ -78,6 +78,7 @@ registerUIAPI env = do
   registerLuaFunction "setColor"     (uiSetColorFn env)
   registerLuaFunction "setText"      (uiSetTextFn env)
   registerLuaFunction "setSpriteTexture" (uiSetSpriteTextureFn env)
+  registerLuaFunction "setSpriteUV" (uiSetSpriteUVFn env)
   registerLuaFunction "setSpriteFlipX" (uiSetSpriteFlipXFn env)
   registerLuaFunction "setOnClick"   (uiSetOnClickFn env)
   registerLuaFunction "setOnRightClick" (uiSetOnRightClickFn env)

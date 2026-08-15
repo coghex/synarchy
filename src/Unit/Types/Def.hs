@@ -4,9 +4,11 @@
 --   public API is unchanged.
 module Unit.Types.Def
     ( Animation(..)
+    , legacyAnimation
     , StatModifier(..)
     , NamePool(..)
     , UnitDef(..)
+    , module Unit.Atlas.Types
     ) where
 
 import UPrelude
@@ -16,6 +18,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
+import Unit.Atlas.Types
 import Unit.Direction (Direction(..))
 import Unit.Types.Combat (BodyPart(..), NaturalWeapon(..), NaturalResistance(..))
 
@@ -27,12 +30,31 @@ import Unit.Types.Combat (BodyPart(..), NaturalWeapon(..), NaturalResistance(..)
 --   is set per animation in YAML; default is False so an asset author
 --   who forgets the flag and lists only 5 dirs sees obvious T-pose
 --   fallbacks rather than silently-mirrored weapon hands.
+--
+--   `aStorage` is WHERE the frames live (#1259): one texture handle per
+--   frame (legacy), or one compiled atlas image per animation with each
+--   frame a UV cell of it. It is a sum, not two optional fields, so an
+--   animation cannot be half-migrated — see "Unit.Atlas.Types". Read
+--   frames through that module's storage-neutral accessors rather than
+--   matching on the constructor; buildings, which reuse this type and
+--   are never compiled to atlases, go through `storageLegacyFrames`.
 data Animation = Animation
-    { aFps    ∷ !Float
-    , aLoop   ∷ !Bool
-    , aFlip   ∷ !Bool
-    , aFrames ∷ !(Map.Map Direction (V.Vector TextureHandle))
+    { aFps     ∷ !Float
+    , aLoop    ∷ !Bool
+    , aFlip    ∷ !Bool
+    , aStorage ∷ !AnimStorage
     } deriving (Show, Eq)
+
+-- | The legacy per-frame animation constructor, kept as a helper
+--   because it is what every caller that is not the atlas loader still
+--   builds (and what every test fixture wants).
+legacyAnimation
+    ∷ Float → Bool → Bool
+    → Map.Map Direction (V.Vector TextureHandle)
+    → Animation
+legacyAnimation fps loop flipX frames = Animation
+    { aFps = fps, aLoop = loop, aFlip = flipX
+    , aStorage = StorageLegacy frames }
 
 -- | One modifier on a stat. Multiple modifiers on the same stat
 --   compose (after expiry filtering): deltas sum onto the base, then

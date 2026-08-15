@@ -19,6 +19,7 @@ module UI.Manager.Property
   , setTextColor
   , setSpriteTexture
   , setSpriteColor
+  , setSpriteUV
   , setSpriteFlipX
   , setElementTooltip
   , clearElementTooltip
@@ -152,6 +153,19 @@ setSpriteColor ∷ ElementHandle → (Float, Float, Float, Float) → UIPageMana
 setSpriteColor handle color = modifyElement handle `flip` \elem →
     case ueRenderData elem of
         RenderSprite style → elem { ueRenderData = RenderSprite style { ussColor = color } }
+        _ → elem
+
+-- | Narrow this sprite to a sub-rect of its texture (#1259).
+--
+--   The one caller today is a compiled unit-animation atlas cell, whose
+--   texture holds the whole animation. Purely visual, like
+--   'setSpriteFlipX': it changes neither the element's geometry nor its
+--   interactive bounds.
+setSpriteUV ∷ ElementHandle → (Float, Float, Float, Float)
+            → UIPageManager → UIPageManager
+setSpriteUV handle uv = modifyElement handle `flip` \elem →
+    case ueRenderData elem of
+        RenderSprite style → elem { ueRenderData = RenderSprite style { ussUV = uv } }
         _ → elem
 
 -- | Draw this sprite horizontally mirrored (#887). Purely visual — it

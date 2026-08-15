@@ -30,6 +30,7 @@ import Engine.Scripting.Lua.Message.Scene ( handleSpawnText, handleSetText
                                            , handleSetColor, handleSetSize
                                            , handleSetVisible, handleDestroy)
 import Engine.Scripting.Lua.Message.Texture ( handleLoadTextureBatch
+                                             , handleLoadAtlasTextureBatch
                                              , handleLoadTexture
                                              , handleLoadFont)
 import Engine.Scripting.Lua.Message.Video ( handleSetResolution
@@ -67,6 +68,14 @@ processLuaMessages = do
             requests = (handle, path) : unwrapTextureLoads burst
         whenGraphical $ handleLoadTextureBatch requests
         process rest'
+    -- Atlases batch among THEMSELVES, never with ordinary textures:
+    -- the two differ in how the slot is registered (pinned nearest vs
+    -- the global sampler), and one burst can only carry one policy.
+    process (LuaLoadAtlasTextureRequest handle path : rest) = do
+        let (burst, rest') = span isAtlasLoad rest
+            requests = (handle, path) : unwrapAtlasLoads burst
+        whenGraphical $ handleLoadAtlasTextureBatch requests
+        process rest'
     process (msg : rest) = do
         handleLuaMessage msg
         process rest
@@ -76,6 +85,12 @@ processLuaMessages = do
 
     unwrapTextureLoads msgs =
         [ (handle, path) | LuaLoadTextureRequest handle path ← msgs ]
+
+    isAtlasLoad (LuaLoadAtlasTextureRequest _ _) = True
+    isAtlasLoad _                                = False
+
+    unwrapAtlasLoads msgs =
+        [ (handle, path) | LuaLoadAtlasTextureRequest handle path ← msgs ]
 
 -- | Drop work produced by the old Lua/UI session while a whole-session load
 --   holds its publication boundary.  The render consumers call this only
@@ -148,6 +163,12 @@ handleLuaMessage msg = do
                 [("path", T.pack path)
                 ,("handle", T.pack (show handle))]
             handleLoadTexture handle path
+
+        LuaLoadAtlasTextureRequest handle path → whenGraphical $ do
+            logDebugSM CatLua "Loading unit animation atlas"
+                [("path", T.pack path)
+                ,("handle", T.pack (show handle))]
+            handleLoadAtlasTextureBatch [(handle, path)]
 
         LuaSpawnTextRequest objId x y font text color layer size → do
             logDebugSM CatLua "Spawning text"

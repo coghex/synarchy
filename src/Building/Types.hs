@@ -24,11 +24,9 @@ import Data.Hashable (Hashable)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
-import qualified Data.Map.Strict as Map
-import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Page.Types (WorldPageId(..))
-import Unit.Types (Animation(..))
+import Unit.Types (Animation(..), storageMaxFrameCount)
 import Item.Types (ItemInstance)
 
 -- | Buildings reuse the unit Animation type. They only need one
@@ -290,9 +288,8 @@ currentActivity now inst def
                 Just animName → case HM.lookup animName (bdAnimations def) of
                     Nothing  → 0
                     Just a   →
-                        let counts = V.length <$> Map.elems (aFrames a)
-                            maxN   = if null counts then 0 else maximum counts
-                            fps    = aFps a
+                        let maxN = storageMaxFrameCount (aStorage a)
+                            fps  = aFps a
                         in if fps > 0 ∧ maxN > 0
                            then fromIntegral maxN / realToFrac fps ∷ Double
                            else 0

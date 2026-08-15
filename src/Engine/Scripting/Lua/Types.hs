@@ -131,6 +131,13 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
                     | LuaSetPixelSnap Bool
                     | LuaSetTextureFilter TextureFilter
                     | LuaLoadTextureRequest TextureHandle FilePath
+                    | LuaLoadAtlasTextureRequest TextureHandle FilePath
+                      -- ^ A compiled unit-animation atlas (#1259). Same
+                      --   upload as 'LuaLoadTextureRequest' but the slot
+                      --   is registered PINNED to the nearest sampler
+                      --   with one mip level, so unit art stays
+                      --   nearest-neighbour (D-6) across a runtime
+                      --   global filter toggle.
                     | LuaLoadFontRequest FontHandle FilePath Int
                     | LuaSpawnTextRequest ObjectId Float Float FontHandle
                                                    Text Vec4 LayerId Float

@@ -8,6 +8,7 @@ module Engine.Scripting.Lua.API.Units.List
   , unknownUnitTexture
   , unknownUnitAnimFrame
   , unitGetFrameTextureFn
+  , unitGetFrameSampleFn
   , unitGetPortraitTextureFn
   , prettifyDefName
   )
@@ -314,14 +315,73 @@ unitGetFrameTextureFn env = do
                     Just inst →
                         case HM.lookup (uiDefName inst) (umDefs um) of
                             Nothing  → Nothing
-                            -- Lua only needs the texture handle; the flipX
-                            -- flag from `pickFrame` is consumed by the
-                            -- renderer at draw time, not here.
-                            Just def → Just (fst (pickFrame now (camFacing cam) inst def))
+                            -- Handle only. This is enough for a legacy
+                            -- frame, whose image IS the frame; a caller
+                            -- that must render an ATLAS-backed frame
+                            -- needs the sub-rect too and must use
+                            -- `unit.getFrameSample` (#1259).
+                            Just def → Just (fsTexture (pickFrame now (camFacing cam) inst def))
             case mTex of
                 Just (TextureHandle k) → Lua.pushinteger (fromIntegral k)
                 Nothing → Lua.pushinteger 0
             return 1
+
+-- | unit.getFrameSample(uid) → the unit's current animation frame as a
+--   table, or nil when the unit or its def is missing.
+--
+--   @{ texture, u0, v0, u1, v1, flipX, width, height }@ — the stable
+--   texture handle, the frame's own UV endpoints WITHIN that texture,
+--   the mirror flag, and the frame's pixel dimensions when the storage
+--   knows them (@width@\/@height@ are absent for a legacy frame, whose
+--   image IS the frame and whose size the UI already gets from the
+--   texture itself).
+--
+--   'unitGetFrameTextureFn' remains for callers that genuinely only
+--   want a handle, but it CANNOT describe an atlas-backed frame (#1259):
+--   an atlas handle names the whole animation sheet, so a UI that pushed
+--   it straight into @UI.setSpriteTexture@ would draw every direction
+--   and every frame at once. Anything DISPLAYING a unit's live frame
+--   must come through here and pass the sub-rect on via
+--   @UI.setSpriteUV@.
+unitGetFrameSampleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetFrameSampleFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → Lua.pushnil >> return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mSample ← Lua.liftIO $ do
+                um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                cam ← readIORef (rvCameraRef (toRenderViewCapability env))
+                now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
+                pure $ case HM.lookup uid (umInstances um) of
+                    Nothing → Nothing
+                    Just inst → case HM.lookup (uiDefName inst) (umDefs um) of
+                        Nothing  → Nothing
+                        Just def → Just (pickFrame now (camFacing cam) inst def)
+            case mSample of
+                Nothing → Lua.pushnil
+                Just smp → do
+                    let (u0, v0, u1, v1) = fsUV smp
+                        TextureHandle rawTex = fsTexture smp
+                    Lua.newtable
+                    pushIntField "texture" (fromIntegral rawTex)
+                    pushNumField "u0" (realToFrac u0)
+                    pushNumField "v0" (realToFrac v0)
+                    pushNumField "u1" (realToFrac u1)
+                    pushNumField "v1" (realToFrac v1)
+                    Lua.pushstring "flipX" >> Lua.pushboolean (fsFlipX smp)
+                        >> Lua.rawset (-3)
+                    case fsCell smp of
+                        Nothing → pure ()
+                        Just (w, h) → do
+                            pushIntField "width" (fromIntegral w)
+                            pushIntField "height" (fromIntegral h)
+            return 1
+  where
+    pushIntField k v = Lua.pushstring k >> Lua.pushinteger v >> Lua.rawset (-3)
+    pushNumField k v = Lua.pushstring k >> Lua.pushnumber (Lua.Number v)
+                           >> Lua.rawset (-3)
 
 -- | unit.getPortraitTexture(uid) → texture handle integer (0 if the
 --   unit is missing or its def declares no authored `portrait:`).

@@ -784,7 +784,8 @@ pre-boot + `scripts/ui/unit_animation_view.lua` in-engine):
   directions unavailable rather than inventing them or falling back to
   another unit's textures. A mirrored cell renders genuinely mirrored
   via `UI.setSpriteFlipX` (#887's `ussFlipX`, applied to the CLIPPED UV
-  slice — flipping before clipping would sample the wrong slice).
+  slice — flipping before clipping would sample the wrong slice; #1259
+  generalized that reflection to the sprite's own source sub-rect).
 - **Playback:** ONE clock per selected animation. Every direction
   computes its own index from the SAME elapsed value against its OWN
   frame count, so unequal per-direction frame counts (four checked-in
@@ -1749,8 +1750,8 @@ nothing — all 695 previously-unowned paths were retained and declared.
 tool's other half (#1258, `docs/texture_infrastructure.md` TEX-2). It
 compiles the validated declarations into DERIVED artifacts; source PNG
 frames stay the editable artwork (D-1) and unit YAML stays the only
-hand-edited semantic authority (D-11). Runtime sampling is TEX-3's and
-KTX2 encoding TEX-5's — neither exists yet.
+hand-edited semantic authority (D-11). Runtime sampling is TEX-3's
+(#1259, below) and KTX2 encoding TEX-5's (which does not exist yet).
 
 Output is **one atlas per ANIMATION** (D-2),
 `assets/textures/units/<unit>/atlas/<animation>.png`, beside a generated
@@ -1824,6 +1825,95 @@ strict run above. Both run unconditionally in `make ci`
 and post-merge master CI, and path-selectively on PRs via
 `tools/ci_expensive_gates.py --gate unit-assets`. hspec:
 `--match "Asset.UnitInventory"`.
+
+## Unit animation atlas runtime
+
+The engine can load and sample those compiled artifacts (#1259,
+`docs/texture_infrastructure.md` TEX-3). **No shipped unit uses it yet**
+— production migration is TEX-4 (#1260) — so on today's asset tree every
+animation still loads its per-frame textures and nothing about loading
+changed.
+
+**Storage is a SUM, so no animation is half-migrated.**
+`Unit.Types.Def.Animation` carries an `aStorage` of
+`Unit.Atlas.Types.AnimStorage`: `StorageLegacy` (one texture handle per
+frame, each its own whole image) or `StorageAtlas` (one compiled image
+per animation, one handle, one bindless slot; each frame a UV cell).
+D-10's "exactly one resident representation" and requirement 6's "never
+mixed within one animation" are then unrepresentable rather than merely
+enforced. Read frames through the module's storage-neutral accessors —
+`storageFrameCount` / `storageFrameCounts` / `storageMaxFrameCount` /
+`storageSampleAt` — never by matching the constructor. Buildings reuse
+the same `Animation` and are never compiled, so `Building.Render` goes
+through `storageLegacyFrames`, which answers `Nothing` for an atlas.
+
+**Mode selection is the compiled index, and failure is failure.** A
+unit's `atlas/index.json` is the explicit declaration of which
+animations are atlas-backed; an animation it does not name loads legacy.
+`Unit.Atlas.Load.loadUnitAtlasIndex` reads, parses, decodes, and
+verifies EVERY declared atlas before `loadUnitYaml` allocates one handle
+or queues one upload, and `Unit.Atlas.Index.planUnitAtlasStorage` then
+adds the YAML-staleness half. A missing, stale, unsupported, or
+malformed index does NOT fall back to legacy frames: the whole unit
+definition is refused, with the unit, animation, and artifact named. No
+partial registration.
+
+Runtime validation covers complete parsing, the supported
+`schema_version` and `digest_algorithm`, the unit's own identity,
+duplicate animation names, containment of `atlas_path` inside that
+unit's `atlas/` directory, positive geometry, every reachable cell lying
+inside the sheet, unique and in-range direction rows, real frame counts
+bounded by row capacity, a positive finite `fps`, the decoded image's
+dimensions, and the `atlas_digest` over its decoded RGBA8 content. The
+digest split is deliberate: `atlas_digest` proves the artifact IS the
+one the index describes and is checked here; `source_digest` needs the
+source frames the atlas runtime deliberately stops reading, so
+`pack_atlas.py --validate-only` (in CI) owns it, and the runtime's own
+freshness check against the one source it still reads is the YAML's
+`fps`/`loop`/`flip` and animation set.
+
+**`pickFrame` returns a `FrameSample`, and its arithmetic is FROZEN**
+(D-3). Every consumer reads the stable handle (#286 — never a slot), the
+frame's UV endpoints WITHIN that handle's image, the frame's pixel
+dimensions when the storage knows them, and the mirror flag. The only
+storage-dependent step is the per-direction frame COUNT, which for an
+atlas is the index's REAL count and never the padded column count, so
+padding is unreachable by construction (D-5).
+
+**Cell dimensions size everything.** `frameDimensions` is the one funnel:
+an atlas sample answers from its cell, a legacy sample falls through to
+`rvTextureSizeRef` as it always has. Nothing may measure an atlas
+handle's whole-image entry where it means a frame. That includes hit
+testing, which since #1259 sizes from the SAME `pickFrame` sample the
+renderer draws (`Unit.HitTest.unitHitRect`, shared by click and box
+selection) rather than the static T-pose it used before.
+
+**Mirroring reflects across the frame's own sub-rect**, never the whole
+image — with atlases, `1-u` lands in a different cell. This is #887's
+flip-the-clipped-slice rule generalized: it now governs every sample,
+not just the preview's. `UI.Render.renderSpriteBatch` takes the sprite's
+source sub-rect (`ussUV`, set from Lua by `UI.setSpriteUV`) and mirrors
+as `u' = su0 + su1 - u`; a whole-image sprite is the unchanged `1-u`.
+Anything DISPLAYING a unit's live frame must use `unit.getFrameSample`
+(handle + UV + flip + cell size), not `unit.getFrameTexture`, which
+cannot describe an atlas frame and would draw the whole sheet.
+
+Atlas slots are registered PINNED to the nearest sampler with one mip
+level (D-6), so a runtime `setTextureFilter` toggle cannot start
+bilinearly resampling unit art — which on a sheet would additionally
+bleed neighbouring cells across every frame edge. Cell UVs sit on exact
+cell EDGES with no half-texel inset: unit art is nearest and pixel-
+snapped, so a fragment centre lands inside its cell, and an inset would
+shift the sampled texels and break pixel-identity with the legacy path.
+
+Gates: hspec `--match "pickFrame"` (the whole logical-choice matrix run
+against BOTH storage modes from one table) and `--match "Unit.Atlas"`
+(index parsing/validation, the digest against `pack_atlas.py`'s own
+reference values, mode selection, and the real consumer geometry —
+`unitToQuad`'s vertices, `unitHitRect`, `renderSpriteBatch`, plus a
+texel-level comparison of an atlas cell against its legacy frame,
+mirrored included, and the pinned-nearest survival of a global filter
+toggle through `planFilterRebind`).
 
 ## AI Asset Generation
 

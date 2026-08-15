@@ -267,7 +267,8 @@ renderElementData mgr fontCache layerId elem absX absY clip =
         RenderSprite style → do
             let (w, h) = ueSize elem
                 (batches, items) = renderSpriteBatch (ussTexture style) (ussColor style)
-                                       (ussFlipX style) absX absY w h layerId clip
+                                       (ussUV style) (ussFlipX style)
+                                       absX absY w h layerId clip
             pure (batches, items)
 
 -- | Pure: a sprite element's render batch, clipped. This is the ACTUAL
@@ -278,29 +279,46 @@ renderElementData mgr fontCache layerId elem absX absY clip =
 --   not just a passing geometry-only test. 'Nothing'-equivalent (empty
 --   vectors) when the clip excludes the sprite entirely.
 --
+--   'srcUV' is the sprite's SOURCE sub-rect — the whole image
+--   @(0,0,1,1)@ for every ordinary sprite, one cell for a compiled
+--   unit-animation atlas frame (#1259). The clip narrows THAT rect;
+--   it is never widened back to the full texture.
+--
 --   'flipX' (#887) mirrors the sprite horizontally. The mirror is a
 --   property of the ELEMENT, not of whatever slice of it survives the
---   clip: a mirrored element spanning screen @[x, x+w]@ samples @u=1@ at
---   its left edge and @u=0@ at its right, and a clip may only HIDE part
---   of that — never change which texel a given screen position shows.
+--   clip: a mirrored element spanning screen @[x, x+w]@ samples the
+--   source rect's RIGHT edge at its left and its LEFT edge at its
+--   right, and a clip may only HIDE part of that — never change which
+--   texel a given screen position shows.
 --
---   Hence @u' = 1-u@ applied pointwise to the clipped sub-rect's own
---   endpoints, which reflects each one across the FULL texture. It is
---   emphatically NOT "reverse the surviving @[u0,u1]@ interval" (i.e.
---   swapping @u0@ and @u1@): for a surviving slice of @0..0.5@ this
---   yields @1..0.5@, whereas swapping would yield @0.5..0@ and make the
---   visible pixels change identity as the clip moves — a mirrored
---   sprite scrolling inside a clipping viewport would animate its own
---   content instead of simply being revealed. 'renderSpriteBatch — a
---   clipped mirror agrees with an unclipped mirror' pins exactly this.
-renderSpriteBatch ∷ TextureHandle → (Float, Float, Float, Float) → Bool
+--   Hence @u' = su0 + su1 - u@ applied pointwise to the clipped
+--   sub-rect's own endpoints, reflecting each one across the SOURCE
+--   RECT. Two things this is not:
+--
+--     * NOT "reverse the surviving @[u0,u1]@ interval" (swapping @u0@
+--       and @u1@): for a whole-image sprite whose surviving slice is
+--       @0..0.5@ this yields @1..0.5@, whereas swapping would yield
+--       @0.5..0@ and make the visible pixels change identity as the
+--       clip moves — a mirrored sprite scrolling inside a clipping
+--       viewport would animate its own content instead of simply being
+--       revealed. 'renderSpriteBatch — a clipped mirror agrees with an
+--       unclipped mirror' pins exactly this.
+--     * NOT @1-u@, which reflects across the whole IMAGE. That is the
+--       same thing only while the source rect is the whole image; for
+--       an atlas cell it lands in a different cell entirely. The #887
+--       flip-the-clipped-slice rule and the atlas sub-rect are the same
+--       rule, and this is where they meet.
+renderSpriteBatch ∷ TextureHandle → (Float, Float, Float, Float)
+                  → (Float, Float, Float, Float) → Bool
                   → Float → Float → Float → Float → LayerId → Maybe ClipRect
                   → (V.Vector RenderBatch, V.Vector RenderItem)
-renderSpriteBatch tex color flipX absX absY w h layerId clip =
-    case clipQuadUV clip (absX, absY, w, h) (0, 0, 1, 1) of
+renderSpriteBatch tex color srcUV@(su0, _, su1, _) flipX absX absY w h layerId clip =
+    case clipQuadUV clip (absX, absY, w, h) srcUV of
         Nothing → (V.empty, V.empty)
         Just ((cx, cy, cw, ch), (u0, v0, u1, v1)) →
-            let uv = if flipX then (1 - u0, v0, 1 - u1, v1) else (u0, v0, u1, v1)
+            let uv = if flipX
+                     then (su0 + su1 - u0, v0, su0 + su1 - u1, v1)
+                     else (u0, v0, u1, v1)
                 atlasId = lookupTextureSlot tex
                 vertices = makeQuadVertices cx cy cw ch color atlasId uv
                 batch = RenderBatch

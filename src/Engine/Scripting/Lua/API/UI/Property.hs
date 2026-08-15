@@ -31,6 +31,7 @@ module Engine.Scripting.Lua.API.UI.Property
   , uiSetColorFn
   , uiSetTextFn
   , uiSetSpriteTextureFn
+  , uiSetSpriteUVFn
   , uiSetSpriteFlipXFn
   , uiSetBoxTexturesFn
   ) where
@@ -629,6 +630,31 @@ uiSetSpriteTextureFn env = do
     case (elemArg, texArg) of
         (Just e, Just t) → Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
             (setSpriteTexture (ElementHandle $ fromIntegral e) (TextureHandle $ fromIntegral t) mgr, ())
+        _ → pure ()
+
+    return 0
+
+-- | UI.setSpriteUV(elementHandle, u0, v0, u1, v1)
+--   Narrow the sprite to a sub-rect of its texture (#1259). Visual
+--   only, like 'uiSetSpriteFlipXFn'. The one caller is a compiled
+--   unit-animation atlas frame, whose texture is the WHOLE animation:
+--   without this the portrait would draw the entire sheet. Any missing
+--   argument leaves the sprite untouched rather than silently resetting
+--   it to the whole image.
+uiSetSpriteUVFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiSetSpriteUVFn env = do
+    elemArg ← Lua.tointeger 1
+    u0Arg   ← Lua.tonumber 2
+    v0Arg   ← Lua.tonumber 3
+    u1Arg   ← Lua.tonumber 4
+    v1Arg   ← Lua.tonumber 5
+
+    case (elemArg, u0Arg, v0Arg, u1Arg, v1Arg) of
+        (Just e, Just u0, Just v0, Just u1, Just v1) →
+            Lua.liftIO $ atomicModifyIORef' (uicUiManagerRef (toUiCapability env)) $ \mgr →
+                (setSpriteUV (ElementHandle $ fromIntegral e)
+                    ( realToFrac u0, realToFrac v0
+                    , realToFrac u1, realToFrac v1 ) mgr, ())
         _ → pure ()
 
     return 0
