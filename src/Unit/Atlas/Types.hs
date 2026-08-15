@@ -105,11 +105,13 @@ data AtlasAnimation = AtlasAnimation
     , aaDirections   ∷ !(Map.Map Direction AtlasDirectionRow)
     , aaSourceDigest ∷ !Text
       -- ^ The compiler's per-animation digest over its SOURCE frames.
-      --   Recorded and reported, not recomputed here: the runtime
-      --   deliberately no longer reads source frames, so source
-      --   freshness is @pack_atlas.py --validate-only@'s gate. What
-      --   this load path verifies is 'aaAtlasDigest' — that the image
-      --   on disk is the one this index describes.
+      --   Recorded and reported, never recomputed. Source freshness IS
+      --   checked at load — @Unit.Atlas.Index@'s @planUnitAtlasStorage@
+      --   covers every declaration this digest is taken over, and its
+      --   @validateSourceFrame@ compares each declared frame's decoded
+      --   pixels against the atlas cell that must hold them — just not
+      --   by reproducing the compiler's field encoding, which would
+      --   have to match @repr()@ of a Python float exactly.
     , aaAtlasDigest  ∷ !Text
     } deriving (Show, Eq)
 

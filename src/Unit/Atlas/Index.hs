@@ -11,25 +11,30 @@
 --   fallback to legacy frames on failure: an animation the index claims
 --   is atlas-backed either loads as an atlas or does not load at all.
 --
---   Everything here is pure. 'parseAtlasIndex' answers from the
---   document alone; 'validateAtlasImage' is the second half, checked
---   once the atlas image has actually been decoded — because two of the
---   things a stale index gets wrong ('aaAtlasWidth' \/ 'aaAtlasHeight'
---   against the real image, and 'aaAtlasDigest' against its real
---   pixels) are unanswerable from the document.
+--   Everything here is pure, and it is the whole of validation apart
+--   from reading files. 'parseAtlasIndex' answers from the document
+--   alone; 'planUnitAtlasStorage' answers it against what the unit YAML
+--   declares; and 'validateAtlasImage' \/ 'validateSourceFrame' answer
+--   the questions only decoded pixels can — whether the atlas is the
+--   image its index describes, and whether it still holds the source
+--   art it was compiled from. "Unit.Atlas.Load" runs them in that
+--   order.
 --
---   Which digest gets verified where is a deliberate split. The
---   compiler records TWO (see @tools\/pack_atlas.py@'s @digest_stream@):
+--   The compiler records TWO digests (see @tools\/pack_atlas.py@'s
+--   @digest_stream@), and they are treated differently here:
 --
---     * @source_digest@ — over the animation's own SOURCE frames.
---       Recomputing it needs those frames, which the atlas runtime
---       deliberately stops reading; @pack_atlas.py --validate-only@ (in
---       CI) owns that check. It is parsed, required, and carried on
---       'aaSourceDigest' for reporting.
---     * @atlas_digest@ — over the atlas's decoded RGBA8 CONTENT. That
---       IS checkable here, because the loader decodes the image
---       anyway, and it is the check that catches the artifact this
---       index does not actually describe.
+--     * @atlas_digest@ — over the atlas's decoded RGBA8 CONTENT. It is
+--       VERIFIED ('validateAtlasImage'), because the loader decodes the
+--       image anyway, and it is what catches an artifact this index
+--       does not actually describe.
+--     * @source_digest@ — over the animation's own SOURCE frames. It is
+--       parsed, required, and carried on 'aaSourceDigest' for
+--       reporting, but never recomputed. Source freshness IS checked at
+--       runtime — 'planUnitAtlasStorage' covers every declaration the
+--       digest is taken over and 'validateSourceFrame' covers the frame
+--       pixels — just not by reproducing the compiler's field encoding.
+--       'validateSourceFrame' explains why that is the safer form of
+--       the same check.
 module Unit.Atlas.Index
     ( AtlasLoadError(..)
     , renderAtlasLoadError
