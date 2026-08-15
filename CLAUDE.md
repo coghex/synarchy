@@ -1725,18 +1725,25 @@ its `portrait` is deliberately legal (20 shipped references do this) and
 is never reported.
 
 **The INVENTORY gate validates CONTENTS as well as structure** (#1311).
-Every declared frame is opened and decoded, in two passes because
-neither alone suffices: a full `decode_rgba8` covers the compressed
-pixel stream (truncation, corrupt deflate data, a non-image, and — via
-its own format check — a valid image of another format renamed
-`.png`), and Pillow's `verify()` then recomputes every chunk's CRC,
+Every declared frame is opened and decoded, in three checks because
+each covers ground the others cannot: a full `decode_rgba8` covers the
+compressed pixel stream (truncation, corrupt deflate data, a
+non-image, and — via its own format check — a valid image of another
+format renamed `.png`); Pillow's `verify()` then CRCs the chunks,
 which is the only thing that sees an intact payload under a WRONG
-checksum (the decoder reads and discards IDAT CRCs while streaming).
+checksum (the decoder reads and discards IDAT CRCs while streaming);
+and a constant tail comparison covers **IEND**, which `verify()`
+breaks ON without checksumming and the decoder never reads. That last
+one needs no parsing — IEND's payload is empty by specification, so
+the whole chunk is a 12-byte constant and the spec makes it final, so
+one comparison catches both a tampered terminal checksum and data
+appended past the image. Do not "simplify" the three into one:
+`tools/test_pack_atlas.py`'s `every content check earns its keep`
+exists because each has a fixture the other two accept.
 Every frame of one animation must then decode to the same pixel size —
 the atlas cell is that size and nothing resamples — while frame COUNTS
-may still differ per direction, unchanged. Each of the two passes has a
-fixture that the OTHER accepts, so neither can be dropped as
-redundant. The rule is "decodes as a PNG", never "is already RGBA8":
+may still differ per direction, unchanged.
+The rule is "decodes as a PNG", never "is already RGBA8":
 paletted, greyscale, greyscale+alpha, 16-bit and interlaced frames all
 pass. Content findings are ERRORS in plain `--validate-only` as much as
 under `--strict`; `--strict` still only promotes warnings.

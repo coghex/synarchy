@@ -167,6 +167,30 @@ def bad_checksum_png() -> bytes:
             + data[offset + 12 + length:])
 
 
+def tampered_iend_png() -> bytes:
+    """A PNG whose TERMINAL chunk carries a wrong checksum.
+
+    Its own fixture because IEND is the one chunk no library pass
+    reaches: Pillow's `verify()` breaks on it before checksumming, and
+    the decoder stops once it has enough scanlines and never reads that
+    far. Everything before it here is byte-perfect.
+    """
+    data = png_bytes(32, 32)
+    assert data[-12:-4] == struct.pack(">I", 0) + b"IEND", "fixture tail moved"
+    return data[:-4] + b"\xde\xad\xbe\xef"
+
+
+def trailing_data_png() -> bytes:
+    """A complete PNG with junk appended past IEND.
+
+    The spec makes IEND the final chunk, so this is a structurally
+    invalid stream — and it is what the terminal check's other half
+    catches, since a tail comparison sees appended bytes as readily as
+    a damaged checksum.
+    """
+    return png_bytes(32, 32) + b"\x00leftover editor metadata"
+
+
 def not_an_image() -> bytes:
     """A text file wearing a `.png` name."""
     return b"# notes about this animation, saved to the wrong path\n" * 8
@@ -604,6 +628,31 @@ def _bad_checksum_frame(fx: Fixture) -> None:
     fx.write_file(
         "assets/textures/units/prop/animations/spin/east/frame_001.png",
         bad_checksum_png())
+
+
+@negative("a frame whose TERMINAL chunk checksum is wrong",
+          "does not end with a valid IEND chunk")
+def _tampered_iend_frame(fx: Fixture) -> None:
+    # Neither library pass reaches IEND — `verify()` breaks on it and
+    # the decoder never gets there — so without the terminal check this
+    # file validates clean. `_both_decode_passes_earn_their_keep` pins
+    # that both of them really do accept it.
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/hero/animations/walk/north/frame_000.png",
+        tampered_iend_png())
+
+
+@negative("a frame with data appended past IEND",
+          "does not end with a valid IEND chunk")
+def _trailing_data_frame(fx: Fixture) -> None:
+    # The other half of the same constant comparison: IEND is the final
+    # chunk by specification, so anything after it is not part of the
+    # image.
+    valid_fixture(fx)
+    fx.write_file(
+        "assets/textures/units/hero/animations/walk/west/frame_000.png",
+        trailing_data_png())
 
 
 @negative("a non-image file wearing a .png name",
@@ -1774,14 +1823,14 @@ def _case_insensitive_atlas_collision(fx: Fixture) -> None:
         f"{[issue.msg for issue in report.errors]}")
 
 
-@scenario("both decode passes earn their keep")
+@scenario("every content check earns its keep")
 def _both_decode_passes_earn_their_keep(fx: Fixture) -> None:
-    """Neither half of `validate_frame_image` is redundant.
+    """No part of `validate_frame_image` is redundant.
 
-    Each fixture here is accepted by ONE pass and rejected by the
-    other, which is the only evidence that removing either would let a
-    broken frame through. Without this, a later "simplification" down
-    to a single call would keep the whole suite green.
+    Each fixture here is accepted by every check except one, which is
+    the only evidence that removing that check would let a broken frame
+    through. Without this, a later "simplification" down to a single
+    call would keep the whole suite green.
     """
     image_mod = pack_atlas.image_module()
 
@@ -1815,6 +1864,24 @@ def _both_decode_passes_earn_their_keep(fx: Fixture) -> None:
         raise AssertionError(
             "a corrupt compressed stream passed the full check, so the "
             "content pass is not decoding pixel data at all")
+
+    # A wrong TERMINAL checksum: both library passes accept it, because
+    # verify() breaks on IEND before checksumming and the decoder never
+    # reads that far. Only the constant tail comparison sees it.
+    terminal = fx.write_file("loose/tampered_iend.png", tampered_iend_png())
+    frame = pack_atlas.decode_rgba8(terminal)
+    assert (frame.width, frame.height) == (32, 32), (
+        "the tampered-IEND fixture should still DECODE")
+    with image_mod.open(terminal) as handle:
+        handle.verify()          # raises if Pillow objected to the tail
+    try:
+        pack_atlas.validate_frame_image(terminal)
+    except ValueError as error:
+        assert "IEND" in str(error), f"rejected for the wrong reason: {error}"
+    else:
+        raise AssertionError(
+            "a wrong IEND checksum passed the full check: no part of the "
+            "content pass validates the terminal chunk")
 
 
 @scenario("a missing image decoder fails validation with an install hint")
@@ -1969,7 +2036,7 @@ def main() -> int:
 
     # The suite is only meaningful if it actually built fixtures; a
     # refactor that silently emptied a registry must not read as green.
-    if len(POSITIVE) < 12 or len(NEGATIVE) < 68 or len(SCENARIO) < 32:
+    if len(POSITIVE) < 12 or len(NEGATIVE) < 70 or len(SCENARIO) < 32:
         failures.append(
             f"case registries look truncated: {len(POSITIVE)} positive, "
             f"{len(NEGATIVE)} negative, {len(SCENARIO)} scenario")

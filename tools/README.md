@@ -121,12 +121,14 @@ Reuse of an animation frame as `sprite`,
 duplicate. A `--unit` naming neither a declaration nor an asset tree exits
 non-zero rather than reporting an empty success.
 
-Validation also opens and decodes every declared frame (#1311). Two passes,
-because neither alone is sufficient: a full decode covers the compressed
-pixel stream — truncation, corrupt deflate data, a non-image, and a valid
-image of another format renamed `.png` — while Pillow's `verify()`
-recomputes each chunk's CRC, the only thing that catches an intact payload
-under a wrong checksum. Every frame of one animation must then decode to the
+Validation also opens and decodes every declared frame (#1311). Three checks,
+because each covers ground the others cannot: a full decode covers the
+compressed pixel stream — truncation, corrupt deflate data, a non-image, and a
+valid image of another format renamed `.png`; Pillow's `verify()` CRCs the
+chunks, the only thing that catches an intact payload under a wrong checksum;
+and a constant tail comparison covers IEND, which `verify()` breaks on without
+checksumming and the decoder never reads, catching both a tampered terminal
+checksum and data appended past the image. Every frame of one animation must then decode to the
 same pixel size; frame COUNTS may still differ per direction. Any legitimate
 PNG colour type passes, including paletted, greyscale, 16-bit and interlaced.
 Content findings are errors with or without `--strict`. Non-animation

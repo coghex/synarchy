@@ -224,8 +224,8 @@ FRAME CONTENTS (issue #1311)
 Every DECLARED frame is opened and decoded, not merely stat-ed. #1257
 stopped at the file boundary, so a truncated, corrupt or mislabelled
 frame passed the gate and failed later — at texture-upload time, or
-visibly in game. `validate_frame_image` closes that gap in two passes,
-because neither one alone is sufficient:
+visibly in game. `validate_frame_image` closes that gap in three
+checks, because each one covers ground the others cannot:
 
   * a full `decode_rgba8` runs the filters, interlace passes and colour
     conversion — catching a truncated stream, corrupt compressed data,
@@ -233,14 +233,21 @@ because neither one alone is sufficient:
     some other format renamed to `.png` — but never looks at an IDAT
     chunk's checksum, because Pillow reads and discards those four
     bytes while streaming pixel data;
-  * Pillow's own `verify()` then recomputes every chunk's CRC, which is
-    what catches an intact payload under a wrong checksum. It never
-    decompresses, so it could not have replaced the pass above.
+  * Pillow's own `verify()` then CRCs the chunks, which is what catches
+    an intact payload under a wrong checksum. It never decompresses, so
+    it could not have replaced the pass above;
+  * and a constant tail comparison covers IEND, which `verify()` breaks
+    ON without checksumming and the decoder never reads at all. That
+    needs no parsing: IEND's payload is empty by specification, so the
+    whole chunk is a 12-byte constant and the spec makes it final, so
+    one comparison catches both a tampered terminal checksum and data
+    appended past the end of the image.
 
 Together they reject a truncated file, corrupt compressed data, a bad
-chunk checksum, a structurally invalid stream, a non-image wearing a
-`.png` name, and a valid image of some OTHER format renamed to `.png`
-(the engine's loader is a PNG loader). Every legitimate PNG colour type
+chunk checksum anywhere including the terminal one, a structurally
+invalid stream, a non-image wearing a `.png` name, and a valid image of
+some OTHER format renamed to `.png` (the engine's loader is a PNG
+loader). Every legitimate PNG colour type
 — paletted, greyscale, greyscale+alpha, 16-bit, interlaced — is
 accepted: the rule is "decodes as a PNG", never "is already RGBA8".
 
@@ -294,6 +301,7 @@ import math
 import re
 import struct
 import sys
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
@@ -369,6 +377,15 @@ FRAME_RE = re.compile(r"\Aframe_(\d{3})\.png\Z")
 
 # Relative to the validation root.
 ASSET_PREFIX: Tuple[str, ...] = ("assets", "textures", "units")
+
+# The terminal PNG chunk, in full. IEND's payload is EMPTY by
+# specification, so its length, type and CRC are all fixed: this is a
+# constant to compare against, not a chunk to parse. `verify_png_container`
+# needs it because Pillow's `verify()` breaks ON this chunk before
+# checksumming it, leaving the terminal CRC the one thing no library pass
+# validates.
+PNG_IEND_CHUNK = (struct.pack(">I", 0) + b"IEND"
+                  + struct.pack(">I", zlib.crc32(b"IEND") & 0xFFFFFFFF))
 
 # --- compiler constants (#1258) --------------------------------------
 
@@ -486,12 +503,16 @@ def decode_rgba8(path: Path) -> Frame:
 
 
 def verify_png_container(path: Path) -> None:
-    """Recompute every PNG chunk's checksum, without decompressing.
+    """Check the chunk stream's checksums, without decompressing.
 
-    Pillow's `verify()` walks the chunk stream and CRCs each chunk,
-    which is the ONLY thing here that looks at an IDAT checksum — the
-    decoder reads and discards those four bytes while streaming pixel
-    data, so a correct payload under a wrong checksum decodes happily.
+    Pillow's `verify()` walks the chunks and CRCs each one, which is
+    the ONLY thing here that looks at an IDAT checksum — the decoder
+    reads and discards those four bytes while streaming pixel data, so
+    a correct payload under a wrong checksum decodes happily.
+
+    It stops ON the terminal chunk without checksumming it, though, and
+    the decoder never reads that far, so IEND is the one chunk neither
+    library pass covers and it is checked separately below.
 
     Deliberately does NOT re-check the format: this only ever runs on a
     file `decode_rgba8` has already accepted as a decodable PNG, and a
@@ -507,15 +528,38 @@ def verify_png_container(path: Path) -> None:
     except Exception as error:  # noqa: BLE001 - any rejection is one finding
         raise ValueError(f"corrupt PNG structure: {error}") from error
 
+    # Checking IEND needs no parsing, which is the point: its payload
+    # is EMPTY by specification, so length, type and CRC together are a
+    # fixed 12-byte constant, and the spec makes it the final chunk. A
+    # tail comparison therefore covers a tampered terminal checksum and
+    # data appended past the end of the stream in one constant-time
+    # read — no chunk walking, and nothing that could drift into a
+    # second format parser.
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, io.SEEK_END)
+            if handle.tell() < len(PNG_IEND_CHUNK):
+                tail = b""
+            else:
+                handle.seek(-len(PNG_IEND_CHUNK), io.SEEK_END)
+                tail = handle.read(len(PNG_IEND_CHUNK))
+    except OSError as error:
+        raise ValueError(f"cannot read: {error}") from error
+    if tail != PNG_IEND_CHUNK:
+        raise ValueError(
+            "corrupt PNG structure: the stream does not end with a valid "
+            "IEND chunk — its terminal checksum is wrong, or data follows "
+            "the end of the image")
+
 
 def validate_frame_image(path: Path) -> Tuple[int, int]:
     """Prove one declared frame is real art, and report its pixel size.
 
-    TWO passes, because neither is sufficient alone — see the module
-    docstring's FRAME CONTENTS section. The decode comes first: it
-    settles the format question and covers the compressed pixel stream,
-    so the container pass that follows is reached only for a genuine,
-    decodable PNG and has exactly one job left, the chunk checksums.
+    TWO passes, neither sufficient alone — see the module docstring's
+    FRAME CONTENTS section. The decode comes first: it settles the
+    format question and covers the compressed pixel stream, so the
+    container pass that follows is reached only for a genuine,
+    decodable PNG and has exactly one job left, the checksums.
 
     Raises `ValueError` naming the reason for any unreadable frame.
     `ImageBackendMissing` propagates untouched: an absent decoder is one
