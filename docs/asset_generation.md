@@ -108,11 +108,12 @@ ascending order, and match the `flip` rule below exactly: `flip: true` ⇒ exact
 the five stored directions, `flip: false` ⇒ all eight.
 See **Unit asset inventory** in `CLAUDE.md` for the full contract.
 
-The gate validates paths and structure only — it never opens a frame, so it
-will not catch a corrupt PNG or a frame whose pixel size differs from its
-siblings. Keeping one size across an animation is still an authoring
-requirement (the future atlas compiler needs it), just not one CI enforces yet;
-issue #1311 owns adding content validation.
+The gate validates frame CONTENTS as well as paths and structure (#1311): it
+decodes every declared frame, so a truncated or corrupt PNG, a non-image, and
+a valid image of another format renamed `.png` all fail. One pixel size per
+animation is enforced there too — differing frame COUNTS per direction remain
+fine. Any legitimate PNG colour type passes; the rule is "decodes as a PNG",
+not "is already RGBA8".
 
 - **Directions**: store 5 (`east`, `north`, `north-east`, `south`, `south-east`); the engine
   mirrors W/SW/NW at runtime. **Exception**: asymmetric animations (e.g. `*_RH_dagger`) store all

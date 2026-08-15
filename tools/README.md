@@ -121,9 +121,21 @@ Reuse of an animation frame as `sprite`,
 duplicate. A `--unit` naming neither a declaration nor an asset tree exits
 non-zero rather than reporting an empty success.
 
-Validation never OPENS a frame for a unit with no compiled index:
-contents — decodability, pixel dimensions, size consistency within an
-animation — are deliberately out of scope there and tracked in issue #1311.
+Validation also opens and decodes every declared frame (#1311). Three checks,
+because each covers ground the others cannot: a full decode covers the
+compressed pixel stream — truncation, corrupt deflate data, a non-image, and a
+valid image of another format renamed `.png`; Pillow's `verify()` CRCs the
+chunks, the only thing that catches an intact payload under a wrong checksum;
+and `locate_png_stream_end` covers the terminal IEND chunk, which `verify()`
+breaks on without checksumming and the decoder never reads, catching both a
+tampered terminal checksum and data appended past the image (a second canonical
+IEND included, which is why it locates the stream's end rather than comparing
+the file's last bytes). Every frame of one animation must then decode to the
+same pixel size; frame COUNTS may still differ per direction. Any legitimate
+PNG colour type passes, including paletted, greyscale, 16-bit and interlaced.
+Content findings are errors with or without `--strict`. Non-animation
+textures (`sprite`, `directional_sprites`, `portrait`) stay existence-checked
+only — the inventory's scope is `animations/`.
 
 `--compile` (#1258) is the other half: it packs the declared frames into one
 lossless PNG atlas per ANIMATION under
@@ -141,8 +153,11 @@ reports staleness, hand edits, missing atlases and tampered pixels; a unit
 with no index stays valid until TEX-4 begins production tracking.
 
 PyYAML and Pillow are the dependencies, pinned in
-`tools/requirements-assets.txt`; Pillow is imported lazily, so the inventory
-gate on an index-free corpus does not need it.
+`tools/requirements-assets.txt`. Both are required by validation as well as
+compilation: an absent Pillow is a loud error naming the install command,
+never a silent skip of the content checks. The whole strict gate over the
+4,620-frame corpus runs in about 1.5 s, of which the content pass is about
+half a second.
 
 ```bash
 python3 tools/pack_atlas.py --validate-only --strict
