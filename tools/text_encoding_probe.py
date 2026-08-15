@@ -6,11 +6,11 @@ valid UTF-8.
 `"caf\\195"` is Lua's decimal escape for the raw byte 0xC3 — a truncated
 UTF-8 lead byte with no continuation byte, exactly the shape produced by
 the byte-vs-codepoint bug in the five `truncateToWidth` ellipsis helpers
-#618 fixes. Three of those five (the unit-info inventory section, the
-item-contents popup and the cargo-contents popup) were merged into ONE
-by #1088's shared item-list widget, so the surviving call sites are
-`scripts/popup.lua`, `scripts/event_log.lua` and
-`scripts/ui/item_list.lua`'s `truncateToWidth`.
+#618 fixes. Those five private copies are gone: #1088's shared item-list
+widget merged three of them, #1107 moved the body into
+`scripts/ui/text_wrap.lua`, and #1157 retired the popup's and the event
+log's last two, so the one surviving implementation is
+`textWrap.truncateToWidth`.
 
 Note the Text-API case is a NARROWER regression than #622's
 `lua_strict_msg_probe.py`, which already established that `engine.setText`

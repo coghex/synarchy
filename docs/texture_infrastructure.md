@@ -160,8 +160,10 @@ whose freshness cannot be verified.
   --validate-only --strict` covers the complete corpus (7 unit trees, 116
   animations, 4,620 frames) and exits 0 with zero warnings, and it runs
   unconditionally in `make ci` and post-merge master CI, path-selectively on
-  PRs via `tools/ci_expensive_gates.py --gate unit-assets`. It validates paths
-  and structure only, never file contents; image-content validation is #1311.
+  PRs via `tools/ci_expensive_gates.py --gate unit-assets`. Since #1311 it
+  also decodes every declared frame and enforces one pixel size per animation,
+  so an unreadable or wrongly-sized frame fails the gate rather than the
+  upload path.
 - `docs/asset_generation.md` documents the live source layout and mirroring
   convention. The legacy proposal for a separate
   `assets/units/<unit>/animations.yaml` was never adopted.
@@ -414,7 +416,7 @@ eventually outweighs that convenience.
   exceptions, numbering, and exact orphan ownership; add self-tests
   and path-selective CI wiring. Image-content validation — decodability and
   per-animation pixel-size consistency — was descoped by owner decision on
-  2026-08-14 and is tracked as #1311.
+  2026-08-14, tracked as #1311, and has since landed there.
 - **Phase:** 1 — establish trustworthy inputs
 - **Depends on:** `none`
 - **Ordering:** `can land first`

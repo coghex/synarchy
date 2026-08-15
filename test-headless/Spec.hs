@@ -125,6 +125,7 @@ import qualified Test.Headless.UI.TutorialHud as UITutorialHud
 import qualified Test.Headless.UI.UnicodeTextEditing as UIUnicodeTextEditing
 import qualified Test.Headless.Lua.TextWrapping as LuaTextWrapping
 import qualified Test.Headless.Lua.TextTruncation as LuaTextTruncation
+import qualified Test.Headless.Lua.WidthTruncation as LuaWidthTruncation
 import qualified Test.Headless.Lua.ShellInput as LuaShellInput
 import qualified Test.Headless.UI.Slider as UISlider
 import qualified Test.Headless.UI.ClickCorrelation as UIClickCorrelation
@@ -408,6 +409,7 @@ main = hspec $ do
     describe "UI.UnicodeTextEditing" UIUnicodeTextEditing.spec
     describe "Lua.TextWrapping" LuaTextWrapping.spec
     describe "Lua.TextTruncation" LuaTextTruncation.spec
+    describe "Lua.WidthTruncation" LuaWidthTruncation.spec
     describe "Lua.ShellInput" LuaShellInput.spec
     UISlider.spec
     UIClickCorrelation.spec

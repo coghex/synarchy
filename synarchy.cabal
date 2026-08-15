@@ -1233,6 +1233,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.ScriptState
                    Test.Headless.Lua.TextWrapping
                    Test.Headless.Lua.TextTruncation
+                   Test.Headless.Lua.WidthTruncation
                    Test.Headless.Lua.ShellInput
                    Test.Headless.Graphics.BindlessRebind
                    Test.Headless.Graphics.BindlessRelease

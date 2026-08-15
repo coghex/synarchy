@@ -17,7 +17,7 @@ local scale    = require("scripts.ui.scale")
 local panel    = require("scripts.ui.panel")
 local label    = require("scripts.ui.label")
 local button   = require("scripts.ui.button")
-local utf8Safe = require("scripts.ui.utf8_safe")
+local textWrap = require("scripts.ui.text_wrap")
 
 local popup = package.loaded["scripts.popup"] or {}
 package.loaded["scripts.popup"] = popup
@@ -177,29 +177,6 @@ local function lineDisplayText(p, line)
     end
 end
 
--- Truncate text to fit maxWidthPx, suffixing "..." (pixel-accurate
--- binary search using engine.getTextWidth). Every candidate cut point is
--- snapped to a complete UTF-8 character boundary (utf8Safe) so a
--- multi-byte character (e.g. an accented letter) is never split into a
--- dangling lead byte -- string.sub cuts by byte offset, not codepoint.
-local function truncateToWidth(text, font, fontSize, maxWidthPx)
-    if engine.getTextWidth(font, text, fontSize) <= maxWidthPx then
-        return text
-    end
-    local lo, hi = 1, #text
-    while lo < hi do
-        local mid = math.floor((lo + hi + 1) / 2)
-        local cut = utf8Safe.snapToCharBoundary(text, mid)
-        local candidate = string.sub(text, 1, cut) .. "..."
-        if engine.getTextWidth(font, candidate, fontSize) <= maxWidthPx then
-            lo = mid
-        else
-            hi = mid - 1
-        end
-    end
-    return string.sub(text, 1, utf8Safe.snapToCharBoundary(text, lo)) .. "..."
-end
-
 -----------------------------------------------------------
 -- Render: destroy + rebuild every line/label/button from p.lines.
 -- Called fresh each time a popup spawns OR an event folds into it.
@@ -250,7 +227,10 @@ renderPopup = function(p)
     local maxLineW = 0
     for i, line in ipairs(p.lines) do
         local txt = lineDisplayText(p, line)
-        local truncated = truncateToWidth(txt, popup.font, s.fontSize, maxTextW)
+        -- #1157: the one shared width-bounded truncator. This surface used
+        -- to carry its own copy, ellipsis and guard set included.
+        local truncated = textWrap.truncateToWidth(txt, popup.font,
+                                                   s.fontSize, maxTextW)
         displayTexts[i] = truncated
         local w = engine.getTextWidth(popup.font, truncated, s.fontSize)
         if w > maxLineW then maxLineW = w end
