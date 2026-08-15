@@ -20,6 +20,7 @@ module UI.Manager.Property
   , setSpriteTexture
   , setSpriteColor
   , setSpriteUV
+  , setSpriteFrame
   , setSpriteFlipX
   , setElementTooltip
   , clearElementTooltip
@@ -166,6 +167,29 @@ setSpriteUV ∷ ElementHandle → (Float, Float, Float, Float)
 setSpriteUV handle uv = modifyElement handle `flip` \elem →
     case ueRenderData elem of
         RenderSprite style → elem { ueRenderData = RenderSprite style { ussUV = uv } }
+        _ → elem
+
+-- | Publish a complete animation frame — texture, source sub-rect, and
+--   mirror — in ONE manager transition (#1259).
+--
+--   The three are not independent: a frame is that texture AND that
+--   sub-rect AND that flip. Setting them one at a time leaves the
+--   element momentarily holding a new atlas handle with the PREVIOUS
+--   frame's sub-rect, and the render thread reads the manager
+--   concurrently — so a reader landing in that window draws the wrong
+--   cell, or on the first switch from a whole-image portrait to an
+--   atlas frame, the entire sheet. That is the exact failure the atlas
+--   sample path exists to prevent, so the publish is atomic.
+setSpriteFrame
+    ∷ ElementHandle
+    → TextureHandle
+    → (Float, Float, Float, Float)   -- ^ source sub-rect
+    → Bool                           -- ^ mirrored
+    → UIPageManager → UIPageManager
+setSpriteFrame handle texture uv flipX = modifyElement handle `flip` \elem →
+    case ueRenderData elem of
+        RenderSprite style → elem { ueRenderData = RenderSprite style
+            { ussTexture = texture, ussUV = uv, ussFlipX = flipX } }
         _ → elem
 
 -- | Draw this sprite horizontally mirrored (#887). Purely visual — it

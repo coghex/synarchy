@@ -1856,7 +1856,10 @@ or queues one upload, and `Unit.Atlas.Index.planUnitAtlasStorage` then
 adds the YAML-staleness half. A missing, stale, unsupported, or
 malformed index does NOT fall back to legacy frames: the whole unit
 definition is refused, with the unit, animation, and artifact named. No
-partial registration.
+partial registration. Only an ABSENT `atlas/` directory means legacy —
+a directory that exists WITHOUT its index is an incomplete compiled
+artifact and rejects, since falling back there would serve the per-frame
+path while compiled PNGs sit beside it.
 
 Validation runs in three passes, cheapest first, stopping at the first
 failure. **(1)** The index parses and is structurally sound: supported
@@ -1909,7 +1912,11 @@ source sub-rect (`ussUV`, set from Lua by `UI.setSpriteUV`) and mirrors
 as `u' = su0 + su1 - u`; a whole-image sprite is the unchanged `1-u`.
 Anything DISPLAYING a unit's live frame must use `unit.getFrameSample`
 (handle + UV + flip + cell size), not `unit.getFrameTexture`, which
-cannot describe an atlas frame and would draw the whole sheet.
+cannot describe an atlas frame and would draw the whole sheet — and must
+publish it with `UI.setSpriteFrame`, which lands texture, sub-rect and
+mirror in ONE manager transition. The render thread reads the manager
+concurrently, so separate setters leave a window where the new atlas
+handle is paired with the previous frame's rect.
 
 Atlas slots are registered PINNED to the nearest sampler with one mip
 level (D-6), so a runtime `setTextureFilter` toggle cannot start

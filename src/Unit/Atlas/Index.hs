@@ -178,6 +178,22 @@ parseAtlasIndex unit path raw = do
         Left (fail' $ "unsupported digest_algorithm '"
                 <> idDigestAlgorithm doc <> "' (this build verifies '"
                 <> supportedDigestAlgorithm <> "')")
+    when (T.null (T.strip (idGenerator doc))) $
+        Left (fail' "generator is empty")
+    when (idToolVersion doc < 0) $
+        Left (fail' $ "tool_version " <> tshow (idToolVersion doc)
+                <> " is negative")
+    -- `direction_order` is DOCUMENTATION of the compiler's row order,
+    -- not something this build re-derives rows from — each row is read
+    -- explicitly. It is still validated, because a document declaring a
+    -- different order was produced by a compiler whose layout this build
+    -- does not share, and reading its rows as if it did is exactly the
+    -- silent mis-sampling requirement 5 forbids.
+    when (idDirectionOrder doc ≢ canonicalDirectionOrder) $
+        Left (fail' $ "direction_order "
+                <> T.intercalate "/" (idDirectionOrder doc)
+                <> " is not this build's row order "
+                <> T.intercalate "/" canonicalDirectionOrder)
     when (idUnit doc ≢ unit) $
         Left (fail' $ "index declares unit '" <> idUnit doc
                 <> "' but was read as unit '" <> unit <> "'")
@@ -299,6 +315,11 @@ validateDirection unit path raw rd = do
         , adrRow = rdRow rd
         , adrFrameCount = rdFrameCount rd
         }
+
+-- | The compiler's @ATLAS_DIRECTION_ORDER@: the engine's own
+--   'Direction' order, in the index's own spelling.
+canonicalDirectionOrder ∷ [Text]
+canonicalDirectionOrder = map renderDir [minBound .. maxBound]
 
 -- | The index's own direction spelling — @tools/pack_atlas.py@'s
 --   @ATLAS_DIRECTION_ORDER@ tokens, which are the long lowercase unit
@@ -592,19 +613,28 @@ data RawAnimation = RawAnimation
 
 data IndexDocument = IndexDocument
     { idSchemaVersion   ∷ !Int
+    , idGenerator       ∷ !Text
+    , idToolVersion     ∷ !Int
     , idDigestAlgorithm ∷ !Text
     , idUnit            ∷ !Text
+    , idDirectionOrder  ∷ ![Text]
     , idAnimations      ∷ ![RawAnimation]
     }
 
--- | Every field is REQUIRED. A truncated document — one missing a
---   dimension, a digest, or the animation list — fails here rather
---   than defaulting into something samplable.
+-- | Every field the compiler emits is REQUIRED — the whole top-level
+--   schema, not just the parts this build happens to consume. A
+--   truncated document is a truncated document: one missing a
+--   dimension, a digest, the generator, the tool version, the direction
+--   order, or the animation list fails here rather than defaulting into
+--   something samplable.
 parseIndexDocument ∷ A.Value → A.Parser IndexDocument
 parseIndexDocument = A.withObject "atlas index" $ \o → IndexDocument
     <$> o A..: "schema_version"
+    <*> o A..: "generator"
+    <*> o A..: "tool_version"
     <*> o A..: "digest_algorithm"
     <*> o A..: "unit"
+    <*> o A..: "direction_order"
     <*> (o A..: "animations" ⌦ mapM parseRawAnimation)
 
 parseRawAnimation ∷ A.Value → A.Parser RawAnimation

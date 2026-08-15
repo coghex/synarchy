@@ -399,19 +399,19 @@ end
 -- Refresh every visible tab's portrait. Prefer the unit def's
 -- authored portrait (static), falling back to the live animation
 -- frame for defs that ship no `portrait:`. Skip the mutation when
--- nothing changed to avoid needless churn — for an authored
--- portrait this means it's set once and then left alone. We only
--- refresh VISIBLE tabs — scrolled-off tabs would just thrash
--- invisibly.
+-- nothing changed; only VISIBLE tabs refresh, since scrolled-off
+-- ones would just thrash invisibly.
 --
--- The live-frame path goes through unit.getFrameSample, not
--- getFrameTexture (#1259): an atlas-backed animation stores every
--- direction and frame in ONE texture, so pushing that handle in
--- bare would draw the whole sheet as the portrait. The sample
--- carries the frame's own UV sub-rect and mirror flag, and both
--- are applied together with the handle. An authored portrait is
--- its own whole image, so it resets the sub-rect to the full
--- texture and clears the flip.
+-- The live-frame path uses unit.getFrameSample, not
+-- getFrameTexture (#1259): an atlas-backed animation holds every
+-- direction and frame in ONE texture, so that handle alone would
+-- draw the whole sheet. The sample adds the frame's own UV
+-- sub-rect and mirror flag, and all three are published with
+-- UI.setSpriteFrame in ONE manager transition — separate setters
+-- leave a window where the new atlas handle is paired with the
+-- previous frame's rect, and the render thread reads the manager
+-- concurrently. An authored portrait is its own whole image, so it
+-- publishes the full rect and no flip through the same call.
 local FULL_UV = { u0 = 0, v0 = 0, u1 = 1, v1 = 1, flipX = false }
 
 local function applyPortrait(tab, tex, uv)
@@ -420,9 +420,8 @@ local function applyPortrait(tab, tex, uv)
         or uv.u1 ~= tab.lastU1 or uv.v1 ~= tab.lastV1
         or (uv.flipX == true) ~= (tab.lastFlipX == true)
     if not changed then return end
-    UI.setSpriteTexture(tab.spriteId, tex)
-    UI.setSpriteUV(tab.spriteId, uv.u0, uv.v0, uv.u1, uv.v1)
-    UI.setSpriteFlipX(tab.spriteId, uv.flipX == true)
+    UI.setSpriteFrame(tab.spriteId, tex, uv.u0, uv.v0, uv.u1, uv.v1,
+                      uv.flipX == true)
     tab.lastTex   = tex
     tab.lastU0, tab.lastV0 = uv.u0, uv.v0
     tab.lastU1, tab.lastV1 = uv.u1, uv.v1

@@ -47,6 +47,11 @@ import System.Directory
     ( createDirectoryIfMissing, getTemporaryDirectory, removeDirectoryRecursive
     , removeFile )
 import System.FilePath ((</>), takeDirectory)
+import UI.Manager
+    ( createPage, createSprite, getElement, setSpriteFrame, setSpriteTexture )
+import UI.Types
+    ( UIElement(..), UILayer(..), UIRenderData(..), UISpriteStyle(..)
+    , emptyUIPageManager )
 import Unit.Atlas.Load (loadUnitAtlasIndexIn)
 import Unit.HitTest (unitHitRect)
 import Unit.Render (unitToQuad)
@@ -142,6 +147,21 @@ setField k v = map (\(k', v') → if k' ≡ k then (k', v) else (k', v'))
 
 dropField ∷ Text → [Field] → [Field]
 dropField k = filter ((≢ k) ∘ fst)
+
+-- | The canonical document with one top-level field removed.
+indexWithout ∷ Text → BL.ByteString
+indexWithout field =
+    BLC.pack ∘ T.unpack ∘ obj ∘ dropField field $
+        [ ("schema_version", "1")
+        , ("generator", str "tools/pack_atlas.py")
+        , ("tool_version", "1")
+        , ("digest_algorithm", str "sha256")
+        , ("unit", str "acolyte")
+        , ("direction_order", arr (map str
+            [ "south", "south-west", "west", "north-west"
+            , "north", "north-east", "east", "south-east" ]))
+        , ("animations", arr [obj idleFields])
+        ]
 
 goodIndex ∷ BL.ByteString
 goodIndex = indexWith [] [idleFields, swingFields]
@@ -1066,11 +1086,24 @@ spec = do
     -- The loader end of the contract, against a REAL fixture tree: the
     -- pure checks above answer from values, these answer from files.
     describe "Unit.Atlas.Load — one request per animation, none when rejected" $ do
-        it "a unit with no index selects nothing and stays wholly legacy" $
+        it "a unit with NO atlas directory stays wholly legacy" $
+            withAtlasFixture $ \root → do
+                removeDirectoryRecursive (root </> unitAtlasDir fixtureUnit)
+                r ← loadUnitAtlasIndexIn root fixtureUnit fixtureYaml
+                r `shouldBe` Right Nothing
+
+        -- An atlas directory without its index is an INCOMPLETE
+        -- compiled artifact, not a legacy unit: compiled PNGs sit
+        -- beside the source frames, and falling back would serve the
+        -- legacy path while pretending nothing is wrong.
+        it "an atlas directory missing its index rejects, not falls back" $
             withAtlasFixture $ \root → do
                 removeFile (root </> unitAtlasIndexPath fixtureUnit)
                 r ← loadUnitAtlasIndexIn root fixtureUnit fixtureYaml
-                r `shouldBe` Right Nothing
+                r `shouldSatisfy` isRejectedLoad
+                selectionOf r `shouldBe` []
+                T.pack (showLoad r) `shouldSatisfy`
+                    T.isInfixOf "but no index"
 
         it "a valid index yields exactly ONE request per indexed animation" $
             withAtlasFixture $ \root → do
@@ -1138,3 +1171,86 @@ spec = do
         it "an ordinary request may reuse only an unpinned entry" $ do
             reuse UploadGlobalSampler (TextureHandle 8) `shouldBe` True
             reuse UploadGlobalSampler (TextureHandle 7) `shouldBe` False
+
+    -- The whole generated schema is the contract, not just the parts
+    -- this build consumes: a truncated document is truncated.
+    describe "Unit.Atlas.Index — every generated top-level field is required" $ do
+        it "rejects a document missing any one of them" $
+            forM_ [ "schema_version", "generator", "tool_version"
+                  , "digest_algorithm", "unit", "direction_order"
+                  , "animations" ] $ \field →
+                parse (indexWithout field) `shouldSatisfy` isRejected
+
+        it "rejects an empty generator" $
+            parse (indexWith [("generator", str "  ")] [idleFields])
+                `shouldReject` "generator is empty"
+
+        it "rejects a negative tool_version" $
+            parse (indexWith [("tool_version", "-1")] [idleFields])
+                `shouldReject` "tool_version -1 is negative"
+
+        it "rejects a non-numeric tool_version rather than defaulting" $
+            parse (indexWith [("tool_version", str "one")] [idleFields])
+                `shouldReject` "malformed"
+
+        -- The row order is documentation here — rows are read
+        -- explicitly — but a document declaring a DIFFERENT order came
+        -- from a compiler whose layout this build does not share.
+        it "rejects a direction_order that is not this build's row order" $ do
+            parse (indexWith [("direction_order", arr (map str
+                    [ "south", "west", "south-west", "north-west"
+                    , "north", "north-east", "east", "south-east" ]))]
+                    [idleFields])
+                `shouldReject` "is not this build's row order"
+            parse (indexWith [("direction_order", arr (map str
+                    ["south", "north"]))] [idleFields])
+                `shouldReject` "is not this build's row order"
+
+    -- A frame is a texture AND a sub-rect AND a mirror flag. Publishing
+    -- them one at a time lets the render thread, which reads the manager
+    -- concurrently, land between the writes and draw the wrong cell —
+    -- or the whole sheet.
+    describe "Unit.Atlas — a frame is published to the UI in one transition" $ do
+        let build =
+                let (pg, m1) = createPage "hud" LayerHUD emptyUIPageManager
+                    (el, m2) = createSprite "portrait" 32 32
+                                   (TextureHandle 1) (1, 1, 1, 1) pg m1
+                in (el, m2)
+            styleOf el mgr = case getElement el mgr of
+                Just e → case ueRenderData e of
+                    RenderSprite st → Just (ussTexture st, ussUV st, ussFlipX st)
+                    _ → Nothing
+                Nothing → Nothing
+
+        it "a fresh sprite starts on the whole image, unmirrored" $
+            let (el, mgr) = build
+            in styleOf el mgr `shouldBe` Just (TextureHandle 1, (0, 0, 1, 1), False)
+
+        it "setSpriteFrame lands texture, sub-rect and mirror together" $
+            let (el, mgr) = build
+                mgr' = setSpriteFrame el (TextureHandle 900) (0.5, 0, 1, 1) True mgr
+            in styleOf el mgr' `shouldBe`
+                Just (TextureHandle 900, (0.5, 0, 1, 1), True)
+
+        it "publishing a whole-image portrait resets the sub-rect and flip" $
+            let (el, mgr) = build
+                atlasFrame = setSpriteFrame el (TextureHandle 900)
+                                 (0.5, 0, 1, 1) True mgr
+                portrait = setSpriteFrame el (TextureHandle 42) (0, 0, 1, 1)
+                               False atlasFrame
+            in styleOf el portrait `shouldBe`
+                Just (TextureHandle 42, (0, 0, 1, 1), False)
+
+        -- The regression the atomic verb exists to prevent: the
+        -- intermediate state a texture-then-UV sequence passes through
+        -- pairs the new atlas handle with the OLD frame's rect, which
+        -- for a first switch from a portrait is the entire sheet.
+        it "the separate setters really do expose that intermediate state" $
+            let (el, mgr) = build
+                halfway = setSpriteTexture el (TextureHandle 900) mgr
+            in do
+                styleOf el halfway `shouldBe`
+                    Just (TextureHandle 900, (0, 0, 1, 1), False)
+                styleOf el halfway `shouldNotBe`
+                    styleOf el (setSpriteFrame el (TextureHandle 900)
+                                    (0.5, 0, 1, 1) False mgr)

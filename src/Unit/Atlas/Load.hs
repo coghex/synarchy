@@ -70,16 +70,18 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Data.Vector.Storable as SV
 import Control.Exception (SomeException, try)
-import System.Directory (doesFileExist)
+import System.Directory (doesDirectoryExist, doesFileExist)
 import System.FilePath ((</>))
 import Unit.Atlas.Index
 import Unit.Atlas.Types
 
 -- | Read, validate, and select one unit's compiled atlas animations.
 --
---   * @Right Nothing@ — the unit has no index: every animation is
---     legacy. This is the ONLY tolerated absence, and it is the state
---     every shipped unit is in today.
+--   * @Right Nothing@ — the unit has no compiler-owned @atlas\/@
+--     directory at all: every animation is legacy. This is the ONLY
+--     tolerated absence, and it is the state every shipped unit is in
+--     today. A directory that EXISTS without its index is an incomplete
+--     artifact and rejects.
 --   * @Right (Just m)@ — every declared animation parsed, still matches
 --     the YAML, decoded to the image its index describes, and holds its
 --     declared source art.
@@ -107,9 +109,29 @@ loadUnitAtlasIndexIn
     → IO (Either AtlasLoadError (Maybe (HM.HashMap Text AtlasAnimation)))
 loadUnitAtlasIndexIn root unit yamlAnims = do
     let indexPath = unitAtlasIndexPath unit
+        atlasDir  = unitAtlasDir unit
     present ← doesFileExist (under root indexPath)
+    dirPresent ← doesDirectoryExist (under root atlasDir)
     if not present
-        then pure (Right Nothing)
+        then if dirPresent
+            -- An atlas DIRECTORY with no index is an incomplete
+            -- compiled artifact, not a legacy unit: the compiler writes
+            -- the index as part of every successful compile and refuses
+            -- an indexed tree it cannot regenerate, so what is on disk
+            -- here is the wreckage of an interrupted or partially
+            -- deleted one. Treating it as "no atlases" would fall back
+            -- to legacy frames while compiled PNGs sit beside them —
+            -- the silent substitution requirement 5 forbids. Only an
+            -- ABSENT directory means legacy.
+            then pure ∘ Left $ AtlasLoadError
+                { aleUnit = unit, aleAnimation = Nothing
+                , aleArtifact = indexPath
+                , aleReason = "the unit has a compiler-owned " <> T.pack atlasDir
+                    <> " directory but no index; the compiled artifacts are "
+                    <> "incomplete — re-run tools/pack_atlas.py --compile, or "
+                    <> "remove that directory to return the unit to legacy "
+                    <> "per-frame loading" }
+            else pure (Right Nothing)
         else do
             eRaw ← readFileBytes (under root indexPath)
             case eRaw of

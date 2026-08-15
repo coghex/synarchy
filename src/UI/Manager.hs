@@ -65,6 +65,7 @@ module UI.Manager
   , setSpriteTexture
   , setSpriteColor
   , setSpriteUV
+  , setSpriteFrame
   , setSpriteFlipX
     -- * Queries
   , getElementAbsolutePosition
