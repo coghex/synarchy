@@ -277,6 +277,70 @@ spec = describe "Location map icons" $ do
             lisTypeIcons iconSet `shouldBe` HM.singleton "loc1" fallbackTex
             lisUnknown iconSet `shouldBe` fallbackTex
 
+        it "no definition id can collide with the shared unknown marker's \
+           \registry key — the two namespaces are disjoint" $
+            -- A definition id is unrestricted authored text. Under a
+            -- shared prefix, `id: unknown` would register its own type
+            -- icon under the shared marker's key and overwrite it, and
+            -- every location's unknown state would then draw that
+            -- definition's icon — leaking the very type the marker
+            -- exists to hide. The adversarial ids below are the ones
+            -- that would land on it under any suffix-based scheme.
+            forM_ [ "unknown", "", "_unknown", "icon", "loc_icon_unknown"
+                  , locationUnknownIconTextureName ] $ \lid →
+                locationIconTextureName lid
+                    `shouldSatisfy` (≢ locationUnknownIconTextureName)
+
+        it "a definition literally named \"unknown\" does NOT hijack the \
+           \shared marker — both resolve to their own textures" $ do
+            -- The end-to-end form of the case above, through the real
+            -- resolution path: register the hostile definition, hand
+            -- the registry BOTH keys, and require the marker to survive.
+            let hostile   = locDef "unknown" (Just "hijack.png")
+                hijackTex = TextureHandle 199
+                reg = HM.fromList
+                    [ (locationUnknownIconTextureName, unknownTex)
+                    , (locationIconTextureName "unknown", hijackTex)
+                    ]
+                iconSet = buildLocationIconMap
+                    (registerLocation hostile emptyLocationRegistry)
+                    reg fallbackTex
+            lisUnknown iconSet `shouldBe` unknownTex
+            HM.lookup "unknown" (lisTypeIcons iconSet) `shouldBe` Just hijackTex
+
+        it "…and that definition's own instances still draw the SHARED \
+           \marker while unknown, never their type icon" $ do
+            -- The behaviour the collision would have broken, at the
+            -- quad level: an instance of the hostile definition must
+            -- render the marker at `unknown` and only reveal its own
+            -- icon once discovered.
+            let hostile = locDef "unknown" (Just "hijack.png")
+                hijackTex = TextureHandle 199
+                reg = foldr registerLocation emptyLocationRegistry [hostile]
+                overlay = overlayAt 0 0 "unknown"
+                -- Resolved through the REAL name registry, not a
+                -- hand-built set: that is the step a colliding key
+                -- corrupts, so building the set directly here would
+                -- render this scenario blind to the very bug it names.
+                nameReg = HM.fromList
+                    [ (locationUnknownIconTextureName, unknownTex)
+                    , (locationIconTextureName "unknown", hijackTex)
+                    ]
+                iconSet = buildLocationIconMap reg nameReg fallbackTex
+                base = buildLocationInstances Nothing reg overlay
+                paramsAt l = defaultWorldGenParams
+                    { wgpLocationOverlay   = overlay
+                    , wgpLocationInstances =
+                        foldr (\iid lis →
+                                  fromMaybe lis (setLocationLifecycle iid l lis))
+                              base [ liId i | i ← instancesToList base ]
+                    }
+                run l = V.map sqTexture (makeLocationIconQuads (paramsAt l)
+                    iconSet FaceSouth openView 0 0 1.0 4.0 (LayerId 2)
+                    (\(TextureHandle n) → n) (-1))
+            run LifecycleUnknown    `shouldBe` V.singleton unknownTex
+            run LifecycleDiscovered `shouldBe` V.singleton hijackTex
+
         it "the shared unknown icon's canonical path is the one the issue \
            \specifies, and it ships" $ do
             locationUnknownIconPath `shouldBe`

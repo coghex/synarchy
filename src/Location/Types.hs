@@ -142,16 +142,28 @@ allLocations = sortOn ldId . lrDefs
 --   looks it up under the same name), mirroring the
 --   @mat_tile_\<name\>@-style convention
 --   'Engine.Asset.TextureNameRegistry' already documents.
+--   The @loc_type_icon_@ prefix keeps this namespace DISJOINT from
+--   'locationUnknownIconTextureName' by construction, which matters
+--   because a definition id is unrestricted authored text: under a
+--   shared @loc_icon_@ prefix, a definition with @id: unknown@
+--   declaring a @map_icon@ would register under the shared marker's own
+--   key and overwrite it — and every location's unknown state would
+--   then draw that definition's type icon, leaking exactly the thing
+--   the marker exists to hide. No id can produce the shared key here,
+--   since every key this returns begins with @loc_type_icon_@ and the
+--   shared key does not.
 locationIconTextureName ∷ Text → Text
-locationIconTextureName lid = "loc_icon_" <> lid
+locationIconTextureName lid = "loc_type_icon_" <> lid
 
 -- | Registry key for the ONE shared unknown-location icon (#1230). Not
 --   derived from any definition id — every annotated location draws this
 --   same marker while its type is unknown, which is the whole point:
 --   the zoom map must not leak WHAT a location is before a unit has
---   seen it.
+--   seen it. Deliberately NOT of the form 'locationIconTextureName'
+--   produces; see that function's note on why the two namespaces must
+--   stay disjoint.
 locationUnknownIconTextureName ∷ Text
-locationUnknownIconTextureName = "loc_icon_unknown"
+locationUnknownIconTextureName = "loc_unknown_icon"
 
 -- | The canonical on-disk path of that shared icon (#1230). Declared in
 --   code rather than in any definition's YAML, and loaded once
