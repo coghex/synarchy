@@ -6,15 +6,15 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## Status
 
-- [ ] PRR-1. Early debug-console quit is lost during startup
-- [ ] PRR-2. Name plate misses seam-alias locations
-- [ ] PRR-3. Explicit page selection bypasses active-page recurrence
-- [ ] PRR-4. Responsive menu tests inherit the saved UI scale
-- [ ] PRR-5. Hydrology source comments contradict the authoritative pipeline map
+- [x] PRR-1. Early debug-console quit is lost during startup — [#1263]
+- [x] PRR-2. Name plate misses seam-alias locations — [#1264]
+- [x] PRR-3. Explicit page selection bypasses active-page recurrence — [#1265]
+- [x] PRR-4. Responsive menu tests inherit the saved UI scale — [#1266]
+- [x] PRR-5. Hydrology source comments contradict the authoritative pipeline map — [#1267]
 
 ## 1. Engine lifecycle
 
-### PRR-1. Early debug-console quit is lost during startup
+### [#1263] PRR-1. Early debug-console quit is lost during startup
 
 > **Captured note:** Do not overwrite an early debug-console quit during startup. `READY` is emitted before the remaining workers and startup handshake finish. An immediate, acknowledged `engine.quit()` sets `CleaningUp`, but `runStartupHandshake` later unconditionally writes `EngineRunning`. The official probe hangs, and a proper response-reading client reproduced it 3/3 times.
 
@@ -37,7 +37,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## 2. Wrapped-world and page boundaries
 
-### PRR-2. Name plate misses seam-alias locations
+### [#1264] PRR-2. Name plate misses seam-alias locations
 
 > **Captured note:** Use seam-aware location containment in the etymology name plate. `scripts/name_plate.lua` uses raw rectangle comparisons. Since #1193 canonicalizes selected tiles, selecting the wrapped image of a seam-crossing discovered location can make its etymology action disappear. The engine's authoritative `boundsContainsPoint` already handles this topology.
 
@@ -58,7 +58,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 - **Scope and constraints:** Surfaced in PR #1194 / issue #1104 through its interaction with PR #1193 / issue #1175. Undiscovered locations must remain excluded, and the fix must retain the repository's canonical cylindrical-world coordinate contract.
 - **Remaining uncertainty:** The failure is established by the current coordinate and containment contracts; its frequency in generated worlds depends on how often a placed location's selectable footprint lands at the seam.
 
-### PRR-3. Explicit page selection bypasses active-page recurrence
+### [#1265] PRR-3. Explicit page selection bypasses active-page recurrence
 
 > **Captured note:** Keep etymology recurrence anchored to the active world page. `world.getEtymology(..., pageId)` resolves both the target and recurrence candidates from the requested page. Supplying an inactive page therefore includes its discovered locations, directly violating #1104's active-page-only recurrence contract. The required inactive-page regression was never implemented.
 
@@ -81,7 +81,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## 3. Test reliability
 
-### PRR-4. Responsive menu tests inherit the saved UI scale
+### [#1266] PRR-4. Responsive menu tests inherit the saved UI scale
 
 > **Captured note:** Make ResponsiveMenus tests independent of the user's saved UI scale. With the legitimate local setting `ui_scale: 1.5`, `UI.ResponsiveMenus` reports 88 examples and two failures. #1188's new identity test assumes three rows are simultaneously visible, although the responsive browser correctly shows two plus a scrollbar. An older scroll test has the same unpinned-scale defect.
 
@@ -104,7 +104,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## 4. Documentation consistency
 
-### PRR-5. Hydrology source comments contradict the authoritative pipeline map
+### [#1267] PRR-5. Hydrology source comments contradict the authoritative pipeline map
 
 > **Captured note:** Align remaining hydrology source comments with the authoritative pipeline map. The new authoritative document correctly says `computeOceanMap` is tectonic-plate-seeded and `composeFluidMap` reads global surface-fluid tables. Three current source comments still claim world-edge seeding or water-table-driven composition.
 

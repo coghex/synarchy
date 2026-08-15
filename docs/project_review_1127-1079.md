@@ -6,15 +6,15 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## Status
 
-- [ ] PRR-1. Lua's Haskell-component registry omits container knowledge
-- [ ] PRR-2. Modern saves can silently omit all container knowledge
-- [ ] PRR-3. Non-finite container observations pass save validation
-- [ ] PRR-4. Restored-entity apply context is mutable across components
-- [ ] PRR-5. Persisted language provenance accepts unconstructible versions
+- [x] PRR-1. Lua's Haskell-component registry omits container knowledge — [#1277]
+- [x] PRR-2. Modern saves can silently omit all container knowledge — [no-issue]
+- [x] PRR-3. Non-finite container observations pass save validation — [#1278]
+- [x] PRR-4. Restored-entity apply context is mutable across components — [#1279]
+- [x] PRR-5. Persisted language provenance accepts unconstructible versions — [no-issue]
 
 ## 1. Container-knowledge persistence
 
-### PRR-1. Lua's Haskell-component registry omits container knowledge
+### [#1277] PRR-1. Lua's Haskell-component registry omits container knowledge
 
 > **Captured note:** Keep Lua's declared Haskell-component dependency set synchronized with the real Haskell registry. PR #1126 registered `container-knowledge` on the Haskell side but did not add it to `save_modules.lua`, so a Lua component cannot declare that real dependency without being rejected as structurally invalid.
 
@@ -36,7 +36,9 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 - **Scope and constraints:** Introduced by PR #1126 / issue #1087 when the new Haskell component was added. Preserve rejection of genuinely unknown ids and the distinction between Haskell dependencies and Lua-to-Lua ordering edges.
 - **Remaining uncertainty:** No current Lua component declares this particular dependency, so the defect is latent until a persistent module needs container-knowledge ordering or documents the dependency honestly.
 
-### PRR-2. Modern saves can silently omit all container knowledge
+### [no-issue] PRR-2. Modern saves can silently omit all container knowledge
+
+> **Disposition:** No issue — manifest-level absence defaulting to "never inspected" is the documented #1087 design (`docs/persistence_contract.md` §5's optional-component contract: honest default at manifest level only; a declared-but-malformed payload still fails like a required component). Reaching the omission requires a non-engine writer editing a checksummed envelope — the production writer always emits the component — and the impact is bounded to the remembered-contents knowledge layer, never physical items. Re-litigating the era-discriminator alternative needs new evidence the review did not produce.
 
 > **Captured note:** Distinguish a genuinely pre-#1087 envelope from a current envelope that lost its `container-knowledge` descriptor and payload. Making the component permanently optional admits old saves, but it also turns complete omission from any newly written save into a successful load that resets every remembered container to never-inspected.
 
@@ -58,7 +60,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 - **Scope and constraints:** Surfaced in PR #1126 / issue #1087. Preserve all tracked pre-A3 baselines and the existing rule that a present malformed/unsupported payload is fatal. A fix may need an envelope-era discriminator, a recognized-legacy migration path, or a component-introduction contract rather than simply flipping `required` to true.
 - **Remaining uncertainty:** Ordinary production writes always include the component, so reaching this path requires an incomplete/corrupted envelope or another writer; the impact once reached is confirmed data loss rather than a load error.
 
-### PRR-3. Non-finite container observations pass save validation
+### [#1278] PRR-3. Non-finite container observations pass save validation
 
 > **Captured note:** Reject non-finite remembered weights and reveal times, not only negative ones. IEEE `NaN` makes both `< 0` checks false, and positive infinity also passes, even though neither value can be produced by a valid finite observation or safely exposed to UI age/weight calculations.
 
@@ -82,7 +84,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## 2. Lua load application
 
-### PRR-4. Restored-entity apply context is mutable across components
+### [#1279] PRR-4. Restored-entity apply context is mutable across components
 
 > **Captured note:** Enforce issue #900's read-only restored-entity context. `applyAll` hands every component the same ordinary Lua table, so one component can delete or rewrite unit/building membership or owner pages and thereby change which rows a later component applies.
 
@@ -106,7 +108,9 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## 3. Language provenance
 
-### PRR-5. Persisted language provenance accepts unconstructible versions
+### [no-issue] PRR-5. Persisted language provenance accepts unconstructible versions
+
+> **Disposition:** No issue — an unconstructible persisted version is a designed, tested degradation state, not a validation hole: etymology reports `unsupported_version` naming the version (the "degrading honestly" spec pins `GeneratorVersion 99` exactly), `world.init`'s provenance re-ingestion refuses it with a warning and falls back to a custom name (#1092/#1101), and write-once names can never re-render wrongly. #1092 requirement 4 deliberately retains `UnsupportedGeneratorVersion` as the runtime verdict; rejecting at load would make the format forward-incompatible for zero correctness gain. Ingress requires a non-engine writer.
 
 > **Captured note:** Validate every persisted `GeneratorVersion` before publishing a world identity. The DTO accepts any `Int` and `world-pages` validation never checks it against `supportedGeneratorVersions`, so a save can successfully load provenance that `generateProfile` immediately rejects as unconstructible.
 
