@@ -406,9 +406,11 @@ data YamlAnimFacts = YamlAnimFacts
 --   unit whose index is broken.
 --
 --   Beyond the structural validation 'parseAtlasIndex' already did,
---   this is the DECLARATION half of source freshness — everything the
---   compiler's @source_digest@ covers except the frame pixels, which
---   'validateSourceFrame' checks against the atlas itself:
+--   this checks the DECLARATIONS against the unit YAML. It is not the
+--   last word on freshness — 'validateSourceDigest' recomputes the
+--   whole @source_digest@ and subsumes everything here — but it is far
+--   cheaper and runs first, so a unit whose YAML has simply moved on is
+--   rejected without decoding a single image:
 --
 --     * An indexed animation the YAML no longer declares is a leftover
 --       from a rename or deletion, not something to publish.
@@ -526,27 +528,17 @@ atlasCellRows anim (DecodedImage w _ pixels) row col =
 --   this source frame really does hold it, decoded sample for decoded
 --   sample.
 --
---   This is what catches the edit no metadata can — a source PNG
---   repainted while its compiled atlas and index were left in place.
---   It is a DIRECT verification of the compiler's own promise ("every
---   atlas cell is a byte-for-byte copy of its source frame's canonical
---   decoded RGBA8 samples") rather than a recomputation of
---   @source_digest@, and deliberately so:
+--   A DIRECT verification of the compiler's own promise: "every atlas
+--   cell is a byte-for-byte copy of its source frame's canonical
+--   decoded RGBA8 samples".
 --
---     * It verifies the property the digest is a proxy FOR, and cannot
---       be satisfied by an artifact that merely hashes the same.
---     * It localizes the failure to one direction and one frame instead
---       of reporting that some input, somewhere, changed.
---     * Recomputing the digest would require reproducing the compiler's
---       field encoding exactly, including @repr()@ of a Python float —
---       whose decimal formatting diverges from Haskell's at exponent
---       extremes. A parity bug there would REJECT valid art, which is a
---       far worse failure than the one it guards.
---
---   Every other @source_digest@ input is checked by name elsewhere:
---   unit and animation by identity, @flip@ \/ @loop@ \/ @fps@ \/ the
---   direction set \/ per-direction frame counts \/ columns by
---   'planUnitAtlasStorage', and cell dimensions here.
+--   'validateSourceDigest' covers this too — the frame's pixels are
+--   among the inputs it digests — so this is not the freshness
+--   authority. It runs first because it is the DIAGNOSTIC one: it names
+--   the direction and the frame that moved, where a digest mismatch can
+--   only say that something among the inputs did. It also verifies the
+--   cell dimensions against the frame, which is the check that makes a
+--   later cell read meaningful.
 validateSourceFrame
     ∷ Text            -- ^ unit
     → AtlasAnimation

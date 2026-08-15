@@ -104,14 +104,15 @@ data AtlasAnimation = AtlasAnimation
     , aaLoop         ∷ !Bool
     , aaDirections   ∷ !(Map.Map Direction AtlasDirectionRow)
     , aaSourceDigest ∷ !Text
-      -- ^ The compiler's per-animation digest over its SOURCE frames.
-      --   Recorded and reported, never recomputed. Source freshness IS
-      --   checked at load — @Unit.Atlas.Index@'s @planUnitAtlasStorage@
-      --   covers every declaration this digest is taken over, and its
-      --   @validateSourceFrame@ compares each declared frame's decoded
-      --   pixels against the atlas cell that must hold them — just not
-      --   by reproducing the compiler's field encoding, which would
-      --   have to match @repr()@ of a Python float exactly.
+      -- ^ The compiler's per-animation digest over its SOURCE frames —
+      --   its identity, mirroring and timing, cell geometry, and every
+      --   direction's declared frame paths and decoded pixels.
+      --   RECOMPUTED and verified at load
+      --   (@Unit.Atlas.Digest.sourceDigest@, checked by
+      --   @Unit.Atlas.Index.validateSourceDigest@), which is what
+      --   catches a forged digest and a frame renamed to a
+      --   byte-identical file — the one input nothing else in the index
+      --   records.
     , aaAtlasDigest  ∷ !Text
     } deriving (Show, Eq)
 
