@@ -40,7 +40,10 @@ module Unit.Atlas.Index
     , parseAtlasIndex
     , YamlAnimFacts(..)
     , planUnitAtlasStorage
+    , DecodedImage(..)
     , validateAtlasImage
+    , validateSourceFrame
+    , atlasCellRows
     , atlasContentDigest
     ) where
 
@@ -287,6 +290,17 @@ parseAtlasDirection t = case t of
     "south-east" → Just DirSE
     _            → Nothing
 
+-- | The index's own spelling of a direction, for diagnostics.
+renderDir ∷ Direction → Text
+renderDir d = case d of
+    DirS  → "south"      ; DirSW → "south-west"
+    DirW  → "west"       ; DirNW → "north-west"
+    DirN  → "north"      ; DirNE → "north-east"
+    DirE  → "east"       ; DirSE → "south-east"
+
+renderDirs ∷ Set.Set Direction → Text
+renderDirs = T.intercalate "/" ∘ map renderDir ∘ Set.toList
+
 -- | An atlas path is acceptable only as @\<unit atlas dir\>\/\<file\>@:
 --   relative, no traversal, no nesting, no absolute escape.
 atlasPathContained ∷ FilePath → Text → Bool
@@ -304,9 +318,12 @@ atlasPathContained expectedDir declared =
 --   deliberately takes facts rather than a @UnitYamlAnim@ so the check
 --   stays pure and free of the asset-loading layer.
 data YamlAnimFacts = YamlAnimFacts
-    { yafFps  ∷ !Float
-    , yafLoop ∷ !Bool
-    , yafFlip ∷ !Bool
+    { yafFps    ∷ !Float
+    , yafLoop   ∷ !Bool
+    , yafFlip   ∷ !Bool
+    , yafFrames ∷ !(Map.Map Direction [FilePath])
+      -- ^ The animation's declared SOURCE frames, per direction, in
+      --   declaration order — the same list the compiler digested.
     } deriving (Show, Eq)
 
 -- | Decide which of a unit's animations are atlas-backed, given its
@@ -318,10 +335,9 @@ data YamlAnimFacts = YamlAnimFacts
 --   unit whose index is broken.
 --
 --   Beyond the structural validation 'parseAtlasIndex' already did,
---   this adds the two staleness checks that need the YAML — the one
---   source the atlas runtime still reads. (The frame PIXELS' freshness
---   is @pack_atlas.py --validate-only@'s gate; the runtime no longer
---   has the source frames to recompute @source_digest@ from.)
+--   this is the DECLARATION half of source freshness — everything the
+--   compiler's @source_digest@ covers except the frame pixels, which
+--   'validateSourceFrame' checks against the atlas itself:
 --
 --     * An indexed animation the YAML no longer declares is a leftover
 --       from a rename or deletion, not something to publish.
@@ -330,6 +346,12 @@ data YamlAnimFacts = YamlAnimFacts
 --       artifact predates a YAML edit. The runtime keeps using the
 --       YAML's values — this rejects rather than silently picking a
 --       winner.
+--     * The DIRECTION SET must agree, and each direction's real frame
+--       count must equal the number of frames the YAML declares for it,
+--       with the column count still the longest row. An added, removed,
+--       or re-authored direction, and a frame appended to or dropped
+--       from one, are exactly the source edits a stale atlas would
+--       otherwise keep serving.
 planUnitAtlasStorage
     ∷ Text
     → Map.Map Text YamlAnimFacts
@@ -351,7 +373,30 @@ planUnitAtlasStorage unit yamlAnims anims =
             | aaFlip aa ≢ yafFlip ya → Left (stale aa $
                 "index flip " <> tshow (aaFlip aa)
                 <> " disagrees with the YAML's " <> tshow (yafFlip ya))
-            | otherwise → Right (aaName aa, aa)
+            | indexDirs ≢ yamlDirs → Left (stale aa $
+                "index directions " <> renderDirs indexDirs
+                <> " disagree with the YAML's " <> renderDirs yamlDirs)
+            | otherwise → case badCount ya of
+                Just err → Left (stale aa err)
+                Nothing
+                    | aaColumns aa ≢ longestRow ya → Left (stale aa $
+                        "index columns " <> tshow (aaColumns aa)
+                        <> " disagrees with the YAML's longest direction ("
+                        <> tshow (longestRow ya) <> " frames)")
+                    | otherwise → Right (aaName aa, aa)
+          where
+            indexDirs = Map.keysSet (aaDirections aa)
+            yamlDirs  = Map.keysSet (yafFrames ya)
+            longestRow y =
+                let ns = map length (Map.elems (yafFrames y))
+                in if null ns then 0 else maximum ns
+            badCount y = listToMaybe
+                [ "direction " <> renderDir d <> " has frame_count "
+                    <> tshow (adrFrameCount row) <> " but the YAML declares "
+                    <> tshow (length paths) <> " frames"
+                | (d, row) ← Map.toList (aaDirections aa)
+                , let paths = Map.findWithDefault [] d (yafFrames y)
+                , adrFrameCount row ≢ length paths ]
     stale aa reason = AtlasLoadError
         { aleUnit = unit
         , aleAnimation = Just (aaName aa)
@@ -361,19 +406,22 @@ planUnitAtlasStorage unit yamlAnims anims =
 
 -- * Image-side validation
 
+-- | A decoded image: canonical RGBA8 samples, row-major from the
+--   top-left — exactly what the compiler digested and what the engine's
+--   own upload path produces.
+data DecodedImage = DecodedImage
+    { diWidth  ∷ !Int
+    , diHeight ∷ !Int
+    , diPixels ∷ !BS.ByteString
+    } deriving (Show, Eq)
+
 -- | The half of validation that needs the DECODED atlas.
---
---   @pixels@ is the image's canonical RGBA8 samples, row-major from the
---   top-left — exactly what the compiler digested and what the upload
---   path produces.
 validateAtlasImage
     ∷ Text            -- ^ unit
     → AtlasAnimation
-    → Int             -- ^ decoded image width
-    → Int             -- ^ decoded image height
-    → BS.ByteString   -- ^ decoded RGBA8 samples
+    → DecodedImage
     → Either AtlasLoadError ()
-validateAtlasImage unit anim w h pixels
+validateAtlasImage unit anim (DecodedImage w h pixels)
     | w ≢ aaAtlasWidth anim ∨ h ≢ aaAtlasHeight anim =
         bad $ "atlas image is " <> tshow w <> "x" <> tshow h
               <> " but the index declares "
@@ -389,6 +437,79 @@ validateAtlasImage unit anim w h pixels
     | otherwise = Right ()
   where
     actual = atlasContentDigest w h pixels
+    bad = Left ∘ animError unit (aaPath anim) (aaName anim)
+
+-- | The RGBA8 rows of one atlas cell, top to bottom.
+--
+--   Slices, not copies: 'BS.take' \/ 'BS.drop' on a strict ByteString
+--   are O(1), so walking a whole sheet's cells allocates nothing beyond
+--   the row headers.
+atlasCellRows ∷ AtlasAnimation → DecodedImage → Int → Int → [BS.ByteString]
+atlasCellRows anim (DecodedImage w _ pixels) row col =
+    [ BS.take (cw * 4) (BS.drop ((y * w + col * cw) * 4) pixels)
+    | let cw = aaCellWidth anim
+          ch = aaCellHeight anim
+    , y ← [row * ch .. row * ch + ch - 1] ]
+
+-- | The PIXEL half of source freshness: the atlas cell that must hold
+--   this source frame really does hold it, decoded sample for decoded
+--   sample.
+--
+--   This is what catches the edit no metadata can — a source PNG
+--   repainted while its compiled atlas and index were left in place.
+--   It is a DIRECT verification of the compiler's own promise ("every
+--   atlas cell is a byte-for-byte copy of its source frame's canonical
+--   decoded RGBA8 samples") rather than a recomputation of
+--   @source_digest@, and deliberately so:
+--
+--     * It verifies the property the digest is a proxy FOR, and cannot
+--       be satisfied by an artifact that merely hashes the same.
+--     * It localizes the failure to one direction and one frame instead
+--       of reporting that some input, somewhere, changed.
+--     * Recomputing the digest would require reproducing the compiler's
+--       field encoding exactly, including @repr()@ of a Python float —
+--       whose decimal formatting diverges from Haskell's at exponent
+--       extremes. A parity bug there would REJECT valid art, which is a
+--       far worse failure than the one it guards.
+--
+--   Every other @source_digest@ input is checked by name elsewhere:
+--   unit and animation by identity, @flip@ \/ @loop@ \/ @fps@ \/ the
+--   direction set \/ per-direction frame counts \/ columns by
+--   'planUnitAtlasStorage', and cell dimensions here.
+validateSourceFrame
+    ∷ Text            -- ^ unit
+    → AtlasAnimation
+    → DecodedImage    -- ^ the decoded atlas
+    → Direction
+    → Int             -- ^ row
+    → Int             -- ^ column (frame index)
+    → FilePath        -- ^ the declared source frame path
+    → DecodedImage    -- ^ the decoded source frame
+    → Either AtlasLoadError ()
+validateSourceFrame unit anim atlas dir row col path frame
+    | diWidth frame ≢ aaCellWidth anim ∨ diHeight frame ≢ aaCellHeight anim =
+        bad $ "source frame " <> T.pack path <> " is "
+              <> tshow (diWidth frame) <> "x" <> tshow (diHeight frame)
+              <> " but the index's cell is "
+              <> tshow (aaCellWidth anim) <> "x" <> tshow (aaCellHeight anim)
+              <> staleHint
+    | BS.length (diPixels frame) ≢ diWidth frame * diHeight frame * 4 =
+        bad $ "source frame " <> T.pack path <> " decoded to "
+              <> tshow (BS.length (diPixels frame)) <> " bytes, expected "
+              <> tshow (diWidth frame * diHeight frame * 4) <> " RGBA8 bytes"
+    | frameRows ≢ atlasCellRows anim atlas row col =
+        bad $ "source frame " <> T.pack path <> " (" <> renderDir dir
+              <> " frame " <> tshow col
+              <> ") does not match the pixels its atlas cell holds"
+              <> staleHint
+    | otherwise = Right ()
+  where
+    staleHint = " — the compiled artifact is stale; "
+              <> "re-run tools/pack_atlas.py --compile"
+    frameRows =
+        [ BS.take (diWidth frame * 4) (BS.drop (y * diWidth frame * 4)
+              (diPixels frame))
+        | y ← [0 .. diHeight frame - 1] ]
     bad = Left ∘ animError unit (aaPath anim) (aaName anim)
 
 -- | The compiler's @content_digest@, reproduced.

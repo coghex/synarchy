@@ -1858,19 +1858,32 @@ malformed index does NOT fall back to legacy frames: the whole unit
 definition is refused, with the unit, animation, and artifact named. No
 partial registration.
 
-Runtime validation covers complete parsing, the supported
+Validation runs in three passes, cheapest first, stopping at the first
+failure. **(1)** The index parses and is structurally sound: supported
 `schema_version` and `digest_algorithm`, the unit's own identity,
 duplicate animation names, containment of `atlas_path` inside that
 unit's `atlas/` directory, positive geometry, every reachable cell lying
 inside the sheet, unique and in-range direction rows, real frame counts
-bounded by row capacity, a positive finite `fps`, the decoded image's
-dimensions, and the `atlas_digest` over its decoded RGBA8 content. The
-digest split is deliberate: `atlas_digest` proves the artifact IS the
-one the index describes and is checked here; `source_digest` needs the
-source frames the atlas runtime deliberately stops reading, so
-`pack_atlas.py --validate-only` (in CI) owns it, and the runtime's own
-freshness check against the one source it still reads is the YAML's
-`fps`/`loop`/`flip` and animation set.
+bounded by row capacity, a positive finite `fps`. **(2)** It still
+describes what the unit YAML declares: animation set, `fps`/`loop`/
+`flip`, direction set, per-direction frame counts, columns. **(3)** Each
+atlas decodes to the image the index describes (dimensions plus
+`atlas_digest` over decoded RGBA8), AND every declared SOURCE frame
+decodes to exactly the pixels its atlas cell holds.
+
+Pass 3 is what catches a source PNG repainted while its compiled atlas
+and index were left in place — the atlas stays internally consistent and
+its own digest still matches, so nothing short of reading the source art
+sees it. Passes 2 and 3 together verify every input the compiler's
+`source_digest` is taken over, **directly rather than by recomputing the
+digest**: that verifies the property the digest is a proxy for, localizes
+a failure to one direction and one frame, and avoids reproducing the
+compiler's field encoding (including `repr()` of a Python float, whose
+decimal formatting diverges from Haskell's at exponent extremes — a
+parity bug there would REJECT valid art). Reading source frames at load
+is a migration-phase cost: the legacy path is still live and every unit
+still ships its frames. TEX-6, which removes source loading, is where
+this becomes the compile-time gate's alone.
 
 **`pickFrame` returns a `FrameSample`, and its arithmetic is FROZEN**
 (D-3). Every consumer reads the stable handle (#286 — never a slot), the

@@ -321,6 +321,17 @@ renderQuad now inst mDef =
 frame1Time ∷ Double
 frame1Time = 0.125
 
+-- | The YAML facts an index animation was compiled from: the same
+--   playback declarations and one synthetic source path per real frame.
+factsFor ∷ AtlasAnimation → YamlAnimFacts
+factsFor aa = YamlAnimFacts
+    { yafFps = aaFps aa, yafLoop = aaLoop aa, yafFlip = aaFlip aa
+    , yafFrames = Map.fromList
+        [ (d, [ "animations/" ⧺ T.unpack (aaName aa) ⧺ "/" ⧺ show d
+                    ⧺ "/frame_" ⧺ show i ⧺ ".png"
+              | i ← [0 .. adrFrameCount row - 1] ])
+        | (d, row) ← Map.toList (aaDirections aa) ] }
+
 isRejected ∷ Either AtlasLoadError a → Bool
 isRejected (Left _) = True
 isRejected _        = False
@@ -515,26 +526,27 @@ spec = do
                 { aaAtlasDigest =
                     atlasContentDigest fixtureW fixtureH fixturePixels }
         it "accepts the image the index describes" $
-            validateAtlasImage "acolyte" anim fixtureW fixtureH fixturePixels
+            validateAtlasImage "acolyte" anim (DecodedImage fixtureW fixtureH fixturePixels)
                 `shouldBe` Right ()
 
         it "rejects a decoded image whose dimensions differ" $
-            validateAtlasImage "acolyte" anim 8 2 (BS.replicate 64 0)
+            validateAtlasImage "acolyte" anim (DecodedImage 8 2 (BS.replicate 64 0))
                 `shouldReject` "but the index declares 4x2"
 
         it "rejects a buffer that is not RGBA8 of that size" $
-            validateAtlasImage "acolyte" anim fixtureW fixtureH
-                (BS.take 8 fixturePixels)
+            validateAtlasImage "acolyte" anim
+                (DecodedImage fixtureW fixtureH (BS.take 8 fixturePixels))
                 `shouldReject` "expected 32 RGBA8 bytes"
 
         it "rejects tampered pixels" $
             let tampered = BS.pack (0xFF : drop 1 (BS.unpack fixturePixels))
-            in validateAtlasImage "acolyte" anim fixtureW fixtureH tampered
+            in validateAtlasImage "acolyte" anim
+                   (DecodedImage fixtureW fixtureH tampered)
                 `shouldReject` "does not match the index's"
 
         it "names the unit, the animation and the ATLAS file, not the index" $ do
-            let msg = rejection (validateAtlasImage "acolyte" anim 8 2
-                          (BS.replicate 64 0))
+            let msg = rejection (validateAtlasImage "acolyte" anim
+                          (DecodedImage 8 2 (BS.replicate 64 0)))
             msg `shouldSatisfy` T.isInfixOf "acolyte"
             msg `shouldSatisfy` T.isInfixOf "clip"
             msg `shouldSatisfy` T.isInfixOf "clip.png"
@@ -544,10 +556,14 @@ spec = do
                 Right [a, b] → (a, b)
                 other → error ("fixture index must parse to two animations: "
                                ⧺ show (fmap (map aaName) other))
+            -- The YAML facts are DERIVED from the index fixtures, so
+            -- the happy path agrees by construction and each negative
+            -- case below perturbs exactly one thing.
             yaml = Map.fromList
-                [ ("idle",  YamlAnimFacts 8 True True)
-                , ("swing", YamlAnimFacts 12 False False)
-                , ("walk",  YamlAnimFacts 8 True True) ]
+                [ ("idle",  factsFor idle)
+                , ("swing", factsFor swing)
+                , ("walk",  YamlAnimFacts 8 True True
+                                (Map.singleton DirS ["walk/s/frame_000.png"])) ]
 
         it "selects exactly the animations the index declares" $
             case planUnitAtlasStorage "acolyte" yaml [idle, swing] of
@@ -571,21 +587,52 @@ spec = do
 
         it "rejects an index whose fps predates a YAML edit" $
             planUnitAtlasStorage "acolyte"
-                (Map.insert "idle" (YamlAnimFacts 10 True True) yaml)
+                (Map.insert "idle" ((factsFor idle) { yafFps = 10 }) yaml)
                 [idle, swing]
                 `shouldReject` "index fps"
 
         it "rejects an index whose loop flag predates a YAML edit" $
             planUnitAtlasStorage "acolyte"
-                (Map.insert "idle" (YamlAnimFacts 8 False True) yaml)
+                (Map.insert "idle" ((factsFor idle) { yafLoop = False }) yaml)
                 [idle, swing]
                 `shouldReject` "index loop"
 
         it "rejects an index whose flip flag predates a YAML edit" $
             planUnitAtlasStorage "acolyte"
-                (Map.insert "idle" (YamlAnimFacts 8 True False) yaml)
+                (Map.insert "idle" ((factsFor idle) { yafFlip = False }) yaml)
                 [idle, swing]
                 `shouldReject` "index flip"
+
+        -- Source-art freshness, declaration half: an added, removed, or
+        -- re-authored direction and a frame appended to or dropped from
+        -- one are exactly the source edits a stale atlas keeps serving.
+        it "rejects an index whose direction set predates a YAML edit" $ do
+            let dropped = (factsFor idle)
+                    { yafFrames = Map.delete DirN (yafFrames (factsFor idle)) }
+                added = (factsFor idle)
+                    { yafFrames = Map.insert DirW ["a.png", "b.png", "c.png", "d.png"]
+                                      (yafFrames (factsFor idle)) }
+            planUnitAtlasStorage "acolyte" (Map.insert "idle" dropped yaml)
+                [idle] `shouldReject` "index directions"
+            planUnitAtlasStorage "acolyte" (Map.insert "idle" added yaml)
+                [idle] `shouldReject` "index directions"
+
+        it "rejects an index whose per-direction frame count predates a YAML edit" $ do
+            let shortened = (factsFor swing)
+                    { yafFrames = Map.adjust (drop 1) DirW
+                                      (yafFrames (factsFor swing)) }
+            planUnitAtlasStorage "acolyte" (Map.insert "swing" shortened yaml)
+                [swing] `shouldReject` "but the YAML declares 4 frames"
+
+        it "rejects an index whose column count no longer spans the longest row" $ do
+            let grown = (factsFor idle)
+                    { yafFrames = Map.adjust (⧺ ["extra.png"]) DirS
+                                      (yafFrames (factsFor idle)) }
+            -- The per-direction count check fires first and names the
+            -- direction; the column check backs it up for the case where
+            -- counts agree but the sheet was packed for a shorter clip.
+            planUnitAtlasStorage "acolyte" (Map.insert "idle" grown yaml)
+                [idle] `shouldSatisfy` isRejected
 
         -- No partial publication: one bad animation rejects the whole
         -- unit rather than returning the good ones, so the caller never
@@ -594,6 +641,81 @@ spec = do
             planUnitAtlasStorage "acolyte" (Map.delete "swing" yaml)
                 [idle, swing]
                 `shouldSatisfy` isRejected
+
+    -- The check no metadata can make: a source PNG repainted while its
+    -- compiled atlas and index were left in place. The atlas is still
+    -- internally consistent and its own digest still matches, so only
+    -- reading the source art catches it.
+    describe "Unit.Atlas.Index — source art freshness against the atlas" $ do
+        let atlas = DecodedImage fixtureW fixtureH fixturePixels
+            frameOf col = DecodedImage fixtureCellW fixtureCellH
+                              (legacyFramePixels col)
+            check col path frame = validateSourceFrame "acolyte" fixtureAtlas
+                atlas DirS 0 col path frame
+
+        it "accepts a source frame the atlas cell really holds" $ do
+            check 0 "animations/clip/south/frame_000.png" (frameOf 0)
+                `shouldBe` Right ()
+            check 1 "animations/clip/south/frame_001.png" (frameOf 1)
+                `shouldBe` Right ()
+
+        it "rejects a source frame whose pixels the atlas no longer holds" $
+            let repainted = DecodedImage fixtureCellW fixtureCellH
+                    (BS.pack (0xFF : drop 1 (BS.unpack (legacyFramePixels 1))))
+            in check 1 "animations/clip/south/frame_001.png" repainted
+                `shouldReject` "does not match the pixels its atlas cell holds"
+
+        -- One repainted pixel is the whole point: a check that only
+        -- compared sizes, or sampled a corner, would pass this.
+        it "catches a single changed texel anywhere in the cell" $
+            forM_ [0 .. fixtureCellW * fixtureCellH * 4 - 1] $ \i →
+                let orig = BS.unpack (legacyFramePixels 0)
+                    bumped = [ if j ≡ i then b + 1 else b
+                             | (j, b) ← zip [0 ..] orig ]
+                    frame = DecodedImage fixtureCellW fixtureCellH
+                                (BS.pack bumped)
+                in check 0 "f.png" frame `shouldSatisfy` isRejected
+
+        it "rejects a source frame that is no longer the cell's size" $
+            check 0 "f.png" (DecodedImage 3 2 (BS.replicate 24 0))
+                `shouldReject` "but the index's cell is 2x2"
+
+        -- A frame swapped with another of the same animation still
+        -- decodes and still fits the cell, so nothing but the pixels
+        -- distinguishes it.
+        it "rejects two source frames swapped between columns" $ do
+            check 0 "f.png" (frameOf 1) `shouldSatisfy` isRejected
+            check 1 "f.png" (frameOf 0) `shouldSatisfy` isRejected
+
+        it "names the unit, the animation and the SOURCE frame" $ do
+            let msg = rejection
+                    (check 0 "animations/clip/south/frame_000.png" (frameOf 1))
+            msg `shouldSatisfy` T.isInfixOf "acolyte"
+            msg `shouldSatisfy` T.isInfixOf "clip"
+            msg `shouldSatisfy` T.isInfixOf "frame_000.png"
+            msg `shouldSatisfy` T.isInfixOf "pack_atlas.py --compile"
+
+        it "reads the cell at the row and column it was told" $ do
+            -- A two-row sheet: row 1 holds different art, so a cell
+            -- reader that ignored the row would match the wrong frame.
+            let twoRow = fixtureAtlas
+                    { aaAtlasHeight = 4, aaRows = 2
+                    , aaDirections = Map.fromList
+                        [ (DirS, AtlasDirectionRow DirS 0 2)
+                        , (DirN, AtlasDirectionRow DirN 1 2) ] }
+                sheet = DecodedImage 4 4 (BS.pack
+                    [ fromIntegral ((x * 16 + y * 3 + c) `mod` 256)
+                    | y ← [0 .. 3 ∷ Int], x ← [0 .. 3 ∷ Int], c ← [0 .. 3 ∷ Int] ])
+                cellOf row col = BS.concat (atlasCellRows twoRow sheet row col)
+                frame row col = DecodedImage 2 2 (cellOf row col)
+                v row col = validateSourceFrame "acolyte" twoRow sheet
+                                DirS row col "f.png" (frame row col)
+            v 0 0 `shouldBe` Right ()
+            v 1 1 `shouldBe` Right ()
+            validateSourceFrame "acolyte" twoRow sheet DirS 0 0 "f.png"
+                (frame 1 0) `shouldSatisfy` isRejected
+            validateSourceFrame "acolyte" twoRow sheet DirS 0 0 "f.png"
+                (frame 0 1) `shouldSatisfy` isRejected
 
     describe "Unit.Atlas — the render quad uses cell geometry, not the sheet" $ do
         it "sizes the quad from the CELL even though the sheet is wider" $ do

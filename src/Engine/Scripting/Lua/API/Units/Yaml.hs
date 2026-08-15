@@ -24,7 +24,7 @@ import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister
                                              , loadAndRegisterAtlas
                                              , resolveTexturePath)
 import Unit.Atlas.Index (AtlasLoadError(..), YamlAnimFacts(..)
-                        , planUnitAtlasStorage, renderAtlasLoadError)
+                        , renderAtlasLoadError)
 import Unit.Atlas.Load (loadUnitAtlasIndex)
 import Engine.Asset.YamlUnits (UnitYamlDef(..), UnitYamlAnim(..), UnitYamlStat(..), UnitYamlSkill(..), UnitYamlBody(..), UnitYamlBodyAttr(..), UnitYamlInventoryEntry(..), UnitYamlModifier(..), UnitYamlNaturalWeapon(..), UnitYamlStrike(..), UnitYamlNaturalResistance(..), loadUnitYaml, unitYamlBodyPartToBodyPart)
 import Engine.Asset.YamlNames (loadNamePool)
@@ -312,22 +312,31 @@ surfaceZInWorld ws gx gy = do
 --   The unit's compiled index is the whole answer. No index at all — the
 --   state EVERY shipped unit is in, since #1258 requirement 7 keeps
 --   production atlases uncommitted until TEX-4 — means an empty map and
---   an entirely legacy unit. Everything else is
---   'Unit.Atlas.Load.loadUnitAtlasIndex' (read, parse, decode, verify)
---   followed by 'planUnitAtlasStorage' (the YAML-staleness half).
+--   an entirely legacy unit. Everything else, including the freshness
+--   of the compiled artifacts against this unit's own source art, is
+--   'Unit.Atlas.Load.loadUnitAtlasIndex'.
+--
+--   A direction key the engine does not recognise is DROPPED here, the
+--   same way the legacy frame loader drops it (with its own warning),
+--   so the facts handed to the validator describe exactly the frames
+--   this build would load.
 resolveUnitAtlases
     ∷ Text
     → Map.Map Text UnitYamlAnim
     → IO (Either AtlasLoadError (HM.HashMap Text AtlasAnimation))
-resolveUnitAtlases name yamlAnims = do
-    e ← loadUnitAtlasIndex name
-    pure $ case e of
-        Left err           → Left err
-        Right Nothing      → Right HM.empty
-        Right (Just anims) → planUnitAtlasStorage name facts anims
+resolveUnitAtlases name yamlAnims =
+    fmap (fmap (maybe HM.empty id)) (loadUnitAtlasIndex name facts)
   where
-    facts = (\ya → YamlAnimFacts (uyaFps ya) (uyaLoop ya) (uyaFlip ya))
-                <$> yamlAnims
+    facts = animFacts <$> yamlAnims
+    animFacts ya = YamlAnimFacts
+        { yafFps    = uyaFps ya
+        , yafLoop   = uyaLoop ya
+        , yafFlip   = uyaFlip ya
+        , yafFrames = Map.fromList
+            [ (dir, map T.unpack paths)
+            | (dirKey, paths) ← Map.toList (uyaFrames ya)
+            , Just dir ← [parseDirKey dirKey] ]
+        }
 
 -- * Helpers
 
