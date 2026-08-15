@@ -400,7 +400,16 @@ end
 -- state — without this, a unit with a full canteen who walks past a
 -- pond never registers it, then later when thirsty has no memory and
 -- can't refill (refill_canteen requires a known source). Cheap to
--- keep running; FOV is small (~40 tiles).
+-- keep running; FOV is small (~40 tiles at noon).
+--
+-- Since #1230 that FOV is NIGHT-AWARE: unit.getVisibleTiles scales its
+-- radius by the page-local nightPerceptionFactor, so a perception-1.0
+-- unit sees 6 tiles at noon and 3 at midnight. That is intentional —
+-- an acolyte should not spot a pond in the dark it could see by day —
+-- and it means this scan is a repeated OPPORTUNITY, not a one-shot
+-- survey: a source missed on a night pass is picked up on a later one,
+-- and knownWaterSources only ever grows, so nothing is forgotten when
+-- the radius shrinks.
 -- Adds every visible water tile to knownWaterSources, dedup'd by
 -- WATER_SOURCE_DEDUP_TILES so a long river contributes only a handful
 -- of entries instead of dozens. Returns the count of brand-new sources

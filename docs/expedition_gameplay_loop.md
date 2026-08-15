@@ -66,6 +66,11 @@ concrete precondition
   epic #159 and issues #777–#782. `Location.Instance` now owns stable placed
   identities, bounds, content-spawn state, and the persisted lifecycle added by
   closed issue #911.
+- **D-14, D-15, D-16 and D-22 landed in #1230.** The bullets below describe the
+  pre-#1230 code and are kept as the design's starting point, not as a
+  description of the tree: reveal is now sight-based, the icon model is
+  shared-unknown / type / dark-type, `unitVisibleTiles` applies the night
+  factor to its radius, and `discovery_margin` no longer exists anywhere.
 - Per-unit experiential location knowledge shipped in closed issue #915 and is
   persisted through `lua.unit_ai`; the global discovery lifecycle remains a
   separate cartographic layer.
@@ -355,6 +360,16 @@ Discovery changes the icon, emits clear player feedback, and persists across
 save/load. It does not imply that the location is cleared or that all of its
 contents are known.
 
+> **Superseded 2026-08-15 by D-15 and D-22, landed in #1230.** The approach
+> margin above describes what #780 shipped and remains accurate as history.
+> The `discovery_margin` field is gone — from the location YAML, the runtime
+> definition, the live instance, both Lua tables, and the `world-pages` wire
+> (v7). `bounds` is the only location footprint, and the trigger is the
+> intersection of a player-owned unit's night-aware visible-tile set with
+> those bounds. The "slightly before a unit physically enters" intent it was
+> introduced for is now served better by sight itself, which reaches further
+> than any halo in the open and not at all through a hill.
+
 ### Portal placement feedback
 
 The portal's construction ghost follows the general building-placement rule:
@@ -390,7 +405,7 @@ from each location's persisted lifecycle state.
 now a first-class persisted record (`Location.Instance.LocationInstance`),
 keyed per world page by a stable `LocationInstanceId` allocated at placement
 time from the deterministic overlay. It carries its definition id, anchor,
-resolved absolute bounds, discovery margin, display name, one-time
+resolved absolute bounds, display name, one-time
 content-spawn flag, and its lifecycle
 (`unknown → hinted → discovered → active → cleared → depleted`).
 `world.listPlacedLocations()` reports all of it and
@@ -526,8 +541,8 @@ This replaces the `discovery_margin` halo as the trigger for **both** layers.
 `findDiscoveries` and #915's `findAwareness` keep deriving from ONE shared
 enumeration — precisely so the map layer and per-unit `knownLocations` cannot
 drift — which now enumerates sight contacts instead of halo contacts (D-15,
-resolving Q-7). Nothing consumes `discovery_margin` afterwards; Q-11 decides
-whether the field is kept, narrowed, or removed.
+resolving Q-7). Nothing consumes `discovery_margin` afterwards, and D-22
+(resolving Q-11) removes it outright.
 
 Everything else about discovery is unchanged: the promotion is one-way, fires
 exactly one player-facing event, is page-scoped, and persists.

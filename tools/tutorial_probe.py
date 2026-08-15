@@ -456,6 +456,21 @@ def water_sources(port: int, uid: int) -> set[tuple[int, int]]:
     return found
 
 
+def pin_daylight(port: int) -> None:
+    """Pin the world clock to local noon, so every sight-based check in
+    this probe is deterministic.
+
+    #1230 made `unit.getVisibleTiles` scale its radius by the page-local
+    `nightPerceptionFactor`: at midnight a perception-1.0 unit sees 3
+    tiles where it sees 6 at noon. Without this, whether the tutorial's
+    water objective is reachable would depend on what hour the run
+    happened to reach — the exact flakiness a probe must not have. Noon
+    is the maximum, so pinning it here keeps the objective's difficulty
+    at what it was before the night factor applied to the binary set.
+    """
+    send(port, "world.setTime(12, 0); return 'ok'", timeout=10.0)
+
+
 def sees_water(port: int, uid: int) -> bool:
     """Whether ANY tile in this unit's own field of view is drinkable water.
 
@@ -464,6 +479,13 @@ def sees_water(port: int, uid: int) -> bool:
     same lake/river test scripts/unit_ai_water.lua's scan uses — not a
     distance heuristic against `awareRangeTiles`. If this is false, the
     unit's own scan cannot have produced a single entry in its memory.
+
+    Since #1230 that FOV is night-aware — a perception-1.0 unit's radius
+    halves at midnight — so this predicate depends on the world clock.
+    Callers that compare it against a distance MUST pin the clock first
+    (`pin_daylight`); this function deliberately reports whatever the
+    current hour gives rather than papering over it, because the
+    engine's answer IS the contract being checked.
     """
     raw = send(port,
                f"for _, t in ipairs(unit.getVisibleTiles({uid}) or {{}}) do "
@@ -577,6 +599,13 @@ def phase_discover_and_share(port: int, finder: int, mate: int,
     range or movement requirement, so the freeze costs the share leg
     nothing.
     """
+    # #1230: unit.getVisibleTiles is night-aware, so both the finder's
+    # "sees the pond it is standing on" and the recipient's "sees
+    # nothing" now depend on the world clock. Pin it to noon — the
+    # widest radius — so this phase asserts the same thing at every hour
+    # a run can reach, and so a PASS on "the recipient is blind" is
+    # earned by its position rather than by darkness.
+    pin_daylight(port)
     blind_before = not sees_water(port, mate)
     check("the recipient starts with no water anywhere in its own field of view",
           blind_before)

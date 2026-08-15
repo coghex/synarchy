@@ -1114,7 +1114,7 @@ before touching each area:
   deterministic overlay's `overlayToList` order — never at stamp time,
   never from hashmap order — so ids survive save/load and chunk
   eviction. It stores its definition id, anchor, resolved absolute
-  bounds (#777), discovery margin, display name AND optional English
+  bounds (#777), display name AND optional English
   gloss (#1101 — see below), one-time content-spawn flag
   (#90), and lifecycle `unknown → hinted → discovered → active →
   cleared → depleted`. Consumers read the STORED values, never
@@ -1122,9 +1122,11 @@ before touching each area:
   chunk-keyed (#424) and was untouched. Transitions are one-way
   (`promoteLifecycle` refuses backward AND same-state), which is what
   makes discovery fire exactly one event. Nothing drives an instance
-  past `discovered` yet; `hinted` is deliberately unreachable (every
-  location is cartographically visible for now — it is reserved for a
-  future information-revealed class, don't delete it). Queries:
+  past `discovered` yet; `hinted` is deliberately unreachable and #1230
+  retired the future information-reveal class it was reserved for — it
+  is now simply an ordinary unknown state (shared unknown icon,
+  promotable to `discovered` on sight), kept because the enum is
+  positionally serialized and append-only, so don't delete it. Queries:
   `world.listPlacedLocations([pageId])` (extended, not repurposed —
   `id` is still the DEFINITION id; `instance_id`/`lifecycle`/`name`/
   `contents_spawned` are new), `world.getLocationInstance(id[, pageId])`,
@@ -1132,7 +1134,8 @@ before touching each area:
   `world.markLocationContentsSpawnedById(id[, pageId])`. The
   coordinate-addressed `hasSpawnedLocationContents`/
   `markLocationContentsSpawned` remain compatibility wrappers resolving
-  to the chunk's first instance. Persistence: `world-pages` (v6 since
+  to the chunk's first instance. Persistence: `world-pages` (v7 since
+  #1230, which dropped the stored discovery margin; v6 since
   #1104; v5 since #1102; v4 since #1101; v3 since #1092; #911 introduced
   its v2), with a
   frozen v1 DTO whose per-chunk flags decode PENDING and are resolved
@@ -1256,19 +1259,55 @@ before touching each area:
   open, hosted by `scripts/name_plate.lua` on `hud.global_page` (NOT
   `world_page` — a world's name is not a zoomed-in concern, and a plate
   on a band-swapped page is unhittable in the zoom map). Persistence:
-  `world-pages` v6, with `PageCoreDTOv5`/`WorldGenParamsDTOv4`/
+  `world-pages` v7 (v6 frozen by #1230 as
+  `PageCoreDTOv6`/`WorldGenParamsDTOv5`/`LocationInstancesDTOv3`), with
+  `PageCoreDTOv5`/`WorldGenParamsDTOv4`/
   `WorldIdentityDTOv2`/`LocationInstanceDTOv2`/`RiverNameDTOv1` frozen —
   every historical shape decodes with the source ABSENT, never inferred.
   Gates: hspec `--match "Language etymology"` / `--match "Etymology
   panel"`, `tools/etymology_probe.py` (manual-only, `needs-gpu`).
-- **Location discovery (#780)** — a one-way lifecycle promotion to
-  `discovered`, fired when a `uiFactionId == "player"` unit enters the
-  instance's `discovery_margin` halo; ticks for EVERY loaded page,
-  independent of pause; emits exactly one `location_discovery` event
-  (hidden-page discoveries omit clickable coords). Independent of the
-  stamped/contents-spawned flags. Gates:
+- **Location discovery (#780, sight-based since #1230)** — a one-way
+  lifecycle promotion to `discovered`, fired when a
+  `uiFactionId == "player"` unit SEES the location: its visible-tile set
+  intersects the instance's own stored `liBounds`, seam-aware, one tile
+  being enough. The `discovery_margin` halo is GONE — from the YAML, the
+  def, the instance, both Lua tables and the wire (`world-pages` v7) —
+  and `bounds` is the only location footprint left. Sight is
+  `Unit.LineOfSight.visibleTilesOnPage`, the SAME calculation the public
+  `unit.getVisibleTiles` runs (perception radius scaled by the
+  page-local `nightPerceptionFactor`, 120° facing cone, terrain-Z
+  occlusion) minus that query's `wmVisible` gate, which is what keeps
+  reveal working on a loaded-but-hidden page while
+  `unitVisibleTiles` still reports `[]` there. Terrain, clock and world
+  size come from the RESOLVED page's own refs, never
+  `activeWorldSizeChunks` (its visibility fallback would compute a
+  hidden page's night radius from the wrong circumference). Ticks for
+  EVERY loaded page, independent of pause; emits exactly one
+  `location_discovery` event (hidden-page discoveries omit clickable
+  coords). Independent of the stamped/contents-spawned flags. A
+  night-scaled radius is intentionally shorter, so any distance-sensitive
+  expectation over `unit.getVisibleTiles` (`scripts/unit_ai_water.lua`'s
+  `scanForWater`, `tools/tutorial_probe.py`'s `sees_water`) must pin the
+  clock rather than trust whatever hour a run reaches. Gates:
   `location_content_probe.py`, `location_embark_probe.py`; hspec
-  `--match "Location discovery"` / `--match "Location map icons"`.
+  `--match "Location discovery"` / `--match "Location map icons"` /
+  `--match "Unit.LineOfSight"`.
+- **Location map icons (#781, reshaped by #1230)** — a definition
+  declares ONE optional `map_icon: <path>` (its TYPE icon); the paired
+  `map_icons: {undiscovered, discovered}` schema is gone. All six
+  lifecycle constructors map explicitly
+  (`World.Render.Zoom.Icons.locationIconAppearance`): `unknown`/`hinted`
+  draw the ONE shared `assets/textures/icons/location/location_unknown.png`
+  — registered once under `locationUnknownIconTextureName`,
+  independently of every definition, so the zoom map never leaks WHAT is
+  there before a unit has seen it — `discovered`/`active` draw the
+  def's own `map_icon`, and `cleared`/`depleted` draw that SAME bitmap
+  with darkened RGB (`clearedIconTint`), the supplied zoom-fade alpha
+  preserved exactly in all six. The dark tint is an explicit,
+  enumerated exception to the no-tinting rule, authorized by
+  `docs/expedition_gameplay_loop.md` D-16 and confined to the icon
+  quad's own `Vec4`. A def with no `map_icon` places no annotation at
+  all. Asset gate: `tools/location_map_icon_asset_check.py`.
 - **Per-unit location knowledge (#915)** — the EXPERIENTIAL layer beside
   that CARTOGRAPHIC one, and neither derives from the other: global
   lifecycle = "the player has mapped it", `aiState[uid].knownLocations`
@@ -1346,7 +1385,7 @@ before touching each area:
   to a single staging tile and held there by the PAUSE, then same verb,
   same destination, same paused window, same seeded hunger deficit —
   measured once BOTH are
-  inside the ruin's halo, differing only in FOOD (the canteen is left
+  at the ruin, differing only in FOOD (the canteen is left
   full on both: a dry one puts `refill_canteen` at its 7.5 peak, above
   `follow_command`, and the control then abandons the leg to walk to
   the water the scout radioed about — a behavioural difference, not the
@@ -1376,7 +1415,7 @@ before touching each area:
   went up — use `engine.setPaused` when you need a unit to actually
   stay put, and re-read positions after pausing); and the observation
   point is both
-  travellers inside the halo in ONE COHERENT SNAPSHOT — a single paired
+  travellers at the ruin in ONE COHERENT SNAPSHOT — a single paired
   read revalidated with the simulation STOPPED, since two separate
   `unit.getInfo` round trips let the sim run in between and a pair that
   was never inside together can satisfy them, and since a unit that
