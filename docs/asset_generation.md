@@ -155,6 +155,147 @@ Recipe for a new unit (validated with bear_brown, 2026-06):
    config, `unit_resources.lua` species block, `unit_ai_combat_attack.lua` COMBAT_ANIM_SUFFIX entry) — engine/
    Lua territory, check with the user first.
 
+## Unit animation atlases: the compiled runtime path
+
+Everything above makes *source artwork*. This section is about the other
+half — turning artwork the repository already tracks into the artifacts the
+engine actually samples. **The two are entirely separate jobs**, and most
+sessions need only this one: compiling costs seconds, touches no external
+service, and invents nothing. If you are not adding or repainting art, you
+are here.
+
+`assets/textures/units/<unit>/animations/**/frame_NNN.png` stay the
+hand-edited source of truth (D-1) and `data/units/<unit>.yaml` stays the only
+hand-edited semantic authority (D-11). `tools/pack_atlas.py --compile` turns
+that pair into one atlas per animation plus a generated index:
+
+```
+assets/textures/units/<unit>/atlas/<animation>.png   one image per animation
+assets/textures/units/<unit>/atlas/index.json        the generated index
+```
+
+Both are **tracked in git**, so a fresh checkout runs with no packer step
+(D-12). Since #1261 the engine has no other way to load a unit animation: a
+unit that declares animations and ships no compiled artifacts is refused
+outright, with no fall back to the frames beside them.
+
+### Fresh checkout: validate and preview every unit
+
+```bash
+python3 -m pip install --user -r tools/requirements-assets.txt  # PyYAML + Pillow
+python3 tools/pack_atlas.py --validate-only --strict            # ~2 s, whole corpus
+python3 tools/pack_atlas.py --compile --check                   # nothing out of date
+python3 tools/test_pack_atlas.py                                # the checker's own self-test
+```
+
+On a PEP 668 "externally managed" Python (recent Homebrew and most
+distributions) that first line refuses; use a virtualenv, your package
+manager's `python3-yaml` / `python3-pillow`, or `--break-system-packages`
+if you know what your environment is.
+
+Both Python dependencies are load-bearing for *validation*, not just for
+compilation: every declared frame is decoded, and every recorded digest is
+over decoded RGBA8. An absent decoder is one loud error naming the install
+command, never a silent skip. Validation does not need the exact pinned
+toolchain — it decodes rather than encodes — so any reasonably recent Pillow
+verifies a committed atlas. Compilation should use the pins.
+
+**Take the unit roster from the inventory, never from a list in a
+document.** The tool walks the filesystem first, so its own output is the
+authoritative roster:
+
+```bash
+python3 tools/pack_atlas.py --validate-only --strict
+# OK — 7 unit declaration(s) (0 asset-only), 116 animation(s), 4620 frame(s); …
+# BUDGET — 116 resident animation image(s) for 116 animation(s) across 7 …
+ls -d assets/textures/units/*/            # the same seven trees
+```
+
+Then eyeball each one through the real viewer. `--preview` opens a real
+window (there is no offscreen variant), so run it yourself rather than from
+an agent session:
+
+```bash
+cabal run exe:synarchy -- --preview units/acolyte
+```
+
+The viewer is on the production asset path (D-9): it reads the same index,
+through the same loader, with the same frozen cell arithmetic gameplay uses.
+A malformed index or a stale atlas fails there exactly as it fails in game —
+which is the entire reason it is an acceptance surface. Its debug-console
+dump (`require("scripts.preview_manager").dump()`) reports the playing
+frame's atlas path, cell and UVs if you need to check a specific cell.
+
+### Regenerating after an art change
+
+```bash
+python3 tools/pack_atlas.py --compile --unit acolyte   # one unit
+python3 tools/pack_atlas.py --compile                  # everything
+python3 tools/pack_atlas.py --compile --check          # report staleness, write nothing
+```
+
+Compilation refuses outright on an inventory that does not validate, so fix
+declaration errors first. A run is deterministic and **local**: it compares
+each artifact against what it would generate and writes only on a real
+difference. Repainting one frame rewrites that animation's atlas and its
+unit index, and nothing else — measured at 2 of 123 tracked artifacts
+(`docs/texture_infrastructure.md`, *Measured results*). An mtime-only touch
+changes nothing; the digests are over content.
+
+**Restart to see it (D-7).** There is no hot reload. A recompiled atlas takes
+effect the next time the game or the preview boots — if a change seems not to
+have landed, restart before debugging it.
+
+### When something is stale or broken
+
+`--validate-only` regenerates each index from the live sources and compares,
+so it reports the real cause rather than a checksum mismatch. The usual ones:
+
+| Report | What happened | Fix |
+|---|---|---|
+| `does not match a fresh compile` / `atlas content does not match its sources` | art or YAML changed, artifacts did not | `--compile --unit <name>` |
+| `is not canonically serialized` | the index was hand-edited or reformatted | `--compile --unit <name>` |
+| `obsolete compiler-owned output` | an animation was renamed or deleted | `--compile --unit <name>` (it sweeps) |
+| `generated atlas directory has no index.json` | a partial copy or a bad merge | `--compile --unit <name>` |
+| `unclassified frame on disk` | a new frame nobody declared | declare it in `data/units/<unit>.yaml` |
+| `budget: expected N resident animation image(s)` | something put per-frame images where one per animation belongs | see below |
+| `unit-texture memory budget exceeded` | the roster outgrew the recorded budget | see below |
+
+**Never hand-edit `index.json`, and never "bless" a digest by copying the
+reported value into the file.** The comparison is against a fresh
+regeneration, not against the numbers the file carries about itself, so an
+edited index cannot certify anything — it just moves the failure. Regenerate.
+
+The two budgets live in `tools/unit_texture_budget.json`, which is the single
+source the strict gate reads:
+
+- **Image/slot budget** — a hard error. One resident image and one bindless
+  registration per compiled animation (D-2), derived from the index's own
+  animation count. A breach means per-frame registrations are creeping back;
+  the diagnostic names the unit, the expected and actual counts, and the
+  offending files.
+- **Resident-memory budget** — a warning, so `--strict` (CI and `make ci`)
+  fails on it. Crossing it is D-10's precondition for resuming deferred
+  TEX-5 (KTX2 atlas loading). It is a decision to escalate to the project
+  owner, not a number to quietly raise: the recorded threshold carries the
+  owner's confirmation. It is also **not** D-12's separate guardrail on
+  tracked artifact bytes on disk.
+
+### Adding a new unit's art
+
+The generation recipe above still applies; only the tail changes. After the
+frames land and `data/units/<unit>.yaml` declares them:
+
+```bash
+python3 tools/pack_atlas.py --validate-only --strict --unit <unit>   # declarations vs art
+python3 tools/pack_atlas.py --compile --unit <unit>                  # artifacts
+cabal run exe:synarchy -- --preview units/<unit>                     # eyeball it
+git add assets/textures/units/<unit>                                 # sources AND atlas/
+```
+
+Commit the generated `atlas/` directory with the source frames. Leaving it
+out ships a unit the engine will refuse to register.
+
 ## Gotchas index
 
 - ETA ~5-8 min/object; tool says 30-90s. Plan batches accordingly.

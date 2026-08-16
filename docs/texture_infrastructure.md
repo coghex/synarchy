@@ -17,7 +17,7 @@ concrete precondition
 - [x] TEX-2. Build the deterministic per-animation atlas compiler and index — [#1258]
 - [x] TEX-3. Add atlas-frame storage and sampling to the unit runtime — [#1259]
 - [x] TEX-4. Migrate acolyte as the end-to-end atlas pilot — [#1260]
-- [ ] TEX-5. Add portable KTX2 atlas loading when the memory budget requires it — [deferred]: resume after TEX-4 establishes the baseline and projected unit content would exceed its unit-texture memory budget
+- [ ] TEX-5. Add portable KTX2 atlas loading when the memory budget requires it — [deferred]: resume when the recorded unit-texture memory budget is exceeded — `tools/pack_atlas.py --validate-only --strict` checks it against `tools/unit_texture_budget.json` on every run and warns by name when it fires (measured 101.60 MiB, projected 203.19 MiB, threshold 384 MiB — see *Measured results*)
 - [x] TEX-6. Migrate the remaining units and retire per-frame runtime loading — [#1261]
 - [x] TEX-7. Close the pipeline with documentation and focused regression gates — [#1262]
 
@@ -512,9 +512,14 @@ eventually outweighs that convenience.
   size/churn evidence is recorded.
 - **Out of scope:** Replacing the format-neutral animation/index model or
   requiring every atlas to use the same encoding.
-- **Open questions:** None. Deferral precondition: TEX-4 has established the
-  baseline and the projected unit-content plan would exceed the resulting
-  unit-texture memory budget. Until then this ledger entry remains `[deferred]`.
+- **Open questions:** None. Deferral precondition, MECHANICALLY CHECKED since
+  TEX-7: the baseline is established (*Measured results*) and the budget that
+  activates this slice is recorded in `tools/unit_texture_budget.json` —
+  384 MiB of decoded RGBA8 resident unit-animation atlas, compared as
+  `measured x 2.0 > threshold`. `pack_atlas.py --validate-only --strict`
+  evaluates it on every run and fails the strict gate by name when it fires,
+  so this entry stops being `[deferred]` because a check said so, not because
+  someone remembered to look.
 
 ### TEX-6. Migrate the remaining units and retire per-frame runtime loading
 
@@ -610,6 +615,155 @@ eventually outweighs that convenience.
   session, and one logical atlas does not retain duplicate production images.
 - The legacy per-frame unit-animation runtime path is removed only after every
   unit and preview path has migrated successfully.
+
+## Measured results
+
+Recorded by TEX-7 (#1262) so the arc's evidence outlives the pull requests
+that produced it. Everything below is reproducible from the commands given.
+
+### Provenance
+
+- **Roster:** the 7 tracked unit trees, 116 animations, 4,620 source animation
+  frames — the corpus `python3 tools/pack_atlas.py --validate-only --strict`
+  reports, which is the authority. Non-animation textures (portraits, direct
+  `sprite`s, `directional_sprites`, `unknown_unit/rotations/`) are outside
+  this inventory and outside every number here.
+- **Revisions:** *after* = this arc's completed state (`aabf94ef`, #1261, plus
+  TEX-7's own non-asset changes); *before* = `b2bc401d`, the commit
+  immediately preceding #1260's first atlas commit, where every unit animation
+  still loaded one image per frame.
+- **Platform (load time only):** macOS 25.6.0 on aarch64, GHC 9.12.2, cabal
+  production profile (`-O2 -optc-O3`; *not* `-f dev`), warm `dist-newstyle`,
+  warm page cache.
+- **Source evidence:** #1260 (`0758edf8`, `9d8e91bc`, `af3ad5e9`) for the
+  acolyte pilot; #1261 (`aabf94ef`) for the full migration.
+
+### Images, bindless registrations, and uploaded bytes
+
+One image per animation means one texture handle and one bindless
+registration per animation, so the first two columns are the same number
+measured two ways. Uploaded bytes are decoded RGBA8.
+
+| Unit | Images before | Images after | Uploaded before | Uploaded after |
+|---|---:|---:|---:|---:|
+| acolyte | 2,250 | 54 | 19.78 MiB | 20.20 MiB |
+| bear_brown | 1,380 | 32 | 44.56 MiB | 44.56 MiB |
+| red_squirrel | 270 | 9 | 1.33 MiB | 1.33 MiB |
+| technomule | 145 | 4 | 4.68 MiB | 4.68 MiB |
+| tiller | 30 | 2 | 0.97 MiB | 0.97 MiB |
+| unknown_unit | 80 | 2 | 2.58 MiB | 2.58 MiB |
+| white_tailed_deer | 465 | 13 | 27.27 MiB | 27.27 MiB |
+| **total** | **4,620** | **116** | **101.17 MiB** | **101.60 MiB** |
+
+**Images and bindless registrations fall 97.5%** (4,620 → 116). **Uploaded
+bytes are essentially unchanged** — up 0.42%, entirely D-5's transparent row
+padding, and confined to `acolyte`, the one unit with unequal per-direction
+counts. That is the expected result and worth stating plainly: atlasing moves
+the same pixels into far fewer images. It removes per-image allocation,
+descriptor and file-load overhead; it does **not** compress. Reducing resident
+*bytes* is deferred TEX-5's job, which is why the budget that activates it is
+about resident memory rather than image count.
+
+Runtime confirmation, from a real engine rather than from the artifacts:
+`python3 tools/combat_anim_probe.py --roster-only` resolves every animation's
+atlas texture name and asserts every per-frame name is *unregistered* — 7
+units, 116 animations, 4,620 frames, zero frames registered individually.
+
+### Load time
+
+Metric: wall clock from process start until `engine.getTextureHandle` resolves
+**every** animation texture of the four units both revisions share
+(`acolyte`, `bear_brown`, `red_squirrel`, `technomule` — 99 atlases after,
+4,045 per-frame images before). Same art, same declarations, two storage
+representations. Measured under `--offscreen --size 640x480` so a GPU is
+present and both paths genuinely decode and upload; polled at 50 ms, each poll
+verifying the complete name set.
+
+| | before (per-frame) | after (atlas) |
+|---|---:|---:|
+| min of 4 runs | 6.56 s | 4.72 s |
+| median | 6.60 s | 4.74 s |
+
+**1.86 s faster (28%)**, with run-to-run spread under 50 ms on both sides.
+The figure covers whole-process startup — Vulkan init and the entire startup
+loader, not units alone — so the unit-specific improvement is larger than 28%
+of the work it replaced.
+
+Decomposition, and the cost the atlas path *adds*: timing
+`engine.loadUnitYaml` alone under `--headless` (no device) gives 1.076 s after
+versus 0.037 s before for the same four units. That is not a regression being
+hidden — the two numbers measure different work. Headless, the per-frame path
+only *enqueued* 4,045 upload messages and its decoding never happened, while
+the atlas path performs #1259's pass-3 verification up front: it decodes every
+source frame and compares it against its atlas cell. That verification is
+one-time, at definition load, on the Lua thread, and off the frame path; the
+offscreen numbers above are what the two paths actually cost end to end.
+
+### Tracked artifacts and D-12's guardrail
+
+| | source frames | derived atlases | ratio | indices |
+|---|---|---|---|---|
+| acolyte (TEX-4) | 1.58 MiB (2,250) | 0.93 MiB (54) | **0.59x** | 59.4 KiB |
+| the six TEX-6 trees | 5.35 MiB (2,370) | 3.94 MiB (62) | **0.74x** | 67.0 KiB |
+| all seven | 6.93 MiB (4,620) | 4.88 MiB (116) | **0.70x** | 126.5 KiB |
+
+Derived artifacts are *smaller* than their sources at every scope, well inside
+D-12's 2x ceiling, so its stop-and-choose-a-distribution-strategy clause (Git
+LFS, release artifacts, a build cache) is not reached. Indices are reported
+separately and are not in the ratio.
+
+### Changed-artifact locality
+
+D-12 also requires that editing one animation not rewrite unrelated artifacts.
+Measured by zeroing every tracked artifact's mtime, flipping **one texel of
+one frame** of `acolyte/idle/south`, and running `--compile`:
+
+- 123 tracked artifacts across all seven units;
+- **2 rewritten** — `acolyte/atlas/idle.png` and `acolyte/atlas/index.json`;
+- expected change set: that animation's atlas plus its own unit's generated
+  index. Observed set is exactly that, and nothing else was opened for writing.
+
+`tools/test_pack_atlas.py`'s `an isolated edit rewrites only that atlas and
+its unit index` scenario keeps this property under test on fixtures.
+
+### The unit-texture memory budget (TEX-5's trigger)
+
+Recorded in `tools/unit_texture_budget.json`, which is the single
+machine-readable source `pack_atlas.py --validate-only --strict` reads.
+
+- **Measured:** 106,531,968 bytes (101.60 MiB) of decoded RGBA8 resident unit
+  animation atlas, aggregated over the whole tracked roster.
+  `scripts/startup_loader.lua` feeds every `data/units/*.yaml` to the loader at
+  boot, so that whole total is resident in every session regardless of what
+  spawns — the aggregation scope is the roster, not a spawned subset.
+- **Projection input:** a 2.0x roster-growth factor, applied to the measured
+  total rather than to a per-unit estimate, because per-unit cost varies by an
+  order of magnitude with canvas size (48x48 `acolyte` at 0.37 MiB/animation
+  versus 92x92 `bear_brown` at 1.39 MiB/animation) and it is the mix that
+  scales.
+- **Threshold:** 402,653,184 bytes (384 MiB). Projected 203.19 MiB is 53% of
+  it, leaving ~181 MiB of headroom — roughly four more `bear_brown`-scale
+  trees. Chosen so the trigger fires on a real content-plan expansion rather
+  than on the next single large quadruped.
+- **Comparison rule:** `measured x roster_growth_factor > threshold` activates
+  TEX-5. Strict `>`, so sitting exactly at the threshold does not fire. The
+  breach is a WARNING, which makes a plain `--validate-only` report it and
+  `--strict` — what CI and `make ci` run — fail on it, so the resume-or-raise
+  decision cannot pass unnoticed.
+- **Confirmation:** proposed by the solver from the measurements above and
+  confirmed by the project owner on 2026-08-16, per this slice's 2026-08-11
+  sign-off. Raising it is the owner's call, not a maintenance edit.
+
+This is a *resident memory* budget and is deliberately separate from D-12's
+tracked-artifact-bytes guardrail above; a future KTX2 artifact set is measured
+against D-12 separately and must not silently expand either one.
+
+The image/slot half of the same document is a hard error rather than a warning:
+at most one resident image and bindless registration per compiled animation,
+the bound derived from each unit's own index so it keeps holding as the roster
+grows. A change that put one image per *frame* back where one per animation
+belongs fails immediately, naming the unit, the expected and actual counts, and
+the offending files.
 
 ## Risks and mitigations
 

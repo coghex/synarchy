@@ -198,6 +198,28 @@ withCompiledUnitFixture mIndex action = do
         writeFile (resRoot </> unitAtlasIndexPath (T.pack brokenUnit)) doc
     (`finally` removeDirectoryRecursive resRoot) (action resRoot catRoot)
 
+-- | A STRUCTURALLY sound index whose animation declares a
+--   representation this build has no decoder for — the shape deferred
+--   TEX-5 will one day make readable, and which must reject cleanly
+--   until it does. Everything else about the document is canonical, so
+--   a rejection here can only be about the format.
+unknownFormatIndex ∷ String → String
+unknownFormatIndex unit = concat
+    [ "{\"schema_version\":1,\"generator\":\"tools/pack_atlas.py\""
+    , ",\"tool_version\":1,\"digest_algorithm\":\"sha256\""
+    , ",\"unit\":\"", unit, "\""
+    , ",\"direction_order\":[\"south\",\"south-west\",\"west\""
+    , ",\"north-west\",\"north\",\"north-east\",\"east\",\"south-east\"]"
+    , ",\"animations\":[{\"name\":\"idle\",\"storage_format\":\"ktx2\""
+    , ",\"atlas_path\":\"assets/textures/units/", unit, "/atlas/idle.png\""
+    , ",\"atlas_width\":32,\"atlas_height\":32"
+    , ",\"cell_width\":32,\"cell_height\":32,\"columns\":1,\"rows\":1"
+    , ",\"flip\":true,\"fps\":8,\"loop\":true"
+    , ",\"directions\":[{\"direction\":\"south\",\"row\":0"
+    , ",\"frame_count\":1}]"
+    , ",\"source_digest\":\"aaaa\",\"atlas_digest\":\"bbbb\"}]}"
+    ]
+
 -- A unit whose YAML DECLARES an animation while its tree ships no
 -- compiled artifacts at all — the state every unit but acolyte was in
 -- before #1261, and a rejection since. Its own temp resource root, for
@@ -605,6 +627,27 @@ spec = do
                 result `shouldSatisfy` \case
                     Left (UnitAtlasRejected _) → True
                     _                          → False
+
+        -- D-9 keeps the preview on the production path, which means the
+        -- format-neutral boundary (D-10) has to reject HERE too. A
+        -- viewer that fell back to the source frames beside an
+        -- unreadable representation would render art gameplay cannot,
+        -- and that is precisely the class of regression this viewer
+        -- exists to catch.
+        it "REJECTS a representation this build cannot read, rather than \
+           \falling back to the frames beside it" $
+            withCompiledUnitFixture (Just (unknownFormatIndex brokenUnit)) $
+                \resRoot catRoot → do
+                    result ← buildPreviewUnitIn resRoot catRoot brokenUnit
+                    case result of
+                        Right _ → expectationFailure
+                            "an unreadable representation still previewed"
+                        Left err → do
+                            err `shouldSatisfy` \case
+                                UnitAtlasRejected _ → True
+                                _                   → False
+                            unitFocusErrorMessage err `shouldSatisfy`
+                                T.isInfixOf "storage_format"
 
         it "resolves one of the trees #1261 promoted out of the \
            \inventory-only asset_units: form, with its declared \
