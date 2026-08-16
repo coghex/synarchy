@@ -252,6 +252,23 @@ ladder in `unit_ai_fetch.lua`. Submodules reach the shared singleton via
 `package.loaded["scripts.unit_ai"]`; public API functions stay attached
 to the `unitAi` table from whichever submodule owns them.
 
+**`math.random` is GAMEPLAY's stream (#1330).** A Lua state has exactly
+one, and eleven modules draw from it (AI cadence, thoughts, mental
+state, wildlife, sleep, water scanning, location rolls). Its entropy is
+established once per state by `Lua.openlibs` in
+`Engine.Scripting.Lua.Thread.createLuaBackendState`, before
+`scripts/init.lua` loads — so **nothing under `scripts/` may call
+`math.randomseed`**: reseeding replaces per-state entropy (clock AND
+state address) with the caller's choice, and two engines launched in
+the same second then share one simulation. `scripts/ui/randbox.lua` did
+exactly that, and also spent eight gameplay draws per suggested world
+seed, so clicking randomize shifted every later simulation decision.
+Non-gameplay code that needs random values keeps its OWN stream —
+`scripts/ui/random.lua` (SplitMix64, seeded from the same time+address
+recipe Lua's own auto-seed uses) is the UI widget kit's. Gate: hspec
+`--match "random stream ownership"`, which pairs behavioural isolation
+and per-instance-entropy cases with the two source guards.
+
 ### UI system
 `UI.*` handles focus management, text input, and UI rendering; layout
 and behavior are driven from Lua. Regression suites:

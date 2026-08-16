@@ -4,6 +4,11 @@
 local scale = require("scripts.ui.scale")
 local boxTextures = require("scripts.ui.box_textures")
 local utf8Safe = require("scripts.ui.utf8_safe")
+-- #1330: every value this widget rolls comes from the UI kit's own
+-- stream. `math.random` belongs to gameplay — AI cadence, thoughts,
+-- mental state, wildlife — and a suggested seed is not a simulation
+-- decision, so pressing randomize must not move it.
+local uiRandom = require("scripts.ui.random")
 local randbox = {}
 
 -----------------------------------------------------------
@@ -63,14 +68,14 @@ function randbox.newHexSeed()
     local hex = ""
     local chars = "0123456789ABCDEF"
     for i = 1, 8 do
-        local idx = math.random(1, #chars)
+        local idx = uiRandom.integer(1, #chars)
         hex = hex .. chars:sub(idx, idx)
     end
     return hex
 end
 
 local function randomNumber(minVal, maxVal)
-    return tostring(math.random(minVal, maxVal))
+    return tostring(uiRandom.integer(minVal, maxVal))
 end
 
 -- Produce a fresh value for one randbox, or nil when it cannot.
@@ -150,8 +155,14 @@ function randbox.init()
     texRandomClicked = engine.loadTexture("assets/textures/ui/randomizeclicked.png")
     texHighlight = engine.loadTexture("assets/textures/ui/highlight.png")
 
-    -- Seed the RNG
-    math.randomseed(os.time())
+    -- #1330: no RNG seeding here. This used to run
+    -- `math.randomseed(os.time())`, which put a UI widget in charge of
+    -- gameplay's stream and replaced the per-state entropy
+    -- `luaopen_math` had already installed with a one-second-granularity
+    -- value — so two engines launched in the same second simulated
+    -- identically. Gameplay's stream is the engine's
+    -- (`Engine.Scripting.Lua.Thread.createLuaBackendState`); this
+    -- widget's own draws come from `scripts.ui.random`.
 
     assetsLoaded = true
     engine.logDebug("RandBox module initialized")

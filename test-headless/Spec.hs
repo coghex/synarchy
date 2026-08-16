@@ -128,6 +128,7 @@ import qualified Test.Headless.Lua.TextWrapping as LuaTextWrapping
 import qualified Test.Headless.Lua.TextTruncation as LuaTextTruncation
 import qualified Test.Headless.Lua.WidthTruncation as LuaWidthTruncation
 import qualified Test.Headless.Lua.ShellInput as LuaShellInput
+import qualified Test.Headless.Lua.RandomStream as LuaRandomStream
 import qualified Test.Headless.UI.Slider as UISlider
 import qualified Test.Headless.UI.ClickCorrelation as UIClickCorrelation
 import qualified Test.Headless.UI.TransferContextMenu as UITransferContextMenu
@@ -413,6 +414,7 @@ main = hspec $ do
     describe "Lua.TextTruncation" LuaTextTruncation.spec
     describe "Lua.WidthTruncation" LuaWidthTruncation.spec
     describe "Lua.ShellInput" LuaShellInput.spec
+    describe "Lua random stream ownership" LuaRandomStream.spec
     UISlider.spec
     UIClickCorrelation.spec
     describe "World.Calendar" Calendar.spec
