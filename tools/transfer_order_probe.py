@@ -94,12 +94,21 @@ SLOT = "probe_transfer_order_slot"
 # 1.6 kg) lands a few ulps over and fits SEVEN — a fixture arithmetic
 # artefact that reads exactly like a partial-batch bug. 0.25 and 2.0 are
 # exact, and eight of the former sum to precisely the latter.
+#
+# `bulk` is REQUIRED — every entry under `items:` is a physical item, so
+# `Engine.Asset.YamlItems` rejects a definition whose bulk is missing or
+# not a finite positive number, and one bad definition rejects the whole
+# FILE. It cannot perturb any number above: the transfer capacity gate is
+# weight-only (`Unit.Transfer` never reads bulk, and `Item.Types`'
+# weight computation does not either), so bulk is carried on the instance
+# and consumed by nothing this probe exercises.
 DEFS_YAML_ITEMS = """\
 items:
   - name: "probe_ingot"
     display_name: "Probe Ingot"
     sprite: "assets/textures/items/material/bar_steel.png"
     weight: 0.25
+    bulk: 0.25
     category: Materials
 """
 
