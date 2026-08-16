@@ -599,6 +599,82 @@ spec = do
                 Right (idle:_) → Map.size (aaDirections idle) `shouldBe` 5
                 _ → expectationFailure "expected idle"
 
+    -- D-10 keeps WHICH encoding an atlas uses behind an explicit,
+    -- closed set rather than an inferred file extension, so deferred
+    -- TEX-5's KTX2 slots in as a constructor. What that boundary owes
+    -- TODAY, with PNG the only representation, is: accept the one
+    -- token this build emits, refuse everything else outright, and
+    -- never substitute a fallback for a representation it cannot read.
+    -- The last part is the load-bearing one — a loader that quietly
+    -- skipped an unreadable animation, or guessed PNG from the path,
+    -- would publish a unit missing art and look healthy doing it.
+    describe "Unit.Atlas — the format-neutral storage boundary (D-10)" $ do
+        let withFormat v = indexWith [] [setField "storage_format" v idleFields]
+
+        it "accepts the token pack_atlas.py emits, and reads it per \
+           \animation" $
+            -- Per ANIMATION, not once per unit: the index records a
+            -- format on every record, which is the shape that lets one
+            -- session hold different representations for different
+            -- animations when TEX-5 lands.
+            case parse goodIndex of
+                Right anims → map aaFormat anims
+                    `shouldBe` replicate (length anims) AtlasFormatPng
+                Left e → expectationFailure (T.unpack (renderAtlasLoadError e))
+
+        it "round-trips its own name, so the token it emits is the token \
+           \it accepts" $
+            atlasStorageFormatName AtlasFormatPng `shouldBe` "png"
+
+        it "refuses every unknown representation rather than choosing one" $
+            forM_ ["ktx2", "basis", "dds", "astc", "raw", ""] $ \token →
+                parse (withFormat (str token))
+                    `shouldReject` ("unsupported storage_format '"
+                                    <> token <> "'")
+
+        it "is an exact token, never case-folded or trimmed" $
+            -- A tolerant match here would be a silent second spelling
+            -- of a format, and the compiler emits exactly one.
+            forM_ ["PNG", "Png", " png", "png "] $ \token →
+                parse (withFormat (str token))
+                    `shouldReject` "unsupported storage_format"
+
+        it "refuses a non-string representation rather than coercing it" $
+            forM_ ["1", "true", "null", "[\"png\"]", "{}"] $ \token →
+                parse (withFormat token) `shouldReject` "malformed"
+
+        it "never infers the representation from the atlas path" $ do
+            -- The artifact really is the .png the compiler wrote; only
+            -- the DECLARED format is unknown. An extension-sniffing
+            -- fallback would accept this, which is exactly the guess
+            -- D-10 forbids.
+            let doc = indexWith [] [setField "storage_format" (str "ktx2")
+                                        idleFields]
+            lookup "atlas_path" idleFields
+                `shouldBe` Just (str "assets/textures/units/acolyte/atlas/idle.png")
+            parse doc `shouldReject` "unsupported storage_format 'ktx2'"
+
+        it "rejects the WHOLE unit when one animation's representation is \
+           \unreadable" $ do
+            -- No partial publication and no synthetic fallback: an
+            -- index whose OTHER animation is a perfectly good PNG must
+            -- still yield nothing, or a unit would register missing an
+            -- animation its YAML declares.
+            let mixed = indexWith []
+                    [idleFields, setField "storage_format" (str "ktx2")
+                                     swingFields]
+            parse mixed `shouldReject` "unsupported storage_format 'ktx2'"
+            rejection (parse mixed) `shouldSatisfy` T.isInfixOf "swing"
+
+        it "names the animation whose representation it could not read" $ do
+            -- The first record is the good one, so a diagnostic naming
+            -- 'idle' would be reporting the wrong animation.
+            let msg = rejection (parse (indexWith []
+                          [idleFields, setField "storage_format" (str "ktx2")
+                                           swingFields]))
+            msg `shouldSatisfy` T.isInfixOf "swing"
+            msg `shouldSatisfy` not ∘ T.isInfixOf "'idle'"
+
     describe "Unit.Atlas.Index — a malformed index is rejected, never sampled" $ do
         it "rejects bytes that are not JSON" $
             parse "not json at all" `shouldReject` "not valid JSON"

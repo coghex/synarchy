@@ -33,10 +33,12 @@ seconds and the expensive gates at the end.
    changes; a module-budget guard only when changing a capped module;
    `test_audit.py` only when changing `world_audit.py`/`world_check.py`;
    `findings_report_audit.py` only when editing a findings report;
-   the unit-asset inventory gate (`test_pack_atlas.py` +
-   `pack_atlas.py --validate-only --strict`, ~1 s) when touching
-   `assets/textures/units/`, `data/units/`, or the unit-YAML /
-   preview / registration decoders.
+   the unit-asset gate (`test_pack_atlas.py` +
+   `pack_atlas.py --validate-only --strict`, ~2 s — inventory,
+   freshness AND budget) when touching `assets/textures/units/`
+   (source frames or generated `atlas/` artifacts), `data/units/`,
+   `tools/unit_texture_budget.json`, `src/Unit/Atlas/`, or the
+   unit-YAML / preview / registration decoders.
    Do NOT run the whole headless suite, the 21-seed world check, or
    `make ci` by default — CI is the full-suite authority.
 
@@ -1751,6 +1753,10 @@ warnings. **Every committed animation PNG is owned by exactly one
 animation-frame declaration; there is no directory or glob exemption
 mechanism.** Adding an undeclared frame fails the gate.
 
+That one command is now THREE checks — the inventory here, the
+compiler's freshness comparison (below), and #1262's two budgets — so
+the sections below are all one gate, not three commands to remember.
+
 **Two declaration forms live under `data/units/`,** and which top-level
 key an entry sits under is the entire runtime distinction:
 
@@ -1981,6 +1987,53 @@ and post-merge master CI, and path-selectively on PRs via
 `tools/ci_expensive_gates.py --gate unit-assets`. hspec:
 `--match "Asset.UnitInventory"`.
 
+## Unit texture budgets
+
+`tools/unit_texture_budget.json` (#1262, TEX-7) is the SINGLE
+machine-readable source `pack_atlas.py --validate-only --strict` reads
+for two independent budgets. It is hand-edited policy, not a generated
+file, and a missing or malformed one is a hard error — never a skipped
+check, which would print a clean run while enforcing nothing.
+
+- **Images and bindless slots — a hard ERROR.** At most one resident
+  image and one bindless registration per COMPILED ANIMATION (D-2),
+  the bound derived from each unit's own generated index rather than
+  from a frozen roster total or a frame count, so it keeps holding as
+  animations are added. A unit's `atlas/` directory must therefore hold
+  exactly that many images, each claimed by exactly one animation; a
+  breach names the unit, the expected and actual counts, and the
+  offending files. This is what makes a reintroduced per-frame
+  registration fail automatically. Non-animation textures are excluded
+  BY CONSTRUCTION, not by an exemption list — portraits, the direct
+  `sprite`, its `directional_sprites` T-pose overrides and
+  `unknown_unit/rotations/` all sit outside `atlas/` and are named by
+  no index.
+- **Resident memory — a WARNING, so `--strict` is what blocks.** The
+  decoded RGBA8 footprint (`atlas_width * atlas_height * 4`) summed
+  over the WHOLE tracked roster: `scripts/startup_loader.lua` feeds
+  every `data/units/*.yaml` to the loader at boot, so all of it is
+  resident in every session regardless of what spawns. Compared as
+  `measured x roster_growth_factor > threshold` — strict `>`, so
+  sitting exactly at the limit does not fire — and a breach IS D-10's
+  precondition for resuming deferred TEX-5 (KTX2 atlas loading).
+  Currently 101.60 MiB measured, 203.19 MiB projected at 2.0x, against
+  a 384 MiB threshold **confirmed by the project owner on 2026-08-16**.
+  Raising it is the owner's call, not a maintenance edit. A
+  single-unit `--unit` run deliberately does NOT evaluate this one: a
+  roster-wide budget measured from a fraction of the roster is a
+  measurement of nothing.
+
+This is NOT D-12's guardrail, which caps tracked derived artifact bytes
+ON DISK at two times their source frames. That is repository size; this
+is resident memory, and the two are measured independently.
+`docs/texture_infrastructure.md`'s **Measured results** section holds
+the full before/after record — image counts, bindless registrations,
+uploaded bytes, load time with its procedure and platform, tracked
+derived-vs-source bytes, and changed-artifact locality — plus the
+threshold's derivation. `docs/asset_generation.md` holds the
+fresh-checkout workflow (regenerate, validate, inspect, review,
+recover) and the restart-to-reload rule (D-7).
+
 ## Unit animation atlas runtime
 
 The engine loads and samples those compiled artifacts (#1259,
@@ -2182,6 +2235,15 @@ Textures (flora, units, buildings, tiles) can be generated via the PixelLab MCP 
 (skeleton-freeze masks for multi-stage flora, character/state/animation flow for units),
 the raw v2 API parameters the MCP tools hide, and the gotchas that waste hours if rediscovered
 (soft freezes, broken `color_image`, base64-in-shell corruption, real ETAs).
+
+That document also owns the OTHER half, which is a separate job and the
+one most sessions actually need: **Unit animation atlases: the compiled
+runtime path** covers regenerating, validating, inspecting and reviewing
+compiled atlases from a fresh checkout, recovery for stale artifacts and
+budget breaches, and D-7's restart-to-reload rule. Compiling tracked
+source frames invents nothing and needs no external service — do not
+confuse it with generating new artwork, which is tracked work with its
+own issue, its own PR, and the owner's signoff.
 
 ## Platform Notes
 

@@ -44,23 +44,37 @@ GRAPHICAL_GLOBS = [
     "synarchy.cabal", "cabal.project", "cabal.project.*",
 ]
 
-# The unit-asset inventory gate (#1257): tools/test_pack_atlas.py plus
-# tools/pack_atlas.py --validate-only --strict.
+# The unit-asset gate: tools/test_pack_atlas.py plus tools/pack_atlas.py
+# --validate-only --strict. That one command is three checks in one —
+# the #1257 inventory, #1258's freshness comparison against a fresh
+# regeneration, and #1262's image/slot and resident-memory budgets — so
+# every path below selects all three and there is nothing to select
+# them separately with.
 #
 # These are fnmatch patterns, NOT globs — `*` crosses `/` and `**` means
 # nothing special — so `assets/textures/units/*` already covers the whole
-# subtree, and `data/units/*.yaml` would also match a nested path under
-# that directory. Anything that can move which PNGs exist, which frames
+# subtree, generated `<unit>/atlas/` artifacts included, and
+# `data/units/*.yaml` would also match a nested path under that
+# directory. Anything that can move which PNGs exist, which frames
 # are declared, how a declaration decodes, or how the gate itself runs
 # belongs here.
 UNIT_ASSET_GLOBS = [
-    # The assets and their declarations.
+    # The assets and their declarations. Source frames and the
+    # compiler-owned atlas/ artifacts both live under this one subtree.
     "assets/textures/units/*", "data/units/*.yaml",
     # The checker, its self-test, this selector, and the CI wiring that
     # invokes them.
     "tools/pack_atlas.py", "tools/test_pack_atlas.py",
     "tools/ci_expensive_gates.py", "tools/ci-local.sh", "Makefile",
     ".github/workflows/ci.yml", ".github/ci/Dockerfile",
+    # The budget policy the strict run enforces (#1262). Editing a
+    # threshold changes what the gate demands, so it has to re-run.
+    "tools/unit_texture_budget.json",
+    # The runtime that parses the generated index and RECOMPUTES the
+    # compiler's source digest. Same rationale as the decoders below:
+    # `Unit.Atlas.Digest` has to reproduce `pack_atlas.py`'s digest
+    # byte for byte, so a change on either side has to face the other.
+    "src/Unit/Atlas/*",
     # The pinned Python toolchain the compiler runs on (#1258). The
     # self-test fails when it disagrees with the Dockerfile, so a pin
     # edit has to re-run this gate.
@@ -161,12 +175,33 @@ def self_test() -> int:
          ["assets/textures/units/tiller/animations/idle/south/frame_000.png"],
          True),
         ("unit-assets", ["data/units/white_tailed_deer.yaml"], True),
+        # The GENERATED artifacts (#1258/#1260/#1261): an atlas sheet and
+        # a unit index. Both are what the freshness comparison and the
+        # image budget read, so a hand-edit to either must re-run the
+        # gate — and both must be covered explicitly, since the source
+        # frames above sit in a different part of the same subtree.
+        ("unit-assets", ["assets/textures/units/acolyte/atlas/idle.png"], True),
+        ("unit-assets", ["assets/textures/units/acolyte/atlas/index.json"],
+         True),
+        # The budget policy and the runtime that shares the index and
+        # digest contract with the compiler (#1262).
+        ("unit-assets", ["tools/unit_texture_budget.json"], True),
+        ("unit-assets", ["src/Unit/Atlas/Digest.hs"], True),
+        ("unit-assets", ["src/Unit/Atlas/Index.hs"], True),
         # ...and negatives, so the gate cannot be trivially always-true.
         ("unit-assets", ["scripts/crafting_panel.lua"], False),
         ("unit-assets", ["assets/textures/icons/skill/climbing.png"], False),
         ("unit-assets", ["data/materials/stone.yaml"], False),
         ("unit-assets", ["src/World/Geology/Timeline.hs"], False),
         ("unit-assets", ["docs/texture_infrastructure.md"], False),
+        ("unit-assets", ["docs/asset_generation.md"], False),
+        # A neighbouring unit-ish path that is NOT part of this gate:
+        # buildings are never compiled to atlases (D-8), so a building
+        # asset must not drag the unit inventory in.
+        ("unit-assets",
+         ["assets/textures/buildings/acolyte_portal/idle/frame_000.png"],
+         False),
+        ("unit-assets", ["src/Unit/Render.hs"], False),
         # A path selecting one gate must not drag in the others.
         ("worldgen", ["tools/pack_atlas.py"], False),
         ("worldgen", ["data/units/acolyte.yaml"], False),

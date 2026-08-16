@@ -109,7 +109,11 @@ echo "==> [15/17] findings report status audit"
 python3 tools/test_findings_report_audit.py
 python3 tools/findings_report_audit.py
 
-echo "==> [16/17] unit asset inventory"
+# One command, three checks: the #1257 inventory, #1258's freshness
+# comparison against a fresh regeneration, and #1262's image/slot and
+# resident-memory budgets. --strict is what makes a budget breach fail
+# rather than merely print.
+echo "==> [16/17] unit asset inventory, freshness and budget"
 python3 tools/test_pack_atlas.py
 python3 tools/pack_atlas.py --validate-only --strict
 

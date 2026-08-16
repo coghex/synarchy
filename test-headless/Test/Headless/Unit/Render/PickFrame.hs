@@ -550,3 +550,95 @@ spec = do
             -- of its row are transparent padding and must not resolve.
             [ isJust (storageSampleAt st DirNW i False) | i ← [0 .. 5] ]
                 `shouldBe` (True : replicate 5 False)
+
+        it "refuses an index outside a row in EITHER direction" $
+            -- The caller has already clamped or wrapped, so an
+            -- out-of-range index is a bug rather than a padding cell.
+            -- A negative one is the case an `idx >= count` bound alone
+            -- would wave through, and it addresses the row BEFORE this
+            -- one — a real cell holding another direction's art.
+            [ isJust (storageSampleAt st DirS i False)
+            | i ← [-6, -1, 0, 5, 6, 99] ]
+                `shouldBe` [False, False, True, True, False, False]
+
+        it "authors no row at all for a direction the animation omits" $
+            -- Distinct from "present but empty": absence is what the
+            -- mirror fallback keys on, so it must stay observable.
+            (storageFrameCount (aStorage (atlasOf 4 True fiveDirMirrored)) DirW
+            , isJust (storageSampleAt
+                          (aStorage (atlasOf 4 True fiveDirMirrored))
+                          DirW 0 False))
+                `shouldBe` (Nothing, False)
+
+    -- The whole point of D-5: rows of one atlas legitimately differ in
+    -- length. The cases above pin individual directions at chosen
+    -- times; this sweeps EVERY authored direction across several full
+    -- cycles, which is what catches an arithmetic that happens to be
+    -- right for the row it was written against.
+    describe "pickFrame — unequal per-direction counts hold across a sweep" $ do
+        let shape = eightDirUnequal
+            def   = mkDef (HM.singleton "clip" (atlasOf 4 True shape))
+            times = [0, 0.05 .. 4.0] ∷ [Double]
+            colAt t d = chosenAtlas shape
+                (pickFrame t FaceSouth ((mkInst "clip" 0) { uiFacing = d }) def)
+
+        it "never resolves past a direction's OWN frame count" $
+            forM_ (shapeDirs shape) $ \(d, n) → do
+                let cols = [ c | t ← times, Chosen _ c ← [colAt t d] ]
+                length cols `shouldBe` length times   -- never a T-pose
+                maximum cols `shouldBe` n - 1
+                minimum cols `shouldBe` 0
+
+        it "would overrun if the padded column count were used instead" $ do
+            -- Without this the case above passes vacuously on a sheet
+            -- whose rows all happen to be full: the shortest row must
+            -- genuinely stop short of the sheet's width.
+            let cols = maximum (map snd (shapeDirs shape))
+                short = [ n | (_, n) ← shapeDirs shape, n < cols ]
+            short `shouldSatisfy` not ∘ null
+            minimum short `shouldSatisfy` (< cols)
+
+        it "keeps every direction on its own row for the whole sweep" $
+            forM_ (shapeDirs shape) $ \(d, _) → do
+                let rows = [ src | t ← times, Chosen src _ ← [colAt t d] ]
+                filter (≢ d) rows `shouldBe` []
+
+    -- Mirroring is a SPATIAL reflection of one cell, and nothing else.
+    -- It must not shift which frame plays, must not reach a row the
+    -- animation does not author, and must not widen past the cell.
+    describe "pickFrame — mirroring reflects a cell without moving it" $ do
+        let shape = fiveDirMirrored
+            def   = mkDef (HM.singleton "clip" (atlasOf 4 True shape))
+            times = [0, 0.1 .. 2.0] ∷ [Double]
+            at t d = pickFrame t FaceSouth
+                        ((mkInst "clip" 0) { uiFacing = d }) def
+            colAt t d = chosenAtlas shape (at t d)
+
+        it "plays the same frame index as the direction it mirrors" $
+            forM_ [(DirW, DirE), (DirSW, DirSE), (DirNW, DirNE)] $
+                \(west, east) → do
+                    let mirrored = [ c | t ← times, Chosen _ c ← [colAt t west] ]
+                        source   = [ c | t ← times, Chosen _ c ← [colAt t east] ]
+                    mirrored `shouldBe` source
+                    -- ...and the cells really are the same cells.
+                    [ fsUV (at t west) | t ← times ]
+                        `shouldBe` [ fsUV (at t east) | t ← times ]
+
+        it "reports the flip only on the mirrored side" $
+            forM_ [(DirW, DirE), (DirSW, DirSE), (DirNW, DirNE)] $
+                \(west, east) →
+                    ( and [ fsFlipX (at t west) | t ← times ]
+                    , or  [ fsFlipX (at t east) | t ← times ] )
+                        `shouldBe` (True, False)
+
+        it "never resolves a mirrored view onto an unauthored row" $
+            -- Every sample, mirrored or not, must land on a row the
+            -- animation actually authors — an invented row would read
+            -- another animation's pixels out of the sheet.
+            forM_ [DirS, DirSE, DirE, DirNE, DirN, DirW, DirSW, DirNW] $ \d →
+                forM_ times $ \t → case colAt t d of
+                    Chosen src _ → src `shouldSatisfy`
+                        (\s → isJust (lookup s (shapeDirs shape)))
+                    TPose        → expectationFailure
+                        ("a mirroring animation fell back to the T-pose for "
+                         ⧺ show d)
