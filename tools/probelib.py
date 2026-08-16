@@ -111,6 +111,76 @@ def send_json(port: int, lua: str, timeout: float = 10.0, idle: float = DEFAULT_
 
 
 # --------------------------------------------------------------------------
+# Inline fixtures (#1342)
+# --------------------------------------------------------------------------
+class FixtureNotRegistered(RuntimeError):
+    """A probe's own inline fixture was rejected by the engine loader.
+
+    This is a SETUP failure, not a behavioural one. Nothing downstream of
+    a fixture that never registered can pass, so the affected scenario
+    must STOP here rather than report the consequences.
+
+    Probes let it propagate out of ``main``: every ``finally:
+    quit_engine(...)`` on the way out still runs, so the engine process
+    and the temporary files are released exactly as on any other exit.
+    The ``__main__`` entry point then prints it and exits nonzero without
+    a traceback.
+    """
+
+
+def load_fixture_yaml(port: int, loader: str, path: str,
+                      timeout: float = 10.0) -> float:
+    """Load a probe-authored fixture, requiring its loader to accept it.
+
+    Every ``engine.load*Yaml`` verb returns how much it registered and
+    reports a rejected file as a plain ``0`` (``Engine.Asset.YamlList``
+    hands back an empty list after a parse failure). The idiom this
+    replaces — ``send(port, f"{loader}('{path}'); return 'ok'")`` —
+    discards that: ``'ok'`` is the statement's value, so the call reads as
+    success whether the fixture registered five definitions or none. A
+    fixture that rots against a schema change then surfaces only as
+    whatever downstream assertions happen to fail, arbitrarily far from
+    the cause; #1341 spent a day reading as nine transfer-system
+    regressions.
+
+    WHAT the count counts is each loader's own business — definitions for
+    the item/building/location loaders, textures queued for
+    ``engine.loadFloraYaml`` (``registerFloraSpecies`` counts at least the
+    base texture for every species it registers), 1-or-0 for
+    ``engine.loadLootTableYaml``. Only the REJECTION signal is shared:
+    every one of them returns zero, and nothing else, when it registered
+    nothing. So this asserts a positive count and leaves the exact value
+    to callers that care about it.
+
+    For a probe's OWN inline fixtures only — YAML the probe authored or
+    generated during this run. Directory bulk-loads of the game's shipped
+    ``data/**`` are deliberately left alone (#1342): they are covered by
+    every other gate, and a per-file count assertion there is brittle
+    noise.
+
+    Returns the count. Raises `FixtureNotRegistered` on zero or on a
+    non-numeric reply.
+    """
+    raw = send(port, f"return {loader}('{path}')", timeout=timeout)
+    try:
+        count = float(raw)
+    except (TypeError, ValueError):
+        raise FixtureNotRegistered(
+            f"SETUP FAILURE: {loader} did not answer with a count for the "
+            f"probe fixture {path} (got {raw!r}). The probe cannot show "
+            f"that its own fixture registered, so it stops here.") from None
+    if count <= 0:
+        raise FixtureNotRegistered(
+            f"SETUP FAILURE: {loader} registered nothing from the probe "
+            f"fixture {path} (it returned {count:g}). That fixture is "
+            f"invalid for the current schema — the engine log names the "
+            f"parse error. Nothing downstream of it can pass, so the probe "
+            f"stops here instead of reporting the consequences as "
+            f"behavioural failures.")
+    return count
+
+
+# --------------------------------------------------------------------------
 # Engine boot / teardown
 # --------------------------------------------------------------------------
 def _log_path(port: int, log: str | None) -> str:

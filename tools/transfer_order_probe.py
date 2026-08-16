@@ -67,9 +67,10 @@ import tempfile
 import time
 from pathlib import Path
 
-from probelib import (boot, clear_find_water, init_arena, init_world,
-                      poll_until, quit_engine, send, send_json,
-                      wait_load_published, load_ai_stack)
+from probelib import (FixtureNotRegistered, boot, clear_find_water,
+                      init_arena, init_world, load_fixture_yaml, poll_until,
+                      quit_engine, send, send_json, wait_load_published,
+                      load_ai_stack)
 
 REPO = Path(__file__).resolve().parent.parent
 SLOT = "probe_transfer_order_slot"
@@ -202,8 +203,8 @@ def bootstrap_defs(port: int, tmp: str) -> None:
         f.write(DEFS_YAML_ITEMS)
     with open(builds, "w", encoding="utf-8") as f:
         f.write(DEFS_YAML_BUILDINGS)
-    send(port, f"engine.loadItemYaml('{items}'); return 'ok'")
-    send(port, f"engine.loadBuildingYaml('{builds}'); return 'ok'")
+    load_fixture_yaml(port, "engine.loadItemYaml", items)
+    load_fixture_yaml(port, "engine.loadBuildingYaml", builds)
 
 
 def spawn_hold(port: int, def_name: str, gx: int, gy: int) -> int | None:
@@ -867,4 +868,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except FixtureNotRegistered as exc:
+        print(f"\n{exc}")
+        sys.exit(1)

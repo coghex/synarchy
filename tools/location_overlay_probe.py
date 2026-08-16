@@ -56,7 +56,8 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import quit_engine, boot, send, wait_load_published
+from probelib import (FixtureNotRegistered, quit_engine, boot,
+                      load_fixture_yaml, send, wait_load_published)
 
 LOG = "/tmp/location_overlay_engine.log"
 
@@ -370,7 +371,7 @@ def main() -> int:
         # satisfied) but max_count 1. The saved world placed 6, and a
         # recompute against this registry could only ever place 1, so
         # reading 6 back still proves the overlay came from the save.
-        send(args.port, f"engine.loadLocationYaml('{THIN_YAML}'); return 'ok'")
+        load_fixture_yaml(args.port, "engine.loadLocationYaml", THIN_YAML)
         send(args.port, "engine.loadSave('loc_overlay_probe'); return 'queued'")
         # Issue #763: the saved page ("wa", its own id verbatim -- no more
         # main_world remap) doesn't exist live until the transaction
@@ -418,7 +419,7 @@ def main() -> int:
     #      (Init hook). ----
     proc = boot(args.port, log=LOG)
     try:
-        send(args.port, f"engine.loadLocationYaml('{DENSE_YAML}'); return 'ok'")
+        load_fixture_yaml(args.port, "engine.loadLocationYaml", DENSE_YAML)
         gen_world(args.port, "wc", args.seed, args.size, args.plates)
         if not has_loc_on(args.port, 0, 0):
             failures.append(f"seed {args.seed}: no location on centre chunk (0,0) — cannot test Init hook")
@@ -438,7 +439,7 @@ def main() -> int:
     proc = boot(args.port, log=LOG)
     saved_centre = False
     try:
-        send(args.port, f"engine.loadLocationYaml('{DENSE_YAML}'); return 'ok'")
+        load_fixture_yaml(args.port, "engine.loadLocationYaml", DENSE_YAML)
         gen_world(args.port, "wd", args.seed, args.size, args.plates)
         if not has_loc_on(args.port, 0, 0):
             failures.append(f"seed {args.seed}: no location on centre chunk (0,0) — cannot test Save hook")
@@ -454,7 +455,7 @@ def main() -> int:
     if saved_centre:
         proc = boot(args.port, log=LOG)
         try:
-            send(args.port, f"engine.loadLocationYaml('{DENSE_YAML}'); return 'ok'")
+            load_fixture_yaml(args.port, "engine.loadLocationYaml", DENSE_YAML)
             send(args.port, "engine.loadSave('loc_centre_probe'); return 'queued'")
             # Issue #763: the saved page ("wd", its own id verbatim -- no
             # more main_world remap) doesn't exist live until published.
@@ -480,7 +481,7 @@ def main() -> int:
     #      arena's. ----
     proc = boot(args.port, log=LOG)
     try:
-        send(args.port, f"engine.loadLocationYaml('{DENSE_YAML}'); return 'ok'")
+        load_fixture_yaml(args.port, "engine.loadLocationYaml", DENSE_YAML)
         send(args.port, "world.initArena('arena'); world.initArenaDone('arena'); world.show('arena'); return 'ok'")
         arena_ok = False
         for _ in range(40):
@@ -586,4 +587,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except FixtureNotRegistered as exc:
+        print(f"\n{exc}")
+        raise SystemExit(1)
