@@ -26,13 +26,13 @@ function M.onKeyDown(key)
         local contextMenu = require("scripts.ui.context_menu")
         if contextMenu.handleEscape() then return end
 
-        -- Cargo inventory popup is next-most-transient.
+        -- Container window is next-most-transient. Since #1238 it owns
+        -- a STACK of nesting levels and this closes the DEEPEST one,
+        -- one per press — the item-contents popup is a level in that
+        -- stack now, so it has no key handler of its own and a second
+        -- call here would close two levels per press.
         local cargoPanel = require("scripts.cargo_inventory_panel")
         if cargoPanel.handleKeyDown(key) then return end
-
-        -- Item contents popup (unit-carried container) — same tier.
-        local itemContents = require("scripts.item_contents_panel")
-        if itemContents.handleKeyDown(key) then return end
 
         -- Crafting station bills popup (#330) — same tier.
         local craftingPanel = require("scripts.crafting_panel")

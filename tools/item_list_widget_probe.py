@@ -45,6 +45,14 @@ WINDOW, so this probe is also the gate on a building endpoint rendering
 exactly as it did before that generalization, and on a unit endpoint
 reaching the same window through the same manager.
 
+Since #1238 that window owns an ordered STACK of nesting levels, so this
+is also the rendered gate on pushing, replacing, dismissing and
+restoring them, and on only the deepest one being interactive. Its own
+throwaway item fixture (`probe_deep_kit`) is a container whose default
+contents are 15 distinct defs plus a real `first_aid_kit`, which is what
+gives a nested level both more rows than its cap and a container row of
+its own.
+
 Since #1237 a BUILDING endpoint renders the player's REMEMBERED contents
 (`building.getContainerKnowledge`), so this is also the rendered gate on
 all three knowledge states, on the "as of…" age, and on the rule that
@@ -84,9 +92,22 @@ Verifies, in order:
      `engine.gameTime()` readings taken against the same unchanged
      `revealedAt`.
   5. first-aid-kit Contents panel: the Haskell-side pre-grouped rows
-     appear unchanged (never re-split by the finer stack key), the rows
-     expose NO right-click action at all, and an emptied container
-     renders its "(empty)" state.
+     appear unchanged (never re-split by the finer stack key), a plain
+     row offers no menu at all (the level is render-only), and an
+     emptied container renders its "(empty)" state.
+  8. the nesting stack (#1238): a container row's real right-click ->
+     "Contents" gesture pushes a level addressed by the exact instance
+     clicked; the parent stays PAINTED but out of input scope, with a
+     right-click on one of its rows opening nothing; a level inside that
+     one pushes a third whose path extends its parent's; opening another
+     container at the same level replaces it and discards every deeper
+     one; Escape closes exactly one level per press, deepest first,
+     restoring the newly deepest level each time; the mouse WHEEL
+     scrolls whichever level is deepest, and a real framebuffer resize
+     preserves the whole nesting path AND every level's own offset; a
+     building-side level renders the engine's REMEMBERED contents with
+     the PARENT's own age, while the unit-info gesture opens a LIVE
+     level at the base.
   6. unit inventory section: rows and counts, a wrapped/centred tab
      strip inside the section rect, tab selection filtering, and a real
      right-click reaching the representative instance's Equip/Contents
@@ -182,9 +203,71 @@ CARGO_STOCK = [
     ("quinoa_sack", 1),
 ]
 
+# #1238 fixtures. A throwaway item-container whose default contents are
+# 15 DISTINCT defs plus a real `first_aid_kit` — so a level rendering it
+# has more rows than its own 12-row cap (something to scroll) AND a
+# container row of its own (somewhere to descend). Registered through
+# the real item-YAML loader, the same throwaway-def technique the
+# building fixtures above use.
+TEST_ITEM_YAML = os.path.join(SPROOT, "item_list_widget_probe_items.yaml")
+DEF_DEEP_KIT = "probe_deep_kit"
+DEEP_KIT_CONTENTS = [
+    "bandage", "gauze", "elastic_wrap", "tweezers", "scissors",
+    "steel_bar", "wood_log", "quinoa_sack", "wiring", "whetstone",
+    "tomato", "wheat_grain", "granite_chunk", "steel_plate",
+    "steel_hardware",
+]
+TEST_ITEMS = "items:\n" + f"""\
+  - name: "{DEF_DEEP_KIT}"
+    display_name: "Probe Deep Kit"
+    sprite: "assets/textures/items/medical/first_aid_kit.png"
+    weight: 0.5
+    bulk: 4.0
+    kind: container
+    category: Medical
+    contents:
+""" + "".join(f"      - {{ item: {d}, count: 1 }}\n"
+              for d in DEEP_KIT_CONTENTS) + \
+    "      - { item: first_aid_kit, count: 1 }\n"
+
+# `unit.addItem` mints an EMPTY container (the comment on the
+# item-contents fixture below says so, and it is why that scenario has
+# an empty-state case at all): only the spawn path materializes an item
+# def's declared `contents`. So the STOCKED deep kit has to arrive in a
+# spawned unit's starting inventory and be deposited from there.
+TEST_UNIT_YAML = os.path.join(SPROOT, "item_list_widget_probe_units.yaml")
+DEF_CARRIER = "probe_kit_carrier"
+TEST_UNITS = f"""\
+units:
+  - name: {DEF_CARRIER}
+    display_name: "Probe Kit Carrier"
+    sprite: "assets/textures/units/tiller/animations/idle/south/frame_000.png"
+    starting_inventory:
+      - {{ item: "{DEF_DEEP_KIT}", count: 1 }}
+"""
+
+# Enough DISTINCT defs in the cargo that the base level (10-row cap) has
+# somewhere to scroll to as well. Deposited BEFORE the two containers, so
+# both of those stay inside the first rendered rows: a level renders its
+# rows in the remembered list's own order, and `unit.depositToCargo`
+# PREPENDS (`biStorage = item : biStorage`), so the newest deposit is the
+# first row.
+CARGO_BULK_STOCK = [
+    "bronze_bar", "granite_chunk", "wiring", "whetstone", "tomato",
+    "wheat_grain", "steel_plate", "steel_hardware", "rations", "radio",
+    "solar_panel",
+]
+
 # Debug-console expressions naming each host's live widget instance.
-CARGO_LIST_ID = "require('scripts.cargo_inventory_panel').state.listId"
-ITEM_CONTENTS_LIST_ID = "require('scripts.item_contents_panel').state.listId"
+# Since #1238 the container window owns a STACK of levels, and the
+# item-contents popup is one of them rather than a second panel:
+# `getLevel(i)` names one (default the deepest), and every read below
+# goes through it because a level may not exist.
+LEVEL = "require('scripts.cargo_inventory_panel').getLevel"
+BASE_LEVEL = f"({LEVEL}(1) or {{src={{}}}})"
+DEEP_LEVEL = f"({LEVEL}() or {{src={{}}}})"
+CARGO_LIST_ID = f"{BASE_LEVEL}.listId"
+ITEM_CONTENTS_LIST_ID = f"{DEEP_LEVEL}.listId"
 UNIT_INV_LIST_ID = "require('scripts.unit_info_v2').invListId"
 
 failures = 0
@@ -265,7 +348,7 @@ def panel_chrome(port: int) -> dict:
     ids the panel is holding, so this reports what is actually rendered
     rather than what the probe expected to be rendered."""
     got = send_json(port, "local s = require('scripts.cargo_inventory_panel')"
-                          ".state; local l = require('scripts.ui.label');"
+                          ".getLevel(1) or {}; local l = require('scripts.ui.label');"
                           " return {title = s.titleId and l.getText(s.titleId),"
                           " subtitle = s.subtitleId and l.getText(s.subtitleId)}")
     return got if isinstance(got, dict) else {}
@@ -523,7 +606,8 @@ def cargo_scenario(port: int, bid: int, bpixel, vp: dict) -> None:
     # -- #1234: the window records the BUILDING endpoint's identity, and
     #    its chrome names the real building and its real storage load.
     ident = send_json(port, "local s = require('scripts.cargo_inventory_panel')"
-                            ".state; return {kind = s.kind, id = s.id}")
+                            ".getLevel(1) or {src={}};"
+                            " return {kind = s.src.endpointKind, id = s.src.id}")
     check("the window records a 'building' endpoint identity",
           isinstance(ident, dict) and ident.get("kind") == "building"
           and ident.get("id") == bid, f"got {ident!r}")
@@ -584,7 +668,7 @@ def cargo_scenario(port: int, bid: int, bpixel, vp: dict) -> None:
               len(ys) == 1, f"got row tops {sorted(ys)!r}")
         panel_right = send_json(
             port, "local p = require('scripts.ui.panel');"
-                  " local s = require('scripts.cargo_inventory_panel').state;"
+                  " local s = require('scripts.cargo_inventory_panel').getLevel(1) or {};"
                   " local x, y = p.getPosition(s.panelId);"
                   " local w, h = p.getSize(s.panelId); return {x=x, w=w}")
         if isinstance(panel_right, dict):
@@ -615,8 +699,8 @@ def cargo_scenario(port: int, bid: int, bpixel, vp: dict) -> None:
                                          for r in filtered),
                   f"got {[(r.get('defName'), r.get('category')) for r in filtered]!r}")
             check_no_duplicate_rows(port, "cargo (after tab click)", filtered)
-            active = send(port, "return require('scripts.cargo_inventory_panel')"
-                                ".state.activeTab").strip().strip('"')
+            active = send(port, "return (require('scripts.cargo_inventory_panel')"
+                                ".getLevel(1) or {}).activeTab").strip().strip('"')
             check("the panel records the clicked category as its selection",
                   active == label, f"got {active!r}")
 
@@ -629,9 +713,10 @@ def cargo_scenario(port: int, bid: int, bpixel, vp: dict) -> None:
             check("a resize keeps the cargo panel open", still_open == "true",
                   f"got {still_open!r}")
             after = send_json(port, "local s = require("
-                                    "'scripts.cargo_inventory_panel').state;"
-                                    " return {kind = s.kind, id = s.id,"
-                                    " tab = s.activeTab}")
+                                    "'scripts.cargo_inventory_panel')"
+                                    ".getLevel(1) or {src={}};"
+                                    " return {kind = s.src.endpointKind,"
+                                    " id = s.src.id, tab = s.activeTab}")
             check("a resize preserves the panel's endpoint identity AND "
                   "selected tab",
                   isinstance(after, dict) and after.get("kind") == "building"
@@ -701,7 +786,8 @@ def unit_endpoint_scenario(port: int, uid: int, wild_uid: int,
         return
 
     ident = send_json(port, "local s = require('scripts.cargo_inventory_panel')"
-                            ".state; return {kind = s.kind, id = s.id}")
+                            ".getLevel(1) or {src={}};"
+                            " return {kind = s.src.endpointKind, id = s.src.id}")
     check("the window records a 'unit' endpoint identity",
           isinstance(ident, dict) and ident.get("kind") == "unit"
           and ident.get("id") == uid, f"got {ident!r}")
@@ -746,9 +832,38 @@ def unit_endpoint_scenario(port: int, uid: int, wild_uid: int,
           f"got {sorted(d for d in got_defs if d)!r} "
           f"want {sorted(d for d in want_defs if d)!r}")
     check_no_duplicate_rows(port, "unit endpoint", rows)
-    check("unit rows expose NO row action in this slice",
-          all(r.get("rightClick") is False for r in rows),
+    # #1238: a unit endpoint's rows route a right-click now, because a
+    # container row has to be able to open its contents as the next
+    # level. What they still expose is NO TRANSFER action: a plain row
+    # opens no menu at all, and a container row's menu is exactly
+    # "Contents".
+    check("unit rows route a right-click (the inspection route)",
+          all(r.get("rightClick") is True for r in rows),
           f"got {[r.get('rightClick') for r in rows]!r}")
+    plain_row = next((r for r in rows
+                      if r.get("defName") not in (None, "first_aid_kit")), None)
+    if check("a plain (non-container) unit row is located", bool(plain_row)):
+        right_click_widget_center(port, plain_row)
+        time.sleep(0.4)
+        labels = [w.get("label") for w in widgets(port)]
+        check("a plain unit row opens NO menu — no Contents, and no "
+              "transfer action either",
+              not any(l == "Contents" or (l or "").startswith("Withdraw")
+                      for l in labels),
+              f"menu labels: {labels!r}")
+        close_menu(port)
+    kit_row = next((r for r in rows
+                    if r.get("defName") == "first_aid_kit"), None)
+    if check("the acolyte's carried kit is rendered as a unit row",
+             bool(kit_row)):
+        right_click_widget_center(port, kit_row)
+        time.sleep(0.4)
+        labels = [w.get("label") for w in widgets(port) if w.get("label")]
+        check("a CONTAINER unit row offers exactly the inspection entry",
+              "Contents" in labels
+              and not any(l.startswith("Withdraw") for l in labels),
+              f"menu labels: {labels!r}")
+        close_menu(port)
 
     # -- Tab strip, and selecting a category.
     tabs = tab_boxes(port, CARGO_LIST_ID)
@@ -779,9 +894,10 @@ def unit_endpoint_scenario(port: int, uid: int, wild_uid: int,
                   send(port, "return require('scripts.cargo_inventory_panel')"
                              ".isOpen()").strip() == "true")
             after = send_json(port, "local s = require("
-                                    "'scripts.cargo_inventory_panel').state;"
-                                    " return {kind = s.kind, id = s.id,"
-                                    " tab = s.activeTab}")
+                                    "'scripts.cargo_inventory_panel')"
+                                    ".getLevel(1) or {src={}};"
+                                    " return {kind = s.src.endpointKind,"
+                                    " id = s.src.id, tab = s.activeTab}")
             check("a resize preserves the unit endpoint identity AND tab",
                   isinstance(after, dict) and after.get("kind") == "unit"
                   and after.get("id") == uid and after.get("tab") == label,
@@ -837,7 +953,8 @@ def unit_endpoint_scenario(port: int, uid: int, wild_uid: int,
           send(port, "return require('scripts.cargo_inventory_panel')"
                      ".isOpen()").strip() == "false")
     state = send_json(port, "local s = require('scripts.cargo_inventory_panel')"
-                            ".state; return {panel = s.panelId ~= nil,"
+                            ".getLevel(1) or {};"
+                            " return {panel = s.panelId ~= nil,"
                             " list = s.listId ~= nil}")
     check("a refused open creates no panel or list state",
           isinstance(state, dict) and state.get("panel") is False
@@ -1038,12 +1155,25 @@ def item_contents_scenario(port: int, mule_uid: int, uid: int) -> None:
                   r.get("count") == expected[d],
                   f"got {r.get('count')!r} vs {expected[d]!r}")
     check_no_duplicate_rows(port, "item contents", rows)
-    check("item-contents rows expose NO right-click action",
-          all(r.get("rightClick") is False for r in rows),
+    # #1238: this level ROUTES right-clicks now -- a container row has to
+    # be able to open the next level. What it still offers is nothing
+    # else: no transfer action anywhere, and a plain (non-container) row
+    # opens no menu at all.
+    check("item-contents rows route a right-click (the inspection route)",
+          all(r.get("rightClick") is True for r in rows),
           f"got {[r.get('rightClick') for r in rows]!r}")
-    check("item-contents rows are NOT reported as enabled click targets",
-          all(r.get("enabled") is not True or r.get("rightClick") is False
-              for r in rows))
+    plain = next((r for r in rows if r.get("defName") == "bandage"), None)
+    if check("a plain (non-container) item-contents row is located",
+             bool(plain)):
+        right_click_widget_center(port, plain)
+        time.sleep(0.4)
+        labels = [w.get("label") for w in widgets(port)]
+        check("a plain row on this render-only level opens NO menu -- "
+              "no Contents, and no transfer action either",
+              not any(l in ("Contents",) or (l or "").startswith("Withdraw")
+                      for l in labels),
+              f"menu labels: {labels!r}")
+        close_menu(port)
     check("item-contents panel renders NO tab strip",
           not tab_boxes(port, ITEM_CONTENTS_LIST_ID))
 
@@ -1378,6 +1508,350 @@ def unit_inventory_scenario(port: int, uid: int) -> None:
         close_menu(port)
 
 
+
+# --------------------------------------------------------------------------
+# #1238: the nesting stack
+# --------------------------------------------------------------------------
+
+def stack_dump(port: int) -> dict:
+    got = send_json(port, "return require('scripts.cargo_inventory_panel').dump()")
+    return got if isinstance(got, dict) else {}
+
+
+def level_list_id(index: int) -> str:
+    """A debug-console expression naming level `index`'s widget instance."""
+    return (f"(require('scripts.cargo_inventory_panel').getLevel({index})"
+            " or {}).listId")
+
+
+def scroll_to_row(port: int, list_id_lua: str, def_name: str):
+    """Scroll a level's list until `def_name` is among the RENDERED rows,
+    and answer that row.
+
+    Which rows a level shows first is the grouped order -- a hashmap
+    enumeration on the engine side -- so a probe must never assume a
+    given row is on screen. Scrolls through the widget's own offset one
+    page at a time and gives up at the end of the list.
+
+    Deliberately looks at the CURRENT view first and only then walks from
+    the top: a level the probe has already scrolled on purpose must not
+    have that offset thrown away just because something else wanted to
+    find a row on it."""
+    il = "require('scripts.ui.item_list')"
+    row = next((r for r in item_rows(port, list_id_lua)
+                if r.get("defName") == def_name), None)
+    if row:
+        return row
+    max_off = int(float(send(port, f"return {il}.maxScrollOffset({list_id_lua})")))
+    step = max(1, int(float(send(port, f"return {il}.rowCapacity({list_id_lua})"))))
+    offset = 0
+    while True:
+        send(port, f"return {il}.setScrollOffset({list_id_lua}, {offset})")
+        time.sleep(0.3)
+        row = next((r for r in item_rows(port, list_id_lua)
+                    if r.get("defName") == def_name), None)
+        if row or offset >= max_off:
+            return row
+        offset = min(max_off, offset + step)
+
+
+def open_contents_on(port: int, list_id_lua: str, def_name: str) -> bool:
+    """Push a nested level the way a PLAYER does: locate the row through
+    `ui.dumpWidgets()`, right-click it, then locate and click the
+    "Contents" entry of the real context menu. No coordinate is ever
+    hardcoded, and no window API is called."""
+    row = scroll_to_row(port, list_id_lua, def_name)
+    if not row:
+        return False
+    right_click_widget_center(port, row)
+    time.sleep(0.4)
+    entry = find_widget(port, "Contents")
+    if not entry:
+        close_menu(port)
+        return False
+    click_widget_center(port, entry)
+    time.sleep(0.6)
+    return True
+
+
+def nesting_stack_scenario(port: int, bid: int, kit_iid: int,
+                           mule_uid: int, vp: dict) -> None:
+    """#1238: one window manager, an ordered stack of levels, only the
+    deepest interactive.
+
+    Every push here goes through the real gesture — a right-click on a
+    real rendered row, then a real click on the real context-menu entry
+    — so what is verified is the route a player has, not an API the
+    window happens to expose."""
+    print("== nesting stack (#1238) ==")
+    send(port, "require('scripts.cargo_inventory_panel').closeIfOpen();"
+               " return 'ok'")
+    time.sleep(0.3)
+    if not check("container window opens on the stocked cargo",
+                 open_window_on(port, bid)):
+        return
+
+    base = stack_dump(port)
+    base_levels = base.get("levels") or []
+    if not check("the open window is a stack of exactly one level",
+                 base.get("depth") == 1 and len(base_levels) == 1,
+                 f"got {base!r}"):
+        return
+    check("the base level is NOT modal and the game is not input-blocked",
+          base_levels[0].get("modal") is False
+          and base.get("inputBlocked") is False,
+          f"got modal={base_levels[0].get('modal')!r} "
+          f"blocked={base.get('inputBlocked')!r}")
+
+    # -- Push a level through the real row gesture.
+    if not check("a container row in the cargo opens a nested level",
+                 open_contents_on(port, CARGO_LIST_ID, DEF_DEEP_KIT)):
+        return
+    close_menu(port)
+    d2 = stack_dump(port)
+    lv = d2.get("levels") or []
+    if not check("the stack is now two levels deep",
+                 d2.get("depth") == 2 and len(lv) == 2, f"got {d2!r}"):
+        return
+    check("the nested level is a building-side REMEMBERED level, "
+          "addressed by the exact instance the player clicked",
+          lv[1].get("kind") == "buildingItem"
+          and lv[1].get("bid") == bid
+          and lv[1].get("path") == [kit_iid],
+          f"got kind={lv[1].get('kind')!r} bid={lv[1].get('bid')!r} "
+          f"path={lv[1].get('path')!r} (want [{kit_iid}])")
+    check("the nested level carries the PARENT's own observation age",
+          lv[1].get("ageText") == lv[0].get("ageText")
+          and bool(lv[1].get("ageText")),
+          f"got {lv[1].get('ageText')!r} vs parent {lv[0].get('ageText')!r}")
+
+    # The rows are the engine's own remembered answer, not a restatement.
+    remembered = send_json(
+        port, f"return building.getRememberedItemContents({bid}, {{{kit_iid}}})")
+    want = [r.get("defName") for r in (remembered or {}).get("items", [])
+            if isinstance(r, dict)]
+    got_rows = item_rows(port, level_list_id(2))
+    got = [r.get("defName") for r in got_rows]
+    # The level shows its row cap's worth of the engine's own list, IN
+    # THAT ORDER -- the widget never re-sorts a pre-grouped answer.
+    check("the nested level renders the engine's REMEMBERED contents, in "
+          "the engine's own order",
+          bool(want) and bool(got) and got == want[:len(got)],
+          f"got {got!r} want a prefix of {want!r}")
+
+    # -- The parent stays PAINTED but INERT.
+    parent_rows = item_rows(port, CARGO_LIST_ID)
+    check("the parent level stays painted behind the nested one",
+          bool(parent_rows), "parent rows vanished")
+    check("the parent level is out of input scope and the game is blocked",
+          lv[0].get("pageInScope") is False
+          and lv[1].get("pageInScope") is True
+          and d2.get("inputBlocked") is True,
+          f"got base={lv[0].get('pageInScope')!r} "
+          f"deep={lv[1].get('pageInScope')!r} "
+          f"blocked={d2.get('inputBlocked')!r}")
+    # Whichever row the parent is actually RENDERING (it is scrolled and
+    # capped, so naming a def would be naming a row that may not be on
+    # screen); what matters is that it is one of the parent's own.
+    inert_target = parent_rows[0] if parent_rows else None
+    if check("a parent row is still located for the inert-click check",
+             bool(inert_target)):
+        right_click_widget_center(port, inert_target)
+        time.sleep(0.4)
+        check("a right-click on a shallower level's row opens nothing",
+              find_widget(port, "Withdraw with") is None
+              and not [w for w in widgets(port)
+                       if (w.get("label") or "").startswith("Withdraw")],
+              "a Withdraw menu appeared behind the modal boundary")
+        close_menu(port)
+
+    # -- A third level, and same-level REPLACEMENT.
+    if check("a container row INSIDE the nested level opens a third",
+             open_contents_on(port, level_list_id(2), "first_aid_kit")):
+        lv3 = stack_dump(port).get("levels") or []
+        check("the third level's path EXTENDS the second's by exactly one "
+              "instance id -- the nesting path, not a fresh address",
+              len(lv3) == 3
+              and (lv3[2].get("path") or [])[:1] == [kit_iid]
+              and len(lv3[2].get("path") or []) == 2,
+              f"got {[l.get('path') for l in lv3]!r}")
+
+    # -- An EXTERNAL request starts over at the base, discarding every
+    #    deeper level. This is the replacement route a player actually
+    #    has: a shallower level's own rows are behind the modal boundary
+    #    (proved inert above), so the level-N-replaces-level-N case is
+    #    exercised through the manager's own API by the CI-blocking
+    #    `--match "container window stack"` group instead.
+    before = stack_dump(port).get("depth")
+    check("the external request runs against a MULTI-level stack",
+          before == 3, f"got depth {before!r}")
+    open_window_on(port, bid)
+    after = stack_dump(port)
+    check("an external request targets the BASE level and discards every "
+          "deeper level",
+          after.get("depth") == 1
+          and (after.get("levels") or [{}])[0].get("kind") == "endpoint",
+          f"got {after.get('depth')!r} / "
+          f"{[l.get('kind') for l in (after.get('levels') or [])]!r}")
+
+    # -- Escape closes one level per press, deepest first.
+    #
+    #    Only the DEPTH is measured through the real key. A gameplay
+    #    Escape ALSO reaches uiManager.onUIEscape (a separate broadcast
+    #    from init_keys' dismiss cascade -- Engine.Input.Thread.Keyboard
+    #    queues LuaUIEscape for every Escape in the ordinary game-input
+    #    path), and in `world_view` that TOGGLES the pause menu. That is
+    #    pre-existing behaviour shared by every panel in the cascade and
+    #    is not this window's; but the pause menu is a LayerModal page,
+    #    so while it is up it owns the input boundary and any scope
+    #    reading would be about IT. The interactivity claim is therefore
+    #    measured separately below, through the same popLevel() the key
+    #    routes to.
+    open_contents_on(port, CARGO_LIST_ID, DEF_DEEP_KIT)
+    open_contents_on(port, level_list_id(2), "first_aid_kit")
+    close_menu(port)
+    start = stack_dump(port).get("depth")
+    depths = [start]
+    for _ in range(start or 0):
+        send(port, "return input.key('Escape')")
+        time.sleep(0.4)
+        depths.append(stack_dump(port).get("depth"))
+    check("a real Escape closes exactly ONE level per press, deepest first",
+          depths == [3, 2, 1, 0], f"got {depths!r}")
+    # Leave no pause menu behind for the blocks below.
+    send(port, "require('scripts.pause_menu').hide(); return 'ok'")
+    time.sleep(0.4)
+    check("the pause menu the Escape cascade toggled is dismissed, and no "
+          "modal boundary survives an emptied stack",
+          send(port, "return UI.isInputBlocked()").strip() == "false",
+          f"got {send(port, 'return UI.isInputBlocked()').strip()!r}")
+
+    # -- Dismissal restores the newly deepest level each time.
+    open_window_on(port, bid)
+    open_contents_on(port, CARGO_LIST_ID, DEF_DEEP_KIT)
+    open_contents_on(port, level_list_id(2), "first_aid_kit")
+    close_menu(port)
+    steps = []
+    for _ in range(3):
+        popped = send(port, "return require('scripts.cargo_inventory_panel')"
+                            ".popLevel()").strip()
+        time.sleep(0.3)
+        d = stack_dump(port)
+        deepest = ((d.get("levels") or [])[-1:] or [{}])[0]
+        steps.append({
+            "popped": popped,
+            "depth": d.get("depth"),
+            "scope": deepest.get("pageInScope") if d.get("depth") else None,
+            "blocked": d.get("inputBlocked"),
+        })
+    check("each dismissal restores the newly deepest level's interactivity",
+          [st["scope"] for st in steps[:2]] == [True, True],
+          f"got {steps!r}")
+    check("the modal boundary lifts once only the base level is left",
+          steps[1]["blocked"] is False and steps[2]["blocked"] is False,
+          f"got {[st['blocked'] for st in steps]!r}")
+    check("every dismissal reports that it closed a level",
+          [st["popped"] for st in steps] == ["true", "true", "true"],
+          f"got {[st['popped'] for st in steps]!r}")
+
+    # -- Per-level scroll survives a real resize, with the nesting path.
+    #
+    #    Both offsets are moved by the REAL wheel, each while its level
+    #    IS the deepest one -- which is the only way a level can be
+    #    scrolled at all, and therefore the only way a shallower level
+    #    can be carrying an offset when a resize arrives.
+    send(port, "require('scripts.cargo_inventory_panel').closeIfOpen();"
+               " return 'ok'")
+    time.sleep(0.3)
+    open_window_on(port, bid)
+    il = "require('scripts.ui.item_list')"
+    max1 = float(send(port, f"return {il}.maxScrollOffset({level_list_id(1)})"))
+    wheel_over_deepest(port)
+    pushed = open_contents_on(port, CARGO_LIST_ID, DEF_DEEP_KIT)
+    max2 = float(send(port, f"return {il}.maxScrollOffset({level_list_id(2)})"))
+    if check("both levels have more rows than they can show at once",
+             pushed and max1 >= 2 and max2 >= 2,
+             f"pushed={pushed!r} max offsets {max1!r} / {max2!r} "
+             f"depth={stack_dump(port).get('depth')!r}"):
+        for _ in range(3):
+            wheel_over_deepest(port)
+        before = stack_dump(port)
+        offsets = [l.get("scroll") for l in (before.get("levels") or [])]
+        check("the wheel moved BOTH levels to distinct nonzero offsets",
+              len(offsets) == 2 and all(isinstance(o, int) and o > 0
+                                        for o in offsets)
+              and offsets[0] != offsets[1],
+              f"got {offsets!r}")
+
+        send(port, "return engine.setWindowSize("
+                   f"{vp['fb_w'] - 140}, {vp['fb_h'] - 100})")
+        time.sleep(1.8)
+        after = stack_dump(port)
+        blv = before.get("levels") or []
+        alv = after.get("levels") or []
+        check("a resize preserves the whole nesting path",
+              after.get("depth") == before.get("depth") == 2
+              and [l.get("path") for l in alv] == [l.get("path") for l in blv]
+              and [l.get("kind") for l in alv] == [l.get("kind") for l in blv],
+              f"got {[(l.get('kind'), l.get('path')) for l in alv]!r} "
+              f"vs {[(l.get('kind'), l.get('path')) for l in blv]!r}")
+        check("a resize preserves EVERY level's own scroll offset",
+              [l.get("scroll") for l in alv] == offsets,
+              f"got {[l.get('scroll') for l in alv]!r} vs {offsets!r}")
+        send(port, "return engine.setWindowSize("
+                   f"{vp['fb_w']}, {vp['fb_h']})")
+        time.sleep(1.5)
+
+    # -- A UNIT-carried level renders LIVE contents, from the unit-info
+    #    gesture's own entry point.
+    send(port, "require('scripts.cargo_inventory_panel').closeIfOpen();"
+               " return 'ok'")
+    time.sleep(0.3)
+    live_before = send_json(
+        port, f"return unit.getItemContents({mule_uid}, 'first_aid_kit')")
+    send(port, "require('scripts.item_contents_panel').openFor("
+               f"{mule_uid}, 'first_aid_kit', 420, 320); return 'ok'")
+    time.sleep(0.6)
+    d = stack_dump(port)
+    lvs = d.get("levels") or []
+    check("the unit-info Contents gesture opens at the BASE level, live",
+          d.get("depth") == 1 and len(lvs) == 1
+          and lvs[0].get("kind") == "unitItem"
+          and lvs[0].get("uid") == mule_uid
+          and lvs[0].get("ageText") is None,
+          f"got {lvs!r}")
+    rows = item_rows(port, level_list_id(1))
+    check("its rows are the engine's LIVE answer for that container",
+          isinstance(live_before, list)
+          and len(rows) == len(live_before),
+          f"got {len(rows)} rows vs {len(live_before) if isinstance(live_before, list) else live_before!r}")
+    send(port, "require('scripts.cargo_inventory_panel').closeIfOpen();"
+               " return 'ok'")
+    time.sleep(0.3)
+
+
+def wheel_over_deepest(port: int) -> None:
+    """One wheel notch over the DEEPEST level's own panel, located from
+    the window's own dump rather than a computed coordinate."""
+    d = stack_dump(port)
+    levels = d.get("levels") or []
+    if not levels:
+        return
+    bounds = send_json(
+        port, "local p = require('scripts.ui.panel');"
+              " local l = require('scripts.cargo_inventory_panel').getLevel();"
+              " if not l or not l.panelId then return nil end;"
+              " local x, y = p.getPosition(l.panelId);"
+              " local w, h = p.getSize(l.panelId);"
+              " return {x=x, y=y, w=w, h=h}")
+    if not isinstance(bounds, dict):
+        return
+    cx = int(bounds.get("x", 0) + bounds.get("w", 0) / 2)
+    cy = int(bounds.get("y", 0) + bounds.get("h", 0) / 2)
+    send(port, f"return input.moveMouse({cx}, {cy})")
+    send(port, "return input.scroll(0, -1)")
+    time.sleep(0.25)
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9428)
@@ -1428,17 +1902,27 @@ def main() -> int:
     n = send(port, f"return engine.loadBuildingYaml('{TEST_BUILDING_YAML}')")
     check("probe building defs loaded", float(n) == 3.0, f"got {n!r}")
 
+    with open(TEST_ITEM_YAML, "w") as f:
+        f.write(TEST_ITEMS)
+    ni = send(port, f"return engine.loadItemYaml('{TEST_ITEM_YAML}')")
+    check("probe deep-kit item def loaded", float(ni) >= 1.0, f"got {ni!r}")
+    with open(TEST_UNIT_YAML, "w") as f:
+        f.write(TEST_UNITS)
+    nu = send(port, f"return engine.loadUnitYaml('{TEST_UNIT_YAML}')")
+    check("probe kit-carrier unit def loaded", float(nu) >= 1.0, f"got {nu!r}")
+
     print("  (scanning terrain outward from the origin for dry anchor sites)")
-    sites = allocate_dry_anchors(port, 6)
-    if not check("found six separated dry sites for the fixtures",
+    sites = allocate_dry_anchors(port, 7)
+    if not check("found seven separated dry sites for the fixtures",
                  sites is not None):
         quit_engine(port, proc)
         return 1
     ((bax, bay), (aax, aay), (max_, may_), (wax, way),
-     (eax, eay), (uax, uay)) = sites
+     (eax, eay), (uax, uay), (cax, cay)) = sites
     print(f"  (fixture sites: building={(bax, bay)} acolyte={(aax, aay)} "
           f"technomule={(max_, may_)} wildlife={(wax, way)} "
-          f"empty-cargo={(eax, eay)} unseen-cargo={(uax, uay)})")
+          f"empty-cargo={(eax, eay)} unseen-cargo={(uax, uay)} "
+          f"kit-carrier={(cax, cay)})")
 
     uid = int(float(send(port,
         f"return unit.spawn('acolyte', {aax}, {aay}, nil, 'player')")))
@@ -1515,6 +1999,40 @@ def main() -> int:
     # whose first-aid kit it deliberately leaves carried.
     temperature_scenario(port, uid, empty_bid)
     item_contents_scenario(port, mule_uid, uid)
+
+    # -- #1238 stock: the nesting fixtures go in LAST so nothing above
+    #    (which asserts exact cargo row counts and inventory shapes) sees
+    #    them. Each deposit is a real completed movement, so it also
+    #    refreshes the container's knowledge record -- which is what
+    #    gives the nested levels something remembered to render.
+    #
+    #    The two CONTAINERS go in first and the bulk after, so both stay
+    #    inside the base level's first rendered rows while the level as a
+    #    whole still has more rows than its cap.
+    carrier_uid = int(float(send(
+        port, f"return unit.spawn('{DEF_CARRIER}', {cax}, {cay}, nil, 'player')")))
+    for defname in CARGO_BULK_STOCK:
+        send(port, f"unit.addItem({uid}, '{defname}');"
+                   f" unit.depositToCargo({uid}, {bid}, '{defname}');"
+                   " return 'ok'", timeout=20.0)
+    send(port, f"unit.depositToCargo({carrier_uid}, {bid}, '{DEF_DEEP_KIT}');"
+               f" unit.addItem({uid}, 'first_aid_kit');"
+               f" unit.depositToCargo({uid}, {bid}, 'first_aid_kit');"
+               " return 'ok'", timeout=20.0)
+    known = send_json(port, f"return building.getContainerKnowledge({bid})")
+    kit_iid = None
+    for row in (known or {}).get("items", []):
+        if isinstance(row, dict) and row.get("defName") == DEF_DEEP_KIT:
+            kit_iid = row.get("instanceId")
+    stocked = send_json(
+        port, f"return building.getRememberedItemContents({bid}, {{{kit_iid}}})"
+        ) if isinstance(kit_iid, int) else None
+    nested_rows = len((stocked or {}).get("items", []))
+    if check("the deep kit is remembered in the cargo, STOCKED with more "
+             "rows than a level can show at once, with an instance id",
+             isinstance(kit_iid, int) and kit_iid > 0 and nested_rows > 12,
+             f"got id={kit_iid!r} nested rows={nested_rows!r}"):
+        nesting_stack_scenario(port, bid, int(kit_iid), mule_uid, vp)
 
     quit_engine(port, proc)
     if failures:

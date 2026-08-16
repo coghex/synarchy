@@ -43,6 +43,8 @@ registerBuildingAPI env = do
   registerLuaFunction "getStorageWeight"    (buildingGetStorageWeightFn env)
   registerLuaFunction "getContainerKnowledge"
                                             (buildingGetContainerKnowledgeFn env)
+  registerLuaFunction "getRememberedItemContents"
+                                            (buildingGetRememberedItemContentsFn env)
   registerLuaFunction "refreshContainerKnowledge"
                                             (buildingRefreshContainerKnowledgeFn env)
   registerLuaFunction "getOperations"       (buildingGetOperationsFn env)

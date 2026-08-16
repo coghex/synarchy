@@ -133,6 +133,7 @@ import qualified Test.Headless.UI.Slider as UISlider
 import qualified Test.Headless.UI.ClickCorrelation as UIClickCorrelation
 import qualified Test.Headless.UI.TransferContextMenu as UITransferContextMenu
 import qualified Test.Headless.UI.ItemList as UIItemList
+import qualified Test.Headless.UI.ContainerWindowStack as UIContainerWindowStack
 import qualified Test.Headless.World.Calendar as Calendar
 import qualified Test.Headless.World.FloraGrowth as FloraGrowth
 import qualified Test.Headless.River.CalderaHazard as RiverCalderaHazard
@@ -169,6 +170,7 @@ import qualified Test.Headless.Save.Snapshot as SaveSnapshot
 import qualified Test.Headless.Location.Discovery as LocationDiscovery
 import qualified Test.Headless.World.LocationDiscovery as WorldLocationDiscovery
 import qualified Test.Headless.Building.Knowledge as ContainerKnowledge
+import qualified Test.Headless.Item.NestedContents as NestedContents
 import qualified Test.Headless.Location.Instance as LocationInstance
 import qualified Test.Headless.Location.Naming as LocationNaming
 import qualified Test.Headless.River.Naming as RiverNaming
@@ -283,6 +285,11 @@ main = hspec $ do
     -- unit/building manager refs and installs its own two-page world
     -- manager, so it cannot share the worldgen engine above.
     aroundAll withHeadlessEngine PowerPlacement.spec
+
+    -- #1238: the two nested item-container reads the container-window
+    -- stack opens a level from, driven through the registered Lua API
+    -- against real live refs.
+    aroundAll withHeadlessEngine NestedContents.spec
     -- Own engine for the same reason (#1206): the demolition gate
     -- installs its own two-page world manager and drives the real
     -- building-command drain, which would disturb the shared engine.
@@ -408,6 +415,7 @@ main = hspec $ do
     describe "UI.PopupPlacement" UIPopupPlacement.spec
     describe "UI.ResponsiveMenus" UIResponsiveMenus.spec
     describe "UI.ResponsiveGameplay" UIResponsiveGameplay.spec
+    describe "UI.ContainerWindowStack" UIContainerWindowStack.spec
     describe "Tutorial HUD" UITutorialHud.spec
     describe "UI.UnicodeTextEditing" UIUnicodeTextEditing.spec
     describe "Lua.TextWrapping" LuaTextWrapping.spec

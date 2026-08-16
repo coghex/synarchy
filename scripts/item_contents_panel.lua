@@ -1,35 +1,69 @@
--- Item Contents Panel
+-- Item Contents — the item-container LEVEL of the container-window
+-- stack.
 --
--- Floating popup showing the contents of an ITEM-CONTAINER carried in
--- a unit's inventory (a first-aid kit, a toolbox). Triggered by
--- right-click on the container row in the unit-info inventory list →
--- context menu → "Contents".
+-- Since #1238 (D-13) this module no longer owns a window lifecycle. It
+-- owns the two item-container LEVEL KINDS the window manager
+-- (scripts/cargo_inventory_panel.lua) draws, and nothing else: no
+-- page, no panel, no singleton, no Escape handling, no per-tick
+-- refresh. Opening, closing, modality, resize restore and the nesting
+-- path all belong to the manager, which is what makes the one-window
+-- rule per nesting LEVEL true rather than aspirational — before this,
+-- this popup and the cargo popup were independent singletons that
+-- could both be open at once.
 --
--- This is the unit-carried analogue of cargo_inventory_panel (which
--- shows a storage building's contents). Since #1088 both render their
--- rows through the SAME shared item-list widget
--- (scripts/ui/item_list.lua); this popup simply leaves the widget's
--- optional category tab strip off, because a kit is one category. (If
--- toolboxes later mix categories, enable the widget's tabs here.)
+-- Two kinds, one presentation:
+--
+--   unitItem      — a container a unit CARRIES, WEARS or has EQUIPPED.
+--                   LIVE contents through unit.getItemContents, which
+--                   searches all three of those locations (#1238) —
+--                   the unit-info inventory list merges them and its
+--                   context menu offers "Contents" for a carried OR
+--                   equipped container, so the read has to cover the
+--                   same set.
+--   buildingItem  — a container stored inside a storage building. The
+--                   player's REMEMBERED contents through
+--                   building.getRememberedItemContents: never a live
+--                   read of building storage, never a knowledge write,
+--                   and carrying the parent record's own `revealedAt`
+--                   so the level shows the same "as of…" age as the
+--                   window it was opened from.
+--
+-- Both descend by EXACT INSTANCE IDENTITY along a `path` of instance
+-- ids, so two same-def kits inside one toolbox never show each other's
+-- contents, and a path that stops resolving closes its level instead of
+-- retargeting a sibling (the manager's update() does that).
 --
 -- The rows are ALREADY GROUPED by defName on the Haskell side, so this
 -- host hands them to the widget pre-grouped: the finer stack key the
--- other two hosts use must not re-split them, and their order (a
--- hashmap enumeration) must not be re-sorted.
+-- endpoint level uses must not re-split them, and their order (a
+-- hashmap enumeration) must not be re-sorted. Both engine reads answer
+-- that same grouped shape (Engine.Scripting.Lua.API.Items.Contents), so
+-- a live level and a remembered one render identically.
 --
--- Data source: unit.getItemContents(uid, defName) → grouped rows of
--- { defName, displayName, category, count, weight, iconTex, fill,
---   condition }. The Haskell side groups identical entries by defName.
+-- A level here is RENDER-ONLY (D-5): not a transfer endpoint, and it
+-- offers no transfer operation. It supplies no `transferMenu` at all —
+-- the manager's own "Contents" entry (inspection, not transfer) is
+-- what lets a container inside a container open the next level.
 --
--- Singleton: opening for a new container destroys the old popup.
--- Pinned at the mouse position when opened. Esc closes.
+-- It owns no elements, so it has no setup(): the window manager holds
+-- the page and assets every level is drawn with, and hud.createUI
+-- configures that one.
 --
 -- Public API:
---   openFor(uid, defName, mx, my) — open on this container
---   closeIfOpen()                 — destroy the popup if shown
---   isOpen()                      — bool
+--   levelKinds()                              — the manager's lookup
+--   openFor(uid, defName, mx, my, instanceId[, displayName])
+--                                             — the unit-info
+--                                               "Contents" gesture:
+--                                               opens at the BASE level
+--   closeIfOpen() / isOpen()                  — stack delegates, kept
+--                                               so existing callers and
+--                                               teardown paths still
+--                                               read naturally
 --
--- Engine script hooks: setup / init / update / shutdown.
+-- Engine script hooks: setup / init / shutdown. There is deliberately
+-- no update() and no handleKeyDown(): per-tick refresh and the Escape
+-- cascade are the manager's, and a second handler here would close two
+-- levels per keypress.
 --
 -- Registered in package.loaded so init.lua's key handler, hud setup,
 -- and unit_info_v2's right-click all see the same instance even though
@@ -39,80 +73,67 @@ local itemContentsPanel =
     package.loaded["scripts.item_contents_panel"] or {}
 package.loaded["scripts.item_contents_panel"] = itemContentsPanel
 
-local panel    = require("scripts.ui.panel")
-local label    = require("scripts.ui.label")
 local scale    = require("scripts.ui.scale")
-local itemList = require("scripts.ui.item_list")
+
+-- The manager is required lazily: it requires this module too (for
+-- levelKinds), and a top-level require in both directions is a load
+-- cycle.
+local function manager()
+    return require("scripts.cargo_inventory_panel")
+end
 
 -----------------------------------------------------------
--- Layout constants. Mirrors cargo_inventory_panel so the two read the
--- same visually. Base units; uiscale applied at draw time.
+-- Layout. The window CHROME (panel padding, header baselines, row
+-- metrics, the "as of…" line) is the manager's and shared with the
+-- endpoint level, so all that differs here is how wide the window is
+-- and how many rows it shows before scrolling.
 -----------------------------------------------------------
 local PANEL_W_BASE   = 420
-local PANEL_PAD_X    = 32
-local PANEL_PAD_TOP  = 28
-local PANEL_PAD_BOT  = 20
-local TITLE_FONT     = 16
-local TITLE_H        = 22
-local SUBTITLE_FONT  = 13
-local SUBTITLE_H     = 18
-local ROW_H          = 32
-local ROW_PAD        = 2
-local ICON_SZ        = 28
-local TEXT_PAD       = 12    -- horizontal pad inside each row
-local NAME_RIGHT_GAP = 24    -- gap between name and weight columns
 local MAX_ROWS       = 12
-local TITLE_COL      = { 1.0, 1.0, 1.0, 1.0 }
-local SUBTITLE_COL   = { 0.85, 0.85, 0.85, 1.0 }
 local ROW_NAME_COL   = { 1.0, 1.0, 1.0, 1.0 }
-local ROW_WEIGHT_COL = { 0.85, 0.85, 0.85, 1.0 }
 local EMPTY_COL      = { 0.7, 0.7, 0.7, 1.0 }
-
------------------------------------------------------------
--- State
------------------------------------------------------------
-itemContentsPanel.state = itemContentsPanel.state or {
-    open        = false,
-    uid         = nil,
-    defName     = nil,
-    instanceId  = nil,
-    mx          = 0,
-    my          = 0,
-    panelId     = nil,
-    titleId     = nil,
-    subtitleId  = nil,
-    listId      = nil,   -- shared item-list widget instance (#1088)
-}
-
-itemContentsPanel.hud = nil   -- assets set by setup()
-
------------------------------------------------------------
--- HUD hookup
------------------------------------------------------------
-function itemContentsPanel.setup(opts)
-    itemContentsPanel.hud = opts
-end
 
 -----------------------------------------------------------
 -- Helpers
 -----------------------------------------------------------
 
--- The item-list parameters describing THIS panel's data and
--- presentation policy. Rows arrive ALREADY GROUPED by defName from the
--- Haskell side (src/Engine/Scripting/Lua/API/Units/Inventory.hs), so
--- the widget must neither re-split them by the finer stack key nor
--- reorder them, and this panel shows no category tabs.
-local function listDataParams(rows)
+-- The container's own display name. The opener knows it (it is the row
+-- the player right-clicked), which is the only source that works for an
+-- EQUIPPED container, an accessory, or one nested inside another — the
+-- pre-#1238 loose-inventory scan could not name any of those. That scan
+-- survives as the fallback for a caller that supplies nothing.
+local function containerTitle(src)
+    if src.displayName and src.displayName ~= "" then return src.displayName end
+    if src.uid and src.defName then
+        for _, it in ipairs(unit.getInventory(src.uid) or {}) do
+            if it.defName == src.defName then
+                return it.displayName or src.defName
+            end
+        end
+    end
+    return src.defName or "Contents"
+end
+
+-- Total piece count across all groups — the subtitle, unchanged.
+local function pieceCountText(rows)
+    local pieces = 0
+    for _, r in ipairs(rows) do pieces = pieces + (r.count or 1) end
+    return (pieces == 1) and "1 item" or (pieces .. " items")
+end
+
+-- The item-list parameters describing an item-container level's data
+-- and presentation policy, shared by both kinds. No right-click
+-- TRANSFER action: this level is read-only, and the manager attaches
+-- the inspection entry itself.
+local function listParams(_src, view)
     return {
-        items      = rows,
+        items      = view.contents,
         preGrouped = true,
-        tabs       = false,
         uiscale    = scale.get(),
-        maxRows    = MAX_ROWS,
-        emptyText  = "(empty)",
+        emptyText  = view.emptyText,
         emptyColor = EMPTY_COL,
         rowIcon    = function(g)
-            -- Unlike the other hosts, this API can report a missing
+            -- Unlike the endpoint level, this API can report a missing
             -- icon as a negative handle.
             if g.iconTex and g.iconTex >= 0 then return g.iconTex end
             return nil
@@ -147,252 +168,131 @@ local function listDataParams(rows)
                 hint = table.concat(hintLines, "\n"),
             }
         end,
-        -- No right-click action: this panel is read-only, so the widget
-        -- registers no click callback for its rows at all.
+        -- The header/subtitle the widget cannot see, so a piece count
+        -- or a title change rebuilds the level.
+        presentationKey = string.format("%s|%s|%s", tostring(view.title),
+                                        tostring(view.subtitle),
+                                        tostring(view.knowledge
+                                                 and view.knowledge.revealedAt)),
     }
 end
 
------------------------------------------------------------
--- Element teardown
------------------------------------------------------------
-local function destroyList()
-    local s = itemContentsPanel.state
-    if s.listId then
-        itemList.destroy(s.listId)
-        s.listId = nil
-    end
-end
-
-local function destroyTitle()
-    local s = itemContentsPanel.state
-    if s.titleId    then label.destroy(s.titleId);    s.titleId    = nil end
-    if s.subtitleId then label.destroy(s.subtitleId); s.subtitleId = nil end
-end
-
-local function destroyAll()
-    destroyList()
-    destroyTitle()
-    local s = itemContentsPanel.state
-    if s.panelId then
-        panel.destroy(s.panelId)
-        s.panelId = nil
-    end
+-- Extend a level's descent path by one instance id, without mutating
+-- the parent's own path (the parent level is still open and still
+-- addressing itself with it).
+local function extendPath(path, instanceId)
+    local out = {}
+    for i, v in ipairs(path or {}) do out[i] = v end
+    out[#out + 1] = instanceId
+    return out
 end
 
 -----------------------------------------------------------
--- Render: title + subtitle
+-- The two level kinds
 -----------------------------------------------------------
-local function buildTitle(originX, originY, defName, rows)
-    local s = itemContentsPanel.state
-    local h = itemContentsPanel.hud
-    if not h then return end
-    local uiscale = scale.get()
+local KINDS = {
+    unitItem = {
+        panelWidthBase = PANEL_W_BASE,
+        maxRows        = MAX_ROWS,
+        tabs           = false,
+        -- nil when the unit is gone, no longer holds that container, or
+        -- the nested path no longer resolves. The manager closes this
+        -- level and every deeper one on nil, which is the whole
+        -- reconciliation rule.
+        view = function(src)
+            local rows = unit.getItemContents(src.uid, src.defName,
+                                              src.instanceId, src.path)
+            if not rows then return nil end
+            return {
+                title     = containerTitle(src),
+                subtitle  = pieceCountText(rows),
+                contents  = rows,
+                emptyText = "(empty)",
+            }
+        end,
+        listParams = listParams,
+        childOf = function(src, row)
+            return { kind = "unitItem", uid = src.uid, defName = src.defName,
+                     instanceId = src.instanceId,
+                     path = extendPath(src.path, row.instanceId),
+                     displayName = row.displayName }
+        end,
+    },
 
-    -- Title = the container's display name (from its own inventory row,
-    -- falling back to the def name).
-    local name = defName
-    local inv = unit.getInventory(s.uid) or {}
-    for _, it in ipairs(inv) do
-        if it.defName == defName then
-            name = it.displayName or defName
-            break
-        end
-    end
+    buildingItem = {
+        panelWidthBase = PANEL_W_BASE,
+        maxRows        = MAX_ROWS,
+        tabs           = false,
+        -- The `knowledge` sub-table is what gives this level the
+        -- manager's "as of…" line (#1237's presentation, reused
+        -- verbatim). Its `revealedAt` is the PARENT RECORD's, because
+        -- that is genuinely when this snapshot was taken — a nested
+        -- container was never observed separately.
+        view = function(src)
+            local res = building.getRememberedItemContents(src.bid, src.path)
+            if not res then return nil end
+            local rows = res.items or {}
+            return {
+                title     = containerTitle(src),
+                subtitle  = pieceCountText(rows),
+                contents  = rows,
+                emptyText = "(empty)",
+                knowledge = { state = "known", revealedAt = res.revealedAt },
+            }
+        end,
+        listParams = listParams,
+        childOf = function(src, row)
+            return { kind = "buildingItem", bid = src.bid,
+                     path = extendPath(src.path, row.instanceId),
+                     displayName = row.displayName }
+        end,
+    },
+}
 
-    s.titleId = label.new({
-        name     = "item_contents_title",
-        text     = name,
-        font     = h.menuFont,
-        fontSize = TITLE_FONT,
-        color    = TITLE_COL,
-        page     = h.page,
-        uiscale  = uiscale,
-    })
-    local th = label.getElementHandle(s.titleId)
-    UI.addToPage(h.page, th, originX,
-                 originY + math.floor(TITLE_FONT * 0.85))
-    UI.setZIndex(th, 132)
-
-    -- Subtitle = total piece count across all groups.
-    local pieces = 0
-    for _, r in ipairs(rows) do pieces = pieces + (r.count or 1) end
-    local subText = (pieces == 1) and "1 item" or (pieces .. " items")
-    s.subtitleId = label.new({
-        name     = "item_contents_subtitle",
-        text     = subText,
-        font     = h.menuFont,
-        fontSize = SUBTITLE_FONT,
-        color    = SUBTITLE_COL,
-        page     = h.page,
-        uiscale  = uiscale,
-    })
-    local sh = label.getElementHandle(s.subtitleId)
-    UI.addToPage(h.page, sh, originX,
-                 originY + TITLE_H + math.floor(SUBTITLE_FONT * 0.85))
-    UI.setZIndex(sh, 132)
+function itemContentsPanel.levelKinds()
+    return KINDS
 end
 
 -----------------------------------------------------------
--- Open / refresh
+-- Entry point
 -----------------------------------------------------------
-local function buildLayout(uid, defName, mx, my, instanceId)
-    local s = itemContentsPanel.state
-    local h = itemContentsPanel.hud
-    if not h or not h.page then return end
 
-    local rows = unit.getItemContents(uid, defName, instanceId) or {}
-
-    local uiscale = scale.get()
-    local panelW  = math.floor(PANEL_W_BASE * uiscale)
-    local padTop  = math.floor(PANEL_PAD_TOP * uiscale)
-    local padBot  = math.floor(PANEL_PAD_BOT * uiscale)
-    local titleH  = math.floor(TITLE_H    * uiscale)
-    local subH    = math.floor(SUBTITLE_H * uiscale)
-    local rowH    = math.floor(ROW_H      * uiscale)
-    local rowPad  = math.floor(ROW_PAD    * uiscale)
-
-    local visibleCount = math.min(math.max(#rows, 1), MAX_ROWS)
-    local rowsH  = visibleCount * rowH + (visibleCount - 1) * rowPad
-    local panelH = padTop + titleH + subH + 8 + rowsH + padBot
-
-    -- #750 round-7 review: cap against the actual framebuffer — the
-    -- position clamp below only ever repositions the panel, never
-    -- shrinks it, so PANEL_W_BASE*uiscale could exceed the framebuffer
-    -- at a narrow, high-scale, still-C2-supported combination regardless
-    -- of position. Best-effort degrade, same pattern as cargo_inventory_
-    -- panel.lua/popup.lua/unit_info_v2.lua's fixes for the identical gap.
-    if h.fbW then panelW = math.min(panelW, h.fbW) end
-    if h.fbH then panelH = math.min(panelH, h.fbH) end
-
-    -- Clamp the panel to the framebuffer so it never opens partly
-    -- off-screen near an edge.
-    local px, py = mx, my
-    if h.fbW and px + panelW > h.fbW then px = math.max(0, h.fbW - panelW) end
-    if h.fbH and py + panelH > h.fbH then py = math.max(0, h.fbH - panelH) end
-
-    if s.panelId then panel.destroy(s.panelId); s.panelId = nil end
-    s.panelId = panel.new({
-        name       = "item_contents_panel",
-        page       = h.page,
-        x          = px,
-        y          = py,
-        width      = panelW,
-        height     = panelH,
-        textureSet = h.boxTexSet,
-        color      = { 0.1, 0.1, 0.1, 0.95 },
-        tileSize   = 64,
-        zIndex     = 130,
-        padding    = { top = PANEL_PAD_TOP, bottom = PANEL_PAD_BOT,
-                       left = PANEL_PAD_X,  right  = PANEL_PAD_X },
-        uiscale    = uiscale,
-    })
-    local pbounds = panel.getContentBounds(s.panelId)
-    local cx = px + pbounds.x
-    local cy = py + pbounds.y
-    local cw = pbounds.width
-
-    destroyTitle()
-    destroyList()
-    buildTitle(cx, cy, defName, rows)
-
-    local dataParams = listDataParams(rows)
-    dataParams.name         = "item_contents"
-    dataParams.page         = h.page
-    dataParams.font         = h.menuFont
-    dataParams.x            = cx
-    dataParams.y            = cy + titleH + subH + 8
-    dataParams.width        = cw
-    dataParams.height       = rowsH
-    dataParams.rowHeight    = ROW_H
-    dataParams.rowPad       = ROW_PAD
-    dataParams.iconSize     = ICON_SZ
-    dataParams.textPad      = TEXT_PAD
-    dataParams.nameRightGap = NAME_RIGHT_GAP
-    dataParams.rowFontSize  = 13
-    dataParams.weightColor  = ROW_WEIGHT_COL
-    dataParams.zBase        = 132
-    s.listId = itemList.new(dataParams)
-end
-
+-- The unit-info inventory row's "Contents" gesture. An EXTERNAL
+-- request targets the BASE level (requirement: a container-row request
+-- targets its owning level plus one; everything else starts over), so
+-- this replaces whatever stack was open.
+--
 -- instanceId (optional) targets the EXACT container the player clicked,
 -- so two same-def kits don't show each other's contents (#67). Falls
 -- back to first-by-defName when nil.
-function itemContentsPanel.openFor(uid, defName, mx, my, instanceId)
-    if not uid or not defName then return end
-    -- A new request always tears down the prior popup first (singleton),
-    -- so a stale/invalid request never leaves an earlier container's
-    -- popup on screen. Close BEFORE the existence guard below.
-    itemContentsPanel.closeIfOpen()
-    -- Don't open for a container that doesn't exist: the unit holds no
-    -- inventory item matching defName/instanceId. unit.getItemContents
-    -- returns nil in that case; an existing-but-empty container returns a
-    -- table, so this only rejects genuinely missing containers (the popup
-    -- still opens and shows "(empty)" for a real, empty kit).
-    if not unit.getItemContents(uid, defName, instanceId) then return end
-    local s = itemContentsPanel.state
-    s.open       = true
-    s.uid        = uid
-    s.defName    = defName
-    s.instanceId = instanceId
-    s.mx         = mx
-    s.my         = my
-    buildLayout(uid, defName, mx, my, instanceId)
+function itemContentsPanel.openFor(uid, defName, mx, my, instanceId, displayName)
+    if not uid or not defName then return false end
+    return manager().openLevel(
+        { kind = "unitItem", uid = uid, defName = defName,
+          instanceId = instanceId, path = {}, displayName = displayName },
+        mx, my, 0)
 end
 
+-- Delegates. Kept because the teardown registry, the loader and
+-- existing callers all speak this vocabulary; the stack is the one
+-- thing that actually holds state.
 function itemContentsPanel.closeIfOpen()
-    local s = itemContentsPanel.state
-    if not s.open then return end
-    destroyAll()
-    s.open       = false
-    s.uid        = nil
-    s.defName    = nil
-    s.instanceId = nil
+    manager().closeIfOpen()
 end
 
 function itemContentsPanel.isOpen()
-    return itemContentsPanel.state.open == true
-end
-
------------------------------------------------------------
--- Per-tick refresh. The rebuild comparison belongs to the shared
--- item-list widget; the "container went away" check below is
--- host-owned lifecycle, not invalidation — the popup must not outlive
--- the kit it describes (consumed / unit died).
------------------------------------------------------------
-function itemContentsPanel.update(dt)
-    local s = itemContentsPanel.state
-    if not s.open or not s.uid or not s.defName then return end
-    local rows = unit.getItemContents(s.uid, s.defName, s.instanceId)
-    if not rows then
-        itemContentsPanel.closeIfOpen()
-        return
-    end
-    if itemList.isStale(s.listId, listDataParams(rows)) then
-        buildLayout(s.uid, s.defName, s.mx, s.my, s.instanceId)
-    end
+    return manager().isOpen()
 end
 
 -----------------------------------------------------------
 -- Engine script hooks
 -----------------------------------------------------------
 function itemContentsPanel.init(scriptId)
-    engine.logInfo("Item contents panel initializing...")
+    engine.logInfo("Item contents level initializing...")
 end
 
 function itemContentsPanel.shutdown()
-    itemContentsPanel.closeIfOpen()
-    engine.logInfo("Item contents panel shut down")
-end
-
--- Esc closes the popup. Returns true if consumed. Named handle* (not
--- on*) deliberately: this module is engine-loaded, so an on*-named
--- function would also fire on every engine broadcast.
-function itemContentsPanel.handleKeyDown(key)
-    if key == "Escape" and itemContentsPanel.state.open then
-        itemContentsPanel.closeIfOpen()
-        return true
-    end
-    return false
+    engine.logInfo("Item contents level shut down")
 end
 
 return itemContentsPanel
