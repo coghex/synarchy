@@ -33,6 +33,7 @@ local findTechnomule       = fetch.findTechnomule
 local fetchWantsFromGround = fetch.fetchWantsFromGround
 local fetchWantsFromMule   = fetch.fetchWantsFromMule
 local deliverItemWeight    = fetch.deliverItemWeight
+local loadFeasible         = fetch.loadFeasible
 
 local mv = require("scripts.movement_speed")
 local roles = require("scripts.unit_roles")
@@ -185,10 +186,11 @@ local function fetchWantsFromCargo(uid, wants, info, params)
 end
 
 -- Can this unit source every demand right now (inventory + nearby
--- ground + mule stock + cargo storage)? Races lose gracefully at
--- fetch time; this is only the "worth claiming" filter, same as
--- construction's.
+-- ground + mule stock + cargo storage) AND carry the shortfall it would
+-- have to fetch (#1326)? Races lose gracefully at fetch time; this is
+-- only the "worth claiming" filter, same as construction's.
 local function craftMaterialsAvailable(uid, fromX, fromY, demands, params)
+    if not loadFeasible(uid, demands) then return false end
     for item, need in pairs(demands) do
         local have = inventoryCountOf(uid, item)
         if have < need then
@@ -196,11 +198,9 @@ local function craftMaterialsAvailable(uid, fromX, fromY, demands, params)
                                          params.craft_scan_range)
             if have + ground < need then
                 local mule = findTechnomule(fromX, fromY)
-                local muleHave = mule
-                    and inventoryCountOf(mule.uid, item) or 0
-                if have + ground + muleHave < need
-                   and have + ground + muleHave + cargoCountOf(item) < need
-                then
+                local muleHave = mule and inventoryCountOf(mule.uid, item) or 0
+                local off = have + ground + muleHave
+                if off < need and off + cargoCountOf(item) < need then
                     return false
                 end
             end

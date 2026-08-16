@@ -26,7 +26,6 @@
 
 local core = require("scripts.unit_ai_core")
 local distance        = core.distance
-local chebToFootprint = core.chebToFootprint
 local reportFailure   = core.reportFailure
 local grantWorkXP     = core.grantWorkXP
 
@@ -34,6 +33,7 @@ local fetch = require("scripts.unit_ai_fetch")
 local inventoryCountOf     = fetch.inventoryCountOf
 local groundCountOf        = fetch.groundCountOf
 local findTechnomule       = fetch.findTechnomule
+local loadFeasible         = fetch.loadFeasible
 local fetchWantsFromGround = fetch.fetchWantsFromGround
 local fetchWantsFromMule   = fetch.fetchWantsFromMule
 
@@ -131,9 +131,10 @@ local function sweepConstructClaims(wid, jobs, now, timeout)
 end
 
 -- Can this unit source every material the piece needs (inventory +
--- ground + mule)? Races lose gracefully at fetch time; this is only
--- the "worth claiming" filter.
+-- ground + mule) AND carry the shortfall (#1326)? Races lose gracefully
+-- at fetch time; this is only the "worth claiming" filter.
 local function constructMaterialsAvailable(uid, fromX, fromY, mats, params)
+    if not loadFeasible(uid, mats) then return false end
     for matType, need in pairs(mats or {}) do
         local have = inventoryCountOf(uid, matType)
         if have < need then
@@ -141,8 +142,7 @@ local function constructMaterialsAvailable(uid, fromX, fromY, mats, params)
                                          params.construct_scan_range)
             if have + ground < need then
                 local mule = findTechnomule(fromX, fromY)
-                local muleHave = mule
-                    and inventoryCountOf(mule.uid, matType) or 0
+                local muleHave = mule and inventoryCountOf(mule.uid, matType) or 0
                 if have + ground + muleHave < need then return false end
             end
         end

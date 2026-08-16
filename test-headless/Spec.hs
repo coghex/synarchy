@@ -184,6 +184,7 @@ import qualified Test.Headless.Lua.TutorialProgress as LuaTutorialProgress
 import qualified Test.Headless.Lua.TutorialEvaluation as LuaTutorialEvaluation
 import qualified Test.Headless.Lua.UnitAiLocations as LuaUnitAiLocations
 import qualified Test.Headless.Lua.UnitAiStall as LuaUnitAiStall
+import qualified Test.Headless.Lua.WorkClaimCapacity as LuaWorkClaimCapacity
 import qualified Test.Headless.Lua.Faction as LuaFaction
 import qualified Test.Headless.Unit.Faction as UnitFaction
 import qualified Test.Headless.Capability.Building as CapabilityBuilding
@@ -361,6 +362,7 @@ main = hspec $ do
     LuaTutorialEvaluation.spec
     LuaUnitAiLocations.spec
     LuaUnitAiStall.spec
+    LuaWorkClaimCapacity.spec
     LuaFaction.spec
     describe "World.CursorInfo" CursorInfo.spec
     describe "World.SelectChunk" SelectChunk.spec

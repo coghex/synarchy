@@ -33,6 +33,44 @@ local function deliverItemWeight(defName)
     return 0
 end
 
+-- Can this unit CARRY what a whole job still has to fetch (#1326)?
+-- `demands` is {defName → count}; only the SHORTFALL is weighed, since
+-- copies already in inventory are part of getCarryingWeight and must
+-- not be charged twice.
+--
+-- Every gate below (fetchWantsFromGround / fetchWantsFromMule /
+-- unit_ai_craft's fetchWantsFromCargo) refuses a single pickup that
+-- would overflow, one item at a time — none of them can see that the
+-- job as a WHOLE never fits. Without this prospective check a worker
+-- claims such a job, fetches until a gate stops it, fails the
+-- post-fetch inventory reconciliation, releases the job still holding
+-- the partial load, and re-claims the same job on the next decision
+-- tick, forever. Six of the seven shipped smelting recipes are heavier
+-- than an average acolyte's free headroom, so this is reachable on the
+-- main smelting tier. scripts/unit_ai_repair.lua makes the identical
+-- comparison before ITS claim, for the identical reason.
+--
+-- Equality is eligible: those gates compare with a strict `>`, so a
+-- load landing exactly on capacity really does fit and must not be
+-- pre-rejected here.
+--
+-- Silent by contract: this runs inside the candidate scan on every
+-- decision tick, so a rejection logs nothing and emits no event — it
+-- just leaves the job unclaimed and pending.
+local function loadFeasible(uid, demands)
+    local needed = 0
+    for defName, count in pairs(demands or {}) do
+        local short = count - inventoryCountOf(uid, defName)
+        if short > 0 then
+            needed = needed + deliverItemWeight(defName) * short
+        end
+    end
+    if needed <= 0 then return true end
+    local carried = unit.getCarryingWeight(uid) or 0
+    local maxW    = unit.getStat(uid, "carrying_capacity") or math.huge
+    return carried + needed <= maxW
+end
+
 -- Nearest technomule, or nil. The colony's construction stock rides
 -- on it; deliverers fetch their shortfall from here. No range limit —
 -- materials are worth the walk.
@@ -188,6 +226,7 @@ end
 
 M.inventoryCountOf       = inventoryCountOf
 M.deliverItemWeight      = deliverItemWeight
+M.loadFeasible           = loadFeasible
 M.findTechnomule         = findTechnomule
 M.groundCountOf          = groundCountOf
 M.untilStockSatisfied    = untilStockSatisfied

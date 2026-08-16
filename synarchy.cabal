@@ -1223,6 +1223,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.TutorialEvaluation
                    Test.Headless.Lua.UnitAiLocations
                    Test.Headless.Lua.UnitAiStall
+                   Test.Headless.Lua.WorkClaimCapacity
                    Test.Headless.Capability.Building
                    Test.Headless.Capability.Events
                    Test.Headless.Capability.Input
@@ -1264,6 +1265,7 @@ test-suite synarchy-test-headless
                 , cereal
                 , yaml
                 , aeson
+                , scientific
                 , directory
                 , filepath
     ghc-options: "-with-rtsopts=-N -A128M"
