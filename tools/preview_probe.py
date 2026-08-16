@@ -45,12 +45,20 @@ Checks:
      EVERY animation as atlas-backed, sample the compiled atlases named
      by the checked-in index with that index's own cell geometry and
      real per-direction frame counts, and open not one source frame.
-  4. Asset-only declarations (--preview units/tiller, #887/#1257): a
-     shipped tree that is part of the authoritative inventory but is
-     NOT a gameplay unit browses from its `asset_units:` declaration,
-     with the DECLARED fps=8 / loop=true / flip=true on every animation
-     and all eight direction cells populated by that declared
-     mirroring.
+  4. A promoted declaration (--preview units/tiller, #887/#1257/#1261):
+     a tree that carried an inventory-only `asset_units:` declaration
+     until #1261 promoted it to a real `units:` entry browses with the
+     DECLARED fps=8 / loop=true / flip=true on every animation, all
+     eight direction cells populated by that declared mirroring, and —
+     since #1261 retired per-frame unit-animation loading — every
+     animation atlas-backed like any other unit's.
+  4b. The rest of the shipped roster (--preview units/<name> for every
+     remaining declared unit, #1261): one boot each, asserting the
+     animation list still equals what is on disk, every animation
+     reports atlas storage naming its own compiled atlas from the
+     index, and nothing outside that unit's own directory loaded. The
+     roster is read from data/units/ rather than written here, so a
+     tree added without this probe noticing fails rather than passes.
   5. Buildings viewer (--preview buildings/acolyte_portal, #888): the
      entry list — animation subdirectories AND loose statics together —
      matches a filesystem+YAML-derived expectation exactly and in order,
@@ -491,12 +499,21 @@ DIRECTION_SPELLINGS = frozenset(
 
 
 def expected_unit_animations(unit: str) -> list[str]:
-    """Independent, filesystem-derived expectation for the animation
-    list — mirrors Engine.Preview.Unit.discoverUnitAnimations's contract
-    (direct children of animations/ that hold at least one recognized,
-    non-symlinked direction folder with at least one non-symlinked .png,
-    case-sensitive lexicographic) without importing any Haskell/Lua
-    code."""
+    """Independent, FILESYSTEM-derived expectation for the animation
+    list: direct children of animations/ that hold at least one
+    recognized, non-symlinked direction folder with at least one
+    non-symlinked .png, case-sensitive lexicographic — computed without
+    importing any Haskell/Lua code.
+
+    #1261 moved the viewer's own authority to the unit YAML and its
+    compiled index, which makes this a genuinely independent oracle
+    rather than a restatement: the two must agree exactly, because
+    `tools/pack_atlas.py --validate-only --strict` fails on any
+    animation PNG no declaration owns, and the engine refuses a unit
+    whose index does not cover its declarations. A folder that appears
+    here and NOT in the dump is an undeclared one — which is the
+    excluded case #1261 specifies, and a real finding for a tracked
+    tree."""
     root = os.path.join("assets", "textures", "units", unit, "animations")
     out = []
     for name in os.listdir(root):
@@ -831,26 +848,24 @@ def check_units_mode(port: int) -> bool:
         quit_engine(port, proc)
 
 
-def check_units_asset_only(port: int) -> bool:
-    """The asset-only declaration form (#1257).
+def check_units_promoted(port: int) -> bool:
+    """A tree #1261 (TEX-6) promoted out of the inventory-only form.
 
     `tiller` used to be this probe's "no data/units YAML at all"
-    fixture. Since #1257 every shipped animation folder is declared, and
-    `tiller` is instead the fixture for the OTHER half of that contract:
-    it has a `data/units/tiller.yaml`, written under the top-level
-    `asset_units:` key, so it is fully browsable and carries real
-    playback metadata while `Engine.Asset.YamlUnits.loadUnitYaml` still
-    never returns it as a gameplay unit.
+    fixture. #1257 gave it a declaration under the top-level
+    `asset_units:` key; #1261 promoted that to a real `units:` entry,
+    because with per-frame unit-animation loading retired an animation
+    renders only through the compiled atlas its declaration drives.
 
-    The visible behaviour asserted here is byte-for-byte what the old
-    inference produced — the declaration states `flip: true` over the
-    canonical five, which is exactly what `effectiveFlip` used to infer
-    from that layout — so this is a change of SOURCE, not of result.
+    The visible behaviour asserted here has not changed across either
+    step — the declaration states `flip: true` over the canonical five,
+    which is exactly what the pre-#1257 inference produced from that
+    layout — so both were a change of SOURCE, not of result.
     """
-    print("4. asset-only declaration (--preview units/tiller): declared metadata")
+    print("4. promoted declaration (--preview units/tiller): declared metadata")
     unit = "tiller"
     proc = boot(port, log=LOG, mode=("--preview", f"units/{unit}"),
-                label="preview engine (units, asset-only)")
+                label="preview engine (units, promoted)")
     try:
         yaml_path = os.path.join("data", "units", unit + ".yaml")
         declaration = ""
@@ -858,15 +873,15 @@ def check_units_asset_only(port: int) -> bool:
             with open(yaml_path) as fh:
                 declaration = fh.read()
         # Pin the fixture's premise: the file exists AND declares the
-        # asset-only key rather than the gameplay one. Without both, the
-        # metadata assertions below could pass against a `units:` entry
-        # and prove nothing about the asset-only path.
+        # gameplay key rather than the inventory-only one. Without both,
+        # the metadata assertions below could pass against an
+        # `asset_units:` entry and prove nothing about the promotion.
         ok_declared = check(
-            "the fixture really is declared under asset_units: (or this "
+            "the fixture really is declared under units: (or this "
             "check proves nothing)",
-            any(line.rstrip() == "asset_units:"
+            any(line.rstrip() == "units:"
                 for line in declaration.splitlines())
-            and not any(line.rstrip() == "units:"
+            and not any(line.rstrip() == "asset_units:"
                         for line in declaration.splitlines()),
             yaml_path)
 
@@ -909,14 +924,65 @@ def check_units_asset_only(port: int) -> bool:
                               c.get("source"))
                              for c in (pb.get("directions") or [])])
 
+        # #1261: a promoted tree is atlas-backed like any other. Before
+        # it, tiller was the probe's canonical LEGACY unit.
+        ok_atlas = check_atlas_backed(port, unit, d)
+
         root_prefix = os.path.join("assets", "textures", "units", unit) + os.sep
         ok_trimmed = check_trimmed_loading(port, root_prefix, allow_chrome=True)
         ok_no_gameplay = check_no_gameplay_scripts_loaded(port)
 
         return all([ok_declared, ok_entries, ok_meta, ok_dirs, ok_mirrored,
-                    ok_trimmed, ok_no_gameplay])
+                    ok_atlas, ok_trimmed, ok_no_gameplay])
     finally:
         quit_engine(port, proc)
+
+
+def shipped_units() -> list[str]:
+    """Every declared unit, from data/units/ rather than from a list
+    written here — a tree added without this probe noticing is the
+    failure mode a hardcoded roster would hide."""
+    return sorted(f[:-len(".yaml")]
+                  for f in os.listdir(os.path.join("data", "units"))
+                  if f.endswith(".yaml"))
+
+
+def check_units_roster(port: int) -> bool:
+    """#1261 requirement 2: EVERY shipped unit tree browses, and does so
+    through the production atlas/index path.
+
+    Phases 3 and 4 cover acolyte and tiller in depth. This one is
+    breadth: one boot per remaining tree, asserting the three things
+    that can only be observed against real compiled artifacts — the
+    animation list still equals what is on disk, every animation
+    reports atlas storage naming its own compiled atlas, and nothing
+    outside this unit's own directory was loaded.
+    """
+    covered = {"acolyte", "tiller"}
+    units = [u for u in shipped_units() if u not in covered]
+    print(f"4b. the rest of the shipped roster ({', '.join(units)}): "
+          f"atlas-backed browsing")
+    ok = True
+    for unit in units:
+        proc = boot(port, log=LOG, mode=("--preview", f"units/{unit}"),
+                    label=f"preview engine (units/{unit})")
+        try:
+            d = poll_unit_ready(port)
+            expected = expected_unit_animations(unit)
+            listed = [e.get("label") for e in (d.get("entries") or [])]
+            ok_entries = check(f"{unit}: animation list matches the "
+                               f"filesystem-derived expectation, in order",
+                               listed == expected,
+                               f"dumped={listed} expected={expected}")
+            ok_atlas = check_atlas_backed(port, unit, d)
+            root_prefix = os.path.join(
+                "assets", "textures", "units", unit) + os.sep
+            ok_trimmed = check_trimmed_loading(port, root_prefix,
+                                               allow_chrome=True)
+            ok = all([ok, ok_entries, ok_atlas, ok_trimmed])
+        finally:
+            quit_engine(port, proc)
+    return ok
 
 
 def is_frame_name(f: str) -> bool:
@@ -1335,7 +1401,8 @@ def main() -> int:
         check_simple_list_mode(args.port),
         check_focused_item_mode(args.port),
         check_units_mode(args.port),
-        check_units_asset_only(args.port),
+        check_units_promoted(args.port),
+        check_units_roster(args.port),
         check_buildings_mode(args.port),
         check_buildings_without_built(args.port),
         check_buildings_without_yaml(args.port),

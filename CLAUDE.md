@@ -759,46 +759,46 @@ in-engine browser is `scripts/ui/asset_browser.lua` + `scripts/ui/list.lua`):
 Units viewer (`--preview units/<name>`, #887; `Engine.Preview.Unit`
 pre-boot + `scripts/ui/unit_animation_view.lua` in-engine):
 
-- **The filesystem decides MEMBERSHIP; the compiled index decides
-  RENDERING** (#1260 split what #887 stated as one rule).
-  `assets/textures/units/<name>/animations/` decides which animations
-  exist — discovery is still filesystem-first, which is why
-  `acolyte/pushing_idle` was browsable before the YAML named it.
-  An animation the unit's `atlas/index.json` declares atlas-backed then
-  takes its directions, per-direction frame counts, cell geometry and
-  `fps`/`loop`/`flip` from THAT index and samples the compiled atlas,
-  through the same loader (`Unit.Atlas.Yaml.resolveUnitAtlases`) and the
-  same frozen cell arithmetic (`Unit.Atlas.Types.atlasCellUV`) the game
-  uses — D-9's whole point, since a preview-only decoder would miss the
-  regressions the viewer exists to catch. A rejected index is a
-  **pre-boot failure** (`UnitFocusError`'s `UnitAtlasRejected`), never a
-  quiet fall back to the source frames beside it. For an animation the
-  index does not name — every animation of every unit but `acolyte`
-  today — the filesystem stays authoritative for directions and the
-  `frame_NNN.png` order (NUMERIC, so an unpadded `frame_10` can't sort
-  before `frame_2`), and `data/units/<name>.yaml` only AUGMENTS it with
-  `fps`/`loop`/`flip`. A preview frame is therefore a texture plus a
-  sub-rect (`PreviewFrame`), published to a sprite with
-  `UI.setSpriteFrame` — never a bare path, which for an atlas would draw
-  the whole sheet. Since #1257 every shipped animation folder IS
-  declared, in one of two forms (see **Unit asset inventory** below):
-  `tiller`, `unknown_unit` and `white_tailed_deer` carry `asset_units:`
-  files, and `acolyte/pushing_idle`, `bear_brown/roar` and
-  `technomule/hit_react` gained ordinary entries. The viewer's
-  missing-metadata fallback is retained for uncommitted local content
-  and falls back to the SAME values `UnitYamlAnim`'s decoder defaults
-  to: `fps=8`, `loop=true`, `flip=false`.
+- **`data/units/<name>.yaml` and its compiled `atlas/index.json` decide
+  everything** (#1261, TEX-6, replacing #887's filesystem-first
+  discovery and #1260's membership/rendering split). The YAML declares
+  which animations exist; the index says how each is stored; the viewer
+  takes its list, directions, per-direction frame counts, cell geometry
+  and `fps`/`loop`/`flip` from that pair and samples the compiled
+  atlas, through the same loader (`Unit.Atlas.Yaml.resolveUnitAtlases`)
+  and the same frozen cell arithmetic
+  (`Unit.Atlas.Types.atlasCellUV`) the game uses — D-9's whole point,
+  since a preview-only decoder would miss the regressions the viewer
+  exists to catch. A rejected index is a **pre-boot failure**
+  (`UnitFocusError`'s `UnitAtlasRejected`), never a quiet fall back to
+  the source frames beside it. A preview frame is therefore a texture
+  plus a sub-rect plus its cell size (`PreviewFrame` — all three
+  unconditional since #1261), published to a sprite with
+  `UI.setSpriteFrame`, never a bare path, which would draw the whole
+  sheet. The asset tree still decides what a unit TARGET must contain
+  (an `animations/` directory, neither it nor the unit directory a
+  symlink), but no longer which animations browse: an animation folder
+  present on disk and absent from the YAML is **excluded from the
+  browse list**, because there is no per-frame path left to render it
+  through. Nothing committed can be in that state —
+  `pack_atlas.py --validate-only --strict` fails on any animation PNG
+  no declaration owns, which is where an undeclared folder is reported
+  loudly and by path.
 - **Ordering + default selection:** animations sort case-sensitively by
   exact directory name (the same `Ord`-on-the-label rule
   `Engine.Preview.Discovery.sortEntries` uses); `idle` is selected when
   present, else the first entry in that order, direction south.
 - **Directions:** the game's own `S, SW, W, NW, N, NE, E, SE` order. A
   directly authored direction ALWAYS wins; W/SW/NW mirror SE/E/NE only
-  when flipping is permitted. With no YAML entry the viewer INFERS
-  mirroring for exactly the canonical five-direction layout
-  `{S, SE, E, NE, N}` — any other stored set leaves its missing
-  directions unavailable rather than inventing them or falling back to
-  another unit's textures. A mirrored cell renders genuinely mirrored
+  when flipping is permitted, which is the index's `flip` (proved equal
+  to the YAML's before anything is published). A direction the
+  animation does not author and may not mirror stays unavailable rather
+  than being invented or filled from another unit's textures. #1261
+  retired the no-YAML-entry INFERENCE with the rest of the YAML-less
+  path: since #1257 every shipped animation declares its own `flip`,
+  and the three trees #1261 promoted declare `flip: true` over the
+  canonical five, which is exactly what the inference used to produce.
+  A mirrored cell renders genuinely mirrored
   via `UI.setSpriteFlipX` (#887's `ussFlipX`, applied to the CLIPPED UV
   slice — flipping before clipping would sample the wrong slice; #1259
   generalized that reflection to the sprite's own source sub-rect).
@@ -820,13 +820,19 @@ pre-boot + `scripts/ui/unit_animation_view.lua` in-engine):
   exit 1 before a window exists. Both symlink levels matter —
   `doesDirectoryExist` follows links, so a real unit directory with a
   symlinked `animations/` would otherwise browse and load another
-  tree's assets, breaking trimmed loading. A missing YAML is NOT a
-  rejection.
+  tree's assets, breaking trimmed loading. Since #1261 a missing,
+  animation-less, or uncompiled YAML IS a rejection: with no
+  declaration there is nothing to browse (`UnitNoAnimations`), and a
+  declaration whose compiled artifacts are missing or stale rejects as
+  `UnitAtlasRejected` — the same refusal the game makes.
 - **Dump extension:** unit mode adds `unit`, the animation `entries`
   list (each with `fps`/`loop`/`flip`/`thumb`/`directionCount`, plus
-  #1260's `storage` `"atlas"`/`"legacy"` and `atlas` path — the WHOLE
-  list, so a probe can prove every animation of a migrated unit selected
-  the atlas, not just the one playing), `defaultAnim`, and `playback` —
+  #1260's `storage` and `atlas` path — the WHOLE list, so a probe can
+  prove every animation selected the atlas, not just the one playing.
+  Since #1261 `storage` can only read `"atlas"`, but it is still
+  DERIVED Lua-side from the atlas path the engine actually pushed
+  rather than asserted, so a missing one reports `"legacy"` and fails a
+  probe instead of passing silently), `defaultAnim`, and `playback` —
   current `animation`, `direction`, `mirrored`, `sourceDirection`,
   `frameIndex`, effective `fps`/`loop`, the same `storage`/`atlas` pair
   with the playing frame's `texturePath` and index-derived `cell`, plus
@@ -1734,18 +1740,26 @@ key an entry sits under is the entire runtime distinction:
 - `units:` — a gameplay unit. `Engine.Asset.YamlUnits.loadUnitYaml`
   returns these, so they register, load textures, list, and spawn.
   `name` and `sprite` are mandatory.
-- `asset_units:` — an ASSET-ONLY unit: `tiller`, `unknown_unit`,
-  `white_tailed_deer`. Declares exactly `name` + `animations` — a
-  WHITELIST, so an unknown key fails as surely as a gameplay one, and
-  BOTH decoders enforce it (Aeson ignores keys a parser doesn't ask for,
-  so `UnitYamlAssetDef` checks the key set explicitly; a silently
-  accepted `sprite:` would decode fine and then be skipped by
-  `loadUnitYaml`, looking exactly like a unit that failed to register). `loadUnitYaml` never
-  returns one — `loadUnitYamlAssets` does — so nothing registers,
-  textures, lists, or spawns it. `unknown_unit`'s hard-coded
-  missing-texture fallback (`Engine.Scripting.Lua.API.Units.List`) is
-  untouched by its declaration. Promotion to a runtime definition is
-  **#1261's** decision, deliberately not this phase's.
+- `asset_units:` — an ASSET-ONLY unit. Declares exactly `name` +
+  `animations` — a WHITELIST, so an unknown key fails as surely as a
+  gameplay one, and BOTH decoders enforce it (Aeson ignores keys a
+  parser doesn't ask for, so `UnitYamlAssetDef` checks the key set
+  explicitly; a silently accepted `sprite:` would decode fine and then
+  be skipped by `loadUnitYaml`, looking exactly like a unit that failed
+  to register). `loadUnitYaml` never returns one —
+  `loadUnitYamlAssets` does — so nothing registers, textures, lists, or
+  spawns it. **NO shipped file uses this form since #1261** (TEX-6),
+  which promoted `tiller`, `unknown_unit` and `white_tailed_deer` to
+  real `units:` entries: with per-frame unit-animation loading retired
+  an animation renders only through its compiled atlas, and the owner
+  decision of 2026-08-11 kept all three as preview targets. They are
+  minimal by construction — a name, one direct sprite (which may reuse
+  an animation frame), and the animation inventory #1257 already
+  authored — with no gameplay role, state mappings, body, or combat
+  design; adding any is a separate decision. The form itself stays
+  supported and tested against fixtures. `unknown_unit`'s hard-coded
+  missing-texture fallback (`unknownUnitTexture` in
+  `Engine.Scripting.Lua.API.Units.List`) is untouched by any of this.
 
 A file may hold either key or both; a file holding NEITHER is refused
 rather than decoded as zero units (that is what a mistyped top-level key
@@ -1898,9 +1912,11 @@ outside the filesystem-first inventory walk.
   digest is over content. Obsolete atlases are removed from the unit's
   own `atlas/` directory and nowhere else.
 - **`--validate-only` is index-aware.** A unit with NO index is valid
-  — it is simply still on the legacy per-frame path, which every
-  shipped unit but `acolyte` is.
-  Where one exists it is REGENERATED from the sources and compared, so
+  to THIS tool — an uncompiled tree is a legitimate working-copy state
+  — but not to the ENGINE, which since #1261 refuses to register a unit
+  that declares animations and ships no compiled artifacts. Every
+  shipped unit is compiled and tracked.
+  Where an index exists it is REGENERATED from the sources and compared, so
   a stale digest, a hand-edited or non-canonically serialized index, a
   missing indexed atlas and tampered pixels all report — and a tampered
   index cannot certify a tampered atlas, because the comparison is
@@ -1908,13 +1924,25 @@ outside the filesystem-first inventory walk.
   about itself. `--compile --check` reports what is out of date and
   writes nothing. Compilation refuses outright on an inventory that
   does not validate.
-- **`acolyte`'s atlases ARE committed** (#1260, TEX-4 — the pilot that
-  D-12 gated mass migration on): 54 per-animation PNGs plus the
-  generated `index.json`, tracked, so a fresh checkout runs with no
-  packer step. Its derived PNG bytes are **0.59x** the corresponding
-  source-frame bytes, against D-12's 2x ceiling (the index is reported
-  separately and is not in that ratio). No other unit is compiled;
-  TEX-6 owns the rest.
+- **Every shipped unit's atlases ARE committed** — `acolyte` by #1260
+  (TEX-4, the pilot D-12 gated mass migration on), the other six by
+  #1261 (TEX-6). 116 per-animation PNGs plus seven generated
+  `index.json` files, tracked, so a fresh checkout runs with no packer
+  step. Measured against D-12's **2x** ceiling, counting animation
+  source frames only (portraits and default/directional sprites
+  excluded; indices reported separately and not in the ratio):
+
+  | | source frames | derived atlases | ratio | indices |
+  |---|---|---|---|---|
+  | acolyte (TEX-4) | 1.58 MiB (2,250) | 0.93 MiB (54) | **0.59x** | 59.4 KiB |
+  | the six TEX-6 trees | 5.35 MiB (2,370) | 3.94 MiB (62) | **0.74x** | 67.0 KiB |
+  | all seven | 6.93 MiB (4,620) | 4.88 MiB (116) | **0.70x** | 126.5 KiB |
+
+  Derived artifacts are SMALLER than their sources at every scope, so
+  D-12's stop-and-choose-a-distribution-strategy clause (Git LFS,
+  release artifacts, a build cache) is not reached. Had the cumulative
+  ratio exceeded 2x, that would have been an escalation to the owner
+  rather than something to land.
 
 **Dependencies are pinned in `tools/requirements-assets.txt`** (PyYAML +
 Pillow), which `.github/ci/Dockerfile` installs verbatim — the pins are
@@ -1938,39 +1966,51 @@ and post-merge master CI, and path-selectively on PRs via
 
 ## Unit animation atlas runtime
 
-The engine can load and sample those compiled artifacts (#1259,
-`docs/texture_infrastructure.md` TEX-3). **Exactly one shipped unit uses
-it: `acolyte`** (#1260, TEX-4), whose 54 animations all load as atlases
-in gameplay AND in the units preview. Every other unit still loads its
-per-frame textures and nothing about its loading changed; TEX-6 (#1261)
-owns migrating them and retiring the legacy path.
+The engine loads and samples those compiled artifacts (#1259,
+`docs/texture_infrastructure.md` TEX-3). **Every shipped unit uses it,
+and there is no other way for a unit animation to load** (#1261,
+TEX-6): `acolyte`'s 54 animations were the #1260 pilot, and the
+remaining six trees' 62 followed. The per-frame unit-animation
+representation and its loader are GONE from the tree, not merely
+unused.
 
-**Storage is a SUM, so no animation is half-migrated.**
-`Unit.Types.Def.Animation` carries an `aStorage` of
-`Unit.Atlas.Types.AnimStorage`: `StorageLegacy` (one texture handle per
-frame, each its own whole image) or `StorageAtlas` (one compiled image
-per animation, one handle, one bindless slot; each frame a UV cell).
-D-10's "exactly one resident representation" and requirement 6's "never
-mixed within one animation" are then unrepresentable rather than merely
-enforced. Read frames through the module's storage-neutral accessors —
+**Storage is a named SUM with one constructor, so no animation is
+half-migrated.** `Unit.Types.Def.Animation` carries an `aStorage` of
+`Unit.Atlas.Types.AnimStorage`, which is now exactly `StorageAtlas`
+(one compiled image per animation, one handle, one bindless slot; each
+frame a UV cell). D-10's "exactly one resident representation" and
+"never mixed within one animation" are unrepresentable rather than
+merely enforced, and the named type stays the seam a later
+representation would be added at — though TEX-5's KTX2 slots in behind
+`AtlasStorageFormat` instead, which is the format-neutral boundary
+proper. Read frames through the module's storage-neutral accessors —
 `storageFrameCount` / `storageFrameCounts` / `storageMaxFrameCount` /
-`storageSampleAt` — never by matching the constructor. Buildings reuse
-the same `Animation` and are never compiled, so `Building.Render` goes
-through `storageLegacyFrames`, which answers `Nothing` for an atlas.
+`storageSampleAt` — never by matching the constructor. **Buildings are
+not on this type at all**: they were the other consumer of the
+per-frame record and are never compiled (D-8 leaves their storage
+untouched), so #1261 split them onto their own
+`Building.Types.BuildingAnimation` — same fields, same per-direction
+`DirS`-keyed frame map, byte-for-byte the behaviour they had — rather
+than deleting a representation they still need.
 
-**Mode selection is the compiled index, and failure is failure.** A
-unit's `atlas/index.json` is the explicit declaration of which
-animations are atlas-backed; an animation it does not name loads legacy.
+**The index is the whole answer, and failure is failure.** A unit's
+`atlas/index.json` describes every animation its YAML declares.
 `Unit.Atlas.Load.loadUnitAtlasIndex` reads, parses, decodes, and
 verifies EVERY declared atlas before `loadUnitYaml` allocates one handle
 or queues one upload, and `Unit.Atlas.Index.planUnitAtlasStorage` then
-adds the YAML-staleness half. A missing, stale, unsupported, or
-malformed index does NOT fall back to legacy frames: the whole unit
-definition is refused, with the unit, animation, and artifact named. No
-partial registration. Only an ABSENT `atlas/` directory means legacy —
-a directory that exists WITHOUT its index is an incomplete compiled
-artifact and rejects, since falling back there would serve the per-frame
-path while compiled PNGs sit beside it.
+adds the YAML-staleness half — including, since #1261, the reverse
+coverage: an animation the YAML DECLARES that the index does not name
+rejects, because publishing the unit without it would silently drop art
+the file asks for. A missing, incomplete, stale, unsupported, or
+malformed index refuses the whole unit definition, with the unit,
+animation, and artifact named. No partial registration, and nothing to
+fall back to: an ABSENT `atlas/` directory now rejects as surely as a
+directory without its index (only a unit declaring NO animations needs
+no artifacts). `planUnitAtlasStorage`'s result therefore covers exactly
+the YAML's animation set, which is what lets the loader publish
+straight from `atlasTextureRequests` — its own upload set, each request
+carrying the animation's index record — with no second lookup that
+could miss.
 
 Validation runs in three passes, cheapest first, stopping at the first
 failure. **(1)** The index parses and is structurally sound: supported
@@ -2006,10 +2046,16 @@ CPython-generated reference values across the whole float32 range: a
 formatting divergence must fail in the test, not by rejecting every
 atlas of a unit whose fps lands in the disagreeing range.
 
-Reading source frames at load is a migration-phase cost: the legacy path
-is still live and every unit still ships its frames. TEX-6, which
-removes source loading, is where this becomes the compile-time gate's
-alone.
+Pass 3's source reading SURVIVED TEX-6, which #1259 expected to retire
+it. Its cost is the whole reason it was provisional, and that cost was
+measured rather than assumed: decoding all 4,620 shipped source frames
+across all seven units totals ~1.8 s of one-time unit-def loading
+(`bear_brown`, the largest, 0.74 s), paid on the Lua thread while YAMLs
+load and not on any frame. The source PNGs remain the tracked,
+hand-edited artwork (D-1), so they remain something a developer can
+repaint without recompiling, and CI's asset gate only runs on a push —
+this stays the check that catches it locally, in the same run that
+would otherwise have drawn the stale art.
 
 **`pickFrame` returns a `FrameSample`, and its arithmetic is FROZEN**
 (D-3). Every consumer reads the stable handle (#286 — never a slot), the
@@ -2020,9 +2066,10 @@ atlas is the index's REAL count and never the padded column count, so
 padding is unreachable by construction (D-5).
 
 **Cell dimensions size everything.** `frameDimensions` is the one funnel:
-an atlas sample answers from its cell, a legacy sample falls through to
-`rvTextureSizeRef` as it always has. Nothing may measure an atlas
-handle's whole-image entry where it means a frame. That includes hit
+an atlas sample answers from its cell, a whole-image sample — the
+direct default/directional sprite a T-pose falls back to — falls
+through to `rvTextureSizeRef` as it always has. Nothing may measure an
+atlas handle's whole-image entry where it means a frame. That includes hit
 testing, which since #1259 sizes from the SAME `pickFrame` sample the
 renderer draws (`Unit.HitTest.unitHitRect`, shared by click and box
 selection) rather than the static T-pose it used before.
@@ -2055,14 +2102,26 @@ and an ordinary texture inheriting a pinned one would be stuck on a
 filter it never asked for. Cell UVs sit on exact
 cell EDGES with no half-texel inset: unit art is nearest and pixel-
 snapped, so a fragment centre lands inside its cell, and an inset would
-shift the sampled texels and break pixel-identity with the legacy path.
+shift the sampled texels and break pixel-identity with what the
+per-frame path drew.
 
-Gates: hspec `--match "pickFrame"` (the whole logical-choice matrix run
-against BOTH storage modes from one table) and `--match "Unit.Atlas"`
+**The non-rendering consumers of a clip's LENGTH read the index's real
+per-direction counts too**, never the padded column count (D-5):
+`Unit.Thread.Command.Pose`'s four pose-transition durations and
+`unit.getAnimDuration` (which `scripts/unit_ai_combat_attack.lua`
+consumes for attack timing) both go through `storageMaxFrameCount`.
+
+Gates: hspec `--match "pickFrame"` (the whole logical-choice matrix from
+one table, each case checked against `expectedChoice` — a restatement
+of the documented rule written independently of `pickFrame`, so an edit
+to either side fails; #1259's version compared two storage modes that
+shared this arithmetic and differed only in where they looked a frame
+up) and `--match "Unit.Atlas"`
 (index parsing/validation, the digest against `pack_atlas.py`'s own
-reference values, mode selection, and the real consumer geometry —
-`unitToQuad`'s vertices, `unitHitRect`, `renderSpriteBatch`, a
-texel-level comparison of an atlas cell against its legacy frame with
+reference values, mode selection including the declared-but-uncompiled
+rejection, and the real consumer geometry — `unitToQuad`'s vertices,
+`unitHitRect`, `renderSpriteBatch`, a
+texel-level comparison of an atlas cell against its source frame with
 the mirrored case included, the pinned-nearest survival of a global
 filter toggle through `planFilterRebind`, the cache's policy awareness,
 and a real on-disk fixture tree driven through `loadUnitAtlasIndexIn`).
@@ -2070,10 +2129,18 @@ and a real on-disk fixture tree driven through `loadUnitAtlasIndexIn`).
 `registerUnitDefs` — what `loadUnitYamlFn` delegates to — against a live
 headless engine, a real asset pool and a real Lua→engine queue, and
 asserts on the messages actually queued and the definitions actually
-published: one atlas upload per selected animation with its own handle,
-no per-frame textures for an atlas-backed one, an unselected animation
-still legacy, and a rejected index queueing nothing and publishing
-nothing.
+published: one atlas upload and one published `Animation` per
+animation, each with its own handle; no per-frame textures for any of
+them; a rejected index queueing nothing and publishing nothing; and —
+since #1261 — all SEVEN shipped units driven through the PRODUCTION
+resolver against their real YAML, real index and real source art, with
+the whole 116-animation corpus pinned. Roster-wide headless evidence
+also lives in `tools/combat_anim_probe.py` (`--roster-only` for the
+storage half alone), which reads the texture-NAME registry
+(`engine.getTextureHandle`) rather than `engine.getLoadedTexturePaths()`
+— the latter is written only inside the device branch of the batch
+upload handler and so is EMPTY headless, where a probe built on it
+would pass vacuously.
 
 ## AI Asset Generation
 

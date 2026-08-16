@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "generator": "tools/pack_atlas.py",
+  "tool_version": 1,
+  "digest_algorithm": "sha256",
+  "unit": "unknown_unit",
+  "direction_order": [
+    "south",
+    "south-west",
+    "west",
+    "north-west",
+    "north",
+    "north-east",
+    "east",
+    "south-east"
+  ],
+  "animations": [
+    {
+      "name": "idle",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/unknown_unit/atlas/idle.png",
+      "atlas_width": 368,
+      "atlas_height": 736,
+      "cell_width": 92,
+      "cell_height": 92,
+      "columns": 4,
+      "rows": 8,
+      "flip": false,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 4
+        },
+        {
+          "direction": "south-west",
+          "row": 1,
+          "frame_count": 4
+        },
+        {
+          "direction": "west",
+          "row": 2,
+          "frame_count": 4
+        },
+        {
+          "direction": "north-west",
+          "row": 3,
+          "frame_count": 4
+        },
+        {
+          "direction": "north",
+          "row": 4,
+          "frame_count": 4
+        },
+        {
+          "direction": "north-east",
+          "row": 5,
+          "frame_count": 4
+        },
+        {
+          "direction": "east",
+          "row": 6,
+          "frame_count": 4
+        },
+        {
+          "direction": "south-east",
+          "row": 7,
+          "frame_count": 4
+        }
+      ],
+      "source_digest": "189c3621c49cef94113388389d0aa77729212ff14c80bc1ab9910af1c7cd72a4",
+      "atlas_digest": "3e7f797c6324ab5bf09856b0498a16cfd68cdca3a3eb7f4088262a5ef57dc2b0"
+    },
+    {
+      "name": "walk",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/unknown_unit/atlas/walk.png",
+      "atlas_width": 552,
+      "atlas_height": 736,
+      "cell_width": 92,
+      "cell_height": 92,
+      "columns": 6,
+      "rows": 8,
+      "flip": false,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 6
+        },
+        {
+          "direction": "south-west",
+          "row": 1,
+          "frame_count": 6
+        },
+        {
+          "direction": "west",
+          "row": 2,
+          "frame_count": 6
+        },
+        {
+          "direction": "north-west",
+          "row": 3,
+          "frame_count": 6
+        },
+        {
+          "direction": "north",
+          "row": 4,
+          "frame_count": 6
+        },
+        {
+          "direction": "north-east",
+          "row": 5,
+          "frame_count": 6
+        },
+        {
+          "direction": "east",
+          "row": 6,
+          "frame_count": 6
+        },
+        {
+          "direction": "south-east",
+          "row": 7,
+          "frame_count": 6
+        }
+      ],
+      "source_digest": "199e313efdcecbe48f4b8bd735439a5e41bb1db58f292a7adb573c5f076055e8",
+      "atlas_digest": "57012f1eb3e78e2336e082c344cf95fb5f2d36763649a5eb55ed0a18890af743"
+    }
+  ]
+}

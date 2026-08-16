@@ -443,8 +443,15 @@ instance FromJSON UnitYamlDef where
 --   body: there is nothing here to register, load a gameplay texture
 --   for, list, or spawn, and 'loadUnitYaml' never returns one, so the
 --   exclusion is a property of WHICH LIST the entry is in rather than of
---   a field it happens to omit or a decode it happens to fail. Promoting
---   one of these to a runtime definition is #1261's decision.
+--   a field it happens to omit or a decode it happens to fail.
+--
+--   NO shipped file uses this form since #1261 (TEX-6) promoted
+--   @tiller@, @unknown_unit@ and @white_tailed_deer@ to real @units:@
+--   entries — with per-frame unit-animation loading retired, an
+--   animation renders only through its compiled atlas, and the owner
+--   decision of 2026-08-11 kept all three as preview targets. The form
+--   remains supported for a tree that genuinely owns art without being
+--   a unit, and its decoder is exercised against fixtures.
 data UnitYamlAssetDef = UnitYamlAssetDef
     { uyadName       ∷ !Text
       -- ^ must equal the asset directory name — @Engine.Preview.Unit@

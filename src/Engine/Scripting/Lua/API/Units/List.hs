@@ -6,7 +6,6 @@ module Engine.Scripting.Lua.API.Units.List
   , unitListAnimationsFn
   , unitGetInfoFn
   , unknownUnitTexture
-  , unknownUnitAnimFrame
   , unitGetFrameTextureFn
   , unitGetFrameSampleFn
   , unitGetPortraitTextureFn
@@ -258,40 +257,27 @@ unknownUnitDirName DirE  = "east"
 unknownUnitDirName DirSE = "south-east"
 
 -- | Static per-direction placeholder for a unit whose declared
---   sprite/portrait/animation-frame texture is missing on disk (#478) —
---   one flat pose per compass direction. Used as-is for non-directional
---   slots (base sprite, portrait, directional sprite) and as the final
---   fallback for any animation `unknownUnitAnimFrame` doesn't cover.
+--   sprite/portrait/directional-sprite texture is missing on disk
+--   (#478) — one flat pose per compass direction.
+--
+--   These are the DIRECT single-texture families, which D-8 leaves on
+--   ordinary loading, so #478's policy is unchanged for them: a missing
+--   visual degrades to this placeholder rather than failing the load.
+--
+--   There is no longer a per-animation-FRAME sibling. #485's
+--   `unknownUnitAnimFrame` cycled the unknown-unit's own idle/walk clip
+--   for a missing animation frame, and its one production caller was
+--   the per-frame animation loader #1261 retired. An animation is now
+--   one compiled atlas, and a missing or unusable atlas rejects the
+--   whole unit definition with the artifact named (#1259) rather than
+--   drawing a placeholder in its place — a deliberate difference,
+--   because a broken compile that still renders is what that contract
+--   exists to prevent. `unknown_unit`'s own idle/walk art is untouched;
+--   since #1261 it is an ordinary registered unit's animation set.
 unknownUnitTexture ∷ Direction → FilePath
 unknownUnitTexture dir =
     "assets/textures/units/unknown_unit/rotations/"
     <> unknownUnitDirName dir <> ".png"
-
--- | Frame counts of the unknown-unit fallback's own authored animation
---   clips (#485), keyed by the SAME animation names real units declare
---   in their `animations:` block. Only covers the "core" clips the issue
---   scoped in (idle, walk) — anything else (attacks, death, ...) still
---   falls back to the single static pose via 'unknownUnitTexture'.
-unknownUnitAnimFrameCounts ∷ [(Text, Int)]
-unknownUnitAnimFrameCounts = [("idle", 4), ("walk", 6)]
-
--- | Per-animation-frame placeholder for a unit's missing animation
---   texture (#485): when the requesting animation is one of
---   'unknownUnitAnimFrameCounts', cycle through the unknown-unit's own
---   authored clip (index modulo its frame count) instead of freezing on
---   one pose for every frame, so a placeholder unit reads as "alive"
---   during headless/GUI iteration. Any other animation name — or a
---   direction the fallback clip doesn't have — falls back to the
---   static rotation.
-unknownUnitAnimFrame ∷ Text → Direction → Int → FilePath
-unknownUnitAnimFrame animName dir frameIdx =
-    case lookup animName unknownUnitAnimFrameCounts of
-        Just n  → "assets/textures/units/unknown_unit/animations/"
-                  <> T.unpack animName <> "/" <> unknownUnitDirName dir
-                  <> "/frame_" <> pad3 (frameIdx `mod` n) <> ".png"
-        Nothing → unknownUnitTexture dir
-  where
-    pad3 k = let s = show k in replicate (3 - length s) '0' <> s
 
 -- | unit.getFrameTexture(uid) → texture handle integer (0 if missing).
 --   Returns the texture for the unit's current animation frame at the
@@ -319,11 +305,12 @@ unitGetFrameTextureFn env = do
                     Just inst →
                         case HM.lookup (uiDefName inst) (umDefs um) of
                             Nothing  → Nothing
-                            -- Handle only. This is enough for a legacy
-                            -- frame, whose image IS the frame; a caller
-                            -- that must render an ATLAS-backed frame
-                            -- needs the sub-rect too and must use
-                            -- `unit.getFrameSample` (#1259).
+                            -- Handle only. Enough for a WHOLE-IMAGE
+                            -- sample (a T-pose's direct sprite), and
+                            -- never enough for an animation frame,
+                            -- which since #1261 is always an atlas cell
+                            -- and needs the sub-rect too — such a
+                            -- caller must use `unit.getFrameSample`.
                             Just def → Just (fsTexture (pickFrame now (camFacing cam) inst def))
             case mTex of
                 Just (TextureHandle k) → Lua.pushinteger (fromIntegral k)
@@ -335,10 +322,10 @@ unitGetFrameTextureFn env = do
 --
 --   @{ texture, u0, v0, u1, v1, flipX, width, height }@ — the stable
 --   texture handle, the frame's own UV endpoints WITHIN that texture,
---   the mirror flag, and the frame's pixel dimensions when the storage
---   knows them (@width@\/@height@ are absent for a legacy frame, whose
---   image IS the frame and whose size the UI already gets from the
---   texture itself).
+--   the mirror flag, and the frame's pixel dimensions when the sample
+--   knows them (@width@\/@height@ are absent only for a WHOLE-IMAGE
+--   sample — a T-pose's direct sprite, whose image IS the frame and
+--   whose size the UI already gets from the texture itself).
 --
 --   'unitGetFrameTextureFn' remains for callers that genuinely only
 --   want a handle, but it CANNOT describe an atlas-backed frame (#1259):

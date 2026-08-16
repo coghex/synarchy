@@ -14,7 +14,6 @@ import Engine.Core.Capability.UnitCombat
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
@@ -31,14 +30,14 @@ import Engine.Scripting.Lua.API.YamlTextures (loadAndRegisterWithPool
 import Unit.Atlas.Index (AtlasLoadError(..), atlasTextureRequests
                         , renderAtlasLoadError)
 import Unit.Atlas.Yaml (resolveUnitAtlases)
-import Engine.Asset.YamlUnits (UnitYamlDef(..), UnitYamlAnim(..), UnitYamlStat(..), UnitYamlSkill(..), UnitYamlBody(..), UnitYamlBodyAttr(..), UnitYamlInventoryEntry(..), UnitYamlModifier(..), UnitYamlNaturalWeapon(..), UnitYamlStrike(..), UnitYamlNaturalResistance(..), loadUnitYaml, unitYamlBodyPartToBodyPart)
+import Engine.Asset.YamlUnits (UnitYamlDef(..), UnitYamlAnim, UnitYamlStat(..), UnitYamlSkill(..), UnitYamlBody(..), UnitYamlBodyAttr(..), UnitYamlInventoryEntry(..), UnitYamlModifier(..), UnitYamlNaturalWeapon(..), UnitYamlStrike(..), UnitYamlNaturalResistance(..), loadUnitYaml, unitYamlBodyPartToBodyPart)
 import Engine.Asset.YamlNames (loadNamePool)
 import System.FilePath (takeDirectory, (</>), (<.>))
 import Unit.Types
 import Unit.Direction (Direction(..), parseDirectionName)
 import World.Types (WorldState(..), LoadedChunk(..), columnIndex, lookupChunk)
 import World.Generate (globalToChunk)
-import Engine.Scripting.Lua.API.Units.List (unknownUnitTexture, unknownUnitAnimFrame)
+import Engine.Scripting.Lua.API.Units.List (unknownUnitTexture)
 
 -- * YAML loading
 
@@ -98,15 +97,15 @@ registerUnitDefs env poolRef lteq resolveAtlases filePath defs = do
         let name      = uydName def
             spritePath = T.unpack (uydSprite def)
 
-        -- ATLAS MODE SELECTION (#1259). The unit's
-        -- compiled index — not a YAML key, not a filename
-        -- guess — declares which animations are atlas-backed,
-        -- and it is resolved and fully validated HERE, before
-        -- a single handle is allocated or a single upload
-        -- queued. A unit whose index is missing an artifact,
-        -- stale, unsupported, or malformed is NOT registered
-        -- at all: falling back to its legacy frames would
-        -- hide a broken compile behind art that still draws.
+        -- ATLAS RESOLUTION (#1259, total since #1261). The
+        -- unit's compiled index describes every animation
+        -- this YAML declares, and it is resolved and fully
+        -- validated HERE, before a single handle is allocated
+        -- or a single upload queued. A unit whose index is
+        -- missing, incomplete, stale, unsupported, or
+        -- malformed is NOT registered at all — there is no
+        -- per-frame path left to fall back to, and there was
+        -- never one to fall back to silently.
         eAtlas ← resolveAtlases name (uydAnimations def)
         case eAtlas of
           Left err → do
@@ -158,56 +157,22 @@ registerUnitDefs env poolRef lteq resolveAtlases filePath defs = do
                         return (Map.insert dir h acc)
                 ) Map.empty (Map.toList (uydDirectionalSprites def))
 
-            -- ONE upload, handle, and bindless slot per atlas-backed
-            -- animation (D-2/D-10) — issued from
-            -- `atlasTextureRequests`, which IS the upload set rather
-            -- than a description of it, so the count cannot drift from
-            -- what the selection says.
-            atlasHandles ← foldM (\accH (animName, regName, atlasPath) → do
+            -- ONE upload, handle, and bindless slot per animation
+            -- (D-2/D-10), and ONE published `Animation` per upload —
+            -- both issued from `atlasTextureRequests`, which IS the
+            -- upload set rather than a description of it, so neither
+            -- the count nor the published library can drift from what
+            -- the selection says. `planUnitAtlasStorage` has already
+            -- proved that selection covers exactly the animations this
+            -- YAML declares, so there is no per-frame branch left and
+            -- no animation this loop can miss.
+            animMap ← foldM (\accA (animName, regName, aa) → do
                 h ← loadAndRegisterAtlasWithPool env poolRef lteq
-                        regName atlasPath
-                return (HM.insert animName h accH)
-                ) HM.empty (atlasTextureRequests name atlasByName)
-
-            -- Load animations (if any), each in exactly ONE
-            -- storage mode. `atlasByName` is empty for every
-            -- unit that ships no compiled index, which today is
-            -- all of them — see `resolveUnitAtlases`.
-            animMap ← foldM (\accA (animName, animDef) → do
-                storage ← case (HM.lookup animName atlasByName
-                               , HM.lookup animName atlasHandles) of
-                    (Just aa, Just h) →
-                        return (StorageAtlas (ResidentAtlas aa h))
-                    _ → StorageLegacy <$> foldM (\accF (dirKey, framePaths) →
-                        case parseDirKey dirKey of
-                            Nothing → do
-                                logWarn logger CatAsset $
-                                    "Unknown direction '" <> dirKey
-                                    <> "' in anim '" <> animName
-                                    <> "' of unit " <> name <> ", skipping"
-                                return accF
-                            Just dir → do
-                                handles ← mapM (\(i, p) → do
-                                    resolved ← resolveTexturePath env "Unit animation frame"
-                                                   (unknownUnitAnimFrame animName dir i) (T.unpack p)
-                                    loadAndRegisterWithPool env poolRef lteq
-                                        ("unit_" <> name
-                                         <> "_" <> animName
-                                         <> "_" <> dirKey
-                                         <> "_" <> T.pack (show i))
-                                        resolved
-                                    ) (zip [(0 ∷ Int)..] framePaths)
-                                return (Map.insert dir
-                                          (V.fromList handles) accF)
-                        ) Map.empty (Map.toList (uyaFrames animDef))
-                let anim = Animation
-                        { aFps     = uyaFps animDef
-                        , aLoop    = uyaLoop animDef
-                        , aFlip    = uyaFlip animDef
-                        , aStorage = storage
-                        }
+                        regName (aaPath aa)
+                let anim = atlasAnimation (aaFps aa) (aaLoop aa) (aaFlip aa)
+                               (ResidentAtlas aa h)
                 return (HM.insert animName anim accA)
-                ) HM.empty (Map.toList (uydAnimations def))
+                ) HM.empty (atlasTextureRequests name atlasByName)
 
             let stateAnims = HM.fromList (Map.toList (uydStateAnimations def))
                 body = uydBody def

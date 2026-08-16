@@ -1,0 +1,578 @@
+{
+  "schema_version": 1,
+  "generator": "tools/pack_atlas.py",
+  "tool_version": 1,
+  "digest_algorithm": "sha256",
+  "unit": "white_tailed_deer",
+  "direction_order": [
+    "south",
+    "south-west",
+    "west",
+    "north-west",
+    "north",
+    "north-east",
+    "east",
+    "south-east"
+  ],
+  "animations": [
+    {
+      "name": "alert",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/white_tailed_deer/atlas/alert.png",
+      "atlas_width": 496,
+      "atlas_height": 620,
+      "cell_width": 124,
+      "cell_height": 124,
+      "columns": 4,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 4
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 4
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 4
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 4
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 4
+        }
+      ],
+      "source_digest": "5acf681194796b0e03c1f3b500fc8486dc8db5fd6d84324ff4c013a486397f82",
+      "atlas_digest": "1c9e8882911dd0f85fb84c860ffa8010d4ef08b2eb72e32e69b82d119a6a9fdf"
+    },
+    {
+      "name": "attack",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/white_tailed_deer/atlas/attack.png",
+      "atlas_width": 1116,
+      "atlas_height": 620,
+      "cell_width": 124,
+      "cell_height": 124,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "81b8d2e1294f05431a81ee3821aaf8e163a1dadecbfac6b870a59c418b16ca31",
+      "atlas_digest": "f19bd583afbfe07e9d09e8ce1dfa41e3bb470d9f40b5b5b1d912cf014eef344c"
+    },
+    {
+      "name": "death",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/white_tailed_deer/atlas/death.png",
+      "atlas_width": 1116,
+      "atlas_height": 620,
+      "cell_width": 124,
+      "cell_height": 124,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "abb7bafce06a655f86beabde3f9e62ecf2fa11611851a2f1c72294d2b680759f",
+      "atlas_digest": "b0634acf6e620aa50fa7d8115faa6e5ecc619507a691bf8e54d87e1f2a4bf525"
+    },
+    {
+      "name": "drink",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/white_tailed_deer/atlas/drink.png",
+      "atlas_width": 992,
+      "atlas_height": 620,
+      "cell_width": 124,
+      "cell_height": 124,
+      "columns": 8,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 8
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 8
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 8
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 8
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 8
+        }
+      ],
+      "source_digest": "483427f6fd76b1d06b8be32f526e83b7b266a5b541f73ea0d70b9467eb13dfa5",
+      "atlas_digest": "84fcdcaf6d845e3701271e0760bd222312f603f1425bb5bf465faf0847714db1"
+    },
+    {
+      "name": "eat",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/white_tailed_deer/atlas/eat.png",
+      "atlas_width": 992,
+      "atlas_height": 620,
+      "cell_width": 124,
+      "cell_height": 124,
+      "columns": 8,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 8
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 8
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 8
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 8
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 8
+        }
+      ],
+      "source_digest": "5af41c206adc979a258a2a5671a413fd1a58fbaa2562d3e8c7131cc5c273308e",
+      "atlas_digest": "0bfe3dee183bf9f9a8fde33d72d4b14310f25b35c6672850ddeebed07e1b5765"
+    },
+    {
+      "name": "hit_react",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/white_tailed_deer/atlas/hit_react.png",
+      "atlas_width": 1116,
+      "atlas_height": 620,
+      "cell_width": 124,
+      "cell_height": 124,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "62b3fb5fdb723210a7900d58dc0b17e1a5737e3792fc8521cba14e25bc2edfb2",
+      "atlas_digest": "6213f7d5c2b3c5bbe92d8edbb8fff5e6558e1c24613ab1a35b1f3be5fa1d9fad"
+    },
+    {
+      "name": "idle",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/white_tailed_deer/atlas/idle.png",
+      "atlas_width": 496,
+      "atlas_height": 620,
+      "cell_width": 124,
+      "cell_height": 124,
+      "columns": 4,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 4
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 4
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 4
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 4
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 4
+        }
+      ],
+      "source_digest": "f9f3e6bbea1841c3a36c4114e71509a0134118e82b23a8010f215f3904f28d51",
+      "atlas_digest": "ccb6a2ba09846ccbeec761a7704fb4e4b89e2dd7c116f66ba1ff895580b3f6a7"
+    },
+    {
+      "name": "lying_idle",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/white_tailed_deer/atlas/lying_idle.png",
+      "atlas_width": 496,
+      "atlas_height": 620,
+      "cell_width": 124,
+      "cell_height": 124,
+      "columns": 4,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 4
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 4
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 4
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 4
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 4
+        }
+      ],
+      "source_digest": "df95b0db34069e39d9ae864cb3fef36e2b938552fcddc082fc513369204c39b3",
+      "atlas_digest": "199187f0ec099c0997d7c533c15494912d7ce64006714505d4e9faa8cc05c68e"
+    },
+    {
+      "name": "lying_to_sleeping",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/white_tailed_deer/atlas/lying_to_sleeping.png",
+      "atlas_width": 1116,
+      "atlas_height": 620,
+      "cell_width": 124,
+      "cell_height": 124,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "8f753d9efc4c8cff71078fb58fdc428c047f375c4d12287c875fb34ff9462b4c",
+      "atlas_digest": "e4427a796ba8bbd0b3d2a8899cae33c1ce159afed418d29fa6dea23c15b2dcc9"
+    },
+    {
+      "name": "run",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/white_tailed_deer/atlas/run.png",
+      "atlas_width": 992,
+      "atlas_height": 620,
+      "cell_width": 124,
+      "cell_height": 124,
+      "columns": 8,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 8
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 8
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 8
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 8
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 8
+        }
+      ],
+      "source_digest": "dd5c9c9c5c4bdf6938b011645170b3f4bb54bb826437e26ec0dfb7436d48ca94",
+      "atlas_digest": "53b735f0d43a397236ac998bd1d58cac6320143d3bc0053c5d66030409cb742c"
+    },
+    {
+      "name": "sleeping_idle",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/white_tailed_deer/atlas/sleeping_idle.png",
+      "atlas_width": 496,
+      "atlas_height": 620,
+      "cell_width": 124,
+      "cell_height": 124,
+      "columns": 4,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 4
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 4
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 4
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 4
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 4
+        }
+      ],
+      "source_digest": "31b00b09f781ed09320e155fee4c534152f5f0277f0418413bed618a98d857c4",
+      "atlas_digest": "9bfe9084f2b5a47c23e4e19b7e915555e3b29e4be55847d57d3a7fb9fa12a591"
+    },
+    {
+      "name": "standing_to_lying",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/white_tailed_deer/atlas/standing_to_lying.png",
+      "atlas_width": 1116,
+      "atlas_height": 620,
+      "cell_width": 124,
+      "cell_height": 124,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "faedeac2492cc6c0f29a9d7327b7a130b9d14fda04a2c54142c567ed4c516074",
+      "atlas_digest": "8dd7bc2af3a137341ac9714b3bb1af3c039adf6aacf05c03317213ab4236385b"
+    },
+    {
+      "name": "walk",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/white_tailed_deer/atlas/walk.png",
+      "atlas_width": 992,
+      "atlas_height": 620,
+      "cell_width": 124,
+      "cell_height": 124,
+      "columns": 8,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 8
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 8
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 8
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 8
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 8
+        }
+      ],
+      "source_digest": "b711f9278a29435e805d95c1ab7c22c51efab92c1ceeae8dd7281920059e6ee1",
+      "atlas_digest": "37ff37cd2d28af528fe1412ed60bb6d26dab89e23b1c4f5e700afdc33a33829c"
+    }
+  ]
+}

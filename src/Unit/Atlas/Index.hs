@@ -7,9 +7,11 @@
 --   exactly why it is validated rather than trusted: what reaches this
 --   parser is a file on disk, and a stale, truncated, hand-mangled, or
 --   foreign one must be REJECTED with the unit, animation, and artifact
---   named — never silently sampled (requirement 5). There is no
---   fallback to legacy frames on failure: an animation the index claims
---   is atlas-backed either loads as an atlas or does not load at all.
+--   named — never silently sampled (requirement 5). There has never
+--   been a fallback to the source frames beside it, and since #1261
+--   retired per-frame unit-animation loading there is nothing to fall
+--   back TO: a unit's animations either load from its compiled atlases
+--   or the unit does not load at all.
 --
 --   Everything here is pure, and it is the whole of validation apart
 --   from reading files. 'parseAtlasIndex' answers from the document
@@ -100,19 +102,24 @@ atlasTextureName ∷ Text → Text → Text
 atlasTextureName unit anim = "unit_" <> unit <> "_" <> anim <> "_atlas"
 
 -- | The atlas texture requests a unit's selection produces: EXACTLY one
---   per atlas-backed animation, each naming that animation's own atlas.
+--   per animation, each naming that animation's own atlas.
 --
 --   This IS the loader's upload set, not a description of it — the unit
---   loader issues one request per element of this list and looks the
---   resulting handles back up by animation name — so a selection that
---   does not exist (a rejected index yields none) issues nothing.
+--   loader issues one request per element of this list and publishes the
+--   'Animation' each element carries — so a selection that does not
+--   exist (a rejected index yields none) issues nothing, and nothing
+--   the loader publishes can come from outside this list.
 --   Deterministically ordered by animation name so it is assertable.
 --
---   Each element is @(animation, registry name, atlas path)@.
+--   Each element is @(animation, registry name, that animation's index
+--   record)@. Carrying the record rather than just its 'aaPath' is what
+--   removes the loader's second lookup: since #1261 every declared
+--   animation is atlas-backed, so a lookup that could miss would be a
+--   branch nothing can reach and nothing can test.
 atlasTextureRequests
-    ∷ Text → HM.HashMap Text AtlasAnimation → [(Text, Text, FilePath)]
+    ∷ Text → HM.HashMap Text AtlasAnimation → [(Text, Text, AtlasAnimation)]
 atlasTextureRequests unit sel =
-    [ (name, atlasTextureName unit name, aaPath aa)
+    [ (name, atlasTextureName unit name, aa)
     | (name, aa) ← sortOn fst (HM.toList sel) ]
 
 -- | Why an atlas-backed animation could not be loaded.
@@ -397,13 +404,14 @@ data YamlAnimFacts = YamlAnimFacts
       --   declaration order — the same list the compiler digested.
     } deriving (Show, Eq)
 
--- | Decide which of a unit's animations are atlas-backed, given its
---   validated index and what its YAML declares.
+-- | Decide the atlas backing for every animation a unit declares, given
+--   its validated index and what its YAML declares.
 --
---   ALL OR NOTHING. The result is one map or one error: there is no
---   partial answer, so a caller that allocates a handle and queues an
---   upload per returned entry can never publish some animations of a
---   unit whose index is broken.
+--   ALL OR NOTHING, AND TOTAL. The result is one map or one error, and
+--   on success its key set is EXACTLY @Map.keysSet yamlAnims@ — every
+--   declared animation is atlas-backed, because since #1261 there is no
+--   other representation to be. A caller may therefore publish straight
+--   from this map without a second lookup that could miss.
 --
 --   Beyond the structural validation 'parseAtlasIndex' already did,
 --   this checks the DECLARATIONS against the unit YAML. It is not the
@@ -414,11 +422,17 @@ data YamlAnimFacts = YamlAnimFacts
 --
 --     * An indexed animation the YAML no longer declares is a leftover
 --       from a rename or deletion, not something to publish.
+--     * A DECLARED animation the index does not name is an
+--       uncompiled one. Before #1261 that meant "load this animation
+--       from its source frames instead"; with the per-frame path
+--       retired it means the compiled artifacts predate a YAML edit,
+--       and publishing the unit without that animation would quietly
+--       drop art the file asks for.
 --     * @fps@ \\/ @loop@ \\/ @flip@ must agree. The compiler records
 --       what the engine would hold, so a disagreement means the
---       artifact predates a YAML edit. The runtime keeps using the
---       YAML's values — this rejects rather than silently picking a
---       winner.
+--       artifact predates a YAML edit. This rejects rather than
+--       silently picking a winner, which is what lets the loader read
+--       either side.
 --     * The DIRECTION SET must agree, and each direction's real frame
 --       count must equal the number of frames the YAML declares for it,
 --       with the column count still the longest row. An added, removed,
@@ -430,9 +444,22 @@ planUnitAtlasStorage
     → Map.Map Text YamlAnimFacts
     → [AtlasAnimation]
     → Either AtlasLoadError (HM.HashMap Text AtlasAnimation)
-planUnitAtlasStorage unit yamlAnims anims =
-    HM.fromList <$> mapM check anims
+planUnitAtlasStorage unit yamlAnims anims = do
+    sel ← HM.fromList <$> mapM check anims
+    case [ n | n ← Map.keys yamlAnims, not (HM.member n sel) ] of
+        []      → Right sel
+        missing → Left AtlasLoadError
+            { aleUnit = unit
+            , aleAnimation = listToMaybe missing
+            , aleArtifact = unitAtlasIndexPath unit
+            , aleReason =
+                "the unit YAML declares animation(s) "
+                <> T.intercalate ", " (map quoted missing)
+                <> " that the index does not name; unit animations are "
+                <> "atlas-backed only (#1261) so there is nothing to load "
+                <> "them from — re-run tools/pack_atlas.py --compile" }
   where
+    quoted n = "'" <> n <> "'"
     check aa = case Map.lookup (aaName aa) yamlAnims of
         Nothing → Left (stale aa
             "the index declares an animation this unit's YAML does not")

@@ -1,11 +1,19 @@
 -- | Focused tests for 'Engine.Preview.Unit' (#887, Phase 3 of the
 --   @--preview@ browser epic #427): the pure direction-mirroring table,
 --   the default-selection rule, animation ordering/labeling, numeric
---   frame ordering, YAML metadata extraction and its exact defaults, the
---   unequal-frame-count playback rule, and the documented non-loop
---   end-of-clip policy — plus the filesystem containment rules that
---   reject a bad @units\/\<name\>@ target before a window is ever
---   created. No engine needed.
+--   frame ordering, YAML metadata extraction, the unequal-frame-count
+--   playback rule, and the documented non-loop end-of-clip policy —
+--   plus the filesystem containment rules that reject a bad
+--   @units\/\<name\>@ target before a window is ever created. No engine
+--   needed.
+--
+--   Since #1261 (TEX-6) the viewer's animation list comes from the unit
+--   YAML and its compiled index, not from a filesystem walk, and every
+--   frame is an atlas cell. The end-to-end cases run against all SEVEN
+--   shipped trees through the PRODUCTION loader and the artifacts
+--   actually checked in — which is the whole of D-9, since a
+--   preview-only decoder would keep passing while the compiled tree
+--   rotted underneath it.
 module Test.Headless.Preview.UnitAnimation (spec) where
 
 import UPrelude
@@ -25,6 +33,8 @@ import Engine.Core.Types
     ( PreviewUnit(..), PreviewAnim(..), PreviewFrameDir(..), PreviewFrame(..) )
 import Engine.Preview.Unit
 import Unit.Atlas.Index (unitAtlasIndexPath)
+import Unit.Atlas.Types
+    ( AtlasAnimation(..), AtlasDirectionRow(..), AtlasStorageFormat(..) )
 import Unit.Direction (Direction(..))
 
 -- The real shipped acolyte tree — every ordering/mirroring claim below
@@ -33,29 +43,67 @@ import Unit.Direction (Direction(..))
 realUnit ∷ String
 realUnit = "acolyte"
 
--- A shipped ASSET-ONLY tree (#1257): it has a data/units/<name>.yaml,
--- but declared under `asset_units:`, so it is browsable and carries
--- real playback metadata while never entering the gameplay unit
--- registry. It replaces the old "no YAML at all" fixture, which no
--- shipped tree exhibits any more — the fallback for genuinely
--- undeclared content is still covered, by the pure `effectiveFlip`
--- cases and by the "a name no YAML file exists for at all" case below,
--- neither of which depends on a shipped tree.
-assetOnlyUnit ∷ String
-assetOnlyUnit = "tiller"
+-- Every shipped unit tree. All seven are declared and compiled since
+-- #1261, so each one must resolve through the production loader.
+shippedUnits ∷ [String]
+shippedUnits =
+    [ "acolyte", "bear_brown", "red_squirrel", "technomule"
+    , "tiller", "unknown_unit", "white_tailed_deer" ]
 
-anim ∷ Float → Bool → Bool → UnitYamlAnim
-anim fps loop flipV = UnitYamlAnim
-    { uyaFps = fps, uyaLoop = loop, uyaFlip = flipV, uyaFrames = Map.empty }
+-- One of the three trees #1261 promoted from #1257's inventory-only
+-- `asset_units:` form to a real `units:` definition. Its animations
+-- declare the canonical five with flip: true, so every one of the eight
+-- display cells still resolves.
+promotedUnit ∷ String
+promotedUnit = "tiller"
 
-frames ∷ [(Direction, [Text])] → Map.Map Direction [Text]
-frames = Map.fromList
+-- Per-direction preview frames LABELLED by path, for the pure mirroring
+-- table: what that table owns is which direction's frames a display
+-- cell resolved to, not the atlas arithmetic (covered end to end
+-- below). The cell size is arbitrary and never read there.
+labelledFrames ∷ [(Direction, [Text])] → Map.Map Direction [PreviewFrame]
+labelledFrames = Map.fromList ∘ map (\(d, ps) → (d, map one ps))
+  where one path = PreviewFrame path (0, 0, 1, 1) (1, 1)
 
--- The same, already lifted into whole-image preview frames — what
--- 'resolveAnimDirections' takes now that a frame is a texture plus a
--- sub-rect rather than a bare path (#1260).
-srcFrames ∷ [(Direction, [Text])] → Map.Map Direction [PreviewFrame]
-srcFrames = fmap sourceFrames ∘ frames
+-- A synthetic compiled-index record: since #1261 the atlas selection is
+-- the ONLY input 'buildPreviewAnims' has.
+fakeAtlas ∷ Text → Float → Bool → Bool → [(Direction, Int)] → AtlasAnimation
+fakeAtlas name fps loop flipV dirs = AtlasAnimation
+    { aaName         = name
+    , aaFormat       = AtlasFormatPng
+    , aaPath         = "assets/textures/units/fake/atlas/"
+                       ⧺ T.unpack name ⧺ ".png"
+    , aaAtlasWidth   = cols * cellW
+    , aaAtlasHeight  = rows * cellH
+    , aaCellWidth    = cellW
+    , aaCellHeight   = cellH
+    , aaColumns      = cols
+    , aaRows         = rows
+    , aaFlip         = flipV
+    , aaFps          = fps
+    , aaLoop         = loop
+    , aaDirections   = Map.fromList
+        [ (d, AtlasDirectionRow d r n) | (r, (d, n)) ← zip [0 ..] ordered ]
+    , aaSourceDigest = "source-digest"
+    , aaAtlasDigest  = "atlas-digest"
+    }
+  where
+    cellW = 16
+    cellH = 24
+    ordered = [ (d, n) | d ← previewDirectionOrder, Just n ← [lookup d dirs] ]
+    rows = length ordered
+    cols = maximum (1 : map snd ordered)
+
+selection ∷ [AtlasAnimation] → HM.HashMap Text AtlasAnimation
+selection = HM.fromList ∘ map (\aa → (aaName aa, aa))
+
+-- | The single animation a one-entry selection assembles to. Partial on
+--   purpose: a selection of one that yields anything else is itself the
+--   failure, and reporting it here beats a pattern-match warning.
+onlyAnim ∷ HasCallStack ⇒ HM.HashMap Text AtlasAnimation → PreviewAnim
+onlyAnim sel = case buildPreviewAnims sel of
+    [a] → a
+    out → error ("expected one animation, got " ⧺ show (map paName out))
 
 framePaths ∷ PreviewFrameDir → [Text]
 framePaths = map pfPath ∘ pfdFrames
@@ -150,6 +198,36 @@ withCompiledUnitFixture mIndex action = do
         writeFile (resRoot </> unitAtlasIndexPath (T.pack brokenUnit)) doc
     (`finally` removeDirectoryRecursive resRoot) (action resRoot catRoot)
 
+-- A unit whose YAML DECLARES an animation while its tree ships no
+-- compiled artifacts at all — the state every unit but acolyte was in
+-- before #1261, and a rejection since. Its own temp resource root, for
+-- the same reason 'withCompiledUnitFixture' has one.
+uncompiledUnit ∷ String
+uncompiledUnit = "spec_uncompiled_unit"
+
+withUncompiledUnitFixture ∷ (FilePath → FilePath → IO ()) → IO ()
+withUncompiledUnitFixture action = do
+    tmp ← getTemporaryDirectory
+    let resRoot = tmp </> "synarchy-preview-unit-uncompiled-spec"
+        catRoot = resRoot </> unitsCategoryRoot
+        unitDir = catRoot </> uncompiledUnit
+        framePath = "assets/textures/units/" ⧺ uncompiledUnit
+                    ⧺ "/animations/idle/south/frame_000.png"
+    createDirectoryIfMissing True (unitDir </> "animations" </> "idle" </> "south")
+    writeFile (resRoot </> framePath) ""
+    createDirectoryIfMissing True (resRoot </> "data" </> "units")
+    writeFile (resRoot </> unitDataPath (T.pack uncompiledUnit))
+        (unlines
+            [ "units:"
+            , "  - name: " ⧺ uncompiledUnit
+            , "    sprite: \"" ⧺ framePath ⧺ "\""
+            , "    animations:"
+            , "      idle:"
+            , "        frames:"
+            , "          south:"
+            , "            - \"" ⧺ framePath ⧺ "\"" ])
+    (`finally` removeDirectoryRecursive resRoot) (action resRoot catRoot)
+
 spec ∷ Spec
 spec = do
     describe "directionDirName / parseDirectionDirName" $ do
@@ -188,35 +266,10 @@ spec = do
             sortFrameFiles ["pose.png", "frame_001.png"]
                 `shouldBe` ["frame_001.png", "pose.png"]
 
-    describe "effectiveFlip" $ do
-        it "takes the YAML flag when the animation has an entry, even for \
-           \a five-direction layout that would otherwise infer True" $
-            effectiveFlip (Just (anim 10 False False))
-                (frames [(d, ["f"]) | d ← [DirS, DirSE, DirE, DirNE, DirN]])
-                `shouldBe` False
-
-        it "takes a YAML True as well" $
-            effectiveFlip (Just (anim 8 True True)) (frames [(DirS, ["f"])])
-                `shouldBe` True
-
-        it "infers True with no YAML entry for exactly the canonical five" $
-            effectiveFlip Nothing
-                (frames [(d, ["f"]) | d ← [DirS, DirSE, DirE, DirNE, DirN]])
-                `shouldBe` True
-
-        it "infers False with no YAML entry when all eight are authored" $
-            effectiveFlip Nothing (frames [(d, ["f"]) | d ← previewDirectionOrder])
-                `shouldBe` False
-
-        it "infers False with no YAML entry for a partial set — a missing \
-           \direction stays unavailable rather than being invented" $
-            effectiveFlip Nothing (frames [(DirS, ["f"]), (DirE, ["f"])])
-                `shouldBe` False
-
     describe "resolveAnimDirections" $ do
         it "mirrors W/SW/NW from their eastern counterparts when flipping \
            \is allowed, reporting each cell's real source" $ do
-            let stored = srcFrames [ (DirS, ["s"]), (DirSE, ["se"]), (DirE, ["e"])
+            let stored = labelledFrames [ (DirS, ["s"]), (DirSE, ["se"]), (DirE, ["e"])
                                    , (DirNE, ["ne"]), (DirN, ["n"]) ]
                 out = resolveAnimDirections True stored
             map pfdDirection out `shouldBe`
@@ -230,13 +283,13 @@ spec = do
 
         it "omits the western directions entirely when flipping is off" $
             map pfdDirection (resolveAnimDirections False
-                (srcFrames [ (DirS, ["s"]), (DirSE, ["se"]), (DirE, ["e"])
+                (labelledFrames [ (DirS, ["s"]), (DirSE, ["se"]), (DirE, ["e"])
                            , (DirNE, ["ne"]), (DirN, ["n"]) ]))
                 `shouldBe` ["south", "north", "north-east", "east", "south-east"]
 
         it "prefers a directly authored western direction over mirroring, \
            \even with flipping enabled" $ do
-            let stored = srcFrames [ (DirS, ["s"]), (DirSE, ["se"]), (DirE, ["e"])
+            let stored = labelledFrames [ (DirS, ["s"]), (DirSE, ["se"]), (DirE, ["e"])
                                    , (DirNE, ["ne"]), (DirN, ["n"])
                                    , (DirW, ["authored-w"]) ]
                 out = resolveAnimDirections True stored
@@ -247,7 +300,7 @@ spec = do
 
         it "treats an empty frame list as no direction at all, and never \
            \mirrors from one" $
-            resolveAnimDirections True (srcFrames [(DirS, ["s"]), (DirE, [])])
+            resolveAnimDirections True (labelledFrames [(DirS, ["s"]), (DirE, [])])
                 `shouldSatisfy` \out →
                     map pfdDirection out ≡ ["south"]
 
@@ -276,36 +329,53 @@ spec = do
            \out of range)" $
             frameIndexAt True 8 4 (-5.0) `shouldBe` 0
 
-    describe "buildPreviewAnims (metadata extraction + exact defaults)" $ do
-        it "uses the YAML fps/loop/flip when the animation has an entry" $ do
-            let meta = Map.fromList [("attack", anim 12 False True)]
-            map (\a → (paFps a, paLoop a, paFlip a))
-                (buildPreviewAnims meta HM.empty
-                    [("attack", frames [(DirS, ["s"])])])
-                `shouldBe` [(12, False, True)]
+    describe "buildPreviewAnims (the compiled index is the whole input)" $ do
+        it "reads fps/loop/flip from each animation's index record" $
+            map (\a → (paName a, paFps a, paLoop a, paFlip a))
+                (buildPreviewAnims (selection
+                    [ fakeAtlas "attack" 12 False True [(DirS, 2)]
+                    , fakeAtlas "idle" 8 True False [(DirS, 1)] ]))
+                `shouldBe` [("attack", 12, False, True), ("idle", 8, True, False)]
 
-        it "falls back to fps=8 / loop=true for an animation the YAML \
-           \never mentions" $
-            map (\a → (paFps a, paLoop a, paFlip a))
-                (buildPreviewAnims Map.empty HM.empty
-                    [("roar", frames [(DirS, ["s"]), (DirE, ["e"])])])
-                `shouldBe` [(8, True, False)]
+        it "orders animations case-sensitively by name, matching the \
+           \simple browser's Ord-on-the-label rule" $
+            map paName (buildPreviewAnims (selection
+                [ fakeAtlas n 8 True False [(DirS, 1)]
+                | n ← ["walk", "Idle", "attack_heavy_RH_dagger", "idle"] ]))
+                `shouldBe` ["Idle", "attack_heavy_RH_dagger", "idle", "walk"]
 
-        it "reports the south frame-zero thumbnail, and none at all when \
-           \the animation stores no south frames" $
-            map (fmap pfPath ∘ paThumb) (buildPreviewAnims Map.empty HM.empty
-                    [ ("a", frames [(DirS, ["s0", "s1"])])
-                    , ("b", frames [(DirE, ["e0"])]) ])
-                `shouldBe` [Just "s0", Nothing]
+        it "lists EXACTLY the selection — an animation folder that exists \
+           \on disk but is absent from the unit YAML has no index record, \
+           \so it cannot appear here at all" $
+            map paName (buildPreviewAnims (selection
+                [fakeAtlas "idle" 8 True False [(DirS, 1)]]))
+                `shouldBe` ["idle"]
 
-        it "leaves an unmigrated animation on the legacy path: source-frame \
-           \paths, whole-image UVs, and no cell size of its own" $ do
-            let out = buildPreviewAnims Map.empty HM.empty
-                          [("roar", frames [(DirS, ["s0", "s1"])])]
-            map paAtlas out `shouldBe` [Nothing]
-            concatMap pfdFrames (concatMap paDirs out) `shouldBe`
-                [ PreviewFrame "s0" (0, 0, 1, 1) Nothing
-                , PreviewFrame "s1" (0, 0, 1, 1) Nothing ]
+        it "reports the south frame-zero thumbnail as an atlas CELL, and \
+           \none at all when the animation authors no south row" $ do
+            let out = buildPreviewAnims (selection
+                    [ fakeAtlas "a" 8 True False [(DirS, 2)]
+                    , fakeAtlas "b" 8 True False [(DirE, 1)] ])
+            map (fmap pfPath ∘ paThumb) out `shouldBe`
+                [ Just "assets/textures/units/fake/atlas/a.png", Nothing ]
+            map (fmap pfCell ∘ paThumb) out `shouldBe` [Just (16, 24), Nothing]
+
+        it "gives every frame the animation's own atlas, its cell size, \
+           \and a sub-rect that is never the whole sheet" $ do
+            let a  = onlyAnim (selection
+                          [fakeAtlas "run" 8 True False [(DirS, 3), (DirE, 3)]])
+                fs = concatMap pfdFrames (paDirs a)
+            paAtlas a `shouldBe` "assets/textures/units/fake/atlas/run.png"
+            map pfPath fs `shouldSatisfy` all (≡ paAtlas a)
+            map pfCell fs `shouldSatisfy` all (≡ (16, 24))
+            map pfUV fs `shouldSatisfy` all (≢ (0, 0, 1, 1))
+
+        it "addresses the index's REAL per-direction counts, never the \
+           \padded column count (D-5)" $ do
+            let a = onlyAnim (selection
+                        [fakeAtlas "uneven" 8 True False [(DirS, 4), (DirE, 1)]])
+            [ (pfdDirection d, length (pfdFrames d)) | d ← paDirs a ]
+                `shouldBe` [("south", 4), ("east", 1)]
 
     describe "resolveUnitDir (pre-boot containment)" $ do
         it "resolves a real shipped unit" $ do
@@ -356,35 +426,36 @@ spec = do
             result ← resolveUnitDir "assets/textures/does-not-exist-887" "acolyte"
             result `shouldBe` Left UnitNotFound
 
-    describe "discoverUnitAnimations (filesystem is authoritative)" $ do
-        it "lists the fixture's animations in case-sensitive directory-name \
-           \order, dropping unrecognized direction folders" $
+    -- #1261 flipped authority from the filesystem to the unit YAML and
+    -- its compiled index. The exclusion below is the whole of that
+    -- change's observable behaviour for undeclared content, and the
+    -- fixture tree is exactly the shape a developer's uncommitted
+    -- animation folder has: real frames on disk, nothing declaring
+    -- them. Nothing COMMITTED can be in that state —
+    -- `tools/pack_atlas.py --validate-only --strict` fails on any
+    -- animation PNG no declaration owns, which is where an undeclared
+    -- folder is reported loudly and by path.
+    describe "YAML/index authority (#1261)" $ do
+        it "EXCLUDES an animation folder that exists on disk but is \
+           \declared nowhere, rather than rendering its source frames" $
             withUnitFixture $ \root → do
-                found ← discoverUnitAnimations (root </> "fixture_unit")
-                map fst found `shouldBe` ["eight", "five", "uneven", "unpadded"]
-                lookup "five" found `shouldSatisfy`
-                    maybe False ((≡ [DirS, DirN, DirNE, DirE, DirSE]) ∘ Map.keys)
+                -- four populated animation folders, no data/units YAML
+                result ← buildPreviewUnitIn root root "fixture_unit"
+                result `shouldBe` Left UnitNoAnimations
 
-        it "orders each direction's frames numerically, even unpadded" $
-            withUnitFixture $ \root → do
-                found ← discoverUnitAnimations (root </> "fixture_unit")
-                let fs = Map.lookup DirS =≪ lookup "unpadded" found
-                fmap (map (T.unpack ∘ T.takeWhileEnd (/= '/'))) fs
-                    `shouldBe` Just ["frame_1.png", "frame_2.png", "frame_10.png"]
-
-        it "is empty for a symlinked animations/ root, standalone — this \
-           \function is exported and independently exercised, so it must \
-           \be symlink-safe without relying on resolveUnitDir first" $
-            withSymlinkedUnit $ \root → do
-                found ← discoverUnitAnimations (root </> "real_unit")
-                found `shouldBe` []
-
-        it "finds every shipped acolyte animation the YAML never mentions \
-           \(pushing_idle), proving the filesystem — not the YAML — is \
-           \what decides membership" $ do
-            found ← discoverUnitAnimations (unitsCategoryRoot </> realUnit)
-            map fst found `shouldContain` ["pushing_idle"]
-            map fst found `shouldContain` ["idle"]
+        it "REJECTS a unit whose YAML declares animations it ships no \
+           \compiled atlas for, naming the unit" $
+            withUncompiledUnitFixture $ \resRoot catRoot → do
+                result ← buildPreviewUnitIn resRoot catRoot uncompiledUnit
+                case result of
+                    Right _ → expectationFailure
+                        "an uncompiled unit still resolved a preview target"
+                    Left err → do
+                        err `shouldSatisfy` \case
+                            UnitAtlasRejected _ → True
+                            _                   → False
+                        unitFocusErrorMessage err `shouldSatisfy`
+                            T.isInfixOf (T.pack uncompiledUnit)
 
     describe "buildPreviewUnit (the whole pre-boot pipeline)" $ do
         it "resolves the shipped acolyte to an idle-defaulted, ordered \
@@ -425,19 +496,17 @@ spec = do
                 Left err → expectationFailure
                     (T.unpack (unitFocusErrorMessage err))
                 Right u → do
-                    let legacy = [paName a | a ← puAnims u, isNothing (paAtlas a)]
-                    legacy `shouldBe` []
                     length (puAnims u) `shouldBe` 54
                     -- Each animation's own atlas, named after itself —
                     -- D-2's one-atlas-per-animation, observed rather
                     -- than assumed.
                     [ (paName a, paAtlas a) | a ← puAnims u ] `shouldSatisfy`
-                        all (\(n, p) → p ≡ Just ("assets/textures/units/acolyte/atlas/"
-                                                 <> n <> ".png"))
+                        all (\(n, p) → p ≡ "assets/textures/units/acolyte/atlas/"
+                                            <> n <> ".png")
                     -- and every frame of every direction samples that
                     -- same image: one upload, one handle, one slot.
                     puAnims u `shouldSatisfy` all (\a →
-                        all (all ((≡ fromMaybe "" (paAtlas a)) ∘ pfPath) ∘ pfdFrames)
+                        all (all ((≡ paAtlas a) ∘ pfPath) ∘ pfdFrames)
                             (paDirs a))
 
         it "addresses frames as atlas CELLS: real per-direction counts \
@@ -462,7 +531,7 @@ spec = do
                             let cells = [ pfCell f
                                         | d ← paDirs a, f ← pfdFrames d ]
                             nub cells `shouldSatisfy` \cs →
-                                length cs ≡ 1 ∧ all isJust cs
+                                length cs ≡ 1 ∧ all (\(w, hh) → w > 0 ∧ hh > 0) cs
                             -- …and one direction's columns tile its row
                             -- left to right without gaps or overlap.
                             case paDirs a of
@@ -537,19 +606,10 @@ spec = do
                     Left (UnitAtlasRejected _) → True
                     _                          → False
 
-        it "stays on the legacy path when the unit ships no atlas/ \
-           \directory at all — the only tolerated absence" $
-            withUnitFixture $ \root → do
-                result ← buildPreviewUnitIn root root "fixture_unit"
-                case result of
-                    Left err → expectationFailure
-                        (T.unpack (unitFocusErrorMessage err))
-                    Right u → map paAtlas (puAnims u)
-                        `shouldSatisfy` all isNothing
-
-        it "resolves a shipped ASSET-ONLY unit from its asset_units \
-           \declaration, with the declared playback metadata" $ do
-            result ← buildPreviewUnit unitsCategoryRoot assetOnlyUnit
+        it "resolves one of the trees #1261 promoted out of the \
+           \inventory-only asset_units: form, with its declared \
+           \playback metadata and all eight cells still populated" $ do
+            result ← buildPreviewUnit unitsCategoryRoot promotedUnit
             case result of
                 Left err → expectationFailure
                     (T.unpack (unitFocusErrorMessage err))
@@ -560,10 +620,39 @@ spec = do
                     -- canonical five, so every one of the eight cells
                     -- still resolves — the same visible result the
                     -- pre-#1257 inference produced.
-                    puAnims u `shouldSatisfy` all (\a → paFlip a)
+                    puAnims u `shouldSatisfy` all paFlip
                     puAnims u `shouldSatisfy` all
                         (\a → map pfdDirection (paDirs a)
                                 ≡ map directionDirName previewDirectionOrder)
+
+        -- #1261 requirement 2: ALL SEVEN preserved trees, every one of
+        -- their animations, through the production loader and the
+        -- generated index/cell metadata. Per-unit `it`s so a failure
+        -- names the tree that broke.
+        forM_ shippedUnits $ \unitName →
+            it ("resolves " ⧺ unitName ⧺ ": every animation atlas-backed, \
+                \every frame a cell of its own animation's atlas") $ do
+                result ← buildPreviewUnit unitsCategoryRoot unitName
+                case result of
+                    Left err → expectationFailure
+                        (T.unpack (unitFocusErrorMessage err))
+                    Right u → do
+                        puAnims u `shouldSatisfy` not ∘ null
+                        puDefault u `shouldSatisfy` not ∘ T.null
+                        forM_ (puAnims u) $ \a → do
+                            paAtlas a `shouldBe`
+                                T.pack ("assets/textures/units/" ⧺ unitName
+                                        ⧺ "/atlas/") <> paName a <> ".png"
+                            -- Every direction has real frames, all
+                            -- sampling that one image at a real cell
+                            -- size and a sub-rect that is not the sheet.
+                            paDirs a `shouldSatisfy` not ∘ null
+                            let fs = concatMap pfdFrames (paDirs a)
+                            fs `shouldSatisfy` not ∘ null
+                            map pfPath fs `shouldSatisfy` all (≡ paAtlas a)
+                            map pfCell fs `shouldSatisfy`
+                                all (\(w, hh) → w > 0 ∧ hh > 0)
+                            map pfUV fs `shouldSatisfy` all (≢ (0, 0, 1, 1))
 
         it "rejects an unknown unit through the same error the CLI prints" $ do
             result ← buildPreviewUnit unitsCategoryRoot "nosuch"
@@ -575,9 +664,11 @@ spec = do
             Map.lookup "idle" meta `shouldSatisfy` isJust
             fmap uyaFlip (Map.lookup "idle" meta) `shouldBe` Just True
 
-        it "extracts a shipped ASSET-ONLY unit's metadata from its \
-           \asset_units: block, exactly as it does a gameplay unit's" $ do
-            meta ← loadUnitAnimMeta (T.pack assetOnlyUnit)
+        it "extracts a promoted tree's metadata from its units: block \
+           \(the reader still accepts both declaration forms — the \
+           \inventory-only asset_units: form remains supported, it is \
+           \just that no shipped file uses it since #1261)" $ do
+            meta ← loadUnitAnimMeta (T.pack promotedUnit)
             sort (Map.keys meta) `shouldBe` ["idle", "run"]
             fmap uyaFlip (Map.lookup "idle" meta) `shouldBe` Just True
             fmap uyaFps  (Map.lookup "idle" meta) `shouldBe` Just 8
@@ -590,10 +681,11 @@ spec = do
     -- Sanity: the real trees this spec leans on exist in this checkout,
     -- or half the assertions above prove nothing.
     describe "fixture sanity" $ do
-        it "the shipped acolyte and tiller asset trees exist, and the \
-           \asset-only tree really does carry a declaration now" $ do
-            a ← doesDirectoryExist (unitsCategoryRoot </> realUnit)
-            t ← doesDirectoryExist (unitsCategoryRoot </> assetOnlyUnit)
-            (a, t) `shouldBe` (True, True)
-            declared ← doesFileExist (unitDataPath (T.pack assetOnlyUnit))
-            declared `shouldBe` True
+        it "every shipped unit tree exists and carries both its \
+           \declaration and its compiled index" $
+            forM_ shippedUnits $ \unitName → do
+                tree ← doesDirectoryExist (unitsCategoryRoot </> unitName)
+                declared ← doesFileExist (unitDataPath (T.pack unitName))
+                indexed ← doesFileExist (unitAtlasIndexPath (T.pack unitName))
+                (unitName, tree, declared, indexed)
+                    `shouldBe` (unitName, True, True, True)

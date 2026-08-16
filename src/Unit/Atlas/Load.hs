@@ -3,20 +3,17 @@
 --   artifacts before any of them is published or given GPU residency
 --   (#1259, TEX-3).
 --
---   MODE SELECTION IS THE INDEX. A unit's compiled index
---   (@assets\/textures\/units\/\<unit\>\/atlas\/index.json@) is the
---   explicit, deterministic declaration of which animations are
---   atlas-backed: an animation named there loads as an atlas, and every
---   other animation of that unit loads as legacy per-frame textures.
---   The two are never mixed WITHIN one animation (requirement 6) —
---   'Unit.Atlas.Types.AnimStorage' cannot represent a mixture.
+--   THE INDEX IS THE WHOLE ANSWER. A unit's compiled index
+--   (@assets\/textures\/units\/\<unit\>\/atlas\/index.json@) describes
+--   every animation that unit's YAML declares, and since #1261 (TEX-6)
+--   retired per-frame unit-animation loading there is no second
+--   representation for one to be in: the index either covers the YAML
+--   exactly or the unit does not load.
 --
---   FAILURE IS FAILURE. A selected atlas mode that is missing, stale,
---   unsupported, or invalid does NOT fall back to legacy frames: it
---   rejects, naming the unit, the animation and the artifact. Silently
---   loading the per-frame path instead would hide a broken compile
---   behind art that still renders, which is precisely the substitution
---   requirement 5 forbids.
+--   FAILURE IS FAILURE. Artifacts that are missing, incomplete, stale,
+--   unsupported, or invalid REJECT, naming the unit, the animation and
+--   the artifact. There has never been a fallback to the source frames
+--   sitting beside them, and now there is nothing to fall back to.
 --
 --   FRESHNESS IS CHECKED AGAINST THE SOURCE ART, not just the index.
 --   'loadUnitAtlasIndex' runs three passes, cheapest first, and stops at
@@ -43,21 +40,26 @@
 --   comparison cannot — a forged digest, and a frame whose PATH changed
 --   while its pixels did not.
 --
---   Reading the source frames here is a MIGRATION-PHASE cost, and an
---   accepted one: the legacy per-frame path is still live (requirement
---   6) and every unit still ships its frames. TEX-6, which removes
---   source loading, is where this check's replacement becomes the
---   compile-time gate's alone.
+--   Pass 3 SURVIVED TEX-6, which #1259 expected to retire it. Its cost
+--   is the whole reason it was provisional, and that cost was measured
+--   here rather than assumed: decoding all 4,620 shipped source frames
+--   across all seven units totals ~1.8 s of one-time unit-def loading
+--   (bear_brown, the largest, 0.74 s), paid on the Lua thread while
+--   YAMLs load and not on any frame. Since the source PNGs remain the
+--   tracked, hand-edited artwork (D-1), they remain something a
+--   developer can repaint without recompiling, and CI's asset gate only
+--   runs on a push — so this stays the check that catches it locally,
+--   in the same run that would otherwise have drawn the stale art.
+--   'tools/pack_atlas.py --validate-only --strict' is the same
+--   comparison at the compile boundary, not a replacement for it.
 --
 --   ALL OR NOTHING, BEFORE PUBLICATION. Every declared animation is
 --   checked before any of them is returned, so a caller never allocates
 --   a handle, queues an upload, or publishes an 'Animation' for a unit
 --   whose index turns out to be broken three animations later.
 --
---   ONE unit ships a compiled index today: @acolyte@, migrated by
---   #1260 (TEX-4) as the production pilot. Every other unit takes the
---   'Nothing' branch and loads exactly as it did before #1259; TEX-6
---   owns migrating them and retiring the legacy path.
+--   ALL SEVEN shipped units ship a compiled index: @acolyte@ from
+--   #1260 (TEX-4)'s pilot, the remaining six from #1261 (TEX-6).
 module Unit.Atlas.Load
     ( loadUnitAtlasIndex
     , loadUnitAtlasIndexIn
@@ -81,20 +83,20 @@ import Unit.Atlas.Types
 
 -- | Read, validate, and select one unit's compiled atlas animations.
 --
---   * @Right Nothing@ — the unit has no compiler-owned @atlas\/@
---     directory at all: every animation is legacy. This is the ONLY
---     tolerated absence, and it is the state every shipped unit but
---     @acolyte@ is in today. A directory that EXISTS without its index
---     is an incomplete artifact and rejects.
---   * @Right (Just m)@ — every declared animation parsed, still matches
---     the YAML, decoded to the image its index describes, and holds its
---     declared source art.
---   * @Left err@ — the index exists but is unusable. Nothing about this
---     unit's animations may be published.
+--   * @Right m@ — every declared animation parsed, still matches the
+--     YAML, decoded to the image its index describes, and holds its
+--     declared source art. @m@ covers EXACTLY the animations the unit
+--     YAML declares (see 'planUnitAtlasStorage').
+--   * @Right mempty@ — the unit declares no animations at all and ships
+--     no @atlas\/@ directory. That is the one absence left: with the
+--     per-frame path retired (#1261) a unit that declares animations
+--     but ships no compiled artifacts has nothing to render them from.
+--   * @Left err@ — the artifacts are missing, incomplete, or unusable.
+--     Nothing about this unit's animations may be published.
 loadUnitAtlasIndex
     ∷ Text
     → Map.Map Text YamlAnimFacts     -- ^ what the unit YAML declares
-    → IO (Either AtlasLoadError (Maybe (HM.HashMap Text AtlasAnimation)))
+    → IO (Either AtlasLoadError (HM.HashMap Text AtlasAnimation))
 loadUnitAtlasIndex = loadUnitAtlasIndexIn ""
 
 -- | 'loadUnitAtlasIndex' against an explicit filesystem ROOT.
@@ -110,32 +112,18 @@ loadUnitAtlasIndexIn
     ∷ FilePath
     → Text
     → Map.Map Text YamlAnimFacts
-    → IO (Either AtlasLoadError (Maybe (HM.HashMap Text AtlasAnimation)))
+    → IO (Either AtlasLoadError (HM.HashMap Text AtlasAnimation))
 loadUnitAtlasIndexIn root unit yamlAnims = do
     let indexPath = unitAtlasIndexPath unit
         atlasDir  = unitAtlasDir unit
     present ← doesFileExist (under root indexPath)
     dirPresent ← doesDirectoryExist (under root atlasDir)
     if not present
-        then if dirPresent
-            -- An atlas DIRECTORY with no index is an incomplete
-            -- compiled artifact, not a legacy unit: the compiler writes
-            -- the index as part of every successful compile and refuses
-            -- an indexed tree it cannot regenerate, so what is on disk
-            -- here is the wreckage of an interrupted or partially
-            -- deleted one. Treating it as "no atlases" would fall back
-            -- to legacy frames while compiled PNGs sit beside them —
-            -- the silent substitution requirement 5 forbids. Only an
-            -- ABSENT directory means legacy.
-            then pure ∘ Left $ AtlasLoadError
-                { aleUnit = unit, aleAnimation = Nothing
-                , aleArtifact = indexPath
-                , aleReason = "the unit has a compiler-owned " <> T.pack atlasDir
-                    <> " directory but no index; the compiled artifacts are "
-                    <> "incomplete — re-run tools/pack_atlas.py --compile, or "
-                    <> "remove that directory to return the unit to legacy "
-                    <> "per-frame loading" }
-            else pure (Right Nothing)
+        then pure $ if not dirPresent ∧ Map.null yamlAnims
+            -- A unit with no animations at all needs no artifacts, and
+            -- the compiler writes it none.
+            then Right HM.empty
+            else Left (missingIndex indexPath atlasDir dirPresent)
         else do
             eRaw ← readFileBytes (under root indexPath)
             case eRaw of
@@ -149,7 +137,27 @@ loadUnitAtlasIndexIn root unit yamlAnims = do
                         Left err → pure (Left err)
                         Right plan → do
                             checked ← checkAll root unit yamlAnims anims
-                            pure (Just plan <$ checked)
+                            pure (plan <$ checked)
+  where
+    -- No index. Before #1261 an ABSENT `atlas/` directory meant "this
+    -- unit is on the per-frame path"; there is no such path any more,
+    -- so the only thing an absent index can mean is that the unit's
+    -- artifacts were never compiled — and an atlas DIRECTORY without
+    -- its index is the wreckage of an interrupted or partly deleted
+    -- compile, which the compiler never writes. Both reject; the
+    -- diagnostic distinguishes them because the repairs differ.
+    missingIndex indexPath atlasDir dirPresent = AtlasLoadError
+        { aleUnit = unit, aleAnimation = Nothing
+        , aleArtifact = indexPath
+        , aleReason = if dirPresent
+            then "the unit has a compiler-owned " <> T.pack atlasDir
+                <> " directory but no index; the compiled artifacts are "
+                <> "incomplete — re-run tools/pack_atlas.py --compile"
+            else "the unit declares "
+                <> T.pack (show (Map.size yamlAnims))
+                <> " animation(s) but ships no compiled atlas artifacts; "
+                <> "unit animations are atlas-backed only (#1261) — run "
+                <> "tools/pack_atlas.py --compile" }
 
 -- | Resolve a resource-relative path for OPENING only.
 under ∷ FilePath → FilePath → FilePath

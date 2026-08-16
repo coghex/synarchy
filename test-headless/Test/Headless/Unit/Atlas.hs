@@ -531,20 +531,19 @@ repaint path = do
             JP.writePng path (JP.generateImage bump
                 (JP.imageWidth img) (JP.imageHeight img))
 
-type LoadResult = Either AtlasLoadError (Maybe (HM.HashMap Text AtlasAnimation))
+type LoadResult = Either AtlasLoadError (HM.HashMap Text AtlasAnimation)
 
 isRejectedLoad ∷ LoadResult → Bool
 isRejectedLoad (Left _) = True
 isRejectedLoad _        = False
 
 selectionOf ∷ LoadResult → [Text]
-selectionOf (Right (Just m)) = HM.keys m
-selectionOf _                = []
+selectionOf (Right m) = HM.keys m
+selectionOf _         = []
 
 showLoad ∷ LoadResult → String
-showLoad (Left e)          = T.unpack (renderAtlasLoadError e)
-showLoad (Right Nothing)   = "<<no index>>"
-showLoad (Right (Just m))  = show (HM.keys m)
+showLoad (Left e)  = T.unpack (renderAtlasLoadError e)
+showLoad (Right m) = show (HM.keys m)
 
 -- | Replace the first occurrence of @needle@ with @repl@.
 replaceFirst ∷ BL.ByteString → BL.ByteString → BS.ByteString → BS.ByteString
@@ -815,24 +814,36 @@ spec = do
             -- case below perturbs exactly one thing.
             yaml = Map.fromList
                 [ ("idle",  factsFor idle)
-                , ("swing", factsFor swing)
-                , ("walk",  YamlAnimFacts 8 True True
-                                (Map.singleton DirS ["walk/s/frame_000.png"])) ]
+                , ("swing", factsFor swing) ]
+            -- One MORE animation than the index names — the shape a
+            -- unit takes when a YAML edit outruns the compiler.
+            uncompiled = Map.insert "walk"
+                (YamlAnimFacts 8 True True
+                    (Map.singleton DirS ["walk/s/frame_000.png"])) yaml
 
-        it "selects exactly the animations the index declares" $
+        it "selects exactly the animations the YAML declares" $
             case planUnitAtlasStorage "acolyte" yaml [idle, swing] of
                 Left e → expectationFailure (T.unpack (renderAtlasLoadError e))
-                Right m → do
-                    -- One entry per indexed animation: the loader
-                    -- allocates one handle and queues one upload each,
-                    -- so this IS the "one atlas per animation" count.
+                Right m →
+                    -- One entry per animation: the loader allocates one
+                    -- handle, queues one upload and publishes one
+                    -- `Animation` each, so this IS the "one atlas per
+                    -- animation" count.
                     HM.keys m `shouldMatchList` ["idle", "swing"]
-                    -- `walk` is declared in YAML but not compiled, so it
-                    -- stays legacy rather than being invented.
-                    HM.lookup "walk" m `shouldBe` Nothing
 
-        it "an index-free unit selects nothing at all" $
-            planUnitAtlasStorage "acolyte" yaml [] `shouldBe` Right HM.empty
+        -- Before #1261 a declared-but-uncompiled animation simply
+        -- stayed on the per-frame path. There is no such path now, so
+        -- publishing the unit without it would silently drop art the
+        -- file asks for.
+        it "rejects an animation the YAML declares that the index does \
+           \not name, naming it" $
+            planUnitAtlasStorage "acolyte" uncompiled [idle, swing]
+                `shouldReject` "'walk'"
+
+        it "an index-free unit is only valid when it declares no \
+           \animations either" $ do
+            planUnitAtlasStorage "acolyte" Map.empty [] `shouldBe` Right HM.empty
+            planUnitAtlasStorage "acolyte" yaml [] `shouldReject` "'idle'"
 
         it "rejects an animation the YAML no longer declares" $
             planUnitAtlasStorage "acolyte" (Map.delete "swing" yaml)
@@ -1147,11 +1158,42 @@ spec = do
     -- The loader end of the contract, against a REAL fixture tree: the
     -- pure checks above answer from values, these answer from files.
     describe "Unit.Atlas.Load — one request per animation, none when rejected" $ do
-        it "a unit with NO atlas directory stays wholly legacy" $
+        -- Before #1261 an absent atlas/ directory meant "this unit is
+        -- on the per-frame path". There is no such path now, so a unit
+        -- that DECLARES animations and ships no compiled artifacts has
+        -- nothing to render them from and rejects, naming the count.
+        it "a unit with NO atlas directory rejects, since there is no \
+           \per-frame path left to fall back to" $
             withAtlasFixture $ \root → do
                 removeDirectoryRecursive (root </> unitAtlasDir fixtureUnit)
                 r ← loadUnitAtlasIndexIn root fixtureUnit fixtureYaml
-                r `shouldBe` Right Nothing
+                r `shouldSatisfy` isRejectedLoad
+                selectionOf r `shouldBe` []
+                T.pack (showLoad r) `shouldSatisfy`
+                    T.isInfixOf "ships no compiled atlas artifacts"
+
+        -- …but a unit that declares NO animations needs no artifacts,
+        -- and the compiler writes it none.
+        it "a unit that declares no animations at all resolves to an \
+           \empty selection with no atlas directory" $
+            withAtlasFixture $ \root → do
+                removeDirectoryRecursive (root </> unitAtlasDir fixtureUnit)
+                r ← loadUnitAtlasIndexIn root fixtureUnit Map.empty
+                r `shouldBe` Right HM.empty
+
+        -- The reverse-coverage half of planUnitAtlasStorage: an index
+        -- that is internally fine but does not name something the YAML
+        -- declares would silently drop that animation from the unit.
+        it "an index that omits a DECLARED animation rejects, naming it" $
+            withAtlasFixture $ \root → do
+                let extra = Map.insert "wave"
+                        (YamlAnimFacts 8 True False
+                            (Map.singleton DirS ["nowhere/frame_000.png"]))
+                        fixtureYaml
+                r ← loadUnitAtlasIndexIn root fixtureUnit extra
+                r `shouldSatisfy` isRejectedLoad
+                selectionOf r `shouldBe` []
+                T.pack (showLoad r) `shouldSatisfy` T.isInfixOf "'wave'"
 
         -- An atlas directory without its index is an INCOMPLETE
         -- compiled artifact, not a legacy unit: compiled PNGs sit
@@ -1170,18 +1212,26 @@ spec = do
             withAtlasFixture $ \root → do
                 r ← loadUnitAtlasIndexIn root fixtureUnit fixtureYaml
                 case r of
-                    Right (Just sel) → do
+                    Right sel → do
                         HM.keys sel `shouldMatchList` ["blink", "step"]
                         -- One upload/handle/slot each (D-2/D-10), and
                         -- each naming its OWN atlas — not the unit's,
                         -- and not another animation's.
-                        atlasTextureRequests fixtureUnit sel `shouldBe`
+                        [ (nm, reg, aaPath aa)
+                            | (nm, reg, aa) ← atlasTextureRequests fixtureUnit sel ]
+                          `shouldBe`
                             [ ( "blink"
                               , "unit_" <> fixtureUnit <> "_blink_atlas"
                               , unitAtlasDir fixtureUnit </> "blink.png" )
                             , ( "step"
                               , "unit_" <> fixtureUnit <> "_step_atlas"
                               , unitAtlasDir fixtureUnit </> "step.png" ) ]
+                        -- Each request carries the animation's OWN index
+                        -- record, so the loader publishes what it
+                        -- uploaded rather than looking it back up.
+                        [ (nm, aaName aa)
+                            | (nm, _, aa) ← atlasTextureRequests fixtureUnit sel ]
+                          `shouldBe` [("blink", "blink"), ("step", "step")]
                     other → expectationFailure ("expected a selection, got "
                                                 ⧺ showLoad other)
 

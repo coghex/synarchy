@@ -15,7 +15,7 @@
 --   working unchanged.
 module Unit.Types
     ( Animation(..)
-    , legacyAnimation
+    , atlasAnimation
     , module Unit.Atlas.Types
     , StatModifier(..)
     , Wound(..)

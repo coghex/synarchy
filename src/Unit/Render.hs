@@ -215,8 +215,8 @@ unitToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst mDef
             flipX     = fsFlipX sample
 
             -- An atlas sample reports its CELL's dimensions; only a
-            -- legacy sample (whose image IS the frame) falls through to
-            -- the whole-image texture-size map. Measuring an atlas
+            -- whole-image sample (the T-pose's direct sprite) falls
+            -- through to the texture-size map. Measuring an atlas
             -- handle there would size every unit to the whole sheet.
             (texW, texH) = frameDimensions texSizes (baseTileW, baseTileH) sample
 
@@ -290,10 +290,11 @@ unitToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst mDef
             flags = if isSel then renderFlagSelected else 0
             wuv = uncurry packWorldUV baseTile
 
-            -- The frame's own UV sub-rect. A legacy frame is the whole
-            -- image, so (su0,sv0,su1,sv1) = (0,0,1,1) and the vertices
-            -- below are byte-for-byte the coordinates this path has
-            -- always emitted; an atlas frame narrows it to one cell.
+            -- The frame's own UV sub-rect. A T-pose sample is the
+            -- whole image, so (su0,sv0,su1,sv1) = (0,0,1,1) and the
+            -- vertices below are byte-for-byte the coordinates this
+            -- path has always emitted; an animation frame narrows it to
+            -- one atlas cell.
             (su0, sv0, su1, sv1) = fsUV sample
 
             -- Horizontal flip: swap U between left and right vertices.

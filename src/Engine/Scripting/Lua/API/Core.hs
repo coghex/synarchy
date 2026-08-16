@@ -246,11 +246,11 @@ getPreviewBrowseFn env = do
       Lua.setfield (-2) "loop"
       Lua.pushboolean (paFlip anim)
       Lua.setfield (-2) "flip"
-      -- Present only for an atlas-backed animation (#1260): its
-      -- compiled atlas path. Its ABSENCE is what tells the viewer this
-      -- animation is on the legacy per-frame path, so it is left off
-      -- the table entirely rather than pushed as an empty string.
-      forM_ (paAtlas anim) (pushTextField "atlas")
+      -- The animation's compiled atlas path (#1260). Unconditional
+      -- since #1261: every unit animation is atlas-backed, so this is a
+      -- fact about the animation rather than the mode signal its
+      -- absence used to be.
+      pushTextField "atlas" (paAtlas anim)
       forM_ (paThumb anim) $ \t → do
         pushPreviewFrame t
         Lua.setfield (-2) "thumb"
@@ -266,11 +266,11 @@ getPreviewBrowseFn env = do
       pushArray pushPreviewFrame (pfdFrames d)
       Lua.setfield (-2) "frames"
 
-    -- ONE frame: the texture to load, the sub-rect to sample within it,
-    -- and the frame's own pixel size when the compiled index knows it.
-    -- A legacy frame carries the whole-image rect and no size, so the
-    -- viewer's existing engine.getTextureSize measurement still applies
-    -- to it unchanged.
+    -- ONE frame: the atlas to load, the cell to sample within it, and
+    -- that cell's own pixel size. The size is the CELL's, never the
+    -- sheet's, so the viewer must not measure the resident texture to
+    -- size a frame — it still measures it to learn whether the upload
+    -- has landed.
     pushPreviewFrame f = do
       Lua.newtable
       pushTextField "path" (pfPath f)
@@ -278,11 +278,11 @@ getPreviewBrowseFn env = do
       forM_ [("u0", u0), ("v0", v0), ("u1", u1), ("v1", v1)] $ \(k, v) → do
         Lua.pushnumber (realToFrac v)
         Lua.setfield (-2) k
-      forM_ (pfCell f) $ \(w, h) → do
-        Lua.pushinteger (fromIntegral w)
-        Lua.setfield (-2) "width"
-        Lua.pushinteger (fromIntegral h)
-        Lua.setfield (-2) "height"
+      let (cw, ch) = pfCell f
+      Lua.pushinteger (fromIntegral cw)
+      Lua.setfield (-2) "width"
+      Lua.pushinteger (fromIntegral ch)
+      Lua.setfield (-2) "height"
 
     pushPreviewBuilding building = do
       Lua.newtable
