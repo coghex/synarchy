@@ -419,17 +419,26 @@ jobs:
           python3 tools/test_findings_report_audit.py
           python3 tools/findings_report_audit.py
 
-      # Unit-asset inventory gate (#1257): filesystem-first validation
-      # that every committed PNG under
-      # assets/textures/units/<unit>/animations/ is owned by exactly one
-      # animation-frame declaration in data/units/*.yaml, under either
-      # the gameplay `units:` or the asset-only `asset_units:` form.
+      # Unit-asset gate. One command, three checks:
+      #   #1257 inventory  -- filesystem-first validation that every
+      #     committed PNG under assets/textures/units/<unit>/animations/
+      #     is owned by exactly one animation-frame declaration in
+      #     data/units/*.yaml, under either the gameplay `units:` or the
+      #     asset-only `asset_units:` form;
+      #   #1258 freshness  -- every generated atlas/index regenerated
+      #     from the live sources and compared;
+      #   #1262 budgets    -- at most one resident image and bindless
+      #     registration per compiled animation (a hard error, and what
+      #     catches a reintroduced per-frame registration), plus the
+      #     resident-memory budget in tools/unit_texture_budget.json
+      #     whose breach activates deferred TEX-5. That one WARNS, so
+      #     --strict below is what makes it blocking.
       # Path-selective on PRs; unconditional after a merge to master, so
       # a path the selector does not list can never leave the inventory
       # unchecked on master. The self-test runs first: it proves the
       # checker still fails on each violation class, so a green strict
       # run below cannot be a vacuously permissive checker.
-      - name: Unit asset inventory
+      - name: Unit asset inventory, freshness and budget
         if: >-
           github.event_name != 'pull_request'
           || steps.expensive-gates.outputs.unit-assets == 'true'
