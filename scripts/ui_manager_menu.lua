@@ -169,6 +169,16 @@ function uiManager.onSaveLoaded(survUnitIds, survBuildingIds)
     if hud.markLoadedToolReset then
         hud.markLoadedToolReset()
     end
+
+    -- #1238: the container-window stack is transient session UI and is
+    -- never persisted, so a load must not leave a level open on an
+    -- endpoint the replacement session may not even have. Closing it
+    -- here drops every level, its modal pages, its list instances, its
+    -- nesting path and its per-level scroll in one call.
+    local containerWindow = package.loaded["scripts.cargo_inventory_panel"]
+    if containerWindow and containerWindow.closeIfOpen then
+        containerWindow.closeIfOpen()
+    end
 end
 
 function uiManager.onCreateWorld()

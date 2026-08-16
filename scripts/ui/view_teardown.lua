@@ -68,18 +68,14 @@ local registry = {
       zoomBand = function() require("scripts.hud.info_panel").clear() end,
       hudHide  = function() require("scripts.hud.info_panel").suppress("hud") end },
 
-    -- Item-contents popup (#142/#100): mounted on hud.world_page, so
-    -- hiding the page only takes it off-view; its logical state stays
-    -- open and it would reappear stale. closeIfOpen() is idempotent.
-    { name = "item_contents_panel",
-      zoomBand = function() require("scripts.item_contents_panel").closeIfOpen() end,
-      hudHide  = function() require("scripts.item_contents_panel").closeIfOpen() end,
-      resize   = function() require("scripts.item_contents_panel").closeIfOpen() end },
-
-    -- Cargo-inventory popup (#141/#99): same story as the item-contents
-    -- popup — mounted on hud.world_page, so a page hide leaves
-    -- state.open true and the popup reappears stale. closeIfOpen() is
-    -- idempotent.
+    -- Container window (#141/#99, a nesting STACK since #1238): its
+    -- base level is mounted on hud.world_page, so a page hide leaves
+    -- the stack logically open and it would reappear stale. Deeper
+    -- levels own their own modal pages, which closeIfOpen deletes.
+    -- ONE entry: the item-contents popup used to be an independent
+    -- singleton registered separately, and since #1238 it is a level in
+    -- this stack — a second entry would be the same call twice.
+    -- closeIfOpen() is idempotent.
     { name = "cargo_inventory_panel",
       zoomBand = function() require("scripts.cargo_inventory_panel").closeIfOpen() end,
       hudHide  = function() require("scripts.cargo_inventory_panel").closeIfOpen() end,

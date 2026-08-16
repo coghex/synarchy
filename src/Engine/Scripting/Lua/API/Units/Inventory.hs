@@ -28,7 +28,10 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
+import Data.List (sortOn)
 import Engine.Core.State (EngineEnv, freshItemInstanceId)
+import Engine.Scripting.Lua.API.Items.Contents
+    (pushGroupedContents, readInstanceIdPath, resolveContainedItem)
 import Engine.Scripting.Lua.API.Units.Page (unitOwningWorldState)
 import Unit.Types
 import Engine.Asset.Handle (TextureHandle(..))
@@ -458,85 +461,78 @@ popFirstById iid (x:xs)
     | otherwise            = (\(it, rest) → (it, x : rest))
                              <$> popFirstById iid xs
 
--- | unit.getItemContents(uid, defName[, instanceId]) → array of { defName,
---   displayName, count, fill, condition, weight, ... }, GROUPED by item type
---   (10 bandages → one entry with count=10), for the targeted item-container
---   (the exact instance when an id is given, else the FIRST inventory item
---   matching `defName`). `weight` is each item's TRUE per-instance mass
---   (empty case + fill + nested contents), so a filled bottle reports its
---   real weight, not the empty-bottle def weight. Empty table if it holds
---   nothing; nil if the unit or that item isn't found.
+-- | Every item-container a unit's own body can be holding, in the order
+--   the unit-info inventory list presents them: loose inventory first,
+--   then equipped slots (by slot id, so the order is deterministic
+--   rather than a hashmap enumeration), then accessories.
+--
+--   #1238: the pre-existing search read `uiInventory` alone, while
+--   `scripts/unit_info_v2_inventory_data.lua` merges all three and
+--   `scripts/unit_info_v2_context_menu.lua` offers "Contents" for a
+--   carried OR equipped container — so a kit slung in an equipment slot
+--   offered a menu entry that then found nothing. One list, one search.
+unitHeldItems ∷ UnitInstance → [ItemInstance]
+unitHeldItems inst =
+       uiInventory inst
+    <> map snd (sortOn fst (HM.toList (uiEquipment inst)))
+    <> uiAccessories inst
+
+-- | unit.getItemContents(uid, defName[, instanceId[, path]]) → array of
+--   { defName, displayName, category, kind, count, fill, condition,
+--   weight, iconTex, instanceId }, GROUPED by item type (10 bandages →
+--   one entry with count=10), for the targeted item-container.
+--
+--   The container is the exact instance when an id is given, else the
+--   FIRST match by `defName`, searched across the unit's loose
+--   inventory, equipped slots and accessories ('unitHeldItems').
+--
+--   `path` (#1238) is an optional dense array of instance ids
+--   descending from that container through NESTED containers, so the
+--   window stack can open a kit inside a toolbox by exact identity.
+--   Absent/empty = the container itself. A malformed path, or one that
+--   no longer resolves, answers nil rather than a sibling's contents.
+--
+--   `weight` is each item's TRUE per-instance mass (empty case + fill +
+--   nested contents), so a filled bottle reports its real weight, not
+--   the empty-bottle def weight. `kind` and `instanceId` (#1238) are
+--   what let a row be recognized as a container and opened as the next
+--   level. Empty table if it holds nothing; nil if the unit, that item,
+--   or the path isn't found.
 unitGetItemContentsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetItemContentsFn env = do
     idArg   ← Lua.tointeger 1
     nameArg ← Lua.tostring 2
     -- Optional 3rd arg: target a specific container instance by id (#67),
     -- so two same-def kits don't show each other's contents. Absent/0 →
-    -- first inventory item matching defName (AI / tooltip callers).
+    -- first held item matching defName (AI / tooltip callers).
     instArg ← Lua.tointeger 3
-    case (idArg, nameArg) of
-        (Just n, Just nameBS) → do
+    mPath   ← readInstanceIdPath 4
+    case (idArg, nameArg, mPath) of
+        (Just n, Just nameBS, Just path) → do
             let uid    = UnitId (fromIntegral n)
                 want   = TE.decodeUtf8Lenient nameBS
                 wantId = maybe 0 fromIntegral instArg
             mRes ← Lua.liftIO $ do
                 um      ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
-                pure $ case HM.lookup uid (umInstances um) of
-                    Nothing → Nothing
-                    Just inst →
-                        case [ i | i ← uiInventory inst, itemMatches wantId want i ] of
-                            (kit : _) → Just (iiContents kit, itemMgr)
-                            []        → Nothing
+                pure $ do
+                    inst ← HM.lookup uid (umInstances um)
+                    kit  ← case [ i | i ← unitHeldItems inst
+                                    , itemMatches wantId want i ] of
+                               (k : _) → Just k
+                               []      → Nothing
+                    held ← if null path
+                             then Just kit
+                             else resolveContainedItem path (iiContents kit)
+                    pure (iiContents held, itemMgr)
             case mRes of
                 Nothing → Lua.pushnil >> return 1
                 Just (contents, itemMgr) → do
-                    -- Group identical contents by defName. A kit holds at
-                    -- most a handful of types, so a flat defName grouping
-                    -- (rather than the cargo panel's defName+quality+cond
-                    -- key) reads fine — tools are count 1, consumables have
-                    -- no condition spread.
-                    -- Carry each item's true per-instance mass (empty case +
-                    -- fill + nested contents, via itemTotalWeight) into the
-                    -- group, NOT the static def weight: a filled antiseptic /
-                    -- antibiotics bottle weighs its contents, so the Contents
-                    -- panel must not show the empty-bottle weight. Items in a
-                    -- defName group are identical (consumables are fill 0,
-                    -- bottles are count 1), so keeping the representative's
-                    -- per-item weight is exact and the panel's weight×count
-                    -- gives the right total.
-                    let grouped = HM.toList $ HM.fromListWith
-                            (\(c1, f, cond, w) (c2, _, _, _) → (c1 + c2, f, cond, w))
-                            [ ( iiDefName i
-                              , (1 ∷ Int, iiCurrentFill i, iiCondition i
-                                , itemTotalWeight itemMgr i) )
-                            | i ← contents ]
-                    Lua.newtable
-                    forM_ (zip [1 ∷ Int ..] grouped) $
-                      \(idx, (dname, (cnt, fill, cond, wt))) → do
-                        let mDef = lookupItemDef dname itemMgr
-                            disp = maybe dname idDisplayName mDef
-                            cat  = maybe "Misc" idCategory mDef
-                            tex  = maybe (-1) (\d → let TextureHandle t =
-                                                          idTexture d in t) mDef
-                        Lua.newtable
-                        Lua.pushstring (TE.encodeUtf8 dname)
-                        Lua.setfield (-2) "defName"
-                        Lua.pushstring (TE.encodeUtf8 disp)
-                        Lua.setfield (-2) "displayName"
-                        Lua.pushstring (TE.encodeUtf8 cat)
-                        Lua.setfield (-2) "category"
-                        Lua.pushinteger (fromIntegral cnt)
-                        Lua.setfield (-2) "count"
-                        Lua.pushnumber (Lua.Number (realToFrac wt))
-                        Lua.setfield (-2) "weight"
-                        Lua.pushinteger (fromIntegral tex)
-                        Lua.setfield (-2) "iconTex"
-                        Lua.pushnumber (Lua.Number (realToFrac fill))
-                        Lua.setfield (-2) "fill"
-                        Lua.pushnumber (Lua.Number (realToFrac cond))
-                        Lua.setfield (-2) "condition"
-                        Lua.rawseti (-2) (fromIntegral idx)
+                    -- Grouping, row shape and the representative-instance
+                    -- convention all belong to the shared push (#1238) —
+                    -- the same one building.getRememberedItemContents
+                    -- uses, so one Lua level renderer draws both.
+                    pushGroupedContents itemMgr contents
                     return 1
         _ → Lua.pushnil >> return 1
 

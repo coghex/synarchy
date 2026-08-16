@@ -505,7 +505,9 @@ spec = aroundAll withSharedFixture $ do
             n ← evalInt ls $ luaLines
                 [ "_G.__n = 0;"
                 , "local function spy() _G.__n = _G.__n + 1 end;"
-                , "package.loaded['scripts.item_contents_panel']  = { closeIfOpen = spy };"
+                -- #1238: the item-contents popup is a LEVEL of the
+                -- container-window stack now, not a registry entry of
+                -- its own -- one owner, one hook, one close.
                 , "package.loaded['scripts.cargo_inventory_panel'] = { closeIfOpen = spy };"
                 , "package.loaded['scripts.crafting_panel']        = { closeIfOpen = spy };"
                 , "package.loaded['scripts.plant_panel']           = { closeIfOpen = spy };"
@@ -514,7 +516,7 @@ spec = aroundAll withSharedFixture $ do
                 , "require('scripts.ui.view_teardown').run('resize');"
                 , "return _G.__n"
                 ]
-            n `shouldBe` 6
+            n `shouldBe` 5
 
         it "a failing hook is pcall-isolated — the sweep still reaches every other hook and hud.createUI() still succeeds" $ \(env, ls) → do
             resetFixture env ls
@@ -525,8 +527,7 @@ spec = aroundAll withSharedFixture $ do
                 -- hud.createUI() itself calls each panel's own .setup(opts)
                 -- on every rebuild (independent of the "resize" sweep), so
                 -- every stub needs a harmless one too.
-                , "package.loaded['scripts.item_contents_panel']  = { setup = noop, closeIfOpen = function() error('boom') end };"
-                , "package.loaded['scripts.cargo_inventory_panel'] = { setup = noop, closeIfOpen = spy };"
+                , "package.loaded['scripts.cargo_inventory_panel'] = { setup = noop, closeIfOpen = function() error('boom') end };"
                 , "package.loaded['scripts.crafting_panel']        = { setup = noop, closeIfOpen = spy };"
                 , "package.loaded['scripts.plant_panel']           = { setup = noop, closeIfOpen = spy };"
                 , "package.loaded['scripts.build_tool']            = { setup = noop, hidePicker = spy };"
@@ -541,7 +542,12 @@ spec = aroundAll withSharedFixture $ do
                 Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
                 Just p → do
                     fhpOk p `shouldBe` True
-                    fhpN p `shouldBe` 5
+                    -- Four surviving hooks across two createUI() calls'
+                    -- worth of sweeps, with the container window's own
+                    -- raising. #1238 folded the item-contents popup into
+                    -- that window, so there are five registry entries
+                    -- here rather than six.
+                    fhpN p `shouldBe` 4
 
         it "build_tool's placement ghost (a committed two-click anchor) is deliberately NOT torn down by a resize" $ \(env, ls) → do
             resetFixture env ls
@@ -2048,11 +2054,16 @@ spec = aroundAll withSharedFixture $ do
                 , "    capacity=100.0, revealedAt=0.0 } end;"
                 , "local pg = UI.newPage('cargo_test_page', 'overlay');"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "cip.setup({page = pg, fbW = 800, fbH = 2160, boxTexSet = 1});"
                 , "cip.openFor('building', 1, 400, 400);"
                 , "local p = require('scripts.ui.panel');"
-                , "local x, y = p.getPosition(cip.state.panelId);"
-                , "local pw, ph = p.getSize(cip.state.panelId);"
+                , "local x, y = p.getPosition(L().panelId);"
+                , "local pw, ph = p.getSize(L().panelId);"
                 , "building.getContainerKnowledge = origK;"
                 , "return {w=pw,"
                 , "        inFrame=(x>=0 and y>=0 and (x+pw)<=800 and (y+ph)<=2160)}"
@@ -2076,11 +2087,16 @@ spec = aroundAll withSharedFixture $ do
                 , "} } end;"
                 , "local pg = UI.newPage('cargo_tab_test_page', 'overlay');"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "cip.setup({page = pg, fbW = 800, fbH = 2160, boxTexSet = 1});"
                 , "cip.openFor('building', 1, 400, 400);"
                 , "local out = {};"
                 , "local il = require('scripts.ui.item_list');"
-                , "for _, t in ipairs(il.getTabs(cip.state.listId)) do"
+                , "for _, t in ipairs(il.getTabs(L().listId)) do"
                 , "    local info = UI.getElementInfo(t.boxId);"
                 , "    table.insert(out, {x=info.x, y=info.y, w=info.width, h=info.height})"
                 , "end;"
@@ -2116,6 +2132,11 @@ spec = aroundAll withSharedFixture $ do
                 , "local origK = building.getContainerKnowledge;"
                 , "local label = require('scripts.ui.label');"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "local function known(items) return function() return"
                 , "  { state='known', items=items, storedWeight=0.0,"
                 , "    capacity=100.0, revealedAt=0.0 } end end;"
@@ -2125,7 +2146,7 @@ spec = aroundAll withSharedFixture $ do
                 , "cip.setup({page = pg1, fbW = 800, fbH = 2160, boxTexSet = 1});"
                 , "cip.openFor('building', 1, 400, 400);"
                 , "local il = require('scripts.ui.item_list');"
-                , "local _, unshunkH = label.getSize(il.getTabs(cip.state.listId)[1].labelId);"
+                , "local _, unshunkH = label.getSize(il.getTabs(L().listId)[1].labelId);"
                 , "building.getContainerKnowledge = known({"
                 , "    { defName='i1', category='Cat1' }, { defName='i2', category='Cat2' },"
                 , "    { defName='i3', category='Cat3' }, { defName='i4', category='Cat4' },"
@@ -2135,7 +2156,7 @@ spec = aroundAll withSharedFixture $ do
                 , "local pg2 = UI.newPage('cargo_lbl_test_2', 'overlay');"
                 , "cip.setup({page = pg2, fbW = 800, fbH = 2160, boxTexSet = 1});"
                 , "cip.openFor('building', 1, 400, 400);"
-                , "local _, shrunkH = label.getSize(il.getTabs(cip.state.listId)[2].labelId);"
+                , "local _, shrunkH = label.getSize(il.getTabs(L().listId)[2].labelId);"
                 , "building.getContainerKnowledge = origK;"
                 , "return {unshrunkH = unshunkH, shrunkH = shrunkH}"
                 ]
@@ -2165,21 +2186,26 @@ spec = aroundAll withSharedFixture $ do
                 , "hud.init(1,2,1920,1080);"
                 , "hud.createUI();"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "cip.openFor('building', 42, 400, 400);"
                 , "local il = require('scripts.ui.item_list');"
                 , "local targetBox = nil;"
-                , "for _, t in ipairs(il.getTabs(cip.state.listId)) do"
+                , "for _, t in ipairs(il.getTabs(L().listId)) do"
                 , "    if t.key == 'Cat2' then targetBox = t.boxId end"
                 , "end;"
                 , "require('scripts.ui.tabbar').handleCallback('onTabClick', targetBox);"
                 , "local wasOpenBefore = cip.isOpen();"
-                , "local tabBefore = cip.state.activeTab;"
+                , "local tabBefore = L().activeTab;"
                 , "hud.onFramebufferResize(1600, 900);"
                 , "building.getContainerKnowledge = origK;"
                 , "return {wasOpenBefore = wasOpenBefore, tabBefore = tabBefore,"
-                , "        isOpenAfter = cip.isOpen(), kindAfter = cip.state.kind,"
-                , "        idAfter = cip.state.id,"
-                , "        tabAfter = cip.state.activeTab}"
+                , "        isOpenAfter = cip.isOpen(), kindAfter = L().src.endpointKind,"
+                , "        idAfter = L().src.id,"
+                , "        tabAfter = L().activeTab}"
                 ]
             case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe CargoResizeProbe of
                 Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
@@ -2218,18 +2244,23 @@ spec = aroundAll withSharedFixture $ do
                 , "cm.show = function() _G.__menuShown = true end;"
                 , "local pg = UI.newPage('cargo_frame_page', 'overlay');"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
                 , "cip.openFor('building', 7, 100, 100);"
                 , "local il = require('scripts.ui.item_list');"
                 , "local tb = require('scripts.ui.tabbar');"
-                , "local rows = il.getRows(cip.state.listId);"
+                , "local rows = il.getRows(L().listId);"
                 , "local rowInfo = UI.getElementInfo(rows[1].hitId);"
                 , "local routed = il.handleCallback('onItemListRightClick', rows[1].hitId);"
                 , "cm.show = origShow;"
                 , "building.getContainerKnowledge = origK;"
                 , "unit.getSelected = origSel;"
-                , "return {hasFrame = tb.hasFrame(il.getTabBarId(cip.state.listId)),"
-                , "        tabCount = #il.getTabs(cip.state.listId),"
+                , "return {hasFrame = tb.hasFrame(il.getTabBarId(L().listId)),"
+                , "        tabCount = #il.getTabs(L().listId),"
                 , "        rowCount = #rows, interactive = rowInfo.interactive,"
                 , "        routed = routed, menuShown = _G.__menuShown}"
                 ]
@@ -2280,18 +2311,23 @@ spec = aroundAll withSharedFixture $ do
                 , "local origShow = cm.show; cm.show = function() end;"
                 , "local pg = UI.newPage('cargo_ep_building', 'overlay');"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
                 , "local accepted = cip.openFor('building', 11, 300, 300);"
                 , "local il = require('scripts.ui.item_list');"
                 , "local lbl = require('scripts.ui.label');"
-                , "local rows = il.getRows(cip.state.listId);"
+                , "local rows = il.getRows(L().listId);"
                 , "local names = {};"
                 , "for i, rw in ipairs(rows) do names[i] = rw.item.defName end;"
                 , "local out = {accepted = accepted, open = cip.isOpen(),"
-                , "  kind = cip.state.kind, id = cip.state.id,"
-                , "  title = lbl.getText(cip.state.titleId),"
-                , "  subtitle = lbl.getText(cip.state.subtitleId),"
-                , "  rowCount = #rows, tabCount = #il.getTabs(cip.state.listId),"
+                , "  kind = L().src.endpointKind, id = L().src.id,"
+                , "  title = lbl.getText(L().titleId),"
+                , "  subtitle = lbl.getText(L().subtitleId),"
+                , "  rowCount = #rows, tabCount = #il.getTabs(L().listId),"
                 , "  rowNames = names,"
                 , "  rightClick = (rows[1] ~= nil and rows[1].hitId ~= nil"
                 , "      and il.handleCallback('onItemListRightClick', rows[1].hitId)"
@@ -2347,18 +2383,23 @@ spec = aroundAll withSharedFixture $ do
                 , "      category='Food', weight=0.5 } } } end;"
                 , "local pg = UI.newPage('cargo_ep_unit', 'overlay');"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
                 , "local accepted = cip.openFor('unit', 5, 300, 300);"
                 , "local il = require('scripts.ui.item_list');"
                 , "local lbl = require('scripts.ui.label');"
-                , "local rows = il.getRows(cip.state.listId);"
+                , "local rows = il.getRows(L().listId);"
                 , "local names = {};"
                 , "for i, rw in ipairs(rows) do names[i] = rw.item.defName end;"
                 , "local out = {accepted = accepted, open = cip.isOpen(),"
-                , "  kind = cip.state.kind, id = cip.state.id,"
-                , "  title = lbl.getText(cip.state.titleId),"
-                , "  subtitle = lbl.getText(cip.state.subtitleId),"
-                , "  rowCount = #rows, tabCount = #il.getTabs(cip.state.listId),"
+                , "  kind = L().src.endpointKind, id = L().src.id,"
+                , "  title = lbl.getText(L().titleId),"
+                , "  subtitle = lbl.getText(L().subtitleId),"
+                , "  rowCount = #rows, tabCount = #il.getTabs(L().listId),"
                 , "  rowNames = names,"
                 , "  rightClick = (rows[1] ~= nil and rows[1].hitId ~= nil"
                 , "      and il.handleCallback('onItemListRightClick', rows[1].hitId)"
@@ -2395,12 +2436,17 @@ spec = aroundAll withSharedFixture $ do
                 , "    { defName='i1', category='Cat1' } } } end;"
                 , "local pg = UI.newPage('cargo_ep_unknown', 'overlay');"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
                 , "cip.openFor('building', 3, 200, 200);"
                 , "local accepted = cip.openFor('item_container', 9, 300, 300);"
                 , "local out = {accepted = accepted, open = cip.isOpen(),"
-                , "  survivorKind = cip.state.kind, survivorId = cip.state.id,"
-                , "  panelId = cip.state.panelId, listId = cip.state.listId};"
+                , "  survivorKind = L().src.endpointKind, survivorId = L().src.id,"
+                , "  panelId = L().panelId, listId = L().listId};"
                 , "cip.closeIfOpen();"
                 , "building.getContainerKnowledge = origK;"
                 , "return out"
@@ -2426,11 +2472,16 @@ spec = aroundAll withSharedFixture $ do
                 , "    capacity = 0.5, storedWeight = 0.0, contents = {} } end;"
                 , "local pg = UI.newPage('cargo_ep_wildlife', 'overlay');"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
                 , "local accepted = cip.openFor('unit', 77, 300, 300);"
                 , "local out = {accepted = accepted, open = cip.isOpen(),"
-                , "  survivorKind = cip.state.kind, survivorId = cip.state.id,"
-                , "  panelId = cip.state.panelId, listId = cip.state.listId};"
+                , "  survivorKind = L().src.endpointKind, survivorId = L().src.id,"
+                , "  panelId = L().panelId, listId = L().listId};"
                 , "unit.transferEndpointInfo = origEp;"
                 , "return out"
                 ]
@@ -2455,22 +2506,27 @@ spec = aroundAll withSharedFixture $ do
                 , "    { defName='i2', category='Cat2', weight=1.0 } } } end;"
                 , "local pg = UI.newPage('cargo_ep_tabs', 'overlay');"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
                 , "cip.openFor('unit', 5, 300, 300);"
                 , "local il = require('scripts.ui.item_list');"
                 , "local targetBox = nil;"
-                , "for _, t in ipairs(il.getTabs(cip.state.listId)) do"
+                , "for _, t in ipairs(il.getTabs(L().listId)) do"
                 , "    if t.key == 'Cat2' then targetBox = t.boxId end"
                 , "end;"
                 , "require('scripts.ui.tabbar').handleCallback('onTabClick', targetBox);"
-                , "local afterClick = cip.state.activeTab;"
+                , "local afterClick = L().activeTab;"
                 -- The resize path: same endpoint, same tab.
                 , "cip.reopenWithTab('unit', 5, 300, 300, afterClick);"
-                , "local afterReopen = cip.state.activeTab;"
-                , "local kindAfter, idAfter = cip.state.kind, cip.state.id;"
+                , "local afterReopen = L().activeTab;"
+                , "local kindAfter, idAfter = L().src.endpointKind, L().src.id;"
                 -- A genuine fresh open starts back at All.
                 , "cip.openFor('unit', 5, 300, 300);"
-                , "local afterFresh = cip.state.activeTab;"
+                , "local afterFresh = L().activeTab;"
                 , "cip.closeIfOpen();"
                 , "unit.transferEndpointInfo = origEp;"
                 , "return {tabAfterClick = afterClick, tabAfterReopen = afterReopen,"
@@ -2504,24 +2560,29 @@ spec = aroundAll withSharedFixture $ do
                 , "} } end;"
                 , "local pg = UI.newPage('cargo_reject_reopen', 'overlay');"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
                 , "cip.openFor('building', 3, 200, 200);"
                 , "local il = require('scripts.ui.item_list');"
                 , "local targetBox = nil;"
-                , "for _, t in ipairs(il.getTabs(cip.state.listId)) do"
+                , "for _, t in ipairs(il.getTabs(L().listId)) do"
                 , "    if t.key == 'Cat2' then targetBox = t.boxId end"
                 , "end;"
                 , "require('scripts.ui.tabbar').handleCallback('onTabClick', targetBox);"
-                , "local tabBefore = cip.state.activeTab;"
-                , "local rowsBefore = #il.getRows(cip.state.listId);"
+                , "local tabBefore = L().activeTab;"
+                , "local rowsBefore = #il.getRows(L().listId);"
                 -- Ask for a DIFFERENT, genuinely valid tab so the only
                 -- thing stopping it is the refusal itself.
                 , "local accepted ="
                 , "    cip.reopenWithTab('item_container', 9, 400, 400, 'Cat1');"
-                , "local out = {accepted = accepted, kind = cip.state.kind,"
-                , "  id = cip.state.id, tabBefore = tabBefore,"
-                , "  tabAfter = cip.state.activeTab, rowsBefore = rowsBefore,"
-                , "  rowsAfter = #il.getRows(cip.state.listId)};"
+                , "local out = {accepted = accepted, kind = L().src.endpointKind,"
+                , "  id = L().src.id, tabBefore = tabBefore,"
+                , "  tabAfter = L().activeTab, rowsBefore = rowsBefore,"
+                , "  rowsAfter = #il.getRows(L().listId)};"
                 , "cip.closeIfOpen();"
                 , "building.getContainerKnowledge = origK;"
                 , "return out"
@@ -2584,6 +2645,11 @@ spec = aroundAll withSharedFixture $ do
                 , "cm.show = function(items) captured = items end;"
                 , "local pg = UI.newPage('cargo_ctx_route', 'overlay');"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
                 , "local claimed ="
                 , "    require('scripts.init_context_menu').tryBuildingMenu(10, 10);"
@@ -2594,9 +2660,9 @@ spec = aroundAll withSharedFixture $ do
                 , "local fired = false;"
                 , "if row and row.callback then row.callback(); fired = true end;"
                 , "local out = {accepted = (claimed == true and fired),"
-                , "  open = cip.isOpen(), survivorKind = cip.state.kind,"
-                , "  survivorId = cip.state.id, panelId = cip.state.panelId,"
-                , "  listId = cip.state.listId};"
+                , "  open = cip.isOpen(), survivorKind = L().src.endpointKind,"
+                , "  survivorId = L().src.id, panelId = L().panelId,"
+                , "  listId = L().listId};"
                 , "cip.closeIfOpen(); cm.show = origShow;"
                 , "package.loaded['scripts.transfer_session'] = origSession;"
                 , "building.hitTestAt = origHit; building.getActivity = origAct;"
@@ -2629,6 +2695,11 @@ spec = aroundAll withSharedFixture $ do
                 , "    { defName='i1', category='Cat1', weight=1.0 } } } end;"
                 , "local pg = UI.newPage('cargo_ep_lifecycle', 'overlay');"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1});"
                 , "cip.openFor('unit', 5, 300, 300);"
                 , "local openBefore = cip.isOpen();"
@@ -2637,8 +2708,8 @@ spec = aroundAll withSharedFixture $ do
                 , "_G.__epEligible = false;"
                 , "cip.update(0.1);"
                 , "local out = {accepted = openBefore, open = cip.isOpen(),"
-                , "  panelId = cip.state.panelId, listId = cip.state.listId,"
-                , "  survivorKind = cip.state.kind, survivorId = cip.state.id};"
+                , "  panelId = L().panelId, listId = L().listId,"
+                , "  survivorKind = L().src.endpointKind, survivorId = L().src.id};"
                 , "unit.transferEndpointInfo = origEp;"
                 , "if not openAfterTick then out.accepted = false end;"
                 , "return out"
@@ -2653,12 +2724,19 @@ spec = aroundAll withSharedFixture $ do
                     erpListId p `shouldBe` Nothing
                     erpSurvivorKind p `shouldBe` Nothing
 
-        it "item_contents_panel: rows expose NO right-click action, and an empty container still renders its empty state (#1088)" $ \(env, ls) → do
+        it "item_contents_panel: an item level offers NO transfer action -- a plain row routes to no menu at all, while a CONTAINER row opens the next level -- and an empty container still renders its empty state (#1088/#1238)" $ \(env, ls) → do
             resetFixture env ls
-            -- #1088 requirement 8: a missing right-click callback must
-            -- create no right-click action and no fake blocking
-            -- surface -- while the transparent per-row tooltip host
-            -- itself stays (hover hit-testing is purely geometric).
+            -- #1088 requirement 8 said a missing right-click callback
+            -- must create no right-click action at all, and before
+            -- #1238 this level supplied none. It does now: an
+            -- item-container row has to be able to open the next level,
+            -- which is INSPECTION rather than transfer. So the contract
+            -- this pins is the one that replaced it -- the level still
+            -- offers no transfer operation, and a row with nothing to
+            -- offer routes to no menu (`routed` false) rather than
+            -- opening an empty one. The widget's own "no callback, no
+            -- surface" rule is unchanged and is covered by
+            -- "Item list widget".
             r ← evalJSON ls $ luaLines
                 [ "local orig = unit.getItemContents;"
                 , "local origInv = unit.getInventory;"
@@ -2669,19 +2747,46 @@ spec = aroundAll withSharedFixture $ do
                 , "} end;"
                 , "local pg = UI.newPage('item_contents_page_a', 'overlay'); UI.showPage(pg);"
                 , "local icp = require('scripts.item_contents_panel');"
-                , "icp.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1, menuFont = 1});"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
+                , "cip.setup({page = pg, fbW = 1920, fbH = 1080, boxTexSet = 1, menuFont = 1});"
                 , "icp.openFor(3, 'first_aid_kit', 100, 100);"
                 , "local il = require('scripts.ui.item_list');"
-                , "local rows = il.getRows(icp.state.listId);"
+                , "local rows = il.getRows(L().listId);"
                 , "local info = UI.getElementInfo(rows[1].hitId);"
                 , "local routed = il.handleCallback('onItemListRightClick', rows[1].hitId);"
+                , "local depthPlain = cip.depth();"
+                -- A CONTAINER row instead: right-clicking it offers the
+                -- inspection entry, and firing that entry pushes a
+                -- level.
+                , "unit.getItemContents = function(_, _, _, path)"
+                , "    if path and #path > 0 then return {"
+                , "        { defName='wrench', displayName='Wrench', count=1,"
+                , "          weight=0.4, condition=100 } } end;"
+                , "    return { { defName='toolbox', displayName='Toolbox',"
+                , "               kind='container', instanceId=77, count=1,"
+                , "               weight=2.0, condition=100 } } end;"
+                , "icp.openFor(3, 'first_aid_kit', 100, 100);"
+                , "local crows = il.getRows(L().listId);"
+                , "_G.__menu = nil;"
+                , "local cm = require('scripts.ui.context_menu');"
+                , "local origShow = cm.show;"
+                , "cm.show = function(items) _G.__menu = items end;"
+                , "local routedContainer ="
+                , "    il.handleCallback('onItemListRightClick', crows[1].hitId);"
+                , "local entry = _G.__menu and _G.__menu[#_G.__menu] or nil;"
+                , "if entry and entry.callback then entry.callback() end;"
+                , "cm.show = origShow;"
+                , "local depthNested = cip.depth();"
+                , "local nestedRow = (cip.getLevel(2) and"
+                , "    #il.getRows(cip.getLevel(2).listId)) or 0;"
                 , "icp.closeIfOpen();"
                 , "unit.getItemContents = function() return {} end;"
                 , "local pg2 = UI.newPage('item_contents_page_b', 'overlay'); UI.showPage(pg2);"
-                , "icp.setup({page = pg2, fbW = 1920, fbH = 1080, boxTexSet = 1, menuFont = 1});"
+                , "cip.setup({page = pg2, fbW = 1920, fbH = 1080, boxTexSet = 1, menuFont = 1});"
                 , "icp.openFor(3, 'first_aid_kit', 100, 100);"
                 , "local emptyOpen = icp.isOpen();"
-                , "local emptyRows = #il.getRows(icp.state.listId);"
+                , "local emptyRows = #il.getRows(L().listId);"
                 , "local hasEmptyLabel = false;"
                 , "for _, e in ipairs(UI.getVisibleElements()) do"
                 , "    if e.name == 'item_contents_empty_text'"
@@ -2691,15 +2796,29 @@ spec = aroundAll withSharedFixture $ do
                 , "unit.getItemContents = orig; unit.getInventory = origInv;"
                 , "return {rowCount = #rows, interactive = info.interactive,"
                 , "        routed = routed, emptyOpen = emptyOpen,"
-                , "        emptyRows = emptyRows, hasEmptyLabel = hasEmptyLabel}"
+                , "        emptyRows = emptyRows, hasEmptyLabel = hasEmptyLabel,"
+                , "        depthPlain = depthPlain, routedContainer = routedContainer,"
+                , "        menuLabel = entry and entry.label or '',"
+                , "        depthNested = depthNested, nestedRow = nestedRow}"
                 ]
             case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ItemContentsMigrationProbe of
                 Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
                 Just p → do
                     icmpRowCount p `shouldBe` 1
-                    -- No onClick and no onRightClick registered at all.
-                    icmpInteractive p `shouldBe` False
+                    -- The level routes right-clicks, so the row IS an
+                    -- interactive surface (#1238) ...
+                    icmpInteractive p `shouldBe` True
+                    -- ... but a bandage is not a container and this
+                    -- level has no transfer action, so nothing opens.
                     icmpRouted p `shouldBe` False
+                    icmpDepthPlain p `shouldBe` 1
+                    -- A container row offers exactly the inspection
+                    -- entry, and firing it pushes a level rendering the
+                    -- nested contents.
+                    icmpRoutedContainer p `shouldBe` True
+                    icmpMenuLabel p `shouldBe` "Contents"
+                    icmpDepthNested p `shouldBe` 2
+                    icmpNestedRow p `shouldBe` 1
                     icmpEmptyOpen p `shouldBe` True
                     icmpEmptyRows p `shouldBe` 0
                     icmpHasEmptyLabel p `shouldBe` True
@@ -2786,11 +2905,13 @@ spec = aroundAll withSharedFixture $ do
                 , "unit.getItemContents = function() return {} end;"
                 , "local pg = UI.newPage('item_contents_test_page', 'overlay');"
                 , "local icp = require('scripts.item_contents_panel');"
-                , "icp.setup({page = pg, fbW = 800, fbH = 2160, boxTexSet = 1});"
+                , "local cip = require('scripts.cargo_inventory_panel');"
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
+                , "cip.setup({page = pg, fbW = 800, fbH = 2160, boxTexSet = 1});"
                 , "icp.openFor(1, 'some_container', 400, 400, nil);"
                 , "local p = require('scripts.ui.panel');"
-                , "local x, y = p.getPosition(icp.state.panelId);"
-                , "local pw, ph = p.getSize(icp.state.panelId);"
+                , "local x, y = p.getPosition(L().panelId);"
+                , "local pw, ph = p.getSize(L().panelId);"
                 , "unit.getItemContents = orig;"
                 , "return {w=pw,"
                 , "        inFrame=(x>=0 and y>=0 and (x+pw)<=800 and (y+ph)<=2160)}"
@@ -2834,12 +2955,17 @@ spec = aroundAll withSharedFixture $ do
                 , "local pg = UI.newPage('cargo_k_unknown', 'overlay');"
                 , "UI.showPage(pg);"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "cip.setup({page = pg, fbW = 1920, fbH = 1080,"
                 , "           boxTexSet = 1, menuFont = 1});"
                 , "local accepted = cip.openFor('building', 11, 300, 300);"
                 , "local il = require('scripts.ui.item_list');"
                 , "local lbl = require('scripts.ui.label');"
-                , "local rows = il.getRows(cip.state.listId);"
+                , "local rows = il.getRows(L().listId);"
                 , "local names = {};"
                 , "for i, rw in ipairs(rows) do names[i] = rw.item.defName end;"
                 , "local et = nil;"
@@ -2847,8 +2973,8 @@ spec = aroundAll withSharedFixture $ do
                 , "    if e.name == 'cargo_inv_empty_text' then et = e.text end"
                 , "end;"
                 , "local out = {accepted = accepted,"
-                , "  subtitle = lbl.getText(cip.state.subtitleId),"
-                , "  age = cip.state.ageId and lbl.getText(cip.state.ageId) or nil,"
+                , "  subtitle = lbl.getText(L().subtitleId),"
+                , "  age = L().ageId and lbl.getText(L().ageId) or nil,"
                 , "  emptyText = et, rowCount = #rows,"
                 , "  rowNames = table.concat(names, ',')};"
                 , "cip.closeIfOpen();"
@@ -2894,19 +3020,24 @@ spec = aroundAll withSharedFixture $ do
                 , "local pg = UI.newPage('cargo_k_empty', 'overlay');"
                 , "UI.showPage(pg);"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "cip.setup({page = pg, fbW = 1920, fbH = 1080,"
                 , "           boxTexSet = 1, menuFont = 1});"
                 , "local accepted = cip.openFor('building', 12, 300, 300);"
                 , "local il = require('scripts.ui.item_list');"
                 , "local lbl = require('scripts.ui.label');"
-                , "local rows = il.getRows(cip.state.listId);"
+                , "local rows = il.getRows(L().listId);"
                 , "local et = nil;"
                 , "for _, e in ipairs(UI.getVisibleElements()) do"
                 , "    if e.name == 'cargo_inv_empty_text' then et = e.text end"
                 , "end;"
                 , "local out = {accepted = accepted,"
-                , "  subtitle = lbl.getText(cip.state.subtitleId),"
-                , "  age = cip.state.ageId and lbl.getText(cip.state.ageId) or nil,"
+                , "  subtitle = lbl.getText(L().subtitleId),"
+                , "  age = L().ageId and lbl.getText(L().ageId) or nil,"
                 , "  emptyText = et, rowCount = #rows, rowNames = ''};"
                 , "cip.closeIfOpen();"
                 , "building.getContainerKnowledge = origK;"
@@ -2956,12 +3087,17 @@ spec = aroundAll withSharedFixture $ do
                 , "local pg = UI.newPage('cargo_k_known', 'overlay');"
                 , "UI.showPage(pg);"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "cip.setup({page = pg, fbW = 1920, fbH = 1080,"
                 , "           boxTexSet = 1, menuFont = 1});"
                 , "local accepted = cip.openFor('building', 13, 300, 300);"
                 , "local il = require('scripts.ui.item_list');"
                 , "local lbl = require('scripts.ui.label');"
-                , "local rows = il.getRows(cip.state.listId);"
+                , "local rows = il.getRows(L().listId);"
                 , "local names = {};"
                 , "for i, rw in ipairs(rows) do names[i] = rw.item.defName end;"
                 , "table.sort(names);"
@@ -2970,8 +3106,8 @@ spec = aroundAll withSharedFixture $ do
                 , "    if e.name == 'cargo_inv_empty_text' then et = e.text end"
                 , "end;"
                 , "local out = {accepted = accepted,"
-                , "  subtitle = lbl.getText(cip.state.subtitleId),"
-                , "  age = cip.state.ageId and lbl.getText(cip.state.ageId) or nil,"
+                , "  subtitle = lbl.getText(L().subtitleId),"
+                , "  age = L().ageId and lbl.getText(L().ageId) or nil,"
                 , "  emptyText = et, rowCount = #rows,"
                 , "  rowNames = table.concat(names, ',')};"
                 , "cip.closeIfOpen();"
@@ -3021,17 +3157,22 @@ spec = aroundAll withSharedFixture $ do
                 , "local pg = UI.newPage('cargo_k_age', 'overlay');"
                 , "UI.showPage(pg);"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "cip.setup({page = pg, fbW = 1920, fbH = 1080,"
                 , "           boxTexSet = 1, menuFont = 1});"
                 , "cip.openFor('building', 14, 300, 300);"
                 , "local lbl = require('scripts.ui.label');"
-                , "local listBefore = cip.state.listId;"
-                , "local before = lbl.getText(cip.state.ageId);"
+                , "local listBefore = L().listId;"
+                , "local before = lbl.getText(L().ageId);"
                 , "_G.__now = 3700.0;"
                 , "cip.update(0.1);"
-                , "local after = lbl.getText(cip.state.ageId);"
+                , "local after = lbl.getText(L().ageId);"
                 , "local out = {before = before, after = after,"
-                , "  sameList = (cip.state.listId == listBefore)};"
+                , "  sameList = (L().listId == listBefore)};"
                 , "cip.closeIfOpen();"
                 , "building.getContainerKnowledge = origK;"
                 , "building.getInfo = origInfo; engine.gameTime = origGT;"
@@ -3066,18 +3207,27 @@ spec = aroundAll withSharedFixture $ do
                 , "local pg = UI.newPage('cargo_k_noreveal', 'overlay');"
                 , "UI.showPage(pg);"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "cip.setup({page = pg, fbW = 1920, fbH = 1080,"
                 , "           boxTexSet = 1, menuFont = 1});"
+                , "local il0 = require('scripts.ui.item_list');"
                 , "local accepted = cip.openFor('building', 15, 300, 300);"
                 , "cip.update(0.1); cip.update(0.1); cip.update(0.1);"
-                , "cip.onTabChange('All');"
+                , "local tb = require('scripts.ui.tabbar');"
+                , "for _, t in ipairs(il0.getTabs(L().listId)) do"
+                , "    if t.key == 'All' then tb.handleCallback('onTabClick', t.boxId) end"
+                , "end;"
                 , "cip.reopenWithTab('building', 15, 300, 300, 'All');"
                 , "local lbl = require('scripts.ui.label');"
                 , "local il = require('scripts.ui.item_list');"
                 , "local out = {accepted = accepted,"
-                , "  subtitle = lbl.getText(cip.state.subtitleId),"
-                , "  age = cip.state.ageId and lbl.getText(cip.state.ageId) or nil,"
-                , "  rowCount = #il.getRows(cip.state.listId), rowNames = '',"
+                , "  subtitle = lbl.getText(L().subtitleId),"
+                , "  age = L().ageId and lbl.getText(L().ageId) or nil,"
+                , "  rowCount = #il.getRows(L().listId), rowNames = '',"
                 , "  reveals = _G.__reveals};"
                 , "cip.closeIfOpen();"
                 , "building.getContainerKnowledge = origK;"
@@ -3120,30 +3270,35 @@ spec = aroundAll withSharedFixture $ do
                 , "local pg = UI.newPage('cargo_k_refresh', 'overlay');"
                 , "UI.showPage(pg);"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "cip.setup({page = pg, fbW = 1920, fbH = 1080,"
                 , "           boxTexSet = 1, menuFont = 1});"
                 , "cip.openFor('building', 16, 300, 300);"
                 , "local il = require('scripts.ui.item_list');"
                 , "local lbl = require('scripts.ui.label');"
-                , "local beforeSubtitle = lbl.getText(cip.state.subtitleId);"
-                , "local beforeRows = #il.getRows(cip.state.listId);"
-                , "local beforeAge = cip.state.ageId"
-                , "                    and lbl.getText(cip.state.ageId) or nil;"
+                , "local beforeSubtitle = lbl.getText(L().subtitleId);"
+                , "local beforeRows = #il.getRows(L().listId);"
+                , "local beforeAge = L().ageId"
+                , "                    and lbl.getText(L().ageId) or nil;"
                 -- The engine's own post-commit replacement.
                 , "_G.__record = { state='known', storedWeight=2.0,"
                 , "  capacity=400.0, revealedAt=597.0, items = {"
                 , "  { defName='steel_bar', category='Materials',"
                 , "    weight=2.0 } } };"
                 , "cip.update(0.1);"
-                , "local rows = il.getRows(cip.state.listId);"
+                , "local rows = il.getRows(L().listId);"
                 , "local names = {};"
                 , "for i, rw in ipairs(rows) do names[i] = rw.item.defName end;"
                 , "local out = {beforeSubtitle = beforeSubtitle,"
                 , "  beforeRows = beforeRows, beforeAge = beforeAge,"
-                , "  afterSubtitle = lbl.getText(cip.state.subtitleId),"
+                , "  afterSubtitle = lbl.getText(L().subtitleId),"
                 , "  afterRows = #rows,"
-                , "  afterAge = cip.state.ageId"
-                , "               and lbl.getText(cip.state.ageId) or nil,"
+                , "  afterAge = L().ageId"
+                , "               and lbl.getText(L().ageId) or nil,"
                 , "  afterNames = table.concat(names, ','),"
                 , "  reveals = _G.__reveals};"
                 , "cip.closeIfOpen();"
@@ -3188,13 +3343,18 @@ spec = aroundAll withSharedFixture $ do
                 , "local pg = UI.newPage('cargo_k_unit', 'overlay');"
                 , "UI.showPage(pg);"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "cip.setup({page = pg, fbW = 1920, fbH = 1080,"
                 , "           boxTexSet = 1, menuFont = 1});"
                 , "local accepted = cip.openFor('unit', 5, 300, 300);"
                 , "cip.update(0.1);"
                 , "local il = require('scripts.ui.item_list');"
                 , "local lbl = require('scripts.ui.label');"
-                , "local rows = il.getRows(cip.state.listId);"
+                , "local rows = il.getRows(L().listId);"
                 , "local names = {};"
                 , "for i, rw in ipairs(rows) do names[i] = rw.item.defName end;"
                 , "local et = nil;"
@@ -3202,8 +3362,8 @@ spec = aroundAll withSharedFixture $ do
                 , "    if e.name == 'cargo_inv_empty_text' then et = e.text end"
                 , "end;"
                 , "local out = {accepted = accepted,"
-                , "  subtitle = lbl.getText(cip.state.subtitleId),"
-                , "  age = cip.state.ageId and lbl.getText(cip.state.ageId) or nil,"
+                , "  subtitle = lbl.getText(L().subtitleId),"
+                , "  age = L().ageId and lbl.getText(L().ageId) or nil,"
                 , "  emptyText = et, rowCount = #rows,"
                 , "  rowNames = table.concat(names, ','),"
                 , "  reveals = _G.__kreads};"
@@ -3251,6 +3411,11 @@ spec = aroundAll withSharedFixture $ do
                 , "    { defName='steel_bar', category='Materials',"
                 , "      weight=2.0 } } } end;"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "local il = require('scripts.ui.item_list');"
                 , "local lbl = require('scripts.ui.label');"
                 , "local out = {};"
@@ -3262,21 +3427,21 @@ spec = aroundAll withSharedFixture $ do
                 , "    cip.setup({page = pg, fbW = 1920, fbH = 2160,"
                 , "               boxTexSet = 1, menuFont = 1});"
                 , "    cip.openFor('building', 20 + i, 300, 300);"
-                , "    local hasAge = cip.state.ageId ~= nil;"
+                , "    local hasAge = L().ageId ~= nil;"
                 , "    local tb = UI.getElementInfo("
-                , "        lbl.getElementHandle(cip.state.titleId)).y;"
+                , "        lbl.getElementHandle(L().titleId)).y;"
                 , "    local sb = UI.getElementInfo("
-                , "        lbl.getElementHandle(cip.state.subtitleId)).y;"
-                , "    local _, sh = lbl.getSize(cip.state.subtitleId);"
+                , "        lbl.getElementHandle(L().subtitleId)).y;"
+                , "    local _, sh = lbl.getSize(L().subtitleId);"
                 , "    local ab, ah = 0, 0;"
                 , "    if hasAge then"
                 , "        ab = UI.getElementInfo("
-                , "            lbl.getElementHandle(cip.state.ageId)).y;"
-                , "        local _, hh = lbl.getSize(cip.state.ageId);"
+                , "            lbl.getElementHandle(L().ageId)).y;"
+                , "        local _, hh = lbl.getSize(L().ageId);"
                 , "        ah = hh;"
                 , "    end;"
                 , "    local tabTop = 1000000;"
-                , "    for _, t in ipairs(il.getTabs(cip.state.listId)) do"
+                , "    for _, t in ipairs(il.getTabs(L().listId)) do"
                 , "        local bi = UI.getElementInfo(t.boxId);"
                 , "        if bi and bi.y < tabTop then tabTop = bi.y end"
                 , "    end;"
@@ -3342,11 +3507,16 @@ spec = aroundAll withSharedFixture $ do
                 , "local pg = UI.newPage('cargo_k_menu', 'overlay');"
                 , "UI.showPage(pg);"
                 , "local cip = require('scripts.cargo_inventory_panel');"
+                -- #1238: the container window owns a STACK of levels;
+                -- `L(i)` is the nil-safe projection of one (default the
+                -- base), so a read after a close answers absent rather
+                -- than raising.
+                , "local L = function(i) return cip.getLevel(i or 1) or {src={}} end;"
                 , "cip.setup({page = pg, fbW = 1920, fbH = 1080,"
                 , "           boxTexSet = 1, menuFont = 1});"
                 , "cip.openFor('building', 17, 300, 300);"
                 , "local il = require('scripts.ui.item_list');"
-                , "local rows = il.getRows(cip.state.listId);"
+                , "local rows = il.getRows(L().listId);"
                 , "il.handleCallback('onItemListRightClick', rows[1].hitId);"
                 , "local row = captured and captured[1] or nil;"
                 , "if row and row.callback then row.callback() end;"
@@ -4707,12 +4877,18 @@ instance FromJSON CargoMigrationProbe where
 data ItemContentsMigrationProbe = ItemContentsMigrationProbe
     { icmpRowCount ∷ Int, icmpInteractive ∷ Bool, icmpRouted ∷ Bool
     , icmpEmptyOpen ∷ Bool, icmpEmptyRows ∷ Int
-    , icmpHasEmptyLabel ∷ Bool } deriving Show
+    , icmpHasEmptyLabel ∷ Bool
+    , icmpDepthPlain ∷ Int, icmpRoutedContainer ∷ Bool
+    , icmpMenuLabel ∷ Text, icmpDepthNested ∷ Int
+    , icmpNestedRow ∷ Int } deriving Show
 instance FromJSON ItemContentsMigrationProbe where
     parseJSON = withObject "ItemContentsMigrationProbe" $ \o →
         ItemContentsMigrationProbe <$> o .: "rowCount" <*> o .: "interactive"
                                    <*> o .: "routed" <*> o .: "emptyOpen"
                                    <*> o .: "emptyRows" <*> o .: "hasEmptyLabel"
+                                   <*> o .: "depthPlain" <*> o .: "routedContainer"
+                                   <*> o .: "menuLabel" <*> o .: "depthNested"
+                                   <*> o .: "nestedRow"
 
 data InvTabMigrationProbe = InvTabMigrationProbe
     { itmpTabRows ∷ Int, itmpHasFrame ∷ Bool

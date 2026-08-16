@@ -716,6 +716,167 @@ spec = after drainLuaToEngineQueue $ describe "Item list widget" $ do
 
     -- * Invalidation
 
+    -- #1238: the widget gained a scroll offset because the container
+    -- window's nesting levels have to be reachable past their row cap
+    -- AND have to restore where each level was after a resize. The
+    -- CLAMP lives here rather than in a host: only the widget knows the
+    -- visible capacity.
+    describe "scroll offset" $ do
+        it "renders the offset window of the filtered list, and reports \
+           \which DATA rows the visible slots are showing" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls setupLua
+            r ← evalDebug ls $ luaLines
+                [ "local il = require('scripts.ui.item_list');"
+                , "local pg = UI.newPage('il_scroll_window', 'overlay');"
+                , "UI.showPage(pg);"
+                , "local items = {};"
+                , "for i = 1, 12 do items[i] = {defName='d'..i,"
+                , "  displayName='D'..i, weight=1} end;"
+                , "local p = baseParams(pg, items); p.maxRows = 4;"
+                , "local id = il.new(p);"
+                , "local function shown()"
+                , "  local names, data = {}, {};"
+                , "  for i, row in ipairs(il.getRows(id)) do"
+                , "    names[i] = row.item.defName; data[i] = row.dataIndex end;"
+                , "  return table.concat(names, ',') .. '/' .. table.concat(data, ',') end;"
+                , "local first = shown();"
+                , "local applied = il.setScrollOffset(id, 5);"
+                , "local scrolled = shown();"
+                , "local dumped = 0;"
+                , "for _, d in ipairs(il.dump()) do"
+                , "  if d.label == 'D6' then dumped = d.dataIndex end end;"
+                , "il.destroy(id);"
+                , "return {first = first, scrolled = scrolled,"
+                , "        applied = applied, dumped = dumped,"
+                , "        capacity = 4, maxOffset = 8}"
+                ]
+            p ← decodeOr r ∷ IO ScrollWindowProbe
+            swFirst p `shouldBe` "d1,d2,d3,d4/1,2,3,4"
+            swApplied p `shouldBe` 5
+            swScrolled p `shouldBe` "d6,d7,d8,d9/6,7,8,9"
+            -- The introspection surface a probe locates a scrolled row
+            -- through carries the same data index.
+            swDumped p `shouldBe` 6
+
+        it "clamps every offset to the rows that exist: negative and \
+           \past-the-end both land in range, a list that fits scrolls \
+           \nowhere, and shrinking the contents re-clamps a restored \
+           \offset instead of leaving a blank window" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls setupLua
+            r ← evalDebug ls $ luaLines
+                [ "local il = require('scripts.ui.item_list');"
+                , "local pg = UI.newPage('il_scroll_clamp', 'overlay');"
+                , "UI.showPage(pg);"
+                , "local function mk(n, cap, offset)"
+                , "  local items = {};"
+                , "  for i = 1, n do items[i] = {defName='d'..i,"
+                , "    displayName='D'..i, weight=1} end;"
+                , "  local p = baseParams(pg, items); p.maxRows = cap;"
+                , "  p.scrollOffset = offset; return il.new(p) end;"
+                , "local id = mk(12, 4, 0);"
+                , "local low = il.setScrollOffset(id, -7);"
+                , "local high = il.setScrollOffset(id, 999);"
+                , "local maxOff = il.maxScrollOffset(id);"
+                , "local cap = il.rowCapacity(id);"
+                , "local byStep = il.scrollBy(id, -3);"
+                , "il.destroy(id);"
+                , "local fits = mk(3, 10, 0);"
+                , "local fitsOffset = il.setScrollOffset(fits, 5);"
+                , "local fitsMax = il.maxScrollOffset(fits);"
+                , "il.destroy(fits);"
+                -- A level restored against SHRUNKEN contents asks for an
+                -- offset that no longer exists.
+                , "local shrunk = mk(6, 4, 9);"
+                , "local shrunkOffset = il.getScrollOffset(shrunk);"
+                , "local shrunkRows = #il.getRows(shrunk);"
+                , "il.destroy(shrunk);"
+                , "return {low = low, high = high, maxOff = maxOff, cap = cap,"
+                , "        byStep = byStep, fitsOffset = fitsOffset,"
+                , "        fitsMax = fitsMax, shrunkOffset = shrunkOffset,"
+                , "        shrunkRows = shrunkRows}"
+                ]
+            p ← decodeOr r ∷ IO ScrollClampProbe
+            scLow p `shouldBe` 0
+            scHigh p `shouldBe` 8
+            scMaxOff p `shouldBe` 8
+            scCap p `shouldBe` 4
+            scByStep p `shouldBe` 5
+            -- Nothing to scroll: the request is clamped to zero rather
+            -- than blanking the list.
+            scFitsOffset p `shouldBe` 0
+            scFitsMax p `shouldBe` 0
+            -- Six rows, four visible: the furthest the list can go is 2,
+            -- and it still renders a FULL window.
+            scShrunkOffset p `shouldBe` 2
+            scShrunkRows p `shouldBe` 4
+
+        it "row SELECTION follows the offset: a right-click on a visible \
+           \slot delivers the data row under it, not the slot's index \
+           \into the unscrolled list" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls setupLua
+            r ← evalDebug ls $ luaLines
+                [ "local il = require('scripts.ui.item_list');"
+                , "local pg = UI.newPage('il_scroll_select', 'overlay');"
+                , "UI.showPage(pg);"
+                , "_G.__seen = nil;"
+                , "local items = {};"
+                , "for i = 1, 12 do items[i] = {defName='d'..i,"
+                , "  displayName='D'..i, instanceId = 100+i, weight=1} end;"
+                , "local p = baseParams(pg, items); p.maxRows = 4;"
+                , "p.onRowRightClick = function(item)"
+                , "  _G.__seen = item.defName .. ':' .. tostring(item.instanceId);"
+                , "  return true end;"
+                , "local id = il.new(p);"
+                , "il.handleCallback('onItemListRightClick', il.getRows(id)[2].hitId);"
+                , "local before = _G.__seen;"
+                , "il.setScrollOffset(id, 5);"
+                , "il.handleCallback('onItemListRightClick', il.getRows(id)[2].hitId);"
+                , "local after = _G.__seen;"
+                , "il.destroy(id);"
+                , "return {before = before, after = after}"
+                ]
+            p ← decodeOr r ∷ IO ScrollSelectProbe
+            ssBefore p `shouldBe` "d2:102"
+            ssAfter p `shouldBe` "d7:107"
+
+        it "a tab change is a different list, so the offset does not \
+           \survive it: the widget re-clamps against the new filtered \
+           \rows rather than opening part-way down them" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls setupLua
+            r ← evalDebug ls $ luaLines
+                [ "local il = require('scripts.ui.item_list');"
+                , "local pg = UI.newPage('il_scroll_tab', 'overlay');"
+                , "UI.showPage(pg);"
+                , "local items = {};"
+                , "for i = 1, 10 do items[i] = {defName='a'..i,"
+                , "  displayName='A'..i, category='Alpha', weight=1} end;"
+                , "items[11] = {defName='b1', displayName='B1',"
+                , "             category='Beta', weight=1};"
+                , "local function build(tab, offset)"
+                , "  local p = baseParams(pg, items); p.maxRows = 4;"
+                , "  p.tabs = {mode='row'}; p.activeTab = tab;"
+                , "  p.scrollOffset = offset; return il.new(p) end;"
+                , "local wide = build('All', 6);"
+                , "local wideOffset = il.getScrollOffset(wide);"
+                , "il.destroy(wide);"
+                , "local narrow = build('Beta', 6);"
+                , "local narrowOffset = il.getScrollOffset(narrow);"
+                , "local narrowRows = #il.getRows(narrow);"
+                , "il.destroy(narrow);"
+                , "return {wideOffset = wideOffset, narrowOffset = narrowOffset,"
+                , "        narrowRows = narrowRows}"
+                ]
+            p ← decodeOr r ∷ IO ScrollTabProbe
+            stWideOffset p `shouldBe` 6
+            -- One Beta row: nothing to scroll past, so the requested
+            -- offset collapses rather than hiding the only row.
+            stNarrowOffset p `shouldBe` 0
+            stNarrowRows p `shouldBe` 1
+
     describe "rebuild invalidation" $ do
         it "unchanged normalized input recreates nothing; a changed presentation input rebuilds" $ \env → do
             ls ← newBareLuaBackend env
@@ -1391,3 +1552,36 @@ data TabClickProbe = TabClickProbe
 instance FromJSON TabClickProbe where
     parseJSON = withObject "TabClickProbe" $ \o →
         TabClickProbe <$> o .: "routed" <*> o .: "picked" <*> o .: "selected"
+
+data ScrollWindowProbe = ScrollWindowProbe
+    { swFirst ∷ Text, swScrolled ∷ Text, swApplied ∷ Int
+    , swDumped ∷ Int } deriving Show
+instance FromJSON ScrollWindowProbe where
+    parseJSON = withObject "ScrollWindowProbe" $ \o →
+        ScrollWindowProbe <$> o .: "first" <*> o .: "scrolled"
+                          <*> o .: "applied" <*> o .: "dumped"
+
+data ScrollClampProbe = ScrollClampProbe
+    { scLow ∷ Int, scHigh ∷ Int, scMaxOff ∷ Int, scCap ∷ Int
+    , scByStep ∷ Int, scFitsOffset ∷ Int, scFitsMax ∷ Int
+    , scShrunkOffset ∷ Int, scShrunkRows ∷ Int } deriving Show
+instance FromJSON ScrollClampProbe where
+    parseJSON = withObject "ScrollClampProbe" $ \o →
+        ScrollClampProbe <$> o .: "low" <*> o .: "high" <*> o .: "maxOff"
+                         <*> o .: "cap" <*> o .: "byStep" <*> o .: "fitsOffset"
+                         <*> o .: "fitsMax" <*> o .: "shrunkOffset"
+                         <*> o .: "shrunkRows"
+
+data ScrollSelectProbe = ScrollSelectProbe
+    { ssBefore ∷ Text, ssAfter ∷ Text } deriving Show
+instance FromJSON ScrollSelectProbe where
+    parseJSON = withObject "ScrollSelectProbe" $ \o →
+        ScrollSelectProbe <$> o .: "before" <*> o .: "after"
+
+data ScrollTabProbe = ScrollTabProbe
+    { stWideOffset ∷ Int, stNarrowOffset ∷ Int
+    , stNarrowRows ∷ Int } deriving Show
+instance FromJSON ScrollTabProbe where
+    parseJSON = withObject "ScrollTabProbe" $ \o →
+        ScrollTabProbe <$> o .: "wideOffset" <*> o .: "narrowOffset"
+                       <*> o .: "narrowRows"

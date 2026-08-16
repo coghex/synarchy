@@ -189,6 +189,16 @@ function uiManager.onUIScroll(elemHandle, dx, dy, shiftHeld)
             return
         end
     end
+    -- Container window (#1238): a level whose contents outgrow its row
+    -- cap scrolls under the wheel. Only the DEEPEST level captures the
+    -- wheel, so this reaches exactly one list however deep the stack is.
+    local containerWindow = package.loaded["scripts.cargo_inventory_panel"]
+    if containerWindow and containerWindow.isOpen
+       and containerWindow.isOpen() and containerWindow.onScroll then
+        if containerWindow.onScroll(elemHandle, dx, dy) then
+            return
+        end
+    end
     -- Planting screen (#335) crop-list scrollbar.
     local plantPanel = package.loaded["scripts.plant_panel"]
     if plantPanel and plantPanel.isOpen and plantPanel.isOpen()

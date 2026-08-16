@@ -209,7 +209,12 @@ function unitInfoV2.handleInvItemRightClick(item)
                     mx = mx * (fbW / ww)
                     my = my * (fbH / wh)
                 end
-                icp.openFor(uid, item.defName, mx, my, item.instanceId)
+                -- #1238: the display name comes from the clicked ROW.
+                -- An equipped container or an accessory is not in the
+                -- unit's loose inventory, so the level's own fallback
+                -- scan could not name one.
+                icp.openFor(uid, item.defName, mx, my, item.instanceId,
+                            item.displayName)
             end,
         }
     end

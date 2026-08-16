@@ -578,12 +578,21 @@ def main() -> int:
                             ".isOpen()").strip()
         check("activating 'Contents' opens the container window",
               opened == "true", f"got {opened!r}")
+        # #1238 made the window a STACK of nesting levels; an external
+        # request like this one targets the BASE level, so that is the
+        # level whose endpoint identity this reads back.
         target = send_json(port, "local s = require("
-                                 "'scripts.cargo_inventory_panel').state;"
-                                 " return {kind = s.kind, id = s.id}")
-        check("the container window opened on THIS building endpoint",
+                                 "'scripts.cargo_inventory_panel')"
+                                 ".getLevel(1) or {src={}};"
+                                 " return {kind = s.src.endpointKind,"
+                                 " id = s.src.id, depth ="
+                                 " require('scripts.cargo_inventory_panel')"
+                                 ".depth()}")
+        check("the container window opened on THIS building endpoint, at "
+              "the base level",
               isinstance(target, dict) and target.get("kind") == "building"
-              and target.get("id") == bid, f"got {target!r}")
+              and target.get("id") == bid and target.get("depth") == 1,
+              f"got {target!r}")
         send(port, "require('scripts.cargo_inventory_panel').closeIfOpen();"
                    " return 'ok'")
         time.sleep(0.3)

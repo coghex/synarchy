@@ -13,7 +13,8 @@
 -- records the designation.
 --
 -- Mounted on hud.world_page, same lifecycle as crafting_panel.lua /
--- cargo_inventory_panel.lua — registered in ui/view_teardown.lua so a
+-- cargo_inventory_panel.lua (the container window) — registered in
+-- ui/view_teardown.lua so a
 -- view transition can't leave it open-but-invisible.
 --
 -- Singleton via package.loaded (engine.loadScript uses dofile).

@@ -214,15 +214,26 @@ spec = do
             -- And the surviving form is decided in exactly one place.
             shared ← TIO.readFile "scripts/ui/text_wrap.lua"
             T.isInfixOf "local ELLIPSIS = \"..\"" shared `shouldBe` True
-        it "the three inventory hosts route through the shared item-list widget" $ do
+        it "the inventory hosts route through the shared item-list widget -- \
+           \including the item-contents LEVEL, whose rows the container \
+           \window renders through that same widget (#1238)" $ do
             sources ← mapM TIO.readFile
                 [ "scripts/unit_info_v2_inventory.lua"
-                , "scripts/item_contents_panel.lua"
                 , "scripts/cargo_inventory_panel.lua"
                 ]
             mapM_ (\src → T.isInfixOf "require(\"scripts.ui.item_list\")" src
                               `shouldBe` True)
                   sources
+            -- #1238 folded the item-contents popup into the container
+            -- window as a LEVEL. It supplies row-presentation policy and
+            -- owns no list instance, so it reaches the shared widget
+            -- through the manager instead of requiring it -- which is
+            -- still exactly one truncator for its rows, not a private
+            -- one.
+            level ← TIO.readFile "scripts/item_contents_panel.lua"
+            T.isInfixOf "require(\"scripts.ui.item_list\")" level `shouldBe` False
+            T.isInfixOf "itemList.new" level `shouldBe` False
+            T.isInfixOf "levelKinds" level `shouldBe` True
             widget ← TIO.readFile "scripts/ui/item_list.lua"
             T.isInfixOf "require(\"scripts.ui.text_wrap\")" widget `shouldBe` True
             T.isInfixOf "textWrap.truncateToWidth" widget `shouldBe` True
