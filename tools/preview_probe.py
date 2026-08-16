@@ -892,14 +892,21 @@ def check_units_asset_only(port: int) -> bool:
         dirs = [c.get("direction") for c in (pb.get("directions") or [])]
         ok_dirs = check("declared mirroring populates all eight cells",
                         dirs == GAME_DIRECTION_ORDER, dirs)
+        # `source`, not `sourceDirection`: a per-direction CELL reports
+        # its own authored source under `source`, while `sourceDirection`
+        # is the top-level playback field naming the ENLARGED cell's.
+        # This check read the top-level name off each cell and so
+        # compared three nils to three direction names — it could only
+        # ever fail (found by #1260, which first ran the probe against a
+        # tree where the units phase above passes).
         ok_mirrored = check("W/SW/NW are the mirrored cells, sourced from "
                             "their eastern counterparts",
-                            [c.get("sourceDirection")
+                            [c.get("source")
                              for c in (pb.get("directions") or [])
                              if c.get("mirrored")]
                             == ["south-east", "east", "north-east"],
                             [(c.get("direction"), c.get("mirrored"),
-                              c.get("sourceDirection"))
+                              c.get("source"))
                              for c in (pb.get("directions") or [])])
 
         root_prefix = os.path.join("assets", "textures", "units", unit) + os.sep
