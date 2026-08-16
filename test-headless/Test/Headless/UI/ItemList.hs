@@ -500,6 +500,93 @@ spec = after drainLuaToEngineQueue $ describe "Item list widget" $ do
             stBySelection p `shouldBe` True
             stForced p `shouldBe` True
 
+        -- #1269: the signature must cover every value SUPPLIED IN THE
+        -- ROW that the widget or one of its host callbacks can put on
+        -- screen -- not just the ones the widget renders itself. The
+        -- tooltip is baked into the hit element at rebuild time, so a
+        -- not-stale verdict keeps yesterday's tooltip text on screen.
+        -- Every mutation below is driven with the presentation key
+        -- held CONSTANT and a rowTooltip callback installed, which is
+        -- exactly the configuration the pre-#1269 signature accepted.
+        it "a change to any callback-consumed row field goes stale under a constant presentation key" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls setupLua
+            r ← evalDebug ls $ luaLines
+                [ "local il = require('scripts.ui.item_list');"
+                , "local pg = UI.newPage('il_rowfields', 'overlay');"
+                -- Rebuilt from scratch every call, exactly as the
+                -- engine reconstructs `weapon` and `buffs` on every
+                -- inventory read -- so nothing here can pass by
+                -- comparing table identities.
+                , "local function baseItems() return {{"
+                , "  defName='blade', displayName='Blade', weight=1,"
+                , "  instanceId=7, condition=100, currentFill=1,"
+                , "  make='forged', material='iron', capacity=2.5,"
+                , "  weapon = {bladeLength=30, baseSharpness=4,"
+                , "            stabEffectiveness=0.9, slashEffectiveness=0.8,"
+                , "            bluntEffectiveness=0.2},"
+                , "  buffs = {{stat='perception', amount=1, percent=0.1,"
+                , "            scalesWithCondition=false},"
+                , "           {stat='strength', amount=2, percent=0.0,"
+                , "            scalesWithCondition=true}},"
+                , "}} end;"
+                , "local function params(items)"
+                , "  local p = baseParams(pg, items);"
+                , "  p.presentationKey = 'constant';"
+                , "  p.rowTooltip = function(row) return {text='t', hint='h'} end;"
+                , "  return p"
+                , "end;"
+                , "local id = il.new(params(baseItems()));"
+                , "local muts = {"
+                , "  {'make', function(r) r.make = 'cast' end},"
+                , "  {'material', function(r) r.material = 'steel' end},"
+                , "  {'capacity', function(r) r.capacity = 3.0 end},"
+                , "  {'weapon.bladeLength', function(r) r.weapon.bladeLength = 31 end},"
+                , "  {'weapon.baseSharpness', function(r) r.weapon.baseSharpness = 5 end},"
+                , "  {'weapon.stabEffectiveness', function(r) r.weapon.stabEffectiveness = 0.95 end},"
+                , "  {'weapon.slashEffectiveness', function(r) r.weapon.slashEffectiveness = 0.85 end},"
+                , "  {'weapon.bluntEffectiveness', function(r) r.weapon.bluntEffectiveness = 0.25 end},"
+                , "  {'weapon.absent', function(r) r.weapon = nil end},"
+                , "  {'buffs.length', function(r) r.buffs[2] = nil end},"
+                , "  {'buffs.order', function(r)"
+                , "     r.buffs[1], r.buffs[2] = r.buffs[2], r.buffs[1] end},"
+                , "  {'buffs.stat', function(r) r.buffs[1].stat = 'agility' end},"
+                , "  {'buffs.amount', function(r) r.buffs[1].amount = 5 end},"
+                , "  {'buffs.percent', function(r) r.buffs[1].percent = 0.25 end},"
+                , "  {'buffs.scalesWithCondition', function(r)"
+                , "     r.buffs[1].scalesWithCondition = true end},"
+                , "  {'buffs.absent', function(r) r.buffs = nil end},"
+                , "};"
+                , "local covered, missed = {}, {};"
+                , "for _, m in ipairs(muts) do"
+                , "  local items = baseItems(); m[2](items[1]);"
+                , "  if il.isStale(id, params(items)) then covered[#covered+1] = m[1]"
+                , "  else missed[#missed+1] = m[1] end"
+                , "end;"
+                -- The other half of the contract: value-equivalent but
+                -- FRESHLY ALLOCATED nested tables must still compare
+                -- not-stale, or production rebuilds on every poll.
+                , "local h1 = il.getRows(id)[1].hitId;"
+                , "local fresh = il.isStale(id, params(baseItems()));"
+                , "local h2 = il.getRows(id)[1].hitId;"
+                , "il.destroy(id);"
+                , "return {covered = table.concat(covered, ','),"
+                , "        missed = table.concat(missed, ','),"
+                , "        fresh = fresh, handleKept = (h1 == h2)}"
+                ]
+            p ← decodeOr r ∷ IO RowFieldProbe
+            rfMissed p `shouldBe` ""
+            rfCovered p `shouldBe` T.intercalate ","
+                [ "make", "material", "capacity"
+                , "weapon.bladeLength", "weapon.baseSharpness"
+                , "weapon.stabEffectiveness", "weapon.slashEffectiveness"
+                , "weapon.bluntEffectiveness", "weapon.absent"
+                , "buffs.length", "buffs.order", "buffs.stat", "buffs.amount"
+                , "buffs.percent", "buffs.scalesWithCondition", "buffs.absent"
+                ]
+            rfFresh p `shouldBe` False
+            rfHandleKept p `shouldBe` True
+
         it "unchanged input leaves the SAME element handles in place (no churn)" $ \env → do
             ls ← newBareLuaBackend env
             run ls setupLua
@@ -924,6 +1011,14 @@ instance FromJSON StaleProbe where
         StaleProbe <$> o .: "same" <*> o .: "changed" <*> o .: "byKey"
                    <*> o .: "byTooltip" <*> o .: "byHeader" <*> o .: "byFooter"
                    <*> o .: "bySelection" <*> o .: "forced"
+
+data RowFieldProbe = RowFieldProbe
+    { rfCovered ∷ Text, rfMissed ∷ Text, rfFresh ∷ Bool
+    , rfHandleKept ∷ Bool } deriving Show
+instance FromJSON RowFieldProbe where
+    parseJSON = withObject "RowFieldProbe" $ \o →
+        RowFieldProbe <$> o .: "covered" <*> o .: "missed" <*> o .: "fresh"
+                      <*> o .: "handleKept"
 
 data NoChurnProbe = NoChurnProbe { ncStale ∷ Bool, ncSame ∷ Bool } deriving Show
 instance FromJSON NoChurnProbe where
