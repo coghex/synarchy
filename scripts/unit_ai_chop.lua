@@ -6,8 +6,9 @@
 -- tree, walk to it, and swing until it falls — world.harvestFlora
 -- then spawns the wood logs as ground items and starts the (long)
 -- regrowth timer, and the designation is removed. Structure mirrors
--- dig_designation: module-local claims keyed by tile so two acolytes
--- never fell the same tree, expiring on timeout or claimant death;
+-- dig_designation: module-local claims keyed by page + tile so two
+-- acolytes never fell the same tree, expiring on timeout, on claimant
+-- death, or when a load replaces the session (#1329);
 -- finite lock-in so dire needs still preempt; walking → equipping →
 -- chopping phases with the same anim-override discipline. Felling
 -- progress lives HERE (s.chopProgress), not in the designation — an
@@ -19,12 +20,15 @@ local grantWorkXP = core.grantWorkXP
 
 local mv = require("scripts.movement_speed")
 local roles = require("scripts.unit_roles")
+-- Page-qualified claim keys + the load reset that empties this
+-- registry when a save replaces the session (#1329).
+local claimsLib = require("scripts.unit_ai_claims")
 
 local M = {}
 
-local chopClaims = {}   -- "x,y" → { uid = ..., at = gameTime }
+local chopClaims = claimsLib.track({})  -- page key → { uid, at = gameTime }
 
-local function chopKey(x, y) return x .. "," .. y end
+local chopKey = claimsLib.key   -- (wid, x, y)
 
 local function chopClaimedByOther(key, uid, now, timeout)
     local c = chopClaims[key]
@@ -52,9 +56,9 @@ local function bestChopSpeed(uid, params)
     return speed
 end
 
-local function releaseChopJob(s, uid)
+local function releaseChopJob(wid, s, uid)
     if s.chopJob then
-        local key = chopKey(s.chopJob.x, s.chopJob.y)
+        local key = chopKey(wid, s.chopJob.x, s.chopJob.y)
         local c = chopClaims[key]
         if c and c.uid == uid then chopClaims[key] = nil end
     end
@@ -66,9 +70,9 @@ end
 -- The designation vanished (tree felled — possibly by us — or player
 -- cancel). BOTH the utility check and the execute loop can be first
 -- to notice, so completion lives in one helper.
-local function chopComplete(uid, s)
+local function chopComplete(wid, uid, s)
     unit.clearAnimOverride(uid)
-    releaseChopJob(s, uid)
+    releaseChopJob(wid, s, uid)
 end
 
 -- Colony wood stock (issue #97's chopUrgency): logs on the ground
@@ -100,7 +104,7 @@ local function chopUtility(uid, s, params)
     if s.chopJob then
         local d = chop.getDesignationAt(wid, s.chopJob.x, s.chopJob.y)
         if d then return params.chop_lock_utility end
-        chopComplete(uid, s)
+        chopComplete(wid, uid, s)
     end
 
     local info = unit.getInfo(uid)
@@ -111,7 +115,7 @@ local function chopUtility(uid, s, params)
     if dist > params.chop_scan_range then return -math.huge end
 
     local now = engine.gameTime()
-    if chopClaimedByOther(chopKey(gx, gy), uid, now,
+    if chopClaimedByOther(chopKey(wid, gx, gy), uid, now,
                           params.chop_claim_timeout) then
         return -math.huge
     end
@@ -136,7 +140,7 @@ local function chopExecute(uid, s, params)
     if not s.chopJob then
         local cand = s.chopCandidate
         if not cand then return end
-        local key = chopKey(cand.x, cand.y)
+        local key = chopKey(wid, cand.x, cand.y)
         if chopClaimedByOther(key, uid, now, params.chop_claim_timeout) then
             return
         end
@@ -161,7 +165,7 @@ local function chopExecute(uid, s, params)
 
     local job = s.chopJob
     -- Keep the claim fresh while we hold the job.
-    chopClaims[chopKey(job.x, job.y)] = { uid = uid, at = now }
+    chopClaims[chopKey(wid, job.x, job.y)] = { uid = uid, at = now }
 
     if s.chopPhase == "walking" then
         local utx = math.floor(info.gridX)
@@ -201,7 +205,7 @@ local function chopExecute(uid, s, params)
     if s.chopPhase == "chopping" then
         if not chop.getDesignationAt(wid, job.x, job.y) then
             -- Player cancelled (or raced) out from under us.
-            chopComplete(uid, s)
+            chopComplete(wid, uid, s)
             return
         end
         -- Idempotent: re-asserts the work anim after preemption.
@@ -226,7 +230,7 @@ local function chopExecute(uid, s, params)
             world.harvestFlora(job.x, job.y, "wood")
             chop.cancelDesignation(job.x, job.y)
             grantWorkXP(uid, "woodcutting", params.chop_xp_per_fell or 0)
-            chopComplete(uid, s)
+            chopComplete(wid, uid, s)
         end
         return
     end

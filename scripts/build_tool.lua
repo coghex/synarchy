@@ -1144,7 +1144,7 @@ function buildTool.handleMouseDown(button, x, y)
                     -- Interrupt any live claimant so it can't keep
                     -- ticking progress on its own cached copy of the
                     -- now-cancelled job and still place the piece.
-                    constructAi.abandonClaim(gx, gy)
+                    constructAi.abandonClaim(wid, gx, gy)
                 end
             end
         end

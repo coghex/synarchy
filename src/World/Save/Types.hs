@@ -373,10 +373,12 @@ data SaveData = SaveData
         --   store palette ids; this resolves them to paths → runtime
         --   handles on load. Stable ids → no per-object remap.
     , sdNextItemInstanceId ∷ !Word64
-        -- ^ Snapshot of 'nextItemInstanceIdRef' at save time. Restored
-        --   (max'd, never lowered) on load so post-load item creation
-        --   continues above every saved 'iiInstanceId' and can't reuse an
-        --   id still held by a loaded item.
+        -- ^ Snapshot of 'nextItemInstanceIdRef' at save time. ASSIGNED
+        --   straight onto the allocator on load (#763: a load replaces the
+        --   session, so the discarded value is not max'd in). Post-load
+        --   item creation still continues above every saved
+        --   'iiInstanceId', because 'World.Save.Snapshot' refuses to
+        --   capture a session whose ids reach this value.
     -- Multi-page fields (#215 / epic #214):
     , sdActivePage   ∷ !WorldPageId
         -- ^ The primary/active page at save time. Restores under id

@@ -36,11 +36,16 @@ local fetchWantsFromMule   = fetch.fetchWantsFromMule
 
 local mv = require("scripts.movement_speed")
 local roles = require("scripts.unit_roles")
+-- The #1329 load reset: both tables below are transient session
+-- coordination state, emptied in place whenever a load replaces the
+-- session (item-instance ids rewind, so a stale entry would otherwise
+-- attach to an unrelated item).
+local claimsLib = require("scripts.unit_ai_claims")
 
 local repairUtility, repairExecute, repairOnExit
 
 do
-local repairClaims = {}   -- instanceId → { uid, at }
+local repairClaims = claimsLib.track({})   -- instanceId → { uid, at }
 
 -- Player-facing "prioritize repair" flag (#303 UI). Purely a
 -- candidate-selection preference: a flagged instance always wins
@@ -54,7 +59,14 @@ local repairClaims = {}   -- instanceId → { uid, at }
 -- other unit's already-claimed job. Cleared automatically once the
 -- item is actually repaired (or found already full) — see the
 -- "repairing" phase below.
-local repairPriority = {}   -- instanceId → true
+--
+-- TRANSIENT, deliberately (#1329 requirement 6): a load empties this
+-- along with the claims. Persisting it as durable player intent would
+-- need a typed reference kind, a lua.unit_ai version bump and a
+-- save-compat fixture; without one, an inherited flag would land on
+-- whatever unrelated item reuses the id after the allocator rewinds.
+-- A player who had prioritized an item re-flags it after loading.
+local repairPriority = claimsLib.track({})   -- instanceId → true
 
 function unitAi.setRepairPriority(instanceId, flag)
     if not instanceId then return end

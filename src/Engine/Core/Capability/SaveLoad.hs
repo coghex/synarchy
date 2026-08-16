@@ -107,7 +107,11 @@ data SaveLoadCapability = SaveLoadCapability
     --   identity space across every page, not a per-page counter — bumped
     --   atomically from any thread via
     --   'Engine.Core.State.freshItemInstanceId'. Persisted exactly and
-    --   restored as @max(loaded, current)@, never lowered (#67).
+    --   ASSIGNED from the save on load — never max'd against the
+    --   replaced session, whose ids are no longer live (#67/#763). The
+    --   no-collision guarantee comes from the SAVE side instead:
+    --   'World.Save.Snapshot' rejects a snapshot holding an id at or
+    --   above its own allocator.
   }
 
 -- | Total projection — every field aliases the identical live
