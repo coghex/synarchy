@@ -2259,6 +2259,72 @@ def _budget_document_required(fx: Fixture) -> None:
     fx.write_budget({"schema_version": 99})
     fx.validate_fails("unsupported schema_version 99")
 
+    # `True == 1` in Python, so an equality test alone would read this
+    # as version 1 and validate the document against a version it never
+    # declared.
+    for version in (True, "1", 1.0, None, [1]):
+        fx.write_budget({"schema_version": version,
+                         "animation_images": {}, "resident_bytes": {}})
+        fx.validate_fails("unsupported schema_version")
+
+
+@scenario("a required budget field must SAY something, not merely exist")
+def _budget_fields_typed(fx: Fixture) -> None:
+    # Presence alone is not enough. These fields carry the comparison
+    # rule and the owner's confirmation of a number nobody may raise
+    # unilaterally, so a numeric confirmed_on or a boolean
+    # comparison_rule has to fail as loudly as a missing one.
+    budget_unit(fx, anims=2)
+    pristine = fx.budget()
+    prose = [
+        ("animation_images", "measure"),
+        ("animation_images", "aggregation_scope"),
+        ("animation_images", "comparison_rule"),
+        ("animation_images", "rationale"),
+        ("resident_bytes", "measure"),
+        ("resident_bytes", "aggregation_scope"),
+        ("resident_bytes", "comparison_rule"),
+        ("resident_bytes", "distinct_from"),
+        ("resident_bytes", "derivation"),
+        ("resident_bytes", "confirmed_by"),
+        ("resident_bytes", "confirmed_on"),
+    ]
+    for block, key in prose:
+        for value, expect in ((42, f"{key} must be str"),
+                              (True, f"{key} must be str"),
+                              (None, f"{key} must be str"),
+                              ({"a": 1}, f"{key} must be str"),
+                              ("", f"{key} must not be empty"),
+                              ("   ", f"{key} must not be empty")):
+            doc = json.loads(json.dumps(pristine))
+            doc[block][key] = value
+            fx.write_budget(doc)
+            fx.validate_fails(expect)
+
+    # `excluded` documents what the image budget deliberately does NOT
+    # count, so an empty or non-textual list is the same defect.
+    for value, expect in (([], "excluded must not be empty"),
+                          ("portraits", "excluded must be list"),
+                          ([1, 2], "excluded must hold non-empty strings"),
+                          (["ok", ""], "excluded must hold non-empty strings")):
+        doc = json.loads(json.dumps(pristine))
+        doc["animation_images"]["excluded"] = value
+        fx.write_budget(doc)
+        fx.validate_fails(expect)
+
+    # projection is the other structured field: it has to be an object
+    # carrying the factor, not a bare number that looks like one.
+    for value in (2.0, "2.0", [2.0], None, True):
+        doc = json.loads(json.dumps(pristine))
+        doc["resident_bytes"]["projection"] = value
+        fx.write_budget(doc)
+        fx.validate_fails("projection must be dict")
+
+    # ...and a well-formed document still passes, so none of the above
+    # is over-rejection.
+    fx.write_budget(pristine)
+    fx.validate_ok()
+
 
 @scenario("every documented budget field is required, not defaulted")
 def _budget_fields_required(fx: Fixture) -> None:

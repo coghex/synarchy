@@ -2213,18 +2213,36 @@ def validate_indices(
 BUDGET_REL = PurePosixPath("tools/unit_texture_budget.json")
 BUDGET_SCHEMA_VERSION = 1
 
-# Every field the check actually reads or reports. Required rather than
-# defaulted: a bare threshold with no stated unit, scope or rule is
-# exactly the artifact this budget exists to avoid, and a default would
-# let one go missing silently.
+# Every field the check reads or reports, WITH its required type.
+# Required rather than defaulted: a bare threshold with no stated unit,
+# scope or rule is exactly the artifact this budget exists to avoid, and
+# a default would let one go missing silently.
+#
+# Presence alone is not enough, and the prose fields are the reason. They
+# carry the owner's confirmation and the stated comparison rule — the
+# provenance of a number nobody may raise unilaterally — so a numeric
+# `confirmed_on` or a boolean `comparison_rule` has to fail as loudly as
+# a missing one. Types are checked here, in the same sweep, so no field
+# can be "present" while saying nothing.
 BUDGET_IMAGE_KEYS = (
-    "max_per_animation", "measure", "aggregation_scope", "comparison_rule",
-    "excluded", "rationale",
+    ("max_per_animation", int),
+    ("measure", str),
+    ("aggregation_scope", str),
+    ("comparison_rule", str),
+    ("excluded", list),
+    ("rationale", str),
 )
 BUDGET_BYTE_KEYS = (
-    "threshold", "unit", "measure", "aggregation_scope", "projection",
-    "comparison_rule", "distinct_from", "derivation", "confirmed_by",
-    "confirmed_on",
+    ("threshold", int),
+    ("unit", str),
+    ("measure", str),
+    ("aggregation_scope", str),
+    ("projection", dict),
+    ("comparison_rule", str),
+    ("distinct_from", str),
+    ("derivation", str),
+    ("confirmed_by", str),
+    ("confirmed_on", str),
 )
 
 
@@ -2252,19 +2270,36 @@ class BudgetTally:
 def _budget_field(
     report: Report, where: str, block: dict, key: str, kind: type,
 ) -> Optional[Any]:
-    """Type-check one PRESENT field. Absence is reported by the caller's
-    presence sweep, so a missing key produces one diagnostic, not two."""
+    """Check one required field's presence AND type, reporting exactly
+    one diagnostic either way.
+
+    A `str` or `list` must additionally be non-empty: these fields carry
+    the comparison rule and the owner's confirmation, and an empty one
+    documents nothing while satisfying a presence test.
+    """
     if key not in block:
+        report.err(where, f"missing field: {key}")
         return None
     value = block[key]
-    # `bool` is a subclass of `int`; a `true` threshold must not read as
-    # 1 byte.
+    # `bool` is a subclass of `int`, so an unguarded isinstance lets
+    # `true` read as 1 — as a threshold of one byte, or as schema
+    # version 1.
     if isinstance(value, bool) or not isinstance(value, kind):
         report.err(
             where,
             f"{key} must be {kind.__name__}, got "
             f"{render_scalar(value)}")
         return None
+    if kind is str and not value.strip():
+        report.err(where, f"{key} must not be empty")
+        return None
+    if kind is list:
+        if not value:
+            report.err(where, f"{key} must not be empty")
+            return None
+        if not all(isinstance(item, str) and item.strip() for item in value):
+            report.err(where, f"{key} must hold non-empty strings")
+            return None
     return value
 
 
@@ -2293,7 +2328,11 @@ def load_budget(report: Report, root: Path) -> Optional[Budget]:
         return None
 
     version = doc.get("schema_version")
-    if version != BUDGET_SCHEMA_VERSION:
+    # `True == 1` in Python, so an equality test alone would accept
+    # `"schema_version": true` as version 1 and validate the whole
+    # document against a version it never declared.
+    if isinstance(version, bool) or not isinstance(version, int) \
+            or version != BUDGET_SCHEMA_VERSION:
         report.err(
             where,
             f"unsupported schema_version {render_scalar(version)}: this "
@@ -2310,28 +2349,23 @@ def load_budget(report: Report, root: Path) -> Optional[Budget]:
         return None
 
     before = len(report.errors)
-    for key in BUDGET_IMAGE_KEYS:
-        if key not in images:
-            report.err(f"{where} animation_images", f"missing field: {key}")
-    for key in BUDGET_BYTE_KEYS:
-        if key not in byte_budget:
-            report.err(f"{where} resident_bytes", f"missing field: {key}")
+    # ONE sweep, checking presence and type together, so no required
+    # field can be present-but-meaningless. The values the check
+    # actually computes with are picked back out of `checked`.
+    checked: Dict[str, Any] = {}
+    for block, block_name, keys in (
+            (images, "animation_images", BUDGET_IMAGE_KEYS),
+            (byte_budget, "resident_bytes", BUDGET_BYTE_KEYS)):
+        for key, kind in keys:
+            checked[f"{block_name}.{key}"] = _budget_field(
+                report, f"{where} {block_name}", block, key, kind)
 
-    per_anim = _budget_field(
-        report, f"{where} animation_images", images, "max_per_animation", int)
-    threshold = _budget_field(
-        report, f"{where} resident_bytes", byte_budget, "threshold", int)
-    unit_name = _budget_field(
-        report, f"{where} resident_bytes", byte_budget, "unit", str)
-    projection = byte_budget.get("projection")
+    per_anim = checked["animation_images.max_per_animation"]
+    threshold = checked["resident_bytes.threshold"]
+    unit_name = checked["resident_bytes.unit"]
+    projection = checked["resident_bytes.projection"]
     factor: Optional[float] = None
-    if "projection" not in byte_budget:
-        pass  # already reported by the presence sweep above
-    elif not isinstance(projection, dict):
-        report.err(
-            f"{where} resident_bytes",
-            "projection must be an object carrying roster_growth_factor")
-    else:
+    if projection is not None:
         raw_factor = projection.get("roster_growth_factor")
         if isinstance(raw_factor, bool) or not isinstance(
                 raw_factor, (int, float)):
