@@ -1,6 +1,8 @@
 {-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 module Building.Types
     ( BuildingId(..)
+    , BuildingAnimation(..)
+    , buildingAnimMaxFrames
     , BuildingActivity(..)
     , BuildingDef(..)
     , BuildingInstance(..)
@@ -24,13 +26,40 @@ import Data.Hashable (Hashable)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.Map.Strict as Map
+import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
+import Unit.Direction (Direction(..))
 import World.Page.Types (WorldPageId(..))
-import Unit.Types (Animation(..), storageMaxFrameCount)
 import Item.Types (ItemInstance)
 
--- | Buildings reuse the unit Animation type. They only need one
---   "direction" key — DirS by convention — since they don't rotate.
+-- | One building animation: a flat per-frame sequence of whole-image
+--   textures.
+--
+--   Buildings used to share the unit 'Unit.Types.Def.Animation' record,
+--   whose per-frame representation #1261 (TEX-6) retired for units. D-8
+--   leaves building animation storage untouched — nothing compiles a
+--   building to an atlas and no building index exists — so the
+--   representation moved here instead of being deleted, and the
+--   building path is byte-for-byte the behaviour it always had.
+--
+--   Frames stay keyed by 'Direction' because that is exactly what the
+--   loader built and the renderer read: buildings don't rotate, so the
+--   map is a singleton under 'Unit.Direction.DirS' and the mirror path
+--   never fires. There is no `flip` field for the same reason.
+data BuildingAnimation = BuildingAnimation
+    { banFps    ∷ !Float
+    , banLoop   ∷ !Bool
+    , banFrames ∷ !(Map.Map Direction (V.Vector TextureHandle))
+    } deriving (Show, Eq)
+
+-- | The longest direction's frame count (0 when the animation has no
+--   frames at all) — the clip-LENGTH question 'currentActivity' asks to
+--   derive an appear animation's duration.
+buildingAnimMaxFrames ∷ BuildingAnimation → Int
+buildingAnimMaxFrames anim =
+    let counts = V.length <$> Map.elems (banFrames anim)
+    in if null counts then 0 else maximum counts
 
 newtype BuildingId = BuildingId { unBuildingId ∷ Word32 }
     deriving stock (Show, Eq, Ord, Generic)
@@ -94,7 +123,7 @@ data BuildingDef = BuildingDef
       --   station. Empty (default) = not a work station. craft.executeAt
       --   validates the recipe's rdStation against this list;
       --   building.findStation routes by it.
-    , bdAnimations  ∷ !(HM.HashMap Text Animation)
+    , bdAnimations  ∷ !(HM.HashMap Text BuildingAnimation)
     , bdStateAnims  ∷ !(HM.HashMap Text Text)
       -- ^ "appearing" / "built" → animation name in bdAnimations.
     , bdPowerDrain    ∷ !Float
@@ -288,8 +317,8 @@ currentActivity now inst def
                 Just animName → case HM.lookup animName (bdAnimations def) of
                     Nothing  → 0
                     Just a   →
-                        let maxN = storageMaxFrameCount (aStorage a)
-                            fps  = aFps a
+                        let maxN = buildingAnimMaxFrames a
+                            fps  = banFps a
                         in if fps > 0 ∧ maxN > 0
                            then fromIntegral maxN / realToFrac fps ∷ Double
                            else 0

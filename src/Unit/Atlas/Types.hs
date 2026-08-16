@@ -1,33 +1,43 @@
 {-# LANGUAGE Strict #-}
--- | Storage-neutral animation-frame addressing (#1259, TEX-3).
+-- | Storage-neutral animation-frame addressing (#1259 TEX-3, narrowed
+--   to atlases alone by #1261 TEX-6).
 --
---   An 'Animation' stores its frames in exactly ONE of two
---   representations ('AnimStorage'), and every consumer reads a frame
---   through the same storage-neutral 'FrameSample'. Making the two
---   modes a SUM rather than two optional fields is the point: D-10
---   allows exactly one resident representation per logical animation,
---   and requirement 6 of #1259 forbids mixing them within one
---   animation — a shape that cannot represent a mixture cannot drift
---   into one.
+--   A unit 'Animation' stores its frames in exactly ONE representation
+--   ('AnimStorage'), and every consumer reads a frame through the same
+--   storage-neutral 'FrameSample'. Keeping that a named SUM rather than
+--   inlining the atlas is the point: D-10 allows exactly one resident
+--   representation per logical animation and forbids mixing
+--   representations within one animation, so a shape that cannot
+--   represent a mixture cannot drift into one — and it stays the seam a
+--   later representation would be added at.
 --
---   * 'StorageLegacy' — the historical per-frame representation: one
---     texture handle per frame, each its own whole image. Buildings
---     ('Building.Render') and every shipped unit but @acolyte@ (the
---     #1260 pilot) are on this mode, and TEX-6 owns its eventual
---     removal.
 --   * 'StorageAtlas' — one compiled image per animation (D-2), one
 --     texture handle, one bindless slot; a frame is a UV sub-rect of
 --     it, addressed through the generated index ('Unit.Atlas.Index').
+--     Since #1261 this is the ONLY unit-animation representation: the
+--     historical per-frame @StorageLegacy@ (one whole-image texture per
+--     frame) is gone, along with the loader that built it. WHICH
+--     encoding an atlas's pixels use stays open behind
+--     'AtlasStorageFormat', which is where deferred TEX-5's KTX2 slots
+--     in.
+--
+--   Buildings are NOT on this type. They were the other user of the
+--   shared per-frame record and are never compiled to atlases (D-8
+--   leaves their storage untouched), so #1261 split them onto their own
+--   'Building.Types.BuildingAnimation' rather than deleting the
+--   representation they still need.
 --
 --   A 'FrameSample' therefore carries the stable bindless handle
 --   (#286 — never a slot), the frame's own UV endpoints WITHIN that
 --   handle's image, the frame's pixel dimensions when the storage
---   knows them, and the mirror flag. Legacy samples span the whole
---   image and report no dimensions of their own, so their consumers
---   keep measuring 'Engine.Core.Capability.RenderView.rvTextureSizeRef'
---   exactly as before; an ATLAS sample's dimensions are the CELL's, so
---   no consumer ever measures the whole sheet where it means one frame
---   (requirement 4).
+--   knows them, and the mirror flag. An atlas sample's dimensions are
+--   the CELL's, so no consumer ever measures the whole sheet where it
+--   means one frame. 'wholeImageSample' remains for the direct
+--   single-texture families D-8 preserves — the T-pose default sprite
+--   and its directional overrides — which span their own whole image
+--   and report no dimensions of their own, so their consumers keep
+--   measuring 'Engine.Core.Capability.RenderView.rvTextureSizeRef'
+--   exactly as before.
 module Unit.Atlas.Types
     ( AtlasStorageFormat(..)
     , atlasStorageFormatName
@@ -43,8 +53,6 @@ module Unit.Atlas.Types
     , storageFrameCounts
     , storageMaxFrameCount
     , storageSampleAt
-    , storageLegacyFrames
-    , storageIsAtlas
     , frameDimensions
     , atlasCellUV
     ) where
@@ -52,7 +60,6 @@ module Unit.Atlas.Types
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
-import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle)
 import Unit.Direction (Direction)
 
@@ -125,11 +132,10 @@ data ResidentAtlas = ResidentAtlas
     , raTexture   ∷ !TextureHandle
     } deriving (Show, Eq)
 
--- | Where one animation's frames live. Exactly one representation per
---   animation — see the module header.
-data AnimStorage
-    = StorageLegacy !(Map.Map Direction (V.Vector TextureHandle))
-    | StorageAtlas  !ResidentAtlas
+-- | Where one unit animation's frames live. Exactly one representation
+--   per animation — see the module header.
+newtype AnimStorage
+    = StorageAtlas ResidentAtlas
     deriving (Show, Eq)
 
 -- | @(u0, v0, u1, v1)@ — a texture sub-rect in normalized coordinates.
@@ -150,15 +156,17 @@ data FrameSample = FrameSample
     { fsTexture ∷ !TextureHandle
     , fsUV      ∷ !UVRect
     , fsCell    ∷ !(Maybe (Int, Int))
-      -- ^ The frame's own pixel dimensions when the storage knows them
-      --   (an atlas cell, from the index). 'Nothing' for a legacy
-      --   frame, whose image IS the frame — its consumer measures the
-      --   texture-size map as it always has.
+      -- ^ The frame's own pixel dimensions when the sample knows them
+      --   (an atlas cell, from the index). 'Nothing' for a whole-image
+      --   sample — the direct default/directional sprite a T-pose falls
+      --   back to, whose image IS the frame, so its consumer measures
+      --   the texture-size map as it always has.
     , fsFlipX   ∷ !Bool
     } deriving (Show, Eq)
 
--- | A whole-image sample: the legacy frame shape, and what the T-pose
---   fallbacks resolve to.
+-- | A whole-image sample: what the T-pose fallbacks — the unit's
+--   direct default sprite and its directional overrides, both of which
+--   D-8 keeps on ordinary single-texture loading — resolve to.
 wholeImageSample ∷ TextureHandle → Bool → FrameSample
 wholeImageSample tex flipX = FrameSample
     { fsTexture = tex
@@ -175,13 +183,16 @@ wholeImageSample tex flipX = FrameSample
 --   present but empty resolves to the T-pose exactly as it always
 --   has.
 storageFrameCount ∷ AnimStorage → Direction → Maybe Int
-storageFrameCount (StorageLegacy frames) dir = V.length <$> Map.lookup dir frames
 storageFrameCount (StorageAtlas res) dir =
     adrFrameCount <$> Map.lookup dir (aaDirections (raAnimation res))
 
--- | Every authored direction's real frame count.
+-- | Every authored direction's REAL frame count — the index's own
+--   counts, never the padded column count (D-5). This is what the
+--   non-rendering consumers of a clip's length read:
+--   'Unit.Thread.Command.Pose'\'s pose-transition durations and
+--   @unit.getAnimDuration@ both go through here (via
+--   'storageMaxFrameCount').
 storageFrameCounts ∷ AnimStorage → Map.Map Direction Int
-storageFrameCounts (StorageLegacy frames) = V.length <$> frames
 storageFrameCounts (StorageAtlas res) =
     adrFrameCount <$> aaDirections (raAnimation res)
 
@@ -202,10 +213,6 @@ storageMaxFrameCount st =
 --   a bug, not a padding cell being reached. Padding is unreachable by
 --   construction: the bound is the real count, never the column count.
 storageSampleAt ∷ AnimStorage → Direction → Int → Bool → Maybe FrameSample
-storageSampleAt (StorageLegacy frames) dir idx flipX = do
-    fs ← Map.lookup dir frames
-    tex ← fs V.!? idx
-    pure (wholeImageSample tex flipX)
 storageSampleAt (StorageAtlas res) dir idx flipX =
     case Map.lookup dir (aaDirections anim) of
         Nothing → Nothing
@@ -228,8 +235,8 @@ storageSampleAt (StorageAtlas res) dir idx flipX =
 --   nearest-neighbour (D-6) and drawn pixel-snapped, so a fragment
 --   centre maps to texel @column*cellW + i@ and lands inside the cell;
 --   an inset would SHIFT the sampled texels and break the
---   pixel-identity #1259 requirement 7 asks for against the legacy
---   path, which spans 0..1 of its own image.
+--   pixel-identity #1259 requirement 7 asks for against the source
+--   frame, which spans 0..1 of its own image.
 --
 --   Exported rather than inlined into 'storageSampleAt' because the
 --   @--preview units\/\<name\>@ viewer resolves its cells before any
@@ -249,30 +256,14 @@ atlasCellUV anim row column = (u0, v0, u1, v1)
     v0 = fromIntegral (row * cellH) / atlasH
     v1 = fromIntegral ((row + 1) * cellH) / atlasH
 
--- | The per-frame handle map when — and only when — this animation is
---   on the legacy representation.
---
---   Buildings reuse the shared 'Unit.Types.Def.Animation' and are
---   never compiled to atlases, so 'Building.Render' reads its frames
---   through here and keeps its exact current behaviour: an atlas-backed
---   animation would answer 'Nothing' and take the same branch a missing
---   animation already takes.
-storageLegacyFrames ∷ AnimStorage → Maybe (Map.Map Direction (V.Vector TextureHandle))
-storageLegacyFrames (StorageLegacy frames) = Just frames
-storageLegacyFrames (StorageAtlas _)       = Nothing
-
--- | Is this animation atlas-backed?
-storageIsAtlas ∷ AnimStorage → Bool
-storageIsAtlas (StorageAtlas _)  = True
-storageIsAtlas (StorageLegacy _) = False
-
 -- | The pixel dimensions a consumer must use to SIZE this frame.
 --
---   An atlas sample answers from its own cell; a legacy sample — whose
---   image is the frame — falls through to the texture-size map, and to
---   the supplied default when the texture has not finished uploading.
---   Routing both through one helper is what stops a consumer from
---   measuring a whole atlas sheet where it means one frame.
+--   An atlas sample answers from its own cell; a whole-image sample —
+--   the direct default/directional sprite a T-pose falls back to —
+--   falls through to the texture-size map, and to the supplied default
+--   when the texture has not finished uploading. Routing both through
+--   one helper is what stops a consumer from measuring a whole atlas
+--   sheet where it means one frame.
 frameDimensions
     ∷ HM.HashMap TextureHandle (Int, Int)
     → (Float, Float)                       -- ^ default (texture not yet sized)

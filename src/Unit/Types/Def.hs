@@ -4,7 +4,7 @@
 --   public API is unchanged.
 module Unit.Types.Def
     ( Animation(..)
-    , legacyAnimation
+    , atlasAnimation
     , StatModifier(..)
     , NamePool(..)
     , UnitDef(..)
@@ -16,13 +16,13 @@ import GHC.Generics (Generic)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
-import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
 import Unit.Atlas.Types
 import Unit.Direction (Direction(..))
 import Unit.Types.Combat (BodyPart(..), NaturalWeapon(..), NaturalResistance(..))
 
--- | A single animation: per-direction frame sequences.
+-- | A single UNIT animation: per-direction frame sequences, addressed
+--   through the animation's compiled atlas.
 --
 --   Missing directions either fall back to T-pose (`aFlip = False`) or
 --   are mirrored from their eastern-half counterpart (`aFlip = True` —
@@ -31,13 +31,17 @@ import Unit.Types.Combat (BodyPart(..), NaturalWeapon(..), NaturalResistance(..)
 --   who forgets the flag and lists only 5 dirs sees obvious T-pose
 --   fallbacks rather than silently-mirrored weapon hands.
 --
---   `aStorage` is WHERE the frames live (#1259): one texture handle per
---   frame (legacy), or one compiled atlas image per animation with each
---   frame a UV cell of it. It is a sum, not two optional fields, so an
---   animation cannot be half-migrated — see "Unit.Atlas.Types". Read
---   frames through that module's storage-neutral accessors rather than
---   matching on the constructor; buildings, which reuse this type and
---   are never compiled to atlases, go through `storageLegacyFrames`.
+--   `aStorage` is WHERE the frames live (#1259): since #1261 retired
+--   per-frame unit-animation loading, that is always one compiled atlas
+--   image per animation with each frame a UV cell of it. It stays a
+--   named sum rather than an inlined `ResidentAtlas` because D-10's
+--   one-resident-representation contract is a property of this field —
+--   see "Unit.Atlas.Types". Read frames through that module's
+--   storage-neutral accessors rather than matching on the constructor.
+--
+--   Buildings do NOT use this type. They were the other consumer of the
+--   per-frame representation and are never compiled to atlases (D-8),
+--   so they have their own `Building.Types.BuildingAnimation`.
 data Animation = Animation
     { aFps     ∷ !Float
     , aLoop    ∷ !Bool
@@ -45,16 +49,17 @@ data Animation = Animation
     , aStorage ∷ !AnimStorage
     } deriving (Show, Eq)
 
--- | The legacy per-frame animation constructor, kept as a helper
---   because it is what every caller that is not the atlas loader still
---   builds (and what every test fixture wants).
-legacyAnimation
-    ∷ Float → Bool → Bool
-    → Map.Map Direction (V.Vector TextureHandle)
-    → Animation
-legacyAnimation fps loop flipX frames = Animation
+-- | Build an animation around one resident compiled atlas — what the
+--   unit loader publishes, and what every test fixture wants.
+--
+--   `fps`/`loop`/`flip` are passed rather than read off the atlas so
+--   the caller states them explicitly; `Unit.Atlas.Index.planUnitAtlasStorage`
+--   has already proved the index and the unit YAML agree on all three,
+--   so there is no winner to pick.
+atlasAnimation ∷ Float → Bool → Bool → ResidentAtlas → Animation
+atlasAnimation fps loop flipX resident = Animation
     { aFps = fps, aLoop = loop, aFlip = flipX
-    , aStorage = StorageLegacy frames }
+    , aStorage = StorageAtlas resident }
 
 -- | One modifier on a stat. Multiple modifiers on the same stat
 --   compose (after expiry filtering): deltas sum onto the base, then

@@ -26,7 +26,8 @@ import Test.Hspec
 import Control.Exception (finally)
 import Data.IORef (newIORef, readIORef)
 import System.Directory
-    (getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive)
+    ( getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive
+    , doesFileExist )
 import System.FilePath ((</>))
 import qualified Data.Text as T
 import qualified Data.Vector.Storable as Vec
@@ -36,7 +37,7 @@ import Engine.Core.State (EngineEnv, floraCatalogRef, luaToEngineQueue, luaQueue
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.API.YamlTextures (resolveTexturePath)
-import Engine.Scripting.Lua.API.Units (unknownUnitTexture, unknownUnitAnimFrame)
+import Engine.Scripting.Lua.API.Units (unknownUnitTexture)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
@@ -63,21 +64,22 @@ spec = do
             resolved ← resolveTexturePath env "Test" realAsset "assets/textures/does/not/exist.png"
             resolved `shouldBe` realAsset
 
-    -- 'unknownUnitAnimFrame' (#485): idle/walk fall back to the
-    -- unknown-unit's own authored clip, cycling by frame index; every
-    -- other animation still freezes on the single static rotation.
-    describe "unknownUnitAnimFrame" $ do
-        it "picks the unknown-unit's idle clip for an in-range frame" $ \_env → do
-            unknownUnitAnimFrame "idle" DirS 0
-                `shouldBe` "assets/textures/units/unknown_unit/animations/idle/south/frame_000.png"
+    -- The DIRECT single-texture families (#478) — which is all of them
+    -- since #1261 retired per-frame unit-animation loading along with
+    -- #485's `unknownUnitAnimFrame`. An animation is one compiled
+    -- atlas now, and a missing or unusable one rejects the unit
+    -- definition outright (Unit.Atlas.Load) instead of substituting a
+    -- placeholder, so there is no per-frame fallback left to cover.
+    describe "unknownUnitTexture" $ do
+        it "names one static rotation per compass direction" $ \_env → do
+            unknownUnitTexture DirS
+                `shouldBe` "assets/textures/units/unknown_unit/rotations/south.png"
+            unknownUnitTexture DirNE
+                `shouldBe` "assets/textures/units/unknown_unit/rotations/north-east.png"
 
-        it "wraps the frame index modulo the authored clip length" $ \_env → do
-            unknownUnitAnimFrame "walk" DirE 6
-                `shouldBe` "assets/textures/units/unknown_unit/animations/walk/east/frame_000.png"
-
-        it "falls back to the static rotation for animations with no authored clip" $ \_env → do
-            unknownUnitAnimFrame "attack_heavy_RH_dagger" DirN 2
-                `shouldBe` unknownUnitTexture DirN
+        it "resolves to a file that actually ships" $ \_env → do
+            exists ← doesFileExist (unknownUnitTexture DirN)
+            exists `shouldBe` True
 
     -- Contract requirement 12's final fall-through: ANY missing visual
     -- with no specialized placeholder of its own (or a specialized

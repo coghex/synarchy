@@ -16,9 +16,9 @@
 --   a temp tree in "Test.Headless.Unit.Atlas", and what those examples
 --   cover is everything downstream of it.
 --
---   The LAST example injects nothing. Since #1260 one unit — @acolyte@ —
---   ships real compiled artifacts, so the production resolver can be run
---   against the shipped index, the shipped YAML and the shipped source
+--   The LAST examples inject nothing. Since #1261 all SEVEN shipped
+--   units ship real compiled artifacts, so the production resolver runs
+--   against each one's shipped index, shipped YAML and shipped source
 --   art together. That is the one thing a canned selection can never
 --   assert: that the three still agree.
 module Test.Headless.Unit.Atlas.Loader (spec) where
@@ -51,16 +51,26 @@ import Unit.Types
 fixtureUnit ∷ Text
 fixtureUnit = "spec_loader_unit"
 
--- The shipped acolyte's own gameplay YAML — the real one the game
--- loads, not a fixture (#1260).
-acolyteYamlPath ∷ FilePath
-acolyteYamlPath = "data" </> "units" </> "acolyte.yaml"
+-- Every shipped unit's own gameplay YAML — the real ones the game
+-- loads, not fixtures (#1260 for acolyte, #1261 for the rest).
+shippedUnits ∷ [Text]
+shippedUnits =
+    [ "acolyte", "bear_brown", "red_squirrel", "technomule"
+    , "tiller", "unknown_unit", "white_tailed_deer" ]
+
+unitYamlPath ∷ Text → FilePath
+unitYamlPath name = "data" </> "units" </> T.unpack name ⧺ ".yaml"
+
+-- The whole shipped corpus, pinned so a tree that silently stops
+-- registering shows up as a number rather than as nothing at all.
+shippedAnimationTotal ∷ Int
+shippedAnimationTotal = 116
 
 -- | A minimal but REAL unit YAML, parsed by the engine's own decoder.
---   Its frame paths deliberately do not exist: the legacy loader
---   substitutes a fallback with a warning, which is exactly what a
---   half-authored unit does in production and keeps this spec about
---   registration rather than about art being present.
+--   Its frame paths deliberately do not exist. Nothing loads them since
+--   #1261 — an animation's pixels come from its compiled atlas — and
+--   the injected resolver supplies the selection, so this spec stays
+--   about registration rather than about art being present.
 fixtureYamlText ∷ String
 fixtureYamlText = unlines
     [ "units:"
@@ -129,6 +139,36 @@ publishedDef env = do
 storageOf ∷ Text → UnitDef → Maybe AnimStorage
 storageOf anim def = aStorage <$> HM.lookup anim (udAnimations def)
 
+-- | Every direct single-texture reference a unit YAML makes — the
+--   families D-8 leaves on ordinary loading.
+nonAnimationArt ∷ UnitYamlDef → [Text]
+nonAnimationArt d = uydSprite d
+    : maybe [] pure (uydPortrait d)
+    ⧺ Map.elems (uydDirectionalSprites d)
+
+-- | Register one SHIPPED unit through the production resolver, against
+--   its real YAML and its real compiled artifacts. Restores the shared
+--   engine's definition table, so these examples stay independent of
+--   each other and of everything above.
+runShipped
+    ∷ EngineEnv → Text
+    → IO ([UnitYamlDef], [LuaToEngineMsg], Maybe UnitDef)
+runShipped env unitName = do
+    let defsRef = ucUnitManagerRef (toUnitCombatCapability env)
+    um0 ← readIORef defsRef
+    let restore = atomicModifyIORef' defsRef $ \um →
+            (um { umDefs = umDefs um0 }, ())
+    (`finally` restore) $ do
+        logger ← readIORef (loggerRef env)
+        defs ← loadUnitYaml logger (unitYamlPath unitName)
+        poolRef ← newIORef =≪ defaultAssetPool
+        q ← Q.newQueue
+        _ ← registerUnitDefs env poolRef q resolveUnitAtlases
+                (unitYamlPath unitName) defs
+        msgs ← Q.flushQueue q
+        um ← readIORef defsRef
+        pure (defs, msgs, HM.lookup unitName (umDefs um))
+
 spec ∷ SpecWith EngineEnv
 spec = describe "Unit.Atlas.Load — the real unit registration boundary" $ do
 
@@ -159,9 +199,8 @@ spec = describe "Unit.Atlas.Load — the real unit registration boundary" $ do
                             raAnimation res `shouldBe` aa
                             Just (raTexture res) `shouldBe`
                                 Map.lookup (aaPath aa) byPath
-                        other → expectationFailure
-                            (T.unpack anim ⧺ " should be atlas-backed, got "
-                             ⧺ show (fmap storageIsAtlas other))
+                        Nothing → expectationFailure
+                            (T.unpack anim ⧺ " was not published at all")
                 check "walk" (atlasFor "walk" 2)
                 check "idle" (atlasFor "idle" 1)
 
@@ -174,19 +213,21 @@ spec = describe "Unit.Atlas.Load — the real unit registration boundary" $ do
         -- is the whole point of one image per animation.
         length (plainRequests msgs) `shouldBe` 1
 
-    it "leaves an unselected animation on the legacy per-frame path" $ \env → do
-        let sel = HM.singleton "walk" (atlasFor "walk" 2)
-        (n, msgs) ← runLoader env (\_ _ → pure (Right sel))
-        n `shouldBe` 1
-        map snd (atlasRequests msgs) `shouldBe` [aaPath (atlasFor "walk" 2)]
-        -- The unit sprite plus `idle`'s single frame.
-        length (plainRequests msgs) `shouldBe` 2
-        mDef ← publishedDef env
-        case mDef of
-            Nothing → expectationFailure "expected the unit definition to publish"
-            Just def → do
-                fmap storageIsAtlas (storageOf "walk" def) `shouldBe` Just True
-                fmap storageIsAtlas (storageOf "idle" def) `shouldBe` Just False
+    -- Before #1261 an animation the selection did not name fell back to
+    -- loading one texture per declared frame. There is no such path
+    -- now, and the PRODUCTION resolver refuses to produce a partial
+    -- selection at all (Test.Headless.Unit.Atlas covers that rule
+    -- directly): a unit that declares animations and ships no compiled
+    -- artifacts is refused outright, before any handle exists.
+    it "refuses a unit whose tree ships no compiled artifacts, through \
+       \the production resolver, publishing nothing" $ \env → do
+        let defsRef = ucUnitManagerRef (toUnitCombatCapability env)
+        atomicModifyIORef' defsRef $ \um →
+            (um { umDefs = HM.delete fixtureUnit (umDefs um) }, ())
+        (n, msgs) ← runLoader env resolveUnitAtlases
+        n `shouldBe` 0
+        msgs `shouldBe` []
+        publishedDef env ⌦ (`shouldBe` Nothing)
 
     -- The rejection contract, at the boundary that matters: not one
     -- message queued and not one definition published.
@@ -214,70 +255,62 @@ spec = describe "Unit.Atlas.Load — the real unit registration boundary" $ do
         HM.keys (umDefs um1) `shouldMatchList` before
         HM.lookup fixtureUnit (umDefs um1) `shouldBe` Nothing
 
-    -- #1260 (TEX-4), the acolyte pilot. Everything above injects a
-    -- canned selection; this one uses the PRODUCTION resolver against
-    -- the artifacts actually checked in, because a synthetic selection
-    -- cannot prove that the shipped index still describes the shipped
-    -- YAML and the shipped source art. If any of the three drift, the
-    -- resolver rejects and this example fails — which is the migration
-    -- gate the pilot exists to install.
-    it "registers the SHIPPED acolyte through the production resolver \
-       \with every animation atlas-backed, and loads no per-frame \
-       \animation texture for it" $ \env → do
-        let defsRef = ucUnitManagerRef (toUnitCombatCapability env)
-        um0 ← readIORef defsRef
-        let restore = atomicModifyIORef' defsRef $ \um →
-                (um { umDefs = umDefs um0 }, ())
-        (`finally` restore) $ do
-            logger ← readIORef (loggerRef env)
-            defs ← loadUnitYaml logger acolyteYamlPath
-            poolRef ← newIORef =≪ defaultAssetPool
-            q ← Q.newQueue
-            n ← registerUnitDefs env poolRef q resolveUnitAtlases
-                    acolyteYamlPath defs
-            msgs ← Q.flushQueue q
-            n `shouldBe` 1
+    -- #1260 (TEX-4)'s acolyte pilot, extended to the whole roster by
+    -- #1261 (TEX-6). Everything above injects a canned selection; these
+    -- use the PRODUCTION resolver against the artifacts actually checked
+    -- in, because a synthetic selection cannot prove that a shipped
+    -- index still describes its shipped YAML and its shipped source art.
+    -- If any of the three drift, the resolver rejects and the example
+    -- for that unit fails — which is the migration gate this installs.
+    describe "the shipped roster, through the production resolver" $ do
+        forM_ shippedUnits $ \unitName →
+            it (T.unpack unitName ⧺ ": registers with every declared \
+                \animation atlas-backed on its own handle, and loads no \
+                \per-frame animation texture") $ \env → do
+                (defs, msgs, mDef) ← runShipped env unitName
+                length defs `shouldBe` 1
+                case (defs, mDef) of
+                    ([yamlDef], Just def) → do
+                        let anims  = HM.toList (udAnimations def)
+                            atlases = atlasRequests msgs
+                            handles = [ raTexture res
+                                      | (_, a) ← anims
+                                      , StorageAtlas res ← [aStorage a] ]
+                        -- Every animation the YAML declares is published,
+                        -- and every published one is atlas-backed —
+                        -- there is no other constructor for it to be.
+                        map fst anims `shouldMatchList`
+                            Map.keys (uydAnimations yamlDef)
+                        length handles `shouldBe` length anims
+                        -- One upload, one handle, one bindless slot per
+                        -- animation, no two sharing either (D-2/D-10).
+                        length (nub handles) `shouldBe` length anims
+                        length atlases `shouldBe` length anims
+                        length (nub (map snd atlases)) `shouldBe` length anims
 
-            um ← readIORef defsRef
-            case HM.lookup "acolyte" (umDefs um) of
-                Nothing → expectationFailure
-                    "the shipped acolyte failed to register"
-                Just def → do
-                    let anims = HM.toList (udAnimations def)
-                        legacy = [ nm | (nm, a) ← anims
-                                 , not (storageIsAtlas (aStorage a)) ]
-                    length anims `shouldBe` 54
-                    legacy `shouldBe` []
-                    -- One upload, one handle, one bindless slot per
-                    -- animation — and no two animations sharing one.
-                    let handles = [ raTexture res
-                                  | (_, a) ← anims
-                                  , StorageAtlas res ← [aStorage a] ]
-                    length (nub handles) `shouldBe` 54
+                        -- The ONLY ordinary texture loads left are this
+                        -- unit's NON-ANIMATION art. The allowance is
+                        -- derived from the YAML rather than from a path
+                        -- shape, because several of those fields
+                        -- legitimately point AT an animation frame —
+                        -- reusing one as a sprite/directional
+                        -- sprite/portrait is explicitly legal (#1257)
+                        -- and 20 shipped references do it, so "nothing
+                        -- under animations/" would be the wrong rule and
+                        -- would fail for a correct tree.
+                        let allowed = nonAnimationArt yamlDef
+                            loaded = map (T.pack ∘ snd) (plainRequests msgs)
+                        loaded `shouldSatisfy` all (`elem` allowed)
+                        -- and every one of them is actually requested, so
+                        -- the allowance is a real upper bound rather than
+                        -- a vacuous one.
+                        nub loaded `shouldMatchList` nub allowed
+                    _ → expectationFailure
+                        (T.unpack unitName ⧺ " failed to register")
 
-            -- 54 atlases queued, one per animation, each its own path.
-            let atlases = atlasRequests msgs
-            length atlases `shouldBe` 54
-            length (nub (map snd atlases)) `shouldBe` 54
-            -- The ONLY ordinary texture loads left are acolyte's
-            -- NON-ANIMATION art. The allowance is derived from the YAML
-            -- rather than from a path shape, because several of those
-            -- fields legitimately point AT an animation frame — reusing
-            -- one as a sprite/directional sprite/portrait is explicitly
-            -- legal (#1257), and 20 shipped references do it, so
-            -- "nothing under animations/" would be the wrong rule and
-            -- would fail for a correct tree.
-            --
-            -- What this does assert is the resident-image reduction the
-            -- pilot claims: of 2,250 source frames, the loader opens
-            -- only the handful the unit names outside its animations.
-            let nonAnimationArt d = uydSprite d
-                    : maybe [] pure (uydPortrait d)
-                    ⧺ Map.elems (uydDirectionalSprites d)
-                allowed = concatMap nonAnimationArt defs
-                loaded = map (T.pack ∘ snd) (plainRequests msgs)
-            length defs `shouldBe` 1
-            loaded `shouldSatisfy` all (`elem` allowed)
-            -- and every one of them is actually requested, so the
-            -- allowance is a real upper bound rather than a vacuous one.
-            nub loaded `shouldMatchList` nub allowed
+        it "registers the whole shipped animation corpus — the same 116 \
+           \tools/pack_atlas.py inventories" $ \env → do
+            totals ← forM shippedUnits $ \unitName → do
+                (_, _, mDef) ← runShipped env unitName
+                pure (maybe 0 (HM.size ∘ udAnimations) mDef)
+            sum totals `shouldBe` shippedAnimationTotal

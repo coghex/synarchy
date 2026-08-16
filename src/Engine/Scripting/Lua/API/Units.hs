@@ -117,7 +117,6 @@ module Engine.Scripting.Lua.API.Units
     , unitGetFrameSampleFn
     , unitGetPortraitTextureFn
     , unknownUnitTexture
-    , unknownUnitAnimFrame
     ) where
 
 import Engine.Scripting.Lua.API.Units.Yaml

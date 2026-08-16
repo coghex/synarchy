@@ -1,20 +1,23 @@
--- | The asset-only unit declaration form (#1257) and the boundary that
---   keeps it out of the gameplay unit registry.
+-- | The unit declaration forms (#1257) and what each one reaches.
 --
---   Three shipped unit asset trees — @tiller@, @unknown_unit@,
---   @white_tailed_deer@ — are part of the authoritative animation
---   inventory but are deliberately NOT gameplay units. They declare
---   their frames under a top-level @asset_units:@ key rather than
---   @units:@, which is the whole mechanism: 'loadUnitYaml' reads
---   'uyfUnits' and so never returns one, meaning nothing downstream can
---   register it, load a gameplay texture for it, list it, or spawn it.
+--   #1257 gave three shipped asset trees — @tiller@, @unknown_unit@,
+--   @white_tailed_deer@ — inventory-only declarations under a top-level
+--   @asset_units:@ key, deliberately outside the gameplay registry.
+--   #1261 (TEX-6) PROMOTED all three to ordinary @units:@ entries: with
+--   per-frame unit-animation loading retired, a tree renders only
+--   through the compiled atlases its declaration drives, and the owner
+--   decision of 2026-08-11 kept all three as preview targets. They are
+--   now registered, minimal runtime definitions — a name, one direct
+--   sprite, and the animation inventory they already carried.
 --
---   The point of this group is that BOTH halves hold at once. Proving
---   only the exclusion would be satisfied by a file that fails to parse
---   — which is exactly the accident the issue's "not by relying on
---   missing gameplay fields or parse failures" clause rules out — so
---   every exclusion assertion here is paired with a positive one
---   showing the same file's animations decoded with real content.
+--   Both halves of that still have to hold at once, so every membership
+--   assertion here is paired with a positive one showing the same
+--   file's animations decoded with real content: a file that failed to
+--   parse would satisfy a bare exclusion check by accident.
+--
+--   The @asset_units:@ FORM remains supported — no shipped file uses it
+--   today, so its decoder is exercised against temp fixtures below
+--   rather than against the asset tree.
 module Test.Headless.Asset.UnitInventory (spec) where
 
 import UPrelude
@@ -36,12 +39,17 @@ import Engine.Asset.YamlUnits
     ( UnitYamlDef(..), UnitYamlAnim(..), UnitYamlAssetDef(..)
     , loadUnitYaml, loadUnitYamlAssets )
 
--- | Every shipped asset-only tree, with the direction count its
+-- | The three trees #1261 promoted, with the direction count each
 --   declared layout must produce. Five means the canonical authored
 --   half (@flip: true@, W/SW/NW mirrored at draw time); eight means a
 --   fully authored set (@flip: false@).
-assetOnlyUnits ∷ [(Text, Int, Bool, Int)]
-assetOnlyUnits =
+--
+--   @flip@ is load-bearing and NOT the decoder default: with a YAML
+--   entry present the preview takes this value verbatim, so transcribing
+--   the decoder's @flip = False@ onto a canonical-five tree would
+--   silently drop its mirrored W/SW/NW cells.
+promotedUnits ∷ [(Text, Int, Bool, Int)]
+promotedUnits =
     --  name                animations  flip   directions
     [ ("tiller",            2,          True,  5)
     , ("unknown_unit",      2,          False, 8)
@@ -51,34 +59,32 @@ assetOnlyUnits =
 gameplayUnits ∷ [Text]
 gameplayUnits = ["acolyte", "bear_brown", "red_squirrel", "technomule"]
 
+-- | Every shipped unit, which since #1261 is every declaration.
+allUnits ∷ [Text]
+allUnits = gameplayUnits ⧺ [n | (n, _, _, _) ← promotedUnits]
+
 unitYamlPath ∷ Text → FilePath
 unitYamlPath name = "data" </> "units" </> T.unpack name <> ".yaml"
 
 spec ∷ Spec
 spec = do
-    describe "asset-only declarations parse" $ do
-        forM_ assetOnlyUnits $ \(name, animCount, flipV, dirCount) →
+    describe "the promoted declarations parse" $ do
+        forM_ promotedUnits $ \(name, animCount, flipV, dirCount) →
             it (T.unpack name <> " declares its shipped animations with \
                 \real frame content") $ do
                 logger ← silentLogger
-                defs ← loadUnitYamlAssets logger (unitYamlPath name)
+                defs ← loadUnitYaml logger (unitYamlPath name)
                 case defs of
                     [def] → do
-                        uyadName def `shouldBe` name
-                        Map.size (uyadAnimations def) `shouldBe` animCount
-                        let anims = Map.elems (uyadAnimations def)
-                        -- Playback metadata is the issue's stated
-                        -- contract, and `flip` is what preserves the
-                        -- viewer's CURRENT visible mirroring: with a
-                        -- YAML entry present, Engine.Preview.Unit's
-                        -- effectiveFlip takes this value verbatim
-                        -- instead of inferring one.
+                        uydName def `shouldBe` name
+                        Map.size (uydAnimations def) `shouldBe` animCount
+                        let anims = Map.elems (uydAnimations def)
                         map uyaFps anims `shouldSatisfy` all (≡ 8)
                         map uyaLoop anims `shouldSatisfy` and
                         map uyaFlip anims `shouldSatisfy` all (≡ flipV)
                         -- Every animation declares the expected
                         -- direction set, and no direction is empty.
-                        forM_ (Map.toList (uyadAnimations def)) $
+                        forM_ (Map.toList (uydAnimations def)) $
                             \(animName, anim) → do
                                 let frames = uyaFrames anim
                                 (T.unpack animName, Map.size frames)
@@ -86,51 +92,64 @@ spec = do
                                 Map.elems frames
                                     `shouldSatisfy` all (not ∘ null)
                     other → expectationFailure
-                        ("expected exactly one asset-only declaration, got "
+                        ("expected exactly one declaration, got "
                          <> show (length other))
 
         it "every declared frame path exists on disk" $ do
             logger ← silentLogger
-            paths ← concat ⊚ forM assetOnlyUnits (\(name, _, _, _) → do
-                defs ← loadUnitYamlAssets logger (unitYamlPath name)
+            paths ← concat ⊚ forM promotedUnits (\(name, _, _, _) → do
+                defs ← loadUnitYaml logger (unitYamlPath name)
                 pure [ p
                      | def ← defs
-                     , anim ← Map.elems (uyadAnimations def)
+                     , anim ← Map.elems (uydAnimations def)
                      , ps ← Map.elems (uyaFrames anim)
                      , p ← ps ])
             length paths `shouldBe` 575
             missing ← filterM (fmap not ∘ doesFileExist ∘ T.unpack) paths
             missing `shouldBe` []
 
-    describe "asset-only declarations stay out of the gameplay registry" $ do
-        forM_ assetOnlyUnits $ \(name, _, _, _) →
-            it (T.unpack name <> " yields no UnitYamlDef, and does so \
-                \without a decode failure") $ do
+    describe "the promoted declarations reach the registry, minimally" $ do
+        forM_ promotedUnits $ \(name, _, _, _) →
+            it (T.unpack name <> " is returned by loadUnitYaml with a \
+                \direct sprite and no invented gameplay design") $ do
                 (logger, entriesRef) ← recordingLogger
                 defs ← loadUnitYaml logger (unitYamlPath name)
-                -- The exclusion itself.
-                map uydName defs `shouldBe` []
-                -- ...and the reason for it. A parse failure would ALSO
-                -- produce an empty list, so pin that the loader logged
-                -- its success path (a debug count) rather than the
-                -- warning it emits when a file does not decode.
+                map uydName defs `shouldBe` [name]
+                -- A decode failure would ALSO be quiet, so pin that the
+                -- loader logged its success path (a debug count) rather
+                -- than the warning it emits when a file does not decode.
                 entries ← readIORef entriesRef
                 map leLevel entries `shouldBe` [LevelDebug]
+                case defs of
+                    [def] → do
+                        -- The one required direct texture, which may
+                        -- legitimately be an animation source frame
+                        -- (#1257: reuse is not a duplicate claim).
+                        uydSprite def `shouldSatisfy` not ∘ T.null
+                        exists ← doesFileExist (T.unpack (uydSprite def))
+                        exists `shouldBe` True
+                        -- "Minimal" is the contract requirement 3 sets:
+                        -- no state mappings, roles, body or combat
+                        -- design were invented for these trees.
+                        uydStateAnimations def `shouldBe` Map.empty
+                        uydNamePool def `shouldBe` Nothing
+                        uydBodyParts def `shouldBe` []
+                        uydNaturalWeapon def `shouldSatisfy` isNothing
+                        uydStartingInventory def `shouldBe` []
+                        uydStats def `shouldBe` Map.empty
+                        uydSkills def `shouldBe` Map.empty
+                    _ → pure ()
 
-        it "the gameplay units are unaffected — they still load, and no \
-           \asset-only unit joins them" $ do
+        it "the gameplay units are unaffected — they still load, and the \
+           \registry is now exactly the seven shipped declarations" $ do
             logger ← silentLogger
-            loaded ← concat ⊚ forM gameplayUnits (\name →
+            loaded ← concat ⊚ forM allUnits (\name →
                 map uydName ⊚ loadUnitYaml logger (unitYamlPath name))
-            sort loaded `shouldBe` sort gameplayUnits
-            -- The two lists are disjoint: no name reaches the registry
-            -- from an `asset_units:` entry.
-            let assetNames = [n | (n, _, _, _) ← assetOnlyUnits]
-            filter (`elem` assetNames) loaded `shouldBe` []
+            sort loaded `shouldBe` sort allUnits
 
-        it "a gameplay YAML holds no asset-only declarations" $ do
+        it "no shipped YAML declares an asset-only entry any more" $ do
             logger ← silentLogger
-            forM_ gameplayUnits $ \name → do
+            forM_ allUnits $ \name → do
                 assets ← loadUnitYamlAssets logger (unitYamlPath name)
                 map uyadName assets `shouldBe` []
 
@@ -213,12 +232,27 @@ spec = do
                 assets ← loadUnitYamlAssets logger path
                 map uyadName assets `shouldBe` []
 
-        it "the shipped asset-only declarations still decode, so the key \
-           \check above is not merely rejecting everything" $ do
-            logger ← silentLogger
-            forM_ assetOnlyUnits $ \(name, _, _, _) → do
-                defs ← loadUnitYamlAssets logger (unitYamlPath name)
-                map uyadName defs `shouldBe` [name]
+        it "a well-formed asset-only declaration still decodes, so the \
+           \key checks above are not merely rejecting everything — the \
+           \form remains supported, it is just that #1261 promoted the \
+           \three files that used it" $
+            withTempUnitYaml
+                (T.unpack (T.unlines
+                    [ "asset_units:"
+                    , "  - name: props_only"
+                    , "    animations:"
+                    , "      idle:"
+                    , "        fps: 8"
+                    , "        loop: true"
+                    , "        flip: true"
+                    , "        frames:"
+                    , "          south:"
+                    , "            - \"a/b/c.png\""
+                    ])) $ \path → do
+                logger ← silentLogger
+                defs ← loadUnitYamlAssets logger path
+                map uyadName defs `shouldBe` ["props_only"]
+                map (Map.keys ∘ uyadAnimations) defs `shouldBe` [["idle"]]
 
         it "an asset-only entry with no animations: block is a decode \
            \failure, not an empty unit" $

@@ -34,10 +34,12 @@ import Unit.Direction (parseDirectionName)
 -- | What the unit YAML declares about each animation, in the shape
 --   'Unit.Atlas.Index.planUnitAtlasStorage' checks an index against.
 --
---   A direction key the engine does not recognise is DROPPED, the same
---   way the legacy frame loader drops it (with its own warning), so the
---   facts describe exactly the frames this build would load rather than
---   the ones the file happens to name.
+--   A direction key the engine does not recognise is DROPPED, so the
+--   facts describe exactly the frames this build would compile against
+--   rather than the ones the file happens to name. The compiler applies
+--   the same rule, so an unparseable direction is a mismatch neither
+--   side invents — and @tools\/pack_atlas.py@ rejects one outright, so
+--   no shipped tree has any.
 unitAnimFacts ∷ Map.Map Text UnitYamlAnim → Map.Map Text YamlAnimFacts
 unitAnimFacts = fmap animFacts
   where
@@ -51,18 +53,18 @@ unitAnimFacts = fmap animFacts
             , Just dir ← [parseDirectionName dirKey] ]
         }
 
--- | Resolve which of a unit's animations are atlas-backed (#1259).
+-- | Resolve the compiled atlas backing every animation a unit declares
+--   (#1259; total since #1261).
 --
---   The unit's compiled index is the whole answer. No index at all
---   means an empty map and an entirely legacy unit — the state every
---   unit but @acolyte@ is in today (#1260 migrated that one alone;
---   TEX-6 owns the rest). Everything else, including the freshness of
---   the compiled artifacts against this unit's own source art, is
---   'Unit.Atlas.Load.loadUnitAtlasIndex'.
+--   The unit's compiled index is the whole answer, and on success it
+--   covers EXACTLY the animations the YAML declares — there is no
+--   second representation for an animation to be in. Everything else,
+--   including the freshness of the compiled artifacts against this
+--   unit's own source art, is 'Unit.Atlas.Load.loadUnitAtlasIndex'.
 --
---   A 'Left' is NEVER a reason to fall back to legacy frames: an
---   animation the index claims is atlas-backed either loads as an atlas
---   or does not load at all, in both the game and the viewer.
+--   A 'Left' is NEVER a reason to draw the source frames instead: a
+--   unit's animations either load from its compiled atlases or the unit
+--   does not load at all, in both the game and the viewer.
 resolveUnitAtlases
     ∷ Text
     → Map.Map Text UnitYamlAnim
@@ -83,5 +85,4 @@ resolveUnitAtlasesIn
     → Map.Map Text UnitYamlAnim
     → IO (Either AtlasLoadError (HM.HashMap Text AtlasAnimation))
 resolveUnitAtlasesIn root name yamlAnims =
-    fmap (fmap (fromMaybe HM.empty))
-         (loadUnitAtlasIndexIn root name (unitAnimFacts yamlAnims))
+    loadUnitAtlasIndexIn root name (unitAnimFacts yamlAnims)

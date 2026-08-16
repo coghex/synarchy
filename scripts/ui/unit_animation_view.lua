@@ -9,16 +9,15 @@
 -- resolved pre-boot by Engine.Preview.Unit and arrives verbatim through
 -- engine.getPreviewBrowse() — nothing here re-derives it.
 --
--- A frame is a TABLE, not a path (#1260): { path, u0, v0, u1, v1, and
--- width/height when the compiled index knows the cell size }. For an
--- atlas-backed animation every frame names the SAME compiled image and
--- differs only in its sub-rect, so a sprite must be published with
--- UI.setSpriteFrame — texture, sub-rect and mirror in ONE manager
--- transition. Setting the texture alone would draw the whole sheet, and
--- setting texture and UV separately leaves a window in which the render
--- thread pairs the new image with the previous frame's rect. A legacy
--- frame carries the whole-image rect and no size, so it goes through
--- the identical call and still measures via engine.getTextureSize.
+-- A frame is a TABLE, not a path (#1260): { path, u0, v0, u1, v1,
+-- width, height } — the compiled atlas, the cell to sample within it,
+-- and that cell's own size. Every frame of an animation names the SAME
+-- compiled image and differs only in its sub-rect, so a sprite must be
+-- published with UI.setSpriteFrame — texture, sub-rect and mirror in
+-- ONE manager transition. Setting the texture alone would draw the
+-- whole sheet, and setting texture and UV separately leaves a window in
+-- which the render thread pairs the new image with the previous frame's
+-- rect. Since #1261 there is no other kind of unit animation frame.
 --
 -- Playback contract (#887 Requirement 5 + its review amendment):
 --   * ONE clock per selected animation. Every cell computes its own
@@ -75,14 +74,13 @@ end
 -- engine.getTextureSize is the readiness handshake this view has always
 -- used: it answers nil until the upload lands, which is what keeps
 -- reflow() retrying and what gates v.ready (and so previewManager's
--- state == "ready"). An atlas frame knows its own SIZE from the compiled
--- index without asking the engine anything — but the index says nothing
--- about whether the sheet has uploaded, so answering from it alone would
+-- state == "ready"). A frame knows its own SIZE from the compiled index
+-- without asking the engine anything — but the index says nothing about
+-- whether the sheet has uploaded, so answering from it alone would
 -- report a laid-out, ready view over a texture that is not there yet: a
 -- blank panel, and a probe free to race its assertions. So ask the
--- engine first, then take the DIMENSIONS from the index, because for an
--- atlas the resident image is the whole sheet and its size is not the
--- frame's.
+-- engine first, then take the DIMENSIONS from the index, because the
+-- resident image is the whole sheet and its size is not the frame's.
 local function frameSize(frame, handle)
     if not handle then return nil end
     local resident = engine.getTextureSize(handle)
@@ -90,10 +88,8 @@ local function frameSize(frame, handle)
         or resident.width <= 0 or resident.height <= 0 then
         return nil
     end
-    if frame and frame.width and frame.height then
-        return { width = frame.width, height = frame.height }
-    end
-    return resident
+    if not (frame and frame.width and frame.height) then return nil end
+    return { width = frame.width, height = frame.height }
 end
 
 -- Fit (w,h) inside (boxW,boxH) preserving aspect ratio — the same rule
@@ -421,12 +417,11 @@ function unitAnimationView.update(id, now)
             if c.direction == v.direction and v.enlargedId then
                 v.frameIndex = idx
                 applyFrame(v, v.enlargedId, c.frames[idx + 1], c.mirrored)
-                -- Frames of one animation are same-sized in every
-                -- shipped asset, and an atlas animation's cells are
-                -- necessarily uniform — but a legacy clip's aren't
-                -- enforced to be, so refit on the frame change rather
-                -- than assuming frame zero's dimensions hold for the
-                -- whole clip.
+                -- An atlas animation's cells are uniform by
+                -- construction, so frame zero's dimensions do hold for
+                -- the whole clip — but refit on the frame change
+                -- anyway: this costs nothing, and it is what keeps the
+                -- view correct if a future storage ever relaxes that.
                 v.fitKey = nil
             end
         elseif c.direction == v.direction then
@@ -509,9 +504,12 @@ function unitAnimationView.dump(id)
         directions = dirs,
         -- Storage mode (#1260). Stated outright rather than left for a
         -- probe to infer from a path shape: `atlas` is the compiled
-        -- image every frame of this clip samples, present only when the
-        -- unit's index declared this animation atlas-backed, and
-        -- `cell` is the index's own frame geometry.
+        -- image every frame of this clip samples and `cell` is the
+        -- index's own frame geometry. Since #1261 every unit animation
+        -- is atlas-backed, so this can only read "atlas" — but it stays
+        -- DERIVED from what the engine actually pushed, so a missing
+        -- atlas reports "legacy" and fails a probe rather than passing
+        -- silently.
         storage = (v.anim and v.anim.atlas) and "atlas" or "legacy",
         atlas = v.anim and v.anim.atlas or nil,
         texturePath = shownCell and shownCell.path or nil,

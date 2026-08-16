@@ -26,7 +26,6 @@ import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, applyFacingF, GridConfig(..), defaultGridConfig)
 import Unit.Direction (Direction(..))
-import Unit.Types (Animation(..), storageLegacyFrames)
 import World.State.Types (wmVisible)
 import Building.Types
 
@@ -63,11 +62,10 @@ pickBuildingFrame now inst def =
                     _ → (Nothing, False)
     in case mAnim of
         Nothing → bdTexture def
-        -- Buildings are never compiled to atlases (#1259): they reuse
-        -- the shared `Animation` but stay on the legacy per-frame
-        -- representation, and an atlas-backed animation would take the
-        -- same `bdTexture` branch a missing one already does.
-        Just a  → case storageLegacyFrames (aStorage a) ⌦ Map.lookup DirS of
+        -- Buildings are never compiled to atlases (D-8): they carry
+        -- their own per-frame `BuildingAnimation`, which #1261 split
+        -- off the unit record when unit animations retired theirs.
+        Just a  → case Map.lookup DirS (banFrames a) of
             Nothing → bdTexture def
             Just fs
                 | V.null fs → bdTexture def
@@ -84,8 +82,8 @@ pickBuildingFrame now inst def =
                             in max 0 (min (n - 1) raw)
                         timeIdx =
                             let elapsed = max 0 (now - biSpawnedAt inst)
-                                raw     = floor (elapsed * realToFrac (aFps a)) ∷ Int
-                            in if aLoop a
+                                raw     = floor (elapsed * realToFrac (banFps a)) ∷ Int
+                            in if banLoop a
                                then raw `mod` n
                                else min raw (n - 1)
                         idx

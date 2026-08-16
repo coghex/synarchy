@@ -686,7 +686,11 @@ function previewManager.dump()
                 loop = a.loop,
                 flip = a.flip,
                 thumb = a.thumb and a.thumb.path or nil,
-                -- Per-animation storage mode (#1260). The whole list is
+                -- Per-animation storage mode (#1260). Since #1261 every
+                -- unit animation is atlas-backed, so this is DERIVED
+                -- from the atlas the engine actually pushed rather than
+                -- asserted: a missing one would report "legacy" and
+                -- fail the probe rather than pass silently. The list is
                 -- reported so a probe can prove EVERY animation of a
                 -- migrated unit selected the atlas, not just the one
                 -- currently playing.

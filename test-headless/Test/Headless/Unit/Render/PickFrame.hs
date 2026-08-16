@@ -3,23 +3,29 @@
 --   and UnitInstance values; verifies the frame index math and the
 --   T-pose fallback chain.
 --
---   Since #1259 the whole logical-choice matrix runs against BOTH
---   storage modes from ONE table of cases ('playbackCases'), because
---   D-3 freezes the arithmetic: legacy per-frame textures and a
---   compiled atlas must choose the same logical frame for every
---   combination of loop, force-loop, reverse, stride, clamping, and
---   clock skew. The two modes cannot silently drift while both are
---   driven from the same list.
+--   D-3 FREEZES THE FRAME-INDEX ARITHMETIC, and the whole logical-choice
+--   matrix runs from ONE table of cases ('playbackCases') covering every
+--   combination of loop, force-loop, reverse, stride, clamping, mirror
+--   fallback, camera rotation and clock skew.
+--
+--   #1259 checked each case by running it through both storage modes and
+--   asserting they agreed. #1261 retired the per-frame mode, so there is
+--   no second side to compare against — but the arithmetic it was
+--   protecting is exactly as frozen. Each case is now checked against
+--   'expectedChoice', a restatement of the documented rule written
+--   independently of 'Unit.Render.pickFrame', so an edit to either one
+--   still fails here. That is strictly more than the old parity check
+--   proved: both of its sides shared this arithmetic and differed only
+--   in where they looked the frame up.
 module Test.Headless.Unit.Render.PickFrame (spec) where
 
 import UPrelude
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
-import qualified Data.Vector as V
-import Engine.Asset.Handle (TextureHandle(..), toInt)
+import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (CameraFacing(..))
-import Unit.Direction (Direction(..))
+import Unit.Direction (Direction(..), mirrorDir)
 import Unit.Faction (Faction(..))
 import Unit.Render (pickFrame, screenDirOf, resolveTexture)
 import Unit.Types
@@ -29,9 +35,9 @@ import World.Page.Types (WorldPageId(..))
 h ∷ Int → TextureHandle
 h = TextureHandle
 
--- | pickFrame returns a storage-neutral 'FrameSample'. These describes
---   cover the frame-index math and the T-pose fallbacks; the handle
---   alone is the readable assertion for the legacy fixtures below.
+-- | pickFrame returns a storage-neutral 'FrameSample'. The T-pose
+--   describes assert on the handle alone, which for a direct sprite IS
+--   the whole answer.
 pickTex ∷ Double → CameraFacing → UnitInstance → UnitDef → TextureHandle
 pickTex t cam inst def = fsTexture (pickFrame t cam inst def)
 
@@ -106,10 +112,18 @@ mkInst animName start = UnitInstance
     , uiTrailState      = Nothing
     }
 
--- | An animation with frame handles 100,101,102,103 on DirS, fps 4, loop.
+-- | A 4-frame south-only animation at fps 4, looping — the fixture the
+--   index-math describes below step through column by column.
+southOnly4 ∷ AnimShape
+southOnly4 = AnimShape False [(DirS, 4)]
+
 animSouth4 ∷ Animation
-animSouth4 = legacyAnimation 4.0 True False
-    (Map.fromList [(DirS, V.fromList [h 100, h 101, h 102, h 103])])
+animSouth4 = atlasOf 4.0 True southOnly4
+
+-- | Which COLUMN of the atlas a sample landed on, for the index-math
+--   describes. 'TPose' when the sample is not an atlas cell at all.
+pickCol ∷ Double → CameraFacing → UnitInstance → UnitDef → Chosen
+pickCol t cam inst def = chosenAtlas southOnly4 (pickFrame t cam inst def)
 
 -- * Storage-parity fixtures
 
@@ -141,19 +155,7 @@ eightDirUnequal = AnimShape False
     [ (DirS, 6), (DirSW, 2), (DirW, 5), (DirNW, 1)
     , (DirN, 6), (DirNE, 3), (DirE, 4), (DirSE, 2) ]
 
--- | Legacy frames for a shape: direction @d@'s frame @i@ gets handle
---   @legacyHandle d i@, so a sample identifies its own (direction,
---   index) unambiguously.
-legacyHandle ∷ Direction → Int → TextureHandle
-legacyHandle d i = h (1000 + 100 * fromEnum d + i)
-
-legacyOf ∷ Float → Bool → AnimShape → Animation
-legacyOf fps loop shape = legacyAnimation fps loop (shapeFlip shape)
-    (Map.fromList
-        [ (d, V.fromList [legacyHandle d i | i ← [0 .. n - 1]])
-        | (d, n) ← shapeDirs shape ])
-
--- | The atlas form of the same shape. Rows follow the compiler's
+-- | The atlas form of a shape. Rows follow the compiler's
 --   `ATLAS_DIRECTION_ORDER` (the engine's own `Direction` order,
 --   restricted to authored directions), columns are the longest row,
 --   and every cell is 24x32 so a wrong cell size is visible in the
@@ -192,28 +194,18 @@ atlasHandle ∷ TextureHandle
 atlasHandle = h 7777
 
 atlasOf ∷ Float → Bool → AnimShape → Animation
-atlasOf fps loop shape = Animation
-    { aFps = fps, aLoop = loop, aFlip = shapeFlip shape
-    , aStorage = StorageAtlas (ResidentAtlas (atlasAnimOf fps loop shape)
-                                             atlasHandle) }
+atlasOf fps loop shape =
+    atlasAnimation fps loop (shapeFlip shape)
+        (ResidentAtlas (atlasAnimOf fps loop shape) atlasHandle)
 
--- | Where a sample came from, expressed identically for both modes:
---   @Nothing@ for the T-pose, @Just (direction, index)@ for a frame.
+-- | Which frame a sample landed on: @TPose@, or the SOURCE direction's
+--   row and the column within it.
 --
---   Legacy reads it back from the handle; atlas from the UV rect's own
---   cell coordinates. That the two AGREE is what the parity cases
---   assert — and recovering it from the UV rect means a wrong sub-rect
---   fails here rather than passing on metadata alone.
+--   Recovered from the UV rect's own cell coordinates rather than from
+--   metadata, so a wrong sub-rect fails here instead of passing on a
+--   correct-looking frame index.
 data Chosen = Chosen Direction Int | TPose
     deriving (Show, Eq)
-
-chosenLegacy ∷ AnimShape → FrameSample → Chosen
-chosenLegacy shape smp =
-    let raw = toInt (fsTexture smp)
-    in if raw < 1000 then TPose else
-        let d = toEnum ((raw - 1000) `div` 100)
-            i = (raw - 1000) `mod` 100
-        in if any ((≡ d) ∘ fst) (shapeDirs shape) then Chosen d i else TPose
 
 chosenAtlas ∷ AnimShape → FrameSample → Chosen
 chosenAtlas shape smp
@@ -313,6 +305,44 @@ shouldBeNear got want
 caseInstance ∷ PlaybackCase → UnitInstance
 caseInstance c = pcTweak c ((mkInst "clip" 0) { uiFacing = pcFacing c })
 
+-- | D-3's frozen rule, RESTATED — deliberately a second statement of
+--   'Unit.Render.pickFrame'\'s documented behaviour rather than a call
+--   into it, so an unreviewed edit to either one fails this table:
+--   camera rotation picks the screen direction, a directly authored
+--   direction always wins, only W\/SW\/NW may mirror and only when the
+--   animation permits it, the clock is clamped at the animation's own
+--   start, stride multiplies the raw index, force-loop overrides a
+--   one-shot's clamp, and reverse counts down from the last frame.
+--
+--   The T-pose branch defers to 'resolveTexture', which has its own
+--   describe above: what this table owns is WHICH animation frame
+--   plays, not which fallback sprite a missing one resolves to.
+expectedChoice ∷ AnimShape → PlaybackCase → (Chosen, Bool)
+expectedChoice shape c = case resolved of
+    Just (srcDir, n, mirrored)
+      | n > 0 →
+        let elapsed = max 0 (pcTime c - uiAnimStart inst)
+            raw     = floor (elapsed * realToFrac (pcFps c)) ∷ Int
+            strided = raw * max 1 (uiAnimStride inst)
+            doLoop  = pcLoop c ∨ uiForceLoop inst
+            fwd     = if doLoop then strided `mod` n else min strided (n - 1)
+            idx     = if uiAnimReverse inst then (n - 1) - fwd else fwd
+        in (Chosen srcDir idx, mirrored)
+    _ → (TPose, snd (resolveTexture (pcCam c) (pcFacing c)
+                         (uiDirSprites inst) (uiTexture inst)))
+  where
+    inst      = caseInstance c
+    screenDir = screenDirOf (pcCam c) (uiFacing inst)
+    authored d = lookup d (shapeDirs shape)
+    resolved = case authored screenDir of
+        Just n  → Just (screenDir, n, False)
+        Nothing
+          | not (shapeFlip shape) → Nothing
+          | otherwise → do
+              md ← mirrorDir screenDir
+              n  ← authored md
+              pure (md, n, True)
+
 spec ∷ Spec
 spec = do
     describe "screenDirOf" $ do
@@ -361,14 +391,14 @@ spec = do
         it "returns T-pose when anim name is not in udAnimations" $
             pickTex 0.0 FaceSouth (mkInst "ghost" 0)
                     (mkDef HM.empty) `shouldBe` h 1
-        it "returns T-pose when anim has no frames for the screen direction" $
-            let anim = legacyAnimation 4.0 True False Map.empty
-                def  = mkDef (HM.fromList [("idle", anim)])
+        it "returns T-pose when the animation authors no row for the \
+           \screen direction and may not mirror" $
+            let def = mkDef (HM.fromList
+                        [("idle", atlasOf 4 True (AnimShape False [(DirE, 2)]))])
             in pickTex 0.0 FaceSouth (mkInst "idle" 0) def `shouldBe` h 1
-        it "returns T-pose when frames vector for screen direction is empty" $
-            let anim = legacyAnimation 4.0 True False
-                           (Map.fromList [(DirS, V.empty)])
-                def  = mkDef (HM.fromList [("idle", anim)])
+        it "returns T-pose when the authored row holds no frames at all" $
+            let def = mkDef (HM.fromList
+                        [("idle", atlasOf 4 True (AnimShape False [(DirS, 0)]))])
             in pickTex 0.0 FaceSouth (mkInst "idle" 0) def `shouldBe` h 1
         it "falls back to default texture when instance has no directional sprite" $
             -- T-pose path reads uiDirSprites from the instance, not the def
@@ -382,50 +412,50 @@ spec = do
 
     describe "pickFrame — frame index math (loop=True)" $ do
         let def = mkDef (HM.fromList [("idle", animSouth4)])
+            at t = pickCol t FaceSouth (mkInst "idle" 0) def
         it "picks frame 0 at t=0" $
-            pickTex 0.0 FaceSouth (mkInst "idle" 0) def `shouldBe` h 100
+            at 0.0 `shouldBe` Chosen DirS 0
         it "picks frame 0 at t=0.1 (under 1/fps)" $
-            pickTex 0.1 FaceSouth (mkInst "idle" 0) def `shouldBe` h 100
+            at 0.1 `shouldBe` Chosen DirS 0
         it "picks frame 1 at t=0.25 (exactly 1/fps)" $
-            pickTex 0.25 FaceSouth (mkInst "idle" 0) def `shouldBe` h 101
+            at 0.25 `shouldBe` Chosen DirS 1
         it "picks frame 2 at t=0.5" $
-            pickTex 0.5 FaceSouth (mkInst "idle" 0) def `shouldBe` h 102
+            at 0.5 `shouldBe` Chosen DirS 2
         it "picks frame 3 at t=0.75" $
-            pickTex 0.75 FaceSouth (mkInst "idle" 0) def `shouldBe` h 103
+            at 0.75 `shouldBe` Chosen DirS 3
         it "wraps around to frame 0 at t=1.0 (one full cycle)" $
-            pickTex 1.0 FaceSouth (mkInst "idle" 0) def `shouldBe` h 100
+            at 1.0 `shouldBe` Chosen DirS 0
         it "wraps again at t=1.25" $
-            pickTex 1.25 FaceSouth (mkInst "idle" 0) def `shouldBe` h 101
+            at 1.25 `shouldBe` Chosen DirS 1
         it "respects animStart offset" $
-            pickTex 5.25 FaceSouth (mkInst "idle" 5.0) def `shouldBe` h 101
+            pickCol 5.25 FaceSouth (mkInst "idle" 5.0) def
+                `shouldBe` Chosen DirS 1
         it "guards against negative elapsed (clock skew) → frame 0" $
-            pickTex 0.0 FaceSouth (mkInst "idle" 10.0) def `shouldBe` h 100
+            pickCol 0.0 FaceSouth (mkInst "idle" 10.0) def
+                `shouldBe` Chosen DirS 0
 
     describe "pickFrame — non-loop clamp" $ do
-        let anim = animSouth4 { aLoop = False }
-            def  = mkDef (HM.fromList [("once", anim)])
+        let def  = mkDef (HM.fromList
+                       [("once", atlasOf 4 False southOnly4)])
+            at t = pickCol t FaceSouth (mkInst "once" 0) def
         it "advances normally before the end" $ do
-            pickTex 0.0  FaceSouth (mkInst "once" 0) def `shouldBe` h 100
-            pickTex 0.5  FaceSouth (mkInst "once" 0) def `shouldBe` h 102
+            at 0.0 `shouldBe` Chosen DirS 0
+            at 0.5 `shouldBe` Chosen DirS 2
         it "clamps to last frame after the end" $ do
-            pickTex 1.0  FaceSouth (mkInst "once" 0) def `shouldBe` h 103
-            pickTex 10.0 FaceSouth (mkInst "once" 0) def `shouldBe` h 103
+            at 1.0  `shouldBe` Chosen DirS 3
+            at 10.0 `shouldBe` Chosen DirS 3
 
-    -- #1259 / D-3: atlas storage changed WHERE frames live, not WHICH
-    -- one plays. Every case runs on both modes and must agree.
-    describe "pickFrame — legacy and atlas storage choose the same logical frame" $
+    -- D-3: atlas storage changed WHERE frames live, not WHICH one
+    -- plays. Every case is checked against the independently restated
+    -- rule, mirror decision included.
+    describe "pickFrame — the frozen logical-frame choice" $
         forM_ playbackCases $ \(shape, c) → do
-            let inst = caseInstance c
-                cam  = pcCam c
-                legacyDef = mkDef (HM.singleton "clip" (legacyOf (pcFps c) (pcLoop c) shape))
-                atlasDef  = mkDef (HM.singleton "clip" (atlasOf  (pcFps c) (pcLoop c) shape))
-                lSmp = pickFrame (pcTime c) cam inst legacyDef
-                aSmp = pickFrame (pcTime c) cam inst atlasDef
-            it (pcLabel c) $ do
-                chosenAtlas shape aSmp `shouldBe` chosenLegacy shape lSmp
-                -- The mirror decision is part of the frozen behaviour
-                -- too: the same case must mirror (or not) identically.
-                fsFlipX aSmp `shouldBe` fsFlipX lSmp
+            let inst     = caseInstance c
+                atlasDef = mkDef (HM.singleton "clip" (atlasOf (pcFps c) (pcLoop c) shape))
+                smp      = pickFrame (pcTime c) (pcCam c) inst atlasDef
+            it (pcLabel c) $
+                (chosenAtlas shape smp, fsFlipX smp)
+                    `shouldBe` expectedChoice shape c
 
     describe "pickFrame — atlas cell geometry" $ do
         let shape = eightDirUnequal
@@ -499,14 +529,24 @@ spec = do
             -- rect spanned the sheet; assert it emphatically does not.
             (u0, u1) `shouldNotBe` (0, 1)
 
-    describe "pickFrame — one animation is never in two storage modes" $ do
-        let shape = fiveDirMirrored
-        it "an atlas animation exposes no legacy frame map" $
-            storageLegacyFrames (aStorage (atlasOf 4 True shape))
-                `shouldBe` Nothing
-        it "a legacy animation is not atlas-backed" $
-            storageIsAtlas (aStorage (legacyOf 4 True shape)) `shouldBe` False
-        it "both modes report the same per-direction real frame counts" $
-            storageFrameCounts (aStorage (atlasOf 4 True eightDirUnequal))
-                `shouldBe`
-                storageFrameCounts (aStorage (legacyOf 4 True eightDirUnequal))
+    -- D-5: the atlas is rectangular, the animation is not. Every
+    -- length question must answer from the index's REAL per-direction
+    -- counts, never the padded column count — which is what
+    -- Unit.Thread.Command.Pose's transition durations and
+    -- unit.getAnimDuration both read through storageMaxFrameCount.
+    describe "pickFrame — real frame counts, never the padding" $ do
+        let st = aStorage (atlasOf 4 True eightDirUnequal)
+        it "reports each authored direction's own declared count" $
+            storageFrameCounts st
+                `shouldBe` Map.fromList (shapeDirs eightDirUnequal)
+        it "reports the longest row as the clip length, not the columns" $
+            -- Columns and the longest row coincide by construction; the
+            -- point is that a SHORT row does not report the column
+            -- count, which is what a padded read would return.
+            (storageMaxFrameCount st, storageFrameCount st DirNW)
+                `shouldBe` (6, Just 1)
+        it "makes a padding cell unreachable" $
+            -- NW authors one frame in a six-column sheet: columns 1..5
+            -- of its row are transparent padding and must not resolve.
+            [ isJust (storageSampleAt st DirNW i False) | i ← [0 .. 5] ]
+                `shouldBe` (True : replicate 5 False)

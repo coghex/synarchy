@@ -1,0 +1,406 @@
+{
+  "schema_version": 1,
+  "generator": "tools/pack_atlas.py",
+  "tool_version": 1,
+  "digest_algorithm": "sha256",
+  "unit": "red_squirrel",
+  "direction_order": [
+    "south",
+    "south-west",
+    "west",
+    "north-west",
+    "north",
+    "north-east",
+    "east",
+    "south-east"
+  ],
+  "animations": [
+    {
+      "name": "alert_idle",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/red_squirrel/atlas/alert_idle.png",
+      "atlas_width": 216,
+      "atlas_height": 180,
+      "cell_width": 36,
+      "cell_height": 36,
+      "columns": 6,
+      "rows": 5,
+      "flip": true,
+      "fps": 6.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 6
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 6
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 6
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 6
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 6
+        }
+      ],
+      "source_digest": "7e219948ac7e812711d03d681dba644d7d269cabec936a97fc9809d568a6cd74",
+      "atlas_digest": "618da47cb85727f5e91f83eadeba8a48a500342f9a7094cf506df5d0514ba90e"
+    },
+    {
+      "name": "attack_quick",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/red_squirrel/atlas/attack_quick.png",
+      "atlas_width": 216,
+      "atlas_height": 180,
+      "cell_width": 36,
+      "cell_height": 36,
+      "columns": 6,
+      "rows": 5,
+      "flip": true,
+      "fps": 12.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 6
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 6
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 6
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 6
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 6
+        }
+      ],
+      "source_digest": "cdce7df9376e105c8f6b640394873411bc0d264ebeb6d867767cd3e58d198e9c",
+      "atlas_digest": "4e7237eba4f2a4676208dc776173268abb57d0678bd67a70bc62acb949072a4c"
+    },
+    {
+      "name": "climbing",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/red_squirrel/atlas/climbing.png",
+      "atlas_width": 180,
+      "atlas_height": 180,
+      "cell_width": 36,
+      "cell_height": 36,
+      "columns": 5,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 5
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 5
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 5
+        }
+      ],
+      "source_digest": "d4add66aee08f5ce84652012f1a03af1f3f6bf98afa5c8c4e7f9d6889d39b5f5",
+      "atlas_digest": "eea5ae016d161d9a0d12776b08be894a78b26c9fd74f62807ccd16307b5e79e0"
+    },
+    {
+      "name": "combat_idle",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/red_squirrel/atlas/combat_idle.png",
+      "atlas_width": 216,
+      "atlas_height": 180,
+      "cell_width": 36,
+      "cell_height": 36,
+      "columns": 6,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 6
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 6
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 6
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 6
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 6
+        }
+      ],
+      "source_digest": "5932f0627ee56f2fa186dbdc6e3f4c5d337b8a761f227d82f4a9fc9886bc7694",
+      "atlas_digest": "c787f636a452a3a9e0e2b8d1be4be8027e66a179f6ff0b1ee6dc991a84b701a4"
+    },
+    {
+      "name": "death",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/red_squirrel/atlas/death.png",
+      "atlas_width": 324,
+      "atlas_height": 180,
+      "cell_width": 36,
+      "cell_height": 36,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 10.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "40146471ed4e8fecc7ef8e72aae503b8defbfc706034bd7708e4efe1d58e3b88",
+      "atlas_digest": "0b6e6d257c8069ebf15a7180c8241f0cd9c9ed905c0df9850f9d6bb8f75b487e"
+    },
+    {
+      "name": "drink",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/red_squirrel/atlas/drink.png",
+      "atlas_width": 216,
+      "atlas_height": 180,
+      "cell_width": 36,
+      "cell_height": 36,
+      "columns": 6,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 6
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 6
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 6
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 6
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 6
+        }
+      ],
+      "source_digest": "b51e47aa1122cb70248942bbe3002fdfe567762f80f0ef450347a9d5143d280c",
+      "atlas_digest": "e679c6c64086a2f0eb01099a7672a7a44cc03fcaf7f3e27f63fe311842b4906a"
+    },
+    {
+      "name": "idle",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/red_squirrel/atlas/idle.png",
+      "atlas_width": 288,
+      "atlas_height": 180,
+      "cell_width": 36,
+      "cell_height": 36,
+      "columns": 8,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 8
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 8
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 8
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 8
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 8
+        }
+      ],
+      "source_digest": "b9827c441ba035e2563edcc3c37053a21c18f6aab822041846ec0050a70c8f9c",
+      "atlas_digest": "c84df457e8fee74e5761cff70ba99dbb033b8b233232002f75156b222c2da971"
+    },
+    {
+      "name": "run",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/red_squirrel/atlas/run.png",
+      "atlas_width": 144,
+      "atlas_height": 180,
+      "cell_width": 36,
+      "cell_height": 36,
+      "columns": 4,
+      "rows": 5,
+      "flip": true,
+      "fps": 10.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 4
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 4
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 4
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 4
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 4
+        }
+      ],
+      "source_digest": "95c97e05bb854cee654dc1cdc01910286b5ad13c6ec69e0f1b1644e3ca71a49b",
+      "atlas_digest": "c10cd38c50f7c6e09804350ef2ab74f50c1bcf72ded93aa085dd2eb236acfe19"
+    },
+    {
+      "name": "walk",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/red_squirrel/atlas/walk.png",
+      "atlas_width": 144,
+      "atlas_height": 180,
+      "cell_width": 36,
+      "cell_height": 36,
+      "columns": 4,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 4
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 4
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 4
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 4
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 4
+        }
+      ],
+      "source_digest": "ac1d2d44bfdf73c1d8e042544554dc6961f5d76ca21329f4fbfa471fa9ee1f80",
+      "atlas_digest": "052a427ff5f80d64066d348cf7a74a84c27eb48b7b090610e877bb4b299ebeb7"
+    }
+  ]
+}
