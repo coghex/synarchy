@@ -103,12 +103,16 @@ local function listDataParams(rect, rawItems)
         -- "Steel Plate ×5 = 6.00 kg" still contributes 6 kg.
         footer          = { text = string.format("Total: %.2f kg", total) },
         zBase           = 11,
+        -- Quality/repair suffixes, then the count, then the group's
+        -- temperature summary (#1268) joined by the shared widget
+        -- helper -- so this row and its tooltip below present the same
+        -- string, and so does the container window.
         rowName = function(it)
             local n = rowDisplayName(it)
             if (it.count or 1) > 1 then
                 n = string.format("%s ×%d", n, it.count)
             end
-            return n
+            return itemList.withTempSuffix(n, it)
         end,
         rowWeightText = function(it)
             return string.format("%.2f kg", (it.weight or 0) * (it.count or 1))
@@ -123,12 +127,17 @@ local function listDataParams(rect, rawItems)
             if it.equipped then return L.INV_EQUIP_TINT end
             return nil
         end,
+        -- The full item hint, plus the same temperature summary as a
+        -- labeled line. It is appended HERE rather than inside
+        -- items.buildItemHint because that builder is shared with the
+        -- equipment silhouette's slot icons, which show ONE instance
+        -- and have no group to summarize.
         rowTooltip = function(it)
-            return {
-                text = rowDisplayName(it),
-                hint = items.buildItemHint(it,
-                    it.equipped and it.equippedSlot or nil),
-            }
+            local hint = items.buildItemHint(it,
+                it.equipped and it.equippedSlot or nil)
+            local tempLine = itemList.tempHintLine(it)
+            if tempLine then hint = hint .. "\n" .. tempLine end
+            return { text = rowDisplayName(it), hint = hint }
         end,
         onTabChange     = M.onTabChange,
         onRowRightClick = unitInfoV2.handleInvItemRightClick,

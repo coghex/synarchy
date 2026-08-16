@@ -41,6 +41,12 @@
 -- and rebuilds its own chrome plus the widget when the answer is yes.
 -- Values the widget cannot see (a formatter's output, a repair-status
 -- badge) reach the comparison through the host's `presentationKey`.
+--
+-- Since #1268 the widget also owns TRACKED TEMPERATURE presentation:
+-- it summarizes a group's members while grouping them, stores the
+-- summary on the row, signs it, and exposes the two join helpers both
+-- raw-item hosts render it with. See "Tracked temperature
+-- presentation" below.
 
 local label         = require("scripts.ui.label")
 local scale         = require("scripts.ui.scale")
@@ -88,8 +94,21 @@ end
 -- count) + weapon-only sharpness (non-weapon gear carries a mutated
 -- sharpness it never displays, so splitting on it would be an
 -- invisible, confusing split) + the nested contents signature (#67A).
--- Anything that still merges is interchangeable, so acting on the
--- group's representative instanceId is always correct (#67).
+--
+-- What merging licenses is bounded by what a host can DO to a row
+-- (#1268). The members of a group are interchangeable FOR THE
+-- TEMPERATURE-INSENSITIVE ACTIONS its hosts currently offer -- Equip /
+-- Unequip, Contents, Prioritize / Un-prioritize Repair, Store,
+-- Withdraw -- so routing those to the representative instanceId is
+-- correct (#67). It is NOT a claim that the members are mechanically
+-- identical: tracked temperature (#344) is deliberately not a key
+-- field (it cools continuously, so keying on it would split and
+-- re-merge a row forever), and consumption effects scale continuously
+-- with it (scripts/consumable.lua). A future temperature-SENSITIVE row
+-- action must therefore define how the player picks the exact instance
+-- it acts on; it may not inherit the representative from here.
+-- The group's own temperature is presented honestly instead -- see
+-- `tempSummary` below.
 --
 -- Returns nil for an equipped entry when the host asked for equipped
 -- items to stay separate -- each occupies a distinct slot.
@@ -106,25 +125,150 @@ function itemList.stackKey(it, separateEquipped)
     }, "|")
 end
 
+-----------------------------------------------------------
+-- Tracked temperature presentation (#1268)
+--
+-- Raw items carry `temp` -- the TRACKED iiTemp (#344), present only
+-- while the item is hotter or colder than its surroundings, so an
+-- ABSENT field means "at ambient" and is displayed as such. It is
+-- deliberately absent from the stack key above, so a group can hold
+-- members at genuinely different temperatures and only a whole-group
+-- summary describes it honestly.
+--
+-- Everything a host puts on screen is derived here, in one place: the
+-- row text, the tooltip line and the invalidation signature all read
+-- the SAME summary string, so they cannot round differently or drift
+-- apart between the two raw-item hosts.
+-----------------------------------------------------------
+
+-- A tracked temperature is a real, finite number; anything else means
+-- ambient. The non-finite guard is what keeps a NaN out of the min/max
+-- walk below, where every comparison against it is false and a group's
+-- range would silently collapse to one bogus endpoint.
+local function isTracked(t)
+    return type(t) == "number" and t == t
+       and t ~= math.huge and t ~= -math.huge
+end
+
+-- One whole degree Celsius, rounded half away from zero so a value and
+-- its negation present symmetrically. This is the ONLY rounding in the
+-- feature and it happens BEFORE the single-value-vs-range decision, so
+-- 41.6 and 42.3 are one presented value ("42°C") rather than the
+-- degenerate range "42–42°C".
+--
+-- The result is always an INTEGER, saturating rather than raising for
+-- an absurd magnitude: math.floor answers a FLOAT when the value is
+-- too large to hold an integer, and string.format's "%d" raises on
+-- one. iiTemp is a 32-bit float and unit.setItemTemp takes whatever
+-- Lua hands it, so `unit.setItemTemp(uid, iid, 1e38)` is reachable --
+-- and it would otherwise abort a whole panel rebuild rather than
+-- render one silly row.
+function itemList.roundTemp(t)
+    local r = (t >= 0) and math.floor(t + 0.5) or -math.floor(-t + 0.5)
+    return math.tointeger(r)
+        or (r < 0 and math.mininteger or math.maxinteger)
+end
+
+-- The four summary forms, decided entirely by the distinct ROUNDED
+-- values a group holds plus whether any member was at ambient:
+--
+--   all ambient                 -> "ambient"
+--   one presented tracked value -> "42°C"        (negatives keep the sign)
+--   several                     -> "35–42°C"
+--   ambient plus tracked        -> "ambient + 35–42°C"
+--
+-- Never the representative's own value presented as the group's.
+local function summarizeTemp(acc)
+    if not acc.tracked then return "ambient" end
+    local body
+    if acc.min == acc.max then
+        body = string.format("%d°C", acc.min)
+    else
+        body = string.format("%d–%d°C", acc.min, acc.max)
+    end
+    if acc.ambient then return "ambient + " .. body end
+    return body
+end
+
+-- Fold ONE member into its group's accumulator.
+local function accumulateTemp(acc, it)
+    if isTracked(it.temp) then
+        local d = itemList.roundTemp(it.temp)
+        if not acc.tracked then
+            acc.tracked, acc.min, acc.max = true, d, d
+        else
+            if d < acc.min then acc.min = d end
+            if d > acc.max then acc.max = d end
+        end
+    else
+        acc.ambient = true
+    end
+end
+
+-- The summary `groupItems` stored on a row, or nil for a row this
+-- widget did not group. The two host helpers below say NOTHING when it
+-- is absent, which is what keeps the "never synthesize" rule
+-- structural: `itemList.prepare` hands PRE-GROUPED rows straight
+-- through (the item-contents popup's deliberately coarse by-defName
+-- grouping), and the widget never saw those members -- inventing a
+-- summary there would present the representative's temperature as the
+-- whole group's, the exact failure this feature exists to avoid.
+function itemList.tempSummary(row)
+    return row and row.tempSummary or nil
+end
+
+-- The ROW-TEXT form: a host's own name text with the summary appended.
+-- Both raw-item hosts join it through here, so a row and its tooltip
+-- can never disagree and the two windows can never drift apart. It
+-- rides the existing name column and inherits the widget's UTF-8-safe
+-- truncation -- appending to every row (ambient ones included) costs
+-- name width, which is the accepted consequence of the presentation.
+function itemList.withTempSuffix(baseName, row)
+    local s = itemList.tempSummary(row)
+    if not s then return baseName or "" end
+    return (baseName or "") .. " · " .. s
+end
+
+-- The TOOLTIP form: a labeled line in the lowercase "label: value"
+-- style every other hint line uses (scripts/unit_info_v2_items.lua).
+function itemList.tempHintLine(row)
+    local s = itemList.tempSummary(row)
+    if not s then return nil end
+    return "temperature: " .. s
+end
+
 -- Copy-and-count grouping in FIRST-APPEARANCE order. The first item of
 -- each group stays its representative instance; the shared count field
 -- is `count`.
+--
+-- Grouping is also the one place every member of a row is visible, so
+-- it is where the temperature summary is computed and stored
+-- (`tempSummary`). A host callback could not do it: the widget's data
+-- signature records a callback's PRESENCE, never its output, so a
+-- summary produced only in `rowName`/`rowTooltip` would never
+-- invalidate a row.
 function itemList.groupItems(items, opts)
     local separateEquipped = opts and opts.separateEquipped
     local groups = {}
+    local accs   = {}
     local seen   = {}
     for _, it in ipairs(items or {}) do
         local key = itemList.stackKey(it, separateEquipped)
-        if key and seen[key] then
-            groups[seen[key]].count = groups[seen[key]].count + 1
+        local idx = key and seen[key]
+        if idx then
+            groups[idx].count = groups[idx].count + 1
+            accumulateTemp(accs[idx], it)
         else
             local copy = {}
             for k, v in pairs(it) do copy[k] = v end
             copy.count = 1
             groups[#groups + 1] = copy
+            accs[#groups] = { ambient = false, tracked = false }
+            accumulateTemp(accs[#groups], it)
             if key then seen[key] = #groups end
         end
     end
+    for i, g in ipairs(groups) do g.tempSummary = summarizeTemp(accs[i]) end
     return groups
 end
 
@@ -266,6 +410,14 @@ end
 -- State that is NOT in the row is deliberately not this function's
 -- job: it reaches the comparison through the host's presentationKey
 -- (see `signatures` below).
+--
+-- Temperature signs its PRESENTED summary and never the raw `temp`
+-- the representative happens to carry (#1268). That is the whole
+-- stability contract: cooling moves the raw value continuously, so a
+-- change staying inside one displayed whole degree leaves this string
+-- identical and rebuilds nothing, while crossing a degree boundary,
+-- switching between tracked and ambient, or moving a group's displayed
+-- minimum or maximum all change it and do rebuild.
 local function rowSignature(r)
     return table.concat({
         tostring(r.defName or ""),
@@ -285,6 +437,7 @@ local function rowSignature(r)
         tostring(r.sharpness or "_"),
         buffsSignature(r.buffs),
         tostring(r.contentsKey or ""),
+        tostring(r.tempSummary or "_"),
         r.equipped and "e" or "i",
         tostring(r.equippedSlot or ""),
         tostring(r.accessoryIndex or "_"),
@@ -541,9 +694,11 @@ local function buildRows(inst, s, listY, listBottom)
         local nameMaxPx = math.max(0, nameRight - nameX)
         local rawName   = p.rowName and p.rowName(row)
                           or (row.displayName or row.defName or "?")
+        local shownName = itemList.truncateToWidth(rawName, p.font,
+                                                   fontPx, nameMaxPx)
         local nameLbl = label.new({
             name = inst.name .. "_name_" .. i,
-            text = itemList.truncateToWidth(rawName, p.font, fontPx, nameMaxPx),
+            text = shownName,
             font = p.font, fontSize = fontSz,
             color = p.rowColor and p.rowColor(row) or { 1.0, 1.0, 1.0, 1.0 },
             page = p.page, uiscale = p.rowLabelUiscale or s,
@@ -572,8 +727,15 @@ local function buildRows(inst, s, listY, listBottom)
         end
         if tip then UI.setTooltipRich(hitId, tip) end
         track(inst, "sprite", hitId)
+        -- `text` is what the label ACTUALLY renders (post-truncation)
+        -- and `rawText` the host's full composed row name; `tooltip` is
+        -- the rich tip baked into the hit element. All three exist for
+        -- dump() -- no Lua API reads a rendered label or an element's
+        -- tooltip content back, so without them a probe could only
+        -- assert its own expectations about what a row says (#1268).
         inst.rows[#inst.rows + 1] =
-            { hitId = hitId, item = row, index = i }
+            { hitId = hitId, item = row, index = i,
+              text = shownName, rawText = rawName, tooltip = tip }
     end
 end
 
@@ -783,6 +945,15 @@ end
 -- right-click action (item contents) -- registry.lua's generic
 -- fallback pass only sees elements that HAVE a click callback, so
 -- without this a probe could not verify that panel's rows at all.
+--
+-- `label` stays the bare item name it always was (probes filter on
+-- it). What a row PRESENTS is separate: `text` is the string the label
+-- renders after truncation, `rawText` the host's full composed name
+-- before it, `tempSummary` the group summary both that and the tooltip
+-- derive from, and `tooltipText`/`tooltipHint` the rich tip's two
+-- halves. Those five are the only read path for either surface --
+-- nothing in the Lua API reports a rendered label or an element's
+-- tooltip content (#1268).
 function itemList.dump()
     local out = {}
     for id, inst in pairs(lists) do
@@ -798,6 +969,13 @@ function itemList.dump()
                         w = info.width, h = info.height,
                     },
                     label = r.item.displayName or r.item.defName or "?",
+                    text        = r.text,
+                    rawText     = r.rawText,
+                    tempSummary = r.item.tempSummary,
+                    tooltipText = type(r.tooltip) == "table"
+                                    and r.tooltip.text or nil,
+                    tooltipHint = type(r.tooltip) == "table"
+                                    and r.tooltip.hint or nil,
                     count = r.item.count or 1,
                     category = itemList.normalizeCategory(r.item.category),
                     defName = r.item.defName,

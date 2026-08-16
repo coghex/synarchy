@@ -1,8 +1,10 @@
 {-# LANGUAGE Strict #-}
--- | Render-side item-instance field pushing, shared by the equipped
---   loadout and accessory-list queries (and, via pushItemInstance,
---   by Engine.Scripting.Lua.API.Buildings.Materials' ground-item
---   listing) — the Lua-table shape a tooltip needs to draw an item.
+-- | Render-side item-instance field pushing — the Lua-table shape a
+--   tooltip needs to draw an item. 'pushItemInstance' backs the
+--   accessory-list query here and, through this module's export, the
+--   building storage / container-knowledge / transfer-endpoint
+--   listings; 'equipmentGetLoadoutFn' builds a compatible SUBSET of
+--   the same fields inline (see pushItemInstance's own note).
 module Engine.Scripting.Lua.API.Equipment.Render
     ( pushItemInstance
     , equipmentGetLoadoutFn
@@ -33,7 +35,7 @@ import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..))
 --   as empty. Returns nil if the unit doesn't exist.
 --
 --   Shape: { slotId = { defName, displayName, kind, weight,
---                       iconTex, currentFill }, … }
+--                       iconTex, currentFill, temp }, … }
 equipmentGetLoadoutFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 equipmentGetLoadoutFn env = do
     uidArg ← Lua.tointeger 1
@@ -75,6 +77,22 @@ equipmentGetLoadoutFn env = do
                         Lua.pushnumber
                             (Lua.Number (realToFrac (iiSharpness inst)))
                         Lua.setfield (-2) "sharpness"
+                        -- Tracked temperature (°C) — present only while
+                        -- the item is hotter/colder than its
+                        -- surroundings (#344); absent = at ambient, the
+                        -- same convention pushItemInstance and
+                        -- unit.getInventory use. An EQUIPPED item
+                        -- genuinely carries one (World.Thread.ItemTemp
+                        -- cools uiEquipment alongside inventory and
+                        -- accessories), and the unit-inventory list
+                        -- presents it per row (#1268), so a slot table
+                        -- that omitted it made every equipped row read
+                        -- "ambient".
+                        case iiTemp inst of
+                            Just t → do
+                                Lua.pushnumber (Lua.Number (realToFrac t))
+                                Lua.setfield (-2) "temp"
+                            Nothing → pure ()
                         -- Gate quality / condition on def specs so
                         -- canteens / rations don't show "100%" they
                         -- never had.
@@ -152,9 +170,20 @@ equipmentGetLoadoutFn env = do
                     return 1
 
 -- | Push an item-instance's render-side fields onto a freshly-created
---   Lua table at the top of the stack. Used by both getLoadout's slot
---   tables and getAccessories' list entries — same shape, so the Lua
---   side's hint-builder doesn't have to branch.
+--   Lua table at the top of the stack. Used by getAccessories' list
+--   entries here, and — through this module's export — by
+--   Engine.Scripting.Lua.API.Buildings.Materials' storage listing,
+--   Engine.Scripting.Lua.API.Buildings.Knowledge's remembered-contents
+--   listing, and Engine.Scripting.Lua.API.Units.Transfer's endpoint
+--   listing.
+--
+--   'equipmentGetLoadoutFn' deliberately does NOT go through it: a slot
+--   table is built inline above and carries a SUBSET of these fields.
+--   The two nevertheless agree on every field they share, name for name
+--   and convention for convention (instance sharpness rather than the
+--   def's base, quality/condition gated on def specs, tracked
+--   temperature absent at ambient), which is what lets the Lua side's
+--   hint-builder read either shape without branching.
 pushItemInstance ∷ ItemInstance → ItemManager → Lua.LuaE Lua.Exception ()
 pushItemInstance inst itemMgr = do
     Lua.pushstring (TE.encodeUtf8 (iiDefName inst))
