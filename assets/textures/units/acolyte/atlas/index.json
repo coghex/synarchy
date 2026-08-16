@@ -1,0 +1,2461 @@
+{
+  "schema_version": 1,
+  "generator": "tools/pack_atlas.py",
+  "tool_version": 1,
+  "digest_algorithm": "sha256",
+  "unit": "acolyte",
+  "direction_order": [
+    "south",
+    "south-west",
+    "west",
+    "north-west",
+    "north",
+    "north-east",
+    "east",
+    "south-east"
+  ],
+  "animations": [
+    {
+      "name": "attack_heavy_RH_dagger",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/attack_heavy_RH_dagger.png",
+      "atlas_width": 432,
+      "atlas_height": 384,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 8,
+      "flip": false,
+      "fps": 10.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-west",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "west",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-west",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 4,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 5,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 6,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 7,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "73818dbb185923a43c634484908095d70f65ad6ae5d56a3d8bb39a874e3672b2",
+      "atlas_digest": "b8781695f8e773dcd015c7a897fb689f5a9775e4d59f5a2f9b982d264bcedebb"
+    },
+    {
+      "name": "attack_heavy_unarmed",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/attack_heavy_unarmed.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 10.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 5
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "4253466a0274c592d7b229879f6e245749d7db13982922e0a74dddb8c3288e40",
+      "atlas_digest": "bbd45c806962bcf558864c46fc2b4476823cc4a7e5ffbff2da664935f86de52f"
+    },
+    {
+      "name": "attack_quick_RH_dagger",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/attack_quick_RH_dagger.png",
+      "atlas_width": 240,
+      "atlas_height": 384,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 5,
+      "rows": 8,
+      "flip": false,
+      "fps": 12.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-west",
+          "row": 1,
+          "frame_count": 5
+        },
+        {
+          "direction": "west",
+          "row": 2,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-west",
+          "row": 3,
+          "frame_count": 5
+        },
+        {
+          "direction": "north",
+          "row": 4,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-east",
+          "row": 5,
+          "frame_count": 5
+        },
+        {
+          "direction": "east",
+          "row": 6,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-east",
+          "row": 7,
+          "frame_count": 5
+        }
+      ],
+      "source_digest": "b6f50312fd540d6ecbf2976de7b23c1da0af68ad207f4f1a505fe9bc7e4b1e44",
+      "atlas_digest": "60c32ceec4c3c94de4f4d48e89eb29ca554cd6cfd1df7070742a6d713a52e187"
+    },
+    {
+      "name": "attack_quick_unarmed",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/attack_quick_unarmed.png",
+      "atlas_width": 240,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 5,
+      "rows": 5,
+      "flip": true,
+      "fps": 12.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 5
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 5
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 5
+        }
+      ],
+      "source_digest": "27b658b6332c5c3914c2ba3f6672943944a136ddf6a88821864539c1787f7baf",
+      "atlas_digest": "504710842eb98da441788bb7c01ef030dad8dec6e0d2e037619085ddcf6d7d97"
+    },
+    {
+      "name": "climb",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/climb.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "9e01119eaf6d070552774681879979c27d29eac6071727e8ab519dca4012e971",
+      "atlas_digest": "3a8568ad69cd32885a09c378cf2d225ad46be92b390c21cf8c61d118bcc4e2a0"
+    },
+    {
+      "name": "climb_idle",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/climb_idle.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 4.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "0e6f34ee8f8d092766320e7077790d412180da8e109224f32f75878c1878f747",
+      "atlas_digest": "7a7b0eb1fde10eeef8b00c0524d2101d7796032a1eb4b1971c6da9750fa9749a"
+    },
+    {
+      "name": "climb_pullup",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/climb_pullup.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "6d879ad187a888baa13bef277fe3eec08aa7e4f4046e49f10daab0ff3b73280b",
+      "atlas_digest": "1024b233f18232c3f793ea2a59419929688ff3b96b30132c89453b9576492927"
+    },
+    {
+      "name": "collapse",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/collapse.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "51eaa0f18069835f4c57141b4bf3371876616573456e88937e4b3184457b1e85",
+      "atlas_digest": "819fee6b85f8d37a0f08e69d450ebaef5fe2c26d72e4fa9068c43742aac7eaea"
+    },
+    {
+      "name": "combat_hit_react_RH_dagger",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/combat_hit_react_RH_dagger.png",
+      "atlas_width": 240,
+      "atlas_height": 384,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 5,
+      "rows": 8,
+      "flip": false,
+      "fps": 12.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-west",
+          "row": 1,
+          "frame_count": 5
+        },
+        {
+          "direction": "west",
+          "row": 2,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-west",
+          "row": 3,
+          "frame_count": 5
+        },
+        {
+          "direction": "north",
+          "row": 4,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-east",
+          "row": 5,
+          "frame_count": 5
+        },
+        {
+          "direction": "east",
+          "row": 6,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-east",
+          "row": 7,
+          "frame_count": 5
+        }
+      ],
+      "source_digest": "9445890998d721f2964b09f2b5b921e14b8eb6b8f7f9d870168ac84f07541ac1",
+      "atlas_digest": "12f25360a18d17626a54d02861a992cb998875de1e10d4dc80f3633c09ded8ff"
+    },
+    {
+      "name": "combat_hit_react_unarmed",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/combat_hit_react_unarmed.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 12.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "45b4709156288f361592a55455b557d2b41d2833524574c22ed5bc214a166fdf",
+      "atlas_digest": "084c1f6e60cec5eea8b65504fedef3e07d6ef573aa193df2fbc718cf07cd4209"
+    },
+    {
+      "name": "combat_idle_RH_dagger",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/combat_idle_RH_dagger.png",
+      "atlas_width": 432,
+      "atlas_height": 384,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 8,
+      "flip": false,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-west",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "west",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-west",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 4,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 5,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 6,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 7,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "4d932ce508aa842078670b2ab625fdeec9a1ddd782d54325ebc847befbbe0f52",
+      "atlas_digest": "930f4e918136e21022f780d4d9d0def47abad53f6719410226a7e9c6dd4432f5"
+    },
+    {
+      "name": "combat_idle_unarmed",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/combat_idle_unarmed.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "e7f470548d394b78de0b070b967f47db416480f3aa79cc40c09bc649d4378067",
+      "atlas_digest": "2dd8fcc17fa99ed5e0cccbd1a878a3879c5e660a5480685c64df130cf977368c"
+    },
+    {
+      "name": "crawling",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/crawling.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 6.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "6342aead92e63a7a1ec42b3463ae1d5cdd36d23df2c3f3571e86ef181cc68ad4",
+      "atlas_digest": "55a449809c9041ca5e5b7cac6e39b98dcfdcf1a9e28ce83908fbfea884a986f6"
+    },
+    {
+      "name": "crawling_idle",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/crawling_idle.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 4.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "b6a4fb4d5054bcfbe6febfc67ebff6e433a413e363c2a0a7c0343f3ad13b3a21",
+      "atlas_digest": "362b2b99607af023b0cd572f77aa2068f90095daea542f925cdcaa2510b05f9f"
+    },
+    {
+      "name": "crawling_to_collapsed",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/crawling_to_collapsed.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "fb7fa63dff2aa56549ef7c34e74ba8c9bb2a03ac0a7dd6b5628737de9f0d7dc9",
+      "atlas_digest": "b2739a7ce6fe936d3105f693eb19f82e39d5feb3b8841413ad22c2d566a3b52b"
+    },
+    {
+      "name": "crawling_to_sleeping",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/crawling_to_sleeping.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "08475a349f8e8cc94131b3741e2c8ab085959ced57a98f030a89a1347b1d3a7c",
+      "atlas_digest": "d3f01c8def5cf3b4a34b26f95fa1e8e7931d8b968dc4b62cfd981fbb99feca6f"
+    },
+    {
+      "name": "crouching_idle",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/crouching_idle.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 4.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "2a2fda39bf85aa40435df52a6bd1a403c67a09d11db2490ce929c28947926dbf",
+      "atlas_digest": "96c595abc59b4acff599988b40fa4cb3c5c4d8826195f9ceaa5555904f0b8a2a"
+    },
+    {
+      "name": "crouching_to_crawling",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/crouching_to_crawling.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "7d640c4af746e9f5725a814e39054e1946b4e83cdddbd80830b1889e3631a41c",
+      "atlas_digest": "900dedb2f9c1053b884f678123272634f6ccde7c2febf9140d1b5e5119706c0b"
+    },
+    {
+      "name": "death",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/death.png",
+      "atlas_width": 336,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 7,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 7
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 7
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 7
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 7
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 7
+        }
+      ],
+      "source_digest": "36f151d9376177828e6aaaca9006bbe83606a65e334521713232e478ec359afe",
+      "atlas_digest": "fd82b19e133b7d62e737b245d24d442ded6d392e26dd7b089114cf85514d8e9a"
+    },
+    {
+      "name": "drink",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/drink.png",
+      "atlas_width": 288,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 6,
+      "rows": 5,
+      "flip": true,
+      "fps": 6.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 6
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 6
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 6
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 6
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 6
+        }
+      ],
+      "source_digest": "6e1c354e132102fcd4d8c2410731102fe9665553adcf7fc1039f7bb70e659909",
+      "atlas_digest": "bd81f63f4de613fbf6460f35fc5db9ae173b775689637fad2d167bb2246ff65b"
+    },
+    {
+      "name": "falling",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/falling.png",
+      "atlas_width": 240,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 5,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 5
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 5
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 5
+        }
+      ],
+      "source_digest": "00f5ceeb7beac784bd91a05b58a5f8c88abb68c3c11601be51c47e47ec488474",
+      "atlas_digest": "e59bbf9b5eacd964ed7be484211178b330e6941084af95482c4a792e4e2728ec"
+    },
+    {
+      "name": "hit_react",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/hit_react.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 12.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "3b7f80dfb6a0dc8613acb5d8f6f5a1741d3021fe32b2f70572b1deea88603cc5",
+      "atlas_digest": "09005b176f2fd7c9de3d3b36a0efff14dbe3cebeb2321b6921a98cb1ee118a87"
+    },
+    {
+      "name": "idle",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/idle.png",
+      "atlas_width": 192,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 4,
+      "rows": 5,
+      "flip": true,
+      "fps": 6.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 4
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 4
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 4
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 4
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 4
+        }
+      ],
+      "source_digest": "9b8602111c74e30e4b17ad24bc774fb2ab7d89fd54631147e577e04886b65c19",
+      "atlas_digest": "19380137c3184edd7dbc726089d0f17c2539291571fcdbaaaefbaf77e3a810bf"
+    },
+    {
+      "name": "injured_attack_heavy_RH_dagger",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/injured_attack_heavy_RH_dagger.png",
+      "atlas_width": 432,
+      "atlas_height": 384,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 8,
+      "flip": false,
+      "fps": 8.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-west",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "west",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-west",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 4,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 5,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 6,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 7,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "fa03e73e15d3d30bce69cefd7e966a9484f9ed3bf0b008575281e5895833bea8",
+      "atlas_digest": "6fd75d0ef0fc5a6303b2f0f320ca4bfe242697239e30b29c2195c948fa318793"
+    },
+    {
+      "name": "injured_attack_heavy_unarmed",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/injured_attack_heavy_unarmed.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 5
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 5
+        }
+      ],
+      "source_digest": "1088edb8f645ba4b3d800822479ff9ab1f47ef5c56c2d4a82a7883cd005fa6f9",
+      "atlas_digest": "e08161ffe925e042875a0915d7b74bb82a264acce84919c94a2d1845d4c59913"
+    },
+    {
+      "name": "injured_attack_quick_RH_dagger",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/injured_attack_quick_RH_dagger.png",
+      "atlas_width": 240,
+      "atlas_height": 384,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 5,
+      "rows": 8,
+      "flip": false,
+      "fps": 10.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-west",
+          "row": 1,
+          "frame_count": 5
+        },
+        {
+          "direction": "west",
+          "row": 2,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-west",
+          "row": 3,
+          "frame_count": 5
+        },
+        {
+          "direction": "north",
+          "row": 4,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-east",
+          "row": 5,
+          "frame_count": 5
+        },
+        {
+          "direction": "east",
+          "row": 6,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-east",
+          "row": 7,
+          "frame_count": 5
+        }
+      ],
+      "source_digest": "1a215f5ab6835ef2af4b5f63beb21a929809be32576050eae8a822cb08d79b2d",
+      "atlas_digest": "f750a5a99032b01a1e564e51ec5ea9eb37bc041bd0b15d287b0b0b40cd5b87ed"
+    },
+    {
+      "name": "injured_attack_quick_unarmed",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/injured_attack_quick_unarmed.png",
+      "atlas_width": 240,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 5,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 5
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 5
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 5
+        }
+      ],
+      "source_digest": "b718d5133994ae949a869e20d3acb848ffd52f3df30aa23f69e267951a37def7",
+      "atlas_digest": "8e625ee4ce0fcf00409d19f4401af119f9fbaa68058c539ba7511489bf2f3006"
+    },
+    {
+      "name": "injured_collapse",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/injured_collapse.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 6.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "60f72166ac3d61bea97ff216cc939cf4445480a075cf30e000dc298135c71406",
+      "atlas_digest": "6cfafb4ab4a9c8928d835a43f0ee44232af9305509f51bac6b34a40a5712bda6"
+    },
+    {
+      "name": "injured_combat_hit_react_RH_dagger",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/injured_combat_hit_react_RH_dagger.png",
+      "atlas_width": 240,
+      "atlas_height": 384,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 5,
+      "rows": 8,
+      "flip": false,
+      "fps": 10.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-west",
+          "row": 1,
+          "frame_count": 5
+        },
+        {
+          "direction": "west",
+          "row": 2,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-west",
+          "row": 3,
+          "frame_count": 5
+        },
+        {
+          "direction": "north",
+          "row": 4,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-east",
+          "row": 5,
+          "frame_count": 5
+        },
+        {
+          "direction": "east",
+          "row": 6,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-east",
+          "row": 7,
+          "frame_count": 5
+        }
+      ],
+      "source_digest": "bdb4f76e342143cafae8f7e905c99ed60e23f61a8ac61df903877357cd018086",
+      "atlas_digest": "982ce5758d8e1bd721d231b1355c81db6454b445a8349eebe295af165b5dde75"
+    },
+    {
+      "name": "injured_combat_hit_react_unarmed",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/injured_combat_hit_react_unarmed.png",
+      "atlas_width": 240,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 5,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 5
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 5
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 5
+        }
+      ],
+      "source_digest": "089e1e696e5a8da1f011d4a7fa8bf5b5729137adc1886b78d728df4734eac61c",
+      "atlas_digest": "09674f4ea5b69b7745c63e6b3cbf608d0d954971c57b20ab9013c2b38f11136f"
+    },
+    {
+      "name": "injured_combat_idle_RH_dagger",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/injured_combat_idle_RH_dagger.png",
+      "atlas_width": 432,
+      "atlas_height": 384,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 8,
+      "flip": false,
+      "fps": 6.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-west",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "west",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-west",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 4,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 5,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 6,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 7,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "1acfa45832c96e7b5dfaf2ecac46d9dcb242efe1270365cfc0b2f351a3afe535",
+      "atlas_digest": "42e68b3b8e212c9f1d64b3fb44a584b0e8739979c33eab26fa750454060933da"
+    },
+    {
+      "name": "injured_combat_idle_unarmed",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/injured_combat_idle_unarmed.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 6.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "71b14b96779983f846dc1bea9813a08a18cd85cdeab509731f59662bfcc8b70e",
+      "atlas_digest": "1a5cf1b496e568f6a50e054cd9e93125d9260f098fcc4711568a29ce6b027672"
+    },
+    {
+      "name": "injured_death",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/injured_death.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 6.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "793482cd018cbf4834aa0d1332ed497eb3a3c197f96623299a66f6f805912b9f",
+      "atlas_digest": "355dde30e14b45b6915edc19b6080bec99b4ceb698fbf14f821ead4387eebfb6"
+    },
+    {
+      "name": "injured_drink",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/injured_drink.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "45da87afa1568081f3bd3a3178ffe0d0b9dce3cf1b486bbe744a13a740db3035",
+      "atlas_digest": "f6397dbc374900f1a76911b50184a4a0d7cc9370150180fd1cae596c263690d5"
+    },
+    {
+      "name": "injured_hit_react",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/injured_hit_react.png",
+      "atlas_width": 240,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 5,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 5
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 5
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 5
+        }
+      ],
+      "source_digest": "c3b1c3a338e6cd5027739041a64a90fcd32af96da67523befc82c9f69f53da0e",
+      "atlas_digest": "6cfb3c8a0ea829c07ccf9e98d038fd489cf59e6624d97c9b436c2408cedd9ca6"
+    },
+    {
+      "name": "injured_idle",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/injured_idle.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 4.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 5
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "c77b4b08fac34977d4a954d72358168171abf8aae3528282740b7599a75c3f85",
+      "atlas_digest": "419fe875ffd7d7dff1b6ca1d9ad9d2aa06bdd38f5fb325b2b20de37f194f093f"
+    },
+    {
+      "name": "injured_pickup",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/injured_pickup.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "6cf73876296eab7cadc55758988062661a4448a4e922086c439601bcf1bf30b1",
+      "atlas_digest": "c5ab67ad9fe541d2192885929e066aec4fdb2a4bcb40c162271be0124cc0836f"
+    },
+    {
+      "name": "injured_run",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/injured_run.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "2dec44296b21ccd1ffab16a495749a5a43e75bbea69765c908a709976cd21f66",
+      "atlas_digest": "39df67503cdef7114805eea145b467ab2636ba59bb37344a62a5fac2560e8cec"
+    },
+    {
+      "name": "injured_walk",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/injured_walk.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 6.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 5
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "4396709a56efbe4ef8cef1da4c0d09bb8acfabbbb64b852f9341eda55949e9e8",
+      "atlas_digest": "e89a5d09e20064a691c1a2b846edd080dbc452fdbb5d7de8d51dbb839e743e31"
+    },
+    {
+      "name": "landing",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/landing.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 12.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "b533e60a784cc84632b8e20beb9d1ce4a6cab04fabdd6419226fba04cb3555d8",
+      "atlas_digest": "7eb0758249d3b8e007f312a9c7b528346211c5fe1ff4720acc8de1c8a5399e9f"
+    },
+    {
+      "name": "pickup",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/pickup.png",
+      "atlas_width": 240,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 5,
+      "rows": 5,
+      "flip": true,
+      "fps": 6.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 5
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 5
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 5
+        }
+      ],
+      "source_digest": "b47eb70828f28b7798d8c011cb09f2d382cd936e35648c3573958084c832332c",
+      "atlas_digest": "05ca67e9d34fea2251e493c5982be39cf144a29db6322998aae6f25c55cf2c68"
+    },
+    {
+      "name": "pushing",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/pushing.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "891613527b7c3a7a8d88a15e0d0160139dd9e87cdee4386e97c624b69f399b39",
+      "atlas_digest": "4f7d2dbcac4e2880a9e6651a76c31cdfc8cf0351992c5951ce495fd2dce52e79"
+    },
+    {
+      "name": "pushing_idle",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/pushing_idle.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "1c25784401ee995b6152090bdc4a183b24e1fc3906ac5a3bcae5fe44b429e509",
+      "atlas_digest": "872a04670e18602cab6049cf8c0ad8c2d9c539b086b0330fdf7d871cd3d2f1df"
+    },
+    {
+      "name": "run",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/run.png",
+      "atlas_width": 288,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 6,
+      "rows": 5,
+      "flip": true,
+      "fps": 12.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 6
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 6
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 6
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 6
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 6
+        }
+      ],
+      "source_digest": "3a564ee260d68878adfa2a1ddd4a9b78456120a7132b761753ecc86de0380c01",
+      "atlas_digest": "03137286197784fb5dc7deec1e14fb42f74e87c4a7cec1d0ffda29b8de98ac4d"
+    },
+    {
+      "name": "shoveling",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/shoveling.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "c673fb92f371a1ca6475c3cfb5065a76fd275bbc62f5eb240c699fb473e1ba71",
+      "atlas_digest": "dc950048de5b9c1c5910f6b860f071d3878ebc78551653954bb399824149ee48"
+    },
+    {
+      "name": "sleeping_idle",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/sleeping_idle.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 4.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "4e8dc88612ff3cd9b327fac9a9445ec93e553a5f6a928f70654840050cb7ac22",
+      "atlas_digest": "8b897cf40a161946223f2e4949494d8fe6deffcd1b5a1aaa87bd10894294d72e"
+    },
+    {
+      "name": "standing_to_collapsed",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/standing_to_collapsed.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "22488afb87b7ba7e40ae9691d478565bcfc94085c6dd7f09501ad7c0ca7f755f",
+      "atlas_digest": "a5fa32aab6ada52cb79d782f749f0d461657bf56fd03fdaf1a945fecde4cfef2"
+    },
+    {
+      "name": "standing_to_crawling",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/standing_to_crawling.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "b16531962b0a01a869c902bdf6c16cfc72e602b374c6f9100b60100729bc994f",
+      "atlas_digest": "26c6907b3020a8c2d2c01be33a068a767b51137510dbcc07e5f577a7dc03849f"
+    },
+    {
+      "name": "standing_to_crouching",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/standing_to_crouching.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "c2aeb45aad39bdb8a9282b08b1b5f7688ea65e3a30f87cf6b1335470a6fc67df",
+      "atlas_digest": "d8b68f35e423d9e37063fbb9cb30f4623c55781eca5b251ffc13131383a057f5"
+    },
+    {
+      "name": "standing_to_holding_pickaxe",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/standing_to_holding_pickaxe.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "fec7b8a14742029ca9c9044a8b559e834d0add59634270d6860d85af7d0087b3",
+      "atlas_digest": "891808e7bbb020cea6978b0d3fecf9d7e73e02c20be017289892e59ead13fa11"
+    },
+    {
+      "name": "standing_to_holding_shovel",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/standing_to_holding_shovel.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "d30182a00cc9d3f5b8bc3ad31580bc06b36ea2f3e3a6f883c57766e3e00877b8",
+      "atlas_digest": "31ec57c981e799c439c138451c74c2c6926a418505db8b1fa512225fc70d5025"
+    },
+    {
+      "name": "standing_to_pushing",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/standing_to_pushing.png",
+      "atlas_width": 240,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 5,
+      "rows": 5,
+      "flip": true,
+      "fps": 5.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 5
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 5
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 5
+        }
+      ],
+      "source_digest": "a30b57c76d253f50957d9b8c8e1920ba903533c7c5fe9eefab81a6de180c96ec",
+      "atlas_digest": "7d7de7f925d78446acf81b39d17cb8d7f03665f7bc52db4899c53c38fbc1fcaa"
+    },
+    {
+      "name": "using_pickaxe",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/using_pickaxe.png",
+      "atlas_width": 432,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "f6db339a0e3c131384800699011c081f691f2ecfcf07d5441ef173303bc767ee",
+      "atlas_digest": "bd7ba0503c602263081e49cda62b77452f5a6d790239be583ec55965d4790f7f"
+    },
+    {
+      "name": "walk",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/acolyte/atlas/walk.png",
+      "atlas_width": 288,
+      "atlas_height": 240,
+      "cell_width": 48,
+      "cell_height": 48,
+      "columns": 6,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 6
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 6
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 6
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 6
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 6
+        }
+      ],
+      "source_digest": "717a0d4682ce2fa5d1cdec620f2a6e4efeaa13943351d406ccf3e3f66c36d080",
+      "atlas_digest": "4d8a7f82e2459c4da90da66c75d02ba9ff6d0b57f24cb4eed79afef6259e6efa"
+    }
+  ]
+}
