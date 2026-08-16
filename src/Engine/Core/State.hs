@@ -127,9 +127,13 @@ data EngineEnv = EngineEnv
   , nextItemInstanceIdRef ∷ IORef Word64
     -- ^ Monotonic allocator for 'iiInstanceId'. Bumped once per genuine
     --   item creation (rolls / spawns) via 'freshItemInstanceId'; moves
-    --   preserve the existing id. Seeded to 1 at startup and restored
-    --   from 'sdNextItemInstanceId' on load (max'd, never lowered) so
-    --   post-load items can't collide with loaded ones (#67).
+    --   preserve the existing id. Seeded to 1 at startup and ASSIGNED
+    --   from 'sdNextItemInstanceId' on load -- a plain write, never a
+    --   'max' against the discarded session's value, because #763 made a
+    --   load a complete session REPLACEMENT rather than a merge
+    --   ('World.Load.Publish'). Post-load items still can't collide with
+    --   loaded ones (#67): 'World.Save.Snapshot' validates at SAVE time
+    --   that every saved 'iiInstanceId' is below the saved allocator.
   , fontCacheRef        ∷ IORef FontCache
   , inputStateRef       ∷ IORef InputState
   , keyBindingsRef      ∷ IORef KeyBindings

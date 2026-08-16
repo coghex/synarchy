@@ -50,8 +50,8 @@
 --     alias) run to COMPLETION after a load with no migration;
 --     resolving the designation but editing terrain raw is a half-fix.
 --   * The Lua-side claim tables (digKey / chopKey / till.key) key off
---     those same coords, so one physical tile now has exactly one claim
---     key -- two aliases could previously hold it twice.
+--     those same coords, PAGE-qualified since #1329, so one physical
+--     tile has one claim key per page -- two aliases held it twice.
 --   * Job SELECTION range gates are the one place a canonical coord is
 --     the wrong number: from a worker, a seam-side job measures a whole
 --     world away and is rejected before it can be claimed. So

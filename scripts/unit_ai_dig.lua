@@ -8,9 +8,11 @@
 -- world-side (world.digTile), so the tile slopes toward the unit
 -- until it drops a z-level and the designation completes.
 --
--- Claims live in a module-local table keyed by tile so two acolytes
--- never work the same tile (same in-flight-claim shape as build
--- sites); claims expire on timeout or when the claimant dies.
+-- Claims live in a module-local table keyed by page + tile so two
+-- acolytes never work the same tile (same in-flight-claim shape as
+-- build sites); claims expire on timeout or when the claimant dies,
+-- and the whole table is emptied when a load replaces the session
+-- (#1329 — see scripts/unit_ai_claims.lua for both rules).
 -----------------------------------------------------------
 
 local core = require("scripts.unit_ai_core")
@@ -18,12 +20,15 @@ local distance = core.distance
 
 local mv = require("scripts.movement_speed")
 local roles = require("scripts.unit_roles")
+-- Page-qualified claim keys + the load reset that empties this
+-- registry when a save replaces the session (#1329).
+local claimsLib = require("scripts.unit_ai_claims")
 
 local M = {}
 
-local digClaims = {}   -- "x,y" → { uid = ..., at = gameTime }
+local digClaims = claimsLib.track({})   -- page key → { uid, at = gameTime }
 
-local function digKey(x, y) return x .. "," .. y end
+local digKey = claimsLib.key   -- (wid, x, y)
 
 local function digClaimedByOther(key, uid, now, timeout)
     local c = digClaims[key]
@@ -55,9 +60,9 @@ local function bestDigTool(uid, params, pickSpeed, shovelSpeed)
     return tool, speed
 end
 
-local function releaseDigJob(s, uid)
+local function releaseDigJob(wid, s, uid)
     if s.digJob then
-        local key = digKey(s.digJob.x, s.digJob.y)
+        local key = digKey(wid, s.digJob.x, s.digJob.y)
         local c = digClaims[key]
         if c and c.uid == uid then digClaims[key] = nil end
     end
@@ -70,12 +75,12 @@ end
 -- the execute loop can be first to notice, depending on tick
 -- ordering, so completion lives in one helper: XP if we were
 -- actually working it, drop the tool visual, release the claim.
-local function digComplete(uid, s, params)
+local function digComplete(wid, uid, s, params)
     if s.digPhase == "digging" or s.digPhase == "equipping" then
         unit.addXP(uid, "mining", params.dig_xp_per_tile or 0)
     end
     unit.clearAnimOverride(uid)
-    releaseDigJob(s, uid)
+    releaseDigJob(wid, s, uid)
 end
 
 local function digUtility(uid, s, params)
@@ -89,7 +94,7 @@ local function digUtility(uid, s, params)
     if s.digJob then
         local z = world.getMineDesignationAt(wid, s.digJob.x, s.digJob.y)
         if z then return params.dig_lock_utility end
-        digComplete(uid, s, params)
+        digComplete(wid, uid, s, params)
     end
 
     local info = unit.getInfo(uid)
@@ -100,7 +105,7 @@ local function digUtility(uid, s, params)
     if dist > params.dig_scan_range then return -math.huge end
 
     local now = engine.gameTime()
-    if digClaimedByOther(digKey(gx, gy), uid, now,
+    if digClaimedByOther(digKey(wid, gx, gy), uid, now,
                          params.dig_claim_timeout) then
         return -math.huge
     end
@@ -188,7 +193,7 @@ local function digExecute(uid, s, params)
     if not s.digJob then
         local cand = s.digCandidate
         if not cand then return end
-        local key = digKey(cand.x, cand.y)
+        local key = digKey(wid, cand.x, cand.y)
         if digClaimedByOther(key, uid, now, params.dig_claim_timeout) then
             return
         end
@@ -212,7 +217,7 @@ local function digExecute(uid, s, params)
 
     local job = s.digJob
     -- Keep the claim fresh while we hold the job.
-    digClaims[digKey(job.x, job.y)] = { uid = uid, at = now }
+    digClaims[digKey(wid, job.x, job.y)] = { uid = uid, at = now }
     local toolCfg = params.dig_tools[job.tool]
 
     if s.digPhase == "walking" then
@@ -256,7 +261,7 @@ local function digExecute(uid, s, params)
             world.getMineDesignationAt(wid, job.x, job.y)
         if not z then
             -- Tile completed (or undesignated out from under us).
-            digComplete(uid, s, params)
+            digComplete(wid, uid, s, params)
             return
         end
         local corners = { c1, c2, c3, c4 }
@@ -287,7 +292,7 @@ local function digExecute(uid, s, params)
                                             or (shovelSpeed or 0)
         if speed <= 0 or spoilBlocked then
             unit.clearAnimOverride(uid)
-            releaseDigJob(s, uid)
+            releaseDigJob(wid, s, uid)
             return
         end
         -- Idempotent: re-asserts the work anim after preemption.

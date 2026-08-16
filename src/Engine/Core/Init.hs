@@ -161,8 +161,10 @@ initializeEngineWith logBackend = do
   assetPool ← defaultAssetPool
   assetPoolRef ← newIORef assetPool
   nextObjectIdRef ← newIORef 0
-  -- Item-instance ids start at 1 (0 is the "unassigned" sentinel); the
-  -- counter is restored/max'd from sdNextItemInstanceId on load (#67).
+  -- Item-instance ids start at 1 (0 is the "unassigned" sentinel); a
+  -- load ASSIGNS the counter from sdNextItemInstanceId, never max'ing
+  -- against this session's value (#67, reshaped by #763 -- see
+  -- 'World.Load.Publish').
   nextItemInstanceIdRef ← newIORef 1
   texNameRegRef ← newIORef emptyTextureNameRegistry
   
