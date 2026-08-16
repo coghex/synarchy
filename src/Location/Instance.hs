@@ -32,7 +32,7 @@
 --   it is derived from chunk residency.
 --
 --   /Stored geometry./ An instance stores its own anchor tile, absolute
---   bounds (#777), discovery margin, and display name, resolved from
+--   bounds (#777) and display name, resolved from
 --   the definition ONCE when the instance is created. Consumers
 --   (queries, discovery, placement exclusion) read those stored values
 --   rather than re-deriving them from the live registry, so a
@@ -131,17 +131,17 @@ firstLocationInstanceId = 1
 --   reward (step 5), and retrieval (step 6) issues are what these
 --   states exist to serve.
 --
---   'LifecycleHinted' is deliberately unreachable today, and that is
---   correct rather than an oversight. EVERY location is
---   cartographically visible from world generation and stays that way
---   for now (a deliberate development-phase simplification): the player
---   can always see something is there, and it stays unexplored until a
---   player-controlled unit discovers it by proximity (#780, #781).
---   'LifecycleHinted' is therefore meaningful only for a future class
---   of locations that are NOT visible by default and must be revealed
---   by INFORMATION rather than proximity. That class is planned but
---   unbuilt — this note is here so the state is not later mistaken for
---   dead weight and deleted by someone tidying an enum.
+--   'LifecycleHinted' is deliberately unreachable today: nothing
+--   produces it, and #1230 removed the future information-reveal class
+--   it used to be reserved for. It is NOT dead weight, and it is not
+--   removable either way — it is a positionally serialized append-only
+--   enum constructor (see the schema note above), so deleting it would
+--   silently corrupt every save written after it. Behaviourally it is
+--   an ordinary unknown state: it draws the shared unknown map icon
+--   ('World.Render.Zoom.Icons.locationIconAppearance') and promotes to
+--   'LifecycleDiscovered' on sight exactly as 'LifecycleUnknown' does.
+--   This note is here so the state is not later mistaken for a
+--   forgotten placeholder and deleted by someone tidying an enum.
 data LocationLifecycle
     = LifecycleUnknown
     | LifecycleHinted
@@ -209,8 +209,6 @@ data LocationInstance = LocationInstance
     , liBounds          ∷ !AbsBounds
       -- ^ absolute, inclusive tile footprint (#777), resolved from the
       --   definition when the instance was created
-    , liDiscoveryMargin ∷ !Int
-      -- ^ the definition's discovery halo (#780), resolved at creation
     , liDisplayName     ∷ !Text
       -- ^ the instance's name, rendered ONCE at creation: native text
       --   in the page's own language (#1101) when it has one, else the
@@ -296,7 +294,6 @@ newLocationInstance namer iid coord def =
         , liChunk           = coord
         , liAnchor          = anchor
         , liBounds          = translateBounds anchor (ldBounds def)
-        , liDiscoveryMargin = ldDiscoveryMargin def
         , liDisplayName     = name
         , liGloss           = gloss
         , liEtymology       = ety

@@ -6,7 +6,7 @@
 --   This module was narrowed to the @content-registries@ capability by
 --   #890 (epic #537) so the location-def registry was reached only
 --   through 'ContentRegistriesCapability'. #911 removed even that: every
---   value these queries report — definition id, anchor, bounds, margin,
+--   value these queries report — definition id, anchor, bounds,
 --   display name and gloss, lifecycle, content-spawn flag — is stored
 --   on the placed-location INSTANCE, so nothing here consults the
 --   registry at all any more. The remaining 'EngineEnv' parameter is purely the
@@ -39,12 +39,14 @@ import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv, activeWorldStateFrom)
 import World.Types
-import Location.Discovery (AwarenessHit(..), findAwareness)
+import Location.Discovery (AwarenessHit(..), UnitSight(..), findAwareness)
 import Location.Instance
     ( LocationInstance(..), LocationInstanceId(..), LocationInstances
     , instancesToList, instancesInChunk, lookupLocationInstance
     , isDiscoveredLifecycle, lifecycleName, emptyLocationInstances )
 import Location.Bounds (AbsBounds(..))
+import Unit.Faction (isPlayerOwned)
+import Unit.LineOfSight (visibleTilesOnPage)
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..))
 import World.Generate.Coordinates (globalToChunk)
 import Engine.Scripting.Lua.API.WorldQuery.Lookup (worldStateByPage)
@@ -78,9 +80,8 @@ instancesForPage env mPage =
 --       id,        -- the LocationDef id (#88) placed there
 --       bounds,    -- { min_x, min_y, max_x, max_y } — absolute,
 --                  --   inclusive tile bounds (#777)
---       discovery_margin,  -- the discovery margin (#777)
---       discovered,        -- has a player-faction unit entered the
---                          --   discovery-margin halo yet (#780)?
+--       discovered,        -- has a player-owned unit SEEN it yet
+--                          --   (#780 trigger, sight-based since #1230)?
 --       instance_id,       -- the stable per-page instance id (#911)
 --       lifecycle,         -- "unknown" | "hinted" | "discovered"
 --                          --   | "active" | "cleared" | "depleted"
@@ -98,10 +99,11 @@ instancesForPage env mPage =
 --   against @locations.getDef@) — the instance identity is the separate
 --   `instance_id`. `discovered` is now derived as "lifecycle at or
 --   beyond discovered", which is exactly what the flag it replaced meant.
---   `bounds` / `discovery_margin` come from the INSTANCE, which stored
---   them when it was placed, so they no longer depend on the def still
---   being registered this session (and an unregistered def can no longer
---   silently omit them).
+--   `bounds` comes from the INSTANCE, which stored it when it was
+--   placed, so it no longer depends on the def still being registered
+--   this session (and an unregistered def can no longer silently omit
+--   it). #1230 removed the `discovery_margin` field entirely: reveal is
+--   sight-based, and `bounds` is the only location footprint left.
 --
 --   With a page-id string argument the named page is read (the location
 --   stamper needs a specific world's placements even before it becomes
@@ -137,9 +139,9 @@ worldGetLocationInstanceFn env = do
 
 -- | world.getLocationAwareness() → array of
 --   @{ uid, page, instance_id, gx, gy }@ rows: every PLAYER-OWNED unit
---   (#912) currently standing inside a placed location's discovery-margin
---   halo, on EVERY loaded page — the acquisition surface for #915's
---   per-unit location memory (@scripts\/unit_ai_locations.lua@).
+--   (#912) that can currently SEE a placed location, on EVERY loaded
+--   page — the acquisition surface for #915's per-unit location memory
+--   (@scripts\/unit_ai_locations.lua@).
 --
 --   This is deliberately a stateless, idempotent QUERY rather than a
 --   drained event stream: the caller re-asks and re-records, and its own
@@ -148,17 +150,18 @@ worldGetLocationInstanceFn env = do
 --   shares its predicate with ("World.Thread.Discovery"):
 --
 --   * the same 'Unit.Faction.isPlayerOwned' filter and the same
---     seam-aware expanded-bounds containment, because both come from
---     the SAME pure enumeration ('Location.Discovery.findAwareness' /
---     'Location.Discovery.findDiscoveries' share @haloContacts@);
+--     seam-aware bounds containment over the same sight calculation,
+--     because both come from the SAME pure enumeration
+--     ('Location.Discovery.findAwareness' /
+--     'Location.Discovery.findDiscoveries' share @sightContactsWhere@);
 --   * every LOADED page, not only the active/visible one — hence
 --     @page@ on every row, since a location's durable identity is
 --     @(page, instance_id)@ and bare instance ids alias across pages;
 --   * pause independence — nothing here reads the pause flag, and
 --     @scripts\/unit_ai.lua@ calls it BEFORE its own pause guard.
 --
---   Reports awareness regardless of lifecycle: a unit arriving at a ruin
---   the player mapped long ago still learns where it is, which is
+--   Reports awareness regardless of lifecycle: a unit that later sees a
+--   ruin the player mapped long ago still learns where it is, which is
 --   exactly the difference between the experiential and cartographic
 --   layers.
 worldGetLocationAwarenessFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -184,6 +187,16 @@ worldGetLocationAwarenessFn env = do
 --   Units are partitioned by 'uiPage' and passed in unit-id order, the
 --   same way 'World.Thread.Discovery.tickLocationDiscovery' does, so the
 --   row order is deterministic across runs.
+--
+--   Sight comes from 'Unit.LineOfSight.visibleTilesOnPage' against each
+--   page's OWN 'WorldState' (#1230) — the same calculation the discovery
+--   tick and the public @unit.getVisibleTiles@ query run, so the two
+--   knowledge layers cannot drift — and deliberately not through the
+--   public 'Unit.LineOfSight.unitVisibleTiles' wrapper, whose
+--   @wmVisible@ gate would silently blind every unit on a loaded but
+--   hidden page. As in the discovery tick, sight is computed ONCE per
+--   unit and only for units the shared 'isPlayerOwned' filter could
+--   accept; 'findAwareness' still applies that filter itself.
 locationAwarenessRows ∷ EngineEnv → IO [(Text, AwarenessHit UnitId)]
 locationAwarenessRows env = do
     um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
@@ -191,16 +204,24 @@ locationAwarenessRows env = do
     let allUnits = sortOn fst (HM.toList (umInstances um))
     fmap concat $ forM (wmWorlds mgr) $ \(pageId@(WorldPageId pageText), ws) → do
         mParams ← readIORef (wsGenParamsRef ws)
-        pure $ case mParams of
-            Nothing → []
-            Just p  →
-                let pageUnits =
-                        [ (uid, uiFactionId inst
-                          , floor (uiGridX inst), floor (uiGridY inst))
-                        | (uid, inst) ← allUnits, uiPage inst ≡ pageId ]
-                in [ (pageText, hit)
-                   | hit ← findAwareness (wgpWorldSize p)
-                                          (wgpLocationInstances p) pageUnits ]
+        case mParams of
+            Nothing → pure []
+            Just p
+                | null (instancesToList (wgpLocationInstances p)) → pure []
+                | otherwise → do
+                    let pageUnits =
+                            [ (uid, inst)
+                            | (uid, inst) ← allUnits
+                            , uiPage inst ≡ pageId
+                            , isPlayerOwned (uiFactionId inst) ]
+                    sights ← forM pageUnits $ \(uid, inst) → do
+                        tiles ← visibleTilesOnPage ws inst
+                        pure UnitSight { usUnit    = uid
+                                       , usFaction = uiFactionId inst
+                                       , usTiles   = tiles }
+                    pure [ (pageText, hit)
+                         | hit ← findAwareness (wgpWorldSize p)
+                                     (wgpLocationInstances p) sights ]
 
 -- | One instance as a Lua table (the shape both queries above return).
 pushInstanceTable ∷ LocationInstance → Lua.LuaE Lua.Exception ()
@@ -237,7 +258,6 @@ pushInstanceTable inst = do
     pushIntField "max_x" (abMaxX ab)
     pushIntField "max_y" (abMaxY ab)
     Lua.setfield (-2) "bounds"
-    pushIntField "discovery_margin" (liDiscoveryMargin inst)
   where
     pushIntField name v = do
         Lua.pushinteger (fromIntegral v)

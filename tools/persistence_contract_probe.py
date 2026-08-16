@@ -327,13 +327,14 @@ def get_attack_target(port: int, uid: int):
 def sample_live_state(port: int, portal_bid: int, atk: int) -> dict:
     """A small, cheap live sample used for the paused-stability dwell
     check (requirement 7) -- repeating this during a paused dwell must
-    yield identical values. This scenario never places a player-faction
-    unit inside an undiscovered location's discovery margin, so it never
+    yield identical values. This scenario never puts a player-faction
+    unit within SIGHT of an undiscovered location, so it never
     hits the ONE documented, deliberate exception to that rule:
     World.Thread.Discovery.tickLocationDiscovery (#780) runs independent
-    of the pause flag and can flip wgpLocationDiscovered on the very
-    first post-load tick if a unit already stands in such a margin
-    (since #911 that is the instance's lifecycle, not a chunk set)."""
+    of the pause flag and can promote a location's lifecycle on the very
+    first post-load tick if a unit can already see it (since #911 that
+    is the instance's lifecycle, not a chunk set; since #1230 the
+    trigger is sight against its bounds, not a discovery margin)."""
     return {
         "date": send(port, f"return world.getDate('{PAGE}')"),
         "activePage": send(port, "return world.getActiveWorldId()"),

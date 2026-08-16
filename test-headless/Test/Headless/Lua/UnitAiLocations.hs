@@ -189,8 +189,8 @@ spec = describe "unit location knowledge" $ do
                 , "local aiState = {}"
                 , "local function ensure(uid)"
                 , "  aiState[uid] = aiState[uid] or {}; return aiState[uid] end"
-                -- Unit 1 stands in the halo; unit 2 is elsewhere, so the
-                -- engine's shared halo predicate never names it.
+                -- Unit 1 can see the location; unit 2 cannot, so the
+                -- engine's shared SIGHT predicate (#1230) never names it.
                 , "world = { getLocationAwareness = function() return {"
                 , "  { uid = 1, page = 'main', instance_id = 3, gx = 8, gy = 9 }"
                 , "} end }"

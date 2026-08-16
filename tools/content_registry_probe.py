@@ -44,9 +44,10 @@ Phases:
      registered def (an empty list would satisfy a "all known entries
      are well-formed" check vacuously, and `world.show` is fire-and-
      forget onto the world thread), then requires every such placement
-     to carry the def's `bounds` + `discovery_margin` — the read that
-     goes through the capability record in `API.WorldQuery.Location` —
-     and requires the argument-less active-world form to agree with the
+     to carry the def's `bounds` and to carry NO `discovery_margin`
+     (#1230 removed the field from both tables) — the read that goes
+     through the capability record in `API.WorldQuery.Location` — and
+     requires the argument-less active-world form to agree with the
      page-targeted one.
 
 Usage: python3 tools/content_registry_probe.py [--port 9341]
@@ -242,10 +243,17 @@ def main():
 
         loc_defs = jget(port, "return engine.listLocationDefs()")
         ok = (isinstance(loc_defs, list) and len(loc_defs) > 0
-              and all(isinstance(d.get("bounds"), dict)
-                      and "discovery_margin" in d for d in loc_defs))
+              and all(isinstance(d.get("bounds"), dict) for d in loc_defs))
         passed = check(passed, ok, "engine.listLocationDefs",
                        f"defs={loc_defs}")
+        # #1230: the field is GONE from the public def table. Asserting
+        # its absence is the inversion of the check this line replaced,
+        # which required it — bounds stays the authoritative footprint.
+        stale = ([d for d in loc_defs if "discovery_margin" in d]
+                 if isinstance(loc_defs, list) else [])
+        passed = check(passed, not stale,
+                       "engine.listLocationDefs reports no discovery_margin "
+                       "(#1230)", f"stale={stale}")
         def_ids = ({d["id"] for d in loc_defs}
                    if isinstance(loc_defs, list) else set())
 
@@ -383,13 +391,16 @@ def main():
                        "resolving against a registered def", detail)
         if found is not None:
             placed, known = found
-            bad = [p for p in known
-                   if not isinstance(p.get("bounds"), dict)
-                   or "discovery_margin" not in p]
+            bad = [p for p in known if not isinstance(p.get("bounds"), dict)]
             passed = check(passed, not bad,
                            "every placement with a registered def carries "
-                           "its bounds + discovery_margin",
+                           "its bounds",
                            f"placed={len(placed)} known={len(known)} bad={bad}")
+            # #1230: and none of them still reports the removed margin.
+            stale_p = [p for p in known if "discovery_margin" in p]
+            passed = check(passed, not stale_p,
+                           "no placement reports discovery_margin (#1230)",
+                           f"stale={stale_p}")
             print(f"        (placements: {len(placed)}, "
                   f"with a registered def: {len(known)})")
             # The argument-less form (active world) must agree with the

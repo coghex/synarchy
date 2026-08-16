@@ -72,7 +72,6 @@ def write_location_yaml() -> None:
             "    max_count: 20\n"
             "    min_spacing: 3\n"
             "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }\n"
-            "    discovery_margin: 6\n"
             "    naming: { heads: [KEEP], modifiers: [ASH] }\n"
             "    contents: []\n"
         )

@@ -33,8 +33,8 @@ own:
             inventory-transfer surface; the shipped first_session
             objective set at its expected value
   travel    both travellers walk ONE identical move leg to the ruin (no
-            teleport) and are measured together inside its halo, and the
-            ruin is DISCOVERED by proximity — lifecycle, player event,
+            teleport) and are measured together at the ruin, and the
+            ruin is DISCOVERED by sight (#1230) — lifecycle, player event,
             and per-unit knowledge
   extract   the retrieval order is issued at the ruin and the ruin's own
             seed-stable loot-table output is picked up through the real
@@ -134,7 +134,7 @@ actually carried them. The departure positions here are re-read and
 re-checked with the simulation stopped, and everything up to the paired
 orders happens inside that same paused window. They then travel under the same verb (`commandMove`), to
 the same tile (the ruin's anchor), ordered in the same paused window.
-The measurement is taken when BOTH are inside the discovery halo in ONE
+The measurement is taken when BOTH are at the ruin in ONE
 COHERENT SNAPSHOT — not "each has been there at some point", because a
 unit whose move task has completed reverts to wander and can drift back
 out while the other is still walking; and not two `unit.getInfo` calls
@@ -269,9 +269,18 @@ RATIONS_DEF = "rations"
 ACOLYTE_DEF = "acolyte"
 MULE_DEF = "technomule"
 
-#: The colony sits this far from the ruin anchor: comfortably outside
-#: the def's 6-tile discovery halo, and far enough that the trip is a
-#: real journey rather than a stroll across the camp.
+#: The widest a unit's night-aware sight radius can reach (#1230):
+#: perception * Unit.LineOfSight.awareRangeTiles (6.0), with the
+#: page-local night factor only ever shrinking it. No shipped unit
+#: carries a perception above 2.0, so 12 tiles bounds every sightline
+#: this probe can produce. It replaces the def's removed 6-tile
+#: discovery halo as the "far enough not to reveal it" boundary.
+MAX_SIGHT_TILES = 12
+
+#: The colony sits this far from the ruin anchor: comfortably beyond
+#: MAX_SIGHT_TILES (so the ruin is not revealed the moment the colony
+#: is planted), and far enough that the trip is a real journey rather
+#: than a stroll across the camp.
 HOME_MIN_DIST = 26
 HOME_MAX_DIST = 30
 
@@ -559,7 +568,7 @@ def paired_positions(port: int, a: int, b: int) -> dict:
 
     Two `unit_pos` calls are two round trips with the simulation running
     in between, so a condition evaluated over them combines coordinates
-    from different moments — "both inside the halo" could pass for a
+    from different moments — "both at the ruin" could pass for a
     pair that was never inside it together. One request reads both from
     the same unit-manager state instead."""
     lua = (f"local function f(u) local i=unit.getInfo(u); "
@@ -1367,17 +1376,26 @@ def assert_real_travel(chk: Checks, samples: list, goal, label: str,
            f"({dist(samples[0], goal):.1f} -> {dist(samples[-1], goal):.1f} tiles)")
 
 
-def halo_box(ruin: dict):
-    """A placed location's discovery halo as inclusive absolute tile
-    bounds — its stored bounds expanded by its stored margin, exactly
-    what Location.Discovery tests containment against."""
+def arrival_box(ruin: dict):
+    """The region this probe counts as "at the ruin", as inclusive
+    absolute tile bounds: its stored bounds (#777) grown by
+    MAX_SIGHT_TILES.
+
+    #1230 removed the discovery_margin this used to expand by. The
+    replacement is deliberately the SIGHT bound rather than a rewritten
+    constant, because that is what the measurement below needs: the
+    unprepared-control comparison is taken once BOTH travellers are at
+    the ruin, and a traveller is only meaningfully "there" once it is
+    close enough to have revealed it. A box smaller than the sight
+    radius would let a unit reveal the ruin from outside the box the
+    probe waits on, and the paired snapshot would never be taken."""
     b = ruin.get("bounds") or {}
-    m = int(ruin.get("discovery_margin") or 0)
+    m = MAX_SIGHT_TILES
     return (int(b["min_x"]) - m, int(b["min_y"]) - m,
             int(b["max_x"]) + m, int(b["max_y"]) + m)
 
 
-def in_halo(pos, box) -> bool:
+def in_arrival_box(pos, box) -> bool:
     x0, y0, x1, y1 = box
     return x0 <= pos[0] <= x1 and y0 <= pos[1] <= y1
 
@@ -1463,7 +1481,7 @@ def main() -> int:
             # the position it had when the flag went up — the check would
             # be reading a stale coordinate. Instead the assertion below
             # is made eligibility-based: a colonist qualifies only if it
-            # was never observed inside the halo during the leg and is
+            # was never observed at the ruin during the leg and is
             # outside it when the check runs. A colonist that genuinely
             # wanders to the ruin has genuinely learned it, and is
             # excluded rather than counted as a leak.
@@ -1550,7 +1568,7 @@ def main() -> int:
 
             # --------------------------------------------------- travel
             chk.enter("travel", "both travellers walk the same route; "
-                                "the ruin is discovered by proximity")
+                                "the ruin is discovered by sight")
             # Muster both travellers at a common departure point first.
             # A shared DESTINATION is not a shared journey: hunger drains
             # with time on the road, so two travellers setting out from
@@ -1645,7 +1663,7 @@ def main() -> int:
                    f"{tasks[prepared]!r}, control {tasks[control]!r}")
             send(port, "engine.setPaused(false); return 'ok'")
 
-            box = halo_box(ruin)
+            box = arrival_box(ruin)
             p_samples: list = []
             c_samples: list = []
             arrived_at: dict[int, float] = {}
@@ -1654,10 +1672,10 @@ def main() -> int:
             # running rather than inferred from the number it left
             # behind.
             ate: dict[int, bool] = {prepared: False, control: False}
-            # Any stay-at-home colonist seen inside the halo during the
+            # Any stay-at-home colonist seen at the ruin during the
             # leg has been there, and is therefore not evidence about
             # units that have NOT been there.
-            visited_halo: set[int] = set()
+            visited_ruin: set[int] = set()
             start = time.time()
             deadline = start + 480.0
             together = None
@@ -1671,7 +1689,7 @@ def main() -> int:
                     p = live[uid]
                     if p:
                         samples.append(p)
-                        if uid not in arrived_at and in_halo(p, box):
+                        if uid not in arrived_at and in_arrival_box(p, box):
                             arrived_at[uid] = time.time() - start
                     # Corroboration only — see `depart_food`. A meal is
                     # over in a tick or two and this poll runs about once
@@ -1683,15 +1701,15 @@ def main() -> int:
                         ate[uid] = True
                 for uid in stay_home:
                     q = unit_pos(port, uid)
-                    if q and in_halo(q, box):
-                        visited_halo.add(uid)
+                    if q and in_arrival_box(q, box):
+                        visited_ruin.add(uid)
                 # The shared observation point is both travellers inside
-                # the halo IN THE SAME SAMPLE — not "each has been there
+                # the ruin IN THE SAME SAMPLE — not "each has been there
                 # at some point". A unit whose move task has completed
                 # reverts to wander and can drift back out while the
                 # other is still walking, and latching first-entry would
                 # score that as a shared observation point.
-                if all(live[u] and in_halo(live[u], box)
+                if all(live[u] and in_arrival_box(live[u], box)
                        for u in (prepared, control)):
                     # A candidate. STOP the simulation and revalidate,
                     # so the snapshot the control is scored from is
@@ -1701,7 +1719,7 @@ def main() -> int:
                     # between them.
                     send(port, "engine.setPaused(true); return 'ok'")
                     held = paired_positions(port, prepared, control)
-                    if all(held[u] and in_halo(held[u], box)
+                    if all(held[u] and in_arrival_box(held[u], box)
                            for u in (prepared, control)):
                         together = held
                         arrive = {u: vitals(port, u)
@@ -1714,7 +1732,7 @@ def main() -> int:
                 time.sleep(1.0)
 
             chk.ok(together is not None,
-                   f"BOTH travellers are inside the ruin's discovery halo {box} "
+                   f"BOTH travellers are at the ruin {box} "
                    f"in ONE COHERENT SNAPSHOT — a single paired read, "
                    f"revalidated with the simulation STOPPED, and the control's "
                    f"metrics taken from that same stopped window — so it is "
@@ -1740,7 +1758,7 @@ def main() -> int:
                       f"{dist(together[control], ruin_xy):.1f} tiles", flush=True)
 
             # -- the control observation point: one identical leg from a
-            #    common departure point, both inside the halo in the same
+            #    common departure point, both at the ruin in the same
             #    sample, only the packs differ. `arrive` was captured at
             #    that sample and is deliberately NOT re-read here.
             print(f"  arrival    prepared {prepared}: "
@@ -1750,7 +1768,7 @@ def main() -> int:
             # #999: both travellers arriving collapsed used to be silently
             # tolerated here — the pose was recorded above but only ever
             # printed, so the location/travel checks below could still
-            # pass around it. A traveller should reach the ruin's halo on
+            # pass around it. A traveller should reach the ruin on
             # its feet; a real ordinary leg collapsing is exactly the
             # run/faint/run bug this gate now has to catch.
             chk.ok(all(arrive[u]["pose"] not in ("collapsed", "dead")
@@ -1793,24 +1811,24 @@ def main() -> int:
                    f"the traveller that walked there personally KNOWS the location "
                    f"({key} in {sorted(known_locations(port, prepared))})")
             # The premise is asserted, not assumed: each held colonist
-            # must genuinely still be outside the halo, and its position
+            # must genuinely still be away from the ruin, and its position
             # and memory are both reported so a failure says which.
             home_state = []
             never_went = []
             for u in stay_home:
                 p = unit_pos(port, u)
                 known = known_locations(port, u)
-                inside = bool(p) and in_halo(p, box)
-                been = u in visited_halo or inside
+                inside = bool(p) and in_arrival_box(p, box)
+                been = u in visited_ruin or inside
                 home_state.append(
                     f"uid {u} at {p} "
-                    f"({'HAS BEEN in' if been else 'never entered'} the halo) "
+                    f"({'HAS BEEN at' if been else 'never reached'} the ruin) "
                     f"knows {sorted(known) or 'nothing'}")
                 if not been:
                     never_went.append((u, known))
             chk.ok(bool(never_went),
                    f"precondition: at least one colonist never entered the "
-                   f"ruin's halo, so there is something to test the knowledge "
+                   f"ruin, so there is something to test the knowledge "
                    f"layer against ({'; '.join(home_state) or 'none'})")
             chk.ok(bool(never_went) and all(key not in k for _u, k in never_went),
                    f"the colonists who never went learned nothing — per-unit "
@@ -1821,7 +1839,7 @@ def main() -> int:
             chk.enter("extract", "recover the ruin's own loot-table output")
             # Issued only now, so the shared travel leg above was the
             # same verb at the same speed for both travellers. The
-            # carrier is already standing in the ruin's halo; this is
+            # carrier is already standing at the ruin; this is
             # the "Pick up" the player clicks once the party has
             # arrived.
             acc_p = send(port, f"return require('scripts.unit_ai').commandPickup("

@@ -907,25 +907,43 @@ spec = do
                            , transferOrdersComponentId ]
 
     describe "per-component codecs" $ do
-        it "each component round-trips its own slice of the snapshot" $ do
-            let check enc dec = case dec (enc richSnapshot) of
+        it "each component round-trips its own slice of the snapshot at \
+           \its OWN CURRENT version" $ do
+            -- The decode version is read from the codec rather than
+            -- written out, so this cannot drift out of step with the
+            -- encoder the way a literal does. It did: these were
+            -- hard-coded, and once world-pages went to v7 (#1230) the
+            -- v7 bytes were still being dispatched through the v6
+            -- migration. It PASSED, because these fixtures carry an
+            -- empty location table and the two shapes differ only in a
+            -- per-instance field — so the round trip claimed here was
+            -- silently never exercising the current decoder at all.
+            -- #1233's buildings/units/world-activity bumps left the
+            -- same three literals stale for the same reason.
+            --
+            -- Genuine frozen-shape coverage is not lost by this: every
+            -- historical version has real frozen bytes behind it in
+            -- "Test.Headless.World.Save.Compat", which encodes each
+            -- vN DTO explicitly instead of hoping the current encoder
+            -- still happens to emit that layout.
+            let check c = case ccDecode c (ccVersion c) (ccEncode c richSnapshot) of
                     Right _  → pure () ∷ IO ()
                     Left e   → expectationFailure (T.unpack (renderComponentError e))
-            check (ccEncode coreSessionCodec)   (ccDecode coreSessionCodec 1)
-            check (ccEncode worldPagesCodec)    (ccDecode worldPagesCodec 6)
-            check (ccEncode buildingsCodec)     (ccDecode buildingsCodec 1)
-            check (ccEncode unitsCodec)         (ccDecode unitsCodec 1)
-            check (ccEncode unitSimCodec)       (ccDecode unitSimCodec 2)
-            check (ccEncode craftBillsCodec)    (ccDecode craftBillsCodec 2)
-            check (ccEncode powerNodesCodec)    (ccDecode powerNodesCodec 2)
-            check (ccEncode worldEditsCodec)    (ccDecode worldEditsCodec 1)
-            check (ccEncode worldActivityCodec) (ccDecode worldActivityCodec 1)
-            check (ccEncode texPaletteCodec)    (ccDecode texPaletteCodec 1)
+            check coreSessionCodec
+            check worldPagesCodec
+            check buildingsCodec
+            check unitsCodec
+            check unitSimCodec
+            check craftBillsCodec
+            check powerNodesCodec
+            check worldEditsCodec
+            check worldActivityCodec
+            check texPaletteCodec
 
         it "declares a stable id and current version of 1" $ do
             ccId coreSessionCodec `shouldBe` coreSessionComponentId
             ccVersion coreSessionCodec `shouldBe` 1
-            ccVersion worldPagesCodec `shouldBe` 6
+            ccVersion worldPagesCodec `shouldBe` 7
 
         it "rejects a NEWER unsupported version, naming the phase" $
             case ccDecode worldPagesCodec 999 (ccEncode worldPagesCodec richSnapshot) of
@@ -1055,7 +1073,8 @@ spec = do
         it "converts snapshot ↔ DTO with no live-state reads: the world \
            \seed survives the round trip (a meaningful seed stays present, \
            \requirement 10)" $
-            case ccDecode worldPagesCodec 6 (ccEncode worldPagesCodec richSnapshot) of
+            case ccDecode worldPagesCodec (ccVersion worldPagesCodec)
+                          (ccEncode worldPagesCodec richSnapshot) of
                 Right wp →
                     [ wgpSeed (pgsGenParams p)
                     | p ← maybeToList (HM.lookup page1 (wpBase wp)) ]
@@ -1138,13 +1157,13 @@ spec = do
                     DecodePhase
                     "unsupported schema version (reader supports v1, v2)")
 
-        it "reports an unsupported version identically for a SIX-version \
+        it "reports an unsupported version identically for a SEVEN-version \
            \reader" $
-            decodeErrorOf worldPagesCodec 7 BS.empty
-                `shouldBe` Just (ComponentError worldPagesComponentId 7
+            decodeErrorOf worldPagesCodec 8 BS.empty
+                `shouldBe` Just (ComponentError worldPagesComponentId 8
                     DecodePhase
                     "unsupported schema version \
-                    \(reader supports v1, v2, v3, v4, v5, v6)")
+                    \(reader supports v1, v2, v3, v4, v5, v6, v7)")
 
         it "reports a malformed payload identically -- same component, \
            \supplied version, DecodePhase, and cereal-derived message -- at \

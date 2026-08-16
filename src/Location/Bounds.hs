@@ -5,8 +5,11 @@
 --   translated to absolute world tile coordinates. This is the one
 --   authoritative spatial contract every later location feature (portal
 --   placement exclusion #778, remote-start distance warnings #779,
---   persistent discovery state #780) shares, replacing the old implicit
---   footprint that only existed as a Lua-side radius constant.
+--   persistent discovery state #780, sight-based reveal #1230) shares,
+--   replacing the old implicit footprint that only existed as a
+--   Lua-side radius constant. Since #1230 it is the ONLY location
+--   footprint: the @discovery_margin@ halo 'expandBounds' used to build
+--   is gone with the proximity trigger it existed for.
 --
 --   Seam-aware variants generalise
 --   'World.Chunk.Types.chunkSeamChebyshev' 's u-alias trick — try the
@@ -20,7 +23,6 @@ module Location.Bounds
     , AbsBounds(..)
     , validRelBounds
     , translateBounds
-    , expandBounds
     , boundsContainsPoint
     , boundsIntersect
     , distancePointToBounds
@@ -63,12 +65,6 @@ validRelBounds b = rbMinX b ≤ rbMaxX b ∧ rbMinY b ≤ rbMaxY b
 translateBounds ∷ (Int, Int) → RelBounds → AbsBounds
 translateBounds (gx, gy) (RelBounds minX minY maxX maxY) =
     AbsBounds (gx + minX) (gy + minY) (gx + maxX) (gy + maxY)
-
--- | Expand a bounds box outward by a non-negative margin on all four
---   sides — a location's discovery-margin halo.
-expandBounds ∷ Int → AbsBounds → AbsBounds
-expandBounds margin (AbsBounds minX minY maxX maxY) =
-    AbsBounds (minX - margin) (minY - margin) (maxX + margin) (maxY + margin)
 
 rawContainsPoint ∷ AbsBounds → (Int, Int) → Bool
 rawContainsPoint (AbsBounds minX minY maxX maxY) (px, py) =

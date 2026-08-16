@@ -213,7 +213,6 @@ instanceFor cat prov expr = LocationInstance
     , liChunk           = ChunkCoord 0 0
     , liAnchor          = (0, 0)
     , liBounds          = AbsBounds 0 0 1 1
-    , liDiscoveryMargin = 4
     , liDisplayName     = nameOf cat prov expr
     , liGloss           = glossOf cat expr
     , liEtymology       = Just (sourceFor prov expr)

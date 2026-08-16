@@ -36,14 +36,14 @@ location's chunk loads, end to end:
      at a declared `position` and it must land on exactly that tile.
   4. Location discovery (#780): stamping a ruin's geometry and spawning
      its contents do NOT discover it; a hostile unit standing on it
-     doesn't either; a player-faction unit within the def's discovery
-     margin does, flipping `world.listPlacedLocations()`'s `discovered`
+     doesn't either; a player-faction unit that SEES it does (#1230),
+     flipping `world.listPlacedLocations()`'s `discovered`
      field and emitting exactly one `location_discovery` player event;
      re-checking without the unit moving emits no duplicate; the
      discovered state survives save -> quit -> fresh restart -> load
      alongside the geometry/contents from check 2.
-  5. Per-unit location knowledge (#915): the unit that entered the
-     margin gains its OWN memory of the location — keyed by the
+  5. Per-unit location knowledge (#915): the unit that can see it
+     gains its OWN memory of the location — keyed by the
      (page, instance id) identity, recorded while the sim is PAUSED
      (acquisition mirrors the discovery tick's pause independence) — a
      second player unit standing elsewhere does not, a unit arriving at
@@ -400,27 +400,43 @@ def known_locations(port: int, uid: int) -> set[str]:
     return {p for p in raw.split(",") if p}
 
 
-def halo_box(e: dict) -> tuple[int, int, int, int]:
-    """A placed location's discovery halo as inclusive absolute tile
-    bounds — its stored bounds (#777) expanded by its stored margin,
-    exactly what Location.Discovery tests containment against."""
+# The widest a unit's night-aware sight radius can reach (#1230). A
+# unit sees at most perception * awareRangeTiles tiles
+# (Unit.LineOfSight.awareRangeTiles = 6.0), and the page-local night
+# factor only ever SHRINKS that. No shipped unit carries a perception
+# above 2.0, so 12 tiles bounds every sightline this probe can produce;
+# the slack below then puts an "ignorant" unit comfortably past it.
+#
+# This replaces the removed 6-tile discovery halo. Re-deriving it from
+# the sight radius rather than rewriting the old constant is the point:
+# a unit that must NOT reveal a location has to be outside the RADIUS,
+# outside the facing cone, or behind blocking terrain, and a 6-tile box
+# no longer describes that boundary at all.
+MAX_SIGHT_TILES = 12
+
+
+def sight_box(e: dict) -> tuple[int, int, int, int]:
+    """The region from which a placed location could be revealed: its
+    stored bounds (#777) — the footprint Location.Discovery tests sight
+    against since #1230 — grown by the widest reachable sight radius, so
+    a tile outside this box cannot see any tile of the location."""
     b = e.get("bounds") or {}
-    m = int(e.get("discovery_margin") or 0)
+    m = MAX_SIGHT_TILES
     return (int(b.get("min_x", e["gx"])) - m, int(b.get("min_y", e["gy"])) - m,
             int(b.get("max_x", e["gx"])) + m, int(b.get("max_y", e["gy"])) + m)
 
 
 def pick_far_tile(la: list[dict], origin: tuple[int, int],
                   slack: int = 6) -> tuple[int, int] | None:
-    """A tile comfortably outside EVERY placed location's halo — where a
-    second unit can stand and stay ignorant (#915)."""
+    """A tile comfortably outside EVERY placed location's sight box —
+    where a second unit can stand and stay ignorant (#915)."""
     ox, oy = origin
     for d in range(24, 400, 8):
         for cand in ((ox + d, oy), (ox, oy + d), (ox + d, oy + d),
                      (ox - d, oy), (ox, oy - d)):
             if all(not (x0 - slack <= cand[0] <= x1 + slack
                         and y0 - slack <= cand[1] <= y1 + slack)
-                   for x0, y0, x1, y1 in map(halo_box, la)):
+                   for x0, y0, x1, y1 in map(sight_box, la)):
                 return cand
     return None
 
@@ -601,8 +617,10 @@ def main() -> int:
 
             # ---- Discovery (#780): stamping + content-spawning above did
             #      NOT discover the ruin; a hostile unit standing on it
-            #      doesn't either; a player-faction unit within the
-            #      6-tile discovery margin does, exactly once, flipping
+            #      doesn't either; a player-faction unit that SEES it
+            #      does (#1230 — standing on the anchor is the strongest
+            #      case, since a unit's own tile is always in its visible
+            #      set), exactly once, flipping
             #      world.listPlacedLocations()'s `discovered` field. ----
             ruin0 = ruins[0]
             r0key = (ruin0["cx"], ruin0["cy"])
@@ -635,8 +653,8 @@ def main() -> int:
                     break
                 time.sleep(0.25)
             if player_uid >= 0 and discovered_ok:
-                print(f"PASS: a player-faction unit ({player_uid}) within the discovery "
-                      f"margin flips world.listPlacedLocations() to discovered:true")
+                print(f"PASS: a player-faction unit ({player_uid}) that can see "
+                      f"the ruin flips world.listPlacedLocations() to discovered:true")
             else:
                 failures.append(
                     f"player presence did not discover the ruin: uid={player_uid}")
@@ -649,10 +667,11 @@ def main() -> int:
                 failures.append(
                     f"expected exactly one attributed discovery event, got {evs}")
 
-            # Leaving (teleport away, well outside the margin) and
+            # Leaving (teleport away, well out of sight of it) and
             # returning must not emit a second event.
             send(args.port,
-                 f"unit.setPos({player_uid}, {ruin0['gx'] + 12}, {ruin0['gy']}); return 'ok'")
+                 f"unit.setPos({player_uid}, "
+                 f"{ruin0['gx'] + MAX_SIGHT_TILES + 8}, {ruin0['gy']}); return 'ok'")
             time.sleep(0.5)
             send(args.port,
                  f"unit.setPos({player_uid}, {ruin0['gx']}, {ruin0['gy']}); return 'ok'")
@@ -686,11 +705,11 @@ def main() -> int:
             else:
                 r0mem = f"wa#{r0inst['instance_id']}"
                 if wait_knows(args.port, player_uid, r0mem):
-                    print(f"PASS: the unit that entered the margin gained its "
-                          f"own memory of the ruin ({r0mem}) — while PAUSED")
+                    print(f"PASS: the unit that can see the ruin gained its "
+                          f"own memory of it ({r0mem}) — while PAUSED")
                 else:
                     failures.append(
-                        f"unit {player_uid} inside the margin never learned "
+                        f"unit {player_uid} that can see the ruin never learned "
                         f"{r0mem}: {known_locations(args.port, player_uid)}")
 
                 load_chunk(args.port, far[0] // 16, far[1] // 16)
@@ -728,7 +747,7 @@ def main() -> int:
                           f"discovered ruin still learned it")
                 else:
                     failures.append(
-                        f"unit {far_uid} entering an already-discovered margin "
+                        f"unit {far_uid} seeing an already-discovered location "
                         f"never learned {r0mem}: "
                         f"{known_locations(args.port, far_uid)}")
                 evs_late = discovery_events(args.port, ruin_label)
@@ -1018,7 +1037,6 @@ def main() -> int:
             "    anchor: []\n"
             "    max_count: 0\n"
             "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }\n"
-            "    discovery_margin: 6\n"
             "    naming: { heads: [KEEP], modifiers: [ASH] }\n"
             "    contents:\n"
             "      - { kind: unit, id: does_not_exist, count: 1 }\n"
@@ -1060,7 +1078,6 @@ def main() -> int:
             "    anchor: []\n"
             "    max_count: 0\n"
             "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }\n"
-            "    discovery_margin: 6\n"
             "    naming: { heads: [KEEP], modifiers: [ASH] }\n"
             "    contents:\n"
             "      - { kind: loot_table, id: probe_quinoa_table, rolls: 1 }\n"
@@ -1197,7 +1214,6 @@ def main() -> int:
             "    max_count: 100000\n"
             "    min_spacing: 1\n"
             "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }\n"
-            "    discovery_margin: 6\n"
             "    naming: { heads: [KEEP], modifiers: [ASH] }\n"
             "    contents:\n"
             "      - { kind: building, id: cargo_hold_S, count: 1, position: {x: 0, y: 0} }\n"

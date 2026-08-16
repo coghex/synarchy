@@ -146,8 +146,7 @@ locDef lid = LocationDef
     , ldMinSpacing      = 0
     , ldContents        = []
     , ldBounds          = RelBounds (-2) (-2) 2 2
-    , ldDiscoveryMargin = 6
-    , ldMapIcons        = Nothing
+    , ldMapIcon         = Nothing
     , ldNaming          = testNaming
     }
 

@@ -76,11 +76,16 @@ import World.Save.Component.Page
     , PageCoreDTOv4(..), WorldPagesDTOv4(..)
     , toWorldGenParamsDTOv4
     , PageCoreDTOv5(..), WorldPagesDTOv5(..)
+    , PageCoreDTOv6(..), WorldPagesDTOv6(..)
+    , WorldGenParamsDTOv5(..), toWorldGenParamsDTOv5
     , WorldPages(..), WorldIdentityDTO(..), WorldIdentityDTOv1(..)
     , WorldIdentityDTOv2(..)
     , LanguageProvenanceDTO(..), toEtymologySourceDTO, basePageSnapshots
     , migrateWorldPagesV1, migrateWorldPagesV2, migrateWorldPagesV3
-    , migrateWorldPagesV4, migrateWorldPagesV5 )
+    , migrateWorldPagesV4, migrateWorldPagesV5, migrateWorldPagesV6 )
+import World.Save.Component.WorldGen
+    ( LocationInstanceDTOv3(..), LocationInstancesDTOv3(..)
+    , toLocationInstancesDTOv3, toRiverNamesDTO )
 import Language.Etymology.Source (EtymologySource(..))
 import Language.Etymology
     (EtymologyResult(..), Etymology(..), decomposeName, etyTokenText)
@@ -795,6 +800,63 @@ spec = do
                                             (LangSeed 0xABCDEF0123456789)
                                             (GeneratorVersion 1))
 
+        it "a frozen v6 page core carrying a NONZERO discovery margin \
+           \migrates to v7 preserving every other instance field \
+           \EXACTLY -- allocator, id, definition, chunk, anchor, bounds, \
+           \name, gloss, etymology, lifecycle and contents-spawned -- \
+           \while the margin itself has no live counterpart left to \
+           \land in (#1230 requirement 11)" $ do
+            let dto = WorldPagesDTOv6 [legacyPageCoreV6]
+            -- The bytes really do carry the margin: assert it on the
+            -- ENCODED shape first, so "it is gone afterwards" is a
+            -- migration outcome rather than a field that was never set.
+            map lid3DiscoveryMargin (HM.elems (lisd3ById richInstancesV6))
+                `shouldBe` [6]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTOv6 of
+                Left err  → expectationFailure err
+                Right dto' → do
+                    let pages = migrateWorldPagesV6 dto'
+                        insts = instancesOf pages "legacy_page"
+                    -- Whole-record equality against the live fixture:
+                    -- 'LocationInstance's derived Eq covers EVERY field,
+                    -- so this catches a dropped, defaulted, reordered or
+                    -- swapped one — including any margin that had
+                    -- survived onto the live record, which no longer has
+                    -- anywhere to put one.
+                    insts `shouldBe` HM.elems (lisById richInstances)
+                    -- Spelled out as well, because a whole-record
+                    -- comparison reports "not equal" without saying
+                    -- which durable identity moved.
+                    map liId insts        `shouldBe` [LocationInstanceId 4]
+                    map liDefId insts     `shouldBe` ["ruin_small"]
+                    map liChunk insts     `shouldBe` [ChunkCoord 2 3]
+                    map liAnchor insts    `shouldBe` [(80, 112)]
+                    map liBounds insts    `shouldBe` [AbsBounds 78 110 82 114]
+                    map liDisplayName insts `shouldBe` ["Vashenkoro"]
+                    map liGloss insts     `shouldBe` [Just "Ashen Keep"]
+                    map liEtymology insts `shouldBe` [Just keepSource]
+                    map liLifecycle insts `shouldBe` [LifecycleCleared]
+                    map liContentsSpawned insts `shouldBe` [True]
+                    -- The page-local ALLOCATOR rides across too: a
+                    -- migration that rebuilt the table from its values
+                    -- would reset this to "one past the highest id" (5)
+                    -- and hand a later placement an id this save had
+                    -- already retired.
+                    map (lisNextId ∘ wgpLocationInstances ∘ pgsGenParams)
+                        (HM.elems (wpBase pages))
+                        `shouldBe` [7]
+                    -- Nothing ELSE about the page moved either: its
+                    -- identity, its etymology source, and its river
+                    -- names all survive the instance-shape change.
+                    (wiName <$> identityOf pages "legacy_page")
+                        `shouldBe` Just "Legacy World"
+                    (wiEtymology =≪ identityOf pages "legacy_page")
+                        `shouldBe` Just keepSource
+                    map (rvnDisplayName ∘ snd) (riversOf pages "legacy_page")
+                        `shouldBe` ["Vashendral"]
+                    map (rvnEtymology ∘ snd) (riversOf pages "legacy_page")
+                        `shouldBe` [Just ashenRiverSource]
+
         it "a frozen v5 page core comes back with NO etymology source on \
            \its page identity, its location, or its river, while every \
            \name and gloss it stored survives EXACTLY -- a save written \
@@ -830,7 +892,7 @@ spec = do
                                             (LangSeed 0xABCDEF0123456789)
                                             (GeneratorVersion 1))
 
-        it "the CURRENT v6 page core round-trips an etymology source on \
+        it "the CURRENT v7 page core round-trips an etymology source on \
            \its page identity, its location, AND its river -- so the v5 \
            \absences above are real decode outcomes, not fields nothing \
            \ever writes" $ do
@@ -846,7 +908,7 @@ spec = do
                     map (rvnEtymology ∘ snd) (riversOf pages "legacy_page")
                         `shouldBe` [Just ashenRiverSource]
 
-        it "the CURRENT v6 page core round-trips a river's name AND gloss, \
+        it "the CURRENT v7 page core round-trips a river's name AND gloss, \
            \keyed by its feature id -- so the v4 absence above is a real \
            \decode outcome, not a table that is always empty" $ do
             let dto = WorldPagesDTO [currentPageCoreRivers]
@@ -859,7 +921,7 @@ spec = do
                                            (Just "Ashen River")
                                            (Just ashenRiverSource)) ]
 
-        it "the CURRENT v6 page core round-trips a location's name AND \
+        it "the CURRENT v7 page core round-trips a location's name AND \
            \gloss -- so the v3 absence above is a real decode outcome, \
            \not a field that is always Nothing" $ do
             let dto = WorldPagesDTO [currentPageCoreNamed]
@@ -871,7 +933,7 @@ spec = do
                     map liDisplayName insts `shouldBe` ["Vashenkoro"]
                     map liGloss insts `shouldBe` [Just "Ashen Keep"]
 
-        it "the CURRENT v5 page core round-trips a present provenance -- \
+        it "the CURRENT v7 page core round-trips a present provenance -- \
            \so the two absences above are a real decode outcome, not a \
            \field that is always Nothing" $ do
             let dto = WorldPagesDTO [currentPageCore]
@@ -1480,7 +1542,6 @@ legacyNamedInstances = LocationInstances
         , liChunk           = ChunkCoord 2 3
         , liAnchor          = (80, 112)
         , liBounds          = AbsBounds 78 110 82 114
-        , liDiscoveryMargin = 6
         , liDisplayName     = "Small Ruin"
         , liGloss           = Nothing
         , liEtymology       = Nothing
@@ -1538,6 +1599,66 @@ currentPageCoreNamed ∷ PageCoreDTO
 currentPageCoreNamed = currentPageCore
     { pcGenParams = toWorldGenParamsDTO defaultWorldGenParams
         { wgpLocationInstances = namedLocationInstances }
+    }
+
+-- | #1230 fixture: one fully-populated placed location, as a
+--   @world-pages@ v6 save holds it. Every field the migration must
+--   carry across is set to something a default could not produce — a
+--   nondefault id and allocator, a definition id, an off-origin chunk
+--   and anchor, real bounds, a GENERATED name with a gloss and the
+--   etymology source that explains it, a lifecycle past the initial
+--   one, and a raised contents-spawned flag — so "preserved exactly"
+--   below is a real decode outcome rather than a comparison of
+--   defaults.
+richInstances ∷ LocationInstances
+richInstances = LocationInstances
+    { lisNextId        = 7
+    , lisById          = HM.singleton (LocationInstanceId 4) LocationInstance
+        { liId              = LocationInstanceId 4
+        , liDefId           = "ruin_small"
+        , liChunk           = ChunkCoord 2 3
+        , liAnchor          = (80, 112)
+        , liBounds          = AbsBounds 78 110 82 114
+        , liDisplayName     = "Vashenkoro"
+        , liGloss           = Just "Ashen Keep"
+        , liEtymology       = Just keepSource
+        , liLifecycle       = LifecycleCleared
+        , liContentsSpawned = True
+        }
+    , lisPendingLegacy = Nothing
+    }
+
+-- | 'richInstances' encoded into the FROZEN v6 wire shape carrying a
+--   NONZERO discovery margin (#1230 requirement 11). The margin is
+--   stamped on explicitly rather than taken from the live record,
+--   because the live record no longer has one — which is exactly the
+--   thing under test: these bytes really do carry a 6 that the current
+--   shape has nowhere to put.
+richInstancesV6 ∷ LocationInstancesDTOv3
+richInstancesV6 =
+    let base = toLocationInstancesDTOv3 richInstances
+    in base { lisd3ById = HM.map (\d → d { lid3DiscoveryMargin = 6 })
+                                 (lisd3ById base) }
+
+-- | A pre-#1230 (@world-pages@ v6) page core over those instances.
+legacyPageCoreV6 ∷ PageCoreDTOv6
+legacyPageCoreV6 = PageCoreDTOv6
+    { pc6PageId     = WorldPageId "legacy_page"
+    , pc6GenParams  = (toWorldGenParamsDTOv5 defaultWorldGenParams)
+                          { gp5LocationInstances = richInstancesV6
+                          , gp5RiverNames = toRiverNamesDTO (RiverNames
+                              (HM.singleton (GeoFeatureId 3)
+                                  (RiverName "Vashendral" (Just "Ashen River")
+                                      (Just ashenRiverSource)))) }
+    , pc6CameraX    = 1, pc6CameraY = 2
+    , pc6TimeHour   = 12, pc6TimeMinute = 30
+    , pc6DateYear   = 1, pc6DateMonth = 2, pc6DateDay = 3
+    , pc6MapMode    = ZMDefault
+    , pc6Identity   = Just (WorldIdentityDTO "Legacy World"
+                               (Just "an old gloss")
+                               (Just (LanguageProvenanceDTO
+                                          0xABCDEF0123456789 1))
+                               (Just (toEtymologySourceDTO keepSource)))
     }
 
 -- | #1104 fixture: a pre-#1104 (@world-pages@ v5) page core whose

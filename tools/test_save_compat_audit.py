@@ -457,7 +457,7 @@ class _Args:
             # run before saving, and a predicate that must hold before
             # the save -- for state a spawn verb never writes directly
             # (a per-unit location memory is INGESTED by the unit-AI
-            # tick once the unit stands in a discovery halo).
+            # tick once the unit can SEE the location).
             spawn_unit_at="0,0", settle_seconds=0.0, setup_lua=None,
             require_lua=None,
             # #1101: the page's optional display identity and the

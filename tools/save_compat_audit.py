@@ -2412,9 +2412,8 @@ def main() -> int:
                           "--spawn-unit on, default '0,0'. A fixture that "
                           "must capture state a unit only acquires SOMEWHERE "
                           "specific (e.g. #915's per-unit location memory, "
-                          "learned by standing in a placed location's "
-                          "discovery halo) spawns it there rather than at "
-                          "the origin")
+                          "learned by SEEING a placed location) spawns it "
+                          "there rather than at the origin")
     ap.add_argument("--settle-seconds", type=float, default=0.0,
                      help="--generate-session only: seconds to let the "
                           "engine + Lua ticks run between the spawns and "

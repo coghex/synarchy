@@ -151,14 +151,78 @@ def match_by_anchor(locs: list[dict], gx: int, gy: int) -> dict | None:
     return next((e for e in locs if e.get("gx") == gx and e.get("gy") == gy), None)
 
 
-def expand(bounds: dict, margin: int) -> dict:
-    return {"min_x": bounds["min_x"] - margin, "min_y": bounds["min_y"] - margin,
-            "max_x": bounds["max_x"] + margin, "max_y": bounds["max_y"] + margin}
+#: Comfortably past the widest sightline this probe can produce
+#: (#1230): a unit sees at most perception * awareRangeTiles (6.0)
+#: tiles, the page-local night factor only shrinks that, and no shipped
+#: unit carries a perception above 2.0. Used ONLY to pick a walk-away
+#: DESTINATION far enough that the ruin certainly leaves view — whether
+#: a unit can actually see it is asked of the engine (`sees_location`),
+#: never approximated by a box.
+MAX_SIGHT_TILES = 12
 
 
-def point_in_expanded(x: float, y: float, bounds: dict, margin: int) -> bool:
-    eb = expand(bounds, margin)
-    return eb["min_x"] <= x <= eb["max_x"] and eb["min_y"] <= y <= eb["max_y"]
+#: Half-width (logical pixels) of the square crop centred on the screen
+#: that the icon-state checks below measure. The camera is centred on
+#: the ruin's anchor and the icon draws at
+#: World.Render.Zoom.Icons.locationIconTargetPixels (32 LOGICAL px), so a
+#: crop this size contains the whole marker plus a little surrounding
+#: terrain. Measuring a crop rather than the full frame matters: a 32px
+#: icon is a vanishing fraction of a 1280x720 frame, and a full-frame
+#: mean would drown the darkening under unchanged terrain.
+ICON_CROP_HALF_PX = 40
+
+
+def centre_luma(path: str, w: int, h: int) -> float | None:
+    """Mean luminance of a square crop centred on the frame, over the
+    OPAQUE pixels only. Returns None if unreadable or empty.
+
+    Alpha-weighted rather than flat: the icon is a silhouette on a
+    transparent background composited over terrain, and #1230 darkens
+    RGB while leaving alpha exactly as supplied, so averaging the
+    composited colour is what actually moves when the tint applies."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    try:
+        with Image.open(path) as im:
+            im = im.convert("RGB")
+            # Screenshots come back at FRAMEBUFFER resolution, which on a
+            # HiDPI display is a multiple of the logical size; scale the
+            # crop by the real ratio rather than assuming 1:1.
+            scale = im.width / float(w) if w else 1.0
+            half = max(4, int(ICON_CROP_HALF_PX * scale))
+            cx, cy = im.width // 2, im.height // 2
+            box = (max(0, cx - half), max(0, cy - half),
+                   min(im.width, cx + half), min(im.height, cy + half))
+            crop = im.crop(box).convert("L")
+            hist = crop.histogram()
+            total = sum(hist)
+            if not total:
+                return None
+            return sum(i * n for i, n in enumerate(hist)) / float(total)
+    except Exception:
+        return None
+
+
+def sees_location(port: int, uid: int, bounds: dict) -> bool:
+    """Whether unit `uid` can currently SEE any tile of `bounds` — the
+    engine's own answer, not an approximation.
+
+    This is literally the predicate `Location.Discovery.sightContactsWhere`
+    tests (#1230): the unit's visible-tile set (`unit.getVisibleTiles`,
+    the same night-aware radius/cone/occlusion calculation location
+    reveal runs) intersected with the location's stored inclusive
+    bounds. Asking the engine beats any radius box this probe could
+    compute: a box has to be conservative enough to cover the widest
+    possible perception, which then reports "in sight" for units that
+    demonstrably are not — cone and terrain having ruled it out."""
+    got = send(port,
+               f"for _, t in ipairs(unit.getVisibleTiles({uid}) or {{}}) do "
+               f"if t.x >= {bounds['min_x']} and t.x <= {bounds['max_x']} "
+               f"and t.y >= {bounds['min_y']} and t.y <= {bounds['max_y']} "
+               f"then return 'yes' end end; return 'no'", timeout=20.0)
+    return (got or "").strip().strip('"') == "yes"
 
 
 def event_log(port: int) -> list[dict]:
@@ -195,7 +259,7 @@ def nearby_seeds(gx: int, gy: int) -> list[tuple[int, int]]:
     margin when the commanded task times out and control reverts to
     ambient wander, which never resumes the approach. 35 tiles leaves
     ample margin under the 51-tile ceiling for wander interruptions/
-    terrain detours while staying outside the ruin's own bounds+margin."""
+    terrain detours while staying out of sight of the ruin."""
     return [
         (gx + dx, gy + dy)
         for dx, dy in ((20, 0), (-20, 0), (0, 20), (0, -20),
@@ -420,7 +484,7 @@ def order_move_to(port: int, target_gx: int, target_gy: int, cx0: int, cy0: int)
     a single-shot resolution can land several tiles off the requested
     target (elevation-dependent isometric projection), which is fine
     for "any valid tile will do" checks but not here, where the
-    destination must land inside a specific ~17-tile discovery-margin
+    destination must land inside a specific sight-radius
     box."""
     resolved = center_on_tile(port, target_gx, target_gy, cx0, cy0)
     if not resolved:
@@ -482,28 +546,31 @@ def session_ghost_and_remote(port: int, w: int, h: int, shots: str,
     c = match_by_anchor(locs, control["gx"], control["gy"]) or locs[1]
 
     # -- steps 2-3: zoom to icon-visible level BEFORE any portal exists;
-    # both ruins show their undiscovered icon. --
+    # both ruins show the SHARED unknown marker (#1230). --
     fade_end = zoom_fade_end(port)
     full_zoom = fade_end * 1.5
     center_on(port, t["gx"], t["gy"])
     set_zoom(port, full_zoom)
     time.sleep(0.3)
-    check("target ruin starts undiscovered", not t.get("discovered"))
-    shot_hidden_target = os.path.join(shots, "icon_hidden_target.png")
-    if check("hidden-icon (target) screenshot answers",
+    check("target ruin starts unknown", not t.get("discovered"))
+    check("target ruin's lifecycle really is 'unknown', so the marker "
+          "below is the shared unknown icon and not a later state",
+          t.get("lifecycle") == "unknown", f"lifecycle={t.get('lifecycle')!r}")
+    shot_hidden_target = os.path.join(shots, "icon_unknown_target.png")
+    if check("unknown-marker (target) screenshot answers",
              screenshot(port, shot_hidden_target)):
         st = png_stats(shot_hidden_target)
-        check("hidden-icon (target) frame is not blank",
+        check("unknown-marker (target) frame is not blank",
               bool(st) and st[2] >= 3, f"distinct colors: {st and st[2]}")
     center_on(port, c["gx"], c["gy"])
     set_zoom(port, full_zoom)
     time.sleep(0.3)
-    check("control ruin starts undiscovered", not c.get("discovered"))
-    shot_hidden_control = os.path.join(shots, "icon_hidden_control.png")
-    if check("hidden-icon (control) screenshot answers",
+    check("control ruin starts unknown", not c.get("discovered"))
+    shot_hidden_control = os.path.join(shots, "icon_unknown_control.png")
+    if check("unknown-marker (control) screenshot answers",
              screenshot(port, shot_hidden_control)):
         st = png_stats(shot_hidden_control)
-        check("hidden-icon (control) frame is not blank",
+        check("unknown-marker (control) frame is not blank",
               bool(st) and st[2] >= 3, f"distinct colors: {st and st[2]}")
 
     # -- step 4: arm portal placement. --
@@ -639,7 +706,13 @@ def session_local_and_discovery(port: int, w: int, h: int, shots: str,
     if not check("session b: target + control ruins re-derived after load",
                  bool(t) and bool(c)):
         return None
-    margin = t.get("discovery_margin", 6)
+    # #1230: reveal is sight-based against the instance's own bounds.
+    # Whether a unit can see the ruin is asked of the ENGINE
+    # (`sees_location`); MAX_SIGHT_TILES is used only to pick a
+    # walk-away DESTINATION comfortably past any possible sightline,
+    # which is a distance this probe chooses rather than a boundary it
+    # asserts.
+    margin = MAX_SIGHT_TILES
     bounds = t["bounds"]
 
     # -- step 13: a valid, non-remote position outside every location's
@@ -673,15 +746,15 @@ def session_local_and_discovery(port: int, w: int, h: int, shots: str,
         return None
     roster_uid = int(roster_uid)
 
-    # -- steps 15-16: the spawned acolyte starts outside the target
-    # ruin's discovery margin, which is still undiscovered. --
+    # -- steps 15-16: the spawned acolyte starts out of sight of the
+    # target ruin, which is still undiscovered. --
     info = unit_info(port, roster_uid)
     if not check("roster acolyte position query answers", bool(info)):
         return None
     ux, uy = info["gridX"], info["gridY"]
-    check("the spawned acolyte starts outside the target ruin's discovery margin",
-          not point_in_expanded(ux, uy, bounds, margin),
-          f"unit at ({ux:.1f},{uy:.1f}), expanded bounds {expand(bounds, margin)}")
+    check("the spawned acolyte starts out of sight of the target ruin",
+          not sees_location(port, roster_uid, bounds),
+          f"unit at ({ux:.1f},{uy:.1f}), ruin bounds {bounds}")
     pre_move = match_by_anchor(list_locations_sorted(port), t["gx"], t["gy"]) or {}
     check("target ruin is still undiscovered before the unit approaches",
           not pre_move.get("discovered"))
@@ -710,7 +783,7 @@ def session_local_and_discovery(port: int, w: int, h: int, shots: str,
     check("real right-click move order resolves the target ruin's anchor tile",
           move_resolved == (t["gx"], t["gy"]), f"got {move_resolved}")
 
-    # -- step 17: entering the expanded margin discovers it exactly
+    # -- step 17: coming within sight discovers it exactly
     # once, attributed to this unit, with matching anchor coords. --
     discovered_flag = poll_until(90.0, lambda: next(
         (e.get("discovered") for e in list_locations_sorted(port)
@@ -727,7 +800,7 @@ def session_local_and_discovery(port: int, w: int, h: int, shots: str,
         # left to their own ambient wander (unordered) rather than
         # frozen, so on a close local-start site it's the real,
         # unscripted AI — not this probe — that occasionally lets a
-        # different roster acolyte reach the margin first. What must
+        # different roster acolyte see the ruin first. What must
         # stay true is that it's a real portal-spawned unit, not a
         # stray from elsewhere.
         check("discovery event attributed to a roster acolyte from this portal",
@@ -746,7 +819,7 @@ def session_local_and_discovery(port: int, w: int, h: int, shots: str,
     # where this probe's move-order clicks land (screen centre) —
     # silently swallows every subsequent input.click before it ever
     # reaches scripts/init_mouse.lua's world-click routing, so step 19's
-    # "exit the margin" order below would otherwise never take effect.
+    # "walk out of sight" order below would otherwise never take effect.
     # Dismissing it directly (like `clear_find_water`, not a player
     # action under test) is the equivalent of a real player clicking
     # its OK button before continuing.
@@ -757,9 +830,9 @@ def session_local_and_discovery(port: int, w: int, h: int, shots: str,
     check("the un-approached control ruin stays undiscovered",
           bool(control_now) and not control_now.get("discovered"))
 
-    # -- checkpoint: one discovered + one undiscovered icon, using the
+    # -- checkpoint: one type icon + one unknown marker, using the
     # IDENTICAL camera centre + zoom formula session (a) used for its
-    # pre-portal `icon_hidden_target.png`/`icon_hidden_control.png`
+    # pre-portal `icon_unknown_target.png`/`icon_unknown_control.png`
     # shots (same tempdir, same file names) — a terrain-stable baseline
     # per ruin, so the comparisons below isolate the ICON change alone
     # rather than "these are two different ruins on different terrain".
@@ -770,7 +843,7 @@ def session_local_and_discovery(port: int, w: int, h: int, shots: str,
     play_zoom = send(port, "return camera.getZoom()")
     fade_end = zoom_fade_end(port)
     full_zoom = fade_end * 1.5
-    shot_hidden_target = os.path.join(shots, "icon_hidden_target.png")
+    shot_hidden_target = os.path.join(shots, "icon_unknown_target.png")
     center_on(port, t["gx"], t["gy"])
     set_zoom(port, full_zoom)
     time.sleep(0.3)
@@ -781,7 +854,7 @@ def session_local_and_discovery(port: int, w: int, h: int, shots: str,
         check("discovered-icon frame is not blank",
               bool(st) and st[2] >= 3, f"distinct colors: {st and st[2]}")
         check("target ruin's icon visibly changed from its own pre-portal "
-              "hidden-icon baseline (same camera centre/zoom) once discovered",
+              "unknown-marker baseline (same camera centre/zoom) once seen",
               png_differs(shot_hidden_target, shot_discovered, min_fraction=0.0002))
     center_on(port, c["gx"], c["gy"])
     set_zoom(port, full_zoom)
@@ -794,27 +867,29 @@ def session_local_and_discovery(port: int, w: int, h: int, shots: str,
     set_zoom(port, float(play_zoom))
     time.sleep(0.3)
 
-    # -- step 19: move out past the margin, then back in — no duplicate
-    # discovery event. Exits along the +x edge, just past the margin,
-    # rather than all the way back to the portal, to keep the round
-    # trip short. --
-    outside_x = bounds["max_x"] + margin + 8
+    # -- step 19: move out of sight, then back in — no duplicate
+    # discovery event. Exits along the +x edge, far enough that an
+    # acolyte's ~6-tile sight radius certainly clears the ruin, rather
+    # than all the way back to the portal, to keep the round trip short.
+    # `sees_location` below is what actually PROVES it left view, so
+    # this distance only has to be plausible, not conservative — padding
+    # it out to the widest theoretical sightline just lengthens the
+    # return leg past the poll budget. --
+    outside_x = bounds["max_x"] + margin + 2
     outside_y = t["gy"]
     resolved_out = order_move_to(port, outside_x, outside_y, cx0, cy0)
-    check("real move order to exit the margin resolves a tile",
+    check("real move order to walk out of sight resolves a tile",
           resolved_out is not None)
-    left_margin = poll_until(60.0, lambda: not point_in_expanded(
-        unit_info(port, roster_uid).get("gridX", 0.0),
-        unit_info(port, roster_uid).get("gridY", 0.0), bounds, margin))
-    check("the unit actually leaves the discovery margin", bool(left_margin))
+    left_margin = poll_until(
+        90.0, lambda: not sees_location(port, roster_uid, bounds))
+    check("the unit actually walks out of sight of the ruin", bool(left_margin))
 
     resolved_back = order_move_to(port, t["gx"], t["gy"], cx0, cy0)
     check("real move order back into the ruin resolves the anchor tile",
           resolved_back == (t["gx"], t["gy"]), f"got {resolved_back}")
-    reentered = poll_until(60.0, lambda: point_in_expanded(
-        unit_info(port, roster_uid).get("gridX", -1e9),
-        unit_info(port, roster_uid).get("gridY", -1e9), bounds, margin))
-    check("the unit re-enters the discovery margin", bool(reentered))
+    reentered = poll_until(
+        90.0, lambda: sees_location(port, roster_uid, bounds))
+    check("the unit comes back within sight of the ruin", bool(reentered))
     time.sleep(1.0)
     evs_again = discovery_events(port)
     check("leaving and returning emits no duplicate discovery event",
@@ -825,6 +900,7 @@ def session_local_and_discovery(port: int, w: int, h: int, shots: str,
         port, f"engine.saveWorld('{FIXTURE_PAGE}', '{SAVE_LOCAL}'); "
               f"return 'true'").lower())
     time.sleep(0.5)
+
     return True
 
 
@@ -862,8 +938,8 @@ def session_reload_check(port: int, w: int, h: int, shots: str,
     # not just against each other. --
     fade_end = zoom_fade_end(port)
     full_zoom = fade_end * 1.5
-    shot_hidden_target = os.path.join(shots, "icon_hidden_target.png")
-    shot_hidden_control = os.path.join(shots, "icon_hidden_control.png")
+    shot_hidden_target = os.path.join(shots, "icon_unknown_target.png")
+    shot_hidden_control = os.path.join(shots, "icon_unknown_control.png")
     center_on(port, target["gx"], target["gy"])
     set_zoom(port, full_zoom)
     time.sleep(0.3)
@@ -873,7 +949,7 @@ def session_reload_check(port: int, w: int, h: int, shots: str,
         check("reloaded target-icon frame is not blank",
               bool(st) and st[2] >= 3, f"distinct colors: {st and st[2]}")
         check("reloaded target ruin's icon still differs from its own "
-              "pre-portal hidden-icon baseline (discovered state survived "
+              "pre-portal unknown-marker baseline (discovered state survived "
               "save -> quit -> restart -> load)",
               png_differs(shot_hidden_target, shot_t, min_fraction=0.0002))
     center_on(port, control["gx"], control["gy"])
@@ -881,12 +957,93 @@ def session_reload_check(port: int, w: int, h: int, shots: str,
     time.sleep(0.3)
     shot_c = os.path.join(shots, "icon_reloaded_control.png")
     if check("reloaded control-icon screenshot answers", screenshot(port, shot_c)):
-        check("the reloaded discovered and undiscovered icons render differently",
+        check("the reloaded type icon and unknown marker render differently",
               png_differs(shot_t, shot_c, min_fraction=0.0002))
         check("reloaded control ruin's icon still matches its own pre-portal "
-              "hidden-icon baseline (undiscovered state survived "
+              "unknown-marker baseline (unknown state survived "
               "save -> quit -> restart -> load)",
               not png_differs(shot_hidden_control, shot_c, min_fraction=0.0002))
+
+    # -- steps 22a-22d (#1230): the three icon appearances, on the GPU,
+    # at ONE camera centre and ONE zoom, so the only thing varying
+    # between the frames is the location's own lifecycle.
+    #
+    # This runs LAST, in the reload session, for two reasons. It drives
+    # the control ruin forward through discovered/cleared/depleted and
+    # lifecycle promotion is one-way, so it must come after every check
+    # that requires the control to still be unknown — which is all of
+    # session (b) and everything above. And it reuses the camera/zoom
+    # sequence this session has just proven works (the reloaded-icon
+    # shots above), rather than the post-save tail of session (b),
+    # where the same sequence photographed a static frame.
+    #
+    # What this can and cannot prove: data/locations/ruin_small.yaml is
+    # the only shipped location definition, so both ruins are instances
+    # of it and "every definition shares ONE unknown marker" is not
+    # demonstrable from a real world — that claim belongs to the pure
+    # "Location map icons" Hspec group, which registers synthetic
+    # definitions. What IS demonstrable here is that the unknown marker
+    # and the ruin type icon render DIFFERENTLY at one camera centre and
+    # zoom, and that the spent states render that type icon strictly
+    # DARKER.
+    inst_id = (c or {}).get("instance_id")
+    if not check("reloaded control ruin exposes its instance id for the "
+                 "icon-state sweep", inst_id is not None):
+        return
+
+    def shoot_state(tag: str) -> str | None:
+        center_on(port, control["gx"], control["gy"])
+        set_zoom(port, full_zoom)
+        time.sleep(0.4)
+        path = os.path.join(shots, f"icon_state_{tag}.png")
+        return path if screenshot(port, path) else None
+
+    def force_lifecycle(state: str) -> bool:
+        got = send(port,
+                   f"return tostring(world.setLocationLifecycle("
+                   f"{int(inst_id)}, '{state}'))")
+        return "true" in (got or "").lower()
+
+    # `shot_c` above is this same camera centre and zoom, taken while
+    # the control was still unknown — reuse it rather than re-shooting,
+    # so the unknown frame is provably the one the persistence check
+    # just validated.
+    shot_unknown = shot_c
+    lit_path = None
+    if check("control ruin promotes to discovered", force_lifecycle("discovered")):
+        lit_path = shoot_state("discovered")
+        if check("discovered-state screenshot answers", bool(lit_path)):
+            check("the unknown marker and the ruin type icon render "
+                  "DIFFERENTLY at the same camera centre and zoom — the "
+                  "map does not show the ruin's type until a unit has "
+                  "seen it",
+                  png_differs(shot_unknown, lit_path, min_fraction=0.0001))
+
+    lit = centre_luma(lit_path, w, h) if lit_path else None
+    spent_shots: dict[str, str] = {}
+    for spent in ("cleared", "depleted"):
+        if not check(f"control ruin promotes to {spent}", force_lifecycle(spent)):
+            continue
+        shot = shoot_state(spent)
+        if not check(f"{spent}-state screenshot answers", bool(shot)):
+            continue
+        spent_shots[spent] = shot
+        dark = centre_luma(shot, w, h)
+        if check(f"{spent}-state luminance measurable and comparable",
+                 lit is not None and dark is not None,
+                 f"discovered={lit} {spent}={dark}"):
+            check(f"the {spent} icon renders strictly DARKER than the "
+                  f"discovered one at the same camera centre and zoom",
+                  dark < lit,
+                  f"discovered luma={lit:.3f} {spent} luma={dark:.3f}")
+    # Both spent states share one bitmap and one tint, so they must be
+    # indistinguishable from each other — the thing that would break if
+    # either grew its own texture.
+    if len(spent_shots) == 2:
+        check("cleared and depleted render identically — one type icon, "
+              "one tint, no second authored bitmap",
+              not png_differs(spent_shots["cleared"], spent_shots["depleted"],
+                              min_fraction=0.0001))
 
 
 def main() -> int:

@@ -1348,6 +1348,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/m1-item-bulk-storage.expected.json"
         }
       ]
+    },
+    {
+      "id": "n1-location-sight-reveal",
+      "description": "Locations revealed by unit sight instead of a proximity halo (issue #1230, epic #1229): world-pages became v7, dropping LocationInstance's discovery_margin. Reveal is now the intersection of a player-owned unit's night-aware visible-tile set with the instance's own stored bounds (#777), so the halo the margin described describes nothing. This baseline tracks a REAL current-format session written by the live engine at world-pages v7, whose page carries placed location instances holding bounds and a lifecycle but NO margin field at all -- so the new shape is exercised by the fixture registered to cover its version. The pre-#1230 v6 shape stays tracked by k1/l1, v5 by j1, v4 by i1, v3 by g1/h1, v2 by d1/e1/f1, and v1 by b2/b3/c3; every one of them decodes with its stored margin read off the wire and discarded, and with every other instance field carried across exactly.",
+      "declaredAt": "2026-08-15",
+      "declaredByIssue": 1230,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.Page.migrateWorldPagesV6 (v6 -> v7: each stored location instance keeps its allocator, id, definition, chunk, anchor, bounds, name, gloss, etymology, lifecycle and contents-spawned flag, and its stored discovery_margin is dropped -- the live record has no such field since reveal became sight-based), migrateWorldPagesV5/V4/V3/V2/V1 (older shapes -> current) + Location.Instance.resolveLegacyLocationInstances",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 7,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 5,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "n1-location-sight-reveal",
+          "path": "test-headless/data/save-compat/n1-location-sight-reveal.bin",
+          "kind": "complete-session",
+          "sha256": "3f90088657fcccf1ae26e171504a2ffc4a9b67598f7e9e862a96507321cde00f",
+          "sizeBytes": 908436,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), settled 6.0s and held until `(function() local ls = world.listPlacedLocations(); if #ls == 0 then return false end; local l = ls[1]; return l.discovery_margin == nil and l.bounds ~= nil and l.lifecycle ~= nil end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/n1-location-sight-reveal.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

@@ -722,7 +722,6 @@ instanceOf e lc = LocationInstance
     , liChunk           = ChunkCoord 0 0
     , liAnchor          = (0, 0)
     , liBounds          = AbsBounds 0 0 1 1
-    , liDiscoveryMargin = 4
     , liDisplayName     = eeName e
     , liGloss           = eeGloss e
     , liEtymology       = eeSource e

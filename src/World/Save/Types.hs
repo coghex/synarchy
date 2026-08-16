@@ -1208,8 +1208,8 @@ missingLocationDefReferences locationDefs pages = concatMap pageRefs pages
 --   instance table carries nothing pending — a v2 (post-#911) save, a
 --   freshly generated world, or a page already resolved — is returned
 --   unchanged, so a definition edited since placement can never
---   overwrite an existing instance's stored bounds, margin, or display
---   name. Called by the load path AFTER content validation and BEFORE
+--   overwrite an existing instance's stored bounds or display name
+--   (#1230 removed the margin that used to sit between them). Called by the load path AFTER content validation and BEFORE
 --   staging/publication ('Engine.Scripting.Lua.API.Save.loadSaveFn'):
 --   the pure component decoders have no registry to resolve against.
 resolveLegacyLocations ∷ LocationRegistry → WorldPageSave → WorldPageSave

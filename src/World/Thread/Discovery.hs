@@ -3,12 +3,12 @@
 --   clock ('World.Thread.Time.tickWorldTime'), once per LOADED page per
 --   world-thread iteration — including a hidden (non-visible) page, and
 --   independent of the pause flag, since a freshly loaded save can come
---   up already standing inside a location's discovery margin and must
---   discover it immediately rather than waiting for an unpause. Unlike
---   the visible-only calendar/flora/power ticks, this never reads
---   game-scaled dt: discovery is a positional check against whatever
---   the unit and world-manager threads have already published this
---   instant, not something that advances with simulated time.
+--   up already looking straight at a location and must discover it
+--   immediately rather than waiting for an unpause. Unlike the
+--   visible-only calendar/flora/power ticks, this never reads
+--   game-scaled dt: discovery is a check against whatever the unit and
+--   world-manager threads have already published this instant, not
+--   something that advances with simulated time.
 module World.Thread.Discovery
     ( tickLocationDiscovery
     ) where
@@ -23,22 +23,40 @@ import Data.List (sortOn)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv, activeWorldPageFrom)
 import Engine.PlayerEvent.Emit (emitEventFullOnPage)
-import Location.Discovery (DiscoveryHit(..), findDiscoveries)
-import Location.Instance (LocationLifecycle(..), setLocationLifecycle)
+import Location.Discovery (DiscoveryHit(..), UnitSight(..), findDiscoveries)
+import Location.Instance
+    ( LocationInstance(..), LocationLifecycle(..), instancesToList
+    , promoteLifecycle, setLocationLifecycle )
+import Unit.Faction (isPlayerOwned)
+import Unit.LineOfSight (visibleTilesOnPage)
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..))
 import World.Types (WorldGenParams(..), WorldPageId(..), WorldState(..))
 
--- | Check one page's placed locations against every currently-known
---   PLAYER-OWNED unit on it, mark any newly-qualifying location
+-- | Check one page's placed locations against what every currently-known
+--   PLAYER-OWNED unit on it can SEE, mark any newly-visible location
 --   discovered, and emit one attributable player event per transition.
 --   A no-op when the page has no live gen params yet (mirrors
 --   'World.Thread.ItemTemp.tickItemTemperatures'). Which units count is
---   NOT decided here: this hands every unit on the page to
+--   NOT decided here: this hands every unit's sight to
 --   'findDiscoveries', which applies 'Unit.Faction.isPlayerOwned' — the
 --   shared definition of "the player's own unit" (#912). Ownership is
 --   narrower than alliance on purpose, so a debug unit (allied with the
 --   player, commandable by them, but not owned) still never discovers a
---   location by moving through it.
+--   location by looking at it.
+--
+--   Sight comes from 'Unit.LineOfSight.visibleTilesOnPage' against THIS
+--   page's own 'WorldState' (#1230) — the same calculation the public
+--   @unit.getVisibleTiles@ query runs, but without that query's
+--   'wmVisible' gate, which is what keeps discovery working on a page
+--   that is loaded but hidden.
+--
+--   Two guards keep the tick cheap now that the predicate is a
+--   rasterization rather than a point-in-box test, and both must stay:
+--   the whole page is skipped once no instance can still promote (the
+--   steady state for a fully explored world), and sight is computed
+--   ONCE per unit and only for units that could qualify at all —
+--   'findDiscoveries' still applies the ownership filter itself, so
+--   pre-filtering here changes cost, never behaviour.
 --
 --   Every emitted event names its 'peSourcePage' (#780) since this
 --   tick runs on every loaded page, not just the active one — but a
@@ -51,41 +69,57 @@ tickLocationDiscovery env pageId@(WorldPageId pageText) ws = do
     mParams ← readIORef (wsGenParamsRef ws)
     case mParams of
         Nothing → pure ()
-        Just p → do
-            -- Every discovery input — bounds, margin, display name,
-            -- lifecycle — is stored on the instance itself (#911), so
-            -- this tick no longer reads the location-def registry at all.
-            um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-            mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
-            let isActivePage = case mActive of
-                    Just (activePageId, _) → activePageId ≡ pageId
-                    Nothing → False
-                pageUnits =
-                    [ (uid, uiFactionId inst, floor (uiGridX inst), floor (uiGridY inst))
-                    | (uid, inst) ← sortOn fst (HM.toList (umInstances um))
-                    , uiPage inst ≡ pageId
-                    ]
-                hits = findDiscoveries (wgpWorldSize p)
-                                        (wgpLocationInstances p)
-                                        pageUnits
-            forM_ hits $ \hit → do
-                -- The lifecycle promotion is the persisted transition
-                -- (#911) — 'setLocationLifecycle' refuses a backward or
-                -- same-state move, so an instance already discovered (or
-                -- past it) neither changes nor re-emits. The event fires
-                -- only on a promotion that actually landed, preserving
-                -- #780's exactly-once contract even if two ticks raced.
-                promoted ← atomicModifyIORef' (wsGenParamsRef ws) $ \mP → case mP of
-                    Just p' → case setLocationLifecycle (dhInstance hit)
-                                        LifecycleDiscovered
-                                        (wgpLocationInstances p') of
-                        Just instances' →
-                            (Just p' { wgpLocationInstances = instances' }, True)
-                        Nothing → (mP, False)
-                    Nothing → (mP, False)
-                when promoted $
-                    emitEventFullOnPage env "location_discovery" "World.Thread.Discovery"
-                        ("Discovered: " <> dhLabel hit)
-                        (if isActivePage then Just (dhAnchor hit) else Nothing)
-                        (Just (unUnitId (dhUnit hit)))
-                        (Just pageText)
+        Just p
+            | not (any promotable
+                       (instancesToList (wgpLocationInstances p))) → pure ()
+            | otherwise → do
+                -- Every discovery input — bounds, display name,
+                -- lifecycle — is stored on the instance itself (#911), so
+                -- this tick no longer reads the location-def registry at all.
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                mActive ← activeWorldPageFrom
+                              (wsWorldManagerRef (toWorldSimCapability env))
+                let isActivePage = case mActive of
+                        Just (activePageId, _) → activePageId ≡ pageId
+                        Nothing → False
+                    pageUnits =
+                        [ (uid, inst)
+                        | (uid, inst) ← sortOn fst (HM.toList (umInstances um))
+                        , uiPage inst ≡ pageId
+                        , isPlayerOwned (uiFactionId inst)
+                        ]
+                sights ← forM pageUnits $ \(uid, inst) → do
+                    tiles ← visibleTilesOnPage ws inst
+                    pure UnitSight { usUnit    = uid
+                                   , usFaction = uiFactionId inst
+                                   , usTiles   = tiles }
+                let hits = findDiscoveries (wgpWorldSize p)
+                                           (wgpLocationInstances p)
+                                           sights
+                forM_ hits $ \hit → do
+                    -- The lifecycle promotion is the persisted transition
+                    -- (#911) — 'setLocationLifecycle' refuses a backward or
+                    -- same-state move, so an instance already discovered (or
+                    -- past it) neither changes nor re-emits. The event fires
+                    -- only on a promotion that actually landed, preserving
+                    -- #780's exactly-once contract even if two ticks raced.
+                    promoted ← atomicModifyIORef' (wsGenParamsRef ws) $ \mP →
+                        case mP of
+                            Just p' → case setLocationLifecycle (dhInstance hit)
+                                                LifecycleDiscovered
+                                                (wgpLocationInstances p') of
+                                Just instances' →
+                                    (Just p' { wgpLocationInstances = instances' }
+                                    , True)
+                                Nothing → (mP, False)
+                            Nothing → (mP, False)
+                    when promoted $
+                        emitEventFullOnPage env "location_discovery"
+                            "World.Thread.Discovery"
+                            ("Discovered: " <> dhLabel hit)
+                            (if isActivePage then Just (dhAnchor hit) else Nothing)
+                            (Just (unUnitId (dhUnit hit)))
+                            (Just pageText)
+  where
+    promotable inst =
+        isJust (promoteLifecycle (liLifecycle inst) LifecycleDiscovered)

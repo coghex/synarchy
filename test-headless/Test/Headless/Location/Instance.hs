@@ -45,11 +45,11 @@ testNaming = LocationNaming
 --   their stored geometry alone.
 
 ruinDef, campDef ∷ LocationDef
-ruinDef = mkDef "ruin" "Small Ruin" (RelBounds (-2) (-2) 2 2) 6
-campDef = mkDef "camp" "Old Camp"   (RelBounds (-1) (-1) 1 1) 2
+ruinDef = mkDef "ruin" "Small Ruin" (RelBounds (-2) (-2) 2 2)
+campDef = mkDef "camp" "Old Camp"   (RelBounds (-1) (-1) 1 1)
 
-mkDef ∷ Text → Text → RelBounds → Int → LocationDef
-mkDef lid label bounds margin = LocationDef
+mkDef ∷ Text → Text → RelBounds → LocationDef
+mkDef lid label bounds = LocationDef
     { ldId              = lid
     , ldLabel           = label
     , ldType            = "ruin"
@@ -59,8 +59,7 @@ mkDef lid label bounds margin = LocationDef
     , ldMinSpacing      = 0
     , ldContents        = []
     , ldBounds          = bounds
-    , ldDiscoveryMargin = margin
-    , ldMapIcons        = Nothing
+    , ldMapIcon         = Nothing
     , ldNaming          = testNaming
     }
 
@@ -177,7 +176,7 @@ spec = describe "Location instance identity" $ do
             locationInstanceAllocatorErrors broken `shouldSatisfy` (not . null)
 
     describe "stored geometry and display name" $ do
-        it "stores the anchor, resolved absolute bounds, margin and name \
+        it "stores the anchor, resolved absolute bounds and name \
            \from the definition at placement time" $
             case lookupLocationInstance (LocationInstanceId 2) instances3 of
                 Nothing → expectationFailure "expected instance #2"
@@ -185,13 +184,12 @@ spec = describe "Location instance identity" $ do
                     liDefId inst           `shouldBe` "ruin"
                     liAnchor inst          `shouldBe` (8, 8)
                     liBounds inst          `shouldBe` AbsBounds 6 6 10 10
-                    liDiscoveryMargin inst `shouldBe` 6
                     liDisplayName inst     `shouldBe` "Small Ruin"
 
         it "keeps its stored geometry when the definition is edited later — \
            \nothing re-derives it from the registry" $ do
             let edited = registerLocation
-                    (mkDef "ruin" "Renamed" (RelBounds (-9) (-9) 9 9) 99)
+                    (mkDef "ruin" "Renamed" (RelBounds (-9) (-9) 9 9))
                     registry
             -- The ONLY registry-consulting path after placement is the v1
             -- migration, and it is a no-op on an already-resolved table.
@@ -318,14 +316,14 @@ spec = describe "Location instance identity" $ do
            \instance occupying it, and nothing else" $
             stateOf migrated `shouldBe` expectedMigratedState
 
-        it "resolves each instance's bounds / margin / name against the \
+        it "resolves each instance's bounds / name against the \
            \registered definition" $
-            map (\i → (liBounds i, liDiscoveryMargin i, liDisplayName i))
+            map (\i → (liBounds i, liDisplayName i))
                 (instancesToList migrated)
                 `shouldBe`
-                [ (AbsBounds (-41) 71 (-39) 73, 2, "Old Camp")
-                , (AbsBounds 6 6 10 10,         6, "Small Ruin")
-                , (AbsBounds 38 (-10) 42 (-6),  6, "Small Ruin")
+                [ (AbsBounds (-41) 71 (-39) 73, "Old Camp")
+                , (AbsBounds 6 6 10 10,         "Small Ruin")
+                , (AbsBounds 38 (-10) 42 (-6),  "Small Ruin")
                 ]
 
         it "discards a marker naming a chunk with no overlay entry — it \

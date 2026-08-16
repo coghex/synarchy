@@ -76,8 +76,9 @@ data WorldGenParams = WorldGenParams
       --   per overlay entry, keyed by a stable
       --   'Location.Instance.LocationInstanceId' allocated at placement
       --   time from the deterministic overlay above. Carries each
-      --   location's definition id, anchor, absolute bounds (#777),
-      --   discovery margin, display name, gameplay LIFECYCLE, and its
+      --   location's definition id, anchor, absolute bounds (#777 —
+      --   the ONLY footprint since #1230 removed the discovery margin),
+      --   display name, gameplay LIFECYCLE, and its
       --   one-time content-spawn flag (#90).
       --
       --   This replaced two former chunk-keyed sets — a chunk is not a
@@ -92,10 +93,18 @@ data WorldGenParams = WorldGenParams
       --   The lifecycle is checked + promoted every world tick by
       --   'World.Thread.Discovery.tickLocationDiscovery' against every
       --   page in 'wmWorlds' (not just the visible one — discovery must
-      --   fire on a hidden page a player unit is simulated on),
-      --   independent of the pause flag so a freshly loaded,
-      --   auto-paused save with a unit already standing in a location's
-      --   margin discovers it immediately.
+      --   fire on a hidden page a player unit is simulated on, which is
+      --   why the tick runs 'Unit.LineOfSight.visibleTilesOnPage'
+      --   against that page's own state rather than the wmVisible-gated
+      --   public query), independent of the pause flag so a freshly
+      --   loaded, auto-paused save with a unit that can already SEE a
+      --   location discovers it immediately.
+      --
+      --   Since #1230 the trigger is SIGHT, not proximity: a
+      --   player-owned unit's night-aware visible-tile set intersecting
+      --   the instance's own stored 'Location.Instance.liBounds',
+      --   seam-aware, one tile being enough. The @discovery_margin@
+      --   halo that used to expand those bounds is gone.
       --
       --   Serialized. 'Location.Instance.lisPendingLegacy' is the one
       --   transient part (skipped by the manual instance below and by

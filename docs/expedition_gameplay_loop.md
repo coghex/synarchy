@@ -15,13 +15,15 @@ Design state: `ready for issue processing`
 > and the "recovered radio core reveals distant locations" reward is
 > **retired**. D-6 is partially superseded; D-10, D-12 and D-13 are fully
 > superseded, retained with their rationale. EXP-4 and EXP-2 changed shape.
-> Q-1 through Q-11 are resolved.
+> Q-1 through Q-12 are resolved.
 >
-> **Q-12 is deliberately open** and is the one thing a solver must stop on: the
-> shared question-mark texture does not exist. The project owner is making it.
-> #1230 carries it as an explicit art blocker — build and test everything the
-> texture does not gate, then stop and ask. Do not placeholder, do not reuse the
-> ruin sprite, and do not assume a generation method.
+> **Q-12 is RESOLVED (2026-08-15, in #1230).** The project owner made the
+> shared question-mark texture and it ships at
+> `assets/textures/icons/location/location_unknown.png`; they also authorized
+> retiring `ruin_hidden.png` and repurposing `ruin_discovered.png` as
+> `ruin.png`. Nothing here remains an art blocker. The rule that produced that
+> outcome still stands for the next texture: do not placeholder, do not reuse
+> another sprite, and do not assume a generation method — stop and ask.
 >
 > **Processing state (2026-08-11).** D-21's corrections are APPLIED: #917 and
 > epic #1229 were both rewritten to this design. EXP-4 is filed as #1230. EXP-5
@@ -66,6 +68,11 @@ concrete precondition
   epic #159 and issues #777–#782. `Location.Instance` now owns stable placed
   identities, bounds, content-spawn state, and the persisted lifecycle added by
   closed issue #911.
+- **D-14, D-15, D-16 and D-22 landed in #1230.** The bullets below describe the
+  pre-#1230 code and are kept as the design's starting point, not as a
+  description of the tree: reveal is now sight-based, the icon model is
+  shared-unknown / type / dark-type, `unitVisibleTiles` applies the night
+  factor to its radius, and `discovery_margin` no longer exists anywhere.
 - Per-unit experiential location knowledge shipped in closed issue #915 and is
   persisted through `lua.unit_ai`; the global discovery lifecycle remains a
   separate cartographic layer.
@@ -118,7 +125,10 @@ concrete precondition
   all rewritten off the retired design.
 - **#1230 carries EXP-4** (*Mark every location unknown on the zoom map and
   reveal its type by unit sight*), filed 2026-08-11 with the question-mark
-  texture recorded as an explicit stop-and-ask art blocker.
+  texture recorded as an explicit stop-and-ask art blocker. That blocker was
+  reached and cleared as designed: the solver built everything the texture did
+  not gate and stopped, and the owner supplied `location_unknown.png`
+  (2026-08-15).
 - No other open tracker epic owns this arc. Closed epic #918 covers survival
   calibration only and explicitly defers #916/#917; closed epic #159 covers the
   location foundation.
@@ -355,6 +365,16 @@ Discovery changes the icon, emits clear player feedback, and persists across
 save/load. It does not imply that the location is cleared or that all of its
 contents are known.
 
+> **Superseded 2026-08-15 by D-15 and D-22, landed in #1230.** The approach
+> margin above describes what #780 shipped and remains accurate as history.
+> The `discovery_margin` field is gone — from the location YAML, the runtime
+> definition, the live instance, both Lua tables, and the `world-pages` wire
+> (v7). `bounds` is the only location footprint, and the trigger is the
+> intersection of a player-owned unit's night-aware visible-tile set with
+> those bounds. The "slightly before a unit physically enters" intent it was
+> introduced for is now served better by sight itself, which reaches further
+> than any halo in the open and not at all through a hill.
+
 ### Portal placement feedback
 
 The portal's construction ghost follows the general building-placement rule:
@@ -390,7 +410,7 @@ from each location's persisted lifecycle state.
 now a first-class persisted record (`Location.Instance.LocationInstance`),
 keyed per world page by a stable `LocationInstanceId` allocated at placement
 time from the deterministic overlay. It carries its definition id, anchor,
-resolved absolute bounds, discovery margin, display name, one-time
+resolved absolute bounds, display name, one-time
 content-spawn flag, and its lifecycle
 (`unknown → hinted → discovered → active → cleared → depleted`).
 `world.listPlacedLocations()` reports all of it and
@@ -405,11 +425,19 @@ Two deliberate boundaries on what #911 landed:
 - **`hinted` is currently unreachable, and that is correct.** Every location
   is cartographically visible from world generation and stays that way for
   now — a deliberate development-phase simplification: the player can always
-  see something is there, and it stays unexplored until a player-controlled
-  unit discovers it by proximity. `hinted` is for a future class of locations
-  that are *not* visible by default and must be revealed by information
-  rather than proximity. That class is planned but unbuilt; the state is
-  documented here so it is not later mistaken for dead weight.
+  see that something is there, though not WHAT (D-14's shared unknown
+  marker), and it stays unexplored until a player-owned unit SEES it
+  (D-15, landed in #1230).
+
+  > **Superseded 2026-08-15 by #1230.** This bullet used to end by
+  > reserving `hinted` for a future class of locations revealed by
+  > information rather than proximity. That class is retired. `hinted`
+  > survives only because `LocationLifecycle` is a positionally
+  > serialized append-only enum, so removing a constructor would corrupt
+  > saves; behaviourally it is an ordinary unknown state, drawing the
+  > shared marker and promoting to `discovered` on sight exactly as
+  > `unknown` does. The state is still documented here so it is not
+  > later mistaken for dead weight.
 
 Display names are a placeholder derived from each definition's `label`.
 Wiring them to the language/naming system (#708) is deliberately separate
@@ -526,8 +554,8 @@ This replaces the `discovery_margin` halo as the trigger for **both** layers.
 `findDiscoveries` and #915's `findAwareness` keep deriving from ONE shared
 enumeration — precisely so the map layer and per-unit `knownLocations` cannot
 drift — which now enumerates sight contacts instead of halo contacts (D-15,
-resolving Q-7). Nothing consumes `discovery_margin` afterwards; Q-11 decides
-whether the field is kept, narrowed, or removed.
+resolving Q-7). Nothing consumes `discovery_margin` afterwards, and D-22
+(resolving Q-11) removes it outright.
 
 Everything else about discovery is unchanged: the promotion is one-way, fires
 exactly one player-facing event, is page-scoped, and persists.
@@ -936,13 +964,19 @@ keep the field and keep decoding.
 
 D-14 requires exactly one new texture: a shared question-mark map symbol drawn
 for every location whose type is not yet known, at the same 32 logical pixels
-`locationIconTargetPixels` uses. It does not exist —
-`assets/textures/icons/location/` holds only `ruin_hidden.png` and
+`locationIconTargetPixels` uses. At the time of writing it did not exist —
+`assets/textures/icons/location/` held only `ruin_hidden.png` and
 `ruin_discovered.png`. The sibling icon families use a `*_unknown.png`
 convention (`skill_unknown.png`, `injury_unknown.png`,
 `infection_unknown.png`), so `location_unknown.png` is the name that fits.
 
 **Resolved 2026-08-11: the project owner will make this icon themselves.**
+
+**Landed 2026-08-15 in #1230.** The owner supplied
+`assets/textures/icons/location/location_unknown.png` (32x32 RGBA), and
+authorized retiring `ruin_hidden.png` and repurposing
+`ruin_discovered.png` as `ruin.png` — the one bitmap now serving
+`discovered`, `active`, and (darkened) `cleared`/`depleted`.
 
 It is nonetheless recorded as an explicit **art blocker in #1230** rather than
 resolved ahead of time. The standing workflow rule is that a solver
@@ -1047,11 +1081,13 @@ type icon its reveal resolves to.
 - **Out of scope:** The clear condition itself (EXP-2 owns it — this slice only
   renders the state), full fog of war, changing physical location visibility,
   new location definitions, and the lore/NPC reveal.
-- **Open questions:** Q-12 is a deliberate **art blocker carried into the
-  issue**: the shared question-mark texture does not exist. The solver must stop
-  and ask the owner for it rather than placeholder, reuse the ruin sprite, or
-  assume a generation method. Everything else in this slice can be built and
-  tested before the texture arrives.
+- **Open questions:** none. Q-12 was a deliberate **art blocker carried into
+  the issue** — the shared question-mark texture did not exist, and the solver
+  had to stop and ask the owner for it rather than placeholder, reuse the ruin
+  sprite, or assume a generation method. It resolved that way on 2026-08-15:
+  everything the texture did not gate was built and tested first, then the
+  owner supplied `location_unknown.png` and authorized retiring
+  `ruin_hidden.png` and repurposing `ruin_discovered.png` as `ruin.png`.
 
 ### EXP-2. Gate location clearing on guaranteed significant loot
 
@@ -1278,7 +1314,7 @@ actually ships:
 ```text
 spawn colony from a real portal roster
 → secure water, provision the party off the technomule
-→ travel and discover the location by proximity
+→ travel and discover the location by sight
 → SURVIVE the journey (the encounter is deferred — #916)
 → extract the ruin's own loot-table output (no guaranteed reward — #917)
 → return and deposit into colony storage

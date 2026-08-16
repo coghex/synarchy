@@ -466,11 +466,11 @@ end
 
 function unitAi.update(dt)
     -- Location awareness (#915) is recorded BEFORE the pause guard on
-    -- purpose. Its engine-side source (World.Thread.Discovery's shared
-    -- halo predicate) is deliberately pause-independent -- a freshly
-    -- loaded, auto-paused save can come up with a unit already standing
-    -- in a location's margin -- and gating acquisition on unpause here
-    -- would quietly reintroduce the dependency the engine side avoids.
+    -- purpose. Its engine-side source (the sight predicate #1230 gave
+    -- World.Thread.Discovery) is pause-independent -- a freshly loaded,
+    -- auto-paused save can come up with a unit already LOOKING AT a
+    -- location -- and gating acquisition on unpause here would quietly
+    -- reintroduce the dependency the engine side avoids.
     -- Recording a memory is not simulation: it mutates only aiState,
     -- never the world.
     locations.ingestAwareness(core.ensureState)

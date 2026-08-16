@@ -24,11 +24,10 @@ locations:
     # tile box relative to the anchor. This IS the 5x5 footprint — the
     # builder (room_small_damaged) and the content scatter below both
     # derive their geometry from these bounds; there is no separate
-    # Lua-side radius constant to keep in sync. discovery_margin is the
-    # tile halo later discovery-trigger work (#780) expands the bounds
-    # by before a unit is considered "near" the ruin.
+    # Lua-side radius constant to keep in sync. Since #1230 this is also
+    # the reveal footprint: a player-owned unit discovers the ruin when
+    # its line of sight touches any tile of this box.
     bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }
-    discovery_margin: 6
     # Naming scheme (#1101). Each placed instance is named in its
     # world's own generated language (epic #708) as one
     # modifier + head compound drawn deterministically from these two
@@ -50,12 +49,15 @@ locations:
               CAVERN, HEARTH, WALL, SPIRE, THRONE]
       modifiers: [ASH, STONE, IRON, SAND, RUIN, SILENCE, SORROW, FROST,
                   SHADOW, HOLLOW, BONE, OATH]
-    # Paired zoom-map annotation textures (#781): 'undiscovered' shows
-    # while wgpLocationDiscovered hasn't recorded this placement yet,
-    # 'discovered' once a player-faction unit has approached it (#780).
-    map_icons:
-      undiscovered: "assets/textures/icons/location/ruin_hidden.png"
-      discovered: "assets/textures/icons/location/ruin_discovered.png"
+    # This location TYPE's zoom-map annotation texture (#781, singular
+    # since #1230). It is what the marker becomes once a player-owned
+    # unit has SEEN the ruin, and — darkened through the icon quad's own
+    # colour, not a second bitmap — once the ruin is cleared or
+    # depleted. Before that every annotated location draws the ONE
+    # shared assets/textures/icons/location/location_unknown.png, which
+    # no definition declares (Location.Types.locationUnknownIconPath):
+    # the zoom map must not leak WHAT is there before anyone has looked.
+    map_icon: "assets/textures/icons/location/ruin.png"
     # World-gen overlay (#89) placement controls. Per-type, not global:
     # at most `max_count` instances, each at least `min_spacing` chunks
     # from another ruin (jittered, deterministic from the seed). Both are
