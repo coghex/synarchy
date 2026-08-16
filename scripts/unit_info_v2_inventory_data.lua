@@ -13,7 +13,13 @@ local M = {}
 -- equipped slots in EquipmentClass slot order so the player sees a
 -- stable layout). Each entry: { defName, displayName, weight,
 --                               category, kind, iconTex, currentFill,
---                               equipped, equippedSlot }
+--                               temp, equipped, equippedSlot }
+--
+-- `temp` is the raw TRACKED temperature (#344) all three sources push,
+-- carried through verbatim -- absent means the item is at ambient. The
+-- shared widget summarizes it per GROUP and both raw-item hosts render
+-- that summary (#1268), so dropping it here (as this module did before
+-- #1268) makes the whole unit-inventory list read "ambient".
 function M.collectInventoryAndEquipment(uid)
     local inv = unit.getInventory(uid) or {}
     local lo  = equipment.getLoadout(uid)  or {}
@@ -37,6 +43,7 @@ function M.collectInventoryAndEquipment(uid)
             condition    = it.condition,
             weapon       = it.weapon,
             sharpness    = it.sharpness,
+            temp         = it.temp,
             buffs        = it.buffs,
             unequippable = it.unequippable,
             equipped     = false,
@@ -74,6 +81,7 @@ function M.collectInventoryAndEquipment(uid)
                 condition     = it.condition,
                 weapon        = it.weapon,
                 sharpness     = it.sharpness,
+                temp          = it.temp,
                 equipped      = true,
                 equippedSlot  = slotId,
             }
@@ -101,6 +109,7 @@ function M.collectInventoryAndEquipment(uid)
             condition      = it.condition,
             weapon         = it.weapon,
             sharpness      = it.sharpness,
+            temp           = it.temp,
             buffs          = it.buffs,
             unequippable   = it.unequippable,
             equipped       = true,
