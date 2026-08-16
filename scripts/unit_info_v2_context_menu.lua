@@ -2,7 +2,10 @@
 -- unit_info_v2.lua).
 --
 -- Equip/Unequip/Contents/Store menus for inventory rows, silhouette
--- equipment slots, and accessory rows. All three routed via
+-- equipment slots, and accessory rows. Since #1249 "Store" is a queued
+-- order-at-a-distance targeting the open container window's endpoint,
+-- built by the shared scripts/transfer_gestures.lua rather than here.
+-- All three routed via
 -- ui_manager into the handleXxxRightClick functions attached below to
 -- the shared unitInfoV2 singleton.
 
@@ -19,50 +22,6 @@ local function invalidateInventory()
 end
 
 local M = {}
-
--- Built storage-capable buildings adjacent (Chebyshev ≤ 1) to the
--- unit. Used by the right-click "Store" path so the menu only offers
--- the player real, reachable targets.
-local function findAdjacentStorageBuildings(uid)
-    local info = unit.getInfo(uid)
-    if not info then return {} end
-    local utx = math.floor(info.gridX)
-    local uty = math.floor(info.gridY)
-    local listStr = building.list()
-    if not listStr or listStr == "No buildings placed" then return {} end
-    local result = {}
-    for id in listStr:gmatch("id=(%d+)") do
-        local bid = tonumber(id)
-        if bid and building.getActivity(bid) == "built" then
-            local cap = building.getStorageCapacity(bid)
-            if cap and cap > 0 then
-                local binfo = building.getInfo(bid)
-                if binfo then
-                    local tw = binfo.tileW or 1
-                    local th = binfo.tileH or 1
-                    local dx, dy = 0, 0
-                    if utx < binfo.gridX then
-                        dx = binfo.gridX - utx
-                    elseif utx >= binfo.gridX + tw then
-                        dx = utx - (binfo.gridX + tw - 1)
-                    end
-                    if uty < binfo.gridY then
-                        dy = binfo.gridY - uty
-                    elseif uty >= binfo.gridY + th then
-                        dy = uty - (binfo.gridY + th - 1)
-                    end
-                    if math.max(dx, dy) <= 1 then
-                        result[#result + 1] = {
-                            bid = bid,
-                            displayName = binfo.displayName or binfo.defName,
-                        }
-                    end
-                end
-            end
-        end
-    end
-    return result
-end
 
 -- All slots on the unit's equipment class that accept items of the
 -- given kind. Used by the right-click "Equip" path: if exactly one
@@ -228,21 +187,26 @@ function unitInfoV2.handleInvItemRightClick(item)
         menuItems[#menuItems + 1] = repairMenuItem
     end
 
-    -- Storage: append "Store in <cargo>" entries for each adjacent
-    -- built cargo. Equipped/accessory items can't be deposited
-    -- directly (player must unequip first). The deposit API enforces
-    -- capacity; menu entries don't pre-check, so a deposit that
-    -- overflows the cargo will return false and the item stays put.
+    -- Storage (#1249): "Store 1" / "Store all" into whatever endpoint
+    -- the OPEN CONTAINER WINDOW is currently showing. The gesture and
+    -- its menu location are the pre-#1249 ones; its target and its
+    -- action are not.
+    --
+    -- What it replaced was one "Store in <cargo>" entry per ADJACENT
+    -- built cargo, calling `unit.depositToCargo` on the spot. Naming the
+    -- open window instead is what drops the adjacency requirement: the
+    -- entry queues a durable order (#1246) and #1247's job walks the
+    -- unit there and commits on arrival, so the player can stock a cargo
+    -- hold across the map from the acolyte carrying the goods. With no
+    -- window open there is no target and no entry -- the player says
+    -- WHERE by opening the container, so there is nothing to guess.
+    --
+    -- Equipped and accessory items stay excluded exactly as before: the
+    -- player unequips first, which the Unequip entry above is for.
     if not item.equipped then
-        for _, c in ipairs(findAdjacentStorageBuildings(uid)) do
-            menuItems[#menuItems + 1] = {
-                label    = "Store in " .. c.displayName,
-                callback = function()
-                    unit.depositToCargo(uid, c.bid, item.defName,
-                                        item.instanceId)
-                    invalidateInventory()
-                end,
-            }
+        local gestures = require("scripts.transfer_gestures")
+        for _, entry in ipairs(gestures.storeEntries(uid, item)) do
+            menuItems[#menuItems + 1] = entry
         end
     end
 

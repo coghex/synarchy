@@ -199,6 +199,10 @@ as `ReasonBecameStale` carrying cause `ReasonInstanceMissing`.
 
 ### What retires, and when
 
+> **Both retired in [#1249] (UIT-2C).** Their replacements are
+> `scripts/transfer_gestures.lua`'s `Store 1` / `Store all` and
+> `Retrieve 1` / `Retrieve all`, reachable from the same two places.
+
 Both are player-facing paths superseded by the unified system, and each is
 removed only once its replacement exists:
 
@@ -567,6 +571,16 @@ None currently blocking. Every decision above carries prior signoff from epic
   its adjacency requirement; retire "Withdraw with \<unit\>"
   (`scripts/cargo_inventory_panel.lua:436`) in favour of retrieve; and the
   right-click hooks on container rows.
+- **Landed as:** `scripts/transfer_gestures.lua`, the ONE builder both hosts
+  call. Only the container window's ACTIVE (deepest) level may supply a target,
+  and only when it is an ENDPOINT level: an item-container level is render-only
+  (D-5) and the gesture never falls back to a transfer-capable ancestor. A
+  gesture that could not run is OMITTED rather than disabled — no window, no
+  eligible source, an equipped/accessory item, or a self-transfer. "all" is
+  every instance id the merged row stands for, which is why
+  `scripts/ui/item_list.lua` now records a row's complete membership during
+  grouping (`itemList.rowInstanceIds`) and signs it into the rebuild identity;
+  before that a merged row kept only its representative and its count.
 - **Phase:** 3 — order foundation
 - **Depends on:** `UIT-1A`, `UIT-2B`
 - **Ordering:** `critical path`
@@ -577,6 +591,10 @@ None currently blocking. Every decision above carries prior signoff from epic
   ladders that depend on them.
 - **Out of scope:** The escort session, and Mode B failure handling.
 - **Open questions:** None
+- **Gates:** hspec `--match "Transfer context menu"` (Mode A's entry plus
+  #1249's own `Transfer context menu (Mode B ...)` sibling, which drives both
+  gestures against a REAL per-page order store); `tools/item_list_widget_probe.py`
+  (manual-only, `needs-gpu`) for the real rendered row menus.
 
 ### UIT-3B. Add the escort transfer session
 
@@ -705,3 +723,7 @@ landed: the endpoint-info verb is `unit.transferEndpointInfo` rather than
 792/499/435; "Store in \<cargo\>" is at `unit_info_v2_context_menu.lua:234`
 rather than `:228`; and "Withdraw with \<unit\>" is at
 `cargo_inventory_panel.lua:436` rather than `:725`.
+
+Those last two line references are historical as of [#1249], which retired both
+entries; they locate the code the epic was written against, not code that still
+exists.

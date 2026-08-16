@@ -1177,6 +1177,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.TransferContextMenu
                    Test.Headless.UI.ItemList
                    Test.Headless.UI.ContainerWindowStack
+        Test.Headless.UI.TransferGestures
                    Test.Headless.World.Calendar
                    Test.Headless.World.Climate
                    Test.Headless.World.TimeLocal

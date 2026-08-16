@@ -97,10 +97,16 @@ end
 --
 -- What merging licenses is bounded by what a host can DO to a row
 -- (#1268). The members of a group are interchangeable FOR THE
--- TEMPERATURE-INSENSITIVE ACTIONS its hosts currently offer -- Equip /
--- Unequip, Contents, Prioritize / Un-prioritize Repair, Store,
--- Withdraw -- so routing those to the representative instanceId is
--- correct (#67). It is NOT a claim that the members are mechanically
+-- TEMPERATURE-INSENSITIVE, SINGLE-INSTANCE ACTIONS its hosts offer --
+-- Equip / Unequip, Contents, Prioritize / Un-prioritize Repair, and the
+-- singular "Store 1" / "Retrieve 1" -- so routing those to the
+-- representative instanceId is correct (#67). A BATCH action does not
+-- inherit that: "Store all" / "Retrieve all" name every member
+-- explicitly through `instanceIds` (#1249), because the transfer
+-- contract takes exact item references and a representative cannot
+-- stand for twelve of them.
+--
+-- Merging is NOT a claim that the members are mechanically
 -- identical: tracked temperature (#344) is deliberately not a key
 -- field (it cools continuously, so keying on it would split and
 -- re-merge a row forever), and consumption effects scale continuously
@@ -237,6 +243,20 @@ function itemList.tempHintLine(row)
     return "temperature: " .. s
 end
 
+-- Fold ONE member's instance identity into its group's membership list:
+-- distinct ids, in raw first-appearance order. A member with no numeric
+-- instanceId contributes nothing (the item-contents hosts' pre-grouped
+-- rows and the unit-info silhouette's synthetic entries both reach the
+-- widget without one), so an absent identity is an absence rather than
+-- a `nil` hole in the list.
+local function accumulateInstance(acc, it)
+    local iid = it.instanceId
+    if type(iid) ~= "number" then return end
+    if acc.seen[iid] then return end
+    acc.seen[iid] = true
+    acc.list[#acc.list + 1] = iid
+end
+
 -- Copy-and-count grouping in FIRST-APPEARANCE order. The first item of
 -- each group stays its representative instance; the shared count field
 -- is `count`.
@@ -247,10 +267,21 @@ end
 -- signature records a callback's PRESENCE, never its output, so a
 -- summary produced only in `rowName`/`rowTooltip` would never
 -- invalidate a row.
+--
+-- It is also the only place a row's COMPLETE membership is visible, so
+-- it is where `instanceIds` is recorded (#1249). Before that, a merged
+-- row kept nothing but its representative and its `count`, which is
+-- enough for the temperature-insensitive single-instance actions
+-- documented on `stackKey` but NOT for a batch gesture: "Store all" on
+-- a row of twelve rations is twelve distinct instance ids, never a
+-- count (the transfer contract takes an ordered list of exact item
+-- references and refuses duplicates). Read it through
+-- `itemList.rowInstanceIds` rather than off the row.
 function itemList.groupItems(items, opts)
     local separateEquipped = opts and opts.separateEquipped
     local groups = {}
     local accs   = {}
+    local ids    = {}
     local seen   = {}
     for _, it in ipairs(items or {}) do
         local key = itemList.stackKey(it, separateEquipped)
@@ -258,18 +289,48 @@ function itemList.groupItems(items, opts)
         if idx then
             groups[idx].count = groups[idx].count + 1
             accumulateTemp(accs[idx], it)
+            accumulateInstance(ids[idx], it)
         else
             local copy = {}
             for k, v in pairs(it) do copy[k] = v end
             copy.count = 1
             groups[#groups + 1] = copy
             accs[#groups] = { ambient = false, tracked = false }
+            ids[#groups]  = { list = {}, seen = {} }
             accumulateTemp(accs[#groups], it)
+            accumulateInstance(ids[#groups], it)
             if key then seen[key] = #groups end
         end
     end
-    for i, g in ipairs(groups) do g.tempSummary = summarizeTemp(accs[i]) end
+    for i, g in ipairs(groups) do
+        g.tempSummary = summarizeTemp(accs[i])
+        -- Overwrites rather than merges: `copy` above cloned every field
+        -- the raw item carried, so a source that already had an
+        -- `instanceIds` field must not survive as this row's membership.
+        g.instanceIds = ids[i].list
+    end
     return groups
+end
+
+-- The ordered instance identities a row stands for, as a FRESH list a
+-- caller may keep or mutate without reaching into the widget's model.
+--
+-- A row this widget grouped answers with its recorded membership. A row
+-- it did not (`preGrouped` — the item-contents levels, whose rows the
+-- engine already grouped by defName) has no membership to report, so
+-- this answers with the representative alone: that is honestly all such
+-- a row identifies, and a batch built from it would otherwise be a
+-- guess. An entry with neither answers empty, which every gesture
+-- treats as "offer nothing" rather than as a batch of zero.
+function itemList.rowInstanceIds(row)
+    if not row then return {} end
+    if type(row.instanceIds) == "table" then
+        local out = {}
+        for _, v in ipairs(row.instanceIds) do out[#out + 1] = v end
+        return out
+    end
+    if type(row.instanceId) == "number" then return { row.instanceId } end
+    return {}
 end
 
 -- "All" first, then one tab per category in first-appearance order.
@@ -400,12 +461,30 @@ local function buffsSignature(bs)
     return table.concat(parts, ";")
 end
 
+-- A row's complete membership (#1249), as a LENGTH plus every id in
+-- order. Two rows of twelve rations differing in one member are a
+-- different batch target even though every displayed value matches, so
+-- this is a sequence signature and not a count.
+local function instanceIdsSignature(ids)
+    if type(ids) ~= "table" then return "_" end
+    local parts = { "n" .. #ids }
+    for _, v in ipairs(ids) do parts[#parts + 1] = tostring(v) end
+    return table.concat(parts, ",")
+end
+
 -- Every value SUPPLIED IN THE ROW that the widget's own rendering or a
 -- host callback (rowName, rowTooltip, rowColor, rowWeightText) can put
 -- on screen. A field any of those reads and this list omits is a field
 -- whose change leaves stale text -- and a stale baked-in tooltip --
 -- on screen, because the widget answers "nothing changed" and keeps
 -- the elements it already built.
+--
+-- Membership (#1249) is the one entry here that is NOT displayed: a
+-- row's context menu acts on the exact instances it stands for, so
+-- swapping a non-representative member for another of the same def,
+-- quality and weight -- which changes no rendered pixel and no count --
+-- must still rebuild, or the menu built from the previous row would
+-- queue an order against an instance that has left the container.
 --
 -- State that is NOT in the row is deliberately not this function's
 -- job: it reaches the comparison through the host's presentationKey
@@ -442,6 +521,7 @@ local function rowSignature(r)
         tostring(r.equippedSlot or ""),
         tostring(r.accessoryIndex or "_"),
         tostring(r.instanceId or "_"),
+        instanceIdsSignature(r.instanceIds),
         tostring(r.iconTex or "_"),
         tostring(r.unequippable or false),
     }, "/")
@@ -1068,6 +1148,12 @@ function itemList.dump()
                     category = itemList.normalizeCategory(r.item.category),
                     defName = r.item.defName,
                     instanceId = r.item.instanceId,
+                    -- The row's COMPLETE membership (#1249), so an
+                    -- offscreen probe can prove "Store all" queued every
+                    -- id the row stands for rather than trusting the
+                    -- count. Reported through the same accessor the
+                    -- gestures use, so the two can never disagree.
+                    instanceIds = itemList.rowInstanceIds(r.item),
                     rightClick = inst.params.onRowRightClick ~= nil,
                     enabled = info.clickable,
                     visible = info.visible,

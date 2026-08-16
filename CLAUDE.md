@@ -1138,7 +1138,7 @@ before touching each area:
   shift by live mental effectiveness (±10) — tests asserting quality
   must pin the neutral-effectiveness precondition (#878). Gates:
   `craft_probe.py`, `craft_bill_probe.py`.
-- **Player transfers + orders (#1000/#1085/#1246/#1247)** — ONE policy
+- **Player transfers + orders (#1000/#1085/#1246/#1247/#1249)** — ONE policy
   (`src/Unit/Transfer.hs`, pure) decides whether exact item instances may
   move between two endpoints (a unit inventory or a built building's loose
   storage, on BOTH sides; direction is DERIVED from the pair). Proximity is
@@ -1162,9 +1162,30 @@ before touching each area:
   create-time refusal is never retried. The stall timer is a STALL timer
   (60 s of ELIGIBLE time, reset on every new closest approach), never a
   trip budget. Terminal orders STAY in the store — exactly-once comes from
-  the lifecycle, not from deletion, and pruning is #1253's. Gates: hspec
-  `--match "Unit transfer"` (contract + both Lua surfaces),
-  `tools/transfer_order_probe.py` (manual-only).
+  the lifecycle, not from deletion, and pruning is #1253's.
+  **The player's own gestures are Mode B** (#1249,
+  `scripts/transfer_gestures.lua` — ONE builder both hosts call): a
+  unit-info inventory row offers **Store 1 / Store all** into whatever
+  endpoint the OPEN CONTAINER WINDOW's ACTIVE level is showing, and a
+  container-window row offers **Retrieve 1 / Retrieve all** into the unit
+  `transfer_session.resolveSource` picks from the selection. Both queue
+  an order and NEITHER requires adjacency — that is the whole promotion,
+  and it retired the two immediate paths that did: the adjacent-cargo
+  "Store in \<cargo\>" enumeration and the window's "Withdraw with
+  \<unit\>" plus its disabled placeholder. Batch granularity is
+  1-and-all only (the 1/N/all picker is Mode A's, UIT-3B), and "all" is
+  every instance id the merged row stands for —
+  `itemList.rowInstanceIds`, recorded during grouping and signed into the
+  rebuild identity, because a row of twelve rations is twelve distinct
+  ids and never a count. A gesture is OMITTED, never shown disabled,
+  whenever it could not run: no window open, no eligible source, an
+  equipped/accessory item, a self-transfer, or an ACTIVE level that is an
+  item container (render-only per D-5 — and it must never fall back to a
+  transfer-capable ancestor). The lax verbs stay registered and untouched
+  for the AI ladders (D-7). Gates: hspec `--match "Unit transfer"`
+  (contract + both Lua surfaces) and `--match "Transfer context menu"`
+  (both gesture modes); `tools/transfer_order_probe.py` and
+  `tools/item_list_widget_probe.py` (both manual-only).
 - **Power (#358-#361, #590/#591)** — solar/battery nodes are
   item-consuming placements (`power.placeNode` via
   `buildTool.commitPlacement`); networks (wire 4-adjacency +
@@ -1426,7 +1447,12 @@ before touching each area:
   location uses ONLY the direct-RTS verbs a player already has
   (`unitAi.commandPickup` → `unitAi.commandMove` home → adjacent
   `unit.depositToCargo`); the design doc forbids a caravan/logistics
-  interface until direct retrieval proves inadequate. `commandPickup`
+  interface until direct retrieval proves inadequate. That last step is
+  the LAX verb, not a player gesture: #1249 retired the adjacent "Store
+  in \<cargo\>" menu entry that used to make the identical call, so
+  `tools/expedition_retrieval_probe.py` now reproduces a rule of its
+  own rather than a menu's (the player's own way to bank it is a queued
+  Store order). `commandPickup`
   gates capacity at COMMAND time (refuses, returns false, emits a
   player-visible `unit_warning` naming carrier and item, sets no
   `pickupOrder`) AND still on ARRIVAL, both measuring

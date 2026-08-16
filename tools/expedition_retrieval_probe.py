@@ -17,10 +17,18 @@ interface: the sequence here is exactly the direct-RTS one a player
 already has — order pickup (`unitAi.commandPickup`, what
 `scripts/init_context_menu.lua`'s "Pick up" entry dispatches), order the
 carrier home (`unitAi.commandMove`, the "Move here" entry), then store
-it adjacent (`unit.depositToCargo(uid, bid, defName, instanceId)`, the
-exact call `scripts/unit_info_v2_context_menu.lua`'s "Store in <cargo>"
-entry makes; this probe reproduces that menu's own Chebyshev-<=1
-adjacency gate rather than booting the UI, which needs a GPU).
+it adjacent (`unit.depositToCargo(uid, bid, defName, instanceId)`).
+
+That verb is a LAX AI verb with no adjacency gate of its own, so this
+probe applies the Chebyshev-<=1 rule itself rather than booting the UI,
+which needs a GPU. It used to be the exact call
+`scripts/unit_info_v2_context_menu.lua`'s "Store in <cargo>" entry made;
+#1249 retired that entry in favour of a queued order-at-a-distance
+("Store 1" / "Store all" targeting the open container window), so the
+call below is no longer any player gesture's own. It is kept
+deliberately: this probe's subject is the direct-RTS RETRIEVAL loop
+(#920), and the adjacent deposit is how it banks the recovered item
+without depending on the transfer-order executor's own timing.
 
 Checks, in one uninterrupted session against a REAL generated world:
 
@@ -1128,12 +1136,13 @@ def main() -> int:
                                "the post-restart return leg",
                                min_samples=5, min_closed=3.0)
 
-            # The exact call scripts/unit_info_v2_context_menu.lua's
-            # "Store in <cargo>" entry makes. The engine API has no
-            # adjacency gate of its own (that rule lives in the menu), so
-            # the adjacency is asserted HERE as part of the deposit —
-            # otherwise a carrier that never arrived could still "deposit"
-            # from across the map and the check would pass vacuously.
+            # A lax AI verb (D-7): the engine API has no adjacency gate
+            # of its own, so the adjacency is asserted HERE as part of
+            # the deposit — otherwise a carrier that never arrived could
+            # still "deposit" from across the map and the check would
+            # pass vacuously. Since #1249 no player MENU makes this call
+            # (see the module docstring); the rule this reproduces is
+            # the probe's own, not a menu's.
             at_deposit = unit_pos(args.port, carrier)
             adj = bool(at_deposit) and is_adjacent(at_deposit, foot)
             ok = send(args.port, f"return unit.depositToCargo({carrier}, {bid}, "

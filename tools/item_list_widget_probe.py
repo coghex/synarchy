@@ -72,8 +72,12 @@ Verifies, in order:
      category tab filters the rows to it; a framebuffer resize keeps the
      panel open on the SAME endpoint identity and the SAME selected
      category; a rebuild leaks no duplicate rows.
-  2. cargo rows route a real right-click to the representative instance:
-     the "Withdraw" menu that appears names the row the probe clicked.
+  2. cargo rows route a real right-click to the representative instance,
+     and the menu that appears is #1249's queued gesture: "Retrieve 1" /
+     "Retrieve all" on a merged row, firing one queues a REAL durable
+     transfer order (read back through `unit.getTransferOrders`) whose
+     items are the row's own instance ids, and neither retired label
+     ("Withdraw ...", "Store in ...") appears anywhere.
   3. a UNIT endpoint (#1234) opens through that same manager: its title
      names the unit, its header reports `transferEndpointInfo`'s own
      capacity and stored weight (which counts equipment and accessories,
@@ -427,6 +431,27 @@ def expected_age(port: int, bid: int):
     return "as of " + format_age(game_time(port) - float(revealed)), k
 
 
+def orders_of(port: int, uid: int):
+    """Every durable transfer order a unit carries, as comparable
+    strings: `"<src kind>:<id>><dst kind>:<id>[<instance ids>]"`.
+
+    Read through `unit.getTransferOrders`, which is #1246's own live
+    surface onto the per-page store -- so a gesture that merely ran a
+    callback without queueing anything reports nothing here."""
+    raw = send(port, "local out = {};"
+                     f" for _, o in ipairs(unit.getTransferOrders({uid}) or {{}}) do"
+                     "   local ids = {};"
+                     "   for j, e in ipairs(o.entries or {}) do"
+                     "     ids[j] = e.instanceId end;"
+                     "   out[#out + 1] = o.source.kind .. ':' .. o.source.id"
+                     "     .. '>' .. o.destination.kind .. ':'"
+                     "     .. o.destination.id .. '['"
+                     "     .. table.concat(ids, ',') .. ']';"
+                     " end;"
+                     " return table.concat(out, ';')").strip('"')
+    return [chunk for chunk in raw.split(";") if chunk]
+
+
 def open_window_on(port: int, bid: int) -> bool:
     accepted = send(port, "return require('scripts.cargo_inventory_panel')"
                           f".openFor('building', {bid}, 240, 240)").strip()
@@ -569,7 +594,8 @@ def check_no_duplicate_rows(port: int, scenario: str, rows: list) -> None:
           len(ids) == len(set(ids)), f"got {ids!r}")
 
 
-def cargo_scenario(port: int, bid: int, bpixel, vp: dict) -> None:
+def cargo_scenario(port: int, bid: int, bpixel, vp: dict,
+                    uid: int) -> None:
     print("== cargo Contents panel ==")
     # The `Contents` context-menu route is a REQUIRED observation, not an
     # optional one (#1286 requirement 4). It used to sit inside `if
@@ -735,18 +761,74 @@ def cargo_scenario(port: int, bid: int, bpixel, vp: dict) -> None:
                 click_widget_center(port, all_tab)
                 time.sleep(0.5)
 
-    # -- A real right-click reaches the representative instance.
+    # -- A real right-click reaches the representative instance, and the
+    #    menu it opens is #1249's queued Retrieve gesture. The acolyte is
+    #    selected first because Retrieve resolves its executor through the
+    #    shared selection rule and is OMITTED (never disabled) with no
+    #    eligible unit -- which is itself checked below.
     rows = item_rows(port, CARGO_LIST_ID)
     target_row = next((r for r in rows if r.get("defName") == "steel_bar"), None)
     if check("cargo steel_bar row still rendered for the right-click check",
              bool(target_row)):
+        # With NOTHING selected there is no retriever, so the gesture is
+        # absent rather than greyed out -- the disabled placeholder this
+        # issue retired is exactly what must not come back.
+        send(port, "return unit.deselectAll()")
+        time.sleep(0.4)
         right_click_widget_center(port, target_row)
         time.sleep(0.4)
-        labels = [w.get("label") for w in widgets(port)]
-        withdraw = [l for l in labels if l and l.startswith("Withdraw")]
-        check("right-clicking a cargo row opens its Withdraw menu",
-              bool(withdraw), f"menu labels: {labels!r}")
+        labels = [w.get("label") for w in widgets(port) if w.get("label")]
+        check("with no unit selected a cargo row offers NO transfer entry "
+              "-- omitted, never a disabled row",
+              not any(l.startswith(("Retrieve", "Withdraw")) for l in labels),
+              f"menu labels: {labels!r}")
         close_menu(port)
+
+        send(port, f"return unit.select({uid})")
+        time.sleep(0.4)
+        rows = item_rows(port, CARGO_LIST_ID)
+        target_row = next((r for r in rows
+                           if r.get("defName") == "steel_bar"), None)
+    if check("cargo steel_bar row still rendered with a unit selected",
+             bool(target_row)):
+        ids = target_row.get("instanceIds") or []
+        right_click_widget_center(port, target_row)
+        time.sleep(0.4)
+        labels = [w.get("label") for w in widgets(port) if w.get("label")]
+        check("right-clicking a cargo row opens its Retrieve menu",
+              "Retrieve 1" in labels, f"menu labels: {labels!r}")
+        # The merged steel_bar row stands for several instances, so it
+        # must offer the batch entry too -- and the ids it names are the
+        # row's own, which is what the widget now reports.
+        check("a MERGED cargo row offers Retrieve all beside Retrieve 1",
+              ("Retrieve all" in labels) == (len(ids) > 1),
+              f"menu labels: {labels!r} for instanceIds {ids!r}")
+        check("neither retired player path survives in the cargo row menu",
+              not any(l.startswith("Withdraw") or l.startswith("Store in ")
+                      for l in labels),
+              f"menu labels: {labels!r}")
+        entry = find_widget(port, "Retrieve all") or find_widget(port, "Retrieve 1")
+        expected = ids if (len(ids) > 1 and find_widget(port, "Retrieve all")) \
+            else ids[:1]
+        if check("a Retrieve entry is clickable", bool(entry)):
+            before = orders_of(port, uid)
+            click_widget_center(port, entry)
+            time.sleep(0.6)
+            after = orders_of(port, uid)
+            new = [o for o in after if o not in before]
+            # The whole promotion: the acolyte is nowhere near the cargo
+            # and the gesture still succeeded, because it queued an order
+            # for the unit job to walk rather than moving an item now.
+            if check("firing Retrieve queues exactly one durable transfer "
+                     "order at a distance", len(new) == 1,
+                     f"before={before!r} after={after!r}"):
+                check("the queued order runs FROM the cargo TO the "
+                      "selected unit, naming the row's own instance ids",
+                      new[0] == f"building:{bid}>unit:{uid}"
+                                f"[{','.join(str(i) for i in expected)}]",
+                      f"got {new[0]!r} for instanceIds {ids!r}")
+        else:
+            close_menu(port)
 
     send(port, "require('scripts.cargo_inventory_panel').closeIfOpen();"
                " return 'ok'")
@@ -848,7 +930,8 @@ def unit_endpoint_scenario(port: int, uid: int, wild_uid: int,
         labels = [w.get("label") for w in widgets(port)]
         check("a plain unit row opens NO menu — no Contents, and no "
               "transfer action either",
-              not any(l == "Contents" or (l or "").startswith("Withdraw")
+              not any(l == "Contents"
+                      or (l or "").startswith(("Withdraw", "Retrieve"))
                       for l in labels),
               f"menu labels: {labels!r}")
         close_menu(port)
@@ -861,7 +944,8 @@ def unit_endpoint_scenario(port: int, uid: int, wild_uid: int,
         labels = [w.get("label") for w in widgets(port) if w.get("label")]
         check("a CONTAINER unit row offers exactly the inspection entry",
               "Contents" in labels
-              and not any(l.startswith("Withdraw") for l in labels),
+              and not any(l.startswith(("Withdraw", "Retrieve"))
+                          for l in labels),
               f"menu labels: {labels!r}")
         close_menu(port)
 
@@ -1170,7 +1254,8 @@ def item_contents_scenario(port: int, mule_uid: int, uid: int) -> None:
         labels = [w.get("label") for w in widgets(port)]
         check("a plain row on this render-only level opens NO menu -- "
               "no Contents, and no transfer action either",
-              not any(l in ("Contents",) or (l or "").startswith("Withdraw")
+              not any(l in ("Contents",)
+                      or (l or "").startswith(("Withdraw", "Retrieve"))
                       for l in labels),
               f"menu labels: {labels!r}")
         close_menu(port)
@@ -1505,7 +1590,87 @@ def unit_inventory_scenario(port: int, uid: int) -> None:
               any(l in ("Equip", "Unequip", "Contents", "Drop")
                   or l.startswith("Store") for l in labels),
               f"menu labels: {labels!r}")
+        # #1249: "Store" names the OPEN CONTAINER WINDOW's endpoint, and
+        # no window is open here -- so the player has named no target and
+        # the entry is absent. This is the negative half of
+        # store_gesture_scenario below.
+        check("with no container window open a unit-inventory row offers "
+              "no Store entry at all",
+              not any(l.startswith("Store") for l in labels),
+              f"menu labels: {labels!r}")
         close_menu(port)
+
+
+def store_gesture_scenario(port: int, uid: int, bid: int) -> None:
+    """#1249: "Store" on a unit-inventory row, against the REAL rendered
+    menu of the REAL open container window.
+
+    The acolyte stands nowhere near the cargo hold, which is the whole
+    point: the retired path enumerated ADJACENT cargos and deposited on
+    the spot, so this gesture could not have existed before. What makes
+    it work is that the open window names the target and the queued
+    order (#1246) carries the walk."""
+    print("== #1249 Store gesture (unit inventory -> open window) ==")
+    send(port, f"return unit.select({uid})")
+    send(port, "require('scripts.cargo_inventory_panel')"
+               f".openFor('building', {bid}, 200, 200); return 'ok'")
+    time.sleep(0.8)
+    if not check("the container window is open on the cargo endpoint for "
+                 "the Store gesture",
+                 send(port, "return require('scripts.cargo_inventory_panel')"
+                            ".isOpen()").strip() == "true"):
+        return
+
+    row = unit_inv_row(port, "steel_bar", "Materials")
+    if not check("a merged unit-inventory row is located for Store",
+                 bool(row)):
+        send(port, "require('scripts.cargo_inventory_panel').closeIfOpen();"
+                   " return 'ok'")
+        return
+    ids = row.get("instanceIds") or []
+    right_click_widget_center(port, row)
+    time.sleep(0.4)
+    labels = [w.get("label") for w in widgets(port) if w.get("label")]
+    check("with a container window open, a unit-inventory row offers Store 1",
+          "Store 1" in labels, f"menu labels: {labels!r}")
+    check("a MERGED unit-inventory row offers Store all beside Store 1",
+          ("Store all" in labels) == (len(ids) > 1),
+          f"menu labels: {labels!r} for instanceIds {ids!r}")
+    check("the retired adjacent-cargo entry is gone from the row menu",
+          not any(l.startswith("Store in ") for l in labels),
+          f"menu labels: {labels!r}")
+
+    entry = find_widget(port, "Store all") or find_widget(port, "Store 1")
+    expected = ids if find_widget(port, "Store all") else ids[:1]
+    if check("a Store entry is clickable", bool(entry)):
+        before = orders_of(port, uid)
+        cam_before = send(port, "local x, y = camera.getPosition();"
+                                " return string.format('%.3f,%.3f,%.3f',"
+                                " x or 0, y or 0, camera.getZoom())")
+        click_widget_center(port, entry)
+        time.sleep(0.6)
+        after = orders_of(port, uid)
+        new = [o for o in after if o not in before]
+        if check("firing Store queues exactly one durable transfer order "
+                 "with no adjacency", len(new) == 1,
+                 f"before={before!r} after={after!r}"):
+            check("the queued order runs FROM the unit TO the open "
+                  "window's endpoint, naming every id the row stands for",
+                  new[0] == f"unit:{uid}>building:{bid}"
+                            f"[{','.join(str(i) for i in expected)}]",
+                  f"got {new[0]!r} for instanceIds {ids!r}")
+        cam_after = send(port, "local x, y = camera.getPosition();"
+                               " return string.format('%.3f,%.3f,%.3f',"
+                               " x or 0, y or 0, camera.getZoom())")
+        check("the Store gesture moved the camera not at all (D-4)",
+              cam_after == cam_before,
+              f"before={cam_before!r} after={cam_after!r}")
+    else:
+        close_menu(port)
+
+    send(port, "require('scripts.cargo_inventory_panel').closeIfOpen();"
+               " return 'ok'")
+    time.sleep(0.3)
 
 
 
@@ -1659,10 +1824,10 @@ def nesting_stack_scenario(port: int, bid: int, kit_iid: int,
         right_click_widget_center(port, inert_target)
         time.sleep(0.4)
         check("a right-click on a shallower level's row opens nothing",
-              find_widget(port, "Withdraw with") is None
-              and not [w for w in widgets(port)
-                       if (w.get("label") or "").startswith("Withdraw")],
-              "a Withdraw menu appeared behind the modal boundary")
+              not [w for w in widgets(port)
+                   if (w.get("label") or "").startswith(("Withdraw",
+                                                          "Retrieve"))],
+              "a transfer menu appeared behind the modal boundary")
         close_menu(port)
 
     # -- A third level, and same-level REPLACEMENT.
@@ -1988,11 +2153,12 @@ def main() -> int:
     # achieve that: `goToTile` re-enables z-tracking, which rewrote the
     # slice back to `surface + 25` on the very next frame (#1286).
     bpixel = focus_building(port, bid, bax, bay, vp)
-    cargo_scenario(port, bid, bpixel, vp)
+    cargo_scenario(port, bid, bpixel, vp, uid)
 
     knowledge_scenario(port, unseen_bid, empty_bid, uid)
     unit_endpoint_scenario(port, uid, wild_uid, vp)
     unit_inventory_scenario(port, uid)
+    store_gesture_scenario(port, uid, bid)
     # After unit_inventory_scenario and knowledge_scenario: this one
     # strips the acolyte down and stocks the known-empty fixture, both
     # of which those two assert on first. Before item_contents_scenario,

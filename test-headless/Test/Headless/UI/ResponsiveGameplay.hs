@@ -2229,16 +2229,33 @@ spec = aroundAll withSharedFixture $ do
             -- The row right-click must keep resolving to the exact
             -- rendered row's representative instance, so it is driven
             -- through the real shared dispatcher, not a host function.
+            --
+            -- #1249: proving a menu APPEARS now needs the host to have
+            -- something to offer, so this selects a real retriever and
+            -- gives the remembered rows the instance ids a batch gesture
+            -- names. Without both, the row would route correctly and
+            -- still show nothing, and the routing half of this case
+            -- would pass vacuously.
             r ← evalJSON ls $ luaLines
                 [ "local origK = building.getContainerKnowledge;"
                 , "local origSel = unit.getSelected;"
+                , "local origUInfo = unit.getInfo;"
+                , "local origFac = unit.getFaction;"
+                , "local origCmd = faction.isPlayerCommandable;"
                 , "building.getContainerKnowledge = function() return"
                 , "  { state='known', storedWeight=3.0, capacity=100.0,"
                 , "    revealedAt=0.0, items = {"
-                , "    { defName='i1', displayName='Ore', category='Cat1', weight=2.0 },"
-                , "    { defName='i2', displayName='Rope', category='Cat2', weight=1.0 },"
+                , "    { defName='i1', displayName='Ore', category='Cat1',"
+                , "      weight=2.0, instanceId=901 },"
+                , "    { defName='i2', displayName='Rope', category='Cat2',"
+                , "      weight=1.0, instanceId=902 },"
                 , "} } end;"
-                , "unit.getSelected = function() return {} end;"
+                , "unit.getSelected = function() return {5} end;"
+                , "unit.getInfo = function() return"
+                , "    { name='Vela', gridX=10, gridY=10 } end;"
+                , "unit.getFaction = function() return 'player' end;"
+                , "faction.isPlayerCommandable = function(f)"
+                , "    return f == 'player' end;"
                 , "local cm = require('scripts.ui.context_menu');"
                 , "local origShow = cm.show; _G.__menuShown = false;"
                 , "cm.show = function() _G.__menuShown = true end;"
@@ -2258,7 +2275,9 @@ spec = aroundAll withSharedFixture $ do
                 , "local routed = il.handleCallback('onItemListRightClick', rows[1].hitId);"
                 , "cm.show = origShow;"
                 , "building.getContainerKnowledge = origK;"
-                , "unit.getSelected = origSel;"
+                , "unit.getSelected = origSel; unit.getInfo = origUInfo;"
+                , "unit.getFaction = origFac;"
+                , "faction.isPlayerCommandable = origCmd;"
                 , "return {hasFrame = tb.hasFrame(il.getTabBarId(L().listId)),"
                 , "        tabCount = #il.getTabs(L().listId),"
                 , "        rowCount = #rows, interactive = rowInfo.interactive,"
@@ -2356,8 +2375,14 @@ spec = aroundAll withSharedFixture $ do
                     cwoRowCount p `shouldBe` 2      -- steel_bar x2 stacks
                     cwoTabCount p `shouldBe` 3      -- All + Materials + Medical
                     cwoRowNames p `shouldContain` ["steel_bar"]
-                    -- The building's Withdraw menu is still its row action.
-                    cwoRightClick p `shouldBe` True
+                    -- #1249: this scene selects NOTHING, and the row
+                    -- action that replaced Withdraw ("Retrieve") is
+                    -- omitted rather than disabled when no eligible
+                    -- retriever resolves — where the retired path always
+                    -- produced a menu, showing a greyed "select an
+                    -- adjacent unit first" row. A plain (non-container)
+                    -- row with no gesture therefore opens no menu at all.
+                    cwoRightClick p `shouldBe` False
 
         it "a unit endpoint opens through the SAME manager, reading capacity and stored weight from transferEndpointInfo and its rows from that call's loose inventory" $ \(env, ls) → do
             resetFixture env ls
@@ -2422,8 +2447,9 @@ spec = aroundAll withSharedFixture $ do
                     cwoRowCount p `shouldBe` 2      -- wood_log x2 stacks
                     cwoTabCount p `shouldBe` 3      -- All + Materials + Food
                     cwoRowNames p `shouldContain` ["ration"]
-                    -- No building-only Withdraw path on a unit row, and
-                    -- no new row action in this slice.
+                    -- A plain row with nothing selected offers nothing:
+                    -- not a container (so no "Contents"), and #1249's
+                    -- "Retrieve" resolves no eligible retriever here.
                     cwoRightClick p `shouldBe` False
 
         it "an unknown endpoint kind is refused, creating no panel state and leaving an already-open window alone" $ \(env, ls) → do
@@ -3471,17 +3497,25 @@ spec = aroundAll withSharedFixture $ do
                         hgrAgeGap g `shouldSatisfy` (≥ 0)
                         hgrListGap g `shouldSatisfy` (> 0)
 
-        it "the row context menu operates on the REMEMBERED row, handing withdraw the remembered instance id" $ \(env, ls) → do
+        it "the row context menu operates on the REMEMBERED row, handing \
+           \the queued order the remembered instance id" $ \(env, ls) → do
             resetFixture env ls
-            -- Requirement 7: the withdraw path is unchanged, and a
-            -- withdraw whose instance is gone stays the engine's safe
-            -- no-op — so the remembered id is what must reach it.
+            -- #1237 requirement 7, restated for #1249's gesture: the row
+            -- action reads the REMEMBERED snapshot, so the id it acts on
+            -- is the remembered one — the live storage here is
+            -- deliberately empty, and an action sourced from it would
+            -- carry nothing. What consumes that id changed (a queued
+            -- transfer order, not an immediate `unit.withdrawFromCargo`)
+            -- while which id reaches it did not, which is the property
+            -- this case exists for.
             r ← evalJSON ls $ luaLines
                 [ "local origK = building.getContainerKnowledge;"
                 , "local origInfo = building.getInfo;"
                 , "local origSel = unit.getSelected;"
                 , "local origUInfo = unit.getInfo;"
-                , "local origW = unit.withdrawFromCargo;"
+                , "local origCreate = unit.createTransferOrder;"
+                , "local origFac = unit.getFaction;"
+                , "local origCmd = faction.isPlayerCommandable;"
                 , "local origGT = engine.gameTime;"
                 , "engine.gameTime = function() return 0.0 end;"
                 , "building.getInfo = function() return"
@@ -3498,9 +3532,18 @@ spec = aroundAll withSharedFixture $ do
                 , "unit.getSelected = function() return {7} end;"
                 , "unit.getInfo = function() return"
                 , "    { name='Sister Vela', gridX=10, gridY=11 } end;"
-                , "unit.withdrawFromCargo = function(uid, bid, defName, instId)"
-                , "    _G.__wd = {uid=uid, bid=bid, defName=defName,"
-                , "               instanceId=instId}; return false end;"
+                , "unit.getFaction = function() return 'player' end;"
+                , "faction.isPlayerCommandable = function(f)"
+                , "    return f == 'player' end;"
+                -- Intercepted at the ENGINE boundary, so everything above
+                -- it -- the shared gesture builder and unit_ai's own
+                -- command -- is the real production path.
+                , "unit.createTransferOrder = function(uid, req)"
+                , "    _G.__wd = {uid=uid, bid=req.source.id,"
+                , "               defName=req.items[1].defName,"
+                , "               instanceId=req.items[1].instanceId};"
+                , "    return { accepted = true, orderId = 1,"
+                , "             outcomes = {} } end;"
                 , "local cm = require('scripts.ui.context_menu');"
                 , "local origShow = cm.show; local captured = nil;"
                 , "cm.show = function(items) captured = items end;"
@@ -3527,14 +3570,17 @@ spec = aroundAll withSharedFixture $ do
                 , "cip.closeIfOpen(); cm.show = origShow;"
                 , "building.getContainerKnowledge = origK;"
                 , "building.getInfo = origInfo; unit.getSelected = origSel;"
-                , "unit.getInfo = origUInfo; unit.withdrawFromCargo = origW;"
+                , "unit.getInfo = origUInfo;"
+                , "unit.createTransferOrder = origCreate;"
+                , "unit.getFaction = origFac;"
+                , "faction.isPlayerCommandable = origCmd;"
                 , "engine.gameTime = origGT;"
                 , "return out"
                 ]
             case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe RememberedMenuProbe of
                 Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
                 Just p → do
-                    rmpLabel p `shouldBe` "Withdraw with Sister Vela"
+                    rmpLabel p `shouldBe` "Retrieve 1"
                     rmpDefName p `shouldBe` "steel_bar"
                     rmpInstance p `shouldBe` 4242
                     rmpBid p `shouldBe` 17

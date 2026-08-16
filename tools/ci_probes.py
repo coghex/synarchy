@@ -235,8 +235,10 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
                                    "on the CI runner (#782)"),
     "item_list_widget": (NEEDS_GPU, "offscreen boot: the shared item-list "
                          "widget's real rendered rows/tabs across its migrated "
-                         "hosts, plus the container window's nesting stack "
-                         "(#1238), located via ui.dumpWidgets() against a real "
+                         "hosts, the container window's nesting stack (#1238), "
+                         "and the real rendered Store/Retrieve row menus whose "
+                         "gestures queue durable transfer orders (#1249), "
+                         "located via ui.dumpWidgets() against a real "
                          "Vulkan-rendered HUD — no GPU on the CI runner "
                          "(#1088)"),
     "transfer_context_menu": (NEEDS_GPU, "offscreen boot: real right-click -> "

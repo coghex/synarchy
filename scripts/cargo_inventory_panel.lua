@@ -45,13 +45,26 @@
 -- closing, opening a child container — stays interactive on the
 -- deepest level, which is what makes the stack usable at all.
 --
+-- Since #1249 an ENDPOINT level's rows offer "Retrieve 1" / "Retrieve
+-- all", which queues a durable transfer order (#1246) for the unit the
+-- shared selection rule resolves and lets #1247's job walk it there.
+-- That REPLACED "Withdraw with <unit>" and its disabled "select an
+-- adjacent unit first" placeholder, so no player path in this window
+-- calls `unit.withdrawFromCargo` any more and none requires adjacency.
+-- The entries themselves are scripts/transfer_gestures.lua's, shared
+-- with the unit-info panel's "Store" so the two directions cannot
+-- drift; this file supplies only which endpoint the level is showing.
+-- An item-container level supplies no transfer action at all, so the
+-- render-only rule above holds by construction rather than by a test
+-- against the level kind.
+--
 -- Earlier contracts this window still holds:
 --
 -- Since #1088 the tabbed list is the shared item-list widget
 -- (scripts/ui/item_list.lua) — this module owns the popup window, its
--- title/subtitle chrome, the data source, the presentation policy it
--- hands the widget, and what "Withdraw" means. Grouping, tabs, rows,
--- truncation, scrolling and rebuild invalidation live in the widget.
+-- title/subtitle chrome, the data source, and the presentation policy
+-- it hands the widget. Grouping, tabs, rows, truncation, scrolling and
+-- rebuild invalidation live in the widget.
 --
 -- Since #1268 a row also presents its group's tracked temperature
 -- (#344), in the row text and in a row tooltip — both derived from the
@@ -60,8 +73,8 @@
 --
 -- Since #1234 the endpoint level is ENDPOINT-KIND AGNOSTIC: everything
 -- that differs between a cargo and an acolyte lives in the ENDPOINTS
--- table below (one live read, one weight label, one optional row
--- action). An unknown kind is REJECTED rather than assumed.
+-- table below (one live read, one weight label, one descent rule). An
+-- unknown kind is REJECTED rather than assumed.
 --
 -- Since #1237 an endpoint's contents are either LIVE TRUTH or the
 -- player's REMEMBERED view, and the endpoint kind decides which. A
@@ -183,88 +196,10 @@ end
 -- Helpers
 -----------------------------------------------------------
 
--- Chebyshev tile distance from (utx, uty) to the cargo footprint.
-local function chebToFootprint(utx, uty, bx, by, tileW, tileH)
-    local dx = 0
-    if utx < bx then dx = bx - utx
-    elseif utx >= bx + tileW then dx = utx - (bx + tileW - 1) end
-    local dy = 0
-    if uty < by then dy = by - uty
-    elseif uty >= by + tileH then dy = uty - (by + tileH - 1) end
-    return math.max(dx, dy)
-end
-
--- One selected acolyte adjacent to the cargo, or nil.
-local function adjacentSelectedUnit(bid)
-    local sel = unit.getSelected() or {}
-    if #sel == 0 then return nil end
-    local binfo = building.getInfo(bid)
-    if not binfo then return nil end
-    local tw = binfo.tileW or 1
-    local th = binfo.tileH or 1
-    for _, uid in ipairs(sel) do
-        local info = unit.getInfo(uid)
-        if info then
-            local cheb = chebToFootprint(math.floor(info.gridX),
-                                         math.floor(info.gridY),
-                                         binfo.gridX, binfo.gridY, tw, th)
-            if cheb <= 1 then return uid end
-        end
-    end
-    return nil
-end
-
--- The window's row action for a BUILDING endpoint, unchanged by #1234
--- and deliberately unchanged by #1238: withdraw the right-clicked stack
--- into an adjacent selected acolyte. The widget deliberately never
--- learns what "Withdraw" means, so this is the host's answer and
--- belongs to this endpoint kind alone. #1238 APPENDS a "Contents" entry
--- for an item-container row (see rowMenuFor) — it never removes or
--- reinterprets this one.
-local function buildingRowMenu(bid, item, invalidate)
-    local defName = item.defName
-    local instId  = item.instanceId
-    local target  = adjacentSelectedUnit(bid)
-
-    local items = {}
-    if target then
-        local info = unit.getInfo(target)
-        -- Prefer the unit's personal name, else its species label (#264).
-        local who  = "unit"
-        if info then
-            if info.name and info.name ~= "" then
-                who = info.name
-            elseif info.displayName and info.displayName ~= "" then
-                who = info.displayName
-            elseif info.defName then
-                who = info.defName
-            end
-        end
-        items[1] = {
-            label    = "Withdraw with " .. who,
-            callback = function()
-                unit.withdrawFromCargo(target, bid, defName, instId)
-                -- Redraw on the SAME frame rather than waiting for the
-                -- next tick's comparison to notice. Resolved through
-                -- the caller's own closure, so it names whichever list
-                -- the level is holding WHEN the entry fires, not the
-                -- one it held when the menu was built.
-                invalidate()
-            end,
-        }
-    else
-        items[1] = {
-            label   = "Withdraw (select an adjacent unit first)",
-            enabled = false,
-        }
-    end
-    return items
-end
-
--- A unit's own display text, mirroring buildingRowMenu's #264
--- precedence so the window titles a unit the same way its withdraw
--- menu names one. transferEndpointInfo reports only the species-level
--- displayName, which is the fallback rather than the answer.
+-- A unit's own display text, following the #264 precedence every other
+-- surface that names a unit uses. transferEndpointInfo reports only the
+-- species-level displayName, which is the fallback rather than the
+-- answer.
 local function unitTitle(uid, info)
     local live = unit.getInfo(uid)
     if live then
@@ -301,9 +236,15 @@ end
 -- popup must not outlive the instance rather than its storage. A kind
 -- that omits it is governed by `view` alone.
 --
--- `rowMenu` is the kind's TRANSFER action and stays optional; #1238's
--- "Contents" entry is appended separately and for every kind, because
--- inspecting a nested container is not a transfer gesture.
+-- A kind declares NO transfer action of its own since #1249. Both
+-- endpoint kinds now offer the SAME "Retrieve" gesture, built once by
+-- scripts/transfer_gestures.lua from the endpoint identity alone (see
+-- LEVELS.endpoint.transferMenu) — where the pre-#1249 building-only
+-- `rowMenu` hook hung an immediate `unit.withdrawFromCargo` that
+-- required an adjacent selected acolyte and had no unit-endpoint
+-- counterpart at all. #1238's "Contents" entry is still appended
+-- separately and for every kind, because inspecting a nested container
+-- is not a transfer gesture.
 --
 -- `childOf` maps a row of THIS endpoint kind to the item-container
 -- level it opens: a building endpoint descends into its own REMEMBERED
@@ -347,7 +288,6 @@ local ENDPOINTS = {
             return view
         end,
         stillThere = function(id) return building.getInfo(id) ~= nil end,
-        rowMenu = buildingRowMenu,
         -- A building-stored container's nested contents are REMEMBERED
         -- (#1238 requirement 5): the level descends the knowledge
         -- record by exact instance identity, so it can never read the
@@ -574,11 +514,18 @@ LEVELS.endpoint = {
                                             view.stored or -1, view.capacity),
         }
     end,
-    -- The kind's own transfer action, if it has one.
-    transferMenu = function(src, row, invalidate)
-        local def = ENDPOINTS[src.endpointKind]
-        if not def or not def.rowMenu then return nil end
-        return def.rowMenu(src.id, row, invalidate)
+    -- The endpoint level's transfer action (#1249): "Retrieve 1" /
+    -- "Retrieve all" into the unit the shared selection rule resolves.
+    --
+    -- Built from the endpoint IDENTITY alone, so a unit endpoint and a
+    -- building endpoint offer the identical gesture — where the retired
+    -- `unit.withdrawFromCargo` path was building-only by construction
+    -- (that verb takes a BuildingId) and a unit endpoint's rows
+    -- therefore had no transfer action at all.
+    transferMenu = function(src, row)
+        local gestures = require("scripts.transfer_gestures")
+        return gestures.retrieveEntries(
+            { kind = src.endpointKind, id = src.id }, row)
     end,
     childOf = function(src, row)
         local def = ENDPOINTS[src.endpointKind]
@@ -744,24 +691,31 @@ end
 -----------------------------------------------------------
 -- Row actions
 --
--- ONE menu builder for every level kind. The kind's own transfer
--- action comes first and unchanged (a building row keeps its Withdraw
--- entries); "Contents" is APPENDED for an item-container row, which is
--- inspection rather than transfer and is therefore offered on every
--- kind — including the item-container levels themselves, which is what
--- makes the stack nest arbitrarily deep.
+-- ONE menu builder for every level kind. The kind's own transfer action
+-- comes first (an endpoint row's "Retrieve" entries, #1249); "Contents"
+-- is APPENDED for an item-container row, which is inspection rather
+-- than transfer and is therefore offered on every kind — including the
+-- item-container levels themselves, which is what makes the stack nest
+-- arbitrarily deep. A kind with neither produces no menu at all, so the
+-- widget's right-click resolves to nothing rather than an empty popup.
 -----------------------------------------------------------
 local function rowIsContainer(row)
     return row ~= nil and row.kind == "container"
        and type(row.instanceId) == "number" and row.instanceId > 0
 end
 
+-- A level kind's transfer action takes the level's SOURCE and the row,
+-- and nothing else. It used to be handed an `invalidate` closure too,
+-- because the retired withdraw entry moved an item on the spot and
+-- wanted the list redrawn on the same frame; since #1249 a transfer
+-- gesture only QUEUES an order, so no contents change when it fires and
+-- there is nothing to invalidate. The movement lands when the executor
+-- arrives, and update()'s existing per-tick re-read is what shows it.
 local function rowMenuFor(level, row)
     local kind = levelKind(level)
     if not kind then return nil end
-    local function invalidate() itemList.invalidate(level.listId) end
-    local items = (kind.transferMenu and kind.transferMenu(level.src, row,
-                                                           invalidate)) or {}
+    local items = (kind.transferMenu and kind.transferMenu(level.src, row))
+                    or {}
     if rowIsContainer(row) and kind.childOf then
         local childSrc = kind.childOf(level.src, row)
         if childSrc then
