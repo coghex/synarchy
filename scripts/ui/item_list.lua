@@ -209,20 +209,81 @@ end
 -- Invalidation
 -----------------------------------------------------------
 
+-- Nested row values are signed BY VALUE, never by table identity.
+-- The engine reconstructs `weapon` and `buffs` as fresh tables on
+-- every inventory read, so `tostring(t)` -- an address -- would report
+-- an unchanged list as stale on every single poll and rebuild the
+-- panel forever. That is the reason these two helpers exist at all.
+
+-- The nested weapon values a row can put on screen, plus the bare
+-- presence flag that is all the signature carried before #1269. The
+-- widget never indexes `weapon` in its own rendering, so a host is
+-- free to supply a plain truthy marker instead of the engine's table;
+-- such a row carries nothing but its presence, and signs exactly that.
+local function weaponSignature(w)
+    if not w then return "_" end
+    if type(w) ~= "table" then return "w:" .. tostring(w) end
+    return table.concat({
+        "w",
+        tostring(w.bladeLength or "_"),
+        tostring(w.baseSharpness or "_"),
+        tostring(w.stabEffectiveness or "_"),
+        tostring(w.slashEffectiveness or "_"),
+        tostring(w.bluntEffectiveness or "_"),
+    }, ",")
+end
+
+-- Buff list: its length and ORDER, then each entry's four displayed
+-- values. A row renders one line per buff in list order, so this is a
+-- sequence signature and not a set one -- swapping two entries is a
+-- visible change.
+local function buffsSignature(bs)
+    if bs == nil then return "_" end
+    if type(bs) ~= "table" then return "b:" .. tostring(bs) end
+    local parts = { "b" .. #bs }
+    for _, b in ipairs(bs) do
+        if type(b) == "table" then
+            parts[#parts + 1] = table.concat({
+                tostring(b.stat or "_"),
+                tostring(b.amount or "_"),
+                tostring(b.percent or "_"),
+                tostring(b.scalesWithCondition or false),
+            }, ",")
+        else
+            parts[#parts + 1] = tostring(b)
+        end
+    end
+    return table.concat(parts, ";")
+end
+
+-- Every value SUPPLIED IN THE ROW that the widget's own rendering or a
+-- host callback (rowName, rowTooltip, rowColor, rowWeightText) can put
+-- on screen. A field any of those reads and this list omits is a field
+-- whose change leaves stale text -- and a stale baked-in tooltip --
+-- on screen, because the widget answers "nothing changed" and keeps
+-- the elements it already built.
+--
+-- State that is NOT in the row is deliberately not this function's
+-- job: it reaches the comparison through the host's presentationKey
+-- (see `signatures` below).
 local function rowSignature(r)
     return table.concat({
         tostring(r.defName or ""),
         tostring(r.displayName or ""),
         tostring(r.count or 1),
         itemList.normalizeCategory(r.category),
+        tostring(r.make or ""),
+        tostring(r.material or ""),
         tostring(r.quality or "_"),
         tostring(r.qualityTier or "_"),
         tostring(r.condition or "_"),
         tostring(r.currentFill or "_"),
+        tostring(r.capacity or "_"),
         tostring(r.fill or "_"),
         tostring(r.weight or "_"),
-        r.weapon and "w" or "_",
+        weaponSignature(r.weapon),
         tostring(r.sharpness or "_"),
+        buffsSignature(r.buffs),
         tostring(r.contentsKey or ""),
         r.equipped and "e" or "i",
         tostring(r.equippedSlot or ""),
@@ -235,9 +296,13 @@ end
 
 -- Two signatures, because a host that must size its own window from
 -- the data cannot know its bounds yet when it asks whether anything
--- changed. `data` covers everything the widget derives from the
--- supplied values (including the host's presentationKey for anything
--- a callback produces); `layout` adds the bounds and row cap.
+-- changed. `data` covers the widget's own presentation inputs plus
+-- every row value `rowSignature` lists above -- which is every field
+-- supplied in a row that the widget or a host callback can display,
+-- nested weapon and buff detail included. State a callback consumes
+-- from ANYWHERE ELSE (a formatter's output, repair claim/priority
+-- state) is invisible here and reaches the comparison only through the
+-- host's `presentationKey`. `layout` adds the bounds and row cap.
 local function signatures(p, model)
     model = model or itemList.prepare(p)
     local parts = {
