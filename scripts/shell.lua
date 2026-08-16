@@ -7,7 +7,27 @@ local textWrap = require("scripts.ui.text_wrap")
 -- measurement and cursor step goes through this helper -- a byte-stepping
 -- cursor leaves a stray fragment of a multi-byte character in the buffer.
 local utf8Safe = require("scripts.ui.utf8_safe")
-local shell = {}
+
+-- #1325: ONE module identity per Lua state. Production loads this file
+-- through engine.loadScript (scripts/init_loader.lua), whose
+-- loadModuleRef runs dofile and deliberately does NOT populate
+-- package.loaded (src/Engine/Scripting/Lua/Script.hs) -- while
+-- scripts/settings_menu.lua `require`s "scripts.shell". Without the
+-- self-registration below those two paths built SEPARATE tables with
+-- their own private upvalues: the engine broadcast LuaFramebufferResize
+-- to the first, and Settings Defaults/Apply/Save/Back drove the second,
+-- whose `shellvisible` is permanently false -- so a scale-only change
+-- reached nothing visible and the live console kept stale geometry until
+-- the next real resize or shell.show(). Reuse whatever is already
+-- cached, otherwise register ourselves, so a later require resolves to
+-- this exact table without re-executing this file (same convention as
+-- scripts/ui_manager.lua, scripts/unit_ai.lua and scripts/debug.lua --
+-- see gotcha_dofile_module_state). The shell deliberately stays OUT of
+-- responsive.register/notifyResize (#748 round 7): the engine already
+-- broadcasts a real resize straight here, and the shared fan-out would
+-- double-fire it.
+local shell = package.loaded["scripts.shell"] or {}
+package.loaded["scripts.shell"] = shell
 
 -- Script ID (passed from engine)
 local myScriptId = nil
