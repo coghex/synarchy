@@ -188,6 +188,15 @@ createLuaBackendState ∷ Q.Queue LuaToEngineMsg → Q.Queue LuaMsg
                       → IORef InputState → IORef LoggerState → IO LuaBackendState
 createLuaBackendState ltem etlm apRef objIdRef inputSRef loggerR = do
   lState ← Lua.newstate
+  -- This is where gameplay's random stream gets its entropy (#1330).
+  -- 'openlibs' runs 'luaopen_math', which seeds the state's one
+  -- 'math.random' stream from the clock AND the state's own address, and
+  -- it happens here — before 'scripts/init.lua' is ever loaded, so every
+  -- consumer sees an already-seeded stream. Nothing in 'scripts/' may
+  -- call 'math.randomseed': doing so replaces per-state entropy with
+  -- whatever that caller chose, and two engines launched in the same
+  -- second then share one simulation. A UI widget wanting its own
+  -- draws keeps its own stream ('scripts/ui/random.lua').
   _ ← Lua.runWith lState $ Lua.openlibs
   scriptsVar ← newTVarIO Map.empty
   scriptIdRef ← newIORef 1
