@@ -26,10 +26,11 @@
 -- to remember to set -- and unit.pruneTransferOrder answers false for an
 -- order already gone, so even a repeated call is inert.
 --
--- The one exit NOT here is the carrier itself being destroyed: nothing
--- ticks a dead unit, so that retirement is the engine's
--- (Unit.Transfer.Live.retireTransferOrdersEverywhere, driven from
--- Unit.Thread.Command.Lifecycle).
+-- The one exit NOT here is the carrier itself dying or being destroyed:
+-- nothing ticks a unit in either state, so that retirement is the
+-- engine's (Unit.Transfer.Live.retireTransferOrdersEverywhere, driven
+-- from Unit.Thread.Command.Lifecycle's destroy and
+-- Unit.Thread.Command.Pose's kill).
 
 local unitAi = package.loaded["scripts.unit_ai"]
 local core = require("scripts.unit_ai_core")
@@ -80,19 +81,49 @@ function M.finishOrder(uid, s, oid)
     s.transferCandidate = nil
 end
 
+-- The instance ids of every entry that is ALREADY terminal.
+--
+-- Taken from the order as it stood BEFORE a commit, this is exactly the
+-- set whose outcome some earlier moment already told the player about --
+-- see reportOutcomes. Ids are unique within a batch by construction (the
+-- contract refuses a request with a duplicate instance,
+-- `ErrDuplicateInstance`), so keying on them is unambiguous and, unlike
+-- a positional index, cannot silently mis-pair if the two lists ever
+-- stop being built from the same `tbEntries` walk.
+function M.settledIds(order)
+    local settled = {}
+    for _, e in ipairs((order or {}).entries or {}) do
+        if e.state == "failed" or e.state == "cancelled"
+           or e.state == "completed" then
+            settled[e.instanceId] = true
+        end
+    end
+    return settled
+end
+
 -- One player-visible warning for a set of refused entries, naming the
 -- carrier and the item -- bounded, because a twelve-item batch that
 -- wholly refuses must not file twelve separate warnings. The first
 -- refused item is named in full and the rest are counted, which is what
 -- a player needs to act ("it wouldn't fit") without a wall of text.
 --
+-- `alreadyReported` (a settledIds set, optional) is what keeps "exactly
+-- once" true across the two moments that report on one order. A commit
+-- result carries an outcome for EVERY requested item, create-time
+-- refusals included -- twelve into room for eight comes back as eight
+-- completions and the same four `receiver_full` entries the command-time
+-- gate already warned about when the order was queued. Reporting the
+-- whole list again at arrival would file that warning twice for one
+-- refusal. Each moment reports only what it produced.
+--
 -- `reason`/`cause` come straight from the engine's structured
 -- vocabulary; the message quotes the cause when there is one, since for
 -- an arrival refusal (`became_stale`) the cause IS the explanation.
-function M.reportOutcomes(uid, outcomes, lead)
+function M.reportOutcomes(uid, outcomes, lead, alreadyReported)
     local first, n = nil, 0
     for _, o in ipairs(outcomes or {}) do
-        if o.state == "failed" then
+        if o.state == "failed"
+           and not (alreadyReported and alreadyReported[o.instanceId]) then
             n = n + 1
             if not first then first = o end
         end

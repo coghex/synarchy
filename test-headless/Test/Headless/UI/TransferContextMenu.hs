@@ -479,6 +479,93 @@ spec = describe "Transfer context menu" $ do
             trace ← evalDebug ls "return table.concat(_G.__orderCalls, ',')"
             trace `shouldBe` "\"cancel:4,event,prune:4\""
 
+    -- Lives in this file because it needs exactly this bare-Lua fixture
+    -- and the executor (scripts/unit_ai_transfer.lua) has no headless
+    -- home of its own -- everything else about it is probe-gated. What
+    -- is pinned here is the RULE, deterministically; the probe's
+    -- partial-batch phase pins the resulting occurrence count against a
+    -- real engine.
+    describe "outcome reporting is exactly-once (#1253)" $ do
+        it "an arrival report SKIPS failures the command-time gate \
+           \already surfaced, and reports the ones it did not" $ \env → do
+            -- Twelve into room for eight: the four create-time
+            -- receiver_full refusals were warned about when the order was
+            -- queued, and the commit result carries them again alongside
+            -- the eight it just decided. Reporting the whole list would
+            -- file a second warning for one refusal.
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls emitSpyLua
+            run ls "require('scripts.unit_ai'); "
+            reported ← evalDebug ls (T.concat
+                [ "local o = require('scripts.unit_ai_transfer_outcome'); "
+                -- The order as it stood BEFORE the commit: one entry
+                -- still walking, one already refused at create time.
+                , "local pre = { entries = { "
+                , "  { instanceId = 1, state = 'in_transit' }, "
+                , "  { instanceId = 2, state = 'failed', reason = 'receiver_full' } "
+                , "} }; "
+                , "local settled = o.settledIds(pre); "
+                -- …and what the commit reports: BOTH, per pushBatchResult.
+                -- The two carry DIFFERENT causes so the emitted text says
+                -- which one survived the filter -- reportOutcomes quotes
+                -- the cause, since for an arrival refusal that is the
+                -- explanation.
+                , "local outcomes = { "
+                , "  { instanceId = 1, defName = 'ration', state = 'failed', "
+                , "    reason = 'became_stale', cause = 'instance_missing' }, "
+                , "  { instanceId = 2, defName = 'ration', state = 'failed', "
+                , "    reason = 'receiver_full' } "
+                , "}; "
+                , "return o.reportOutcomes(7, outcomes, 'couldn\\'t transfer', "
+                , "                        settled)" ])
+            reported `shouldBe` "1"
+            evs ← evalDebug ls "return table.concat(_G.__emitted, ' | ')"
+            evs `shouldSatisfy` T.isInfixOf "instance_missing"
+            evs `shouldNotSatisfy` T.isInfixOf "receiver_full"
+            -- ONE warning, for the entry THIS commit refused, and with no
+            -- "(and 1 more)" tail claiming the excluded one alongside it.
+            evs `shouldNotSatisfy` T.isInfixOf " | "
+            evs `shouldNotSatisfy` T.isInfixOf "more)"
+
+        it "with no exclusion set every failure is reported, so the \
+           \command-time gate itself still says everything" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls emitSpyLua
+            run ls "require('scripts.unit_ai'); "
+            reported ← evalDebug ls (T.concat
+                [ "local o = require('scripts.unit_ai_transfer_outcome'); "
+                , "return o.reportOutcomes(7, { "
+                , "  { instanceId = 1, defName = 'ration', state = 'failed', "
+                , "    reason = 'receiver_full' }, "
+                , "  { instanceId = 2, defName = 'ration', state = 'failed', "
+                , "    reason = 'receiver_full' } "
+                , "}, 'can\\'t transfer')" ])
+            -- Two refusals, still ONE bounded warning naming the first
+            -- and counting the rest.
+            reported `shouldBe` "2"
+            evs ← evalDebug ls "return table.concat(_G.__emitted, ' | ')"
+            evs `shouldSatisfy` T.isInfixOf "(and 1 more)"
+
+        it "settledIds names every terminal state and nothing pending" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls "require('scripts.unit_ai'); "
+            ids ← evalDebug ls (T.concat
+                [ "local o = require('scripts.unit_ai_transfer_outcome'); "
+                , "local s = o.settledIds({ entries = { "
+                , "  { instanceId = 1, state = 'queued' }, "
+                , "  { instanceId = 2, state = 'in_transit' }, "
+                , "  { instanceId = 3, state = 'ready_to_commit' }, "
+                , "  { instanceId = 4, state = 'completed' }, "
+                , "  { instanceId = 5, state = 'cancelled' }, "
+                , "  { instanceId = 6, state = 'failed' } } }); "
+                , "local out = {}; for i = 1, 6 do "
+                , "  out[i] = s[i] and '1' or '0' end; "
+                , "return table.concat(out, '')" ])
+            ids `shouldBe` "\"000111\""
+
     describe "session creation (scripts/transfer_session.lua)" $ do
         it "selecting Transfer creates a session with the exact endpoint identities" $ \env → do
             ls ← newBareLuaBackend env
@@ -879,6 +966,17 @@ buildingStub bid activity capacity ops = T.concat
     , "building.getStorageCapacity = function(b) return ", T.pack (show capacity), " end; "
     , "building.getOperations = function(b) return {"
     , T.intercalate "," (map (\o → "'" <> o <> "'") ops) <> "} end; "
+    ]
+
+-- | Capture every @engine.emitEventForUnit@ call into @_G.__emitted@,
+-- joined ' | ' by the reader below, so "how many warnings did that file"
+-- is answerable without a real event log.
+emitSpyLua ∷ Text
+emitSpyLua = T.concat
+    [ "_G.__emitted = {}; "
+    , "engine.emitEventForUnit = function(cat, msg, u) "
+    , "  table.insert(_G.__emitted, cat .. ':' .. msg "
+    , "    .. ' uid=' .. tostring(u)) end; "
     ]
 
 -- | @unit.hitTestAt@ fixed to this target uid.

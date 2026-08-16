@@ -46,6 +46,8 @@ checks is downstream of that:
      load, and the carrier resumes and completes it.
  10. The player cancels a haul mid-walk: nothing moves and the carrier
      is released.
+ 11. The carrier DIES mid-walk: its order is retired rather than left
+     pending forever on a unit that will never tick again.
 
 #1253's terminal cleanup runs through every one of those. Whichever way
 an order ends — committed, refused, retired, stalled or cancelled — its
@@ -54,7 +56,7 @@ each phase checks the store is left holding no terminal order, and the
 save/load phase additionally proves the integrity sweep has nothing to
 report about a carrier that died mid-order.
 
-Phases 1-8 and 10 run on an ARENA (flat, no worldgen, deterministic
+Phases 1-8, 10 and 11 run on an ARENA (flat, no worldgen, deterministic
 geometry). Phase 9 needs a real world page: a save containing an arena
 page hangs the world thread on load (#365), so it runs on its own pair of
 engines against a small generated world.
@@ -62,7 +64,7 @@ engines against a small generated world.
 Usage:
   python3 tools/transfer_order_probe.py
   python3 tools/transfer_order_probe.py --port 9271 --seed 42 --size 48
-  python3 tools/transfer_order_probe.py --only 10
+  python3 tools/transfer_order_probe.py --only 10,11
 
 Exit 0 = every check passed.
 """
@@ -195,6 +197,9 @@ HOLD_X = -28
 # along X instead, 38 tiles east of lane 1's hold and far inside the
 # arena box, with lane 1's own carrier destroyed by the time it runs.
 CANCEL_HOLD_X = 10
+# The dead-carrier phase (11) shares that row too, another 20 tiles east
+# and still inside the arena's +47 edge with room for a 14-tile approach.
+KILL_HOLD_X = 30
 
 
 class Checks:
@@ -527,6 +532,7 @@ def phase_partial_batch(port: int, chk: Checks) -> None:
     uid = spawn_carrier(port, HOLD_X + 12, lane)
     give(port, uid, "probe_ingot", 12)
     mark = len(event_log(port))
+    before = event_total(port, uid, "unit_warning", "Probe Ingot")
     oid_raw = command_order(port, uid, order_request(port, uid, bid, 12))
     try:
         oid = int(float(oid_raw))
@@ -553,6 +559,17 @@ def phase_partial_batch(port: int, chk: Checks) -> None:
               "the order completes and is pruned"):
         chk.ok(len(stored(port, bid)) == 8, "eight are in the hold")
         chk.ok(len(ingots(port, uid)) == 4, "four stayed with the carrier")
+    # EXACTLY once for the whole order, across BOTH moments that report
+    # on it. A commit result carries an outcome for every requested item,
+    # the four create-time refusals included, so an arrival report that
+    # did not exclude what the command-time gate already surfaced would
+    # warn about the same four refusals a second time.
+    chk.ok(event_total(port, uid, "unit_warning", "Probe Ingot")
+           - before == 1,
+           "the four that did not fit are warned about ONCE, not again "
+           "when the eight that did arrive",
+           str([e.get("text") for e in event_log(port)[mark:]
+                if e.get("uid") == uid]))
     chk.ok(terminal_orders(port, uid) == [],
            "no terminal order is left in the store",
            str(terminal_orders(port, uid)))
@@ -838,6 +855,54 @@ def phase_cancel(port: int, chk: Checks) -> None:
     send(port, f"unit.destroy({uid}); return 'ok'")
 
 
+def phase_carrier_dies(port: int, chk: Checks) -> None:
+    """11. The carrier DIES mid-walk (#1253, review round 1).
+
+    Distinct from the destroyed carrier phase 9 folds in, and the reason
+    it needs its own check: `unit.kill` leaves the instance in place, so
+    every reference the order carries still resolves and the integrity
+    sweep stays perfectly quiet about it -- while `scripts/unit_ai.lua`
+    short-circuits a `dead` pose before any action scores, so the
+    executor can never reach the terminal transition that prunes it.
+    Nothing would have noticed. It is also the only one of the two whose
+    aftermath is directly observable: the corpse still resolves a store,
+    so `unit.getTransferOrders` can be asked.
+    """
+    print("\n--- 11. a carrier that DIES mid-walk leaves no order ---")
+    lane = LANES[1]
+    bid = spawn_hold(port, "probe_wide_hold", KILL_HOLD_X, lane)
+    if not chk.ok(bid is not None, "3x1 probe hold spawned"):
+        return
+    uid = spawn_carrier(port, KILL_HOLD_X + 14, lane)
+    give(port, uid, "probe_ingot", 1)
+    oid_raw = command_order(port, uid, order_request(port, uid, bid, 1))
+    try:
+        oid = int(float(oid_raw))
+    except (TypeError, ValueError):
+        chk.ok(False, "the order was accepted", oid_raw)
+        return
+    chk.ok(wait_state(port, uid, oid, "in_transit", 20.0) is not None,
+           "the carrier sets off")
+    send(port, f"unit.kill({uid}); return 'ok'")
+    # unit.getPose is what scripts/unit_ai.lua's own dead short-circuit
+    # reads, so this asserts the carrier is dead by the exact measure
+    # that stops it ever ticking again.
+    def pose() -> str:
+        return send(port, f"return tostring(unit.getPose({uid}))").strip('"')
+    poll_until(15.0, lambda: pose() == "dead" or None)
+    chk.ok(pose() == "dead", "the carrier is dead", pose())
+    chk.ok(wait_settled(port, uid, oid, 20.0),
+           "its order is retired rather than left pending forever")
+    # The corpse is still a live instance -- which is exactly why nothing
+    # downstream would have flagged the abandoned order.
+    chk.ok(send(port, f"return tostring(unit.exists({uid}))") == "true",
+           "…and the corpse itself is still there, so this was never a "
+           "consequence of the unit disappearing")
+    chk.ok(orders(port, uid) == [], "no order at all remains",
+           str(orders(port, uid)))
+    send(port, f"unit.destroy({uid}); return 'ok'")
+
+
 # --------------------------------------------------------------------------
 # Save/load phase (real world page — never an arena, #365)
 # --------------------------------------------------------------------------
@@ -1019,19 +1084,19 @@ def main() -> int:
                     help="comma-separated phase numbers (default: all)")
     args = ap.parse_args()
 
-    all_phases = set(range(1, 11))
+    all_phases = set(range(1, 12))
     wanted = {int(p) for p in args.only.split(",") if p.strip()} or all_phases
     # A selection that names no real phase must FAIL, not report a clean
     # run of nothing: an exit-0 probe that executed zero checks is
     # indistinguishable from one that passed.
     if not wanted & all_phases:
-        print(f"no such phase(s): {sorted(wanted)} (valid: 1-10)")
+        print(f"no such phase(s): {sorted(wanted)} (valid: 1-11)")
         return 2
     tmp = tempfile.mkdtemp(prefix="synarchy_transfer_order_probe_")
     chk = Checks()
     proc = None
     try:
-        if wanted & (set(range(1, 9)) | {10}):
+        if wanted & (set(range(1, 9)) | {10, 11}):
             print(f"== arena engine (port {args.port}) ==")
             proc = boot(args.port, log=os.path.join(tmp, "engineA.log"))
             bootstrap_defs(args.port, tmp)
@@ -1047,6 +1112,7 @@ def main() -> int:
                 (7, phase_blocked_approach),
                 (8, phase_long_trip),
                 (10, phase_cancel),
+                (11, phase_carrier_dies),
             ]
             for n, fn in phases:
                 if n in wanted:

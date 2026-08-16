@@ -20,6 +20,7 @@ import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv)
 import Unit.Anim (stateKey)
+import Unit.Transfer.Live (retireTransferOrdersEverywhere)
 import Unit.Types
 import Unit.Sim.Types
 
@@ -135,6 +136,24 @@ handleUnitKillCommand env utsRef uid = do
                              , usPendingFallDrop = Nothing
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
+    -- Retire any durable transfer order this carrier was walking
+    -- (#1253), for the same reason 'handleUnitDestroyCommand' does: the
+    -- executor prunes an order at its terminal transition, and a carrier
+    -- that will never tick again can never reach one. Death qualifies as
+    -- surely as destruction does — @scripts/unit_ai.lua@ short-circuits
+    -- a @dead@ pose before any action scores, and that is documented as
+    -- terminal ("No AI, no resources, no revival") — so without this the
+    -- order sits pending in the store forever and rides every save. The
+    -- corpse is deliberately NOT the collapsed/crawling case: those are
+    -- recoverable, their orders are merely SUSPENDED
+    -- (@unit_ai_stall.suspendOrders@), and retiring one would abandon a
+    -- haul the unit is going to get back up and finish.
+    --
+    -- Silent, like the destroy path: an @emitEventForUnit@ here would
+    -- file the news in the dead carrier's own Log tab, and the death
+    -- itself is already reported by whatever killed it.
+    retireTransferOrdersEverywhere (wsWorldManagerRef (toWorldSimCapability env))
+                                   uid
 
 handleUnitReviveCommand ∷ IORef UnitThreadState → UnitId → IO ()
 handleUnitReviveCommand utsRef uid = do

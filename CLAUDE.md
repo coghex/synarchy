@@ -1186,13 +1186,22 @@ before touching each area:
   (omitted, never disabled, when that unit carries no live order), and it
   cancels every non-terminal order the unit carries, stops only
   transfer-directed movement, and touches no other command field. The one
-  exit the executor cannot reach is the CARRIER being destroyed — nothing
-  ticks a dead unit — so `Unit.Transfer.Live.retireTransferOrdersEverywhere`
-  (from `Unit.Thread.Command.Lifecycle`, the `retirePowerNodeEverywhere`
-  pattern) drops its orders engine-side, keyed on the ACTING unit alone: a
-  unit that is merely an endpoint of somebody else's order is not
-  orphaned by its own death, and that order's live carrier retires it
-  properly with the reason recorded.
+  exit the executor cannot reach is the CARRIER ceasing to act — so
+  `Unit.Transfer.Live.retireTransferOrdersEverywhere` (the
+  `retirePowerNodeEverywhere` pattern) drops its orders engine-side from
+  BOTH `Unit.Thread.Command.Lifecycle`'s destroy and
+  `Unit.Thread.Command.Pose`'s kill. Death matters as much as destruction
+  and is easier to miss: the instance REMAINS, so every reference still
+  resolves and the sweep stays quiet, while `scripts/unit_ai.lua`
+  short-circuits a `dead` pose before any action scores. The recoverable
+  poses (collapsed, crawling) are deliberately excluded — their orders
+  are merely suspended. Keyed on the ACTING unit alone: a unit that is
+  merely an endpoint of somebody else's order is not orphaned by its own
+  death, and that order's live carrier retires it properly with the
+  reason recorded. **A commit result reports EVERY requested item**,
+  create-time refusals included, so the arrival report excludes what the
+  command-time gate already surfaced (`settledIds`) — otherwise the four
+  that never fit in a twelve-into-eight batch get warned about twice.
   **The player's own gestures are Mode B** (#1249,
   `scripts/transfer_gestures.lua` — ONE builder both hosts call): a
   unit-info inventory row offers **Store 1 / Store all** into whatever

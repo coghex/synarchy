@@ -11,8 +11,15 @@
 --   way an order leaves the store is the executor pruning it at its
 --   terminal transition (@scripts/unit_ai_transfer.lua@), one tick after
 --   the outcome was surfaced. That covers every way an order can FINISH.
---   It cannot cover the carrier ceasing to exist, because there is then
---   nobody left to tick it — and this is that other half.
+--   It cannot cover the carrier ceasing to be able to act, because there
+--   is then nobody left to tick it — and this is that other half. TWO
+--   callers, both in the unit thread's own command handlers:
+--   'Unit.Thread.Command.Lifecycle.handleUnitDestroyCommand' (the
+--   instance is gone) and 'Unit.Thread.Command.Pose.handleUnitKillCommand'
+--   (the instance remains, but @scripts/unit_ai.lua@ short-circuits a
+--   @dead@ pose before any action scores). The recoverable poses —
+--   collapsed, crawling — are deliberately NOT here: their orders are
+--   merely suspended and the unit gets back up to finish the haul.
 module Unit.Transfer.Live
     ( retireTransferOrdersEverywhere
     ) where
@@ -24,14 +31,15 @@ import Unit.Transfer.Orders (removeOrdersForUnit)
 import World.State.Types (WorldManager(..), WorldState(..))
 
 -- | The acting unit died or was destroyed: drop every order it was
---   carrying, on every live page.
+--   carrying, on every live page. Idempotent — a second call, or one for
+--   a unit carrying nothing, rewrites each page's store to itself.
 --
 --   Applied to EVERY page rather than the unit's own, for the same two
---   reasons 'Power.Live.retirePowerNodeEverywhere' is: the caller
---   ("Unit.Thread.Command.Lifecycle") has already removed the instance
---   by the time this runs, so there is no @uiPage@ left to resolve —
---   and a 'UnitId' comes from one session-global allocator, so it can
---   name a unit on at most one page anyway. Page-correct by
+--   reasons 'Power.Live.retirePowerNodeEverywhere' is: the destroy
+--   caller has already removed the instance by the time this runs, so
+--   there is no @uiPage@ left to resolve — and a 'UnitId' comes from one
+--   session-global allocator, so it can name a unit on at most one page
+--   anyway. Page-correct by
 --   construction, with no dependence on read\/delete ordering, and
 --   orders on every other page are untouched because none of them names
 --   this carrier.

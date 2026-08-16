@@ -38,6 +38,7 @@ import Item.Types (ItemInstance(..), emptyItemManager)
 import Unit.Faction (Faction(..))
 import Unit.Sim.Types (emptyUnitThreadState)
 import Unit.Thread.Command.Lifecycle (handleUnitDestroyCommand)
+import Unit.Thread.Command.Pose (handleUnitKillCommand)
 import Unit.Transfer.Orders (TransferOrderId(..), TransferOrders(..))
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..), emptyUnitManager)
 import World.Page.Types (WorldPageId(..))
@@ -819,6 +820,32 @@ spec = describe "Unit transfer Lua API (orders, #1247)" $ do
             -- precisely the signal its live carrier retires it on.
             orders ls 4 `shouldReturn`
                 q "1;2|false|source|none|101:ration:queued"
+
+        it "KILLING the carrier retires its orders too — a dead unit \
+           \never ticks again" $ \env → do
+            -- Review round 1: ordinary gameplay death is UnitKill, not
+            -- UnitDestroy. It leaves the instance in place, so every
+            -- reference still resolves and the integrity sweep stays
+            -- quiet — but scripts/unit_ai.lua short-circuits a `dead`
+            -- pose before any action scores ("Dead pose: terminal. No
+            -- AI, no resources, no revival"), so the executor can never
+            -- reach the terminal transition that would prune the order.
+            -- Without this it sits pending forever and rides every save.
+            resetOrderWorld env [mkItem "ration" 101 0.5] []
+            ls ← backend env
+            _ ← create ls 1 (req "unit" 1 "building" 7 (itemLit 101 "ration"))
+            _ ← create ls 4 (req "unit" 1 "unit" 4 (itemLit 101 "ration"))
+            utsRef ← newIORef emptyUnitThreadState
+            handleUnitKillCommand env utsRef acolyteUid
+            after ← pageOrders env pageA
+            map (unTransferOrderId ∘ fst) (HM.toList (trosOrders after))
+                `shouldBe` [2]
+            -- The corpse is still a live instance, unlike the destroy
+            -- case — which is exactly why nothing else would have
+            -- noticed the order was dead.
+            um ← readIORef (unitManagerRef env)
+            HM.member acolyteUid (umInstances um) `shouldBe` True
+            orders ls 1 `shouldReturn` q "0;"
 
     describe "order identity" $
         it "ids are allocated per page and every verb is scoped to the \

@@ -48,8 +48,8 @@
 -- it from this file -- a completed or partly-completed commit, a
 -- counterpart that stopped existing, a carrier that stalled short of one,
 -- and the player's own "Cancel transfer" -- plus a fifth the executor
--- cannot reach at all, the carrier itself being destroyed, which the
--- engine handles in Unit.Transfer.Live.
+-- cannot reach at all, the carrier itself dying or being destroyed,
+-- which the engine handles in Unit.Transfer.Live.
 --
 -- One consequence lands HERE rather than there: the quiet retirement
 -- #1247 gave a vanished counterpart is now surfaced like every other
@@ -291,6 +291,14 @@ local function transferExecute(uid, s)
     -- still fit -- is the arrival gate, and whatever it refuses comes
     -- back as became_stale carrying the real cause.
     unit.advanceTransferOrder(uid, order.id, "ready_to_commit")
+    -- Snapshot which entries were ALREADY terminal, BEFORE the commit
+    -- rewrites the rest. A commit result reports every requested item,
+    -- create-time refusals included, and commandTransferOrder warned
+    -- about those when the order was queued -- so without this the four
+    -- that never fit in a twelve-into-eight batch get a second warning
+    -- on arrival for the same refusal. Neither advance above can move an
+    -- entry into or out of this set: both only step a pending state on.
+    local alreadyReported = outcome.settledIds(order)
     local result = unit.commitTransferOrder(uid, order.id)
     if not result then
         -- The order vanished between this tick's read and the commit --
@@ -323,11 +331,12 @@ local function transferExecute(uid, s)
             uid, math.floor(info.gridX), math.floor(info.gridY))
     end
     -- D-1 / #1247 requirement 5: whatever did not make it is reported,
-    -- so a partial batch is visibly partial rather than silently short.
-    -- An arrival refusal comes back as became_stale carrying the real
-    -- precondition as its cause, and reportOutcomes quotes the cause,
-    -- which is the part that explains itself.
-    reportOutcomes(uid, result.outcomes, "couldn't transfer")
+    -- so a partial batch is visibly partial rather than silently short --
+    -- but only what THIS commit refused (see above). An arrival refusal
+    -- comes back as became_stale carrying the real precondition as its
+    -- cause, and reportOutcomes quotes the cause, which is the part that
+    -- explains itself.
+    reportOutcomes(uid, result.outcomes, "couldn't transfer", alreadyReported)
     -- Both halves of the outcome have now been surfaced, so the order
     -- has no reader left. Every entry the commit touched is terminal, so
     -- this is the terminal transition (#1253 requirement 5).
