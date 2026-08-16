@@ -188,7 +188,7 @@ unitAi.registerActions("acolyte", {
     { name = "auto_harvest", utility = unitAi.harvest.utility, execute = unitAi.harvest.execute },
     { name = "repair_job", utility = repairMod.utility, execute = repairMod.execute, onExit = repairMod.onExit },
     { name = "pickup_ground", utility = pickup.pickupUtility, execute = pickup.pickupExecute },
-    transfer.action,
+    transfer.action, transfer.escortAction,
 })
 
 -- Technomule: player pack unit. Stands by the colony's materials
@@ -212,7 +212,7 @@ unitAi.registerActions("technomule", {
     { name = "idle", utility = needs.idleUtility, execute = needs.idleExecute },
     { name = "wander", utility = needs.wanderUtility, execute = needs.wanderExecute },
     { name = "follow_command", utility = combat.followCommandUtility, execute = combat.followCommandExecute },
-    transfer.action,
+    transfer.action, transfer.escortAction,
 })
 
 -- Load species satellite scripts. Each one defines its candidates

@@ -28,9 +28,10 @@
 --       ('Engine.Scripting.Lua.API.Units.Cargo'\'s @unit.depositToCargo@ /
 --       @unit.withdrawFromCargo@), so the AI's own hauling keeps the
 --       player's picture current;
---     * a Mode A session opening on the container (#1013 C3 calls
---       'revealContainer' through @building.refreshContainerKnowledge@;
---       A3 only provides the verb);
+--     * a Mode A session opening on the container (#1250's
+--       @scripts\/transfer_session.lua@ calls 'revealContainer' through
+--       @building.refreshContainerKnowledge@, exactly once per session,
+--       on the transition to its open\/held state);
 --     * the first completion of a storage-capable building
 --       ('seedBuiltContainer') — the player watched it go up, so it
 --       seeds KNOWN-EMPTY rather than never-inspected.

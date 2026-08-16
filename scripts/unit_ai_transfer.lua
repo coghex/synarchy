@@ -1,3 +1,21 @@
+-- Unit AI transfer execution: BOTH modes of epic #1013.
+--
+--   transfer_order    (#1247, UIT-2B) -- Mode B. A durable order walks
+--                     its acting unit to the counterpart endpoint and
+--                     commits there, exactly once.
+--   escort_transfer   (#1250, UIT-3B) -- Mode A. A player-opened
+--                     session walks its source unit to the destination
+--                     and HOLDS it there while the player moves items
+--                     by hand, for as long as the window is open.
+--
+-- They share this file because they share their whole vocabulary: the
+-- same rect-to-rect approach, the same contract-owned reach rule, the
+-- same comfort pacing, and the same place in the #306 utility ladder.
+-- What differs is what happens on arrival -- one commits and finishes,
+-- the other stops and waits for the player.
+--
+-- Mode B's own record follows.
+--
 -- Unit AI transfer-order execution (#1247, epic #1013 slice UIT-2B).
 --
 -- Action: transfer_order. A durable order queued by #1246's store makes
@@ -358,12 +376,114 @@ function unitAi.commandTransferOrder(uid, request)
     return result.orderId
 end
 
+-----------------------------------------------------------
+-- Mode A: the escort hold (#1250)
+-----------------------------------------------------------
+-- The in-progress LOCK that IS the hold (requirement 5). A Mode A
+-- session is the player standing an acolyte somewhere and working its
+-- pockets by hand, so it sits at the same 7.5 as a queued order and
+-- pickup: above follow_command (7.0) and every routine-work lock
+-- (<=6.0), below combat / treatment (>=8.0) and dire survival, which
+-- still preempt.
+--
+-- Constant while a session names this unit, which is the whole point.
+-- unit.setFrozen is NOT this (it only pins the render publish while the
+-- sim keeps walking) and neither is a completed move order (the unit
+-- reverts to wander the moment it arrives) --
+-- docs/expedition_survival_calibration.md E3 measured both.
+local ESCORT_UTILITY = 7.5
+
+-- The session holding this unit, or nil. Read through package.loaded so
+-- a build with the gesture module unloaded simply never scores this
+-- action, rather than pulling a UI module into the AI thread.
+local function heldSession(uid)
+    local session = package.loaded["scripts.transfer_session"]
+    if not session or type(session.holdsUnit) ~= "function" then return nil end
+    if not session.holdsUnit(uid) then return nil end
+    return session
+end
+
+-- There is deliberately NO stall timer here. Mode B's exists because an
+-- order must reach a terminal state on its own; a session is the
+-- player's own window, ends when they close it, and a unit that cannot
+-- reach its destination is UIT-5B's failure handling, not this slice's.
+--
+-- It keeps NO per-unit state either, deliberately: the SESSION is the
+-- state, so there is nothing to reconcile, nothing to strip at snapshot
+-- time (scripts/unit_ai_save.lua persists an aiState row minus an
+-- explicit transient list, so a scratch field here would ride into
+-- `lua.unit_ai`), and nothing an interrupted tick can leave behind.
+local function escortUtility(uid, _s)
+    if not heldSession(uid) then return -math.huge end
+    return ESCORT_UTILITY
+end
+
+local function escortExecute(uid, _s)
+    local session = heldSession(uid)
+    if not session then return end
+    local active = session.get()
+    local info = unit.getInfo(uid)
+    if not (active and info) then return end
+
+    -- Already open: stand still. `unit.stop` on a unit that is already
+    -- stopped is a no-op, and re-running it is what makes this a hold
+    -- rather than a one-shot -- an interruption that walked the unit
+    -- away (combat, a mental break) leaves it standing wherever it
+    -- ended up once this action wins again, which is the honest
+    -- best-effort until UIT-5B owns that case.
+    if active.phase ~= session.PHASE_APPROACHING then
+        unit.stop(uid)
+        return
+    end
+
+    local dest = session.destinationNow()
+    if not dest then
+        -- The destination stopped existing mid-approach. Retire the
+        -- session QUIETLY rather than holding a unit against nothing;
+        -- the richer player-facing failure handling is UIT-5B's.
+        session.close("destination_missing")
+        return
+    end
+
+    -- The contract's OWN Chebyshev <= 1 rect-to-rect rule, measured
+    -- against the endpoint's live footprint, so "close enough to walk
+    -- no further" and "close enough to commit" cannot disagree.
+    if approachDist(info, dest) > 1 then
+        moveBesideRect(uid, info, dest.gridX, dest.gridY,
+                       dest.tileW or 1, dest.tileH or 1)
+        return
+    end
+    unit.stop(uid)
+    session.markArrived()
+end
+
 M.action = {
     name = "transfer_order",
     utility = transferUtility,
     execute = transferExecute,
 }
+-- Registered AFTER M.action in every action list, so a unit that
+-- somehow holds both resolves the equal-utility tie to the queued order
+-- by list order; neither clears the other.
+--
+-- Deliberately NOT forceExecute, exactly like the queued order beside
+-- it: re-executing while the unit is actively walking re-issues
+-- `unit.moveTo`, which wipes the engine-side `usLocalPath` and leaves
+-- the unit barely making progress between AI ticks (see unit_ai.lua's
+-- re-execute conditions). So the approach is issued once and the
+-- arrival is noticed when the walk ends and the unit is idle again --
+-- moveBesideRect aims at the ring tile just OUTSIDE the footprint, so
+-- ending that walk IS satisfying the contract's reach rule. Once the
+-- session is open the unit stands idle, so this then runs every tick,
+-- which is what makes the hold a hold.
+M.escortAction = {
+    name = "escort_transfer",
+    utility = escortUtility,
+    execute = escortExecute,
+}
 M.transferUtility = transferUtility
 M.transferExecute = transferExecute
+M.escortUtility   = escortUtility
+M.escortExecute   = escortExecute
 
 return M

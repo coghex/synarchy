@@ -808,8 +808,16 @@ pushArrayField key vals = do
     Lua.setfield (-2) key
 
 -- | @unit.transferEndpointInfo({ kind = …, id = … })@ →
---   @{ eligible, displayName, page, gridX, gridY, capacity,
---      storedWeight, contents }@ | nil.
+--   @{ eligible, displayName, page, gridX, gridY, tileW, tileH,
+--      capacity, storedWeight, contents }@ | nil.
+--
+--   @gridX@\/@gridY@ and @tileW@\/@tileH@ are the two halves of the ONE
+--   'endpointRect' the adjacency rule itself measures against, so a
+--   caller that walks a unit to an endpoint and a caller that asks
+--   whether it is close enough cannot disagree about where the endpoint
+--   is or how big it is. A unit reports a 1x1 rect; a multi-tile
+--   building reports its real footprint, which is why anchor-to-anchor
+--   distance would strand a walker beside the far end of one (#1250).
 --
 --   Answers for EITHER endpoint kind, in either role: the eligibility
 --   rule is role-independent (a unit is player-commandable, a building
@@ -844,13 +852,17 @@ pushEndpointInfo ls ep view = do
     Lua.pushboolean (endpointEligible view)
     Lua.setfield (-2) "eligible"
     pushTextField "displayName" (fromMaybe "" (endpointDisplayName ls ep))
-    let WorldPageId page = endpointPage view
-        (gx, gy)         = fst (endpointRect view)
+    let WorldPageId page      = endpointPage view
+        ((gx, gy), (tw, th))  = endpointRect view
     pushTextField "page" page
     Lua.pushinteger (fromIntegral gx)
     Lua.setfield (-2) "gridX"
     Lua.pushinteger (fromIntegral gy)
     Lua.setfield (-2) "gridY"
+    Lua.pushinteger (fromIntegral tw)
+    Lua.setfield (-2) "tileW"
+    Lua.pushinteger (fromIntegral th)
+    Lua.setfield (-2) "tileH"
     Lua.pushnumber (Lua.Number (realToFrac (endpointCapacity view)))
     Lua.setfield (-2) "capacity"
     Lua.pushnumber (Lua.Number (realToFrac (endpointLoad view)))

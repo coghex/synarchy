@@ -135,6 +135,7 @@ import qualified Test.Headless.UI.TransferContextMenu as UITransferContextMenu
 import qualified Test.Headless.UI.ItemList as UIItemList
 import qualified Test.Headless.UI.ContainerWindowStack as UIContainerWindowStack
 import qualified Test.Headless.UI.TransferGestures as UITransferGestures
+import qualified Test.Headless.UI.TransferSession as UITransferSession
 import qualified Test.Headless.World.Calendar as Calendar
 import qualified Test.Headless.World.FloraGrowth as FloraGrowth
 import qualified Test.Headless.River.CalderaHazard as RiverCalderaHazard
@@ -422,6 +423,7 @@ main = hspec $ do
     describe "UI.ResponsiveGameplay" UIResponsiveGameplay.spec
     describe "UI.ContainerWindowStack" UIContainerWindowStack.spec
     UITransferGestures.spec
+    UITransferSession.spec
     describe "Tutorial HUD" UITutorialHud.spec
     describe "UI.UnicodeTextEditing" UIUnicodeTextEditing.spec
     describe "Lua.TextWrapping" LuaTextWrapping.spec

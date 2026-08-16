@@ -396,24 +396,40 @@ nothing enforces that by hand — a level past the base gets its own
 painted-but-unclickable and closing it restores the parent. The base
 level keeps its pre-#1238 non-modal behaviour on `hud.world_page`.
 Escape closes ONE level per press (the one dismiss-cascade tier; the
-item-contents module has no key handler of its own). Three level kinds:
-`endpoint`, `unitItem` (LIVE, `unit.getItemContents`) and
+item-contents module has no key handler of its own). Four level kinds:
+`endpoint`, `unitItem` (LIVE, `unit.getItemContents`),
 `buildingItem` (the player's REMEMBERED contents,
 `building.getRememberedItemContents`, carrying the PARENT record's own
-`revealedAt` — never a live storage read, never a knowledge write). Both
+`revealedAt` — never a live storage read, never a knowledge write) and
+`escort` (#1250's Mode A pair). The two item kinds
 descend by EXACT INSTANCE IDENTITY along a path of instance ids, and a
 path that stops resolving closes that level AND every level below it
-rather than retargeting a same-def sibling. An item-container level is
+rather than retargeting a same-def sibling. A level owns one or more
+PANES (#1250) — a pane being one panel box, its header and one item
+list, with its own tab and scroll — and for every kind but `escort`
+the level table IS its own single pane (`panes[1] == level`), so
+`level.listId`/`activeTab`/`scroll` still mean exactly what they meant
+before. A level stays the unit of NESTING, modality, teardown and
+restore, which is what makes two flanking panels ONE level.
+An item-container level is
 RENDER-ONLY (D-5): no transfer endpoint, no transfer operation — only
 inspection (scroll, close, open a child), so a building row keeps its
 Withdraw entry and merely GAINS "Contents". `scripts/item_contents_panel.lua`
 no longer owns a window lifecycle (D-13): it supplies the two item-level
 kinds and nothing else — no page, no panel, no singleton, no `setup()`,
 no `update()`. `unit.getItemContents` searches loose inventory,
-equipment AND accessories (the three the unit-info list merges). The
+equipment AND accessories (the three the unit-info list merges).
+`scripts/transfer_session_panels.lua` supplies the `escort` kind the
+same way and owns no lifecycle either. The
 stack is transient session UI: `hud.createUI()` snapshots and restores
-the WHOLE thing across a resize (path + tab + per-level scroll), and
-`uiManager.onSaveLoaded` drops it. Gates: hspec
+the WHOLE thing across a resize (path + per-PANE tab and scroll), and
+`uiManager.onSaveLoaded` drops it. A level teardown carries a REASON,
+and `"layout"` — passed only by that resize snapshot/restore pass and
+by `view_teardown`'s `resize` hook — is the one that does NOT fire a
+kind's `onClose`; every other teardown does. That distinction is what
+lets an escort session (and the unit it holds) survive a resize while
+a zoom-band change, a HUD hide, Escape, or another container replacing
+it all end it. Gates: hspec
 `--match "container window stack"` / `--match "Container knowledge"` /
 `--match "Nested item contents"` / `--match "Item list widget"`, plus
 `tools/item_list_widget_probe.py` (manual-only, `needs-gpu`).
@@ -1140,7 +1156,7 @@ before touching each area:
   shift by live mental effectiveness (±10) — tests asserting quality
   must pin the neutral-effectiveness precondition (#878). Gates:
   `craft_probe.py`, `craft_bill_probe.py`.
-- **Player transfers + orders (#1000/#1085/#1246/#1247/#1249)** — ONE policy
+- **Player transfers + orders (#1000/#1085/#1246/#1247/#1249/#1250)** — ONE policy
   (`src/Unit/Transfer.hs`, pure) decides whether exact item instances may
   move between two endpoints (a unit inventory or a built building's loose
   storage, on BOTH sides; direction is DERIVED from the pair). Proximity is
@@ -1175,7 +1191,7 @@ before touching each area:
   and it retired the two immediate paths that did: the adjacent-cargo
   "Store in \<cargo\>" enumeration and the window's "Withdraw with
   \<unit\>" plus its disabled placeholder. Batch granularity is
-  1-and-all only (the 1/N/all picker is Mode A's, UIT-3B), and "all" is
+  1-and-all only (the 1/N/all picker stays deferred), and "all" is
   every instance id the merged row stands for —
   `itemList.rowInstanceIds`, recorded during grouping and signed into the
   rebuild identity, because a row of twelve rations is twelve distinct
@@ -1183,11 +1199,39 @@ before touching each area:
   whenever it could not run: no window open, no eligible source, an
   equipped/accessory item, a self-transfer, or an ACTIVE level that is an
   item container (render-only per D-5 — and it must never fall back to a
-  transfer-capable ancestor). The lax verbs stay registered and untouched
-  for the AI ladders (D-7). Gates: hspec `--match "Unit transfer"`
+  transfer-capable ancestor) or an escort pair (two endpoints, so "the
+  endpoint this window shows" has no single answer). The lax verbs stay
+  registered and untouched for the AI ladders (D-7).
+  **Mode A is the ESCORT** (#1250, `scripts/transfer_session.lua`): walk
+  FIRST, then choose items. Selecting "Transfer" records a session, and
+  `scripts/unit_ai_transfer.lua`'s `escort_transfer` action — a 7.5
+  in-progress LOCK, peer of the queued order, so wander and utility churn
+  cannot steal the unit — walks the source to the destination's
+  FOOTPRINT and stops. The one-way transition to the open/held state
+  fires EXACTLY ONCE and is what does everything else: it calls
+  `building.refreshContainerKnowledge` (the reveal that verb was shipped
+  for, and the only caller in the game), opens the two flanking panes,
+  and snaps the camera onto the pair (D-4 — no other gesture moves it).
+  Every one of those reads LIVE endpoint positions and footprints, never
+  the creation-time snapshot; a resize, a reflow and every later commit
+  repeat none of them. Rows commit IMMEDIATELY through
+  `unit.checkTransfer` then `unit.commitTransfer` on the identical
+  request, the COMMIT being authoritative: a target that drifted out of
+  reach is refused with the contract's own proximity reason — whether
+  that arrives as a whole-request rejection or as every item's own
+  outcome — and the session stays open, a partial batch reports the
+  remainder by count and cause (D-1), and both panes refresh within the
+  gesture. The hold is released BY the session ending
+  — there is no separate release call, so no path can end a session and
+  leave a unit pinned — and every teardown is the same coupled,
+  idempotent one (panel close, replacement, `clear`, Exit to Menu, the
+  save-load reset). A REJECTED replacement leaves the running session
+  untouched; only a resize is exempt (see the container-window stack
+  above). The target-side hold is UIT-4's and session failure handling
+  UIT-5B's. Gates: hspec `--match "Unit transfer"`
   (contract + both Lua surfaces) and `--match "Transfer context menu"`
-  (both gesture modes); `tools/transfer_order_probe.py` and
-  `tools/item_list_widget_probe.py` (both manual-only).
+  (both gesture modes AND the escort session); `tools/transfer_order_probe.py`
+  and `tools/item_list_widget_probe.py` (both manual-only).
 - **Power (#358-#361, #590/#591)** — solar/battery nodes are
   item-consuming placements (`power.placeNode` via
   `buildTool.commitPlacement`); networks (wire 4-adjacency +
