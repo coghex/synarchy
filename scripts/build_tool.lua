@@ -550,8 +550,8 @@ function buildTool.showPicker()
     local pickerX      = margin + btnSize + stackGap
 
     -- #750 round-7 review: cap against the actual framebuffer — unlike
-    -- cargo_inventory_panel.lua/item_contents_panel.lua (which at least
-    -- clamp POSITION), this picker had no framebuffer awareness at all:
+    -- cargo_inventory_panel.lua's container window (which at least
+    -- clamps POSITION), this picker had no framebuffer awareness at all:
     -- PICKER_W_BASE*uiscale (360 at 1x, 1440 at a still-C2-supported 4x)
     -- could extend far past the right/bottom edge from its fixed
     -- toolbar-anchored position. Best-effort degrade, same pattern as

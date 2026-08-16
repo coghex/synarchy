@@ -11,9 +11,11 @@
 -- Opened by right-click → "Bills" on any building whose def offers a
 -- craft operation (init.lua's building right-click handler, alongside
 -- the existing cargo "Contents" entry). Mounted on hud.world_page,
--- same lifecycle as cargo_inventory_panel / item_contents_panel —
+-- same lifecycle as the container window (cargo_inventory_panel) —
 -- registered in ui/view_teardown.lua so a view transition can't leave
--- it open-but-invisible.
+-- it open-but-invisible. (item_contents_panel used to be listed here
+-- too; since #1238 it is a LEVEL of that window rather than a panel
+-- with a lifecycle of its own.)
 --
 -- Bill modes: fixed count and repeat-forever call craft.addBill with a
 -- count (blank/zero/negative = repeat forever, its own convention).
@@ -932,7 +934,8 @@ function craftingPanel.isOpen()
 end
 
 -- Esc closes the popup. Returns true if consumed (init.lua's Escape
--- cascade, same tier as cargo_inventory_panel / item_contents_panel).
+-- cascade, same tier as the container window). Unlike that window,
+-- this panel has no nesting: one press closes it outright.
 function craftingPanel.handleKeyDown(key)
     if key == "Escape" and craftingPanel.state.open then
         craftingPanel.closeIfOpen()

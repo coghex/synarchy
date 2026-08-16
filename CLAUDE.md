@@ -381,6 +381,41 @@ large → capped, inverting → zero-extent, non-hittable AND
 non-rendering. `UI.getElementInfo` adds `interactiveOverflow` +
 `interactiveBounds` (`x/y/width/height` stay content bounds).
 
+**Container window stack (#1238):** `scripts/cargo_inventory_panel.lua`
+is THE container window and owns an ordered STACK of levels, not one
+popup. Level 1 is an endpoint (a storage building or a unit); a
+container row inside level N opens level N+1, and the nesting PATH is
+remembered. Two windows never coexist at one level: opening container B
+where A is open REPLACES A and discards every deeper level, and an
+EXTERNAL request (a cargo right-click, the unit-info "Contents" entry)
+always targets the base. Only the DEEPEST level is interactive, and
+nothing enforces that by hand — a level past the base gets its own
+`LayerModal` page, so #742's boundary makes every shallower level
+painted-but-unclickable and closing it restores the parent. The base
+level keeps its pre-#1238 non-modal behaviour on `hud.world_page`.
+Escape closes ONE level per press (the one dismiss-cascade tier; the
+item-contents module has no key handler of its own). Three level kinds:
+`endpoint`, `unitItem` (LIVE, `unit.getItemContents`) and
+`buildingItem` (the player's REMEMBERED contents,
+`building.getRememberedItemContents`, carrying the PARENT record's own
+`revealedAt` — never a live storage read, never a knowledge write). Both
+descend by EXACT INSTANCE IDENTITY along a path of instance ids, and a
+path that stops resolving closes that level AND every level below it
+rather than retargeting a same-def sibling. An item-container level is
+RENDER-ONLY (D-5): no transfer endpoint, no transfer operation — only
+inspection (scroll, close, open a child), so a building row keeps its
+Withdraw entry and merely GAINS "Contents". `scripts/item_contents_panel.lua`
+no longer owns a window lifecycle (D-13): it supplies the two item-level
+kinds and nothing else — no page, no panel, no singleton, no `setup()`,
+no `update()`. `unit.getItemContents` searches loose inventory,
+equipment AND accessories (the three the unit-info list merges). The
+stack is transient session UI: `hud.createUI()` snapshots and restores
+the WHOLE thing across a resize (path + tab + per-level scroll), and
+`uiManager.onSaveLoaded` drops it. Gates: hspec
+`--match "container window stack"` / `--match "Container knowledge"` /
+`--match "Nested item contents"` / `--match "Item list widget"`, plus
+`tools/item_list_widget_probe.py` (manual-only, `needs-gpu`).
+
 **Responsive lifecycle (#748 menus / #750 gameplay):**
 `scripts/ui/responsive.lua` owns the supported envelope — bands
 (inclusive): framebuffer height 600-900 @ 0.5-1x UI scale, 901-1200 @
@@ -405,10 +440,12 @@ Rules that keep resizes correct — follow them for any new screen/panel:
   `snapshotPage`/`restoreAll`), selected tabs, open-panel targets.
   `hud.createUI()` snapshots each world-page panel's "open for" state
   before the `view_teardown.lua` `"resize"` sweep and reopens via each
-  panel's real entry point (`reopenWithTab`/`reopenWithState`); restores
-  must not re-fire `onChange`/`onSelect` (use the widgets' `silent`
-  params, `toggle.restoreSlotIdentity`, `list.setSelectedIndex` — never
-  `selectItem`).
+  panel's real entry point (`reopenWithTab`/`reopenWithState`/
+  `restoreStack`); restores must not re-fire `onChange`/`onSelect` (use
+  the widgets' `silent` params, `toggle.restoreSlotIdentity`,
+  `list.setSelectedIndex` — never `selectItem`). A surface with NESTING
+  restores the whole nesting path, not just its topmost window (#1238's
+  container stack).
 - Keyboard control focus survives rebuilds by NAME:
   `responsive.snapshotControlFocusName()`/`restoreControlFocusName()`
   around any destroy+recreate; restore only after pages are re-shown.

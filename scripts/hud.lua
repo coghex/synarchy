@@ -215,22 +215,19 @@ function hud.createUI()
         end
         return result
     end
-    local reopenCargo, reopenItem, reopenCraft, reopenPlant, reopenPicker, reopenTile
+    local reopenCargo, reopenCraft, reopenPlant, reopenPicker, reopenTile
     local reopenEtymology
     if hud.uiCreated and hud.world_page and hud.zoom_page then
+        -- #1238: the container window is a STACK of nesting levels, and
+        -- a layout-only change must preserve the whole thing — every
+        -- level's identity, its anchor, its selected tab and its scroll
+        -- offset — not just whichever window was on top. The
+        -- item-contents popup is one of those levels now, so it has no
+        -- snapshot of its own.
         reopenCargo = trySnapshot(function()
             local m = require("scripts.cargo_inventory_panel")
             if not m.isOpen() then return nil end
-            local s = m.state
-            return { kind = s.kind, id = s.id, mx = s.mx, my = s.my,
-                     tab = s.activeTab }
-        end)
-        reopenItem = trySnapshot(function()
-            local m = require("scripts.item_contents_panel")
-            if not m.isOpen() then return nil end
-            local s = m.state
-            return { uid = s.uid, defName = s.defName, mx = s.mx, my = s.my,
-                     instanceId = s.instanceId }
+            return m.snapshotStack()
         end)
         reopenCraft = trySnapshot(function()
             local m = require("scripts.crafting_panel")
@@ -633,16 +630,10 @@ function hud.createUI()
         menuFont  = hud.menuFont,
     })
 
-    -- Item contents popup (unit-carried container) shares the same
-    -- page + assets as the cargo panel.
-    local itemContentsPanel = require("scripts.item_contents_panel")
-    itemContentsPanel.setup({
-        page      = hud.world_page,
-        fbW       = hud.fbW,
-        fbH       = hud.fbH,
-        boxTexSet = hud.boxTexSet,
-        menuFont  = hud.menuFont,
-    })
+    -- #1238: the item-contents popup used to be set up here as a
+    -- second independent panel. It is a LEVEL of the container window
+    -- now and owns no elements, so the setup above is the only one
+    -- that configures it.
 
     -- Crafting station bills panel (#330): same page + assets as the
     -- cargo/item popups above.
@@ -756,16 +747,7 @@ function hud.createUI()
     end
     if reopenCargo then
         tryReopen(function()
-            require("scripts.cargo_inventory_panel").reopenWithTab(
-                reopenCargo.kind, reopenCargo.id, reopenCargo.mx,
-                reopenCargo.my, reopenCargo.tab)
-        end)
-    end
-    if reopenItem then
-        tryReopen(function()
-            require("scripts.item_contents_panel").openFor(
-                reopenItem.uid, reopenItem.defName, reopenItem.mx, reopenItem.my,
-                reopenItem.instanceId)
+            require("scripts.cargo_inventory_panel").restoreStack(reopenCargo)
         end)
     end
     if reopenCraft then

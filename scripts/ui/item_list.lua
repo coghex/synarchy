@@ -617,6 +617,24 @@ local function buildRows(inst, s, listY, listBottom)
             math.floor((listBottom - listY) / (rowH + rowPad)))
     end
 
+    -- Scroll offset (#1238): how many leading rows of the ACTIVE TAB's
+    -- filtered list are skipped. Clamped here, at the one point that
+    -- knows both the row count and the visible capacity -- a host sizes
+    -- its window before either exists. The clamped value is written
+    -- back onto `inst` (and onto the params, so a rebuild from the same
+    -- table starts where the widget actually was) so a host that
+    -- restores a saved offset against SHRUNKEN contents lands on the
+    -- last full page instead of an empty one.
+    local capacity  = math.max(0, maxRows)
+    local maxOffset = math.max(0, #visible - capacity)
+    local offset    = math.floor(tonumber(p.scrollOffset) or 0)
+    if offset < 0 then offset = 0 end
+    if offset > maxOffset then offset = maxOffset end
+    inst.rowCapacity  = capacity
+    inst.maxScroll    = maxOffset
+    inst.scrollOffset = offset
+    p.scrollOffset    = offset
+
     if #visible == 0 then
         if p.emptyText then
             local lbl = label.new({
@@ -633,8 +651,8 @@ local function buildRows(inst, s, listY, listBottom)
         return
     end
 
-    for i = 1, math.min(#visible, maxRows) do
-        local row  = visible[i]
+    for i = 1, math.min(#visible - offset, capacity) do
+        local row  = visible[offset + i]
         local rowY = listY + (i - 1) * (rowH + rowPad)
 
         -- Optional full-row backdrop (the unit-info equipped tint).
@@ -733,8 +751,12 @@ local function buildRows(inst, s, listY, listBottom)
         -- dump() -- no Lua API reads a rendered label or an element's
         -- tooltip content back, so without them a probe could only
         -- assert its own expectations about what a row says (#1268).
+        -- `index` is the SLOT (1 = topmost rendered row); `dataIndex`
+        -- is the row's place in the filtered list, which is the only
+        -- way an introspecting probe can tell a scrolled list from an
+        -- unscrolled one (#1238).
         inst.rows[#inst.rows + 1] =
-            { hitId = hitId, item = row, index = i,
+            { hitId = hitId, item = row, index = i, dataIndex = offset + i,
               text = shownName, rawText = rawName, tooltip = tip }
     end
 end
@@ -906,6 +928,68 @@ function itemList.getScale(id)
     return inst and inst.scale or nil
 end
 
+-----------------------------------------------------------
+-- Scrolling (#1238)
+--
+-- A window whose contents outgrow its row cap has to be reachable, and
+-- the nesting stack has to be able to SAVE and RESTORE where each of
+-- its levels was. So the offset is real widget state, not a host's
+-- private bookkeeping: the widget owns the clamp (only it knows the
+-- visible capacity), reports the clamped value back, and a host that
+-- restores an offset against changed contents gets the same clamp for
+-- free.
+--
+-- Deliberately NOT part of the invalidation signature: scrolling is a
+-- pure re-render of unchanged data, so a host must never see its own
+-- scroll as "the data went stale". `setScrollOffset` rebuilds the rows
+-- itself instead.
+-----------------------------------------------------------
+
+-- The offset actually in effect (post-clamp), 0 for a never-scrolled
+-- or unknown list.
+function itemList.getScrollOffset(id)
+    local inst = lists[id]
+    return inst and inst.scrollOffset or 0
+end
+
+-- The largest offset this list's current contents admit: rows beyond
+-- the visible capacity, never negative.
+function itemList.maxScrollOffset(id)
+    local inst = lists[id]
+    return inst and inst.maxScroll or 0
+end
+
+-- How many rows fit at once (the host's `maxRows`, or the count the
+-- supplied bounds allow).
+function itemList.rowCapacity(id)
+    local inst = lists[id]
+    return inst and inst.rowCapacity or 0
+end
+
+-- Scroll to an absolute offset; returns the CLAMPED offset actually
+-- applied. A no-op request rebuilds nothing.
+function itemList.setScrollOffset(id, offset)
+    local inst = lists[id]
+    if not inst then return 0 end
+    local want = math.floor(tonumber(offset) or 0)
+    if want < 0 then want = 0 end
+    if inst.maxScroll and want > inst.maxScroll then want = inst.maxScroll end
+    if want == inst.scrollOffset then return inst.scrollOffset end
+    inst.params.scrollOffset = want
+    destroyElements(inst)
+    build(inst)
+    return inst.scrollOffset
+end
+
+-- Relative scroll (one wheel notch is one row); returns the clamped
+-- offset actually applied.
+function itemList.scrollBy(id, delta)
+    local inst = lists[id]
+    if not inst then return 0 end
+    return itemList.setScrollOffset(id,
+        (inst.scrollOffset or 0) + math.floor(tonumber(delta) or 0))
+end
+
 function itemList.count()
     local n = 0
     for _ in pairs(lists) do n = n + 1 end
@@ -963,6 +1047,10 @@ function itemList.dump()
                 table.insert(out, {
                     id = "item_list:" .. id .. ":" .. r.index,
                     name = inst.name .. "_row_" .. r.index,
+                    listId = id,
+                    slot = r.index,
+                    dataIndex = r.dataIndex,
+                    scrollOffset = inst.scrollOffset or 0,
                     type = "item_list",
                     bounds = {
                         x = info.x, y = info.y,

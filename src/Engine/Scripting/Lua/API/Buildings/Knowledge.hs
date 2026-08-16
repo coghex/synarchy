@@ -10,6 +10,7 @@
 --   page reports and refreshes its own page's memory.
 module Engine.Scripting.Lua.API.Buildings.Knowledge
     ( buildingGetContainerKnowledgeFn
+    , buildingGetRememberedItemContentsFn
     , buildingRefreshContainerKnowledgeFn
     ) where
 
@@ -31,6 +32,9 @@ import Building.Knowledge.Live
 import Building.Types
     (BuildingId(..), BuildingDef(..), BuildingInstance(..), BuildingManager(..))
 import Engine.Scripting.Lua.API.Equipment (pushItemInstance)
+import Engine.Scripting.Lua.API.Items.Contents
+    (pushGroupedContents, readInstanceIdPath, resolveContainedItem)
+import Item.Types (ItemInstance(..))
 
 -- | @building.getContainerKnowledge(bid)@ →
 --   @{ state, items, storedWeight, capacity, revealedAt }@ | nil.
@@ -104,6 +108,63 @@ buildingGetContainerKnowledgeFn env = do
                         Just r  → pushNumberField "revealedAt" (crRevealedAt r)
                         Nothing → pure ()
                     return 1
+
+-- | @building.getRememberedItemContents(bid, path)@ →
+--   @{ items, revealedAt }@ | nil (#1238).
+--
+--   The REMEMBERED contents of an item-container stored inside a
+--   container building — the read the window stack opens a
+--   building-side nested level from. @path@ is a dense array of
+--   instance ids descending through the record's own remembered items:
+--   the first selects among the top-level remembered instances, each
+--   later one descends that item's nested contents.
+--
+--   Three properties this must keep, all of them load-bearing:
+--
+--     * __It is the MEMORY, never the live building.__ Everything
+--       comes out of the 'Building.Knowledge.ContainerRecord' the last
+--       reveal wrote — so a nested level keeps showing what the player
+--       last saw even after a unit has emptied the real container, and
+--       reports the PARENT record's @revealedAt@, which is what lets
+--       the level carry the same \"as of…\" age as the window it
+--       opened from.
+--     * __It reveals nothing.__ A pure read through
+--       'readContainerKnowledge', exactly like
+--       'buildingGetContainerKnowledgeFn' above; opening a window at
+--       any depth must never refresh the memory it is rendering.
+--     * __It descends by exact instance identity.__ Two same-def kits
+--       remembered side by side answer with their own contents, and an
+--       id that is no longer in the record answers nil rather than a
+--       sibling's — the caller closes that level instead of silently
+--       retargeting.
+--
+--   nil when @bid@ names no live building or its page is gone, when
+--   nothing has ever been observed there, when @path@ is malformed or
+--   empty, or when it does not resolve. The @items@ rows are the SAME
+--   grouped shape @unit.getItemContents@ answers with
+--   ('Engine.Scripting.Lua.API.Items.Contents'), so one Lua level
+--   renderer draws a live level and a remembered one alike.
+buildingGetRememberedItemContentsFn
+    ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingGetRememberedItemContentsFn env = do
+    idArg ← Lua.tointeger 1
+    mPath ← readInstanceIdPath 2
+    case (idArg, mPath) of
+        (Just n, Just path) | not (null path) → do
+            let bid = BuildingId (fromIntegral n)
+            mKnown ← Lua.liftIO $ readContainerKnowledge (observerFor env) bid
+            case mKnown of
+                Just (Just record)
+                  | Just held ← resolveContainedItem path (crItems record) → do
+                    itemMgr ← Lua.liftIO $ readIORef
+                        (crItemManagerRef (toContentRegistriesCapability env))
+                    Lua.newtable
+                    pushGroupedContents itemMgr (iiContents held)
+                    Lua.setfield (-2) "items"
+                    pushNumberField "revealedAt" (crRevealedAt record)
+                    return 1
+                _ → Lua.pushnil >> return 1
+        _ → Lua.pushnil >> return 1
 
 -- | @building.refreshContainerKnowledge(bid)@ → bool. Take a fresh
 --   observation of the container's CURRENT contents and replace the
