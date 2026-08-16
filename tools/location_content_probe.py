@@ -88,7 +88,8 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import (quit_engine, boot, send, wait_load_published,
+from probelib import (FixtureNotRegistered, quit_engine, boot,
+                      load_fixture_yaml, send, wait_load_published,
                       load_ai_stack)
 
 LOG = "/tmp/location_content_engine.log"
@@ -1095,10 +1096,14 @@ def main() -> int:
     proc = boot(args.port, log=LOG)
     try:
         load_defs(args.port)
-        send(args.port, f"engine.loadLocationYaml('{bogus_yaml}'); return 'ok'")
-        send(args.port, f"engine.loadLootTableYaml('{bogus_loot_yaml}'); return 'ok'")
-        send(args.port, f"engine.loadLocationYaml('{quinoa_yaml}'); return 'ok'")
-        send(args.port, f"engine.loadLootTableYaml('{quinoa_loot_yaml}'); return 'ok'")
+        # These four fixtures are DELIBERATELY full of unknown ids, but the
+        # files themselves must still register: phase 3 is about what
+        # spawnContents does with a bogus CONTENT entry, which it can only
+        # reach once the location and loot-table defs exist.
+        load_fixture_yaml(args.port, "engine.loadLocationYaml", bogus_yaml)
+        load_fixture_yaml(args.port, "engine.loadLootTableYaml", bogus_loot_yaml)
+        load_fixture_yaml(args.port, "engine.loadLocationYaml", quinoa_yaml)
+        load_fixture_yaml(args.port, "engine.loadLootTableYaml", quinoa_loot_yaml)
         gen_world(args.port, "wc", args.seed, args.size)
         # Stamp directly (bogus_ruin has max_count 0, so it never places via
         # the overlay) — content-spawning is the concern here, not overlay
@@ -1225,7 +1230,7 @@ def main() -> int:
         # dense_ruin for chunk (0,0) and make the placement non-deterministic
         # (mirrors tools/location_overlay_probe.py's isolated DENSE_YAML use).
         load_registries(args.port)
-        send(args.port, f"engine.loadLocationYaml('{dense_yaml}'); return 'ok'")
+        load_fixture_yaml(args.port, "engine.loadLocationYaml", dense_yaml)
         send(args.port, "world.initArena('arena'); world.initArenaDone('arena'); "
                         "world.show('arena'); return 'ok'")
         arena_ok = False
@@ -1452,4 +1457,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except FixtureNotRegistered as exc:
+        print(f"\n{exc}")
+        raise SystemExit(1)

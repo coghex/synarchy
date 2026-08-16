@@ -35,7 +35,8 @@ Usage: python3 tools/crop_probe.py [--port 9195] [--seed 42]
 import argparse, copy, glob, json, os, shutil, socket, subprocess, sys, tempfile, time
 import yaml
 from pathlib import Path
-from probelib import quit_engine, boot, send, wait_load_published
+from probelib import (FixtureNotRegistered, quit_engine, boot,
+                      load_fixture_yaml, send, wait_load_published)
 
 SPROOT = "/tmp"
 REPO = Path(__file__).resolve().parent.parent
@@ -114,7 +115,7 @@ def bootstrap(port):
     path = f"{SPROOT}/probe_tomato_plant.yaml"
     with open(path, "w") as f:
         yaml.safe_dump({"flora": [tomato]}, f)
-    send(port, f"engine.loadFloraYaml('{path}'); return 'ok'")
+    load_fixture_yaml(port, "engine.loadFloraYaml", path)
     return checked
 
 
@@ -386,4 +387,8 @@ def _run(port, proc, args, passed):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except FixtureNotRegistered as exc:
+        print(f"\n{exc}")
+        sys.exit(1)

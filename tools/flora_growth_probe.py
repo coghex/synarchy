@@ -32,7 +32,8 @@ Usage: python3 tools/flora_growth_probe.py [--port 9186] [--seed 42]
        [--size 64] [--plates 3]
 """
 import argparse, glob, json, socket, subprocess, sys, time
-from probelib import quit_engine, boot, send, wait_load_published
+from probelib import (FixtureNotRegistered, quit_engine, boot,
+                      load_fixture_yaml, send, wait_load_published)
 
 SPROOT = "/tmp"
 
@@ -159,7 +160,7 @@ def bootstrap(port):
     berry_path = f"{SPROOT}/probe_berry.yaml"
     with open(berry_path, "w") as f:
         f.write(PROBE_BERRY_YAML)
-    send(port, f"engine.loadFloraYaml('{berry_path}'); return 'ok'")
+    load_fixture_yaml(port, "engine.loadFloraYaml", berry_path)
     # The probe's own no-fruiting-stage species — appended AFTER
     # probe_berry so both the real flora's indices and probe_berry's
     # own index stay untouched. Max-tolerance worldGen: places on any
@@ -167,7 +168,7 @@ def bootstrap(port):
     clover_path = f"{SPROOT}/probe_clover.yaml"
     with open(clover_path, "w") as f:
         f.write(PROBE_CLOVER_YAML)
-    send(port, f"engine.loadFloraYaml('{clover_path}'); return 'ok'")
+    load_fixture_yaml(port, "engine.loadFloraYaml", clover_path)
 
 
 def set_date(port, page, y, mo, d):
@@ -386,4 +387,8 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except FixtureNotRegistered as exc:
+        print(f"\n{exc}")
+        sys.exit(1)
