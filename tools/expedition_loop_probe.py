@@ -1906,13 +1906,18 @@ def main() -> int:
             chk.ok(find_instance(inventory(port, prepared), instance_id) is not None,
                    "the recovered item is still carried at the end of the return leg")
 
+            # A lax AI verb (D-7) with no adjacency gate of its own, so
+            # the adjacency asserted beside it is this probe's own rule.
+            # It used to be the call the "Store in <cargo>" menu entry
+            # made; #1249 retired that entry for a queued order, and this
+            # step stays direct so "invest" does not wait on the transfer
+            # executor's own timing.
             at_deposit = unit_pos(port, prepared)
             adj = bool(at_deposit) and is_adjacent(at_deposit, foot)
             ok = send(port, f"return unit.depositToCargo({prepared},{storage_bid},"
                             f"'{recovered['defName']}',{instance_id})")
             chk.ok(adj and ok.strip() == "true",
-                   f"the carrier banks it in colony storage from an adjacent tile — "
-                   f"the exact call the 'Store in <cargo>' menu entry makes "
+                   f"the carrier banks it in colony storage from an adjacent tile "
                    f"(adjacent={adj} at {at_deposit}, returned {ok!r})")
             stored = send_json(port, f"return building.getStorage({storage_bid})")
             chk.ok(find_instance(stored if isinstance(stored, list) else [],

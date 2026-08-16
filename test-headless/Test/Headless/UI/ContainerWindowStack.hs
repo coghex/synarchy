@@ -484,10 +484,18 @@ spec = aroundAll withSharedFixture $
 
     describe "row actions" $ do
 
-        it "a building row keeps its Withdraw entry and gains Contents \
-           \only when it IS a container; a unit endpoint and an item \
-           \level offer Contents alone — no level ever gains a transfer \
-           \operation it did not have" $ \(env, ls) → do
+        -- #1249 retired the Withdraw entry this case was written around
+        -- and put "Retrieve" in its place, which is OMITTED when no
+        -- eligible source resolves (this scene selects nothing) rather
+        -- than shown disabled. So an endpoint row here offers exactly
+        -- what the item levels do: "Contents" when it is a container,
+        -- and no menu at all when it is not. What the case still pins is
+        -- unchanged and is the point — an item-container level never
+        -- gains a transfer operation (D-5), and neither endpoint kind
+        -- gains one it could not run.
+        it "a container row on any level offers Contents; no level ever \
+           \gains a transfer operation it did not have, and a level with \
+           \nothing to offer shows no menu at all" $ \(env, ls) → do
             resetFixture env ls
             setupScene ls
             r ← evalJSON ls $ luaLines
@@ -510,10 +518,12 @@ spec = aroundAll withSharedFixture $
             case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe MenuProbe of
                 Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
                 Just p → do
-                    mnBuildingRow p `shouldBe`
-                        "Withdraw (select an adjacent unit first)|Contents"
-                    mnBuildingPlain p `shouldBe`
-                        "Withdraw (select an adjacent unit first)"
+                    mnBuildingRow p `shouldBe` "Contents"
+                    -- Where the retired disabled "Withdraw (select an
+                    -- adjacent unit first)" row used to be: an
+                    -- unrunnable gesture is now absent, so a plain row
+                    -- with no eligible retriever shows no menu.
+                    mnBuildingPlain p `shouldBe` ""
                     mnUnitRow p `shouldBe` "Contents"
                     mnItemRow p `shouldBe` "Contents"
                     -- A plain row on a render-only level offers nothing
