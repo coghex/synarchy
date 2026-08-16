@@ -39,7 +39,8 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import quit_engine, boot, send, wait_load_published
+from probelib import (FixtureNotRegistered, quit_engine, boot,
+                      load_fixture_yaml, send, wait_load_published)
 
 LOG = "/tmp/location_stamp_idempotent_engine.log"
 LOCATION_YAML = "/tmp/location_stamp_idempotent_probe_loc.yaml"
@@ -57,7 +58,7 @@ def load_defs(port: int) -> None:
     load_yaml_dir(port, "data/items", "engine.loadItemYaml")
     load_yaml_dir(port, "data/units", "engine.loadUnitYaml")
     load_yaml_dir(port, "data/buildings", "engine.loadBuildingYaml")
-    send(port, f"engine.loadLocationYaml('{LOCATION_YAML}'); return 'ok'")
+    load_fixture_yaml(port, "engine.loadLocationYaml", LOCATION_YAML)
 
 
 def write_location_yaml() -> None:
@@ -320,4 +321,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except FixtureNotRegistered as exc:
+        print(f"\n{exc}")
+        raise SystemExit(1)
