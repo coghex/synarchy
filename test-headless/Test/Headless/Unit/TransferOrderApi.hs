@@ -3,7 +3,10 @@
 --   @unit.getTransferOrders@, @unit.advanceTransferOrder@,
 --   @unit.commitTransferOrder@ and @unit.failTransferOrder@ driven
 --   through the REAL registered production API against REAL manager
---   refs and a REAL per-page @wsTransferOrdersRef@.
+--   refs and a REAL per-page @wsTransferOrdersRef@ — plus #1253's
+--   @unit.cancelTransferOrder@ / @unit.pruneTransferOrder@ and the
+--   orphan cleanup 'Unit.Thread.Command.Lifecycle' performs when a
+--   carrier is destroyed.
 --
 --   Sibling of 'Test.Headless.Unit.TransferApi', whose fixture
 --   constructors this reuses; what it adds is the geometry an ORDER
@@ -23,8 +26,9 @@ module Test.Headless.Unit.TransferOrderApi (spec) where
 import UPrelude
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Text as T
-import Data.IORef (modifyIORef', readIORef, writeIORef)
+import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Building.Types
     ( BuildingId(..), BuildingInstance(..), BuildingManager(..)
     , emptyBuildingManager )
@@ -32,9 +36,15 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Item.Types (ItemInstance(..), emptyItemManager)
 import Unit.Faction (Faction(..))
+import Unit.Sim.Types (emptyUnitThreadState)
+import Unit.Thread.Command.Lifecycle (handleUnitDestroyCommand)
+import Unit.Transfer.Orders (TransferOrderId(..), TransferOrders(..))
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..), emptyUnitManager)
 import World.Page.Types (WorldPageId(..))
-import World.State.Types (WorldManager(..), emptyWorldState)
+import World.Save.Integrity
+    ( IntegrityError(..), PageEntities(..), danglingOrderRefErrors
+    , transferOrderRefs )
+import World.State.Types (WorldManager(..), WorldState(..), emptyWorldState)
 import Test.Headless.Unit.TransferApi
     ( evalDebug, mkBuilding, mkItem, mkUnit, minimalDef, newBareLuaBackend
     , storageDef )
@@ -146,6 +156,17 @@ buildingLoose env bid = do
     bm ← readIORef (buildingManagerRef env)
     pure $ maybe [] (map iiInstanceId ∘ biStorage)
                     (HM.lookup bid (bmInstances bm))
+
+-- | One page's live order store, read straight out of the ref the verbs
+--   write — the only way to see what pruning actually left behind, since
+--   @unit.getTransferOrders@ resolves the store FROM the acting unit and
+--   a destroyed carrier can no longer reach it (#1253's orphan case).
+pageOrders ∷ EngineEnv → WorldPageId → IO TransferOrders
+pageOrders env pid = do
+    wm ← readIORef (worldManagerRef env)
+    case lookup pid (wmWorlds wm) of
+        Just ws → readIORef (wsTransferOrdersRef ws)
+        Nothing → error "fixture: page is not live"
 
 -- * Lua plumbing
 
@@ -632,6 +653,172 @@ spec = describe "Unit transfer Lua API (orders, #1247)" $ do
             o ← orders ls 1
             o `shouldBe` q "1;1|false|destination|building#7@30,10 1x1|\
                            \101:ration:queued"
+
+    describe "cancellation and terminal pruning (#1253)" $ do
+        it "cancels PENDING entries only, leaves terminal ones alone, and \
+           \moves nothing" $ \env → do
+            -- The crate cannot fit (500 kg into a 200 kg hold), so it is
+            -- already terminal when the order is stored. A cancel that
+            -- overwrote terminal entries would rewrite that recorded
+            -- refusal as an abandonment nobody chose — and after a
+            -- PARTIAL commit the same bug would claim delivered items
+            -- were abandoned.
+            resetOrderWorld env [mkItem "ration" 101 0.5, mkItem "crate" 102 500]
+                                []
+            ls ← backend env
+            _ ← create ls 1 (req "unit" 1 "building" 7
+                                 (itemLit 101 "ration" <> ", "
+                                  <> itemLit 102 "crate"))
+            _ ← advance ls 1 1 "in_transit"
+            r ← evalDebug ls
+                "return tostring(unit.cancelTransferOrder(1, 1))"
+            r `shouldBe` q "true"
+            o ← orders ls 1
+            o `shouldBe`
+                q "1;1|true|destination|building#7@30,10 1x1|\
+                  \101:ration:cancelled \
+                  \102:crate:failed:receiver_full"
+            unitLoose env acolyteUid `shouldReturn` [101, 102]
+            buildingLoose env farHold `shouldReturn` []
+
+        it "is scoped to the ACTING unit, so one unit cannot cancel \
+           \another's order" $ \env → do
+            resetOrderWorld env [mkItem "ration" 101 0.5] []
+            ls ← backend env
+            _ ← create ls 1 (req "unit" 1 "building" 7 (itemLit 101 "ration"))
+            -- Same page, same live store, same id — only the acting unit
+            -- differs, which is the whole check.
+            wrong ← evalDebug ls
+                "return tostring(unit.cancelTransferOrder(4, 1))"
+            wrong `shouldBe` q "false"
+            missing ← evalDebug ls
+                "return tostring(unit.cancelTransferOrder(1, 99))"
+            missing `shouldBe` q "false"
+            o ← orders ls 1
+            o `shouldBe` q "1;1|false|destination|building#7@30,10 1x1|\
+                           \101:ration:queued"
+
+        it "refuses to prune a LIVE order — abandoning queued work with \
+           \no cancelled entry and no event is the one thing pruning \
+           \must never do" $ \env → do
+            resetOrderWorld env [mkItem "ration" 101 0.5] []
+            ls ← backend env
+            _ ← create ls 1 (req "unit" 1 "building" 7 (itemLit 101 "ration"))
+            r1 ← evalDebug ls "return tostring(unit.pruneTransferOrder(1, 1))"
+            r1 `shouldBe` q "false"
+            -- Not even part-way: a batch is terminal only when EVERY
+            -- entry is, and this one still has a live entry after the
+            -- walk began.
+            _ ← advance ls 1 1 "in_transit"
+            r2 ← evalDebug ls "return tostring(unit.pruneTransferOrder(1, 1))"
+            r2 `shouldBe` q "false"
+            o ← orders ls 1
+            o `shouldBe` q "1;1|false|destination|building#7@30,10 1x1|\
+                           \101:ration:in_transit"
+
+        it "prunes a cancelled order, and a second prune is inert rather \
+           \than an error" $ \env → do
+            resetOrderWorld env [mkItem "ration" 101 0.5] []
+            ls ← backend env
+            _ ← create ls 1 (req "unit" 1 "building" 7 (itemLit 101 "ration"))
+            _ ← evalDebug ls "return tostring(unit.cancelTransferOrder(1, 1))"
+            first ← evalDebug ls "return tostring(unit.pruneTransferOrder(1, 1))"
+            first `shouldBe` q "true"
+            orders ls 1 `shouldReturn` q "0;"
+            -- Idempotence is what lets the executor prune on the tick
+            -- that terminalised the order without recording whether it
+            -- has already done so.
+            again ← evalDebug ls "return tostring(unit.pruneTransferOrder(1, 1))"
+            again `shouldBe` q "false"
+            orders ls 1 `shouldReturn` q "0;"
+
+        it "prunes a COMPLETED order, and the item really did move" $ \env → do
+            -- The ordinary happy path's cleanup: pruning is not a
+            -- failure-only mechanism, and a completed haul must not ride
+            -- the next save either.
+            resetOrderWorld env [mkItem "ration" 101 0.5] []
+            ls ← backend env
+            oid ← readyOrder ls 1 (req "unit" 1 "building" 8
+                                       (itemLit 101 "ration"))
+            c ← commitOrder ls 1 oid
+            c `shouldBe` q "all|101:ration:completed"
+            p ← evalDebug ls "return tostring(unit.pruneTransferOrder(1, 1))"
+            p `shouldBe` q "true"
+            orders ls 1 `shouldReturn` q "0;"
+            unitLoose env acolyteUid `shouldReturn` []
+            buildingLoose env nearHold `shouldReturn` [101]
+
+        it "refuses to prune another unit's terminal order" $ \env → do
+            resetOrderWorld env [mkItem "ration" 101 0.5] []
+            ls ← backend env
+            _ ← create ls 1 (req "unit" 1 "building" 7 (itemLit 101 "ration"))
+            _ ← evalDebug ls "return tostring(unit.cancelTransferOrder(1, 1))"
+            wrong ← evalDebug ls "return tostring(unit.pruneTransferOrder(4, 1))"
+            wrong `shouldBe` q "false"
+            o ← orders ls 1
+            o `shouldBe` q "1;1|true|destination|building#7@30,10 1x1|\
+                           \101:ration:cancelled"
+
+        it "leaves the integrity sweep nothing to report once a terminal \
+           \order naming a demolished endpoint is pruned" $ \env → do
+            -- Requirement 5's "the integrity sweep stays quiet", against
+            -- the real graph: the destination is torn down mid-order, so
+            -- every reference the order carries becomes a tolerated
+            -- dangling diagnostic on every later save and load — until
+            -- the order is gone.
+            resetOrderWorld env [mkItem "ration" 101 0.5] []
+            ls ← backend env
+            _ ← create ls 1 (req "unit" 1 "building" 7 (itemLit 101 "ration"))
+            modifyIORef' (buildingManagerRef env) $ \bm → bm
+                { bmInstances = HM.delete farHold (bmInstances bm) }
+            -- Only the acolyte and its ration resolve; the hold is gone.
+            let entities = PageEntities
+                    { peUnits     = HS.singleton acolyteUid
+                    , peBuildings = HS.empty
+                    , peItems     = HS.singleton 101 }
+            before ← pageOrders env pageA
+            -- Four: the acting unit, both endpoints, and the one entry.
+            length (transferOrderRefs pageA before) `shouldBe` 4
+            map ieRefValue (danglingOrderRefErrors pageA entities before)
+                `shouldBe` ["7"]
+            _ ← evalDebug ls
+                "return tostring(unit.failTransferOrder(1, 1, 'became_stale', \
+                \'receiver_missing'))"
+            _ ← evalDebug ls "return tostring(unit.pruneTransferOrder(1, 1))"
+            after ← pageOrders env pageA
+            transferOrderRefs pageA after `shouldBe` []
+            danglingOrderRefErrors pageA entities after `shouldBe` []
+
+        it "destroying the CARRIER retires its orders, and only its own" $ \env → do
+            -- The one retirement the executor can never perform: a
+            -- destroyed unit never ticks again, so without this its
+            -- orders would sit pending in the store forever and report a
+            -- dangling acting unit on every save.
+            resetOrderWorld env [mkItem "ration" 101 0.5] []
+            ls ← backend env
+            _ ← create ls 1 (req "unit" 1 "building" 7 (itemLit 101 "ration"))
+            -- A second order carried by a DIFFERENT unit, so "retired
+            -- everything" cannot pass by accident. Its source is the
+            -- doomed acolyte, which makes it the deliberate control for
+            -- the troUnit-only rule: a unit that is merely an ENDPOINT of
+            -- somebody else's order is not orphaned by its own death, and
+            -- that order's live carrier retires it on its next tick with
+            -- the reason recorded.
+            _ ← create ls 4 (req "unit" 1 "unit" 4 (itemLit 101 "ration"))
+            before ← pageOrders env pageA
+            HM.size (trosOrders before) `shouldBe` 2
+            utsRef ← newIORef emptyUnitThreadState
+            handleUnitDestroyCommand env utsRef acolyteUid
+            after ← pageOrders env pageA
+            map (unTransferOrderId ∘ fst) (HM.toList (trosOrders after))
+                `shouldBe` [2]
+            -- The allocator is NOT rewound, so a retired id can never be
+            -- handed to a later order.
+            trosNextId after `shouldBe` 3
+            -- It survives with its own approach now UNRESOLVED, which is
+            -- precisely the signal its live carrier retires it on.
+            orders ls 4 `shouldReturn`
+                q "1;2|false|source|none|101:ration:queued"
 
     describe "order identity" $
         it "ids are allocated per page and every verb is scoped to the \

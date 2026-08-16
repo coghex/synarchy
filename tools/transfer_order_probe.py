@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Headless transfer-order execution probe (issue #1247, epic #1013
-slice UIT-2B).
+"""Headless transfer-order execution probe (issues #1247 and #1253, epic
+#1013 slices UIT-2B and UIT-5A).
 
 Gates the UNIT JOB that drives a durable transfer order (#1246's store)
 through `queued -> in_transit -> ready_to_commit -> completed`: the real
@@ -35,24 +35,34 @@ checks is downstream of that:
      `became_stale/receiver_full`, and the player is told.
   5. An instance that leaves the carrier's hands mid-walk records
      `became_stale/instance_missing` while its sibling still lands.
-  6. A counterpart that VANISHES mid-walk retires the order quietly —
-     `became_stale/receiver_missing`, and no new warning.
+  6. A counterpart that VANISHES mid-walk retires the order, telling the
+     player the destination is gone.
   7. A blocked approach (an ocean ring the carrier cannot cross) stalls
-     out and records a terminal `out_of_range` failure with a warning.
+     out and warns ONCE, naming the unit and the target.
   8. A trip that keeps making progress for LONGER than the nominal
      timeout still completes — the closest-approach reset is what
      distinguishes a stall timer from a trip budget (#920).
   9. An order in flight survives a real save -> quit -> fresh restart ->
      load, and the carrier resumes and completes it.
+ 10. The player cancels a haul mid-walk: nothing moves and the carrier
+     is released.
 
-Phases 1-8 run on an ARENA (flat, no worldgen, deterministic geometry).
-Phase 9 needs a real world page: a save containing an arena page hangs
-the world thread on load (#365), so it runs on its own pair of engines
-against a small generated world.
+#1253's terminal cleanup runs through every one of those. Whichever way
+an order ends — committed, refused, retired, stalled or cancelled — its
+outcome reaches the player exactly once and the order is then PRUNED, so
+each phase checks the store is left holding no terminal order, and the
+save/load phase additionally proves the integrity sweep has nothing to
+report about a carrier that died mid-order.
+
+Phases 1-8 and 10 run on an ARENA (flat, no worldgen, deterministic
+geometry). Phase 9 needs a real world page: a save containing an arena
+page hangs the world thread on load (#365), so it runs on its own pair of
+engines against a small generated world.
 
 Usage:
   python3 tools/transfer_order_probe.py
   python3 tools/transfer_order_probe.py --port 9271 --seed 42 --size 48
+  python3 tools/transfer_order_probe.py --only 10
 
 Exit 0 = every check passed.
 """
@@ -177,6 +187,14 @@ ARENA_MIN, ARENA_MAX = -32, 47
 # 3x1 hold in phase 1 get approached from its FAR end.
 LANES = {1: -28, 2: -18, 3: -8, 4: 2, 5: 12, 6: 22, 7: 32, 8: 42}
 HOLD_X = -28
+
+# The cancel phase (10) shares lane 1's row rather than claiming a ninth
+# one: the eight lanes already span -28..42 at the 10-tile spacing that
+# keeps a wanderer out of the next phase, and both remaining edges of the
+# arena are within that spacing of an existing lane. It is separated
+# along X instead, 38 tiles east of lane 1's hold and far inside the
+# arena box, with lane 1's own carrier destroyed by the time it runs.
+CANCEL_HOLD_X = 10
 
 
 class Checks:
@@ -336,14 +354,45 @@ def unit_tile(port: int, uid: int) -> tuple[float, float] | None:
     return info.get("gridX"), info.get("gridY")
 
 
-def wait_terminal(port: int, uid: int, oid: int, seconds: float):
-    """Poll until the order reaches a terminal state; return it (or None)."""
-    def look():
-        for o in orders(port, uid):
-            if o.get("id") == oid and o.get("terminal"):
-                return o
-        return None
-    return poll_until(seconds, look, interval=0.5)
+def wait_settled(port: int, uid: int, oid: int, seconds: float) -> bool:
+    """Poll until `oid` has left the store.
+
+    Since #1253 an order that reaches a terminal state has its outcome
+    surfaced and is then PRUNED, in the same tick -- so "the order
+    finished" is observed as its DISAPPEARANCE, not as a terminal
+    snapshot. There is deliberately no attempt to catch the terminal
+    state in flight: the window is a fraction of one AI tick, and a probe
+    that raced for it would be flaky in exactly the direction that hides
+    a missing prune. What actually happened is asserted from the two
+    surfaces that outlive the order -- the event log, and the world."""
+    return poll_until(seconds, lambda: True if not any(
+        o.get("id") == oid for o in orders(port, uid)) else None,
+        interval=0.5) is not None
+
+
+def terminal_orders(port: int, uid: int) -> list:
+    """Terminal orders still sitting in the store -- always [] once a
+    scenario has settled (requirement 5). A leftover here is the whole
+    failure mode pruning exists to prevent: it rides the next save and
+    keeps reporting its dead endpoint to the integrity sweep."""
+    return [o for o in orders(port, uid) if o.get("terminal")]
+
+
+def event_total(port: int, uid: int, category: str, needle: str) -> int:
+    """How many times a matching event has been emitted for `uid`.
+
+    The event log COALESCES identical consecutive entries into one row
+    carrying a `count` (Engine.PlayerEvent.Emit), so counting rows
+    reports one for two emissions. Summing `count` over the WHOLE log and
+    taking a before/after delta is what makes "warned exactly once" mean
+    it -- a slice from a mark would also miss a pre-existing row whose
+    count was bumped."""
+    total = 0
+    for e in event_log(port):
+        if (e.get("category") == category and e.get("uid") == uid
+                and needle in e.get("text", "")):
+            total += int(e.get("count", 1) or 1)
+    return total
 
 
 def wait_state(port: int, uid: int, oid: int, state: str, seconds: float):
@@ -394,21 +443,23 @@ def phase_walk_and_commit(port: int, chk: Checks) -> None:
     # ambient tick took the carrier off its order.
     stole = []
     def sample_until_done():
-        for o in orders(port, uid):
-            if o.get("id") == oid and o.get("terminal"):
-                return o
+        if not any(o.get("id") == oid for o in orders(port, uid)):
+            return True
         act = current_action(port, uid)
         if act == "wander":
             stole.append(act)
         return None
     done = poll_until(90.0, sample_until_done, interval=0.4)
-    chk.ok(done is not None, "the order completes")
+    chk.ok(done is not None,
+           "the order completes and is PRUNED from the store (#1253 "
+           "requirement 5 -- a completed haul does not linger)")
     chk.ok(not stole, "the wander tick never took the carrier mid-order",
            f"{len(stole)} wander sample(s)")
     if done is None:
         return
-    chk.ok(entry_states(done) == ["completed", "completed"],
-           "both entries recorded completed", str(entry_states(done)))
+    chk.ok(orders(port, uid) == [],
+           "the carrier carries no order at all afterwards",
+           str(orders(port, uid)))
 
     pos = unit_tile(port, uid)
     if pos and pos[0] is not None:
@@ -498,12 +549,13 @@ def phase_partial_batch(port: int, chk: Checks) -> None:
                str(states))
     chk.ok(bool(events_since(port, mark, "unit_warning", uid)),
            "the player is told what did not fit")
-    done = wait_terminal(port, uid, oid, 90.0)
-    if chk.ok(done is not None, "the order completes"):
-        states = entry_states(done)
-        chk.ok(states.count("completed") == 8, "eight moved", str(states))
+    if chk.ok(wait_settled(port, uid, oid, 90.0),
+              "the order completes and is pruned"):
         chk.ok(len(stored(port, bid)) == 8, "eight are in the hold")
         chk.ok(len(ingots(port, uid)) == 4, "four stayed with the carrier")
+    chk.ok(terminal_orders(port, uid) == [],
+           "no terminal order is left in the store",
+           str(terminal_orders(port, uid)))
     send(port, f"unit.destroy({uid}); return 'ok'")
 
 
@@ -532,16 +584,28 @@ def phase_arrival_refusal(port: int, chk: Checks) -> None:
         send(port, f"unit.depositToCargo({filler}, {bid}, 'probe_ingot'); "
                    "return 'ok'")
     chk.ok(len(stored(port, bid)) == 8, "the hold is full when the carrier arrives")
-    mark = len(event_log(port))
-    done = wait_terminal(port, uid, oid, 90.0)
-    if chk.ok(done is not None, "the order terminalises"):
-        chk.ok(entry_states(done) == ["failed:became_stale/receiver_full"],
-               "the refusal is recorded as became_stale with its cause",
-               str(entry_states(done)))
+    before = event_total(port, uid, "unit_warning", "Probe Ingot")
+    chk.ok(wait_settled(port, uid, oid, 90.0),
+           "the order terminalises and is pruned")
     chk.ok(len(ingots(port, uid)) == 1,
            "nothing moved — no item half-moved")
-    chk.ok(bool(events_since(port, mark, "unit_warning", uid)),
-           "the player is warned at arrival too")
+    # The refusal's own structured cause is what the message quotes, so
+    # this is the arrival gate reporting itself rather than a generic
+    # "something went wrong".
+    refusals = [e for e in event_log(port)
+                if e.get("category") == "unit_warning" and e.get("uid") == uid
+                and "receiver_full" in e.get("text", "")]
+    chk.ok(bool(refusals),
+           "the arrival refusal surfaces its structured reason",
+           str([e.get("text") for e in event_log(port)[-6:]]))
+    chk.ok(event_total(port, uid, "unit_warning", "Probe Ingot") - before == 1,
+           "warned exactly ONCE (counting coalesced rows' own count)")
+    chk.ok(current_action(port, uid) != "transfer_order",
+           "the carrier is released rather than stuck on a dead order",
+           current_action(port, uid))
+    chk.ok(terminal_orders(port, uid) == [],
+           "no terminal order is left in the store",
+           str(terminal_orders(port, uid)))
     send(port, f"unit.destroy({uid}); return 'ok'")
     send(port, f"unit.destroy({filler}); return 'ok'")
 
@@ -565,22 +629,33 @@ def phase_stale_instance(port: int, chk: Checks) -> None:
            "the carrier sets off")
     send(port, f"unit.removeItem({uid}, 'probe_ingot'); return 'ok'")
     chk.ok(len(ingots(port, uid)) == 1, "one of the two instances is gone")
-    done = wait_terminal(port, uid, oid, 90.0)
-    if chk.ok(done is not None, "the order terminalises"):
-        states = entry_states(done)
-        chk.ok(states.count("failed:became_stale/instance_missing") == 1,
-               "the missing instance is recorded with its structured cause",
-               str(states))
-        chk.ok(states.count("completed") == 1,
-               "its sibling still lands — one refusal neither rolls back nor "
-               "blocks another item", str(states))
-    chk.ok(len(stored(port, bid)) == 1, "exactly one instance reached the hold")
+    before = event_total(port, uid, "unit_warning", "instance_missing")
+    chk.ok(wait_settled(port, uid, oid, 90.0),
+           "the order terminalises and is pruned")
+    chk.ok(event_total(port, uid, "unit_warning", "instance_missing")
+           - before == 1,
+           "the missing instance is surfaced player-visibly with its "
+           "structured cause, exactly once")
+    chk.ok(len(stored(port, bid)) == 1,
+           "its sibling still lands — one refusal neither rolls back nor "
+           "blocks another item")
+    chk.ok(terminal_orders(port, uid) == [],
+           "no terminal order is left in the store",
+           str(terminal_orders(port, uid)))
     send(port, f"unit.destroy({uid}); return 'ok'")
 
 
 def phase_vanished_counterpart(port: int, chk: Checks) -> None:
-    """6. The destination is demolished mid-walk: retire QUIETLY."""
-    print("\n--- 6. a counterpart that vanished retires quietly ---")
+    """6. The destination is demolished mid-walk.
+
+    #1247 retired this QUIETLY, on the reasoning that a demolished
+    destination is attrition rather than something to interrupt the
+    player over. #1253 prunes the terminal order, which removes the only
+    place that reason could still have been read afterwards -- so the
+    order would otherwise vanish with the cargo still aboard and nothing
+    anywhere saying why. It is surfaced like every other failure now.
+    """
+    print("\n--- 6. a counterpart that vanished is surfaced and pruned ---")
     lane = LANES[6]
     bid = spawn_hold(port, "probe_wide_hold", HOLD_X, lane)
     if not chk.ok(bid is not None, "3x1 probe hold spawned"):
@@ -595,20 +670,20 @@ def phase_vanished_counterpart(port: int, chk: Checks) -> None:
         return
     chk.ok(wait_state(port, uid, oid, "in_transit", 20.0) is not None,
            "the carrier sets off")
-    mark = len(event_log(port))
+    before = event_total(port, uid, "unit_warning", "no longer exists")
     send(port, f"building.destroy({bid}); return 'ok'")
-    done = wait_terminal(port, uid, oid, 60.0)
-    if chk.ok(done is not None, "the order retires"):
-        chk.ok(entry_states(done) == ["failed:became_stale/receiver_missing"],
-               "recorded as became_stale, naming the side that went missing",
-               str(entry_states(done)))
-    noisy = [e for e in events_since(port, mark, "unit_warning", uid)
-             if "transfer" in e.get("text", "").lower()
-             or "Probe Ingot" in e.get("text", "")]
-    chk.ok(not noisy,
-           "and NO transfer warning — a demolished destination is attrition, "
-           "not a failure worth interrupting the player over", str(noisy))
+    chk.ok(wait_settled(port, uid, oid, 60.0),
+           "the order retires and is pruned")
+    chk.ok(event_total(port, uid, "unit_warning", "no longer exists")
+           - before == 1,
+           "the player is told the destination is gone — exactly once, and "
+           "not silently, because the pruned order is no longer readable")
     chk.ok(len(ingots(port, uid)) == 1, "the carrier keeps its cargo")
+    chk.ok(current_action(port, uid) != "transfer_order",
+           "the carrier is released", current_action(port, uid))
+    chk.ok(terminal_orders(port, uid) == [],
+           "no terminal order is left in the store",
+           str(terminal_orders(port, uid)))
     send(port, f"unit.destroy({uid}); return 'ok'")
 
 
@@ -633,7 +708,13 @@ def phase_blocked_approach(port: int, chk: Checks) -> None:
     send(port, ring)
     uid = spawn_carrier(port, HOLD_X + 14, lane)
     give(port, uid, "probe_ingot", 1)
-    mark = len(event_log(port))
+    # Specifically THIS warning: unit_ai.lua's own stuck-walk watchdog
+    # also files a unit_warning while the carrier bumps against the
+    # ocean, so "some warning appeared" would pass without the order ever
+    # having reported anything. The hold is alive, so the message names
+    # it (requirement 2's "naming the unit and the target").
+    needle = "couldn't reach the transfer destination (Probe Small Hold)"
+    before = event_total(port, uid, "unit_warning", needle)
     started = time.time()
     oid_raw = command_order(port, uid, order_request(port, uid, bid, 1))
     try:
@@ -641,24 +722,19 @@ def phase_blocked_approach(port: int, chk: Checks) -> None:
     except (TypeError, ValueError):
         chk.ok(False, "the order was accepted", oid_raw)
         return
-    done = wait_terminal(port, uid, oid, 180.0)
+    settled = wait_settled(port, uid, oid, 180.0)
     elapsed = time.time() - started
-    if chk.ok(done is not None, f"the order gives up (after {elapsed:.0f} s)"):
-        chk.ok(entry_states(done) == ["failed:out_of_range"],
-               "recorded as a terminal out_of_range failure — the carrier "
-               "never got in range", str(entry_states(done)))
+    chk.ok(settled, f"the order gives up and is pruned (after {elapsed:.0f} s)")
     chk.ok(elapsed > 30.0,
            "it persisted rather than giving up immediately", f"{elapsed:.0f} s")
-    reach = [e for e in events_since(port, mark, "unit_warning", uid)
-             if "transfer destination" in e.get("text", "")]
-    # Specifically THIS warning: unit_ai.lua's own stuck-walk watchdog
-    # also files a unit_warning while the carrier bumps against the
-    # ocean, so "some warning appeared" would pass without the order
-    # ever having reported anything.
-    chk.ok(bool(reach),
-           "the player is warned that the transfer destination could not "
-           "be reached", str(events_since(port, mark, "unit_warning", uid)))
+    chk.ok(event_total(port, uid, "unit_warning", needle) - before == 1,
+           "the player is warned ONCE, by unit and target name, that the "
+           "transfer destination could not be reached",
+           str([e.get("text") for e in event_log(port)[-8:]]))
     chk.ok(len(ingots(port, uid)) == 1, "the cargo stayed put")
+    chk.ok(terminal_orders(port, uid) == [],
+           "no terminal order is left in the store — never retried forever, "
+           "never silently dropped", str(terminal_orders(port, uid)))
     send(port, f"unit.destroy({uid}); return 'ok'")
 
 
@@ -687,14 +763,78 @@ def phase_long_trip(port: int, chk: Checks) -> None:
     except (TypeError, ValueError):
         chk.ok(False, "the order was accepted", oid_raw)
         return
-    done = wait_terminal(port, uid, oid, 400.0)
+    settled = wait_settled(port, uid, oid, 400.0)
     elapsed = time.time() - started
-    if chk.ok(done is not None, f"the long haul completes (after {elapsed:.0f} s)"):
-        chk.ok(entry_states(done) == ["completed"],
-               "and commits on arrival", str(entry_states(done)))
+    if chk.ok(settled, f"the long haul completes (after {elapsed:.0f} s)"):
+        chk.ok(len(stored(port, bid)) == 1,
+               "and commits on arrival", str(stored(port, bid)))
     chk.ok(elapsed > 60.0,
            "the trip really did outlast the 60 s stall budget — a total-trip "
            "budget would have abandoned it", f"{elapsed:.0f} s")
+    send(port, f"unit.destroy({uid}); return 'ok'")
+
+
+def phase_cancel(port: int, chk: Checks) -> None:
+    """10. The player calls the haul off mid-walk (#1253 requirement 1).
+
+    Driven through `unitAi.cancelTransferOrder`, which is exactly what
+    the unit context menu's "Cancel transfer" row invokes -- the menu's
+    own gate and this gesture's sequencing are pinned headlessly in
+    `Test.Headless.UI.TransferContextMenu`, and what only a real engine
+    can show is that the carrier really does stop walking with nothing
+    moved.
+    """
+    print("\n--- 10. a mid-walk cancel releases the carrier ---")
+    lane = LANES[1]
+    bid = spawn_hold(port, "probe_wide_hold", CANCEL_HOLD_X, lane)
+    if not chk.ok(bid is not None, "3x1 probe hold spawned"):
+        return
+    uid = spawn_carrier(port, CANCEL_HOLD_X + 14, lane)
+    give(port, uid, "probe_ingot", 2)
+    oid_raw = command_order(port, uid, order_request(port, uid, bid, 2))
+    try:
+        oid = int(float(oid_raw))
+    except (TypeError, ValueError):
+        chk.ok(False, "the order was accepted", oid_raw)
+        return
+    chk.ok(wait_state(port, uid, oid, "in_transit", 20.0) is not None,
+           "the carrier sets off")
+    # Let it get genuinely under way, so "released" means something.
+    time.sleep(3.0)
+    start = unit_tile(port, uid)
+    chk.ok(any(o.get("id") == oid for o in orders(port, uid)),
+           "the order is live when the player cancels it")
+
+    before = event_total(port, uid, "unit_event", "was cancelled")
+    res = send(port, "return tostring(require('scripts.unit_ai')"
+                     f".cancelTransferOrder({uid}))")
+    chk.ok(res == "true", "the cancel gesture reports success", res)
+    chk.ok(orders(port, uid) == [],
+           "the order is gone from the store immediately — cancelled, "
+           "surfaced and pruned in one gesture", str(orders(port, uid)))
+    chk.ok(event_total(port, uid, "unit_event", "was cancelled") - before == 1,
+           "a player-visible line is filed against the carrier, exactly once")
+    chk.ok(len(ingots(port, uid)) == 2, "NOTHING moved")
+    chk.ok(not stored(port, bid), "and nothing reached the hold")
+
+    # Released: the transfer lock is gone, so the ambient tick takes the
+    # unit back, and it is not still marching at the hold.
+    time.sleep(6.0)
+    chk.ok(current_action(port, uid) != "transfer_order",
+           "the carrier is released from the transfer job",
+           current_action(port, uid))
+    end = unit_tile(port, uid)
+    if start and end and start[0] is not None and end[0] is not None:
+        # It may wander (radius 5), but it must not have carried on
+        # closing the ~11 remaining tiles to the hold.
+        chk.ok(abs(end[0] - CANCEL_HOLD_X) > 5.0,
+               "it stopped walking at the hold rather than finishing the trip",
+               f"{start} -> {end}, hold at x={CANCEL_HOLD_X}")
+
+    # A second cancel is inert, not an error: the order is already gone.
+    again = send(port, "return tostring(require('scripts.unit_ai')"
+                       f".cancelTransferOrder({uid}))")
+    chk.ok(again == "false", "a second cancel is inert", again)
     send(port, f"unit.destroy({uid}); return 'ok'")
 
 
@@ -746,6 +886,14 @@ def find_hold_site(port: int) -> tuple[int, int, int] | None:
     return None
 
 
+def log_lines(path: str, needle: str) -> list[str]:
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return [ln.rstrip("\n") for ln in f if needle in ln]
+    except OSError:
+        return []
+
+
 def phase_save_load(chk: Checks, root: str, tmp: str, port: int,
                     seed: int, size: int) -> None:
     print("\n--- 9. an order in flight survives save -> restart -> load ---")
@@ -778,11 +926,32 @@ def phase_save_load(chk: Checks, root: str, tmp: str, port: int,
             return
         chk.ok(wait_state(port, uid, oid, "in_transit", 30.0) is not None,
                "the order is IN FLIGHT when the save is taken")
+
+        # An ORPHAN candidate rides along in the same save (#1253): a
+        # second carrier with its own in-flight order, destroyed before
+        # the save is taken. Nothing ever ticks that order again, so
+        # without the engine-side cleanup it would be captured here,
+        # restored below, and report its dead carrier to the integrity
+        # sweep on every save and load for the rest of the session.
+        ghost = spawn_carrier(port, gx + 11, gy)
+        give(port, ghost, "probe_ingot", 1)
+        ghost_oid = command_order(port, ghost, order_request(port, ghost, bid, 1))
+        chk.ok(ghost_oid not in ("false", "nil"),
+               "the doomed carrier's order was accepted", ghost_oid)
+        chk.ok(wait_state(port, ghost, int(float(ghost_oid)), "in_transit",
+                          30.0) is not None,
+               "…and is in flight when its carrier dies")
+        send(port, f"unit.destroy({ghost}); return 'ok'")
+
         saved = send(port, f"return engine.saveWorld('probe_world', '{SLOT}')")
         chk.ok(saved.strip() == "true", "engine.saveWorld accepted", saved)
         save_file = os.path.join(root, "saves", SLOT, "world.synworld")
         chk.ok(poll_until(30.0, lambda: os.path.exists(save_file) or None)
                is not None, "the save file appeared")
+        chk.ok(not log_lines(log_b, "integrity diagnostic"),
+               "the SAVE reported no integrity diagnostic — the destroyed "
+               "carrier's order never reached it",
+               str(log_lines(log_b, "integrity diagnostic")[:3]))
     finally:
         quit_engine(port, proc)
 
@@ -802,12 +971,32 @@ def phase_save_load(chk: Checks, root: str, tmp: str, port: int,
             chk.ok(not restored[0].get("terminal"),
                    "still non-terminal, so there is a trip left to resume",
                    str(entry_states(restored[0])))
+        # Requirement 5's "the integrity sweep stays quiet", end to end
+        # and in a fresh process: World.Load.Stage logs one line per
+        # dangling transfer-order reference, and the orphaned order's
+        # dead carrier, endpoints and items would be several.
+        chk.ok(not log_lines(log_c, "transfer-order integrity diagnostic"),
+               "the LOAD reported no dangling transfer-order reference",
+               str(log_lines(log_c, "transfer-order integrity diagnostic")[:3]))
         send(port, "engine.setPaused(false); return 'ok'")
-        done = wait_terminal(port, uid, oid, 180.0)
-        if chk.ok(done is not None, "the carrier resumes and the order completes"):
-            chk.ok(entry_states(done) == ["completed"],
-                   "committed after the round trip", str(entry_states(done)))
+        chk.ok(wait_settled(port, uid, oid, 180.0),
+               "the carrier resumes, the order completes and is pruned")
         chk.ok(len(stored(port, bid)) == 1, "the item is in the hold")
+        chk.ok(orders(port, uid) == [],
+               "and the carrier is left with no order at all",
+               str(orders(port, uid)))
+
+        # A save taken AFTER that terminal outcome carries only live
+        # orders — there are none left, and the second save writing
+        # cleanly with no diagnostic is what says so at the boundary
+        # rather than only in the store.
+        saved2 = send(port, f"return engine.saveWorld('probe_world', '{SLOT}')")
+        chk.ok(saved2.strip() == "true", "a post-completion save succeeds",
+               saved2)
+        time.sleep(2.0)
+        chk.ok(not log_lines(log_c, "integrity diagnostic"),
+               "…with no integrity diagnostic of any kind",
+               str(log_lines(log_c, "integrity diagnostic")[:3]))
     finally:
         quit_engine(port, proc)
 
@@ -830,19 +1019,19 @@ def main() -> int:
                     help="comma-separated phase numbers (default: all)")
     args = ap.parse_args()
 
-    all_phases = set(range(1, 10))
+    all_phases = set(range(1, 11))
     wanted = {int(p) for p in args.only.split(",") if p.strip()} or all_phases
     # A selection that names no real phase must FAIL, not report a clean
     # run of nothing: an exit-0 probe that executed zero checks is
     # indistinguishable from one that passed.
     if not wanted & all_phases:
-        print(f"no such phase(s): {sorted(wanted)} (valid: 1-9)")
+        print(f"no such phase(s): {sorted(wanted)} (valid: 1-10)")
         return 2
     tmp = tempfile.mkdtemp(prefix="synarchy_transfer_order_probe_")
     chk = Checks()
     proc = None
     try:
-        if wanted & set(range(1, 9)):
+        if wanted & (set(range(1, 9)) | {10}):
             print(f"== arena engine (port {args.port}) ==")
             proc = boot(args.port, log=os.path.join(tmp, "engineA.log"))
             bootstrap_defs(args.port, tmp)
@@ -857,6 +1046,7 @@ def main() -> int:
                 (6, phase_vanished_counterpart),
                 (7, phase_blocked_approach),
                 (8, phase_long_trip),
+                (10, phase_cancel),
             ]
             for n, fn in phases:
                 if n in wanted:
