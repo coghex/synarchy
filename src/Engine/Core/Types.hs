@@ -5,6 +5,8 @@ module Engine.Core.Types
   , bootModeName
   , EngineConfig(..)
   , PreviewEntry(..)
+  , PreviewFrame(..)
+  , wholeImagePreviewFrame
   , PreviewFrameDir(..)
   , PreviewAnim(..)
   , PreviewUnit(..)
@@ -68,6 +70,36 @@ data PreviewEntry = PreviewEntry
   , pePath  ∷ !Text
   } deriving (Eq, Show)
 
+-- | ONE displayable frame of a previewed unit animation — the viewer's
+--   storage-neutral counterpart to 'Unit.Atlas.Types.FrameSample'
+--   (#1260, D-9), and deliberately the same three fields.
+--
+--   Before the acolyte pilot a preview frame was just a source PNG
+--   path, because every unit was on the legacy per-frame path. Now an
+--   ATLAS-backed animation's frames are all the SAME compiled image
+--   with different sub-rects, so a bare path can no longer name a
+--   frame: it would draw the whole sheet. 'pfPath' is what to load,
+--   'pfUV' is where the frame lives inside it, and 'pfCell' is how big
+--   the frame is when the storage knows (a legacy frame's image IS the
+--   frame, so its consumer measures the texture as it always has).
+data PreviewFrame = PreviewFrame
+  { pfPath ∷ !Text
+    -- ^ The texture to load: the animation's compiled atlas, or the
+    --   source frame's own PNG on the legacy path.
+  , pfUV   ∷ !(Float, Float, Float, Float)
+    -- ^ @(u0, v0, u1, v1)@ WITHIN that texture. The atlas cell
+    --   ('Unit.Atlas.Types.atlasCellUV' — the game's own frozen
+    --   arithmetic, not a second copy), or the whole image.
+  , pfCell ∷ !(Maybe (Int, Int))
+    -- ^ The frame's own pixel size, from the compiled index. 'Nothing'
+    --   on the legacy path.
+  } deriving (Eq, Show)
+
+-- | A legacy frame: a whole image of its own, with no known cell size.
+wholeImagePreviewFrame ∷ Text → PreviewFrame
+wholeImagePreviewFrame path = PreviewFrame
+  { pfPath = path, pfUV = (0, 0, 1, 1), pfCell = Nothing }
+
 -- | One displayable direction cell of a previewed unit animation (#887,
 --   Phase 3). Directions are the LONG folder-name spellings
 --   (@"south"@, @"south-west"@, …) so the Lua viewer and the
@@ -81,15 +113,20 @@ data PreviewFrameDir = PreviewFrameDir
   { pfdDirection ∷ !Text
   , pfdSource    ∷ !Text
   , pfdMirrored  ∷ !Bool
-  , pfdFrames    ∷ ![Text]
-    -- ^ Frame texture paths in numeric @frame_NNN.png@ order. Never
-    --   empty — a direction with no frames is omitted entirely rather
-    --   than listed as an empty cell.
+  , pfdFrames    ∷ ![PreviewFrame]
+    -- ^ Frames in playback order. Never empty — a direction with no
+    --   frames is omitted entirely rather than listed as an empty cell.
   } deriving (Eq, Show)
 
--- | One animation of a previewed unit: the filesystem-derived frame
---   sets plus the playback metadata @data/units/\<name\>.yaml@
---   contributed (or the documented defaults when it didn't).
+-- | One animation of a previewed unit.
+--
+--   MEMBERSHIP is still the filesystem's ('Engine.Preview.Unit'
+--   discovers the animation directories). What each animation IS —
+--   which directions it has, how many frames each holds, its
+--   @fps@\/@loop@\/@flip@, and the pixels themselves — comes from the
+--   unit's compiled index when the animation is atlas-backed (#1260),
+--   and from the source frames plus @data\/units\/\<name\>.yaml@
+--   otherwise. The two never mix within one animation.
 data PreviewAnim = PreviewAnim
   { paName  ∷ !Text
     -- ^ The animation directory's exact name — also its list label.
@@ -97,11 +134,19 @@ data PreviewAnim = PreviewAnim
   , paLoop  ∷ !Bool
   , paFlip  ∷ !Bool
     -- ^ Whether western directions may mirror their eastern
-    --   counterparts. From YAML when the animation has an entry;
-    --   otherwise inferred from the stored direction set.
-  , paThumb ∷ !Text
+    --   counterparts. From the compiled index for an atlas-backed
+    --   animation, else from YAML when it has an entry, else inferred
+    --   from the stored direction set.
+  , paAtlas ∷ !(Maybe Text)
+    -- ^ The compiled atlas this animation samples, when it is
+    --   atlas-backed; 'Nothing' on the legacy per-frame path. Every
+    --   frame in 'paDirs' names this same path — it is surfaced
+    --   separately so the viewer's introspection dump can state the
+    --   storage mode outright rather than leaving a probe to infer it
+    --   from a path shape.
+  , paThumb ∷ !(Maybe PreviewFrame)
     -- ^ Frame-zero of the south direction — the list row's thumbnail.
-    --   Empty when the animation stores no south frames at all.
+    --   'Nothing' when the animation stores no south frames at all.
   , paDirs  ∷ ![PreviewFrameDir]
     -- ^ Available directions in the game's own @S, SW, W, NW, N, NE,
     --   E, SE@ order; unavailable ones are omitted.

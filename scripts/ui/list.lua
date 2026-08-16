@@ -1,6 +1,7 @@
 -- List UI component (selectable list with hover highlight + optional scrollbar)
 -- Modeled after dropdown.lua but simpler: no text input, no arrow button.
--- Items are { text = "...", value = "...", icon = <textureHandle> }
+-- Items are { text = "...", value = "...", icon = <textureHandle>,
+--             iconUV = { u0, v0, u1, v1 } }
 --
 -- `icon` is OPT-IN and inert unless the list was created with
 -- params.iconSize (#887): without it no icon element is created at all
@@ -8,6 +9,13 @@
 -- visible slot gains a square sprite left of its label and the label
 -- indents past it; an item with no `icon` simply leaves its slot's
 -- sprite hidden.
+--
+-- `iconUV` is the sub-rect to sample within that texture (#1260) — an
+-- icon that is one CELL of a compiled atlas rather than a whole image.
+-- Omitted, the icon is the whole texture, exactly as before. Texture
+-- and sub-rect are published together via UI.setSpriteFrame so the
+-- render thread never observes a new image paired with the previous
+-- one's rect.
 --
 -- params.columns (#1107) is OPT-IN the same way: an ordered list of
 -- EXTRA text columns, one real text element per column per visible
@@ -46,6 +54,17 @@ local nextId = 1
 
 local highlightTex = nil
 local assetsLoaded = false
+
+-- Publish an item's icon onto its slot sprite: texture and sub-rect in
+-- ONE manager transition (see the header note on `iconUV`). An item
+-- without a sub-rect gets the whole image, which is the pre-#1260
+-- behaviour spelled out rather than a separate code path.
+local function applyIcon(iconId, item)
+    local uv = item.iconUV
+    UI.setSpriteFrame(iconId, item.icon,
+        uv and uv[1] or 0.0, uv and uv[2] or 0.0,
+        uv and uv[3] or 1.0, uv and uv[4] or 1.0, false)
+end
 
 -----------------------------------------------------------
 -- Initialization
@@ -358,6 +377,7 @@ function list.new(params)
                 textPadding, slotY + math.floor((itemHeight - iconSize) / 2))
             UI.setZIndex(iconId, ls.zIndex + 1)
             UI.setVisible(iconId, (item0 and item0.icon) ~= nil)
+            if item0 and item0.icon then applyIcon(iconId, item0) end
         end
 
         -- Text label
@@ -548,7 +568,7 @@ function list.refreshSlots(id)
 
             if slot.iconId then
                 if item.icon then
-                    UI.setSpriteTexture(slot.iconId, item.icon)
+                    applyIcon(slot.iconId, item)
                     UI.setVisible(slot.iconId, true)
                 else
                     UI.setVisible(slot.iconId, false)

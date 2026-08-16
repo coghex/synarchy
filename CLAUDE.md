@@ -759,12 +759,28 @@ in-engine browser is `scripts/ui/asset_browser.lua` + `scripts/ui/list.lua`):
 Units viewer (`--preview units/<name>`, #887; `Engine.Preview.Unit`
 pre-boot + `scripts/ui/unit_animation_view.lua` in-engine):
 
-- **The filesystem is authoritative.**
+- **The filesystem decides MEMBERSHIP; the compiled index decides
+  RENDERING** (#1260 split what #887 stated as one rule).
   `assets/textures/units/<name>/animations/` decides which animations
-  exist, which directions each has, and the `frame_NNN.png` order
-  (NUMERIC, so an unpadded `frame_10` can't sort before `frame_2`).
-  `data/units/<name>.yaml` only AUGMENTS a matching animation with
-  `fps`/`loop`/`flip`. Since #1257 every shipped animation folder IS
+  exist — discovery is still filesystem-first, which is why
+  `acolyte/pushing_idle` was browsable before the YAML named it.
+  An animation the unit's `atlas/index.json` declares atlas-backed then
+  takes its directions, per-direction frame counts, cell geometry and
+  `fps`/`loop`/`flip` from THAT index and samples the compiled atlas,
+  through the same loader (`Unit.Atlas.Yaml.resolveUnitAtlases`) and the
+  same frozen cell arithmetic (`Unit.Atlas.Types.atlasCellUV`) the game
+  uses — D-9's whole point, since a preview-only decoder would miss the
+  regressions the viewer exists to catch. A rejected index is a
+  **pre-boot failure** (`UnitFocusError`'s `UnitAtlasRejected`), never a
+  quiet fall back to the source frames beside it. For an animation the
+  index does not name — every animation of every unit but `acolyte`
+  today — the filesystem stays authoritative for directions and the
+  `frame_NNN.png` order (NUMERIC, so an unpadded `frame_10` can't sort
+  before `frame_2`), and `data/units/<name>.yaml` only AUGMENTS it with
+  `fps`/`loop`/`flip`. A preview frame is therefore a texture plus a
+  sub-rect (`PreviewFrame`), published to a sprite with
+  `UI.setSpriteFrame` — never a bare path, which for an atlas would draw
+  the whole sheet. Since #1257 every shipped animation folder IS
   declared, in one of two forms (see **Unit asset inventory** below):
   `tiller`, `unknown_unit` and `white_tailed_deer` carry `asset_units:`
   files, and `acolyte/pushing_idle`, `bear_brown/roar` and
@@ -807,13 +823,17 @@ pre-boot + `scripts/ui/unit_animation_view.lua` in-engine):
   tree's assets, breaking trimmed loading. A missing YAML is NOT a
   rejection.
 - **Dump extension:** unit mode adds `unit`, the animation `entries`
-  list (each with `fps`/`loop`/`flip`/`thumb`/`directionCount`),
-  `defaultAnim`, and `playback` — current `animation`, `direction`,
-  `mirrored`, `sourceDirection`, `frameIndex`, effective `fps`/`loop`,
-  plus a per-direction `directions` array carrying each cell's own
-  mirrored flag, source, frame index, and interactive bounds/handle
-  (enough to locate and click a real cell without a hardcoded
-  coordinate).
+  list (each with `fps`/`loop`/`flip`/`thumb`/`directionCount`, plus
+  #1260's `storage` `"atlas"`/`"legacy"` and `atlas` path — the WHOLE
+  list, so a probe can prove every animation of a migrated unit selected
+  the atlas, not just the one playing), `defaultAnim`, and `playback` —
+  current `animation`, `direction`, `mirrored`, `sourceDirection`,
+  `frameIndex`, effective `fps`/`loop`, the same `storage`/`atlas` pair
+  with the playing frame's `texturePath` and index-derived `cell`, plus
+  a per-direction `directions` array carrying each cell's own mirrored
+  flag, source, frame index, sampled `texturePath`/`uv`, and interactive
+  bounds/handle (enough to locate and click a real cell without a
+  hardcoded coordinate).
 
 Buildings viewer (`--preview buildings/<name>`, #888;
 `Engine.Preview.Building` pre-boot +
@@ -1878,7 +1898,8 @@ outside the filesystem-first inventory walk.
   digest is over content. Obsolete atlases are removed from the unit's
   own `atlas/` directory and nowhere else.
 - **`--validate-only` is index-aware.** A unit with NO index is valid
-  (every shipped unit is, until TEX-4 begins production tracking).
+  — it is simply still on the legacy per-frame path, which every
+  shipped unit but `acolyte` is.
   Where one exists it is REGENERATED from the sources and compared, so
   a stale digest, a hand-edited or non-canonically serialized index, a
   missing indexed atlas and tampered pixels all report — and a tampered
@@ -1887,8 +1908,13 @@ outside the filesystem-first inventory walk.
   about itself. `--compile --check` reports what is out of date and
   writes nothing. Compilation refuses outright on an inventory that
   does not validate.
-- **No production atlases are committed yet** (#1258 requirement 7).
-  D-12's tracking gate is the acolyte pilot, TEX-4.
+- **`acolyte`'s atlases ARE committed** (#1260, TEX-4 — the pilot that
+  D-12 gated mass migration on): 54 per-animation PNGs plus the
+  generated `index.json`, tracked, so a fresh checkout runs with no
+  packer step. Its derived PNG bytes are **0.59x** the corresponding
+  source-frame bytes, against D-12's 2x ceiling (the index is reported
+  separately and is not in that ratio). No other unit is compiled;
+  TEX-6 owns the rest.
 
 **Dependencies are pinned in `tools/requirements-assets.txt`** (PyYAML +
 Pillow), which `.github/ci/Dockerfile` installs verbatim — the pins are
@@ -1913,10 +1939,11 @@ and post-merge master CI, and path-selectively on PRs via
 ## Unit animation atlas runtime
 
 The engine can load and sample those compiled artifacts (#1259,
-`docs/texture_infrastructure.md` TEX-3). **No shipped unit uses it yet**
-— production migration is TEX-4 (#1260) — so on today's asset tree every
-animation still loads its per-frame textures and nothing about loading
-changed.
+`docs/texture_infrastructure.md` TEX-3). **Exactly one shipped unit uses
+it: `acolyte`** (#1260, TEX-4), whose 54 animations all load as atlases
+in gameplay AND in the units preview. Every other unit still loads its
+per-frame textures and nothing about its loading changed; TEX-6 (#1261)
+owns migrating them and retiring the legacy path.
 
 **Storage is a SUM, so no animation is half-migrated.**
 `Unit.Types.Def.Animation` carries an `aStorage` of

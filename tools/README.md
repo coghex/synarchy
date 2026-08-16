@@ -150,7 +150,8 @@ that does not validate, writes only artifacts whose content actually changed
 obsolete atlases from the unit's own output directory and nowhere else.
 Where an index exists, `--validate-only` regenerates it from the sources and
 reports staleness, hand edits, missing atlases and tampered pixels; a unit
-with no index stays valid until TEX-4 begins production tracking.
+with no index is simply still on the legacy per-frame path, which every
+shipped unit but `acolyte` (migrated by TEX-4/#1260) is.
 
 PyYAML and Pillow are the dependencies, pinned in
 `tools/requirements-assets.txt`. Both are required by validation as well as

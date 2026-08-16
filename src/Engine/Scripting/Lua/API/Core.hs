@@ -29,7 +29,7 @@ import Engine.Core.Capability.RenderView
 import Engine.Core.State (EngineEnv, EngineLifecycle(..), loadStatusRef)
 import Engine.Core.Types
     (EngineConfig(..), bootProfileTag, PreviewBrowse(..), PreviewEntry(..)
-    , PreviewUnit(..), PreviewAnim(..), PreviewFrameDir(..)
+    , PreviewUnit(..), PreviewAnim(..), PreviewFrameDir(..), PreviewFrame(..)
     , PreviewBuilding(..), PreviewBuildingEntry(..))
 import Engine.Core.Log (logInfo, logWarn, logDebug, LogCategory(..))
 import Engine.Load.Status (loadInProgress)
@@ -168,6 +168,16 @@ getPreviewTargetFn env = do
 --   identity and effective @fps@\/@loop@ —
 --   'Engine.Preview.Unit'\/'Engine.Preview.Building' own those rules,
 --   the Lua side never re-derives them.
+--
+--   A unit animation's FRAME is a table, not a path (#1260):
+--   @{ path, u0, v0, u1, v1 }@ plus @width@\/@height@ when the compiled
+--   index knows the cell size. An ATLAS-backed animation carries its
+--   compiled atlas path in @atlas@ and every one of its frames names
+--   that same image, differing only in the sub-rect; a legacy animation
+--   omits @atlas@ and its frames carry the whole-image rect. So a
+--   consumer must publish a frame with @UI.setSpriteFrame@ — a bare
+--   @setSpriteTexture@ would draw the entire sheet. Building frames are
+--   still bare paths: buildings are never compiled.
 getPreviewBrowseFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getPreviewBrowseFn env = do
   case ecPreviewBrowse (ccEngineConfig (toCoreCapability env)) of
@@ -236,7 +246,14 @@ getPreviewBrowseFn env = do
       Lua.setfield (-2) "loop"
       Lua.pushboolean (paFlip anim)
       Lua.setfield (-2) "flip"
-      pushTextField "thumb" (paThumb anim)
+      -- Present only for an atlas-backed animation (#1260): its
+      -- compiled atlas path. Its ABSENCE is what tells the viewer this
+      -- animation is on the legacy per-frame path, so it is left off
+      -- the table entirely rather than pushed as an empty string.
+      forM_ (paAtlas anim) (pushTextField "atlas")
+      forM_ (paThumb anim) $ \t → do
+        pushPreviewFrame t
+        Lua.setfield (-2) "thumb"
       pushArray pushPreviewDir (paDirs anim)
       Lua.setfield (-2) "directions"
 
@@ -246,8 +263,26 @@ getPreviewBrowseFn env = do
       pushTextField "source"    (pfdSource d)
       Lua.pushboolean (pfdMirrored d)
       Lua.setfield (-2) "mirrored"
-      pushArray (Lua.pushstring ∘ TE.encodeUtf8) (pfdFrames d)
+      pushArray pushPreviewFrame (pfdFrames d)
       Lua.setfield (-2) "frames"
+
+    -- ONE frame: the texture to load, the sub-rect to sample within it,
+    -- and the frame's own pixel size when the compiled index knows it.
+    -- A legacy frame carries the whole-image rect and no size, so the
+    -- viewer's existing engine.getTextureSize measurement still applies
+    -- to it unchanged.
+    pushPreviewFrame f = do
+      Lua.newtable
+      pushTextField "path" (pfPath f)
+      let (u0, v0, u1, v1) = pfUV f
+      forM_ [("u0", u0), ("v0", v0), ("u1", u1), ("v1", v1)] $ \(k, v) → do
+        Lua.pushnumber (realToFrac v)
+        Lua.setfield (-2) k
+      forM_ (pfCell f) $ \(w, h) → do
+        Lua.pushinteger (fromIntegral w)
+        Lua.setfield (-2) "width"
+        Lua.pushinteger (fromIntegral h)
+        Lua.setfield (-2) "height"
 
     pushPreviewBuilding building = do
       Lua.newtable

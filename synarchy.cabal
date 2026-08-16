@@ -446,6 +446,7 @@ library
                      Unit.Atlas.Digest
                      Unit.Atlas.Index
                      Unit.Atlas.Load
+                     Unit.Atlas.Yaml
                      Unit.Types.Instance
                      Unit.Types.Manager
                      Unit.Types.Trail

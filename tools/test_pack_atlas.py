@@ -1727,8 +1727,9 @@ def _atlas_dir_without_index(fx: Fixture) -> None:
 
 @scenario("a unit with no generated artifacts stays valid")
 def _legacy_unit_without_index(fx: Fixture) -> None:
-    # Absence of an index is legitimate until TEX-4 begins production
-    # tracking; the freshness checks must not make it an error.
+    # Absence of an index is legitimate — the unit is still on the
+    # legacy per-frame path, which every shipped unit but `acolyte`
+    # (TEX-4/#1260) is; the freshness checks must not make it an error.
     build_unit(fx, "hero", [("idle", uniform(CANON5, 2), True)])
     fx.validate_ok()
     assert not fx.atlas_dir("hero").exists()

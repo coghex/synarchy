@@ -35,6 +35,14 @@
 -- south thumbnails; scripts/ui/unit_animation_view.lua owns the enlarged
 -- sprite, the direction row, and the shared playback clock.
 --
+-- #1260 makes a unit frame a TABLE ({ path, u0, v0, u1, v1, and
+-- width/height for a compiled cell}) rather than a path, because an
+-- atlas-backed animation's frames are all one image. Every sprite that
+-- shows one — the row thumbnail included, via scripts.ui.list's iconUV
+-- — must publish texture and sub-rect together, or it draws the whole
+-- sheet. acquireTexture's per-path cache then dedups an entire
+-- animation to ONE engine.loadTexture rather than one per frame.
+--
 -- #888 (Phase 4) adds the fourth, "building": one list mixing the
 -- building folder's animation subdirectories and its loose static PNGs,
 -- resolved by Engine.Preview.Building (including the
@@ -299,10 +307,15 @@ local function buildUnitUI(unit, fbW, fbH, restoreAnim, restoreScroll, restoreDi
         listItems[i] = {
             label = a.name,
             path = a.name,
-            -- Requirement 1: a frame-zero/south thumbnail per row.
-            -- Empty thumb (an animation with no south frames at all)
-            -- simply leaves that row's icon hidden.
-            icon = (a.thumb ~= "" and acquireTexture(a.thumb)) or nil,
+            -- Requirement 1: a frame-zero/south thumbnail per row. No
+            -- thumb (an animation with no south frames at all) simply
+            -- leaves that row's icon hidden. For an atlas-backed
+            -- animation the thumbnail is one CELL of the compiled
+            -- sheet, so the row icon needs its sub-rect too — without
+            -- iconUV the list would draw the whole atlas in a 24px box.
+            icon = a.thumb and acquireTexture(a.thumb.path) or nil,
+            iconUV = a.thumb and { a.thumb.u0, a.thumb.v0,
+                                   a.thumb.u1, a.thumb.v1 } or nil,
         }
     end
 
@@ -672,7 +685,13 @@ function previewManager.dump()
                 fps = a.fps,
                 loop = a.loop,
                 flip = a.flip,
-                thumb = a.thumb,
+                thumb = a.thumb and a.thumb.path or nil,
+                -- Per-animation storage mode (#1260). The whole list is
+                -- reported so a probe can prove EVERY animation of a
+                -- migrated unit selected the atlas, not just the one
+                -- currently playing.
+                storage = a.atlas and "atlas" or "legacy",
+                atlas = a.atlas,
                 directionCount = #(a.directions or {}),
             }
         end

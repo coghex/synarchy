@@ -9,13 +9,18 @@
 --   texture-upload messages it queued, and which unit definitions it
 --   published into the unit manager.
 --
---   Only the atlas RESOLVER is injected, and only because it is the
---   step that reads a compiled tree from the resource root — which a
---   test cannot create without writing into the repo's own
+--   Most examples INJECT the atlas resolver, because a synthetic
+--   compiled tree cannot be created without writing into the repo's own
 --   @assets\/textures\/units@ (where the #1257 inventory gate would then
---   find it). The resolver's own filesystem behaviour is covered
---   against a temp tree in "Test.Headless.Unit.Atlas"; what is covered
---   HERE is everything downstream of it.
+--   find it); the resolver's own filesystem behaviour is covered against
+--   a temp tree in "Test.Headless.Unit.Atlas", and what those examples
+--   cover is everything downstream of it.
+--
+--   The LAST example injects nothing. Since #1260 one unit — @acolyte@ —
+--   ships real compiled artifacts, so the production resolver can be run
+--   against the shipped index, the shipped YAML and the shipped source
+--   art together. That is the one thing a canned selection can never
+--   assert: that the three still agree.
 module Test.Headless.Unit.Atlas.Loader (spec) where
 
 import UPrelude
@@ -25,9 +30,10 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import Data.IORef (atomicModifyIORef', newIORef, readIORef)
+import Data.List (nub)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.Types (defaultAssetPool)
-import Engine.Asset.YamlUnits (loadUnitYaml)
+import Engine.Asset.YamlUnits (UnitYamlDef(..), loadUnitYaml)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.State (EngineEnv, loggerRef)
@@ -38,11 +44,17 @@ import System.Directory (getTemporaryDirectory, removeFile)
 import System.FilePath ((</>))
 import Unit.Atlas.Index (AtlasLoadError(..))
 import Unit.Atlas.Types
+import Unit.Atlas.Yaml (resolveUnitAtlases)
 import Unit.Direction (Direction(..))
 import Unit.Types
 
 fixtureUnit ∷ Text
 fixtureUnit = "spec_loader_unit"
+
+-- The shipped acolyte's own gameplay YAML — the real one the game
+-- loads, not a fixture (#1260).
+acolyteYamlPath ∷ FilePath
+acolyteYamlPath = "data" </> "units" </> "acolyte.yaml"
 
 -- | A minimal but REAL unit YAML, parsed by the engine's own decoder.
 --   Its frame paths deliberately do not exist: the legacy loader
@@ -201,3 +213,71 @@ spec = describe "Unit.Atlas.Load — the real unit registration boundary" $ do
         um1 ← readIORef defsRef
         HM.keys (umDefs um1) `shouldMatchList` before
         HM.lookup fixtureUnit (umDefs um1) `shouldBe` Nothing
+
+    -- #1260 (TEX-4), the acolyte pilot. Everything above injects a
+    -- canned selection; this one uses the PRODUCTION resolver against
+    -- the artifacts actually checked in, because a synthetic selection
+    -- cannot prove that the shipped index still describes the shipped
+    -- YAML and the shipped source art. If any of the three drift, the
+    -- resolver rejects and this example fails — which is the migration
+    -- gate the pilot exists to install.
+    it "registers the SHIPPED acolyte through the production resolver \
+       \with every animation atlas-backed, and loads no per-frame \
+       \animation texture for it" $ \env → do
+        let defsRef = ucUnitManagerRef (toUnitCombatCapability env)
+        um0 ← readIORef defsRef
+        let restore = atomicModifyIORef' defsRef $ \um →
+                (um { umDefs = umDefs um0 }, ())
+        (`finally` restore) $ do
+            logger ← readIORef (loggerRef env)
+            defs ← loadUnitYaml logger acolyteYamlPath
+            poolRef ← newIORef =≪ defaultAssetPool
+            q ← Q.newQueue
+            n ← registerUnitDefs env poolRef q resolveUnitAtlases
+                    acolyteYamlPath defs
+            msgs ← Q.flushQueue q
+            n `shouldBe` 1
+
+            um ← readIORef defsRef
+            case HM.lookup "acolyte" (umDefs um) of
+                Nothing → expectationFailure
+                    "the shipped acolyte failed to register"
+                Just def → do
+                    let anims = HM.toList (udAnimations def)
+                        legacy = [ nm | (nm, a) ← anims
+                                 , not (storageIsAtlas (aStorage a)) ]
+                    length anims `shouldBe` 54
+                    legacy `shouldBe` []
+                    -- One upload, one handle, one bindless slot per
+                    -- animation — and no two animations sharing one.
+                    let handles = [ raTexture res
+                                  | (_, a) ← anims
+                                  , StorageAtlas res ← [aStorage a] ]
+                    length (nub handles) `shouldBe` 54
+
+            -- 54 atlases queued, one per animation, each its own path.
+            let atlases = atlasRequests msgs
+            length atlases `shouldBe` 54
+            length (nub (map snd atlases)) `shouldBe` 54
+            -- The ONLY ordinary texture loads left are acolyte's
+            -- NON-ANIMATION art. The allowance is derived from the YAML
+            -- rather than from a path shape, because several of those
+            -- fields legitimately point AT an animation frame — reusing
+            -- one as a sprite/directional sprite/portrait is explicitly
+            -- legal (#1257), and 20 shipped references do it, so
+            -- "nothing under animations/" would be the wrong rule and
+            -- would fail for a correct tree.
+            --
+            -- What this does assert is the resident-image reduction the
+            -- pilot claims: of 2,250 source frames, the loader opens
+            -- only the handful the unit names outside its animations.
+            let nonAnimationArt d = uydSprite d
+                    : maybe [] pure (uydPortrait d)
+                    ⧺ Map.elems (uydDirectionalSprites d)
+                allowed = concatMap nonAnimationArt defs
+                loaded = map (T.pack ∘ snd) (plainRequests msgs)
+            length defs `shouldBe` 1
+            loaded `shouldSatisfy` all (`elem` allowed)
+            -- and every one of them is actually requested, so the
+            -- allowance is a real upper bound rather than a vacuous one.
+            nub loaded `shouldMatchList` nub allowed
