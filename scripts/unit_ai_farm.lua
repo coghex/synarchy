@@ -14,6 +14,9 @@ local grantWorkXP = core.grantWorkXP
 
 local mv = require("scripts.movement_speed")
 local roles = require("scripts.unit_roles")
+-- Page-qualified claim keys + the load reset that empties both
+-- registries when a save replaces the session (#1329).
+local claimsLib = require("scripts.unit_ai_claims")
 
 -----------------------------------------------------------
 -- Action: till_designation (#333)
@@ -32,13 +35,16 @@ local roles = require("scripts.unit_roles")
 -- Grouped under unitAi.till (an established convention, #333) rather
 -- than a top-level local per helper — kept as-is by this split.
 -----------------------------------------------------------
-unitAi.till = { claims = {} }   -- claims: "x,y" → { uid = ..., at = gameTime }
+-- claims: page key → { uid, at = gameTime }. track() enrolls the table
+-- in the #1329 load reset WITHOUT changing its identity, so the public
+-- unitAi.till.claims field keeps naming the same table it always did.
+unitAi.till = { claims = claimsLib.track({}) }
 -- Tilled-soil vegetation id — must match World.Vegetation's
 -- vegTilledSoil. No Lua-side veg-id registry exists yet, so this is a
 -- plain mirrored constant.
 unitAi.till.VEG_ID = 77
 
-function unitAi.till.key(x, y) return x .. "," .. y end
+unitAi.till.key = claimsLib.key   -- (wid, x, y)
 
 function unitAi.till.claimedByOther(key, uid, now, timeout)
     local c = unitAi.till.claims[key]
@@ -50,9 +56,9 @@ function unitAi.till.claimedByOther(key, uid, now, timeout)
     return true
 end
 
-function unitAi.till.releaseJob(s, uid)
+function unitAi.till.releaseJob(wid, s, uid)
     if s.tillJob then
-        local key = unitAi.till.key(s.tillJob.x, s.tillJob.y)
+        local key = unitAi.till.key(wid, s.tillJob.x, s.tillJob.y)
         local c = unitAi.till.claims[key]
         if c and c.uid == uid then unitAi.till.claims[key] = nil end
     end
@@ -64,9 +70,9 @@ end
 -- The designation vanished (tile tilled — possibly by us — or player
 -- cancel). BOTH the utility check and the execute loop can be first
 -- to notice, so completion lives in one helper.
-function unitAi.till.complete(uid, s)
+function unitAi.till.complete(wid, uid, s)
     unit.clearAnimOverride(uid)
-    unitAi.till.releaseJob(s, uid)
+    unitAi.till.releaseJob(wid, s, uid)
 end
 
 function unitAi.till.utility(uid, s, params)
@@ -78,7 +84,7 @@ function unitAi.till.utility(uid, s, params)
     if s.tillJob then
         local d = till.getDesignationAt(wid, s.tillJob.x, s.tillJob.y)
         if d then return params.till_lock_utility end
-        unitAi.till.complete(uid, s)
+        unitAi.till.complete(wid, uid, s)
     end
 
     local info = unit.getInfo(uid)
@@ -89,7 +95,7 @@ function unitAi.till.utility(uid, s, params)
     if dist > params.till_scan_range then return -math.huge end
 
     local now = engine.gameTime()
-    if unitAi.till.claimedByOther(unitAi.till.key(gx, gy), uid, now,
+    if unitAi.till.claimedByOther(unitAi.till.key(wid, gx, gy), uid, now,
                                   params.till_claim_timeout) then
         return -math.huge
     end
@@ -113,7 +119,7 @@ function unitAi.till.execute(uid, s, params)
     if not s.tillJob then
         local cand = s.tillCandidate
         if not cand then return end
-        local key = unitAi.till.key(cand.x, cand.y)
+        local key = unitAi.till.key(wid, cand.x, cand.y)
         if unitAi.till.claimedByOther(key, uid, now, params.till_claim_timeout) then
             return
         end
@@ -131,7 +137,7 @@ function unitAi.till.execute(uid, s, params)
 
     local job = s.tillJob
     -- Keep the claim fresh while we hold the job.
-    unitAi.till.claims[unitAi.till.key(job.x, job.y)] = { uid = uid, at = now }
+    unitAi.till.claims[unitAi.till.key(wid, job.x, job.y)] = { uid = uid, at = now }
 
     if s.tillPhase == "walking" then
         local utx = math.floor(info.gridX)
@@ -171,7 +177,7 @@ function unitAi.till.execute(uid, s, params)
     if s.tillPhase == "tilling" then
         if not till.getDesignationAt(wid, job.x, job.y) then
             -- Player cancelled (or raced) out from under us.
-            unitAi.till.complete(uid, s)
+            unitAi.till.complete(wid, uid, s)
             return
         end
         -- Idempotent: re-asserts the work anim after preemption.
@@ -193,7 +199,7 @@ function unitAi.till.execute(uid, s, params)
             world.setVegAt(wid, job.x, job.y, job.z, unitAi.till.VEG_ID)
             till.cancelDesignation(job.x, job.y)
             grantWorkXP(uid, "farming", params.till_xp_per_till or 0)
-            unitAi.till.complete(uid, s)
+            unitAi.till.complete(wid, uid, s)
         end
         return
     end
@@ -226,9 +232,11 @@ end
 -- Grouped under unitAi.plant (the unitAi.till convention, #333) —
 -- kept as-is by this split.
 -----------------------------------------------------------
-unitAi.plant = { claims = {} }   -- claims: "x,y" → { uid = ..., at = gameTime }
+-- claims: page key → { uid, at = gameTime }; same in-place #1329
+-- enrolment as unitAi.till.claims above, same preserved identity.
+unitAi.plant = { claims = claimsLib.track({}) }
 
-function unitAi.plant.key(x, y) return x .. "," .. y end
+unitAi.plant.key = claimsLib.key   -- (wid, x, y)
 
 function unitAi.plant.claimedByOther(key, uid, now, timeout)
     local c = unitAi.plant.claims[key]
@@ -240,9 +248,9 @@ function unitAi.plant.claimedByOther(key, uid, now, timeout)
     return true
 end
 
-function unitAi.plant.releaseJob(s, uid)
+function unitAi.plant.releaseJob(wid, s, uid)
     if s.plantJob then
-        local key = unitAi.plant.key(s.plantJob.x, s.plantJob.y)
+        local key = unitAi.plant.key(wid, s.plantJob.x, s.plantJob.y)
         local c = unitAi.plant.claims[key]
         if c and c.uid == uid then unitAi.plant.claims[key] = nil end
     end
@@ -254,9 +262,9 @@ end
 -- The designation vanished (tile planted — possibly by us — or player
 -- cancel). BOTH the utility check and the execute loop can be first
 -- to notice, so completion lives in one helper.
-function unitAi.plant.complete(uid, s)
+function unitAi.plant.complete(wid, uid, s)
     unit.clearAnimOverride(uid)
-    unitAi.plant.releaseJob(s, uid)
+    unitAi.plant.releaseJob(wid, s, uid)
 end
 
 function unitAi.plant.utility(uid, s, params)
@@ -273,7 +281,7 @@ function unitAi.plant.utility(uid, s, params)
     if s.plantJob then
         local d = plant.getDesignationAt(wid, s.plantJob.x, s.plantJob.y)
         if d and d.crop == s.plantJob.crop then return params.plant_lock_utility end
-        unitAi.plant.complete(uid, s)
+        unitAi.plant.complete(wid, uid, s)
     end
 
     local info = unit.getInfo(uid)
@@ -284,7 +292,7 @@ function unitAi.plant.utility(uid, s, params)
     if dist > params.plant_scan_range then return -math.huge end
 
     local now = engine.gameTime()
-    if unitAi.plant.claimedByOther(unitAi.plant.key(gx, gy), uid, now,
+    if unitAi.plant.claimedByOther(unitAi.plant.key(wid, gx, gy), uid, now,
                                    params.plant_claim_timeout) then
         return -math.huge
     end
@@ -308,7 +316,7 @@ function unitAi.plant.execute(uid, s, params)
     if not s.plantJob then
         local cand = s.plantCandidate
         if not cand then return end
-        local key = unitAi.plant.key(cand.x, cand.y)
+        local key = unitAi.plant.key(wid, cand.x, cand.y)
         if unitAi.plant.claimedByOther(key, uid, now, params.plant_claim_timeout) then
             return
         end
@@ -327,7 +335,7 @@ function unitAi.plant.execute(uid, s, params)
 
     local job = s.plantJob
     -- Keep the claim fresh while we hold the job.
-    unitAi.plant.claims[unitAi.plant.key(job.x, job.y)] = { uid = uid, at = now }
+    unitAi.plant.claims[unitAi.plant.key(wid, job.x, job.y)] = { uid = uid, at = now }
 
     if s.plantPhase == "walking" then
         local utx = math.floor(info.gridX)
@@ -370,7 +378,7 @@ function unitAi.plant.execute(uid, s, params)
             -- Player cancelled, or re-designated this tile with a
             -- different crop, out from under us — drop the stale job
             -- rather than plant it and cancel the newer designation.
-            unitAi.plant.complete(uid, s)
+            unitAi.plant.complete(wid, uid, s)
             return
         end
         -- Idempotent: re-asserts the work anim after preemption.
@@ -396,7 +404,7 @@ function unitAi.plant.execute(uid, s, params)
             end
             plant.cancelDesignation(job.x, job.y)
             grantWorkXP(uid, "farming", params.plant_xp_per_plant or 0)
-            unitAi.plant.complete(uid, s)
+            unitAi.plant.complete(wid, uid, s)
         end
         return
     end

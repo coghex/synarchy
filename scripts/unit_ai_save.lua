@@ -414,6 +414,33 @@ function M.register(aiState)
                 entities, { kind = "unit", component = "unit_ai" })
         end,
     })
+
+    -- The unit-AI family's TRANSIENT coordination tables (#1329): the
+    -- five coordinate claim registries plus repairClaims and
+    -- repairPriority, none of which lives in aiState and none of which
+    -- is persisted. registerResetHook fires unconditionally on every
+    -- load -- including a load whose envelope carries no data for this
+    -- module family at all -- which is exactly the contract these need:
+    -- a load REPLACES the session, both id allocators rewind, and the
+    -- loaded clock can be EARLIER than the session that wrote a claim,
+    -- so the `now - c.at > timeout` expiry would not fire until game
+    -- time caught up. onSaveLoaded is the wrong hook for the same job:
+    -- it only reconciles aiState, and it is a post-publication
+    -- broadcast, so a load rejected before publication must leave the
+    -- live session's claims intact -- which it does, because applyAll
+    -- runs reset hooks only after every component has committed.
+    --
+    -- Its id is NOT "unit_ai": that belongs to the persistent component
+    -- registered above, and saveModules refuses a reset-hook/component
+    -- collision (`duplicate id`).
+    local claimsLib = require("scripts.unit_ai_claims")
+    saveMods.registerResetHook("unit_ai_claims", function()
+        local dropped = claimsLib.resetAll()
+        if dropped > 0 then
+            engine.logInfo("Unit AI: cleared " .. dropped
+                .. " transient claim/priority entries on load")
+        end
+    end)
 end
 
 return M

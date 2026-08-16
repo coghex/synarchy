@@ -34,7 +34,8 @@ import Engine.Graphics.Config (VideoConfig(..))
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
-import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Engine.Scripting.Lua.Types (LuaBackendState(..), ScriptValue(..))
+import Engine.Scripting.Lua.Util (broadcastToModules)
 import Test.Headless.Harness (withHeadlessEngine)
 import UI.Types (UIPageManager(..), emptyUIPageManager)
 
@@ -1515,6 +1516,131 @@ spec = around withMenusEngine $ do
                     rcpAfterMinimize p `shouldBe` 0
                     rcpAfterRestore p `shouldSatisfy` (> 0)
 
+    -- #1325: every case in the block ABOVE requires scripts.shell
+    -- before booting settings, which populates package.loaded first and
+    -- makes both sides share one instance — the REVERSE of production,
+    -- and exactly why they all passed against the split-identity bug.
+    -- Production loads the shell through engine.loadScript
+    -- (scripts/init_loader.lua), whose loadModuleRef runs dofile and
+    -- deliberately leaves package.loaded alone; scripts/settings_menu.lua
+    -- then `require`s "scripts.shell" much later. Every case here
+    -- therefore starts with package.loaded["scripts.shell"] ABSENT and
+    -- loads the shell the dofile way FIRST. Reverting shell.lua's
+    -- self-registration fails this block.
+    describe "shell debug console has one module identity per Lua state (#1325)" $ do
+        it "a dofile-path load is the table a later require resolves to, without re-executing the file" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "if package.loaded['scripts.shell'] ~= nil then"
+                , "  return {preloaded = true, sameTable = false, notReexecuted = false} end;"
+                -- loadModuleRef IS Lua.dofileTrace
+                -- (src/Engine/Scripting/Lua/Script.hs), so a bare dofile
+                -- reproduces the production load exactly.
+                , "local dofiled = dofile('scripts/shell.lua');"
+                -- A second execution of the body would rebind every
+                -- shell.* function on whatever table it resolved,
+                -- wiping this sentinel — so the sentinel surviving is
+                -- the observable proof the file ran only once, and is
+                -- independent of the table-identity check beside it.
+                , "local sentinel = function() return 'sentinel' end;"
+                , "dofiled.rescale = sentinel;"
+                , "local required = require('scripts.shell');"
+                , "return {preloaded = false, sameTable = (required == dofiled),"
+                    <> " notReexecuted = (required.rescale == sentinel)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ShellIdentityProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    sipPreloaded p `shouldBe` False
+                    sipSameTable p `shouldBe` True
+                    sipNotReexecuted p `shouldBe` True
+
+        -- Requirements 2 and 4 together, through the REAL routes both
+        -- sides use: engine.loadScript registers the module ref that
+        -- Engine.Scripting.Lua.Util.broadcastToModules delivers
+        -- LuaFramebufferResize to (Thread/Dispatch.hs's
+        -- @LuaFramebufferResize w h@ arm is exactly this call), while
+        -- settings_menu.lua reaches its shell through `require`. The
+        -- counter is installed on the REQUIRED table, so it only ever
+        -- increments if that is the same table the broadcast reaches.
+        it "a real framebuffer broadcast reaches the table settings_menu holds, exactly once, with the shell still outside the responsive registry" $ \env → do
+            ls ← newBareLuaBackend env
+            _ ← evalOk ls $ luaLines
+                [ "assert(package.loaded['scripts.shell'] == nil,"
+                    <> " 'fixture must start with scripts.shell unloaded');"
+                , "assert(engine.loadScript('scripts/shell.lua', 0.5) ~= nil,"
+                    <> " 'production loadScript path failed');"
+                -- ui_manager -> ui_manager_boot -> settings_menu are
+                -- pass-through require hops whose only role is reaching
+                -- settings_menu; what this fixture must preserve is the
+                -- ORDER (loadScript first, require second), and
+                -- settings_menu is the module that actually holds the
+                -- shell reference (scripts/settings_menu.lua's own
+                -- require of "scripts.shell" runs on this line).
+                , "local m = require('scripts.settings_menu');"
+                , "m.init(1,2,3,1280,720);"
+                , "_G.__shell_resize_calls = 0;"
+                , "local s = require('scripts.shell');"
+                , "local realHandler = s.onFramebufferResize;"
+                , "s.onFramebufferResize = function(w, h)"
+                    <> " _G.__shell_resize_calls = _G.__shell_resize_calls + 1;"
+                    <> " return realHandler(w, h) end;"
+                , "return 'ok'"
+                ]
+            broadcastToModules ls "onFramebufferResize"
+                [ScriptNumber 1600, ScriptNumber 900]
+            r ← evalJSON ls $ luaLines
+                [ "return {calls = _G.__shell_resize_calls,"
+                    <> " registered = require('scripts.ui.responsive').isRegistered('shell')}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ShellBroadcastProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    sbpCalls p `shouldBe` 1
+                    -- #748 round 7's deliberate rule: routing the shell
+                    -- through responsive.notifyResize as well would
+                    -- double-fire the handler above on every real resize.
+                    sbpRegistered p `shouldBe` False
+
+        -- Requirement 3. The observable proof that Settings reached the
+        -- LIVE console's own upvalues (rather than merely a nominally
+        -- shared table) is shell.rescale() finding nothing left to do:
+        -- it compares engine.getUIScale() against the cached `uiscale`
+        -- upvalue the resize handler is supposed to have just updated.
+        -- Before the fix the settings fan-out drove a second table
+        -- whose shellvisible is permanently false, so this table's
+        -- cache still held the pre-Apply scale and rescale() returned
+        -- true.
+        it "a scale-only settings Apply rebuilds the live dofile-loaded shell immediately" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "assert(package.loaded['scripts.shell'] == nil,"
+                    <> " 'fixture must start with scripts.shell unloaded');"
+                , "local live = dofile('scripts/shell.lua');"
+                , "live.init(0);"
+                , "live.show();"
+                , "local rebuilds = 0;"
+                , "local realRebuildBox = live.rebuildBox;"
+                , "live.rebuildBox = function(...) rebuilds = rebuilds + 1; return realRebuildBox(...) end;"
+                -- Scale starts at whatever m.init() captures as
+                -- data.current.uiScale — deliberately NOT pre-set, or
+                -- Apply would see no change at all.
+                , "local m = require('scripts.settings_menu');"
+                , "m.init(1,2,3,1280,720);"
+                , "local graphicsTab = require('scripts.settings.graphics_tab');"
+                , "local textbox = require('scripts.ui.textbox');"
+                , "local data = require('scripts.settings.data');"
+                , "local target = (data.current.uiScale >= 3.0) and 1.0 or (data.current.uiScale + 1.0);"
+                , "textbox.setText(graphicsTab.uiScaleTextBoxId, tostring(target));"
+                , "m.onApply();"
+                , "return {rebuilds = rebuilds, noFurtherChange = not live.rescale()}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe ShellLiveApplyProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    slapRebuilds p `shouldSatisfy` (> 0)
+                    slapNoFurtherChange p `shouldBe` True
+
     describe "row labels never overlap their same-row control at a narrow, high-scale supported combination (#748 round 7)" $ do
         it "graphics_tab.lua's Resolution row: label ends before the (also-reserved) dropdown begins at 800x2160@4x" $ \env → do
             ls ← newBareLuaBackend env
@@ -1998,6 +2124,26 @@ data RebuildCountsProbe = RebuildCountsProbe
 instance FromJSON RebuildCountsProbe where
     parseJSON = withObject "RebuildCountsProbe" $ \o → RebuildCountsProbe
         <$> o .: "afterMinimize" <*> o .: "afterRestore"
+
+-- | #1325: scripts/shell.lua's single-module-identity probes.
+data ShellIdentityProbe = ShellIdentityProbe
+    { sipPreloaded ∷ Bool, sipSameTable ∷ Bool, sipNotReexecuted ∷ Bool }
+    deriving Show
+instance FromJSON ShellIdentityProbe where
+    parseJSON = withObject "ShellIdentityProbe" $ \o → ShellIdentityProbe
+        <$> o .: "preloaded" <*> o .: "sameTable" <*> o .: "notReexecuted"
+
+data ShellBroadcastProbe = ShellBroadcastProbe
+    { sbpCalls ∷ Int, sbpRegistered ∷ Bool } deriving Show
+instance FromJSON ShellBroadcastProbe where
+    parseJSON = withObject "ShellBroadcastProbe" $ \o → ShellBroadcastProbe
+        <$> o .: "calls" <*> o .: "registered"
+
+data ShellLiveApplyProbe = ShellLiveApplyProbe
+    { slapRebuilds ∷ Int, slapNoFurtherChange ∷ Bool } deriving Show
+instance FromJSON ShellLiveApplyProbe where
+    parseJSON = withObject "ShellLiveApplyProbe" $ \o → ShellLiveApplyProbe
+        <$> o .: "rebuilds" <*> o .: "noFurtherChange"
 
 data TextboxStateProbe = TextboxStateProbe
     { tspText ∷ Text, tspCursor ∷ Int, tspFocused ∷ Bool } deriving Show

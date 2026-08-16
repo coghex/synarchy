@@ -11,12 +11,14 @@
 --     addJobProgress; the ghost solidifies as progress accrues), and at
 --     1.0 place the piece via scripts/structures.lua, job complete.
 --
--- Claims: one worker per tile via a module-local registry (constructClaims,
--- same shape as digClaims); the engine-side "claimed" status is the
--- durable/observable layer — getPendingJobs carries it, and the sweep
--- below releases a dead or expired claimant back to "pending". Claims
--- from a save/Lua reload arrive with no registry entry; adopted with an
--- anonymous timer, released the same way if nobody refreshes them.
+-- Claims: one worker per PAGE + tile via a module-local registry
+-- (constructClaims, same shape and same #1329 page key as digClaims);
+-- the engine-side "claimed" status is the durable/observable layer —
+-- getPendingJobs carries it, and the sweep below releases a dead or
+-- expired claimant back to "pending". Claims from a save/Lua reload
+-- arrive with no registry entry (#1329 empties the registry on EVERY
+-- load, so a restored "claimed" job is always an orphan here); adopted
+-- with an anonymous timer, released the same way if nobody refreshes.
 --
 -- Material races (construct jobs vs. deliveries) are NOT reserved
 -- cross-unit: the fetch fails gracefully for the loser, the post-fetch
@@ -39,12 +41,12 @@ local fetchWantsFromMule   = fetch.fetchWantsFromMule
 
 local mv = require("scripts.movement_speed")
 local roles = require("scripts.unit_roles")
+local claimsLib = require("scripts.unit_ai_claims")
 
 local M = {}
 
-local constructClaims = {}   -- "x,y" → { uid = ..., at = gameTime }
-
-local function constructKey(x, y) return x .. "," .. y end
+local constructClaims = claimsLib.track({})  -- page key → { uid, at }
+local constructKey    = claimsLib.key        -- (wid, x, y)
 
 local function constructClaimedByOther(key, uid, now, timeout)
     local c = constructClaims[key]
@@ -73,30 +75,28 @@ end
 
 -- Release the unit's hold on its job. toPending flips engine-side status
 -- back so another worker can take the tile; omitted = already gone.
-local function releaseConstructJob(s, uid, toPending)
+local function releaseConstructJob(wid, s, uid, toPending)
     local job = s.constructJob
     if job then
-        local key = constructKey(job.x, job.y)
+        local key = constructKey(wid, job.x, job.y)
         local c = constructClaims[key]
         if c and c.uid == uid then constructClaims[key] = nil end
         if toPending then
-            local wid = world.getActiveWorldId()
-            if wid then
-                construction.setJobStatus(wid, job.x, job.y, "pending")
-            end
+            construction.setJobStatus(wid, job.x, job.y, "pending")
         end
     end
     s.constructJob = nil
     s.constructCandidate = nil
 end
 
--- Externally interrupt a live claimant on (gx,gy) — e.g. a cancelled
--- paid job (#799): s.constructJob is a LOCAL copy that keeps ticking
--- regardless of the engine-side designation, and constructUtility only
--- notices on that unit's own next decision tick — too late to stop it
--- placing the piece. This clears the claim immediately instead.
-local function abandonClaim(gx, gy)
-    local key = constructKey(gx, gy)
+-- Externally interrupt a live claimant on (wid,gx,gy) — e.g. a
+-- cancelled paid job (#799): s.constructJob is a LOCAL copy that keeps
+-- ticking regardless of the engine-side designation, and
+-- constructUtility only notices on that unit's own next decision tick
+-- — too late to stop it placing the piece. This clears the claim
+-- immediately instead. `wid` is the CANCELLED job's own page.
+local function abandonClaim(wid, gx, gy)
+    local key = constructKey(wid, gx, gy)
     local c = constructClaims[key]
     constructClaims[key] = nil
     if not (c and c.uid) then return end
@@ -115,7 +115,7 @@ M.abandonClaim = abandonClaim
 local function sweepConstructClaims(wid, jobs, now, timeout)
     for _, job in ipairs(jobs) do
         if job.status == "claimed" then
-            local key = constructKey(job.x, job.y)
+            local key = constructKey(wid, job.x, job.y)
             local c = constructClaims[key]
             if not c then
                 -- Orphan (loaded save / script reload): adopt with an
@@ -169,7 +169,7 @@ local function findConstructJob(uid, fromX, fromY, params)
     local best, bestD = nil, params.construct_scan_range
     for _, job in ipairs(jobs) do
         if job.status == "pending"
-           and not constructClaimedByOther(constructKey(job.x, job.y),
+           and not constructClaimedByOther(constructKey(wid, job.x, job.y),
                                            uid, now,
                                            params.construct_claim_timeout) then
             local viable, build = false, nil
@@ -211,7 +211,7 @@ local function constructUtility(uid, s, params)
         local job = construction.getDesignationAt(wid, s.constructJob.x,
                                                   s.constructJob.y)
         if job then return params.construct_lock_utility end
-        releaseConstructJob(s, uid)
+        releaseConstructJob(wid, s, uid)
     end
 
     local info = unit.getInfo(uid)
@@ -306,7 +306,7 @@ local function constructExecute(uid, s, params)
     if not s.constructJob then
         local cand = s.constructCandidate
         if not cand then return end
-        local key = constructKey(cand.x, cand.y)
+        local key = constructKey(wid, cand.x, cand.y)
         if constructClaimedByOther(key, uid, now,
                                    params.construct_claim_timeout) then
             s.constructCandidate = nil
@@ -347,7 +347,7 @@ local function constructExecute(uid, s, params)
     end
 
     local job = s.constructJob
-    local key = constructKey(job.x, job.y)
+    local key = constructKey(wid, job.x, job.y)
     -- A live claim by someone ELSE means ours expired while we were
     -- preempted and the tile was legally re-claimed — walk away.
     local c = constructClaims[key]
@@ -369,13 +369,13 @@ local function constructExecute(uid, s, params)
         local bid = building.spawn(job.building, job.x, job.y)
         if bid then
             construction.setJobStatus(wid, job.x, job.y, "complete")
-            releaseConstructJob(s, uid)
+            releaseConstructJob(wid, s, uid)
         else
             -- Placement invalid (terrain changed, overlap) — retrying
             -- can't succeed, so cancel the blueprint and say so.
             reportFailure(uid, "Can't build here — blueprint cancelled")
             construction.cancelDesignation(job.x, job.y)
-            releaseConstructJob(s, uid)
+            releaseConstructJob(wid, s, uid)
         end
         return
     end
@@ -393,7 +393,7 @@ local function constructExecute(uid, s, params)
             if inventoryCountOf(uid, matType) < need then
                 -- Sources came up short (raced / capacity) — release
                 -- the tile for someone who can cover it.
-                releaseConstructJob(s, uid, true)
+                releaseConstructJob(wid, s, uid, true)
                 return
             end
         end
@@ -423,7 +423,7 @@ local function constructExecute(uid, s, params)
                         reason = "requested structure slot filled before material payment",
                     }
                     construction.cancelDesignation(job.x, job.y)
-                    releaseConstructJob(s, uid)
+                    releaseConstructJob(wid, s, uid)
                     return
                 end
                 for matType, need in pairs(job.need) do
@@ -431,7 +431,7 @@ local function constructExecute(uid, s, params)
                         if not unit.removeItem(uid, matType) then
                             reportFailure(uid,
                                 "Construction materials went missing")
-                            releaseConstructJob(s, uid, true)
+                            releaseConstructJob(wid, s, uid, true)
                             return
                         end
                     end
@@ -476,7 +476,7 @@ local function constructExecute(uid, s, params)
             construction.setJobStatus(wid, job.x, job.y, "complete")
             grantWorkXP(uid, "construction",
                         params.construct_xp_per_piece or 0)
-            releaseConstructJob(s, uid)
+            releaseConstructJob(wid, s, uid)
         end
         return
     end

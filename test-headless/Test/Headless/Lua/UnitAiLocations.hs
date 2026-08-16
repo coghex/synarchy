@@ -299,10 +299,16 @@ spec = describe "unit location knowledge" $ do
     describe "lua.unit_ai schema evolution (v3 → v4)" $ do
         -- Capture the spec table the component registers, without an
         -- engine or a real save_modules registry behind it.
+        -- The stub must cover BOTH registrations @register@ performs:
+        -- the persistent component whose spec these cases inspect, and
+        -- (since #1329) the @unit_ai_claims@ reset hook that clears the
+        -- family's transient claim registries on load. A stub missing
+        -- the second raises rather than reporting a spec problem.
         let registered = lns
                 [ "local captured"
                 , "package.loaded['scripts.lib.save_modules'] ="
-                , "  { register = function(id, spec) captured = spec end }"
+                , "  { register = function(id, spec) captured = spec end,"
+                , "    registerResetHook = function() end }"
                 , "local unitAi = {}"
                 , "package.loaded['scripts.unit_ai'] = unitAi"
                 , "local aiState = {}"
