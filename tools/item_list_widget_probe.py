@@ -91,6 +91,15 @@ Verifies, in order:
      strip inside the section rect, tab selection filtering, and a real
      right-click reaching the representative instance's Equip/Contents
      menu.
+  7. tracked temperature (#1268): both raw-item hosts present a row's
+     summary in the row text AND in a tooltip line, derived from the
+     same string; a group holding two tracked values and one ambient
+     member reports all three rather than the representative's; an
+     EQUIPPED row presents one too (the path `equipment.getLoadout` had
+     no `temp` field for at all); cooling inside one displayed degree
+     rebuilds nothing while crossing the boundary refreshes the row; and
+     a deposited exact instance carries its temperature into the
+     container window on both endpoint kinds.
 
 Manual-only (needs-gpu) unless promoted through `tools/ci_probes.py` per
 CLAUDE.md; the CI-blocking gates for this feature are
@@ -1052,6 +1061,242 @@ def item_contents_scenario(port: int, mule_uid: int, uid: int) -> None:
     send(port, "require('scripts.item_contents_panel').closeIfOpen(); return 'ok'")
 
 
+def unit_inv_row(port: int, def_name: str, category: str):
+    """One unit-inventory row, filtering to its category first when the
+    All view is too short to render it.
+
+    The unit-info inventory is a fixed-height HUD section: the widget
+    renders only the rows that fit, and `itemList.dump()` reports only
+    rendered rows, so a row past the fold is simply absent. Selecting
+    its category is the same gesture a player has, and the widget's own
+    `fitVertical` guarantees at least one row is always reachable — so
+    with one row per fixture category this resolves whatever the
+    section's capacity turns out to be. An empty category (the item is
+    not carried, so there is nothing to filter to) looks in the current
+    view only."""
+    def find():
+        return next((r for r in item_rows(port, UNIT_INV_LIST_ID)
+                     if r.get("defName") == def_name), None)
+    row = find()
+    if row or not category:
+        return row
+    tab = next((t for t in tab_boxes(port, UNIT_INV_LIST_ID)
+                if (t.get("label") or "").split(" (")[0] == category), None)
+    if not tab:
+        return None
+    click_widget_center(port, tab)
+    time.sleep(0.8)
+    return find()
+
+
+def temperature_scenario(port: int, uid: int, empty_bid: int) -> None:
+    """#1268: both raw-item hosts present a row's TRACKED temperature.
+
+    Every seeded value goes in through `unit.setItemTemp` (which reaches
+    inventory, equipment and accessories alike) and every rendered value
+    comes back out through the widget's own dump — `text`/`rawText` for
+    what the row label says, `tooltipHint` for the tooltip line. Neither
+    surface has any other read path: no Lua API reports a rendered label
+    or an element's tooltip content.
+
+    The SIMULATION IS PAUSED throughout. Item cooling runs on the game
+    clock and freezes with the pause flag (World/Thread/ItemTemp.hs), so
+    an unpaused run could cross a displayed degree boundary between
+    seeding a value and asserting on it.
+
+    The exact seeds are chosen to make the summary unfakeable: the two
+    hot logs straddle 42 from BOTH sides (41.6 and 42.3), so a
+    presentation reading only the representative would still say "42°C"
+    — and the third log is left at ambient, which only a whole-group
+    summary can report."""
+    print("== tracked temperature presentation (#1268) ==")
+    set_paused(port, True)
+
+    # -- Strip the acolyte first. The unit-info inventory is a
+    #    fixed-height HUD section and the widget renders only the rows
+    #    that FIT: at the default 1280x900 a spawned acolyte's own kit
+    #    fills it, and the section was measured rendering one row of
+    #    nine. Discarding that kit leaves one row per fixture category,
+    #    which — with `unit_inv_row`'s tab fallback below — is what makes
+    #    each fixture row reachable whatever the section's capacity is.
+    #    The first-aid kit stays: item_contents_scenario still needs it.
+    for slot in (send_json(port, "local out = {};"
+                                 " for s in pairs(equipment.getLoadout("
+                                 f"{uid}) or {{}}) do out[#out+1] = s end;"
+                                 " return out") or []):
+        send(port, f"return equipment.unequip({uid}, '{slot}')")
+    worn = send(port, f"local a = equipment.getAccessories({uid});"
+                      " return a and #a or 0").strip()
+    for i in range(int(float(worn or 0)), 0, -1):
+        send(port, f"return equipment.unequipAccessory({uid}, {i})")
+    # Discarded rather than deposited: unequipping the whole kit could
+    # otherwise overrun the cargo's declared capacity, and a refused
+    # deposit would silently leave the row it was meant to remove.
+    for it in (send_json(port, f"return unit.getInventory({uid})") or []):
+        if it.get("defName") != "first_aid_kit":
+            send(port, f"return unit.removeItem({uid}, '{it['defName']}')")
+
+    # -- Seed a three-member group: two tracked, one ambient. A fresh
+    #    def, so nothing already in the acolyte's inventory merges in.
+    for _ in range(3):
+        send(port, f"return unit.addItem({uid}, 'wood_log')")
+    logs = [it for it in (send_json(port, f"return unit.getInventory({uid})")
+                          or []) if it.get("defName") == "wood_log"]
+    if not check("three wood logs are carried for the temperature fixture",
+                 len(logs) == 3, f"got {len(logs)}"):
+        set_paused(port, False)
+        return
+    # The third stays ambient — only a whole-group summary can report it.
+    hot_a, hot_b = (int(logs[i]["instanceId"]) for i in (0, 1))
+    send(port, f"return unit.setItemTemp({uid}, {hot_a}, 41.6)")
+    send(port, f"return unit.setItemTemp({uid}, {hot_b}, 42.3)")
+
+    # -- An EQUIPPED row too: before #1268 `equipment.getLoadout`'s slot
+    #    table carried no `temp` field at all, so this is the one path a
+    #    Lua-only change could not have reached.
+    send(port, f"return unit.addItem({uid}, 'pick_steel')")
+    pick = send(port, f"local inv = unit.getInventory({uid});"
+                      " for _, it in ipairs(inv) do"
+                      " if it.defName == 'pick_steel' then"
+                      " return it.instanceId end end; return nil").strip()
+    if not check("a pick was added to equip", pick not in ("", "nil", "null"),
+                 f"got {pick!r}"):
+        set_paused(port, False)
+        return
+    pick_id = int(float(pick))
+    equipped = send(port, f"return equipment.equip({uid}, 'right_hand',"
+                          f" 'pick_steel', {pick_id})").strip()
+    check("the pick equips into the acolyte's right hand", equipped == "true",
+          f"got {equipped!r}")
+    send(port, f"return unit.setItemTemp({uid}, {pick_id}, 88.4)")
+    slot_temp = send(port, f"local lo = equipment.getLoadout({uid});"
+                           " local s = lo and lo['right_hand'];"
+                           " return s and tostring(s.temp) or 'nil'"
+                           ).strip().strip('"')
+    check("equipment.getLoadout exposes the equipped item's tracked temp",
+          slot_temp not in ("", "nil", "null"), f"got {slot_temp!r}")
+
+    # -- Unit inventory: the rows the acolyte's own panel renders.
+    send(port, f"return unit.select({uid})")
+    time.sleep(0.9)
+    def inv_category(def_name: str) -> str:
+        return send(port, f"local inv = unit.getInventory({uid});"
+                          " for _, it in ipairs(inv) do"
+                          f" if it.defName == '{def_name}' then"
+                          " return it.category end end; return ''"
+                          ).strip().strip('"')
+
+    log_cat = inv_category("wood_log")
+    kit_cat = inv_category("first_aid_kit")
+    pick_cat = send(port, f"local lo = equipment.getLoadout({uid});"
+                          " local s = lo and lo['right_hand'];"
+                          " return s and s.category or ''"
+                          ).strip().strip('"')
+
+    log_row = unit_inv_row(port, "wood_log", log_cat)
+    if check("the unit inventory renders a wood-log row", bool(log_row),
+             f"category {log_cat!r}, rendered "
+             f"{[r.get('defName') for r in item_rows(port, UNIT_INV_LIST_ID)]!r}"):
+        check("the three logs stay ONE group despite differing temperatures",
+              log_row.get("count") == 3, f"got {log_row.get('count')!r}")
+        check("the log row summarizes EVERY member, not the representative",
+              log_row.get("tempSummary") == "ambient + 42°C",
+              f"got {log_row.get('tempSummary')!r}")
+        check("the log row's text carries that summary",
+              "ambient + 42°C" in (log_row.get("rawText") or ""),
+              f"got {log_row.get('rawText')!r}")
+        check("the log row's tooltip carries it as a labeled line",
+              (log_row.get("tooltipHint") or "")
+                  .endswith("temperature: ambient + 42°C"),
+              f"got {log_row.get('tooltipHint')!r}")
+
+    kit_row = unit_inv_row(port, "first_aid_kit", kit_cat)
+    if check("the unit inventory renders an untracked row too",
+             bool(kit_row), f"category {kit_cat!r}"):
+        check("an item at ambient reads 'ambient' rather than blank",
+              kit_row.get("tempSummary") == "ambient",
+              f"got {kit_row.get('tempSummary')!r}")
+
+    # -- The EQUIPPED row, and the stability contract driven on it. Its
+    #    category tab stays selected across the three reads below, so the
+    #    handle comparison is between two renders of the same row.
+    pick_row = unit_inv_row(port, "pick_steel", pick_cat)
+    if not check("the unit inventory renders the EQUIPPED pick row",
+                 bool(pick_row), f"category {pick_cat!r}, rendered "
+                 f"{[r.get('defName') for r in item_rows(port, UNIT_INV_LIST_ID)]!r}"):
+        set_paused(port, False)
+        return
+    check("the equipped row presents its own tracked temperature",
+          pick_row.get("tempSummary") == "88°C",
+          f"got {pick_row.get('tempSummary')!r}")
+    check("the equipped row's text and tooltip agree on it",
+          "88°C" in (pick_row.get("rawText") or "")
+          and (pick_row.get("tooltipHint") or "")
+                  .endswith("temperature: 88°C"),
+          f"text={pick_row.get('rawText')!r} "
+          f"tip={pick_row.get('tooltipHint')!r}")
+
+    # -- Cooling that stays inside one displayed degree must not rebuild
+    #    the row; crossing the boundary must. Compared by element handle,
+    #    which the widget only replaces on a real rebuild.
+    send(port, f"return unit.setItemTemp({uid}, {pick_id}, 88.1)")
+    time.sleep(0.9)
+    within = unit_inv_row(port, "pick_steel", pick_cat)
+    check("a raw change inside one displayed degree rebuilds nothing",
+          bool(within) and pick_row.get("handle") == within.get("handle")
+          and within.get("tempSummary") == "88°C",
+          f"{pick_row.get('handle')!r} -> "
+          f"{within and within.get('handle')!r}, "
+          f"{within and within.get('tempSummary')!r}")
+    send(port, f"return unit.setItemTemp({uid}, {pick_id}, 70.0)")
+    time.sleep(0.9)
+    crossed = unit_inv_row(port, "pick_steel", pick_cat)
+    check("crossing a displayed degree DOES refresh the row",
+          bool(crossed) and crossed.get("tempSummary") == "70°C"
+          and "70°C" in (crossed.get("rawText") or ""),
+          f"got {crossed and crossed.get('tempSummary')!r}")
+
+    # -- The container window, on BOTH endpoint kinds. The building one
+    #    is reached by depositing an EXACT seeded instance, so the row it
+    #    renders is provably the one that was heated. It goes into the
+    #    hitherto-EMPTY fixture rather than the main cargo, which already
+    #    holds ambient logs the hot one would merge with — the two
+    #    endpoints must land on DIFFERENT summaries here, or one of them
+    #    could pass on the other's string.
+    stored = send(port, f"return unit.depositToCargo({uid}, {empty_bid},"
+                        f" 'wood_log', {hot_b})").strip()
+    check("the hot log deposits into the empty cargo as an exact instance",
+          stored == "true", f"got {stored!r}")
+    for kind, ident, want in (("building", empty_bid, "42°C"),
+                              ("unit", uid, "ambient + 42°C")):
+        opened = send(port, "return require('scripts.cargo_inventory_panel')"
+                            f".openFor('{kind}', {ident}, 240, 240)").strip()
+        if not check(f"the container window opens on the {kind} endpoint",
+                     opened == "true", f"got {opened!r}"):
+            continue
+        time.sleep(0.6)
+        row = next((r for r in item_rows(port, CARGO_LIST_ID)
+                    if r.get("defName") == "wood_log"), None)
+        if not check(f"the {kind} window renders a wood-log row", bool(row)):
+            continue
+        check(f"the {kind} window's row presents the same summary",
+              row.get("tempSummary") == want,
+              f"got {row.get('tempSummary')!r} want {want!r}")
+        check(f"the {kind} window's row TEXT carries it",
+              want in (row.get("rawText") or ""),
+              f"got {row.get('rawText')!r}")
+        # #1268 gave this window a row tooltip it did not have before,
+        # bounded to the row's display text plus the temperature line.
+        check(f"the {kind} window's row gained a bounded temperature tooltip",
+              row.get("tooltipHint") == f"temperature: {want}"
+              and want not in (row.get("tooltipText") or ""),
+              f"hint={row.get('tooltipHint')!r} "
+              f"text={row.get('tooltipText')!r}")
+    send(port, "require('scripts.cargo_inventory_panel').closeIfOpen();"
+               " return 'ok'")
+    set_paused(port, False)
+
+
 def unit_inventory_scenario(port: int, uid: int) -> None:
     print("== unit inventory section ==")
     send(port, f"return unit.select({uid})")
@@ -1264,6 +1509,11 @@ def main() -> int:
     knowledge_scenario(port, unseen_bid, empty_bid, uid)
     unit_endpoint_scenario(port, uid, wild_uid, vp)
     unit_inventory_scenario(port, uid)
+    # After unit_inventory_scenario and knowledge_scenario: this one
+    # strips the acolyte down and stocks the known-empty fixture, both
+    # of which those two assert on first. Before item_contents_scenario,
+    # whose first-aid kit it deliberately leaves carried.
+    temperature_scenario(port, uid, empty_bid)
     item_contents_scenario(port, mule_uid, uid)
 
     quit_engine(port, proc)

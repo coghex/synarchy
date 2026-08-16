@@ -12,6 +12,11 @@
 -- truncation and rebuild invalidation all live in the widget, which the
 -- unit-info inventory section and the item-contents popup share.
 --
+-- Since #1268 a row also presents its group's tracked temperature
+-- (#344), in the row text and in a row tooltip this window gained with
+-- that issue — both derived from the widget's own summary, so this
+-- window and the unit inventory can never word it differently.
+--
 -- Since #1234 the window is ENDPOINT-KIND AGNOSTIC: everything that
 -- differs between a cargo and an acolyte lives in the ENDPOINTS table
 -- below (one live read, one weight label, one optional row action), and
@@ -435,8 +440,29 @@ end
 -- between them would leave the header still reading "unknown". The
 -- "as of…" line deliberately does NOT: it changes every game second and
 -- is refreshed in place by update() instead of rebuilding the window.
+--
+-- The row TOOLTIP is #1268's, and it is a new hover surface on this
+-- window rather than an extension of an existing one — before it this
+-- host supplied no `rowTooltip` at all, so the widget attached none.
+-- It is deliberately bounded to the row's own display text plus the
+-- labeled temperature line: quality, condition, weapon and fill detail
+-- stay out of this window. It is supplied for EVERY endpoint kind, so
+-- a unit endpoint and a building endpoint present temperature
+-- identically.
 local function listDataParams(kind, view, activeTab)
     local def = ENDPOINTS[kind]
+    -- The row's display text WITHOUT the temperature summary: the row
+    -- appends it, and the tooltip labels it on its own line, so
+    -- building both from this shared base keeps it from appearing
+    -- twice in one tooltip.
+    local function rowBaseName(g)
+        local n = qualityTier.withSuffix(
+            g.displayName or g.defName or "?", g)
+        if (g.count or 1) > 1 then
+            n = string.format("%s ×%d", n, g.count)
+        end
+        return n
+    end
     return {
         emptyText = emptyText(view),
         items     = view.contents,
@@ -445,12 +471,12 @@ local function listDataParams(kind, view, activeTab)
         tabs      = CARGO_TABS,
         maxRows   = MAX_ROWS,
         rowName   = function(g)
-            local n = qualityTier.withSuffix(
-                g.displayName or g.defName or "?", g)
-            if (g.count or 1) > 1 then
-                n = string.format("%s ×%d", n, g.count)
-            end
-            return n
+            return itemList.withTempSuffix(rowBaseName(g), g)
+        end,
+        rowTooltip = function(g)
+            local tempLine = itemList.tempHintLine(g)
+            if not tempLine then return nil end
+            return { text = rowBaseName(g), hint = tempLine }
         end,
         rowWeightText = function(g)
             return string.format("%.2f kg", (g.weight or 0) * (g.count or 1))
