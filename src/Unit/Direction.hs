@@ -5,9 +5,11 @@ module Unit.Direction
     , indexToDir
     , allDirections
     , mirrorDir
+    , parseDirectionName
     ) where
 
 import UPrelude
+import qualified Data.Text as T
 import GHC.Generics (Generic)
 import Data.Serialize (Serialize)
 
@@ -53,3 +55,38 @@ mirrorDir DirSW = Just DirSE
 mirrorDir DirW  = Just DirE
 mirrorDir DirNW = Just DirNE
 mirrorDir _     = Nothing
+
+-- | Parse a direction written as text: the short compass abbreviation
+--   (@"S"@, @"sw"@) or the long hyphenated name (@"south"@,
+--   @"south-east"@), case-insensitively.
+--
+--   ONE table, because the same vocabulary is read from three places
+--   that must never disagree about which spellings exist: a unit YAML's
+--   @frames:@ direction keys
+--   (@Engine.Scripting.Lua.API.Units.Yaml.parseDirKey@), an animation
+--   asset tree's direction FOLDER names
+--   (@Engine.Preview.Unit.parseDirectionDirName@), and — since #1260
+--   routed the preview through the compiled index — the YAML→facts
+--   projection the atlas selection is validated against
+--   ("Unit.Atlas.Yaml"). A spelling one of those accepted and another
+--   didn't would show up as an animation that loads in the game and
+--   half-loads in the viewer.
+parseDirectionName ∷ Text → Maybe Direction
+parseDirectionName t = case T.toLower t of
+    "s"          → Just DirS
+    "sw"         → Just DirSW
+    "w"          → Just DirW
+    "nw"         → Just DirNW
+    "n"          → Just DirN
+    "ne"         → Just DirNE
+    "e"          → Just DirE
+    "se"         → Just DirSE
+    "south"      → Just DirS
+    "south-west" → Just DirSW
+    "west"       → Just DirW
+    "north-west" → Just DirNW
+    "north"      → Just DirN
+    "north-east" → Just DirNE
+    "east"       → Just DirE
+    "south-east" → Just DirSE
+    _            → Nothing

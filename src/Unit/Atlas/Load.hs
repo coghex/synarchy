@@ -54,10 +54,10 @@
 --   a handle, queues an upload, or publishes an 'Animation' for a unit
 --   whose index turns out to be broken three animations later.
 --
---   No unit ships a compiled index yet (#1258 requirement 7 keeps
---   production atlases uncommitted until TEX-4), so on today's asset
---   tree every unit takes the 'Nothing' branch and nothing about
---   loading changes.
+--   ONE unit ships a compiled index today: @acolyte@, migrated by
+--   #1260 (TEX-4) as the production pilot. Every other unit takes the
+--   'Nothing' branch and loads exactly as it did before #1259; TEX-6
+--   owns migrating them and retiring the legacy path.
 module Unit.Atlas.Load
     ( loadUnitAtlasIndex
     , loadUnitAtlasIndexIn
@@ -83,9 +83,9 @@ import Unit.Atlas.Types
 --
 --   * @Right Nothing@ — the unit has no compiler-owned @atlas\/@
 --     directory at all: every animation is legacy. This is the ONLY
---     tolerated absence, and it is the state every shipped unit is in
---     today. A directory that EXISTS without its index is an incomplete
---     artifact and rejects.
+--     tolerated absence, and it is the state every shipped unit but
+--     @acolyte@ is in today. A directory that EXISTS without its index
+--     is an incomplete artifact and rejects.
 --   * @Right (Just m)@ — every declared animation parsed, still matches
 --     the YAML, decoded to the image its index describes, and holds its
 --     declared source art.

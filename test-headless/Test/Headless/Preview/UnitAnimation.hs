@@ -11,7 +11,7 @@ module Test.Headless.Preview.UnitAnimation (spec) where
 import UPrelude
 import Test.Hspec
 import Control.Exception (finally)
-import Data.List (sort, find)
+import Data.List (sort, find, nub)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import System.Directory
@@ -19,9 +19,12 @@ import System.Directory
     , doesDirectoryExist, doesFileExist, createDirectoryLink
     , removeDirectoryLink )
 import System.FilePath ((</>))
+import qualified Data.HashMap.Strict as HM
 import Engine.Asset.YamlUnits (UnitYamlAnim(..))
-import Engine.Core.Types (PreviewUnit(..), PreviewAnim(..), PreviewFrameDir(..))
+import Engine.Core.Types
+    ( PreviewUnit(..), PreviewAnim(..), PreviewFrameDir(..), PreviewFrame(..) )
 import Engine.Preview.Unit
+import Unit.Atlas.Index (unitAtlasIndexPath)
 import Unit.Direction (Direction(..))
 
 -- The real shipped acolyte tree — every ordering/mirroring claim below
@@ -47,6 +50,15 @@ anim fps loop flipV = UnitYamlAnim
 
 frames ∷ [(Direction, [Text])] → Map.Map Direction [Text]
 frames = Map.fromList
+
+-- The same, already lifted into whole-image preview frames — what
+-- 'resolveAnimDirections' takes now that a frame is a texture plus a
+-- sub-rect rather than a bare path (#1260).
+srcFrames ∷ [(Direction, [Text])] → Map.Map Direction [PreviewFrame]
+srcFrames = fmap sourceFrames ∘ frames
+
+framePaths ∷ PreviewFrameDir → [Text]
+framePaths = map pfPath ∘ pfdFrames
 
 -- A synthetic unit tree, for the cases no shipped asset exhibits:
 -- an all-eight-direction animation, an unequal-frame-count animation,
@@ -107,6 +119,36 @@ withSymlinkedUnit action = do
             removeDirectoryRecursive root
             removeDirectoryRecursive real
     (`finally` cleanup) (action root)
+
+-- A unit whose compiled artifacts are BROKEN, in its own temp resource
+-- root (#1260). Deliberately a fixture rather than a temporarily
+-- corrupted copy of the shipped acolyte index: the rejection path must
+-- be exercisable without ever writing into the tracked asset tree,
+-- where a crashed run would leave a damaged artifact behind and the
+-- inventory gate would then fail for an unrelated reason.
+--
+--   <tmp>/assets/textures/units/<brokenUnit>/animations/idle/south/frame_000.png
+--   <tmp>/assets/textures/units/<brokenUnit>/atlas/index.json   (optional)
+--
+-- 'Nothing' leaves the atlas/ directory present but EMPTY, which is the
+-- other half of the contract: an incomplete compiled artifact rejects
+-- just as a malformed one does, and only a wholly ABSENT atlas/
+-- directory means legacy.
+brokenUnit ∷ String
+brokenUnit = "spec_broken_atlas_unit"
+
+withCompiledUnitFixture ∷ Maybe String → (FilePath → FilePath → IO ()) → IO ()
+withCompiledUnitFixture mIndex action = do
+    tmp ← getTemporaryDirectory
+    let resRoot = tmp </> "synarchy-preview-unit-atlas-spec"
+        catRoot = resRoot </> unitsCategoryRoot
+        unitDir = catRoot </> brokenUnit
+    createDirectoryIfMissing True (unitDir </> "animations" </> "idle" </> "south")
+    writeFile (unitDir </> "animations" </> "idle" </> "south" </> "frame_000.png") ""
+    createDirectoryIfMissing True (unitDir </> "atlas")
+    forM_ mIndex $ \doc →
+        writeFile (resRoot </> unitAtlasIndexPath (T.pack brokenUnit)) doc
+    (`finally` removeDirectoryRecursive resRoot) (action resRoot catRoot)
 
 spec ∷ Spec
 spec = do
@@ -174,13 +216,13 @@ spec = do
     describe "resolveAnimDirections" $ do
         it "mirrors W/SW/NW from their eastern counterparts when flipping \
            \is allowed, reporting each cell's real source" $ do
-            let stored = frames [ (DirS, ["s"]), (DirSE, ["se"]), (DirE, ["e"])
-                                , (DirNE, ["ne"]), (DirN, ["n"]) ]
+            let stored = srcFrames [ (DirS, ["s"]), (DirSE, ["se"]), (DirE, ["e"])
+                                   , (DirNE, ["ne"]), (DirN, ["n"]) ]
                 out = resolveAnimDirections True stored
             map pfdDirection out `shouldBe`
                 [ "south", "south-west", "west", "north-west"
                 , "north", "north-east", "east", "south-east" ]
-            [ (pfdDirection d, pfdSource d, pfdFrames d)
+            [ (pfdDirection d, pfdSource d, framePaths d)
                 | d ← out, pfdMirrored d ] `shouldBe`
                 [ ("south-west", "south-east", ["se"])
                 , ("west", "east", ["e"])
@@ -188,24 +230,24 @@ spec = do
 
         it "omits the western directions entirely when flipping is off" $
             map pfdDirection (resolveAnimDirections False
-                (frames [ (DirS, ["s"]), (DirSE, ["se"]), (DirE, ["e"])
-                        , (DirNE, ["ne"]), (DirN, ["n"]) ]))
+                (srcFrames [ (DirS, ["s"]), (DirSE, ["se"]), (DirE, ["e"])
+                           , (DirNE, ["ne"]), (DirN, ["n"]) ]))
                 `shouldBe` ["south", "north", "north-east", "east", "south-east"]
 
         it "prefers a directly authored western direction over mirroring, \
            \even with flipping enabled" $ do
-            let stored = frames [ (DirS, ["s"]), (DirSE, ["se"]), (DirE, ["e"])
-                                , (DirNE, ["ne"]), (DirN, ["n"])
-                                , (DirW, ["authored-w"]) ]
+            let stored = srcFrames [ (DirS, ["s"]), (DirSE, ["se"]), (DirE, ["e"])
+                                   , (DirNE, ["ne"]), (DirN, ["n"])
+                                   , (DirW, ["authored-w"]) ]
                 out = resolveAnimDirections True stored
                 west = find ((≡ "west") ∘ pfdDirection) out
             fmap pfdMirrored west `shouldBe` Just False
             fmap pfdSource west `shouldBe` Just "west"
-            fmap pfdFrames west `shouldBe` Just ["authored-w"]
+            fmap framePaths west `shouldBe` Just ["authored-w"]
 
         it "treats an empty frame list as no direction at all, and never \
            \mirrors from one" $
-            resolveAnimDirections True (frames [(DirS, ["s"]), (DirE, [])])
+            resolveAnimDirections True (srcFrames [(DirS, ["s"]), (DirE, [])])
                 `shouldSatisfy` \out →
                     map pfdDirection out ≡ ["south"]
 
@@ -238,22 +280,32 @@ spec = do
         it "uses the YAML fps/loop/flip when the animation has an entry" $ do
             let meta = Map.fromList [("attack", anim 12 False True)]
             map (\a → (paFps a, paLoop a, paFlip a))
-                (buildPreviewAnims meta [("attack", frames [(DirS, ["s"])])])
+                (buildPreviewAnims meta HM.empty
+                    [("attack", frames [(DirS, ["s"])])])
                 `shouldBe` [(12, False, True)]
 
         it "falls back to fps=8 / loop=true for an animation the YAML \
            \never mentions" $
             map (\a → (paFps a, paLoop a, paFlip a))
-                (buildPreviewAnims Map.empty
+                (buildPreviewAnims Map.empty HM.empty
                     [("roar", frames [(DirS, ["s"]), (DirE, ["e"])])])
                 `shouldBe` [(8, True, False)]
 
-        it "reports the south frame-zero thumbnail, and an empty one when \
+        it "reports the south frame-zero thumbnail, and none at all when \
            \the animation stores no south frames" $
-            map paThumb (buildPreviewAnims Map.empty
+            map (fmap pfPath ∘ paThumb) (buildPreviewAnims Map.empty HM.empty
                     [ ("a", frames [(DirS, ["s0", "s1"])])
                     , ("b", frames [(DirE, ["e0"])]) ])
-                `shouldBe` ["s0", ""]
+                `shouldBe` [Just "s0", Nothing]
+
+        it "leaves an unmigrated animation on the legacy path: source-frame \
+           \paths, whole-image UVs, and no cell size of its own" $ do
+            let out = buildPreviewAnims Map.empty HM.empty
+                          [("roar", frames [(DirS, ["s0", "s1"])])]
+            map paAtlas out `shouldBe` [Nothing]
+            concatMap pfdFrames (concatMap paDirs out) `shouldBe`
+                [ PreviewFrame "s0" (0, 0, 1, 1) Nothing
+                , PreviewFrame "s1" (0, 0, 1, 1) Nothing ]
 
     describe "resolveUnitDir (pre-boot containment)" $ do
         it "resolves a real shipped unit" $ do
@@ -355,8 +407,145 @@ spec = do
                                 map directionDirName previewDirectionOrder
                             map pfdSource (filter pfdMirrored (paDirs idle))
                                 `shouldBe` ["south-east", "east", "north-east"]
-                            paThumb idle `shouldSatisfy`
-                                T.isSuffixOf "/south/frame_000.png"
+                            -- Since #1260 the thumbnail is a CELL of the
+                            -- compiled atlas, not a source frame.
+                            fmap pfPath (paThumb idle) `shouldBe`
+                                Just "assets/textures/units/acolyte/atlas/idle.png"
+
+        -- #1260 (TEX-4): the acolyte pilot. These run against the
+        -- artifacts actually checked in, through the PRODUCTION loader
+        -- the game registers with — which is the whole of D-9. A
+        -- preview-only decoder would keep passing every assertion above
+        -- while the compiled tree rotted underneath it.
+        it "puts EVERY shipped acolyte animation on the atlas path — no \
+           \animation of a migrated unit silently resolves to legacy \
+           \per-frame storage" $ do
+            result ← buildPreviewUnit unitsCategoryRoot realUnit
+            case result of
+                Left err → expectationFailure
+                    (T.unpack (unitFocusErrorMessage err))
+                Right u → do
+                    let legacy = [paName a | a ← puAnims u, isNothing (paAtlas a)]
+                    legacy `shouldBe` []
+                    length (puAnims u) `shouldBe` 54
+                    -- Each animation's own atlas, named after itself —
+                    -- D-2's one-atlas-per-animation, observed rather
+                    -- than assumed.
+                    [ (paName a, paAtlas a) | a ← puAnims u ] `shouldSatisfy`
+                        all (\(n, p) → p ≡ Just ("assets/textures/units/acolyte/atlas/"
+                                                 <> n <> ".png"))
+                    -- and every frame of every direction samples that
+                    -- same image: one upload, one handle, one slot.
+                    puAnims u `shouldSatisfy` all (\a →
+                        all (all ((≡ fromMaybe "" (paAtlas a)) ∘ pfPath) ∘ pfdFrames)
+                            (paDirs a))
+
+        it "addresses frames as atlas CELLS: real per-direction counts \
+           \(never the padded column count), a cell size from the index, \
+           \and contiguous non-overlapping sub-rects across a row" $ do
+            result ← buildPreviewUnit unitsCategoryRoot realUnit
+            case result of
+                Left err → expectationFailure
+                    (T.unpack (unitFocusErrorMessage err))
+                Right u →
+                    -- injured_idle is one of the four checked-in acolyte
+                    -- animations whose directions hold UNEQUAL frame
+                    -- counts (D-5) — exactly where a padded column count
+                    -- would show up as invented frames.
+                    case find ((≡ "injured_idle") ∘ paName) (puAnims u) of
+                        Nothing → expectationFailure "acolyte has no injured_idle"
+                        Just a → do
+                            let counts = map (length ∘ pfdFrames) (paDirs a)
+                            length (nub counts) `shouldSatisfy` (> 1)
+                            paDirs a `shouldSatisfy` all (not ∘ null ∘ pfdFrames)
+                            -- Every frame carries the index's cell size…
+                            let cells = [ pfCell f
+                                        | d ← paDirs a, f ← pfdFrames d ]
+                            nub cells `shouldSatisfy` \cs →
+                                length cs ≡ 1 ∧ all isJust cs
+                            -- …and one direction's columns tile its row
+                            -- left to right without gaps or overlap.
+                            case paDirs a of
+                                [] → expectationFailure "injured_idle has no directions"
+                                (d : _) → do
+                                    let uvs = map pfUV (pfdFrames d)
+                                        us  = [ (u0, u1) | (u0, _, u1, _) ← uvs ]
+                                        vs  = [ (v0, v1) | (_, v0, _, v1) ← uvs ]
+                                    length (nub vs) `shouldBe` 1
+                                    us `shouldSatisfy` \xs →
+                                        and [ u1 ≡ u0'
+                                            | ((_, u1), (u0', _)) ← zip xs (drop 1 xs) ]
+                                    us `shouldSatisfy` all (\(u0, u1) → u0 < u1)
+
+        it "mirrors an atlas-backed clip from its own eastern cells, and \
+           \leaves an all-eight-direction clip unmirrored" $ do
+            result ← buildPreviewUnit unitsCategoryRoot realUnit
+            case result of
+                Left err → expectationFailure
+                    (T.unpack (unitFocusErrorMessage err))
+                Right u → do
+                    -- flip comes from the INDEX now, and the index's
+                    -- flip was proved equal to the YAML's before any of
+                    -- this was published.
+                    case find ((≡ "idle") ∘ paName) (puAnims u) of
+                        Nothing → expectationFailure "acolyte has no idle"
+                        Just a → do
+                            paFlip a `shouldBe` True
+                            map pfdSource (filter pfdMirrored (paDirs a))
+                                `shouldBe` ["south-east", "east", "north-east"]
+                            -- A mirrored cell reuses its SOURCE
+                            -- direction's row: same v-range, and never
+                            -- a row of its own.
+                            let rowOf n = listToMaybe
+                                    [ (v0, v1)
+                                    | d ← paDirs a, pfdDirection d ≡ n
+                                    , (_, v0, _, v1) ← take 1 (map pfUV (pfdFrames d)) ]
+                            rowOf "west" `shouldBe` rowOf "east"
+                    -- attack_heavy_RH_dagger authors all eight
+                    -- directions with flip: false so the dagger never
+                    -- swaps hands: eight distinct rows, nothing mirrored.
+                    case find ((≡ "attack_heavy_RH_dagger") ∘ paName) (puAnims u) of
+                        Nothing → expectationFailure "acolyte has no RH dagger attack"
+                        Just a → do
+                            paFlip a `shouldBe` False
+                            filter pfdMirrored (paDirs a) `shouldBe` []
+                            length (paDirs a) `shouldBe` 8
+                            let rows = [ (v0, v1)
+                                       | d ← paDirs a
+                                       , (_, v0, _, v1) ← take 1 (map pfUV (pfdFrames d)) ]
+                            length (nub rows) `shouldBe` 8
+
+        it "REJECTS the whole target when the compiled index is unusable, \
+           \instead of quietly showing the source frames beside it" $
+            withCompiledUnitFixture (Just "{ not json") $ \resRoot catRoot → do
+                result ← buildPreviewUnitIn resRoot catRoot brokenUnit
+                case result of
+                    Right _ → expectationFailure
+                        "a corrupt index still resolved a preview target"
+                    Left err → do
+                        err `shouldSatisfy` \case
+                            UnitAtlasRejected _ → True
+                            _                   → False
+                        unitFocusErrorMessage err `shouldSatisfy`
+                            T.isInfixOf (T.pack brokenUnit)
+
+        it "REJECTS an atlas/ directory with no index at all — an \
+           \incomplete compiled artifact is not a legacy unit" $
+            withCompiledUnitFixture Nothing $ \resRoot catRoot → do
+                result ← buildPreviewUnitIn resRoot catRoot brokenUnit
+                result `shouldSatisfy` \case
+                    Left (UnitAtlasRejected _) → True
+                    _                          → False
+
+        it "stays on the legacy path when the unit ships no atlas/ \
+           \directory at all — the only tolerated absence" $
+            withUnitFixture $ \root → do
+                result ← buildPreviewUnitIn root root "fixture_unit"
+                case result of
+                    Left err → expectationFailure
+                        (T.unpack (unitFocusErrorMessage err))
+                    Right u → map paAtlas (puAnims u)
+                        `shouldSatisfy` all isNothing
 
         it "resolves a shipped ASSET-ONLY unit from its asset_units \
            \declaration, with the declared playback metadata" $ do

@@ -24,8 +24,11 @@ end
 --   font, fontSize, itemHeight, maxVisible, uiscale, zIndex
 --   listWidthFraction (default 0.35), gap (default 20)
 --   iconSize -- optional per-row thumbnail edge (#887); nil = no icons
---   entries = { { label = "...", path = "...", icon = <handle> }, ... }
---     'icon' is ignored unless iconSize was given.
+--   entries = { { label = "...", path = "...", icon = <handle>,
+--                 iconUV = { u0, v0, u1, v1 } }, ... }
+--     'icon' is ignored unless iconSize was given; 'iconUV' (#1260) is
+--     the sub-rect within it, for an icon that is one cell of a
+--     compiled atlas. Both are passed straight through to scripts.ui.list.
 --   onSelect = function(path, label, index) end -- fired by
 --     assetBrowser.selectEntry (below) and by every later click/
 --     keyboard selection. NOT fired by 'new' itself — a caller doing
@@ -43,7 +46,8 @@ function assetBrowser.new(params)
 
     local items = {}
     for i, e in ipairs(params.entries or {}) do
-        items[i] = { text = e.label, value = e.path, icon = e.icon }
+        items[i] = { text = e.label, value = e.path,
+                     icon = e.icon, iconUV = e.iconUV }
     end
 
     -- The visible row count MUST fit params.height, not just default to

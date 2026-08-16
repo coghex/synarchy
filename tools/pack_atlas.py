@@ -173,8 +173,9 @@ out of reach.
 STALENESS
 ---------
 
-`--validate-only` is index-aware. A unit with NO index is valid: units
-are legacy until TEX-4 begins production tracking. Where an index DOES
+`--validate-only` is index-aware. A unit with NO index is valid: it is
+simply still on the legacy per-frame path, which every shipped unit but
+`acolyte` (migrated by TEX-4/#1260) is. Where an index DOES
 exist it is regenerated from the sources and compared, so a stale
 source digest, a hand-edited or non-canonically serialized index, a
 missing indexed atlas, and an atlas whose pixels do not match its
@@ -2067,8 +2068,9 @@ def validate_unit_index(
     # directory belongs would read as "no artifacts" and skip the whole
     # check. `is_symlink()` is what sees it.
     if not (atlas_dir.exists() or atlas_dir.is_symlink()):
-        # No generated artifacts. Legitimate: units are legacy until
-        # TEX-4 begins production tracking.
+        # No generated artifacts. Legitimate: the unit is still on the
+        # legacy per-frame path, which every shipped unit but `acolyte`
+        # (TEX-4/#1260) is.
         return
 
     where = f"{decl.name}/{ATLAS_DIR_NAME}"

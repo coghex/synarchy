@@ -12,8 +12,9 @@
 --
 --   * 'StorageLegacy' — the historical per-frame representation: one
 --     texture handle per frame, each its own whole image. Buildings
---     ('Building.Render') and every unit shipped today are on this
---     mode, and TEX-6 owns its eventual removal.
+--     ('Building.Render') and every shipped unit but @acolyte@ (the
+--     #1260 pilot) are on this mode, and TEX-6 owns its eventual
+--     removal.
 --   * 'StorageAtlas' — one compiled image per animation (D-2), one
 --     texture handle, one bindless slot; a frame is a UV sub-rect of
 --     it, addressed through the generated index ('Unit.Atlas.Index').
@@ -45,6 +46,7 @@ module Unit.Atlas.Types
     , storageLegacyFrames
     , storageIsAtlas
     , frameDimensions
+    , atlasCellUV
     ) where
 
 import UPrelude
@@ -209,32 +211,43 @@ storageSampleAt (StorageAtlas res) dir idx flipX =
         Nothing → Nothing
         Just row
             | idx < 0 ∨ idx ≥ adrFrameCount row → Nothing
-            | otherwise →
-                let atlasW = fromIntegral (aaAtlasWidth anim)  ∷ Float
-                    atlasH = fromIntegral (aaAtlasHeight anim) ∷ Float
-                    cellW  = aaCellWidth anim
-                    cellH  = aaCellHeight anim
-                    -- Exact integer cell geometry, divided into
-                    -- normalized UV at the CELL EDGES. Deliberately no
-                    -- half-texel inset: unit art is nearest-neighbour
-                    -- (D-6) and drawn pixel-snapped, so a fragment
-                    -- centre maps to texel `idx*cellW + i` and lands
-                    -- inside the cell; an inset would SHIFT the sampled
-                    -- texels and break the pixel-identity requirement 7
-                    -- asks for against the legacy path, which spans
-                    -- 0..1 of its own image.
-                    u0 = fromIntegral (idx * cellW) / atlasW
-                    u1 = fromIntegral ((idx + 1) * cellW) / atlasW
-                    v0 = fromIntegral (adrRow row * cellH) / atlasH
-                    v1 = fromIntegral ((adrRow row + 1) * cellH) / atlasH
-                in Just FrameSample
-                    { fsTexture = raTexture res
-                    , fsUV      = (u0, v0, u1, v1)
-                    , fsCell    = Just (cellW, cellH)
-                    , fsFlipX   = flipX
-                    }
+            | otherwise → Just FrameSample
+                { fsTexture = raTexture res
+                , fsUV      = atlasCellUV anim (adrRow row) idx
+                , fsCell    = Just (aaCellWidth anim, aaCellHeight anim)
+                , fsFlipX   = flipX
+                }
   where
     anim = raAnimation res
+
+-- | The normalized UV sub-rect of one atlas cell: @atlasCellUV anim row
+--   column@.
+--
+--   Exact integer cell geometry, divided into normalized UV at the CELL
+--   EDGES. Deliberately no half-texel inset: unit art is
+--   nearest-neighbour (D-6) and drawn pixel-snapped, so a fragment
+--   centre maps to texel @column*cellW + i@ and lands inside the cell;
+--   an inset would SHIFT the sampled texels and break the
+--   pixel-identity #1259 requirement 7 asks for against the legacy
+--   path, which spans 0..1 of its own image.
+--
+--   Exported rather than inlined into 'storageSampleAt' because the
+--   @--preview units\/\<name\>@ viewer resolves its cells before any
+--   texture handle exists (#1260, D-9): it has an 'AtlasAnimation' from
+--   the same index and no 'ResidentAtlas' to sample through, and the
+--   arithmetic it uses must BE this one rather than a second copy of
+--   it. Nothing else about D-3's frozen arithmetic changed.
+atlasCellUV ∷ AtlasAnimation → Int → Int → UVRect
+atlasCellUV anim row column = (u0, v0, u1, v1)
+  where
+    atlasW = fromIntegral (aaAtlasWidth anim)  ∷ Float
+    atlasH = fromIntegral (aaAtlasHeight anim) ∷ Float
+    cellW  = aaCellWidth anim
+    cellH  = aaCellHeight anim
+    u0 = fromIntegral (column * cellW) / atlasW
+    u1 = fromIntegral ((column + 1) * cellW) / atlasW
+    v0 = fromIntegral (row * cellH) / atlasH
+    v1 = fromIntegral ((row + 1) * cellH) / atlasH
 
 -- | The per-frame handle map when — and only when — this animation is
 --   on the legacy representation.

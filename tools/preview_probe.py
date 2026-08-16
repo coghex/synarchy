@@ -40,7 +40,11 @@ Checks:
      animation and restarts the clip; clicking a mirrored direction cell
      (located the same way) enlarges it and reports its real source
      direction; a resize preserves the animation, direction, and scroll
-     offset; only the requested unit's textures load.
+     offset; only the requested unit's textures load. Since #1260
+     acolyte is the atlas pilot, so the viewer must additionally report
+     EVERY animation as atlas-backed, sample the compiled atlases named
+     by the checked-in index with that index's own cell geometry and
+     real per-direction frame counts, and open not one source frame.
   4. Asset-only declarations (--preview units/tiller, #887/#1257): a
      shipped tree that is part of the authoritative inventory but is
      NOT a gameplay unit browses from its `asset_units:` declaration,
@@ -96,6 +100,7 @@ Exit 0 = all checks passed.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -515,6 +520,106 @@ def expected_unit_animations(unit: str) -> list[str]:
     return sorted(out)
 
 
+def compiled_index(unit: str):
+    """The unit's generated atlas index, or None when it ships none.
+
+    Read straight off disk with the stdlib json module: the probe's whole
+    job here (#1260, D-9) is to prove the RUNNING viewer is sampling the
+    artifacts that are actually checked in, so its expectation has to
+    come from those artifacts rather than from anything the engine
+    reports about itself."""
+    path = os.path.join("assets", "textures", "units", unit, "atlas", "index.json")
+    if not os.path.exists(path):
+        return None
+    with open(path) as fh:
+        return json.load(fh)
+
+
+def check_atlas_backed(port: int, unit: str, d: dict) -> bool:
+    """#1260: the units viewer renders a MIGRATED unit through the
+    production atlas metadata, not a preview-only per-frame decoder.
+
+    Everything below is cross-checked against the compiled index on
+    disk. A viewer that quietly fell back to the source frames beside a
+    broken atlas would still pass every #887 check — it would list the
+    same animations, play at the same rate, and mirror the same cells —
+    so the storage mode has to be observed directly."""
+    index = compiled_index(unit)
+    if index is None:
+        return check(f"{unit} ships a compiled atlas index", False,
+                     "no assets/textures/units/%s/atlas/index.json" % unit)
+    by_name = {a["name"]: a for a in index.get("animations", [])}
+
+    # 1. EVERY animation selected the atlas — not just the one playing.
+    entries = d.get("entries") or []
+    legacy = [e.get("label") for e in entries if e.get("storage") != "atlas"]
+    wrong_path = [e.get("label") for e in entries
+                  if e.get("atlas") != (by_name.get(e.get("label")) or {}).get("atlas_path")]
+    ok_all = check("every animation reports atlas storage, each naming its "
+                   "own compiled atlas from the index",
+                   entries and not legacy and not wrong_path,
+                   f"count={len(entries)} legacy={legacy[:5]} "
+                   f"mismatched={wrong_path[:5]}")
+    ok_count = check("the viewer lists every animation the index compiled",
+                     len(entries) == len(by_name),
+                     f"dumped={len(entries)} index={len(by_name)}")
+
+    # 2. The PLAYING clip samples that atlas, with the index's own cell
+    #    geometry — a whole-image sample would report no cell at all.
+    pb = d.get("playback") or {}
+    want = by_name.get(pb.get("animation")) or {}
+    cell = pb.get("cell") or {}
+    ok_playing = check("the playing clip samples its compiled atlas with the "
+                       "index's own cell size",
+                       pb.get("storage") == "atlas"
+                       and pb.get("atlas") == want.get("atlas_path")
+                       and pb.get("texturePath") == want.get("atlas_path")
+                       and cell.get("width") == want.get("cell_width")
+                       and cell.get("height") == want.get("cell_height"),
+                       f"playback=({pb.get('storage')}, {pb.get('texturePath')}, "
+                       f"{cell}) index=({want.get('atlas_path')}, "
+                       f"{want.get('cell_width')}x{want.get('cell_height')})")
+
+    # 3. Each visible direction cell samples a SUB-RECT of that one
+    #    image, and reports the index's REAL frame count for its own
+    #    direction — never the padded column count (D-5).
+    rows = {r["direction"]: r for r in want.get("directions", [])}
+    dirs = pb.get("directions") or []
+    bad = []
+    for c in dirs:
+        uv = c.get("uv") or {}
+        src = rows.get(c.get("source"))
+        if (c.get("texturePath") != want.get("atlas_path")
+                or not uv
+                or not (0.0 <= uv.get("u0", -1) < uv.get("u1", -1) <= 1.0)
+                or not (0.0 <= uv.get("v0", -1) < uv.get("v1", -1) <= 1.0)
+                or src is None
+                or c.get("frameCount") != src.get("frame_count")):
+            bad.append(c.get("direction"))
+    ok_cells = check("every direction cell samples a sub-rect of that one "
+                     "atlas, with the index's REAL per-direction frame count",
+                     dirs and not bad,
+                     f"cells={len(dirs)} bad={bad}")
+
+    # 4. And nothing opened a source frame. This is the reduction the
+    #    pilot claims, measured against the engine's own load record.
+    loaded = send_json(port, "return engine.getLoadedTexturePaths()")
+    loaded = loaded if isinstance(loaded, list) else []
+    src_prefix = os.path.join("assets", "textures", "units", unit,
+                              "animations") + os.sep
+    from_source = [p for p in loaded if p.startswith(src_prefix)]
+    atlas_prefix = os.path.join("assets", "textures", "units", unit,
+                                "atlas") + os.sep
+    from_atlas = [p for p in loaded if p.startswith(atlas_prefix)]
+    ok_no_source = check("no source animation frame is loaded at all — only "
+                         "compiled atlases",
+                         not from_source and from_atlas,
+                         f"source={from_source[:3]}({len(from_source)}) "
+                         f"atlas={len(from_atlas)}")
+
+    return all([ok_all, ok_count, ok_playing, ok_cells, ok_no_source])
+
+
 def expected_yaml_meta(unit: str, animation: str):
     """(fps, loop) as declared in data/units/<unit>.yaml, or None when
     the file or the entry is absent. Parsed with a deliberately dumb
@@ -708,6 +813,12 @@ def check_units_mode(port: int) -> bool:
                               f"playback=({d2_pb.get('animation')}, "
                               f"{d2_pb.get('fps')}, {d2_pb.get('loop')}) yaml={want2}")
 
+        # #1260: the atlas contract, checked against the compiled index
+        # on disk. Deliberately LAST, after the animation switch and the
+        # resize above, so it observes a viewer that has already
+        # reselected and rebuilt rather than only its first frame.
+        ok_atlas = check_atlas_backed(port, unit, poll_unit_ready(port))
+
         # Requirement 6: only THIS unit's textures (plus list chrome).
         root_prefix = os.path.join("assets", "textures", "units", unit) + os.sep
         ok_trimmed = check_trimmed_loading(port, root_prefix, allow_chrome=True)
@@ -715,7 +826,7 @@ def check_units_mode(port: int) -> bool:
 
         return all([ok_mode, ok_filter, ok_entries, ok_default, ok_meta,
                     ok_dirs, ok_mirror, ok_advance, ok_select, ok_cell,
-                    ok_resize, ok_trimmed, ok_no_gameplay])
+                    ok_resize, ok_atlas, ok_trimmed, ok_no_gameplay])
     finally:
         quit_engine(port, proc)
 

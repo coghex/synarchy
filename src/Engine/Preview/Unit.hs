@@ -7,21 +7,37 @@
 --   the engine as 'Engine.Core.Types.PreviewBrowse' for
 --   @scripts/preview_manager.lua@ to render.
 --
---   Authority split (#887 review amendment): the unit's own asset tree
+--   Authority split (#887 review amendment, reshaped by #1260's atlas
+--   pilot): the unit's own asset tree
 --   @assets\/textures\/units\/\<name\>\/animations\/@ is authoritative
---   for WHICH animations exist, WHICH directions each has, and the
---   frame ORDER within a direction. @data\/units\/\<name\>.yaml@ only
---   AUGMENTS a matching animation with playback metadata
---   (@fps@\/@loop@\/@flip@).
+--   for WHICH animations exist — DISCOVERY is still filesystem-first,
+--   which is why @acolyte\/pushing_idle@ was browsable before the YAML
+--   ever named it.
+--
+--   RENDERING is not. An animation the unit's compiled index
+--   (@atlas\/index.json@) declares is atlas-backed takes its
+--   directions, per-direction frame counts, cell geometry and
+--   @fps@\/@loop@\/@flip@ from that index and samples the compiled
+--   atlas — the SAME artifacts, the SAME loader
+--   ('Unit.Atlas.Yaml.resolveUnitAtlases'), and the SAME frozen cell
+--   arithmetic ('Unit.Atlas.Types.atlasCellUV') the game uses. D-9 asks
+--   for exactly that: a viewer running a preview-only decoder would
+--   miss the malformed-metadata and sampling regressions it exists to
+--   catch. A rejected index is a PRE-BOOT FAILURE here, never a quiet
+--   fall back to the source frames sitting beside it.
+--
+--   An animation the index does not name (every animation of every unit
+--   but @acolyte@ today) keeps the legacy per-frame path below, where
+--   @data\/units\/\<name\>.yaml@ only AUGMENTS a discovered animation
+--   with playback metadata (@fps@\/@loop@\/@flip@).
 --
 --   Since #1257 every shipped animation folder IS declared: the three
 --   asset-only trees (@tiller@, @unknown_unit@, @white_tailed_deer@)
 --   have @data\/units\/\<name\>.yaml@ files using the @asset_units:@
 --   form, so their metadata is read here exactly like a gameplay unit's
 --   while @Engine.Asset.YamlUnits.loadUnitYaml@ still never registers
---   them. The filesystem stays authoritative regardless — the fallback
---   below is retained for genuinely undeclared local development
---   content, not for anything committed.
+--   them. The no-YAML-entry fallback below is retained for genuinely
+--   undeclared local development content, not for anything committed.
 module Engine.Preview.Unit
   ( UnitFocusError(..)
   , unitFocusErrorMessage
@@ -35,14 +51,18 @@ module Engine.Preview.Unit
   , defaultAnimationName
   , effectiveFlip
   , resolveAnimDirections
+  , sourceFrames
   , frameIndexAt
   , loadUnitAnimMeta
+  , loadUnitAnimMetaIn
   , discoverUnitAnimations
   , buildPreviewAnims
   , buildPreviewUnit
+  , buildPreviewUnitIn
   ) where
 
 import UPrelude
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import qualified Data.Yaml as Yaml
@@ -55,9 +75,15 @@ import System.Directory
     ( doesDirectoryExist, doesFileExist, listDirectory, pathIsSymbolicLink )
 import System.FilePath ((</>), (<.>), takeExtension)
 import Engine.Asset.YamlUnits (UnitYamlAnim(..))
-import Engine.Core.Types (PreviewUnit(..), PreviewAnim(..), PreviewFrameDir(..))
+import Engine.Core.Types
+    ( PreviewUnit(..), PreviewAnim(..), PreviewFrameDir(..)
+    , PreviewFrame(..), wholeImagePreviewFrame )
 import Engine.Preview.Discovery (ItemDirError(..), resolveItemDir, sortFrameFiles)
-import Unit.Direction (Direction(..), mirrorDir)
+import Unit.Atlas.Index (renderAtlasLoadError)
+import Unit.Atlas.Types
+    ( AtlasAnimation(..), AtlasDirectionRow(..), atlasCellUV )
+import Unit.Atlas.Yaml (resolveUnitAtlasesIn)
+import Unit.Direction (Direction(..), mirrorDir, parseDirectionName)
 
 -- | Every reason a requested @--preview units/\<name\>@ target can fail
 --   to resolve. All of these reject BEFORE a window is ever created,
@@ -82,6 +108,18 @@ data UnitFocusError
   | UnitNoAnimations
   -- ^ The unit directory exists but has no @animations\/@ subtree, so
   --   there is nothing for the viewer to show.
+  | UnitAtlasRejected !Text
+  -- ^ The unit ships compiled atlas artifacts and the PRODUCTION loader
+  --   refused them (#1260): a missing, stale, unsupported, or malformed
+  --   index, or an atlas that no longer holds the source art it was
+  --   compiled from. Carries
+  --   'Unit.Atlas.Index.renderAtlasLoadError'\'s own diagnostic, which
+  --   already names the unit, the animation and the artifact.
+  --
+  --   This is a REJECTION, not a fallback. The viewer could trivially
+  --   draw the source frames sitting beside the broken atlas, and that
+  --   is precisely what would make it useless as D-9's acceptance
+  --   surface: it would render art the game refuses to load.
   deriving (Eq, Show)
 
 unitFocusErrorMessage ∷ UnitFocusError → Text
@@ -93,6 +131,7 @@ unitFocusErrorMessage UnitNameSymlink =
 unitFocusErrorMessage UnitNotFound = "no such unit"
 unitFocusErrorMessage UnitNoAnimations =
     "unit has no animations/ directory"
+unitFocusErrorMessage (UnitAtlasRejected reason) = reason
 
 -- | @assets\/textures\/units@ — the grouped units category root.
 unitsCategoryRoot ∷ FilePath
@@ -118,26 +157,11 @@ directionDirName DirSE = "south-east"
 
 -- | Inverse of 'directionDirName', accepting the same short/long
 --   spellings @Engine.Scripting.Lua.API.Units.Yaml.parseDirKey@ does so
---   an asset folder can be named either way.
+--   an asset folder can be named either way — literally the same table
+--   ('Unit.Direction.parseDirectionName') since #1260, so a folder the
+--   viewer browses and a YAML key the game loads can never disagree.
 parseDirectionDirName ∷ Text → Maybe Direction
-parseDirectionDirName t = case T.toLower t of
-    "s"          → Just DirS
-    "sw"         → Just DirSW
-    "w"          → Just DirW
-    "nw"         → Just DirNW
-    "n"          → Just DirN
-    "ne"         → Just DirNE
-    "e"          → Just DirE
-    "se"         → Just DirSE
-    "south"      → Just DirS
-    "south-west" → Just DirSW
-    "west"       → Just DirW
-    "north-west" → Just DirNW
-    "north"      → Just DirN
-    "north-east" → Just DirNE
-    "east"       → Just DirE
-    "south-east" → Just DirSE
-    _            → Nothing
+parseDirectionDirName = parseDirectionName
 
 -- | The game's own compass order (@Unit.Direction.allDirections@:
 --   clockwise from South) — the left-to-right order the viewer's
@@ -173,7 +197,11 @@ defaultAnimationName names
 --   other stored set (all eight already authored, or a partial set) is
 --   left alone: its missing directions stay unavailable rather than
 --   being invented.
-effectiveFlip ∷ Maybe UnitYamlAnim → Map.Map Direction [Text] → Bool
+--
+--   An ATLAS-backed animation never reaches here: its @flip@ is read
+--   from the compiled index, which 'Unit.Atlas.Index.planUnitAtlasStorage'
+--   has already proved equal to the YAML's.
+effectiveFlip ∷ Maybe UnitYamlAnim → Map.Map Direction [a] → Bool
 effectiveFlip (Just anim) _ = uyaFlip anim
 effectiveFlip Nothing stored =
     -- 'Map.keys' is ascending-'Ord'; sort the reference set the same
@@ -189,7 +217,7 @@ effectiveFlip Nothing stored =
 --   only from their own eastern counterpart via 'mirrorDir'. Anything
 --   still unresolved is omitted: an unavailable direction shows no
 --   cell rather than falling back to another unit's textures.
-resolveAnimDirections ∷ Bool → Map.Map Direction [Text] → [PreviewFrameDir]
+resolveAnimDirections ∷ Bool → Map.Map Direction [PreviewFrame] → [PreviewFrameDir]
 resolveAnimDirections flipOK stored =
     mapMaybe resolve previewDirectionOrder
   where
@@ -208,6 +236,33 @@ resolveAnimDirections flipOK stored =
         , pfdMirrored  = mirrored
         , pfdFrames    = frames
         }
+
+-- | Legacy per-frame paths as whole-image frames — the shape a
+--   non-atlas animation's directions carry.
+sourceFrames ∷ [Text] → [PreviewFrame]
+sourceFrames = map wholeImagePreviewFrame
+
+-- | An atlas-backed animation's per-direction frames, addressed through
+--   the compiled index (#1260).
+--
+--   The index is the whole authority here: which directions the
+--   animation authors, how many frames each REALLY holds
+--   ('adrFrameCount', never the padded column count — D-5), which row
+--   each occupies, and the cell geometry. Every frame names the one
+--   atlas image; only the sub-rect differs, computed by the game's own
+--   'atlasCellUV'.
+atlasFrames ∷ AtlasAnimation → Map.Map Direction [PreviewFrame]
+atlasFrames aa = frame ⊚ aaDirections aa
+  where
+    path = T.pack (aaPath aa)
+    cell = Just (aaCellWidth aa, aaCellHeight aa)
+    frame row =
+        [ PreviewFrame
+            { pfPath = path
+            , pfUV   = atlasCellUV aa (adrRow row) column
+            , pfCell = cell
+            }
+        | column ← [0 .. adrFrameCount row - 1] ]
 
 -- | The frame index one direction shows at @elapsed@ seconds into the
 --   animation's single shared playback clock.
@@ -273,8 +328,15 @@ instance FromJSON UnitAnimMetaFile where
 --   preview. No shipped tree relies on that fallback since #1257; local
 --   uncommitted assets still can.
 loadUnitAnimMeta ∷ Text → IO (Map.Map Text UnitYamlAnim)
-loadUnitAnimMeta unitName = do
-    let path = unitDataPath unitName
+loadUnitAnimMeta = loadUnitAnimMetaIn ""
+
+-- | 'loadUnitAnimMeta' against an explicit filesystem ROOT — the same
+--   fixture hook 'Unit.Atlas.Load.loadUnitAtlasIndexIn' provides, and
+--   for the same reason. Production passes @""@.
+loadUnitAnimMetaIn ∷ FilePath → Text → IO (Map.Map Text UnitYamlAnim)
+loadUnitAnimMetaIn root unitName = do
+    let path = if null root then unitDataPath unitName
+                            else root </> unitDataPath unitName
     exists ← doesFileExist path
     if not exists
         then pure Map.empty
@@ -388,37 +450,79 @@ discoverDirections animPath = do
         pure (not isLink)
 
 -- | Pure assembly (Requirement 8's dump payload and the viewer's whole
---   model): join the filesystem-derived animations with whatever
---   metadata the YAML contributed. Exposed separately from
---   'buildPreviewUnit' so the metadata/mirroring/default-selection
+--   model): join the filesystem-DISCOVERED animations with the compiled
+--   index that owns the atlas-backed ones and the YAML metadata that
+--   augments the rest. Exposed separately from 'buildPreviewUnit' so
+--   the storage-selection, metadata, mirroring and default-selection
 --   rules are testable without a fixture on disk.
+--
+--   @atlases@ is the PRODUCTION selection
+--   ('Unit.Atlas.Yaml.resolveUnitAtlases'), already validated against
+--   the unit's YAML and its source art. An animation it names is
+--   atlas-backed and takes EVERYTHING from the index — directions,
+--   real per-direction frame counts, cell geometry, @fps@\/@loop@\/
+--   @flip@ — because that is what the game will do with it. An
+--   animation it does not name keeps the legacy per-frame path.
 buildPreviewAnims
     ∷ Map.Map Text UnitYamlAnim
+    → HM.HashMap Text AtlasAnimation
     → [(Text, Map.Map Direction [Text])]
     → [PreviewAnim]
-buildPreviewAnims meta = map build
+buildPreviewAnims meta atlases = map build
   where
-    build (name, stored) =
-        let mAnim = Map.lookup name meta
-            flipOK = effectiveFlip mAnim stored
-        in PreviewAnim
-            { paName  = name
-            , paFps   = maybe defaultFps uyaFps mAnim
-            , paLoop  = maybe defaultLoop uyaLoop mAnim
-            , paFlip  = flipOK
-            , paThumb = fromMaybe "" (listToMaybe =≪ Map.lookup DirS stored)
-            , paDirs  = resolveAnimDirections flipOK stored
-            }
+    build (name, stored) = case HM.lookup name atlases of
+        Just aa →
+            let frames = atlasFrames aa
+            in assemble name (aaFps aa) (aaLoop aa) (aaFlip aa)
+                   (Just (T.pack (aaPath aa))) frames
+        Nothing →
+            let mAnim  = Map.lookup name meta
+                frames = sourceFrames ⊚ stored
+                flipOK = effectiveFlip mAnim stored
+            in assemble name (maybe defaultFps uyaFps mAnim)
+                   (maybe defaultLoop uyaLoop mAnim) flipOK Nothing frames
+
+    assemble name fps loop flipOK mAtlas frames = PreviewAnim
+        { paName  = name
+        , paFps   = fps
+        , paLoop  = loop
+        , paFlip  = flipOK
+        , paAtlas = mAtlas
+        , paThumb = listToMaybe =≪ Map.lookup DirS frames
+        , paDirs  = resolveAnimDirections flipOK frames
+        }
+
     -- The SAME values 'UnitYamlAnim's FromJSON instance defaults to,
     -- restated here for the no-YAML-entry-at-all case.
     defaultFps  = 8.0
     defaultLoop = True
 
 -- | The whole pre-boot pipeline for @--preview units/\<name\>@:
---   validate the target, discover its animations, augment them from
---   the unit's own YAML, and pick the default selection.
+--   validate the target, discover its animations, resolve its compiled
+--   atlases through the PRODUCTION loader, augment the rest from the
+--   unit's own YAML, and pick the default selection.
+--
+--   The atlas resolution runs before anything is assembled and its
+--   failure is the whole target's failure (D-9): a unit whose compiled
+--   artifacts the game would refuse must not open a window showing the
+--   source frames instead.
 buildPreviewUnit ∷ FilePath → String → IO (Either UnitFocusError PreviewUnit)
-buildPreviewUnit root name = resolveUnitDir root name ⌦ \case
+buildPreviewUnit = buildPreviewUnitIn ""
+
+-- | 'buildPreviewUnit' with an explicit RESOURCE root for the two
+--   resource-relative reads it makes beyond the unit's own asset
+--   directory — @data\/units\/\<name\>.yaml@ and the compiled
+--   @atlas\/index.json@. Production passes @""@ (the executable has
+--   already chdir'd into the resource root); a fixture tree passes its
+--   own, which is what lets the rejected-index path be exercised
+--   without writing into the shipped assets.
+--
+--   The units-category root stays a separate parameter because it is
+--   not always @\<resource root\>\/assets\/textures\/units@: the
+--   containment specs point it at a bare temp directory.
+buildPreviewUnitIn
+    ∷ FilePath → FilePath → String → IO (Either UnitFocusError PreviewUnit)
+buildPreviewUnitIn resourceRoot root name = resolveUnitDir root name ⌦ \case
     Left err → pure (Left err)
     Right unitDir → do
         let unitName = T.pack name
@@ -426,11 +530,16 @@ buildPreviewUnit root name = resolveUnitDir root name ⌦ \case
         if null stored
             then pure (Left UnitNoAnimations)
             else do
-                meta ← loadUnitAnimMeta unitName
-                let anims = buildPreviewAnims meta stored
-                pure (Right PreviewUnit
-                    { puName    = unitName
-                    , puAnims   = anims
-                    , puDefault = fromMaybe ""
-                        (defaultAnimationName (map paName anims))
-                    })
+                meta ← loadUnitAnimMetaIn resourceRoot unitName
+                eAtlases ← resolveUnitAtlasesIn resourceRoot unitName meta
+                case eAtlases of
+                    Left err → pure ∘ Left ∘ UnitAtlasRejected
+                                   $ renderAtlasLoadError err
+                    Right atlases → do
+                        let anims = buildPreviewAnims meta atlases stored
+                        pure (Right PreviewUnit
+                            { puName    = unitName
+                            , puAnims   = anims
+                            , puDefault = fromMaybe ""
+                                (defaultAnimationName (map paName anims))
+                            })

@@ -9,6 +9,17 @@
 -- resolved pre-boot by Engine.Preview.Unit and arrives verbatim through
 -- engine.getPreviewBrowse() — nothing here re-derives it.
 --
+-- A frame is a TABLE, not a path (#1260): { path, u0, v0, u1, v1, and
+-- width/height when the compiled index knows the cell size }. For an
+-- atlas-backed animation every frame names the SAME compiled image and
+-- differs only in its sub-rect, so a sprite must be published with
+-- UI.setSpriteFrame — texture, sub-rect and mirror in ONE manager
+-- transition. Setting the texture alone would draw the whole sheet, and
+-- setting texture and UV separately leaves a window in which the render
+-- thread pairs the new image with the previous frame's rect. A legacy
+-- frame carries the whole-image rect and no size, so it goes through
+-- the identical call and still measures via engine.getTextureSize.
+--
 -- Playback contract (#887 Requirement 5 + its review amendment):
 --   * ONE clock per selected animation. Every cell computes its own
 --     index from the SAME elapsed value against its OWN frame count, so
@@ -45,6 +56,29 @@ local function frameIndexAt(looping, fps, frameCount, elapsed)
     local raw = math.floor(math.max(0, elapsed or 0) * rate)
     if looping then return raw % frameCount end
     return math.min(raw, frameCount - 1)
+end
+
+-- Publish one frame onto a sprite: texture, sub-rect and mirror
+-- together. See the module header for why this is never done in pieces.
+local function applyFrame(v, elemId, frame, mirrored)
+    if not elemId or not frame then return nil end
+    local handle = v.requestTexture(frame.path)
+    UI.setSpriteFrame(elemId, handle, frame.u0, frame.v0, frame.u1, frame.v1,
+        mirrored == true)
+    return handle
+end
+
+-- The frame's own pixel size. An atlas frame knows it from the compiled
+-- index (the whole-sheet texture size would be meaningless); a legacy
+-- frame's image IS the frame, so it falls through to the engine's
+-- texture-size map exactly as before — and answers nil until the upload
+-- lands, which is what keeps reflow() retrying.
+local function frameSize(frame, handle)
+    if frame and frame.width and frame.height then
+        return { width = frame.width, height = frame.height }
+    end
+    if not handle then return nil end
+    return engine.getTextureSize(handle)
 end
 
 -- Fit (w,h) inside (boxW,boxH) preserving aspect ratio — the same rule
@@ -173,14 +207,16 @@ local function buildCells(v)
         UI.setVisible(markerId, false)
 
         local spriteId = UI.newSprite(name .. "_frame", 1, 1,
-            v.requestTexture(d.frames[1]), 1.0, 1.0, 1.0, 1.0, v.page)
+            v.requestTexture(d.frames[1].path), 1.0, 1.0, 1.0, 1.0, v.page)
         UI.addToPage(v.page, spriteId, 0, 0)
         UI.setZIndex(spriteId, v.zIndex + 1)
         -- Requirement 4: a mirrored cell must actually LOOK mirrored,
-        -- not merely report a flag — UI.setSpriteFlipX (#887) swaps the
-        -- quad's U coordinates the same way Unit.Render does for the
-        -- game's own western directions.
-        UI.setSpriteFlipX(spriteId, d.mirrored == true)
+        -- not merely report a flag — the mirror rides in the same
+        -- setSpriteFrame transition as the sub-rect, and reflects
+        -- across the FRAME's own rect (#1259 generalized #887's
+        -- flip-the-clipped-slice rule): reflecting across the whole
+        -- image would land in a different atlas cell.
+        applyFrame(v, spriteId, d.frames[1], d.mirrored)
 
         local labelId = UI.newText(name .. "_label",
             SHORT_NAME[d.direction] or d.direction, v.font,
@@ -305,8 +341,8 @@ function unitAnimationView.reflow(id)
         -- (the upload hasn't landed yet) just fills the cell until the
         -- next reflow picks up the real dimensions.
         local frameIdx = c.frameIndex >= 0 and c.frameIndex or 0
-        local size = engine.getTextureSize(
-            v.requestTexture(c.frames[math.min(#c.frames, frameIdx + 1)]))
+        local frame = c.frames[math.min(#c.frames, frameIdx + 1)]
+        local size = frameSize(frame, v.requestTexture(frame.path))
         local rect = size and fitRect(
             { x = cx, y = cy, width = g.cellSize, height = g.cellSize },
             size.width, size.height)
@@ -323,14 +359,12 @@ function unitAnimationView.reflow(id)
     local cell = v.direction and findCell(v, v.direction)
     if v.enlargedId and cell then
         local frameIdx = cell.frameIndex >= 0 and cell.frameIndex or 0
-        local path = cell.frames[math.min(#cell.frames, frameIdx + 1)]
-        local handle = v.requestTexture(path)
-        -- Push the texture unconditionally: setDirection routes through
+        local frame = cell.frames[math.min(#cell.frames, frameIdx + 1)]
+        -- Push the frame unconditionally: setDirection routes through
         -- here, and its new direction's current frame must appear at
         -- once rather than waiting for the next index change.
-        UI.setSpriteTexture(v.enlargedId, handle)
-        UI.setSpriteFlipX(v.enlargedId, cell.mirrored)
-        local size = engine.getTextureSize(handle)
+        local handle = applyFrame(v, v.enlargedId, frame, cell.mirrored)
+        local size = frameSize(frame, handle)
         local rect = size and fitRect(g.enlarged, size.width, size.height)
         if rect then
             UI.setSize(v.enlargedId, rect.width, rect.height)
@@ -368,14 +402,16 @@ function unitAnimationView.update(id, now)
         local idx = frameIndexAt(looping, fps, #c.frames, elapsed)
         if idx ~= c.frameIndex then
             c.frameIndex = idx
-            UI.setSpriteTexture(c.spriteId, v.requestTexture(c.frames[idx + 1]))
+            applyFrame(v, c.spriteId, c.frames[idx + 1], c.mirrored)
             if c.direction == v.direction and v.enlargedId then
                 v.frameIndex = idx
-                UI.setSpriteTexture(v.enlargedId, v.requestTexture(c.frames[idx + 1]))
+                applyFrame(v, v.enlargedId, c.frames[idx + 1], c.mirrored)
                 -- Frames of one animation are same-sized in every
-                -- shipped asset, but nothing enforces that — refit on
-                -- the frame change rather than assuming frame zero's
-                -- dimensions hold for the whole clip.
+                -- shipped asset, and an atlas animation's cells are
+                -- necessarily uniform — but a legacy clip's aren't
+                -- enforced to be, so refit on the frame change rather
+                -- than assuming frame zero's dimensions hold for the
+                -- whole clip.
                 v.fitKey = nil
             end
         elseif c.direction == v.direction then
@@ -427,6 +463,7 @@ function unitAnimationView.dump(id)
         -- the real element rather than a self-reported guess that a
         -- geometry bug could leave stale.
         local info = UI.getElementInfo(c.hitId)
+        local shown = c.frames[math.max(1, c.frameIndex + 1)]
         table.insert(dirs, {
             direction = c.direction,
             source = c.source,
@@ -434,11 +471,19 @@ function unitAnimationView.dump(id)
             frameIndex = c.frameIndex,
             frameCount = #c.frames,
             handle = c.hitId,
+            -- The frame this cell is actually SHOWING (#1260): the
+            -- texture it samples and the sub-rect within it, so a probe
+            -- can prove the atlas path is on screen rather than trusting
+            -- a storage label reported once at the animation level.
+            texturePath = shown and shown.path or nil,
+            uv = shown and { u0 = shown.u0, v0 = shown.v0,
+                             u1 = shown.u1, v1 = shown.v1 } or nil,
             bounds = info and {
                 x = info.x, y = info.y, w = info.width, h = info.height,
             } or c.bounds,
         })
     end
+    local shownCell = cell and cell.frames[math.max(1, v.frameIndex + 1)]
     local out = {
         animation = v.anim and v.anim.name or nil,
         direction = v.direction,
@@ -447,6 +492,16 @@ function unitAnimationView.dump(id)
         frameCount = cell and #cell.frames or 0,
         ready = v.ready,
         directions = dirs,
+        -- Storage mode (#1260). Stated outright rather than left for a
+        -- probe to infer from a path shape: `atlas` is the compiled
+        -- image every frame of this clip samples, present only when the
+        -- unit's index declared this animation atlas-backed, and
+        -- `cell` is the index's own frame geometry.
+        storage = (v.anim and v.anim.atlas) and "atlas" or "legacy",
+        atlas = v.anim and v.anim.atlas or nil,
+        texturePath = shownCell and shownCell.path or nil,
+        cell = (shownCell and shownCell.width)
+            and { width = shownCell.width, height = shownCell.height } or nil,
     }
     -- Assigned, never written as `x and y or z`: every field below can
     -- legitimately BE false, and Lua's and/or collapses that to the
