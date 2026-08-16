@@ -1237,6 +1237,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.TextTruncation
                    Test.Headless.Lua.WidthTruncation
                    Test.Headless.Lua.ShellInput
+                   Test.Headless.Lua.RandomStream
                    Test.Headless.Graphics.BindlessRebind
                    Test.Headless.Graphics.BindlessRelease
     build-depends: base >=4.20 && <5
