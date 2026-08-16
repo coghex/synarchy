@@ -68,17 +68,32 @@ local function applyFrame(v, elemId, frame, mirrored)
     return handle
 end
 
--- The frame's own pixel size. An atlas frame knows it from the compiled
--- index (the whole-sheet texture size would be meaningless); a legacy
--- frame's image IS the frame, so it falls through to the engine's
--- texture-size map exactly as before — and answers nil until the upload
--- lands, which is what keeps reflow() retrying.
+-- The frame's own pixel size, and nil until its texture is actually
+-- RESIDENT.
+--
+-- Those are two separate questions and both have to be answered here.
+-- engine.getTextureSize is the readiness handshake this view has always
+-- used: it answers nil until the upload lands, which is what keeps
+-- reflow() retrying and what gates v.ready (and so previewManager's
+-- state == "ready"). An atlas frame knows its own SIZE from the compiled
+-- index without asking the engine anything — but the index says nothing
+-- about whether the sheet has uploaded, so answering from it alone would
+-- report a laid-out, ready view over a texture that is not there yet: a
+-- blank panel, and a probe free to race its assertions. So ask the
+-- engine first, then take the DIMENSIONS from the index, because for an
+-- atlas the resident image is the whole sheet and its size is not the
+-- frame's.
 local function frameSize(frame, handle)
+    if not handle then return nil end
+    local resident = engine.getTextureSize(handle)
+    if not resident or not resident.width or not resident.height
+        or resident.width <= 0 or resident.height <= 0 then
+        return nil
+    end
     if frame and frame.width and frame.height then
         return { width = frame.width, height = frame.height }
     end
-    if not handle then return nil end
-    return engine.getTextureSize(handle)
+    return resident
 end
 
 -- Fit (w,h) inside (boxW,boxH) preserving aspect ratio — the same rule
