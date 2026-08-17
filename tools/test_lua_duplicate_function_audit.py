@@ -272,6 +272,98 @@ def test_singleton_near_misses_are_attributed_failures():
                 f"a declaration {label}")
 
 
+MASKED_BY_PRIVATE_TABLE = """\
+local widget = { value = 1 }
+local instances = {}
+
+function widget.f(a)
+    return a
+end
+
+function widget.f(a, b)
+    return a, b
+end
+"""
+
+
+def test_unrecognized_declaration_is_not_masked_by_a_later_private_table():
+    # PR #1351 round-1 review: identifying the module table as the first
+    # ACCEPTED declaration let an unrecognized one fall through to the
+    # private table below it, so the file was reported as a clean
+    # analysis of `instances` while both `widget.f` definitions went
+    # unseen. Nearly every shipped widget module declares such a private
+    # table, so this is the reachable form of the skip #1324 fixed.
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        _write(root, "scripts/ui/widget.lua", MASKED_BY_PRIVATE_TABLE)
+        code, output = _run(root)
+        _expect_failure(
+            code, output,
+            ["scripts/ui/widget.lua", "widget", "no recognized declaration"],
+            "an unrecognized declaration followed by a private table")
+        # The file must not be counted as analyzed on the strength of
+        # the private table it fell through to.
+        expect("1 files" in output and "0 analyzed" in output,
+               f"a file whose exports were not attributed must not count "
+               f"as analyzed, got: {output!r}")
+
+
+def test_the_same_file_with_a_recognized_declaration_reports_its_duplicate():
+    # The positive counterpart: repairing only the declaration turns the
+    # attribution failure into the duplicate it was hiding, which proves
+    # the new rule did not simply make the shape fail unconditionally.
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        _write(root, "scripts/ui/widget.lua",
+               MASKED_BY_PRIVATE_TABLE.replace("local widget = { value = 1 }",
+                                               "local widget = {}", 1))
+        code, output = _run(root)
+        _expect_failure(
+            code, output,
+            ["scripts/ui/widget.lua", "widget.f", "first at line 4"],
+            "the same file once its module table is recognized")
+
+
+def test_export_attached_to_an_undeclared_table_is_an_attributed_failure():
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        _write(root, "scripts/ui/widget.lua", """\
+local widget = {}
+
+function widget.f()
+end
+
+function other.g()
+end
+""")
+        code, output = _run(root)
+        _expect_failure(
+            code, output,
+            ["scripts/ui/widget.lua", "other", "no recognized declaration"],
+            "an export attached to a table declared nowhere in the file")
+
+
+def test_export_attached_to_a_declared_private_table_is_attributed():
+    # The positive counterpart of the case above: declaring the table by
+    # an accepted form attributes its exports, so they are recognized
+    # (though still not duplicate-tracked -- that scope is unchanged).
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        _write(root, "scripts/ui/widget.lua", """\
+local widget = {}
+local other = {}
+
+function widget.f()
+end
+
+function other.g()
+end
+""")
+        code, output = _run(root)
+        _expect_clean(code, output, 1,
+                      "an export attached to a declared private table")
+
+
 def test_trailing_code_after_a_declaration_is_an_attributed_failure():
     # Only a `--` comment may follow either declaration. Trailing code is
     # unparsed, so it is reported rather than absorbed -- the positive
@@ -420,12 +512,6 @@ end
 function widget:method(extra)
 end
 
-function other.f()
-end
-
-function other.f()
-end
-
 do
     function widget.f()
     end
@@ -440,9 +526,8 @@ widget.assigned = function() end
         code, output = _run(root)
         _expect_clean(
             code, output, 1,
-            "duplicated local helpers, colon methods, foreign-table "
-            "functions, nested and indented definitions, and assigned "
-            "anonymous functions")
+            "duplicated local helpers, colon methods, nested and indented "
+            "definitions, and assigned anonymous functions")
 
 
 def test_nested_directories_and_non_lua_files_are_out_of_scope():
@@ -469,6 +554,10 @@ TESTS = [
     test_first_declaration_wins_over_later_private_tables,
     test_table_with_initializer_is_an_attributed_failure,
     test_singleton_near_misses_are_attributed_failures,
+    test_unrecognized_declaration_is_not_masked_by_a_later_private_table,
+    test_the_same_file_with_a_recognized_declaration_reports_its_duplicate,
+    test_export_attached_to_an_undeclared_table_is_an_attributed_failure,
+    test_export_attached_to_a_declared_private_table_is_attributed,
     test_trailing_code_after_a_declaration_is_an_attributed_failure,
     test_recognized_declaration_passes_where_the_near_miss_failed,
     test_unreadable_file_is_an_attributed_failure,

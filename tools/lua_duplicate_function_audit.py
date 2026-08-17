@@ -34,6 +34,15 @@ covering less than it claimed:
     scan, so a moved directory or an edited glob would have disabled the
     guard with CI still green. An empty corpus is now a failure.
 
+A third, subtler form of the first one is closed with it: identifying
+the module table as the first ACCEPTED declaration means a file whose
+real module table is unrecognized can fall through to a later PRIVATE
+table (`local widget = { value = 1 }` followed by `local instances =
+{}`) and report a clean analysis of the wrong table, hiding duplicate
+`widget.*` exports. So an export attached to a table no accepted
+declaration covers is reported too -- recognition is tied to the
+exports, not merely to the first declaration that happens to parse.
+
 The supported module-table grammar stays deliberately CLOSED -- exactly
 the two forms below. Anything else is reported as an unrecognized
 declaration rather than absorbed by widening the pattern: this
@@ -83,17 +92,20 @@ DECLARATION_FORMS = ('local <name> = {}',
 FUNC_DEF_RE = re.compile(r'^function\s+(\w+)\.(\w+)\s*\(')
 
 
-def module_table_name(lines: list[str]) -> str | None:
-    """The module table this file attaches its exports to, or None.
+def declared_tables(lines: list[str]) -> list[str]:
+    """Every table declared by an accepted form, in source order.
 
-    The first line matching either accepted form wins: these modules
-    declare their own table before the private tables that follow it.
+    The first is the module table -- these modules declare their own
+    table before the private tables that follow it. The rest are those
+    private tables, which are not duplicate-tracked but ARE recognized,
+    so an export attached to one is attributed rather than orphaned.
     """
+    names: list[str] = []
     for line in lines:
         m = MODULE_TABLE_RE.match(line) or SINGLETON_TABLE_RE.match(line)
-        if m:
-            return m.group(1)
-    return None
+        if m and m.group(1) not in names:
+            names.append(m.group(1))
+    return names
 
 
 def check_file(path: Path, repo_root: Path) -> tuple[bool, list[str]]:
@@ -113,8 +125,8 @@ def check_file(path: Path, repo_root: Path) -> tuple[bool, list[str]]:
             f"is in scope but was not analyzed"]
 
     lines = text.splitlines()
-    name = module_table_name(lines)
-    if name is None:
+    declared = declared_tables(lines)
+    if not declared:
         return False, [
             f"{rel}: unrecognized module-table declaration -- no "
             f"column-zero `{DECLARATION_FORMS[0]}` or "
@@ -122,11 +134,25 @@ def check_file(path: Path, repo_root: Path) -> tuple[bool, list[str]]:
             f"file's exported functions were analyzed. Fix the "
             f"declaration rather than widening the audit's grammar."]
 
+    name = declared[0]
     seen: dict[str, int] = {}
+    orphans: dict[str, int] = {}
     failures: list[str] = []
     for lineno, line in enumerate(lines, start=1):
         m = FUNC_DEF_RE.match(line)
-        if not m or m.group(1) != name:
+        if not m:
+            continue
+        table = m.group(1)
+        if table not in declared:
+            # An export attached to a table no accepted declaration
+            # covers. Identifying the module table by "first accepted
+            # declaration" alone would let this file fall through to a
+            # later PRIVATE table and report a clean analysis of the
+            # wrong one, which is the same false-green class this guard
+            # exists to close -- so it is reported, not guessed at.
+            orphans.setdefault(table, lineno)
+            continue
+        if table != name:
             continue
         fn = m.group(2)
         if fn in seen:
@@ -136,7 +162,17 @@ def check_file(path: Path, repo_root: Path) -> tuple[bool, list[str]]:
                 f"overwrites the earlier one in the module table")
         else:
             seen[fn] = lineno
-    return True, failures
+
+    for table, lineno in orphans.items():
+        failures.append(
+            f"{rel}:{lineno}: `function {table}.` definitions attach to "
+            f"`{table}`, which has no recognized declaration in this file "
+            f"(recognized here: {', '.join(declared)}) -- so they were not "
+            f"analyzed. A declaration the grammar does not accept is "
+            f"reported rather than silently replaced by another table; fix "
+            f"the declaration rather than widening the audit's grammar.")
+
+    return not orphans, failures
 
 
 def main(repo_root: Path = REPO_ROOT) -> int:
