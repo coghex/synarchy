@@ -71,6 +71,7 @@ echo "==> [5/17] lua module line budget"
 python3 tools/lua_module_budget.py
 
 echo "==> [6/17] lua duplicate function audit"
+python3 tools/test_lua_duplicate_function_audit.py
 python3 tools/lua_duplicate_function_audit.py
 
 echo "==> [7/17] haskell module line budget"
