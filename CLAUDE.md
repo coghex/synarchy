@@ -32,7 +32,7 @@ seconds and the expensive gates at the end.
    `EngineEnv`'s field set or `docs/engineenv_capability_inventory.md`
    changes; a module-budget guard only when changing a capped module;
    `test_audit.py` only when changing `world_audit.py`/`world_check.py`;
-   `test_run_probes.py` (deterministic, GPU-free, ~10 s) only when
+   `test_run_probes.py` (deterministic, GPU-free, ~15 s) only when
    changing `run_probes.py`;
    `findings_report_audit.py` only when editing a findings report;
    the unit-asset gate (`test_pack_atlas.py` +

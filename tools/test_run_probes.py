@@ -23,7 +23,8 @@ with the SIGTERM-to-SIGKILL escalation, a shutting-down runner refusing
 to launch one more probe, runner interruption (a real SIGINT to a real
 runner process), parallel cancellation, an interrupt landing DURING
 future submission, a probe launched into an already-starting shutdown,
-and an interrupt landing in the launch window itself.
+an interrupt landing in the launch window itself, and a retry rebinding
+the port a SIGKILLed engine had held.
 
 Usage:
   python3 tools/test_run_probes.py
@@ -34,6 +35,7 @@ from __future__ import annotations
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -66,12 +68,37 @@ def expect(cond: bool, msg: str) -> None:
 DESCENDANT_SRC = textwrap.dedent("""\
     # Stands in for the engine a probe boots: records its pid so the test
     # can check it is gone, then outlives its parent unless signalled.
-    import os, signal, sys, time
+    #
+    # Given a port it also BINDS it, the way a real engine's debug console
+    # does, and appends whether the bind succeeded to a shared log. That
+    # log is how a retry proves the port was genuinely released rather
+    # than merely signalled -- #1190 aborts a boot that cannot bind.
+    import os, signal, socket, sys, time
     pidfile, term_policy = sys.argv[1], sys.argv[2]
+    port = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+    bindlog = sys.argv[4] if len(sys.argv) > 4 else None
     if term_policy == "ignore-term":
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    held = None
+    if port:
+        held = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            held.bind(("127.0.0.1", port))
+            held.listen(4)
+            outcome = "bound"
+        except OSError:
+            outcome = "inuse"
+        if bindlog:
+            with open(bindlog, "a") as fh:
+                print(outcome, file=fh)
+                fh.flush()
+                os.fsync(fh.fileno())
     with open(pidfile, "w") as fh:
         fh.write(str(os.getpid()))
+        fh.flush()
+        os.fsync(fh.fileno())
+    with open(pidfile + ".all", "a") as fh:
+        print(os.getpid(), file=fh)
         fh.flush()
         os.fsync(fh.fileno())
     time.sleep(600)
@@ -81,7 +108,7 @@ DESCENDANT_SRC = textwrap.dedent("""\
 def probe_src(root: Path, name: str, *, exit_code: int = 0,
               tail_lines: int = 0, hang: bool = False,
               ignore_term: bool = False, engine_ignores_term: bool = False,
-              descendant: bool = True) -> str:
+              descendant: bool = True, hold_port: int = 0) -> str:
     """A synthetic probe that boots a synthetic 'engine' the way probelib does.
 
     ``ignore_term`` and ``engine_ignores_term`` are independent on purpose:
@@ -110,9 +137,14 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
             # this probe's group) and output to a log file, NOT the pipe
             # run_probes is reading -- which is why communicate() returns
             # as soon as this probe exits.
+            # Clear the previous attempt's marker first: `--retries` reuses
+            # these paths, and waiting on a STALE pidfile would let this
+            # probe exit before its own engine had started.
+            f"try:\n    os.unlink({str(pidfile)!r})\nexcept OSError:\n    pass",
             f"log = open({str(logfile)!r}, 'w')",
             f"subprocess.Popen([sys.executable, {str(root / '_descendant.py')!r},"
-            f" {str(pidfile)!r}, {term_policy!r}], stdout=log,"
+            f" {str(pidfile)!r}, {term_policy!r}, {str(hold_port)!r},"
+            f" {str(root / (name + '.binds'))!r}], stdout=log,"
             " stderr=subprocess.STDOUT)",
             # Do not exit before the descendant has recorded its pid, or
             # the test would have nothing to look for.
@@ -160,12 +192,28 @@ class Tree:
     def started(self, name: str) -> bool:
         return (self.root / f"{name}.started").exists()
 
+    def engine_pids(self, name: str) -> list[int]:
+        """Every engine pid this probe booted, one per attempt."""
+        try:
+            raw = (self.root / f"{name}.enginepid.all").read_text()
+        except OSError:
+            return []
+        return [int(tok) for tok in raw.split() if tok.isdigit()]
+
+    def binds(self, name: str) -> list[str]:
+        """One entry per attempt: "bound" or "inuse"."""
+        try:
+            raw = (self.root / f"{name}.binds").read_text()
+        except OSError:
+            return []
+        return raw.split()
+
     def cleanup(self) -> None:
         # Belt and braces: never leave a synthetic descendant behind even
         # if an assertion failed before the runner reaped it.
         for name, _, _ in self.probes:
-            pid = self.engine_pid(name)
-            if pid is not None:
+            for pid in self.engine_pids(name) or ([self.engine_pid(name)]
+                                                  if self.engine_pid(name) else []):
                 try:
                     os.kill(pid, signal.SIGKILL)
                 except OSError:
@@ -453,11 +501,14 @@ def test_retry_reaps_between_attempts() -> None:
     try:
         tree.add("flaky", exit_code=1)
         rc, out = _main_with(tree, ["--only", "flaky", "--exact", "--retries", "1"])
-        pid = tree.engine_pid("flaky")
+        pids = tree.engine_pids("flaky")
         expect(rc == 1, f"the probe still fails after its retry (got {rc})")
         expect(out.count("retrying solo") == 1, "exactly one retry was announced")
-        expect(pid is not None and wait_pid_gone(pid),
-               "no engine from either attempt is left running")
+        expect(len(pids) == 2,
+               f"both attempts really booted an engine (got {pids})")
+        alive = [pid for pid in pids if not wait_pid_gone(pid)]
+        expect(not alive,
+               f"no engine from EITHER attempt is left running (alive: {alive})")
     finally:
         tree.cleanup()
 
@@ -666,9 +717,15 @@ def test_ctrl_c_in_the_launch_window_leaves_nothing() -> None:
             # pgid. Undeferred, the KeyboardInterrupt lands here and the
             # Popen object never reaches run_one at all, so nothing can
             # reap the probe or the engine it goes on to boot.
+            #
+            # ONCE, and only for the probe launch. This patches the shared
+            # subprocess module, and the reap itself shells out to `ps`;
+            # firing again there would interrupt the teardown being tested
+            # and look exactly like the leak this case is checking for.
             proc = real_popen(*a, **kw)
-            launched["pgid"] = proc.pid
-            os.kill(os.getpid(), signal.SIGINT)
+            if not launched:
+                launched["pgid"] = proc.pid
+                os.kill(os.getpid(), signal.SIGINT)
             return proc
 
         raised = None
@@ -733,8 +790,155 @@ def test_liveness_check_does_not_count_a_zombie_as_running() -> None:
         live.wait()
 
 
+def free_port() -> int:
+    """A port nothing is listening on right now."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def test_reap_returns_only_once_the_group_is_observed_gone() -> None:
+    print("\n-- the reap does not return on the SIGKILL, but on the group going")
+    # Sending SIGKILL is not the group being gone: delivery and teardown
+    # are asynchronous. Asserted on the reap's OWN last observation rather
+    # than by racing it, so the case is deterministic.
+    tree = Tree()
+    try:
+        script = tree.add("kill_wait", exit_code=1, engine_ignores_term=True)
+        seen: list[bool] = []
+        real_running = run_probes._group_running
+
+        def watched(pgid: int) -> bool:
+            answer = real_running(pgid)
+            seen.append(answer)
+            return answer
+
+        # _group_running is the predicate the reap gates its return on: a
+        # zombie is not a running member, so this is what "the group is
+        # gone" actually means for a port about to be reused.
+        run_probes._group_running = watched
+        try:
+            with patched(tree):
+                run_probes.run_one(script, None, 120.0)
+        finally:
+            run_probes._group_running = real_running
+        expect(bool(seen), "the reap really did inspect the group")
+        expect(True in seen,
+               "it saw a live member first -- otherwise it reaped nothing and "
+               "this case proves nothing")
+        expect(seen and seen[-1] is False,
+               f"its LAST look saw the group empty before returning "
+               f"(observations ended {seen[-3:]})")
+    finally:
+        tree.cleanup()
+
+
+def test_retry_can_rebind_the_port_a_killed_engine_held() -> None:
+    print("\n-- a retry can bind the port a SIGTERM-ignoring engine held")
+    tree = Tree()
+    try:
+        port = free_port()
+        # Attempt 1 leaks an engine that ignores SIGTERM and owns `port`.
+        # Only a reap that SIGKILLs it AND waits for the port to be
+        # released lets attempt 2's engine bind the same port; otherwise
+        # the retry hits exactly the #1190 abort this PR is about.
+        tree.add("rebind", exit_code=1, engine_ignores_term=True,
+                 hold_port=port)
+        rc, out = _main_with(tree, ["--only", "rebind", "--exact",
+                                    "--retries", "1", "--port", str(port)])
+        binds = tree.binds("rebind")
+        expect(rc == 1, f"the probe still fails on both attempts (got {rc})")
+        expect(len(binds) == 2,
+               f"both attempts really booted an engine that tried to bind "
+               f"(got {binds})")
+        expect(binds == ["bound", "bound"],
+               f"the retry's engine bound the same port the first one held "
+               f"(got {binds})")
+    finally:
+        tree.cleanup()
+
+
+def test_the_synthetic_fixtures_are_valid_python() -> None:
+    print("\n-- the synthetic probe and engine sources are valid Python")
+    # These are generated source strings, and a mistake in one does NOT
+    # announce itself. An unescaped newline inside DESCENDANT_SRC once
+    # defeated textwrap.dedent, leaving every line indented and the engine
+    # unable to start at all: nothing booted, so nothing needed reaping,
+    # and the suite reported sixteen "the engine is gone" failures instead
+    # of one broken fixture. Compiling them here names that mistake.
+    tree = Tree()
+    try:
+        problems = []
+        try:
+            compile(DESCENDANT_SRC, "<descendant>", "exec")
+        except SyntaxError as exc:
+            problems.append(f"DESCENDANT_SRC: {exc}")
+        expect(DESCENDANT_SRC.splitlines()[0].startswith("#"),
+               "DESCENDANT_SRC really was dedented (first line is flush left)")
+        # One of every shape the cases below actually generate.
+        variants = {
+            "plain": {},
+            "failing": {"exit_code": 1, "tail_lines": 3},
+            "hanging": {"hang": True, "ignore_term": True},
+            "stubborn engine": {"engine_ignores_term": True},
+            "no engine": {"descendant": False},
+            "port holder": {"hold_port": 9999},
+        }
+        for label, kw in variants.items():
+            try:
+                compile(probe_src(tree.root, "fixture", **kw),
+                        f"<probe {label}>", "exec")
+            except SyntaxError as exc:
+                problems.append(f"probe_src({label}): {exc}")
+        expect(not problems, f"every generated source compiles ({problems})")
+    finally:
+        tree.cleanup()
+
+
+def test_group_running_ignores_a_zombie_only_group() -> None:
+    print("\n-- a group holding only a zombie does not count as running")
+    # This is what lets the reap's waits finish promptly instead of
+    # spending the whole grace, and then the post-SIGKILL settle, on an
+    # engine that has already exited and released its port. Signals cannot
+    # see the difference: a zombie-only group answers EPERM on macOS and
+    # succeeds on Linux, so killpg alone calls it alive either way.
+    #
+    # Tested directly, because the platform decides whether it is even
+    # reachable end to end: macOS reaps orphans through launchd almost at
+    # once, while a container's PID 1 may never reap at all.
+    child = subprocess.Popen([sys.executable, "-c", "pass"],
+                             start_new_session=True)
+    pgid = child.pid
+    try:
+        deadline = time.monotonic() + 15.0
+        while time.monotonic() < deadline:
+            if process_state(pgid) == "Z":
+                break
+            time.sleep(0.05)
+        expect(process_state(pgid) == "Z",
+               f"the child is a zombie and nothing has reaped it "
+               f"(state {process_state(pgid)!r})")
+        expect(run_probes._group_alive(pgid) is True,
+               "signals still report its group -- so the distinction below is "
+               "real here, not an artifact of it having already gone")
+        expect(run_probes._group_running(pgid) is False,
+               "but nothing in it is RUNNING")
+    finally:
+        child.wait()
+    live = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                            start_new_session=True)
+    try:
+        expect(run_probes._group_running(live.pid) is True,
+               "while a group with a live member still counts as running")
+    finally:
+        live.kill()
+        live.wait()
+
+
 def main() -> int:
+    test_the_synthetic_fixtures_are_valid_python()
     test_liveness_check_does_not_count_a_zombie_as_running()
+    test_group_running_ignores_a_zombie_only_group()
     test_success_reaps_the_engine()
     test_failure_reaps_the_engine_and_keeps_the_tail()
     test_clean_probe_is_unaffected()
@@ -749,6 +953,8 @@ def main() -> int:
     test_ctrl_c_during_submission_starts_nothing_more()
     test_probe_launched_into_shutdown_is_killed_promptly()
     test_ctrl_c_in_the_launch_window_leaves_nothing()
+    test_reap_returns_only_once_the_group_is_observed_gone()
+    test_retry_can_rebind_the_port_a_killed_engine_held()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:

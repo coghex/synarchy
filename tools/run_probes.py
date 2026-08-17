@@ -313,6 +313,12 @@ DEFAULT_TIMEOUT = 900.0
 # because by then the leader has already been reaped).
 GROUP_GRACE = 10.0
 
+# How long to wait for a SIGKILLed group to actually empty. Short by
+# design: SIGKILL cannot be blocked, so this covers the asynchronous
+# delivery and teardown — during which the engine still holds its port —
+# rather than giving anything a second chance to shut down cleanly.
+KILL_SETTLE = 5.0
+
 
 # --------------------------------------------------------------------------
 # Process-group teardown (#1323)
@@ -336,7 +342,46 @@ def _signal_group(pgid: int, sig: int) -> bool:
 
 
 def _group_alive(pgid: int) -> bool:
+    """True while any process — running OR zombie — remains in the group."""
     return _signal_group(pgid, 0)
+
+
+def _group_states(pgid: int) -> list[str] | None:
+    """Process state of every member of ``pgid``, or None if unreadable."""
+    try:
+        done = subprocess.run(["ps", "-eo", "pgid=,state="],
+                              capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    states = []
+    for line in done.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0].isdigit() and int(parts[0]) == pgid:
+            states.append(parts[1])
+    return states
+
+
+def _group_running(pgid: int) -> bool:
+    """True while the group holds a member that has NOT yet exited.
+
+    A zombie does not count. It has already exited — releasing its port
+    and every other resource — and is only waiting to be reaped, which
+    nothing may ever do for a process orphaned under an init that does not
+    reap (a container's PID 1, typically). Signals cannot tell the two
+    apart: a zombie-only group answers EPERM on macOS and succeeds on
+    Linux, so `killpg` alone reports a long-dead engine as live and would
+    spend the entire grace, and then the post-SIGKILL settle, waiting for
+    something that has already released the port.
+
+    Falls back to the signal answer when states cannot be read, erring
+    towards waiting rather than towards calling a live engine gone.
+    """
+    states = _group_states(pgid)
+    if states is None:
+        return _group_alive(pgid)
+    return any(not state.startswith("Z") for state in states)
 
 
 def reap_group(pgid: int, grace: float | None = None) -> None:
@@ -358,21 +403,49 @@ def reap_group(pgid: int, grace: float | None = None) -> None:
     Reaping an empty group is a no-op. Once ``communicate()`` has reaped
     the probe leader there is nothing left to wait on, so the SIGTERM grace
     is spent polling the GROUP for liveness before escalating to SIGKILL.
+
+    It does not return until the group is OBSERVED empty (or the budget
+    runs out). Sending SIGKILL is not the same as the group being gone —
+    delivery and teardown are asynchronous — and until its last member
+    exits, the engine still owns the listening port. Returning early would
+    hand that port straight to the next `--retries` attempt and recreate
+    the #1190 boot abort this reap exists to prevent.
     """
     if grace is None:
         grace = GROUP_GRACE
-    # Check first: the common case is an empty group, and skipping the
-    # signal entirely there keeps this from ever addressing a recycled pid.
+    # Signal-only fast path: an empty group is the ordinary case, and
+    # answering it without spawning `ps` keeps this free for every probe
+    # that tore its own engine down. It also means a recycled pid is never
+    # signalled.
     if not _group_alive(pgid):
+        return
+    if not _group_running(pgid):
         return
     if not _signal_group(pgid, signal.SIGTERM):
         return
-    deadline = time.monotonic() + grace
-    while time.monotonic() < deadline:
-        if not _group_alive(pgid):
-            return
-        time.sleep(0.1)
+    if _wait_group_stopped(pgid, grace):
+        return
     _signal_group(pgid, signal.SIGKILL)
+    # SIGKILL cannot be blocked, so this is a short settle rather than
+    # another full grace — the members are already condemned.
+    if _wait_group_stopped(pgid, KILL_SETTLE):
+        return
+    # Say so rather than let the retry fail as an unexplained "exited
+    # before READY", which is the confusion #1323 is about.
+    print(f"warning: process group {pgid} still had a running member after "
+          f"SIGKILL; a retry reusing its port may fail to bind",
+          file=sys.stderr)
+
+
+def _wait_group_stopped(pgid: int, budget: float) -> bool:
+    """Poll until nothing in the group is still running, or time runs out."""
+    deadline = time.monotonic() + budget
+    while True:
+        if not _group_running(pgid):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.2)
 
 
 class _DeferSigint:

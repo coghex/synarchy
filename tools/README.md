@@ -535,6 +535,15 @@ never alters a probe's status, elapsed time, or output tail. Ctrl-C exits
 130 after terminating every probe still running, its engine included, and
 launches none of the probes still queued.
 
+The reap returns only once nothing in the group is still RUNNING, not when
+the signal is sent: SIGKILL delivery is asynchronous, and until the last
+member exits it still owns the port the next retry is about to reuse. A
+ZOMBIE deliberately does not count as running there — it has already
+exited and released its port, and signals cannot tell it apart from a live
+process (a zombie-only group answers EPERM on macOS and succeeds on
+Linux), so the reap consults process state and would otherwise spend its
+whole grace on an engine that was long gone.
+
 `python3 tools/test_run_probes.py` is that behavior's gate: deterministic,
 GPU-free, synthetic probes and synthetic engine descendants in a throwaway
 tree, no registered probe ever run. It is a blocking CI step alongside
