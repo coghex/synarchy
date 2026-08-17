@@ -123,11 +123,18 @@ function M.clauses(detail, mech)
     -- 1. Detect severs: a structural (bone/cartilage) layer at/above the
     --    sever threshold under a cut/blunt removes the whole subpart; its
     --    other layers are then IMPLIED (suppressed).
+    --    The membership set answers "is this subpart severed?"; the array
+    --    beside it remembers the order the severs were FIRST seen, so the
+    --    clause below reads in encounter order like the layer clauses do
+    --    (pairs order is undefined, and its per-state string hash made the
+    --    list arbitrary within a session and different across sessions).
     local severed = {}     -- sub -> true
+    local severOrder = {}  -- subs, in first-severed order
     for _, d in ipairs(detail) do
         if (d.material == "bone" or d.material == "cartilage")
-           and d.sev >= SEVER_SEVERITY then
+           and d.sev >= SEVER_SEVERITY and not severed[d.sub] then
             severed[d.sub] = true
+            severOrder[#severOrder + 1] = d.sub
         end
     end
 
@@ -180,7 +187,7 @@ function M.clauses(detail, mech)
     local clauses = {}
     -- Sever clauses first (the dramatic ones).
     local severList = {}
-    for sub, _ in pairs(severed) do severList[#severList + 1] = "the " .. sub end
+    for _, sub in ipairs(severOrder) do severList[#severList + 1] = "the " .. sub end
     if #severList > 0 then
         local v = SEVER_VERB[mech] or SEVER_VERB.default
         clauses[#clauses + 1] = v .. " " .. listJoin(severList)
