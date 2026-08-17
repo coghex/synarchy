@@ -79,6 +79,8 @@ registerUnitAPI env = do
   registerLuaFunction "advanceTransferOrder" (unitAdvanceTransferOrderFn env)
   registerLuaFunction "commitTransferOrder"  (unitCommitTransferOrderFn env)
   registerLuaFunction "failTransferOrder"    (unitFailTransferOrderFn env)
+  registerLuaFunction "cancelTransferOrder"  (unitCancelTransferOrderFn env)
+  registerLuaFunction "pruneTransferOrder"   (unitPruneTransferOrderFn env)
   registerLuaFunction "transitionTo" (unitTransitionToFn env)
   registerLuaFunction "getPose"      (unitGetPoseFn env)
   registerLuaFunction "getFaction"   (unitGetFactionFn env)

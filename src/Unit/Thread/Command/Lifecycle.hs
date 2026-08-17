@@ -19,6 +19,7 @@ import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv)
 import Unit.Types
 import Unit.Sim.Types
+import Unit.Transfer.Live (retireTransferOrdersEverywhere)
 import World.Types (WorldManager(..), WorldState(..), LoadedChunk(..), columnIndex, lookupChunk)
 import World.Generate (globalToChunk)
 
@@ -33,6 +34,15 @@ handleUnitDestroyCommand env utsRef uid = do
             }, ())
     atomicModifyIORef' utsRef $ \uts →
         (uts { utsSimStates = HM.delete uid (utsSimStates uts) }, ())
+    -- A durable transfer order (#1246) outliving its carrier is an
+    -- ORPHAN: the executor prunes an order at its terminal transition,
+    -- but a destroyed unit never ticks again, so nothing else would ever
+    -- retire it and it would ride every later save with a dangling
+    -- acting-unit reference (#1253). Runs AFTER the instance is gone,
+    -- like the demolition twins in "Building.Thread.Command", so no
+    -- reader can observe an order whose carrier is half-removed.
+    retireTransferOrdersEverywhere (wsWorldManagerRef (toWorldSimCapability env))
+                                   uid
 
 handleUnitClearAllCommand ∷ EngineEnv → IORef UnitThreadState → IO ()
 handleUnitClearAllCommand env utsRef = do

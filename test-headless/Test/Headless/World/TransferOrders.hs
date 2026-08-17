@@ -53,13 +53,17 @@ import Unit.Transfer
     , requestFailure, staleFailure )
 import Unit.Transfer.Orders
     ( TransferOrder(..), TransferOrderId(..), TransferOrders(..)
-    , addTransferOrder, emptyTransferOrders, transferOrderList )
+    , addTransferOrder, emptyTransferOrders, removeTransferOrder
+    , transferOrderList )
+import World.Save.Integrity (OrderRef(..), transferOrderRefs)
 
-pageId ∷ WorldPageId
-pageId = WorldPageId "tro_live_w8"
+pageId, prunedPageId ∷ WorldPageId
+pageId       = WorldPageId "tro_live_w8"
+prunedPageId = WorldPageId "tro_pruned_w8"
 
-slotName ∷ Text
-slotName = "tro_live_spec"
+slotName, prunedSlotName ∷ Text
+slotName       = "tro_live_spec"
+prunedSlotName = "tro_pruned_spec"
 
 entry ∷ Int64 → Text → TransferState → QueuedTransfer
 entry iid nm st = QueuedTransfer
@@ -115,6 +119,30 @@ liveOrders =
                 (TransferFailed (staleFailure ReasonInstanceMissing))
             ] }
 
+-- | The store as it stands at the moment #1253's executor has just
+--   surfaced a terminal outcome: one live order still in flight, and one
+--   that has already failed against an endpoint that no longer exists.
+--
+--   The demolished building (999) is named by the TERMINAL order alone,
+--   which is what makes the assertions below discriminating: if a save
+--   ever carried a terminal order again, that id would reappear in the
+--   reference graph the integrity sweep walks.
+liveAndTerminalOrders ∷ TransferOrders
+liveAndTerminalOrders =
+    let afterFirst = mustAdd (UnitId 11) stillWalking emptyTransferOrders
+    in mustAdd (UnitId 11) alreadyDead afterFirst
+  where
+    stillWalking = TransferBatch
+        { tbSource      = EndpointUnit (UnitId 11)
+        , tbDestination = EndpointBuilding (BuildingId 777)
+        , tbEntries     = [ entry 6001 "bandage" TransferInTransit ] }
+    alreadyDead = TransferBatch
+        { tbSource      = EndpointUnit (UnitId 11)
+        , tbDestination = EndpointBuilding (BuildingId 999)
+        , tbEntries =
+            [ entry 6002 "bandage"
+                (TransferFailed (staleFailure ReasonReceiverMissing)) ] }
+
 -- | Poll until the world thread has written the save file (mirrors
 --   "Test.Headless.World.Identity"'s helper). Fails after ~30 s.
 waitForFile ∷ FilePath → IO ()
@@ -128,8 +156,77 @@ waitForFile path = go (300 ∷ Int)
 spec ∷ SpecWith EngineEnv
 spec =
     describe "durable transfer orders survive the LIVE save/load path \
-             \(#1246)" $
-        it "a populated wsTransferOrdersRef is captured by the real \
+             \(#1246)" $ do
+      it "a save taken after a terminal outcome carries only LIVE orders, \
+         \and the pruned order's demolished endpoint is gone from the \
+         \reference graph the integrity sweep walks (#1253)" $ \env' →
+            let cleanup = removePathForcibly
+                            ("saves/" <> T.unpack prunedSlotName)
+            in (`finally` cleanup) $ do
+                cleanup
+
+                sendWorldCommand env' (WorldInit prunedPageId 45 8 3 Nothing)
+                ws ← waitForWorldInit env' prunedPageId 120
+                writeIORef (wsTransferOrdersRef ws) liveAndTerminalOrders
+
+                -- Before: the terminal order's demolished destination is
+                -- in the graph, so every save and load reports it.
+                let refsBefore = transferOrderRefs prunedPageId
+                                                   liveAndTerminalOrders
+                map orfValue refsBefore
+                    `shouldBe` ["11", "11", "777", "6001"
+                               , "11", "11", "999", "6002"]
+
+                -- The prune the executor performs on the tick that
+                -- surfaced the outcome — the exact store transition
+                -- @unit.pruneTransferOrder@ applies (its own terminality
+                -- gate and ownership scoping are driven against the real
+                -- verb in "Test.Headless.Unit.TransferOrderApi").
+                let pruned = fst (removeTransferOrder (TransferOrderId 2)
+                                                      liveAndTerminalOrders)
+                writeIORef (wsTransferOrdersRef ws) pruned
+
+                sendWorldCommand env'
+                    (WorldSave prunedPageId prunedSlotName
+                               "2026-08-16T00:00:00.000000Z" [] [] Nothing)
+                waitForFile ("saves/" <> T.unpack prunedSlotName
+                             <> "/world.synworld")
+
+                logger ← readIORef (loggerRef env')
+                (sd, _, _) ← loadWorld logger prunedSlotName HS.empty HS.empty
+                    ⌦ either (\(_, e) → expectationFailure (T.unpack e)
+                                     ≫ error "unreachable") pure
+
+                case find ((≡ prunedPageId) ∘ wpsPageId) (sdWorlds sd) of
+                    Nothing → expectationFailure "saved page missing"
+                    Just wps → do
+                        wpsTransferOrders wps `shouldBe` pruned
+                        map troId (transferOrderList (wpsTransferOrders wps))
+                            `shouldBe` [TransferOrderId 1]
+                        -- The allocator still travels at 3: pruning
+                        -- retires an id, it never rewinds the counter, so
+                        -- a loaded session cannot mint the dead order's
+                        -- id again.
+                        trosNextId (wpsTransferOrders wps) `shouldBe` 3
+                        -- …and the demolished building is nowhere in the
+                        -- graph the sweep walks, so it has nothing to
+                        -- report (requirement 5).
+                        map orfValue
+                            (transferOrderRefs prunedPageId
+                                               (wpsTransferOrders wps))
+                            `shouldBe` ["11", "11", "777", "6001"]
+
+                matReg ← readIORef (materialRegistryRef env')
+                staged ← stageSession env' logger sd matReg ⌦ either
+                    (\e → expectationFailure (T.unpack (renderStageError e))
+                            ≫ error "unreachable")
+                    pure
+                case find ((≡ prunedPageId) ∘ spPageId) (ssPages staged) of
+                    Nothing → expectationFailure "staged page missing"
+                    Just sp → readIORef (wsTransferOrdersRef (spWorldState sp))
+                                  `shouldReturn` pruned
+
+      it "a populated wsTransferOrdersRef is captured by the real \
            \WorldSave transaction and restored, verbatim and \
            \dangling-references-and-all, into the staged WorldState" $
             \env →

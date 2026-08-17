@@ -23,9 +23,17 @@
 --   @scripts/unit_ai_transfer.lua@ (#1247, UIT-2B): this module stays
 --   the pure store those drive, so the transitions below are the only
 --   way an order's state ever changes and the headless suite can
---   exercise them without an engine. Explicit cancellation and pruning
---   of terminal orders remain UIT-5A's — nothing here removes an order
---   because it finished, so a completed order stays inspectable.
+--   exercise them without an engine.
+--
+--   __The store holds LIVE work only__ (#1253, UIT-5A), the same rule
+--   'Craft.Bills' keeps: an order that reaches a terminal state has its
+--   outcome surfaced to the player once and is then PRUNED, so nothing
+--   terminal rides a save and the integrity sweep has nothing to report
+--   about a demolished endpoint. The durable history of what happened is
+--   the session's event log, not this store. Removal itself stays a
+--   caller's decision — 'removeTransferOrder' and 'removeOrdersForUnit'
+--   are the two ways out, and nothing here retires an order on its own
+--   just because 'Unit.Transfer.batchTerminal' has become true.
 --   The transient Mode A session
 --   (@scripts/transfer_session.lua@) stays transient — it registers a
 --   @saveModules.registerResetHook@ so a session never survives a load
@@ -46,6 +54,7 @@ module Unit.Transfer.Orders
     , addTransferOrder
     , transferOrderAllocatorExhausted
     , removeTransferOrder
+    , removeOrdersForUnit
     , updateTransferOrder
     , lookupTransferOrder
     , ordersForUnit
@@ -155,6 +164,27 @@ removeTransferOrder oid orders
     | HM.member oid (trosOrders orders) =
         (orders { trosOrders = HM.delete oid (trosOrders orders) }, True)
     | otherwise = (orders, False)
+
+-- | Drop every order @uid@ is the ACTING unit of, and say how many went
+--   (#1253). The orphan half of terminal cleanup: the executor prunes an
+--   order when it terminalises, but a carrier that stops existing never
+--   reaches that transition, and its orders would then sit pending in
+--   this store forever, ride every save, and report their vanished
+--   carrier as a dangling reference on every integrity sweep.
+--
+--   Filters on 'troUnit' ALONE, deliberately. A unit that is merely an
+--   ENDPOINT of somebody else's order is not orphaned by its own death:
+--   that order still has a live carrier, whose very next tick sees the
+--   counterpart gone, retires the order with @became_stale@ and prunes
+--   it — which records WHY it died, and this could not.
+--
+--   The allocator is left where it is, exactly as 'removeTransferOrder'
+--   leaves it: a retired id is never handed to a later order.
+removeOrdersForUnit ∷ UnitId → TransferOrders → (TransferOrders, Int)
+removeOrdersForUnit uid orders =
+    let doomed = HM.filter ((≡ uid) ∘ troUnit) (trosOrders orders)
+    in ( orders { trosOrders = HM.difference (trosOrders orders) doomed }
+       , HM.size doomed )
 
 -- | Rewrite ONE stored order's batch in place (#1247) — the single
 --   mutation path every lifecycle transition goes through, so the live

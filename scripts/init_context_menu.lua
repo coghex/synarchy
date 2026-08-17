@@ -191,6 +191,24 @@ function M.tryUnitMenu(x, y)
                 end })
         end
     end
+    -- Cancel transfer (#1253, requirement 1): the way out of a durable
+    -- order (#1246) the player queued and has changed their mind about.
+    --
+    -- Gated on the TARGET's own orders, not the selection's -- this is
+    -- the same right-clicked unit's menu that shows its Info, and the
+    -- order belongs to whichever unit is carrying it. Omitted entirely
+    -- when there is none: a unit with nothing queued has no decision to
+    -- make here, so a disabled row would be noise (the omission rule
+    -- #1249's gestures already follow).
+    do
+        local unitAi = require("scripts.unit_ai")
+        if unitAi.hasActiveTransferOrder(targetUid) then
+            table.insert(items, { label = "Cancel transfer",
+                callback = function()
+                    unitAi.cancelTransferOrder(targetUid)
+                end })
+        end
+    end
     -- Treat bleeding: a selected unit that KNOWS bleed-control
     -- dresses the target's worst bleeding wound, drawing
     -- bandages from a first-aid kit carried by the medic OR
