@@ -25,7 +25,7 @@
 -- container ROW inside level N opens at level N+1.
 --
 -- Where a level's data comes from is the LEVEL KIND's business
--- (LEVELS below), and there are three:
+-- (LEVELS below), and there are four:
 --
 --   endpoint      — a storage building or a unit, the pre-#1238 window.
 --   unitItem      — an item-container a unit carries, wears or has
@@ -34,16 +34,39 @@
 --                   the REMEMBERED contents recorded by the last
 --                   reveal, carrying the parent record's own
 --                   "as of…" age. Never a live read, never a write.
+--   escort        — a Mode A transfer session (#1250): D-9's stated
+--                   exception, ONE level owning TWO flanking panes,
+--                   one per endpoint of the session.
 --
--- The last two are `scripts/item_contents_panel.lua`'s (D-13): that
--- module no longer owns a window lifecycle at all — it supplies the
--- item-container level's data and presentation, and this file draws it
--- with the same chrome every other level uses.
+-- unitItem/buildingItem are `scripts/item_contents_panel.lua`'s (D-13)
+-- and escort is `scripts/transfer_session_panels.lua`'s: neither module
+-- owns a window lifecycle at all — each supplies its level's data and
+-- presentation, and this file draws it with the same chrome every other
+-- level uses.
+--
+-- A level owns one or more PANES (#1250). A pane is the unit of
+-- RENDERING: one panel box, its header labels, and one item list, with
+-- its own selected tab and scroll offset. Every level kind but `escort`
+-- has exactly one, and for those the level table IS its own first pane
+-- — `level.panes[1] == level` — so `level.listId` / `level.activeTab` /
+-- `level.scroll` keep meaning exactly what they meant before the escort
+-- session existed, with no mirrored copy that could drift out of sync.
+-- A level is still the unit of NESTING, modality, teardown and restore,
+-- which is what makes two flanking panels count as one stack level.
 --
 -- An item-container level is RENDER-ONLY (D-5): it is not a transfer
 -- endpoint and offers no transfer operation. Inspection — scrolling,
 -- closing, opening a child container — stays interactive on the
 -- deepest level, which is what makes the stack usable at all.
+--
+-- Since #1250 the ESCORT level's two panes commit IMMEDIATELY instead
+-- (Mode A): the source unit has already walked to the endpoint and is
+-- held there, so its rows offer "Store 1" / "Store all" and the
+-- endpoint's offer "Retrieve 1" / "Retrieve all", each moving items on
+-- the spot through the contract's own check/commit pair. Those entries
+-- are scripts/transfer_gestures.lua's too — the SAME 1-and-all builder,
+-- given a different way to submit — so the two modes cannot disagree
+-- about which exact instances a merged row stands for.
 --
 -- Since #1249 an ENDPOINT level's rows offer "Retrieve 1" / "Retrieve
 -- all", which queues a durable transfer order (#1246) for the unit the
@@ -98,12 +121,18 @@
 --                                          isn't one
 --   reopenWithTab(kind, id, mx, my, tab) — base-level open + tab
 --   openLevel(src, mx, my, parentIndex)  — open `src` at parentIndex+1
---   closeIfOpen()                        — destroy the WHOLE stack
+--   closeIfOpen(reason)                  — destroy the WHOLE stack
 --   popLevel()                           — close the deepest level
 --   isOpen() / depth() / getLevel(i)     — introspection
+--   getPane(level, paneKey)              — one pane of a level
 --   snapshotStack() / restoreStack(s)    — the resize-restore pair
 --   onScroll(handle, dx, dy)             — wheel over the window
 --   dump()                               — probe oracle
+--
+-- Shared with the escort level kind, so the pair renders through
+-- exactly the endpoint machinery a lone container window uses:
+--   endpointView(kind, id) / endpointListParams(kind, view)
+--   endpointStillThere(kind, id) / endpointChildOf(kind, id, row)
 --
 -- Engine script hooks: setup / init / update / shutdown.
 --
@@ -174,11 +203,14 @@ local CARGO_TABS = {
 --
 -- `levels` is the whole truth (#1238): an ordered array, [1] the base.
 -- Each entry is
---   { src, mx, my, activeTab, scroll,
---     pageId, panelId, titleId, subtitleId, ageId, listId }
+--   { src, index, mx, my, pageId, panes,
+--     paneKey, activeTab, scroll, panelId, titleId, subtitleId,
+--     ageId, listId }
 -- where `src` is the level kind's own identity table — the thing
 -- hud.lua snapshots across a resize, and the thing a child level
--- extends with one more instance id.
+-- extends with one more instance id — and the second group is the
+-- LEVEL'S OWN FIRST PANE (#1250; `panes[1] == level`, see the header).
+-- A second pane is a plain table carrying only that same second group.
 -----------------------------------------------------------
 cargoInventoryPanel.state = cargoInventoryPanel.state or { levels = {} }
 cargoInventoryPanel.state.levels = cargoInventoryPanel.state.levels or {}
@@ -417,19 +449,143 @@ end
 -----------------------------------------------------------
 -- Level kinds (#1238)
 --
--- What differs between an endpoint level and an item-container level:
--- its window width, its row cap, whether it has category tabs, how its
--- view is read, and the item-list presentation policy it hands the
--- widget. Everything else — panel sizing, header baselines, the "as
--- of…" line, modality, scrolling, teardown, restore — is shared below
--- and level-kind blind.
+-- What a level kind declares:
 --
--- The two item kinds live in scripts/item_contents_panel.lua (D-13),
--- required lazily so the two modules can reference each other without a
--- load-order cycle.
+--   panelWidthBase / maxRows / tabs   window width, row cap, category
+--                                     tabs
+--   view(src, paneKey)                that pane's data; nil closes the
+--                                     level
+--   listParams(src, view, paneKey)    the item-list presentation policy
+--   stillThere(src)                   the per-tick LIFECYCLE question,
+--                                     asked only by update()
+--   transferMenu(src, row, paneKey)   the row's transfer action
+--   childOf(src, row, paneKey)        the level a container row opens
+--   paneKeys                          #1250: more than one pane. Absent
+--                                     means exactly one, addressed as
+--                                     MAIN_PANE
+--   paneScale(level, paneKey)         #1250: a LOCAL effective uiscale
+--                                     for this kind's panes. Absent
+--                                     means the configured one
+--   placePanes(level, measures, hud)  #1250: where each pane's panel
+--                                     goes. Absent means the shared
+--                                     anchor-and-clamp rule
+--   onClose(src, reason)              #1250: state that outlives the
+--                                     level's own elements. Never fires
+--                                     for reason == "layout"
+--
+-- Everything else — panel sizing, header baselines, the "as of…" line,
+-- modality, scrolling, teardown, restore — is shared below and
+-- level-kind blind.
+--
+-- The two item kinds live in scripts/item_contents_panel.lua (D-13) and
+-- the escort kind in scripts/transfer_session_panels.lua, both required
+-- lazily so the modules can reference each other without a load-order
+-- cycle.
 -----------------------------------------------------------
 local function itemLevels()
     return require("scripts.item_contents_panel").levelKinds()
+end
+
+local function escortLevels()
+    return require("scripts.transfer_session_panels").levelKinds()
+end
+
+-- The endpoint level's own four questions, answered from an endpoint
+-- IDENTITY rather than a level `src`. Exposed because the escort
+-- session's level (#1250) is two of these side by side: reading them
+-- through this module is what makes an escort pane render, refresh,
+-- close and descend exactly the way a lone container window does, with
+-- no second copy of the ENDPOINTS table to drift.
+function cargoInventoryPanel.endpointView(endpointKind, id)
+    local def = ENDPOINTS[endpointKind]
+    if not def or id == nil then return nil end
+    local view = def.view(id)
+    if not view then return nil end
+    view.subtitle  = weightText(endpointKind, view)
+    view.emptyText = emptyText(view)
+    return view
+end
+
+-- Deliberately NOT folded into `endpointView`: liveness is the per-tick
+-- LIFECYCLE question, and it is asked only by update(). Opening
+-- has always been governed by the view alone, and merging the two
+-- would refuse an open the endpoint's own data supports.
+function cargoInventoryPanel.endpointStillThere(endpointKind, id)
+    local def = ENDPOINTS[endpointKind]
+    if not def or not def.stillThere then return true end
+    return def.stillThere(id) and true or false
+end
+
+function cargoInventoryPanel.endpointChildOf(endpointKind, id, row)
+    local def = ENDPOINTS[endpointKind]
+    if not def or not def.childOf then return nil end
+    return def.childOf(id, row)
+end
+
+-- The container window's own tab-strip style. Exposed so an escort pane
+-- (#1250) renders a tab strip identical to a lone window's rather than
+-- a second copy of these constants that could drift.
+function cargoInventoryPanel.endpointTabSpec()
+    return CARGO_TABS
+end
+
+-- The item-list parameters that describe an endpoint's data and
+-- presentation policy. Everything the widget needs to group, tab,
+-- render and invalidate; bounds are added by buildLevel once the
+-- panel has been sized from the resulting row count.
+--
+-- The host-owned title/subtitle chrome rides in `presentationKey`
+-- because the widget cannot see it: a unit's stored weight moves
+-- when it equips something its loose inventory never listed, and
+-- without this the header would keep reporting the load it had at
+-- open. The knowledge STATE rides there too (#1237) — an unknown
+-- container and a known-empty one both render zero rows, so without
+-- it the transition between them would leave the header still
+-- reading "unknown". The "as of…" line deliberately does NOT: it
+-- changes every game second and is refreshed in place by update()
+-- instead of rebuilding the window.
+--
+-- The row TOOLTIP is #1268's, deliberately bounded to the row's own
+-- display text plus the labeled temperature line: quality,
+-- condition, weapon and fill detail stay out of this window. It is
+-- supplied for EVERY endpoint kind, so a unit endpoint and a
+-- building endpoint present temperature identically.
+function cargoInventoryPanel.endpointListParams(endpointKind, view)
+    -- The row's display text WITHOUT the temperature summary: the
+    -- row appends it, and the tooltip labels it on its own line, so
+    -- building both from this shared base keeps it from appearing
+    -- twice in one tooltip.
+    local function rowBaseName(g)
+        local n = qualityTier.withSuffix(
+            g.displayName or g.defName or "?", g)
+        if (g.count or 1) > 1 then
+            n = string.format("%s ×%d", n, g.count)
+        end
+        return n
+    end
+    return {
+        emptyText = view.emptyText,
+        items     = view.contents,
+        uiscale   = scale.get(),
+        rowName   = function(g)
+            return itemList.withTempSuffix(rowBaseName(g), g)
+        end,
+        rowTooltip = function(g)
+            local tempLine = itemList.tempHintLine(g)
+            if not tempLine then return nil end
+            return { text = rowBaseName(g), hint = tempLine }
+        end,
+        rowWeightText = function(g)
+            return string.format("%.2f kg",
+                                 (g.weight or 0) * (g.count or 1))
+        end,
+        rowColor  = function() return ROW_NAME_COL end,
+        presentationKey = string.format("%s|%s|%s|%.3f/%.3f",
+                                        tostring(endpointKind),
+                                        tostring(view.title),
+                                        knowledgeState(view),
+                                        view.stored or -1, view.capacity),
+    }
 end
 
 local LEVELS = {}
@@ -439,80 +595,13 @@ LEVELS.endpoint = {
     maxRows        = 10,
     tabs           = CARGO_TABS,
     view = function(src)
-        local def = ENDPOINTS[src.endpointKind]
-        if not def or src.id == nil then return nil end
-        local view = def.view(src.id)
-        if not view then return nil end
-        view.subtitle  = weightText(src.endpointKind, view)
-        view.emptyText = emptyText(view)
-        return view
+        return cargoInventoryPanel.endpointView(src.endpointKind, src.id)
     end,
-    -- Deliberately NOT folded into `view`: liveness is the per-tick
-    -- LIFECYCLE question, and it is asked only by update(). Opening
-    -- has always been governed by `view` alone, and merging the two
-    -- would refuse an open the endpoint's own data supports.
     stillThere = function(src)
-        local def = ENDPOINTS[src.endpointKind]
-        if not def or not def.stillThere then return true end
-        return def.stillThere(src.id) and true or false
+        return cargoInventoryPanel.endpointStillThere(src.endpointKind, src.id)
     end,
-    -- The item-list parameters that describe THIS level's data and
-    -- presentation policy. Everything the widget needs to group, tab,
-    -- render and invalidate; bounds are added by buildLevel once the
-    -- panel has been sized from the resulting row count.
-    --
-    -- The host-owned title/subtitle chrome rides in `presentationKey`
-    -- because the widget cannot see it: a unit's stored weight moves
-    -- when it equips something its loose inventory never listed, and
-    -- without this the header would keep reporting the load it had at
-    -- open. The knowledge STATE rides there too (#1237) — an unknown
-    -- container and a known-empty one both render zero rows, so without
-    -- it the transition between them would leave the header still
-    -- reading "unknown". The "as of…" line deliberately does NOT: it
-    -- changes every game second and is refreshed in place by update()
-    -- instead of rebuilding the window.
-    --
-    -- The row TOOLTIP is #1268's, deliberately bounded to the row's own
-    -- display text plus the labeled temperature line: quality,
-    -- condition, weapon and fill detail stay out of this window. It is
-    -- supplied for EVERY endpoint kind, so a unit endpoint and a
-    -- building endpoint present temperature identically.
     listParams = function(src, view)
-        -- The row's display text WITHOUT the temperature summary: the
-        -- row appends it, and the tooltip labels it on its own line, so
-        -- building both from this shared base keeps it from appearing
-        -- twice in one tooltip.
-        local function rowBaseName(g)
-            local n = qualityTier.withSuffix(
-                g.displayName or g.defName or "?", g)
-            if (g.count or 1) > 1 then
-                n = string.format("%s ×%d", n, g.count)
-            end
-            return n
-        end
-        return {
-            emptyText = view.emptyText,
-            items     = view.contents,
-            uiscale   = scale.get(),
-            rowName   = function(g)
-                return itemList.withTempSuffix(rowBaseName(g), g)
-            end,
-            rowTooltip = function(g)
-                local tempLine = itemList.tempHintLine(g)
-                if not tempLine then return nil end
-                return { text = rowBaseName(g), hint = tempLine }
-            end,
-            rowWeightText = function(g)
-                return string.format("%.2f kg",
-                                     (g.weight or 0) * (g.count or 1))
-            end,
-            rowColor  = function() return ROW_NAME_COL end,
-            presentationKey = string.format("%s|%s|%s|%.3f/%.3f",
-                                            tostring(src.endpointKind),
-                                            tostring(view.title),
-                                            knowledgeState(view),
-                                            view.stored or -1, view.capacity),
-        }
+        return cargoInventoryPanel.endpointListParams(src.endpointKind, view)
     end,
     -- The endpoint level's transfer action (#1249): "Retrieve 1" /
     -- "Retrieve all" into the unit the shared selection rule resolves.
@@ -528,15 +617,26 @@ LEVELS.endpoint = {
             { kind = src.endpointKind, id = src.id }, row)
     end,
     childOf = function(src, row)
-        local def = ENDPOINTS[src.endpointKind]
-        if not def or not def.childOf then return nil end
-        return def.childOf(src.id, row)
+        return cargoInventoryPanel.endpointChildOf(src.endpointKind, src.id, row)
     end,
 }
 
 local function levelKind(level)
     if level.src.kind == "endpoint" then return LEVELS.endpoint end
-    return itemLevels()[level.src.kind]
+    local k = itemLevels()[level.src.kind]
+    if k then return k end
+    return escortLevels()[level.src.kind]
+end
+
+-- The pane keys of a level kind, in render order. A kind that declares
+-- none has exactly one pane, and `MAIN_PANE` is the key it is addressed
+-- by — a key rather than nil so every per-pane hook has the same arity
+-- whichever kind supplies it.
+local MAIN_PANE = "main"
+local DEFAULT_PANE_KEYS = { MAIN_PANE }
+
+local function paneKeysOf(kind)
+    return (kind and kind.paneKeys) or DEFAULT_PANE_KEYS
 end
 
 -----------------------------------------------------------
@@ -545,6 +645,13 @@ end
 
 local function levels()
     return cargoInventoryPanel.state.levels
+end
+
+-- Every pane of `level`, in render order. `panes[1] == level` (see the
+-- header): a level IS its own first pane, so this is never empty and a
+-- single-pane level needs no allocation at all.
+local function panesOf(level)
+    return level.panes or { level }
 end
 
 -- The page a level's elements live on. The base level shares
@@ -556,32 +663,47 @@ local function levelPage(level)
                             and cargoInventoryPanel.hud.page)
 end
 
+local function destroyPaneElements(pane)
+    if pane.listId then itemList.destroy(pane.listId); pane.listId = nil end
+    if pane.titleId    then label.destroy(pane.titleId);    pane.titleId = nil end
+    if pane.subtitleId then label.destroy(pane.subtitleId); pane.subtitleId = nil end
+    if pane.ageId      then label.destroy(pane.ageId);      pane.ageId = nil end
+    if pane.panelId    then panel.destroy(pane.panelId);    pane.panelId = nil end
+end
+
 local function destroyLevelElements(level)
-    if level.listId then itemList.destroy(level.listId); level.listId = nil end
-    if level.titleId    then label.destroy(level.titleId);    level.titleId = nil end
-    if level.subtitleId then label.destroy(level.subtitleId); level.subtitleId = nil end
-    if level.ageId      then label.destroy(level.ageId);      level.ageId = nil end
-    if level.panelId    then panel.destroy(level.panelId);    level.panelId = nil end
+    for _, pane in ipairs(panesOf(level)) do destroyPaneElements(pane) end
 end
 
 -- Widgets first, page second: UI.deletePage destroys the element tree
 -- outright, so a page deleted before its widgets are torn down would
 -- leave panel/label/item_list registry entries pointing at handles the
 -- manager has already forgotten.
-local function destroyLevel(level)
+--
+-- `reason` distinguishes a GEOMETRY teardown from a real close (#1250).
+-- A level kind may own state that outlives its own elements — the
+-- escort session does — and a resize destroys and rebuilds every level
+-- precisely so that state survives. So the kind's `onClose` hook fires
+-- for every reason EXCEPT "layout", which is what hud.createUI's
+-- snapshot/restore pass passes.
+local function destroyLevel(level, reason)
     destroyLevelElements(level)
     if level.pageId then
         UI.deletePage(level.pageId)
         level.pageId = nil
     end
+    local kind = levelKind(level)
+    if reason ~= "layout" and kind and kind.onClose then
+        kind.onClose(level.src, reason)
+    end
 end
 
 -- Close every level from `index` down (deepest first, so the modal
 -- boundary lifts in the same order it was established).
-local function closeLevelsFrom(index)
+local function closeLevelsFrom(index, reason)
     local ls = levels()
     for i = #ls, math.max(1, index), -1 do
-        destroyLevel(ls[i])
+        destroyLevel(ls[i], reason)
         ls[i] = nil
     end
 end
@@ -594,9 +716,11 @@ end
 local function applyScrollCapture()
     local ls = levels()
     for i, level in ipairs(ls) do
-        if level.panelId then
-            local h = panel.getBoxHandle(level.panelId)
-            if h then UI.setScrollCapture(h, i == #ls) end
+        for _, pane in ipairs(panesOf(level)) do
+            if pane.panelId then
+                local h = panel.getBoxHandle(pane.panelId)
+                if h then UI.setScrollCapture(h, i == #ls) end
+            end
         end
     end
 end
@@ -625,15 +749,22 @@ local function headerBaselines(uiscale)
            titleH + subH + math.floor(AGE_FONT * uiscale * 0.85)
 end
 
-local function buildTitle(level, originX, originY, view)
+-- `uiscale` is the PANE's effective scale, not the configured one
+-- (#1250 review round 2). measurePane reserves the header's three bands
+-- at that scale and buildPane places the list below them from the same
+-- number, so rasterising the labels at any other scale would draw
+-- glyphs into space that was never measured for them — at 800x600 the
+-- fitted escort boxes and lists shrink while full-size headers would
+-- reach down into the rows. One scale in, three bands and three labels
+-- out.
+local function buildTitle(level, pane, originX, originY, view, uiscale, name)
     local h = cargoInventoryPanel.hud
     if not h then return end
     local page = levelPage(level)
-    local uiscale = scale.get()
     local titleBase, subBase, ageBase = headerBaselines(uiscale)
 
-    level.titleId = label.new({
-        name     = "cargo_inv_title",
+    pane.titleId = label.new({
+        name     = name .. "_title",
         text     = view.title,
         font     = h.menuFont,
         fontSize = TITLE_FONT,
@@ -641,12 +772,12 @@ local function buildTitle(level, originX, originY, view)
         page     = page,
         uiscale  = uiscale,
     })
-    local th = label.getElementHandle(level.titleId)
+    local th = label.getElementHandle(pane.titleId)
     UI.addToPage(page, th, originX, originY + titleBase)
     UI.setZIndex(th, 132)
 
-    level.subtitleId = label.new({
-        name     = "cargo_inv_subtitle",
+    pane.subtitleId = label.new({
+        name     = name .. "_subtitle",
         text     = view.subtitle or "",
         font     = h.menuFont,
         fontSize = SUBTITLE_FONT,
@@ -654,7 +785,7 @@ local function buildTitle(level, originX, originY, view)
         page     = page,
         uiscale  = uiscale,
     })
-    local sh = label.getElementHandle(level.subtitleId)
+    local sh = label.getElementHandle(pane.subtitleId)
     UI.addToPage(page, sh, originX, originY + subBase)
     UI.setZIndex(sh, 132)
 
@@ -665,8 +796,8 @@ local function buildTitle(level, originX, originY, view)
     -- so the panel can never size for a line it does not draw.
     local age = ageText(view)
     if age then
-        level.ageId = label.new({
-            name     = "cargo_inv_age",
+        pane.ageId = label.new({
+            name     = name .. "_age",
             text     = age,
             font     = h.menuFont,
             fontSize = AGE_FONT,
@@ -674,7 +805,7 @@ local function buildTitle(level, originX, originY, view)
             page     = page,
             uiscale  = uiscale,
         })
-        local ah = label.getElementHandle(level.ageId)
+        local ah = label.getElementHandle(pane.ageId)
         UI.addToPage(page, ah, originX, originY + ageBase)
         UI.setZIndex(ah, 132)
     end
@@ -704,20 +835,28 @@ local function rowIsContainer(row)
        and type(row.instanceId) == "number" and row.instanceId > 0
 end
 
--- A level kind's transfer action takes the level's SOURCE and the row,
--- and nothing else. It used to be handed an `invalidate` closure too,
--- because the retired withdraw entry moved an item on the spot and
--- wanted the list redrawn on the same frame; since #1249 a transfer
--- gesture only QUEUES an order, so no contents change when it fires and
--- there is nothing to invalidate. The movement lands when the executor
--- arrives, and update()'s existing per-tick re-read is what shows it.
-local function rowMenuFor(level, row)
+-- A level kind's transfer action takes the level's SOURCE, the row and
+-- the PANE the row was rendered in, and nothing else. It used to be
+-- handed an `invalidate` closure too, because the retired withdraw
+-- entry moved an item on the spot and wanted the list redrawn on the
+-- same frame; since #1249 a Mode B transfer gesture only QUEUES an
+-- order, so no contents change when it fires and there is nothing to
+-- invalidate. The movement lands when the executor arrives, and
+-- update()'s existing per-tick re-read is what shows it. A Mode A
+-- escort commit (#1250) DOES move items immediately, and it reaches the
+-- same per-tick re-read the same way rather than reviving that closure.
+--
+-- The pane key is what tells a two-paned level which of its endpoints
+-- the player right-clicked, and it is passed to every single-pane kind
+-- as well (as MAIN_PANE) so the hook signature never varies.
+local function rowMenuFor(level, pane, row)
     local kind = levelKind(level)
     if not kind then return nil end
-    local items = (kind.transferMenu and kind.transferMenu(level.src, row))
-                    or {}
+    local paneKey = pane.paneKey or MAIN_PANE
+    local items = (kind.transferMenu
+                   and kind.transferMenu(level.src, row, paneKey)) or {}
     if rowIsContainer(row) and kind.childOf then
-        local childSrc = kind.childOf(level.src, row)
+        local childSrc = kind.childOf(level.src, row, paneKey)
         if childSrc then
             local index = level.index
             items[#items + 1] = {
@@ -742,9 +881,9 @@ end
 -- The widget hands back the exact rendered row's representative
 -- instance; the LEVEL decides what a row action means, which the widget
 -- deliberately never learns.
-local function showRowMenu(level, row)
+local function showRowMenu(level, pane, row)
     if not row then return false end
-    local items = rowMenuFor(level, row)
+    local items = rowMenuFor(level, pane, row)
     if not items or #items == 0 then return false end
 
     local contextMenu = require("scripts.ui.context_menu")
@@ -764,43 +903,50 @@ end
 -----------------------------------------------------------
 
 -- Full item-list params: the level kind's presentation policy plus the
--- pieces every level shares (tabs, row cap, scroll offset, routing).
-local function listDataParams(level, view)
+-- pieces every pane shares (tabs, row cap, scroll offset, routing).
+local function listDataParams(level, pane, view)
     local kind = levelKind(level)
-    local p = kind.listParams(level.src, view)
-    p.activeTab    = level.activeTab
+    local paneKey = pane.paneKey or MAIN_PANE
+    local p = kind.listParams(level.src, view, paneKey)
+    p.activeTab    = pane.activeTab
     p.tabs         = kind.tabs or false
     p.maxRows      = kind.maxRows
-    p.scrollOffset = level.scroll or 0
+    p.scrollOffset = pane.scroll or 0
     p.onTabChange  = kind.tabs and function(category)
-        cargoInventoryPanel.onLevelTabChange(level, category)
+        cargoInventoryPanel.onPaneTabChange(level, pane, category)
     end or nil
-    -- Every level routes right-clicks: even a kind with no transfer
+    -- Every pane routes right-clicks: even a kind with no transfer
     -- action can offer "Contents", and the widget's `rc=` signature
     -- means the callback's presence is part of the rebuild comparison.
-    p.onRowRightClick = function(row) return showRowMenu(level, row) end
+    p.onRowRightClick = function(row) return showRowMenu(level, pane, row) end
     return p
 end
 
-local function buildLevel(level, view)
+-- Everything about ONE pane that depends only on its own data: the
+-- normalized item-list model and the panel size that model implies.
+-- Separated from drawing because a multi-pane level has to know EVERY
+-- pane's size before it can place ANY of them (they avoid each other).
+local function measurePane(level, pane, view)
     local h = cargoInventoryPanel.hud
-    if not h or not levelPage(level) then return end
     local kind = levelKind(level)
-    local page = levelPage(level)
-    local mx, my = level.mx, level.my
 
     -- Normalize the data ONCE through the shared widget, then size the
     -- panel from the row count it produces. The widget snaps a
     -- no-longer-present selection back to "All"; mirror that into the
-    -- level's own durable activeTab so the resize snapshot never
+    -- pane's own durable activeTab so the resize snapshot never
     -- carries a dead category forward.
-    local dataParams = listDataParams(level, view)
+    local dataParams = listDataParams(level, pane, view)
     local model = itemList.prepare(dataParams)
     dataParams.model = model
-    level.activeTab = model.activeTab
+    pane.activeTab = model.activeTab
 
-    -- Size the panel.
-    local uiscale = scale.get()
+    -- A kind may render its panes at a LOCAL effective uiscale rather
+    -- than the configured one (#1250): the escort pair has to fit TWO
+    -- panels side by side, which is a constraint no single pane can see.
+    -- Its own listParams sets the same value on the widget, so the box
+    -- and the text inside it shrink together (#750).
+    local uiscale = (kind.paneScale and kind.paneScale(level, pane.paneKey))
+                      or scale.get()
     local panelW  = math.floor(kind.panelWidthBase * uiscale)
     local padTop  = math.floor(PANEL_PAD_TOP * uiscale)
     local padBot  = math.floor(PANEL_PAD_BOT * uiscale)
@@ -823,7 +969,7 @@ local function buildLevel(level, view)
                        + rowsH + padBot
 
     -- #750 round-7 review: cap against the actual framebuffer — the
-    -- pre-existing px/py clamp below only ever repositions the panel,
+    -- position clamp below only ever repositions the panel,
     -- never shrinks it, so panelWidthBase*uiscale (460 at 1x, 1840 at a
     -- still-C2-supported 4x) could exceed the framebuffer several times
     -- over regardless of position, leaving tabs/items/actions
@@ -832,48 +978,82 @@ local function buildLevel(level, view)
     if h.fbW then panelW = math.min(panelW, h.fbW) end
     if h.fbH then panelH = math.min(panelH, h.fbH) end
 
-    -- Clamp the panel position to the framebuffer so it doesn't open
-    -- partly off-screen if the player right-clicks near an edge.
-    local px = mx
-    local py = my
-    if h.fbW and px + panelW > h.fbW then px = math.max(0, h.fbW - panelW) end
-    if h.fbH and py + panelH > h.fbH then py = math.max(0, h.fbH - panelH) end
+    return { dataParams = dataParams, w = panelW, h = panelH,
+             titleH = titleH, subH = subH, ageH = ageH,
+             tabH = tabH, tabPad = tabPad, rowsH = rowsH,
+             uiscale = uiscale }
+end
 
-    -- Recreate or reuse the panel box.
-    if level.panelId then panel.destroy(level.panelId); level.panelId = nil end
-    level.panelId = panel.new({
-        name       = "cargo_inv_panel",
+-- Where each pane's panel goes. A kind that supplies `placePanes` owns
+-- the answer completely (the escort pair flanks the screen centre and
+-- keeps clear of its sibling); every other kind keeps the pre-#1250
+-- rule verbatim — anchored at the level's own (mx, my), clamped to the
+-- framebuffer so it doesn't open partly off-screen when the player
+-- right-clicks near an edge.
+local function placePanes(level, measures)
+    local h = cargoInventoryPanel.hud
+    local kind = levelKind(level)
+    if kind.placePanes then
+        return kind.placePanes(level, measures, h)
+    end
+    local out = {}
+    for i, m in ipairs(measures) do
+        local px, py = level.mx, level.my
+        if h.fbW and px + m.w > h.fbW then px = math.max(0, h.fbW - m.w) end
+        if h.fbH and py + m.h > h.fbH then py = math.max(0, h.fbH - m.h) end
+        out[i] = { x = px, y = py }
+    end
+    return out
+end
+
+-- Every UI element this pane creates is named from here, and the name
+-- has to be PANE-UNIQUE (#1250 review round 3). Control focus survives
+-- a geometry rebuild by NAME
+-- (responsive.snapshotControlFocusName / restoreControlFocusName, which
+-- restores the FIRST visible match), so two panes sharing one widget
+-- name means focus parked on the destination pane's tab comes back on
+-- the source pane's — a silently wrong control, not a missing one.
+local function paneWidgetName(pane)
+    return cargoInventoryPanel.paneWidgetName(pane.paneKey or MAIN_PANE)
+end
+
+local function buildPane(level, pane, view, m, pos)
+    local h = cargoInventoryPanel.hud
+    local kind = levelKind(level)
+    local page = levelPage(level)
+    local dataParams = m.dataParams
+    local widgetName = paneWidgetName(pane)
+
+    destroyPaneElements(pane)
+    pane.panelId = panel.new({
+        name       = widgetName .. "_panel",
         page       = page,
-        x          = px,
-        y          = py,
-        width      = panelW,
-        height     = panelH,
+        x          = pos.x,
+        y          = pos.y,
+        width      = m.w,
+        height     = m.h,
         textureSet = h.boxTexSet,
         color      = { 0.1, 0.1, 0.1, 0.95 },
         tileSize   = 64,
         zIndex     = 130,
         padding    = { top = PANEL_PAD_TOP, bottom = PANEL_PAD_BOT,
                        left = PANEL_PAD_X,  right  = PANEL_PAD_X },
-        uiscale    = uiscale,
+        uiscale    = m.uiscale,
     })
-    local pbounds = panel.getContentBounds(level.panelId)
-    local cx = px + pbounds.x
-    local cy = py + pbounds.y
+    local pbounds = panel.getContentBounds(pane.panelId)
+    local cx = pos.x + pbounds.x
+    local cy = pos.y + pbounds.y
     local cw = pbounds.width
 
-    if level.titleId    then label.destroy(level.titleId);    level.titleId = nil end
-    if level.subtitleId then label.destroy(level.subtitleId); level.subtitleId = nil end
-    if level.ageId      then label.destroy(level.ageId);      level.ageId = nil end
-    if level.listId     then itemList.destroy(level.listId);  level.listId = nil end
-    buildTitle(level, cx, cy, view)
+    buildTitle(level, pane, cx, cy, view, m.uiscale, widgetName)
 
-    dataParams.name         = "cargo_inv"
+    dataParams.name         = widgetName
     dataParams.page         = page
     dataParams.font         = h.menuFont
     dataParams.x            = cx
-    dataParams.y            = cy + titleH + subH + ageH + 6
+    dataParams.y            = cy + m.titleH + m.subH + m.ageH + 6
     dataParams.width        = cw
-    dataParams.height       = tabH + tabPad + rowsH
+    dataParams.height       = m.tabH + m.tabPad + m.rowsH
     if kind.tabs then
         dataParams.tabBottomPadPx = 8  -- literal, matching panelH's gap
     end
@@ -885,33 +1065,68 @@ local function buildLevel(level, view)
     dataParams.rowFontSize  = 13
     dataParams.weightColor  = ROW_WEIGHT_COL
     dataParams.zBase        = 132
-    level.listId = itemList.new(dataParams)
+    pane.listId = itemList.new(dataParams)
     -- The widget owns the scroll clamp (only it knows the visible
-    -- capacity), so the level's own durable offset takes its answer
-    -- back — otherwise a level restored against shrunken contents would
+    -- capacity), so the pane's own durable offset takes its answer
+    -- back — otherwise a pane restored against shrunken contents would
     -- keep re-requesting an offset it can never have.
-    level.scroll = itemList.getScrollOffset(level.listId)
+    pane.scroll = itemList.getScrollOffset(pane.listId)
+end
+
+-- Build (or rebuild) every pane of one level. `views` is one view per
+-- pane, in pane order — read by the caller, because whether a level
+-- survives at all is decided by ALL of its panes together.
+local function buildLevel(level, views)
+    local h = cargoInventoryPanel.hud
+    if not h or not levelPage(level) then return end
+
+    local panes = panesOf(level)
+    local measures = {}
+    for i, pane in ipairs(panes) do
+        measures[i] = measurePane(level, pane, views[i])
+    end
+    local positions = placePanes(level, measures)
+    for i, pane in ipairs(panes) do
+        buildPane(level, pane, views[i], measures[i],
+                  positions[i] or { x = 0, y = 0 })
+    end
     applyScrollCapture()
+end
+
+-- Every pane's view, or nil when ANY of them no longer resolves — a
+-- two-paned escort level whose destination was demolished has nothing
+-- coherent left to show, so the level closes as a whole rather than
+-- rendering half of itself.
+local function readViews(level)
+    local kind = levelKind(level)
+    if not kind then return nil end
+    local out = {}
+    for i, pane in ipairs(panesOf(level)) do
+        local v = kind.view(level.src, pane.paneKey or MAIN_PANE)
+        if not v then return nil end
+        out[i] = v
+    end
+    return out
 end
 
 -----------------------------------------------------------
 -- Opening
 -----------------------------------------------------------
 
--- Re-apply a remembered tab to a freshly-opened level. A plain open
--- always resets to "All" (a fresh level's own default), so both restore
+-- Re-apply a remembered tab to a freshly-opened pane. A plain open
+-- always resets to "All" (a fresh pane's own default), so both restore
 -- paths — the single-level reopenWithTab and the whole-stack
 -- restoreStack — have to put the player's selection back afterwards,
 -- and both must do it only IF it is still a valid category for the
 -- (possibly changed) current contents.
-local function applySavedTab(level, tab)
-    if not level or not tab or tab == level.activeTab then return end
-    for _, t in ipairs(itemList.getTabs(level.listId)) do
+local function applySavedTab(level, pane, tab)
+    if not level or not pane or not tab or tab == pane.activeTab then return end
+    for _, t in ipairs(itemList.getTabs(pane.listId)) do
         if t.key == tab then
-            local view = levelKind(level).view(level.src)
-            if view then
-                level.activeTab = tab
-                buildLevel(level, view)
+            local views = readViews(level)
+            if views then
+                pane.activeTab = tab
+                buildLevel(level, views)
             end
             return
         end
@@ -925,7 +1140,12 @@ end
 -- not player-commandable is refused without creating any state and
 -- WITHOUT disturbing the levels already open. Same ordering
 -- scripts/etymology_panel.lua's openFor uses.
-function cargoInventoryPanel.openLevel(src, mx, my, parentIndex)
+--
+-- `reason` names why whatever was open at this depth is going away, and
+-- reaches its level kind's `onClose`. It defaults to "replaced", which
+-- is what an ordinary player gesture opening another container is —
+-- only hud.createUI's own geometry pass passes "layout".
+function cargoInventoryPanel.openLevel(src, mx, my, parentIndex, reason)
     if type(src) ~= "table" then return false end
     local index = (parentIndex or 0) + 1
     if index < 1 then return false end
@@ -935,14 +1155,30 @@ function cargoInventoryPanel.openLevel(src, mx, my, parentIndex)
     local probe = { src = src, index = index }
     local kind = levelKind(probe)
     if not kind then return false end
-    local view = kind.view(src)
-    if not view then return false end
+    -- Probe EVERY pane before disturbing anything: a two-paned level
+    -- whose second endpoint is already gone must be refused whole, and
+    -- refusing after the replacement teardown would leave the player
+    -- with nothing where their window used to be.
+    local paneKeys = paneKeysOf(kind)
+    local views = {}
+    for i, key in ipairs(paneKeys) do
+        local v = kind.view(src, key)
+        if not v then return false end
+        views[i] = v
+    end
 
-    closeLevelsFrom(index)
+    closeLevelsFrom(index, reason or "replaced")
     local level = {
         src = src, index = index, mx = mx, my = my,
-        activeTab = "All", scroll = 0,
+        paneKey = paneKeys[1], activeTab = "All", scroll = 0,
     }
+    -- The level IS its own first pane (see the header); any further
+    -- pane is a plain table carrying only the per-pane fields.
+    level.panes = { level }
+    for i = 2, #paneKeys do
+        level.panes[i] = { paneKey = paneKeys[i], activeTab = "All",
+                           scroll = 0 }
+    end
     -- Depth 2 and beyond own a LayerModal page. Created fresh each time
     -- so its handle is higher than every shallower level's: pages sort
     -- by (layer, zIndex) with ties broken by handle order, so the
@@ -952,7 +1188,7 @@ function cargoInventoryPanel.openLevel(src, mx, my, parentIndex)
         UI.showPage(level.pageId)
     end
     ls[index] = level
-    buildLevel(level, view)
+    buildLevel(level, views)
     return true
 end
 
@@ -980,7 +1216,8 @@ end
 -- unrelated endpoint the caller never named.
 function cargoInventoryPanel.reopenWithTab(kind, id, mx, my, tab)
     if not cargoInventoryPanel.openFor(kind, id, mx, my) then return false end
-    applySavedTab(levels()[1], tab)
+    local base = levels()[1]
+    applySavedTab(base, base, tab)
     return true
 end
 
@@ -988,8 +1225,11 @@ end
 -- Closing / introspection
 -----------------------------------------------------------
 
-function cargoInventoryPanel.closeIfOpen()
-    closeLevelsFrom(1)
+-- Destroy the whole stack. `reason` reaches every closed level's kind
+-- hook: "layout" means a geometry rebuild that a snapshot/restore pass
+-- is about to undo, anything else (the default) is a real close.
+function cargoInventoryPanel.closeIfOpen(reason)
+    closeLevelsFrom(1, reason or "closed")
 end
 
 -- Close the deepest level only. Returns true when one was closed —
@@ -997,10 +1237,48 @@ end
 function cargoInventoryPanel.popLevel()
     local ls = levels()
     if #ls == 0 then return false end
-    closeLevelsFrom(#ls)
+    closeLevelsFrom(#ls, "dismissed")
     -- The newly deepest level takes the wheel back.
     applyScrollCapture()
     return true
+end
+
+-- Rebuild one level's panes against fresh views, right now. update()
+-- does this on its own cadence when the shared widget reports
+-- staleness; a Mode A commit (#1250) moves items on the spot and
+-- refreshes both panes within the same gesture rather than leaving a
+-- stale weight on screen until the next tick. Returns false when the
+-- level is gone or no longer resolves — never closes anything, because
+-- that is update()'s own decision to make.
+function cargoInventoryPanel.refreshLevel(level)
+    if not level then return false end
+    local views = readViews(level)
+    if not views then return false end
+    buildLevel(level, views)
+    return true
+end
+
+-- The element-name prefix every widget of `paneKey` is built under —
+-- the ONE rule that keeps two panes' controls distinguishable by name
+-- (see paneWidgetName). The single-pane case keeps the historic bare
+-- "cargo_inv", so every element name a lone container window has ever
+-- had is unchanged. Exposed so a gate can address a pane's controls
+-- without restating it.
+function cargoInventoryPanel.paneWidgetName(paneKey)
+    if paneKey == nil or paneKey == MAIN_PANE then return "cargo_inv" end
+    return "cargo_inv_" .. paneKey
+end
+
+-- The pane of `level` addressed by `paneKey` (default: its first), or
+-- nil. The escort session's own reads go through this rather than
+-- indexing `panes` positionally.
+function cargoInventoryPanel.getPane(level, paneKey)
+    if not level then return nil end
+    if paneKey == nil then return level end
+    for _, pane in ipairs(panesOf(level)) do
+        if (pane.paneKey or MAIN_PANE) == paneKey then return pane end
+    end
+    return nil
 end
 
 function cargoInventoryPanel.isOpen()
@@ -1021,35 +1299,51 @@ end
 -- Resize snapshot / restore (#750, whole-stack since #1238)
 --
 -- What must survive a geometry rebuild: the nesting PATH (every
--- level's own identity), each level's anchor, its selected tab and its
--- scroll offset. Rebuilt through the SAME open path a fresh open uses,
--- so every level renders exactly as if it had just been opened against
--- the new layout — then the remembered tab and offset are re-applied.
+-- level's own identity), each level's anchor, and EVERY pane's selected
+-- tab and scroll offset. Rebuilt through the SAME open path a fresh
+-- open uses, so every level renders exactly as if it had just been
+-- opened against the new layout — then the remembered tabs and offsets
+-- are re-applied.
+--
+-- Both halves pass "layout" (#1250): a resize destroys and rebuilds
+-- every level precisely so that its kind's own state survives, so no
+-- level kind may treat this pass as a close. That is what keeps an
+-- escort session — and the unit it is holding — alive across a resize.
 -----------------------------------------------------------
 function cargoInventoryPanel.snapshotStack()
     local out = {}
     for i, level in ipairs(levels()) do
+        local panes = {}
+        for j, pane in ipairs(panesOf(level)) do
+            panes[j] = { activeTab = pane.activeTab, scroll = pane.scroll }
+        end
         out[i] = { src = level.src, mx = level.mx, my = level.my,
-                   activeTab = level.activeTab, scroll = level.scroll }
+                   panes = panes }
     end
     return out
 end
 
 function cargoInventoryPanel.restoreStack(snapshot)
-    cargoInventoryPanel.closeIfOpen()
+    cargoInventoryPanel.closeIfOpen("layout")
     if type(snapshot) ~= "table" then return end
     for i, saved in ipairs(snapshot) do
         if not cargoInventoryPanel.openLevel(saved.src, saved.mx, saved.my,
-                                             i - 1) then
+                                             i - 1, "layout") then
             -- A level whose source is gone stops the restore: every
             -- deeper level is addressed THROUGH it, so re-opening one
             -- without its parent would strand it.
             return
         end
         local level = levels()[i]
-        applySavedTab(level, saved.activeTab)
-        if (saved.scroll or 0) > 0 then
-            level.scroll = itemList.setScrollOffset(level.listId, saved.scroll)
+        for j, pane in ipairs(panesOf(level)) do
+            local savedPane = (saved.panes or {})[j]
+            if savedPane then
+                applySavedTab(level, pane, savedPane.activeTab)
+                if (savedPane.scroll or 0) > 0 then
+                    pane.scroll = itemList.setScrollOffset(pane.listId,
+                                                           savedPane.scroll)
+                end
+            end
         end
     end
 end
@@ -1060,29 +1354,36 @@ end
 
 -- The tab strip is scripts/ui/tabbar's, so a click arrives through
 -- uiManager.onTabClick like every other tabbar; this only records the
--- level's own durable selection and rebuilds around it. Changing tab
+-- pane's own durable selection and rebuilds around it. Changing tab
 -- resets the scroll: the new category is a different list, and an
 -- offset carried into it would land the player somewhere they never
--- scrolled to.
-function cargoInventoryPanel.onLevelTabChange(level, category)
-    if category == level.activeTab then return end
-    local view = levelKind(level).view(level.src)
-    if not view then return end
-    level.activeTab = category
-    level.scroll    = 0
-    buildLevel(level, view)
+-- scrolled to. Only the CLICKED pane changes; a two-paned level's other
+-- endpoint keeps whatever category the player left it on.
+function cargoInventoryPanel.onPaneTabChange(level, pane, category)
+    if category == pane.activeTab then return end
+    local views = readViews(level)
+    if not views then return end
+    pane.activeTab = category
+    pane.scroll    = 0
+    buildLevel(level, views)
 end
 
 -- Mouse WHEEL over the window (uiManager.onUIScroll). Only the deepest
 -- level captures the wheel, so this needs no hit test of its own beyond
--- confirming the event belongs to that level's own panel.
+-- confirming the event belongs to one of that level's own panels — and
+-- WHICH panel is what decides which pane scrolls.
 function cargoInventoryPanel.onScroll(elemHandle, _dx, dy)
     local level = cargoInventoryPanel.getLevel()
-    if not level or not level.panelId then return false end
-    if panel.getBoxHandle(level.panelId) ~= elemHandle then return false end
-    local step = (dy or 0) > 0 and -1 or 1
-    level.scroll = itemList.scrollBy(level.listId, step)
-    return true
+    if not level then return false end
+    for _, pane in ipairs(panesOf(level)) do
+        if pane.panelId
+           and panel.getBoxHandle(pane.panelId) == elemHandle then
+            local step = (dy or 0) > 0 and -1 or 1
+            pane.scroll = itemList.scrollBy(pane.listId, step)
+            return true
+        end
+    end
+    return false
 end
 
 -----------------------------------------------------------
@@ -1107,23 +1408,35 @@ function cargoInventoryPanel.update(dt)
     while i <= #ls do
         local level = ls[i]
         local kind  = levelKind(level)
-        local view  = kind and kind.view(level.src)
-        if not view or (kind.stillThere and not kind.stillThere(level.src)) then
-            closeLevelsFrom(i)
+        local views = readViews(level)
+        if not views or (kind.stillThere and not kind.stillThere(level.src)) then
+            closeLevelsFrom(i, "endpoint_gone")
             applyScrollCapture()
             return
         end
-        if itemList.isStale(level.listId, listDataParams(level, view)) then
-            buildLevel(level, view)
+        -- ONE staleness question for the whole level: a rebuild
+        -- reconstructs every pane together (they are placed against each
+        -- other), so rebuilding on the first stale pane is both correct
+        -- and enough.
+        local stale = false
+        for j, pane in ipairs(panesOf(level)) do
+            if itemList.isStale(pane.listId,
+                                listDataParams(level, pane, views[j])) then
+                stale = true
+                break
+            end
         end
+        if stale then buildLevel(level, views) end
         -- The age advances every game second, which nothing else in the
         -- window does. Retexting the one label in place is deliberately
         -- NOT part of the staleness comparison: routing it through
         -- presentationKey would tear the whole popup down and rebuild it
         -- once a second for as long as a container window is open.
-        if level.ageId then
-            local age = ageText(view)
-            if age then label.setText(level.ageId, age) end
+        for j, pane in ipairs(panesOf(level)) do
+            if pane.ageId then
+                local age = ageText(views[j])
+                if age then label.setText(pane.ageId, age) end
+            end
         end
         i = i + 1
     end
@@ -1134,16 +1447,47 @@ end
 --
 -- The whole stack, in order, with each level's identity, chrome state
 -- and list handle — enough to prove a nesting path, a modal boundary,
--- a per-level scroll offset and a remembered age WITHOUT hardcoding a
+-- a per-pane scroll offset and a remembered age WITHOUT hardcoding a
 -- screen coordinate. Row bounds/handles remain itemList.dump()'s.
+--
+-- A level's own `title`/`activeTab`/`scroll`/`listId` are its FIRST
+-- pane's, which is every pane there is for all but an escort level
+-- (#1250); `panes` reports each one separately, with the panel geometry
+-- a two-paned level's flanking and clamping is proved from.
 -----------------------------------------------------------
 function cargoInventoryPanel.dump()
     local out = { depth = #levels(), levels = {},
                   inputBlocked = UI.isInputBlocked() }
     for i, level in ipairs(levels()) do
-        local kind = levelKind(level)
-        local view = kind and kind.view(level.src)
-        local rows = level.listId and itemList.getRows(level.listId) or {}
+        local views = readViews(level) or {}
+        local panes = {}
+        for j, pane in ipairs(panesOf(level)) do
+            local view = views[j]
+            local rows = pane.listId and itemList.getRows(pane.listId) or {}
+            local bx, by, bw, bh
+            if pane.panelId then
+                bx, by = panel.getPosition(pane.panelId)
+                bw, bh = panel.getSize(pane.panelId)
+            end
+            panes[j] = {
+                index      = j,
+                paneKey    = pane.paneKey or MAIN_PANE,
+                title      = view and view.title or nil,
+                subtitle   = view and view.subtitle or nil,
+                ageText    = view and ageText(view) or nil,
+                activeTab  = pane.activeTab,
+                scroll     = pane.scroll,
+                maxScroll  = pane.listId
+                               and itemList.maxScrollOffset(pane.listId) or 0,
+                rowCount   = #rows,
+                listId     = pane.listId,
+                x          = bx,
+                y          = by,
+                width      = bw,
+                height     = bh,
+            }
+        end
+        local view = views[1]
         out.levels[i] = {
             index        = i,
             kind         = level.src.kind,
@@ -1154,6 +1498,7 @@ function cargoInventoryPanel.dump()
             defName      = level.src.defName,
             instanceId   = level.src.instanceId,
             path         = level.src.path,
+            sessionId    = level.src.sessionId,
             title        = view and view.title or nil,
             subtitle     = view and view.subtitle or nil,
             ageText      = view and ageText(view) or nil,
@@ -1163,8 +1508,10 @@ function cargoInventoryPanel.dump()
             scroll       = level.scroll,
             maxScroll    = level.listId
                              and itemList.maxScrollOffset(level.listId) or 0,
-            rowCount     = #rows,
+            rowCount     = panes[1] and panes[1].rowCount or 0,
             listId       = level.listId,
+            paneCount    = #panes,
+            panes        = panes,
             pageId       = level.pageId,
             modal        = level.pageId ~= nil,
             -- The direct read of "is this level still interactive?":

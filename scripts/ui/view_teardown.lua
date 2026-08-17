@@ -76,10 +76,21 @@ local registry = {
     -- singleton registered separately, and since #1238 it is a level in
     -- this stack — a second entry would be the same call twice.
     -- closeIfOpen() is idempotent.
+    --
+    -- The RESIZE hook passes "layout" and the other two deliberately do
+    -- not (#1250). A resize is the one teardown hud.createUI is about to
+    -- undo — it snapshots the whole stack first and restores it after —
+    -- so a level kind holding state beyond its own elements (the escort
+    -- session, and the unit it is holding) must survive it. A zoom-band
+    -- change or a HUD hide is a real close: the window is going away and
+    -- not coming back, so a session must not be left holding a unit
+    -- against a window the player can no longer see.
     { name = "cargo_inventory_panel",
       zoomBand = function() require("scripts.cargo_inventory_panel").closeIfOpen() end,
       hudHide  = function() require("scripts.cargo_inventory_panel").closeIfOpen() end,
-      resize   = function() require("scripts.cargo_inventory_panel").closeIfOpen() end },
+      resize   = function()
+          require("scripts.cargo_inventory_panel").closeIfOpen("layout")
+      end },
 
     -- Crafting station bills popup (#330): same story — mounted on
     -- hud.world_page, own module-level "open" state, opened via

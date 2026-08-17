@@ -169,8 +169,12 @@ buildingGetRememberedItemContentsFn env = do
 -- | @building.refreshContainerKnowledge(bid)@ → bool. Take a fresh
 --   observation of the container's CURRENT contents and replace the
 --   whole record — the verb #1013's C3 calls when a Mode A session
---   opens on the container. A3 provides it; nothing in the shipped game
---   calls it yet.
+--   opens on the container. Since #1250 that caller exists:
+--   @scripts\/transfer_session.lua@ calls it exactly once, on the
+--   session's transition to the open\/held state, so the escort's
+--   container panel shows a fresh snapshot. Nothing else in the shipped
+--   game calls it — merely opening the ordinary container window must
+--   still reveal nothing.
 --
 --   Deliberately NOT unit-gated: this is the player themself looking
 --   inside through an opened session, not a unit's interaction, so

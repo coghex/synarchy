@@ -1,26 +1,58 @@
 -- Transfer session (#1014, epic #1013 phase B1; generalized to named
--- endpoints by #1085 phase A2): the shared entry point right-click
--- "Transfer" opens.
+-- endpoints by #1085 phase A2; made a real ESCORT by #1250, slice
+-- UIT-3B): the shared entry point right-click "Transfer" opens.
 --
--- NOT an A2 (#1085) transfer order: a real order needs concrete item
--- instances, which only C1's later item selection provides. This module
--- is that order's IDENTITY -- the source endpoint, the destination
--- endpoint, and the lifecycle vocabulary the eventual request will use
--- -- recorded the moment the player commits to a transfer, well before
--- an item is chosen. It is TRANSIENT by design (never registered as a
--- save_modules component, matching A1/A2): 'M.init' registers a reset
--- hook so a stale session pointing at a dead endpoint can never survive
--- a LOAD. A reset hook only fires from saveModules.applyAll(), never
--- from an ordinary "Exit to Menu" -> world.destroyAll() -> fresh
--- world.init() -- that path clears M.active explicitly in
+-- MODE A: walk FIRST, then choose items. Selecting "Transfer" resolves
+-- the nearest eligible selected unit (D-8), records this session, and
+-- that unit walks to the destination and STOPS there. On arrival the
+-- session opens two flanking panels and the player moves exact
+-- instances in either direction, immediately and repeatably, for as
+-- long as the window is open. That is the whole difference from Mode B
+-- (#1246/#1249), which queues a durable order and requires no
+-- adjacency: here the unit is standing next to the endpoint, so each
+-- request is created and committed in the same instant.
+--
+-- The three things this module owns, and nothing else does:
+--
+--   IDENTITY   the source endpoint, the destination endpoint and the
+--              contract vocabulary the eventual requests use, recorded
+--              the moment the player commits to the transfer.
+--   PHASE      "approaching" while the unit walks, "open" once it has
+--              arrived. The transition happens exactly once and is what
+--              fires the one camera snap, the one container reveal and
+--              the panels.
+--   THE HOLD   which unit is standing there. scripts/unit_ai_transfer.
+--              lua's `escort_transfer` action reads this module every
+--              tick and scores an in-progress LOCK for as long as a
+--              session names its unit, which is what keeps the wander
+--              tick and ordinary utility churn from stealing it. The
+--              hold is RELEASED by the session ending -- there is no
+--              separate release call, and therefore no way to end a
+--              session and leave a unit pinned.
+--
+-- What this module deliberately does NOT own: the panels themselves
+-- (scripts/transfer_session_panels.lua supplies the window manager's
+-- escort LEVEL KIND), and every transfer policy question -- eligibility,
+-- proximity, capacity, exact-instance identity, per-item atomicity and
+-- the refusal vocabulary are all src/Unit/Transfer.hs's, reached
+-- through the engine verbs.
+--
+-- TRANSIENT by design (D-3, never registered as a save_modules
+-- component, matching A1/A2): 'M.init' registers a reset hook so a
+-- stale session pointing at a dead endpoint can never survive a LOAD.
+-- A reset hook only fires from saveModules.applyAll(), never from an
+-- ordinary "Exit to Menu" -> world.destroyAll() -> fresh world.init()
+-- -- that path clears the session explicitly in
 -- scripts/pause_menu.lua's onExitToMenu, the same place
 -- build_tool/mine_tool clear their own transient armed state for the
--- identical reason.
+-- identical reason. Both paths run the SAME coupled teardown, so
+-- neither can leave panels open or a unit held.
 --
--- Reusable on purpose (requirement 8): 'M.create' is the ONE place a
--- session gets built. scripts/init_context_menu.lua's "Transfer"
--- callback calls it below; a future drag-and-drop surface calls the
--- exact same function rather than duplicating this validation.
+-- Reusable on purpose (#1014 requirement 8): 'M.create' is the ONE
+-- place a session gets built. scripts/init_context_menu.lua's
+-- "Transfer" callback calls it below; a future drag-and-drop surface
+-- calls the exact same function rather than duplicating this
+-- validation.
 
 local M = package.loaded["scripts.transfer_session"] or {}
 package.loaded["scripts.transfer_session"] = M
@@ -46,6 +78,15 @@ local REASON_RECEIVER_MISSING     = "receiver_missing"
 local REASON_RECEIVER_INELIGIBLE  = "receiver_ineligible"
 local REASON_CONTRACT_UNAVAILABLE = "contract_unavailable"
 
+-- Likewise NOT engine vocabulary, and named the same way and for the
+-- same reason as the constant above (#1250 review round 1): the chosen
+-- source is a real, live, player-commandable unit -- the contract would
+-- accept it as an endpoint -- but its SPECIES cannot run the escort
+-- action, so no session on it could ever walk, arrive or open. That is
+-- a Mode A capability failure, not a transfer policy refusal, and
+-- reporting it as one of the contract's own reasons would be a lie.
+local REASON_SOURCE_NOT_ESCORTABLE = "source_not_escortable"
+
 -- This session's initial lifecycle state (Unit.Transfer.
 -- transferStateId's 'TransferQueued'), validated by MEMBERSHIP against
 -- the live contract, never by array position.
@@ -67,6 +108,21 @@ local STATE_QUEUED = "queued"
 -- source a unit; the destination kind is whatever the caller targeted.
 local KIND_UNIT = "unit"
 local KIND_BUILDING = "building"
+
+-- This session's own two phases (#1250). NOT contract vocabulary: the
+-- contract describes a REQUEST's lifecycle, and a Mode A session makes
+-- many requests (or none at all). These name where the ESCORT is.
+local PHASE_APPROACHING = "approaching"
+local PHASE_OPEN        = "open"
+
+-- The AI action a Mode A source must be able to run for a session on it
+-- to mean anything (scripts/unit_ai_transfer.lua's own name for it).
+-- Named here rather than duplicated at each gate below.
+local ESCORT_ACTION = "escort_transfer"
+M.ESCORT_ACTION = ESCORT_ACTION
+
+M.PHASE_APPROACHING = PHASE_APPROACHING
+M.PHASE_OPEN        = PHASE_OPEN
 
 local function containsValue(list, v)
     for _, x in ipairs(list or {}) do
@@ -136,10 +192,79 @@ local function checkVocabulary()
     end
 end
 
+-----------------------------------------------------------
+-- Live reads (#1250)
+--
+-- The escort decides everything against LIVE state. The unit is
+-- walking, and the destination may be a unit that is walking too, so
+-- nothing below ever reads the creation-time snapshot in M.active.
+-----------------------------------------------------------
+
+-- The contract's own endpoint projection: position, footprint,
+-- eligibility, capacity, load and loose contents, all as of now.
+local function liveEndpoint(ep)
+    if not ep or ep.id == nil then return nil end
+    return unit.transferEndpointInfo({ kind = ep.kind, id = ep.id })
+end
+
+-- Ask `uid` to re-decide on its NEXT tick rather than at its natural
+-- thought cadence -- the same responsiveness every direct command
+-- (commandMove / commandPickup / commandTransferOrder) buys, and what
+-- makes both starting and ending a session feel immediate.
+--
+-- Read through package.loaded rather than require'd: this is a
+-- player-gesture module and every headless UI fixture loads it WITHOUT
+-- the unit AI. A session created where no AI is running simply has
+-- nobody to nudge, which is exactly right.
+local function nudgeUnit(uid)
+    if type(uid) ~= "number" then return false end
+    local core = package.loaded["scripts.unit_ai_core"]
+    if not core or type(core.ensureState) ~= "function" then return false end
+    local ok, s = pcall(core.ensureState, uid)
+    if not ok or type(s) ~= "table" then return false end
+    s.nextActionAt = 0
+    return true
+end
+
+-- Centre the camera on the pair, ONCE, on the transition to the open
+-- state (D-4 -- Mode A only; no Mode B order and no plain container
+-- inspect ever moves the camera).
+--
+-- Measured in the SOURCE's own u-alias frame (#1175): two tiles that
+-- are physically adjacent across the wrap seam sit a whole world apart
+-- in canonical coords, and the midpoint of those two canonical values
+-- is nowhere near the pair. world.localizeTile re-expresses the
+-- destination beside the source before averaging; identity away from
+-- the seam and in arena / non-wrapping worlds.
+--
+-- The destination's centre is its FOOTPRINT's, not its anchor's, so a
+-- multi-tile cargo hold frames on the building rather than on a corner.
+local function snapToPair(s)
+    local src = unit.getInfo(s.source.id)
+    local dst = liveEndpoint(s.destination)
+    if not (src and dst and src.gridX and src.gridY
+            and dst.gridX and dst.gridY) then
+        return false
+    end
+    local sx, sy = math.floor(src.gridX), math.floor(src.gridY)
+    local lx, ly = world.localizeTile(sx, sy, dst.gridX, dst.gridY)
+    if not (lx and ly) then lx, ly = dst.gridX, dst.gridY end
+    local cx = lx + ((dst.tileW or 1) - 1) * 0.5
+    local cy = ly + ((dst.tileH or 1) - 1) * 0.5
+    camera.goToTile(math.floor((sx + cx) * 0.5 + 0.5),
+                    math.floor((sy + cy) * 0.5 + 0.5))
+    return true
+end
+
 function M.init(scriptId)
     local saveMods = require("scripts.lib.save_modules")
+    -- The load reset runs the SAME coupled teardown every other path
+    -- does (requirement 7), not a bare `M.active = nil`: a load
+    -- replaces the whole session, so panels pointing at endpoints the
+    -- replacement may not even have must go with it, and the unit the
+    -- old session was holding must be released.
     saveMods.registerResetHook("transfer_session", function()
-        M.active = nil
+        M.close("save_loaded")
     end)
     checkVocabulary()
 end
@@ -195,8 +320,20 @@ end
 -- in which case every candidate is equidistant and the lowest-uid
 -- tiebreak alone decides -- still deterministic, never a nil-arithmetic
 -- error.
-function M.resolveSource(selectedUids, excludeUid, target)
+--
+-- `requiredAction` (optional, #1250 review round 1) additionally
+-- requires a candidate's SPECIES to be able to run that AI action, and
+-- it filters BEFORE ranking for the same reason commandability does: a
+-- candidate that cannot do the job must not win by being nearest and
+-- then do nothing. Mode A passes "escort_transfer", because a source
+-- whose species never registered it would sit in `approaching`
+-- forever. Mode B's own resolution (transfer_gestures.retrieveEntries)
+-- deliberately passes nothing: this issue does not change a shipped
+-- gesture, and the equivalent question for a QUEUED order's executor is
+-- its own concern to raise.
+function M.resolveSource(selectedUids, excludeUid, target, requiredAction)
     if not selectedUids then return nil end
+    local aiActions = require("scripts.unit_ai_actions")
     local tx = target and target.gridX and math.floor(target.gridX)
     local ty = target and target.gridY and math.floor(target.gridY)
     local best, bestUid = nil, nil
@@ -205,7 +342,9 @@ function M.resolveSource(selectedUids, excludeUid, target)
             local info = unit.getInfo(uid)
             local fac = info and unit.getFaction(uid)
             if info and info.gridX and info.gridY and fac
-               and faction.isPlayerCommandable(fac) then
+               and faction.isPlayerCommandable(fac)
+               and (requiredAction == nil
+                    or aiActions.unitHas(uid, requiredAction)) then
                 local d = 0
                 if tx and ty then
                     local cx = math.floor(info.gridX)
@@ -262,6 +401,19 @@ function M.create(sourceUid, kind, destinationId)
     -- membership rule exists to prevent. A contract that dropped
     -- 'unit' would otherwise still mint a session whose source kind no
     -- engine verb recognises.
+    -- Defence in depth behind the menu's omission (#1250 review round
+    -- 1): 'M.create' is the ONE place a session is built and is
+    -- deliberately reusable by surfaces that never ran resolveSource,
+    -- so the capability is re-checked here rather than trusted. Placed
+    -- after the destination checks so a call that is wrong on both
+    -- counts still reports the destination first, as it always did.
+    if not require("scripts.unit_ai_actions").unitHas(sourceUid,
+                                                      ESCORT_ACTION) then
+        engine.emitEventForUnit("unit_warning",
+            "Cannot transfer: this unit cannot be escorted", sourceUid)
+        return nil, REASON_SOURCE_NOT_ESCORTABLE
+    end
+
     local sourceKind = resolveEndpointKind(KIND_UNIT)
     local destinationKind = resolveEndpointKind(kind)
     local state = resolveState(STATE_QUEUED)
@@ -272,6 +424,13 @@ function M.create(sourceUid, kind, destinationId)
     end
 
     local srcInfo = unit.getInfo(sourceUid)
+
+    -- Every validation above has passed, so this call is committed and
+    -- only NOW may it disturb what is already there. A REJECTED
+    -- replacement leaves the existing session — its panels, its phase
+    -- and its held unit — exactly as it found them, which is what makes
+    -- a mis-click on a demolished cargo harmless.
+    M.close("replaced")
 
     local id = nextSessionId
     nextSessionId = nextSessionId + 1
@@ -292,33 +451,163 @@ function M.create(sourceUid, kind, destinationId)
         -- check), so the destination's resolved page IS the source's
         -- page for any real player interaction (hit-testing only ever
         -- matches entities on the currently visible world).
+        --
+        -- A creation-time RECORD, and nothing more (#1250 review): the
+        -- escort reads live positions for everything it decides -- the
+        -- approach, the arrival test, the camera snap and the panels'
+        -- placement -- because the unit is walking and the endpoint may
+        -- be walking too, so a snapshot taken at right-click time is
+        -- stale by the time any of them happen.
         sourceLocation         = { page  = info.page,
                                     gridX = srcInfo and srcInfo.gridX,
                                     gridY = srcInfo and srcInfo.gridY },
         destinationLocation    = { page = info.page, gridX = info.gridX,
                                     gridY = info.gridY },
+        -- Where the ESCORT is (#1250). A fresh session always starts
+        -- with the unit still to walk, even when it happens to be
+        -- standing next to the endpoint already -- arrival is decided by
+        -- the AI action against the contract's own reach rule, never
+        -- assumed here.
+        phase                  = PHASE_APPROACHING,
         -- This session's OWN lifecycle state -- the contract's first
         -- vocabulary value (resolved by membership above, not a
         -- hardcoded literal and not an array position), meaning "the
         -- player has committed to this transfer", NOT a real queued
-        -- transfer order (see module header). C2/C3 own advancing it
-        -- past here.
+        -- transfer order (see module header).
         contract               = { state = state },
     }
+    -- Decide on the next tick rather than at the unit's natural
+    -- cadence, the same responsiveness commandMove / commandPickup /
+    -- commandTransferOrder buy.
+    nudgeUnit(sourceUid)
     return M.active
 end
 
--- The current session, or nil. C1's paired inventory view reads
--- through this rather than the context-menu module.
+-- The current session, or nil.
 function M.get()
     return M.active
 end
 
--- Explicit teardown (also run unconditionally on world load via the
--- reset hook above). C3 owns player-facing cancellation; this is the
--- mechanical clear underneath it.
-function M.clear()
+-- Is `uid` the unit this session is holding? The AI action's whole
+-- question, asked every tick.
+function M.holdsUnit(uid)
+    local s = M.active
+    return s ~= nil and s.source.id == uid
+end
+
+-- The destination as it is RIGHT NOW: position, footprint and
+-- eligibility, straight from the contract's own endpoint projection.
+-- nil when it no longer resolves at all.
+function M.destinationNow()
+    local s = M.active
+    if not s then return nil end
+    return liveEndpoint(s.destination)
+end
+
+-- The one-way transition to the open/held state, run by the AI action
+-- the moment the unit is within the contract's own reach of the
+-- destination. Returns true only on the transition itself, so
+-- everything below happens EXACTLY ONCE per session:
+--
+--   * the container REVEAL (requirement 3) -- and only for a building,
+--     because a unit endpoint has no remembered snapshot to refresh.
+--     Before the panels, so the container pane's first render is
+--     already the fresh one.
+--   * the two panels.
+--   * the one camera SNAP (D-4, requirement 1), centred on the pair's
+--     LIVE positions. Mode A only: no Mode B order and no plain
+--     container inspect ever moves the camera.
+--
+-- A resize, a reflow and every later commit re-run none of it.
+function M.markArrived()
+    local s = M.active
+    if not s or s.phase ~= PHASE_APPROACHING then return false end
+    s.phase = PHASE_OPEN
+
+    if s.destination.kind == KIND_BUILDING then
+        building.refreshContainerKnowledge(s.destination.id)
+    end
+    -- pcall'd, and the FAILURE PATH ends the session: the phase has
+    -- already flipped (so nothing above can run twice), which means a
+    -- window that did not open would otherwise leave this unit held
+    -- against nothing, forever, with no way for the player to release
+    -- it. Ending here is the only disposition that cannot strand it.
+    local ok, opened = pcall(function()
+        return require("scripts.transfer_session_panels").open(s)
+    end)
+    if not (ok and opened) then
+        if not ok then
+            engine.logError("transfer_session: opening the escort panels "
+                .. "failed -- " .. tostring(opened))
+        end
+        engine.emitEventForUnit("unit_warning",
+            "Cannot transfer: could not open the transfer window",
+            s.source.id)
+        M.close("panels_unavailable")
+        return false
+    end
+    snapToPair(s)
+    return true
+end
+
+-- Coupled teardown (requirement 7), and the ONLY way a session ends.
+-- Idempotent, and the same call for every path that ends one: a closed
+-- panel, a replacement, an endpoint that vanished, Exit to Menu, a save
+-- load.
+--
+-- The active session is cleared FIRST and deliberately: closing the
+-- level fires the escort kind's own `onClose`, which calls back into
+-- `onLevelClosed` below, and finding no session with that id is what
+-- stops the two halves of the coupling from re-entering each other. No
+-- flag, no ordering rule to remember.
+--
+-- Releasing the hold is simply the session no longer existing -- the AI
+-- action scores -inf on its next tick with nothing left to hold it --
+-- so the only thing left to do is ask that unit to re-decide NOW rather
+-- than at its natural cadence.
+function M.close(reason)
+    local s = M.active
+    if not s then return false end
     M.active = nil
+    engine.logDebug("transfer_session: session " .. tostring(s.id)
+        .. " ended (" .. tostring(reason or "closed") .. ")")
+    pcall(function()
+        require("scripts.transfer_session_panels").closeFor(s.id)
+    end)
+    -- STOP the unit, not just release it. A session that ends while its
+    -- escort is still APPROACHING leaves a walk in flight toward an
+    -- endpoint that no longer means anything, and the AI will not
+    -- interrupt that walk on its own: unit_ai's execute gate re-runs an
+    -- action only on a SWITCH or when the unit is idle, and this action
+    -- is deliberately not forceExecute (re-issuing moveTo mid-walk wipes
+    -- the engine-side path). So a replacement session on the SAME unit
+    -- would keep walking to the OLD destination until that path ran out
+    -- before it ever looked at the new one. Stopping here is what makes
+    -- the unit idle, which is what makes the next tick re-decide
+    -- immediately -- and it is a no-op for the far commoner case, a
+    -- session closed while the escort is already standing still.
+    unit.stop(s.source.id)
+    nudgeUnit(s.source.id)
+    return true
+end
+
+-- The window manager's side of the coupling: the escort level was
+-- destroyed for a real reason (Escape, another container replacing it,
+-- an endpoint that stopped resolving), so the session it was showing
+-- ends. A "layout" teardown never reaches here -- the manager filters
+-- it -- which is what lets a resize rebuild both panes with the session
+-- and its hold intact (requirement 8).
+function M.onLevelClosed(sessionId, reason)
+    local s = M.active
+    if not s or s.id ~= sessionId then return false end
+    return M.close(reason or "closed")
+end
+
+-- Explicit teardown, kept under its historical name because
+-- scripts/pause_menu.lua's onExitToMenu speaks it (#1014 review round
+-- 1: the save-load reset hook alone misses that path).
+function M.clear()
+    M.close("cleared")
 end
 
 return M

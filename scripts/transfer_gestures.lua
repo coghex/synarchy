@@ -34,6 +34,15 @@
 -- to redraw. The items leave when the executor arrives and commits, and
 -- each host's existing per-tick refresh is what shows that.
 --
+-- Since #1250 this builder serves MODE A as well, and that is the whole
+-- reason `entries` takes a `submit`: an escort session's row menus are
+-- the identical 1-and-all gesture with the identical omission rules and
+-- the identical exact-instance membership, differing only in that the
+-- source unit is already standing there, so the items move on the spot
+-- instead of becoming an order. Everything a merged row means — which
+-- instance the singular entry names, which set "all" names, when the
+-- gesture is omitted entirely — is decided ONCE, here, for both modes.
+--
 -- Public API:
 --   activeEndpoint()                     -- the open window's active
 --                                           endpoint, or nil
@@ -46,8 +55,10 @@ package.loaded["scripts.transfer_gestures"] = M
 
 local itemList = require("scripts.ui.item_list")
 
--- Batch granularity is 1 and all (signed off 2026-08-11). The fuller
--- 1/N/all quantity picker belongs to Mode A's own menu (UIT-3B).
+-- Batch granularity is 1 and all (signed off 2026-08-11), in BOTH
+-- modes: #1250 shipped Mode A's session menus on this same builder, and
+-- the fuller 1/N/all quantity picker stays deferred to a later issue if
+-- play shows it is missed.
 local LABEL_ONE = "%s 1"
 local LABEL_ALL = "%s all"
 
@@ -66,6 +77,13 @@ end
 -- ancestor -- a player looking into a toolbox inside a cargo hold is
 -- pointing at the toolbox, and silently retargeting the cargo hold would
 -- move the item somewhere they did not name.
+--
+-- An ESCORT level (#1250) answers nil for the same reason read the
+-- other way: it shows TWO endpoints, so "the endpoint this window is
+-- showing" has no single answer and picking one would be guessing. The
+-- unit-info "Store" gesture is therefore omitted while a session is
+-- open -- which costs the player nothing, because the session's own
+-- panes already offer Store and Retrieve on both sides, immediately.
 function M.activeEndpoint()
     -- Required lazily, like every other cross-reference to the window
     -- manager (it requires this module too, from its own transferMenu,
@@ -112,8 +130,13 @@ end
 --   verb         "Store" | "Retrieve" -- names the entries
 --   row          the rendered row the player right-clicked
 --   executor     uid that walks the order and commits it on arrival
+--                (Mode A: the unit already standing there)
 --   source       { kind, id }
 --   destination  { kind, id }
+--   submit       optional (executor, source, destination, defName, ids)
+--                -- what a chosen entry DOES. Defaults to queueing a
+--                durable Mode B order; the escort session (#1250)
+--                passes its own immediate check-and-commit.
 function M.entries(opts)
     if type(opts) ~= "table" then return {} end
     local row, source, destination = opts.row, opts.source, opts.destination
@@ -136,13 +159,14 @@ function M.entries(opts)
                              and row.instanceId or ids[1]
     local verb = opts.verb or "Store"
     local executor = opts.executor
+    local submit = opts.submit or queueOrder
 
     local out = {}
     out[1] = {
         label    = string.format(LABEL_ONE, verb),
         callback = function()
-            queueOrder(executor, source, destination, defName,
-                       { representative })
+            submit(executor, source, destination, defName,
+                   { representative })
         end,
     }
     -- A single-instance row shows the singular entry alone: an "all"
@@ -151,7 +175,7 @@ function M.entries(opts)
         out[2] = {
             label    = string.format(LABEL_ALL, verb),
             callback = function()
-                queueOrder(executor, source, destination, defName, ids)
+                submit(executor, source, destination, defName, ids)
             end,
         }
     end

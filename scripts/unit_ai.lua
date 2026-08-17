@@ -110,7 +110,7 @@ local unitAiSave    = require("scripts.unit_ai_save")
 -- filled in below via registerActions — see its own block for the
 -- universal combat prepend every one of them gets.
 -----------------------------------------------------------
-local actions = {}
+local actions, actionNames = {}, require("scripts.unit_ai_actions")
 
 -----------------------------------------------------------
 -- Public registration API (for satellite AI scripts)
@@ -151,7 +151,7 @@ function unitAi.registerActions(defName, ambientActions)
     for _, a in ipairs(ambientActions or {}) do
         table.insert(list, a)
     end
-    actions[defName] = list
+    actions[defName] = actionNames.record(defName, list)
 end
 
 -- Expose goal-layer helpers so satellite scripts can read/write
@@ -188,7 +188,7 @@ unitAi.registerActions("acolyte", {
     { name = "auto_harvest", utility = unitAi.harvest.utility, execute = unitAi.harvest.execute },
     { name = "repair_job", utility = repairMod.utility, execute = repairMod.execute, onExit = repairMod.onExit },
     { name = "pickup_ground", utility = pickup.pickupUtility, execute = pickup.pickupExecute },
-    transfer.action,
+    transfer.action, transfer.escortAction,
 })
 
 -- Technomule: player pack unit. Stands by the colony's materials
@@ -212,7 +212,7 @@ unitAi.registerActions("technomule", {
     { name = "idle", utility = needs.idleUtility, execute = needs.idleExecute },
     { name = "wander", utility = needs.wanderUtility, execute = needs.wanderExecute },
     { name = "follow_command", utility = combat.followCommandUtility, execute = combat.followCommandExecute },
-    transfer.action,
+    transfer.action, transfer.escortAction,
 })
 
 -- Load species satellite scripts. Each one defines its candidates

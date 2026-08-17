@@ -851,7 +851,12 @@ baseSetupLua = T.concat
     , "faction.isPlayerCommandable = function(f) return f == 'player' end; "
     , "faction.canAttack = function(a, b) return true end; "
     , "unit.exists = function(uid) return true end; "
-    , "unit.getInfo = function(uid) return { gridX = 1, gridY = 2 } end; "
+    -- A real 'unit.getInfo' always reports the unit's def name, and
+    -- since #1250 the source rule reads it (to ask whether that species
+    -- can run the escort at all), so a stub that omitted it would model
+    -- a unit no engine can produce.
+    , "unit.getInfo = function(uid) "
+    , "  return { gridX = 1, gridY = 2, defName = 'acolyte' } end; "
     , "unit.getFaction = function(uid) return 'player' end; "
     , "unit.getWounds = function(uid) return {} end; "
     , "unit.getKnowledge = function(uid, k) return false end; "
@@ -906,7 +911,7 @@ unitInfoStubF entries = T.concat
     [ "unit.getInfo = function(uid) return ({"
     , T.intercalate ", "
         [ T.concat [ "[", tshow uid, "]={gridX=", dshow gx
-                   , ",gridY=", dshow gy, "}" ]
+                   , ",gridY=", dshow gy, ",defName='acolyte'}" ]
         | (uid, (gx, gy)) ← entries ]
     , "})[uid] end; "
     ]

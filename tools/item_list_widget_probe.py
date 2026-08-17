@@ -116,6 +116,18 @@ Verifies, in order:
      strip inside the section rect, tab selection filtering, and a real
      right-click reaching the representative instance's Equip/Contents
      menu.
+  9. the escort session (#1250): a Mode A session opens TWO flanking
+     panels as ONE non-modal stack level, both clamped inside the
+     framebuffer and neither overlapping the other, source on the left
+     and destination on the right; the camera snaps onto the pair (the
+     one gesture in this file that moves it at all); a source-pane row
+     offers Store and only Store while a destination-pane row offers
+     Retrieve and only Retrieve; firing Store all moves the items for
+     real and refreshes BOTH panes' headers within the gesture, leaving
+     the session open; a real resize keeps the PAIR sized to the
+     framebuffer it is drawn on, in frame and flanking rather than
+     stacked; and one dismissal closes both panels and ends the
+     session.
   7. tracked temperature (#1268): both raw-item hosts present a row's
      summary in the row text AND in a tooltip line, derived from the
      same string; a group holding two tracked values and one ambient
@@ -145,7 +157,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from probelib import (boot, camera_state, centred_within,
+from probelib import (boot, camera_state, centred_within, clear_find_water,
                       focus_and_locate, locate_building_pixel, poll_until,
                       quit_engine, send, send_json, set_paused,
                       targeting_report, viewport, win_to_fb)
@@ -1675,6 +1687,252 @@ def store_gesture_scenario(port: int, uid: int, bid: int) -> None:
 
 
 # --------------------------------------------------------------------------
+# #1250: the Mode A escort session's rendered pair
+# --------------------------------------------------------------------------
+
+def pane_list_id(pane_key: str) -> str:
+    """A debug-console expression naming one escort pane's widget
+    instance — the same shape `level_list_id` gives a single-pane
+    level, addressed through the manager's own pane accessor rather
+    than by indexing `panes` positionally."""
+    return ("(function() local c = require('scripts.cargo_inventory_panel');"
+            f" local p = c.getPane(c.getLevel(1), '{pane_key}');"
+            " return p and p.listId end)()")
+
+
+def escort_session_scenario(port: int, bid: int, bax: int, bay: int,
+                            vp: dict) -> None:
+    """#1250: the rendered escort pair.
+
+    Its own acolyte, spawned ON the cargo's anchor tile so the contract's
+    footprint rule already reports it in reach — the WALK is the headless
+    gate's business (and the AI's), while what needs a GPU here is the
+    pair of real panels and the real row menus on them. Everything below
+    is located through the widget oracle and the manager's dump; not one
+    screen coordinate is written down.
+
+    Deliberately last of the transfer scenarios: it opens a window at the
+    base level, which replaces whatever else was open, and it leaves the
+    stack empty again on the way out."""
+    print("== #1250 escort session (the rendered flanking pair) ==")
+    send(port, "require('scripts.cargo_inventory_panel').closeIfOpen();"
+               " return 'ok'")
+    esc_raw = send(port, f"return unit.spawn('acolyte', {bax}, {bay},"
+                         " nil, 'player')")
+    if not check("escort acolyte spawned on the cargo's own tile",
+                 esc_raw.strip() not in ("", "nil", "null"), f"got {esc_raw!r}"):
+        return
+    esc_uid = int(float(esc_raw))
+    # A freshly spawned acolyte carries the standing `find_water` goal,
+    # whose search utility competes with the escort hold for this very
+    # unit. Retiring it is what makes the arrival below a measurement of
+    # the ESCORT rather than a race against thirst on whatever terrain
+    # this run's world happened to generate.
+    check("the escort's standing find_water goal is retired",
+          clear_find_water(port, esc_uid))
+    # Three MORE rations on top of the spawn loadout's own, so the row
+    # is unambiguously merged and "Store all" has more than one instance
+    # to name.
+    send(port, f"for i = 1, 3 do unit.addItem({esc_uid}, 'rations') end;"
+               " return 'ok'", timeout=20.0)
+
+    # Pan the camera well away from the pair FIRST. The probe's earlier
+    # scenarios already centred it on this very cargo, so a snap onto the
+    # pair would otherwise be a no-op and unobservable — this is what
+    # makes the D-4 check a real one rather than a tautology.
+    send(port, f"camera.goToTile({bax + 60}, {bay + 60}); return 'ok'")
+    time.sleep(0.5)
+    cam_before = send(port, "local x, y = camera.getPosition();"
+                            " return string.format('%.3f,%.3f', x or 0, y or 0)")
+    made = send(port, "return tostring(require('scripts.transfer_session')"
+                      f".create({esc_uid}, 'building', {bid}) ~= nil)")
+    if not check("a Mode A session is created on the cargo endpoint",
+                 made.strip().strip('"') == "true", f"got {made!r}"):
+        return
+
+    opened = poll_until(45.0, lambda: send(
+        port, "local s = require('scripts.transfer_session').get();"
+              " return s and s.phase or 'none'").strip('"') == "open",
+        interval=0.5)
+    if not check("the REAL unit AI holds the escort and opens the pair on "
+                 "arrival", bool(opened)):
+        send(port, "require('scripts.transfer_session').clear(); return 'ok'")
+        return
+    time.sleep(0.6)
+
+    d = stack_dump(port)
+    lv = (d.get("levels") or [{}])[0]
+    check("the pair is ONE stack level of the escort kind (D-9's stated "
+          "exception), non-modal at the base",
+          d.get("depth") == 1 and lv.get("kind") == "escort"
+          and lv.get("paneCount") == 2 and lv.get("modal") is False,
+          f"got {d!r}")
+    panes = lv.get("panes") or []
+    if check("both panes report rendered geometry", len(panes) == 2
+             and all(isinstance(p.get("width"), (int, float)) for p in panes),
+             f"got {panes!r}"):
+        a, b = panes[0], panes[1]
+        fb_w, fb_h = vp["fb_w"], vp["fb_h"]
+
+        def in_frame(p):
+            return (p["x"] >= 0 and p["y"] >= 0
+                    and p["x"] + p["width"] <= fb_w
+                    and p["y"] + p["height"] <= fb_h)
+
+        check("both panels are clamped inside the framebuffer",
+              in_frame(a) and in_frame(b),
+              f"framebuffer {fb_w}x{fb_h}, panes {a!r} {b!r}")
+        overlap = not (a["x"] + a["width"] <= b["x"]
+                       or b["x"] + b["width"] <= a["x"]
+                       or a["y"] + a["height"] <= b["y"]
+                       or b["y"] + b["height"] <= a["y"])
+        check("the two panels flank rather than overlap", not overlap,
+              f"panes {a!r} {b!r}")
+        check("the source unit is on the left and the destination on the "
+              "right, reading from -> to",
+              a.get("paneKey") == "source"
+              and b.get("paneKey") == "destination" and a["x"] < b["x"],
+              f"panes {a!r} {b!r}")
+
+    cam_after = send(port, "local x, y = camera.getPosition();"
+                           " return string.format('%.3f,%.3f', x or 0, y or 0)")
+    check("opening the session snapped the camera onto the pair (D-4 — "
+          "Mode A is the ONE gesture that moves it)",
+          cam_after != cam_before,
+          f"before={cam_before!r} after={cam_after!r}")
+
+    # -- the real rendered row menus, one per pane, in both directions.
+    src_rows = item_rows(port, pane_list_id("source"))
+    dst_rows = item_rows(port, pane_list_id("destination"))
+    check("both panes render their endpoint's rows",
+          len(src_rows) > 0 and len(dst_rows) > 0,
+          f"source={len(src_rows)} destination={len(dst_rows)}")
+
+    def row_named(rows, def_name):
+        for w in rows:
+            if (w.get("defName") or "") == def_name:
+                return w
+        return None
+
+    ration = row_named(src_rows, "rations")
+    if check("the merged rations row is located on the source pane",
+             bool(ration), f"rows {[w.get('defName') for w in src_rows]!r}"):
+        right_click_widget_center(port, ration)
+        time.sleep(0.4)
+        labels = [w.get("label") for w in widgets(port) if w.get("label")]
+        check("a source-pane row offers Store 1 and Store all",
+              "Store 1" in labels and "Store all" in labels,
+              f"menu labels: {labels!r}")
+        check("a source-pane row offers no Retrieve — direction comes from "
+              "WHICH pane was clicked",
+              not any((l or "").startswith("Retrieve") for l in labels),
+              f"menu labels: {labels!r}")
+
+        before_panes = {p.get("paneKey"): (p.get("subtitle"), p.get("rowCount"))
+                        for p in panes}
+        entry = find_widget(port, "Store all")
+        if check("the Store all entry is clickable", bool(entry)):
+            click_widget_center(port, entry)
+            time.sleep(0.8)
+            d2 = stack_dump(port)
+            lv2 = (d2.get("levels") or [{}])[0]
+            after_panes = {p.get("paneKey"): (p.get("subtitle"), p.get("rowCount"))
+                           for p in (lv2.get("panes") or [])}
+            check("committing refreshes BOTH panes in the same gesture — "
+                  "each header's own stored weight moved",
+                  after_panes.get("source") != before_panes.get("source")
+                  and after_panes.get("destination")
+                      != before_panes.get("destination"),
+                  f"before={before_panes!r} after={after_panes!r}")
+            check("the session stays open and repeatable after a commit",
+                  d2.get("depth") == 1 and lv2.get("kind") == "escort"
+                  and send(port,
+                           "local s = require('scripts.transfer_session').get();"
+                           " return s and s.phase or 'none'").strip('"')
+                      == "open",
+                  f"got {d2!r}")
+            check("the rations really left the acolyte's own pane",
+                  not any((w.get("defName") or "") == "rations"
+                          for w in item_rows(port, pane_list_id("source"))),
+                  "the source pane still lists a rations row")
+        else:
+            close_menu(port)
+
+    # -- a real resize, rendered (#1250 review round 1).
+    #
+    #    Two 440-wide panels need 904 px at 1x, so on a framebuffer
+    #    narrower than that the PAIR has to be fitted to width — each
+    #    panel clamped on its own would land them on top of each other.
+    #    What is asserted here is the invariant that holds at EVERY
+    #    width: the pair's combined width fits the framebuffer it is
+    #    drawn on, and the two still flank rather than stack.
+    #
+    #    Deliberately NOT asserted as "narrower than 440": `--offscreen`
+    #    renders to a fixed-size target, so `engine.setWindowSize` moves
+    #    the window without necessarily moving the FRAMEBUFFER this
+    #    geometry is measured against, and demanding a shrink would then
+    #    be demanding one that was never required. The envelope's formal
+    #    minimum (800x600 @ 1x, where the fit genuinely fires and each
+    #    pane really does come out under 440) is pinned deterministically
+    #    by hspec instead — Test.Headless.UI.TransferSession drives the
+    #    real framebuffer ref down to it.
+    send(port, "return engine.setWindowSize(800, 600)")
+    time.sleep(1.5)
+    tight = stack_dump(port)
+    tlv = (tight.get("levels") or [{}])[0]
+    tpanes = tlv.get("panes") or []
+    if check("the session survives a real resize",
+             tight.get("depth") == 1 and tlv.get("kind") == "escort"
+             and len(tpanes) == 2, f"got {tight!r}"):
+        tvp = viewport(port, fallback=(800, 600))
+        a, b = tpanes[0], tpanes[1]
+
+        def fits(p):
+            return (p["x"] >= 0 and p["y"] >= 0
+                    and p["x"] + p["width"] <= tvp["fb_w"]
+                    and p["y"] + p["height"] <= tvp["fb_h"])
+
+        overlap = not (a["x"] + a["width"] <= b["x"]
+                       or b["x"] + b["width"] <= a["x"]
+                       or a["y"] + a["height"] <= b["y"]
+                       or b["y"] + b["height"] <= a["y"])
+        check("after the resize both panels still fit the framebuffer and "
+              "still flank, source left",
+              fits(a) and fits(b) and not overlap and a["x"] < b["x"]
+              and a.get("paneKey") == "source",
+              f"framebuffer {tvp['fb_w']}x{tvp['fb_h']}, panes {a!r} {b!r}")
+        check("the PAIR is sized to the framebuffer it is drawn on, not "
+              "each panel independently",
+              a["width"] + b["width"] <= tvp["fb_w"],
+              f"framebuffer width {tvp['fb_w']}, "
+              f"panes {a['width']} + {b['width']}")
+
+    dst_rows = item_rows(port, pane_list_id("destination"))
+    target = dst_rows[0] if dst_rows else None
+    if check("a destination-pane row is located for the reverse direction",
+             bool(target)):
+        right_click_widget_center(port, target)
+        time.sleep(0.4)
+        labels = [w.get("label") for w in widgets(port) if w.get("label")]
+        check("a destination-pane row offers Retrieve, never Store",
+              any((l or "").startswith("Retrieve") for l in labels)
+              and not any((l or "").startswith("Store") for l in labels),
+              f"menu labels: {labels!r}")
+        close_menu(port)
+
+    # -- coupled close: one dismissal takes both panels AND the session.
+    send(port, "require('scripts.cargo_inventory_panel').popLevel(); return 'ok'")
+    time.sleep(0.5)
+    closed = stack_dump(port)
+    check("closing the window closes BOTH panels and ends the session "
+          "(requirement 7)",
+          closed.get("depth") == 0
+          and send(port, "return tostring(require('scripts.transfer_session')"
+                         ".get())").strip('"') == "nil",
+          f"got {closed!r}")
+
+
+# --------------------------------------------------------------------------
 # #1238: the nesting stack
 # --------------------------------------------------------------------------
 
@@ -2199,6 +2457,12 @@ def main() -> int:
              isinstance(kit_iid, int) and kit_iid > 0 and nested_rows > 12,
              f"got id={kit_iid!r} nested rows={nested_rows!r}"):
         nesting_stack_scenario(port, bid, int(kit_iid), mule_uid, vp)
+
+    # -- #1250 LAST: it spawns its own escort, opens a window at the base
+    #    level (replacing anything above), commits real items into the
+    #    cargo and leaves the stack empty, so nothing that asserts exact
+    #    cargo contents or row counts may run after it.
+    escort_session_scenario(port, bid, bax, bay, vp)
 
     quit_engine(port, proc)
     if failures:

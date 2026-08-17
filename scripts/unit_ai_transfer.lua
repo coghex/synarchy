@@ -1,3 +1,21 @@
+-- Unit AI transfer execution: BOTH modes of epic #1013.
+--
+--   transfer_order    (#1247, UIT-2B) -- Mode B. A durable order walks
+--                     its acting unit to the counterpart endpoint and
+--                     commits there, exactly once.
+--   escort_transfer   (#1250, UIT-3B) -- Mode A. A player-opened
+--                     session walks its source unit to the destination
+--                     and HOLDS it there while the player moves items
+--                     by hand, for as long as the window is open.
+--
+-- They share this file because they share their whole vocabulary: the
+-- same rect-to-rect approach, the same contract-owned reach rule, the
+-- same comfort pacing, and the same place in the #306 utility ladder.
+-- What differs is what happens on arrival -- one commits and finishes,
+-- the other stops and waits for the player.
+--
+-- Mode B's own record follows.
+--
 -- Unit AI transfer-order execution (#1247, epic #1013 slice UIT-2B).
 --
 -- Action: transfer_order. A durable order queued by #1246's store makes
@@ -392,6 +410,24 @@ M.action = {
     utility = transferUtility,
     execute = transferExecute,
 }
+-- The rect-to-rect approach and the contract's own reach measure, both
+-- of which Mode A's escort shares verbatim. Exported rather than
+-- copied: "close enough to walk no further" and "close enough to
+-- commit" must be ONE rule for both modes.
+M.moveBesideRect = moveBesideRect
+M.approachDist   = approachDist
+
+-- Mode A's action, re-exported (#1250). Its body lives in
+-- scripts/unit_ai_escort.lua -- this module is at its #538 line budget
+-- and the escort is a self-contained concern -- but the REGISTRATION
+-- point stays one name here, beside the queued order it is a peer of,
+-- so scripts/unit_ai.lua names both from the same require.
+--
+-- Registered AFTER M.action in every action list, so a unit that
+-- somehow holds both resolves the equal-utility tie to the queued order
+-- by list order; neither clears the other.
+M.escortAction = require("scripts.unit_ai_escort").action
+
 M.transferUtility = transferUtility
 M.transferExecute = transferExecute
 
