@@ -173,32 +173,60 @@ class Tree:
         shutil.rmtree(self.root, ignore_errors=True)
 
 
+def process_state(pid: int) -> str | None:
+    """The one-letter process state, or None when it cannot be read.
+
+    Linux publishes it in /proc/<pid>/stat. That field follows the comm,
+    which is parenthesized and may itself contain spaces and ')', so it is
+    read from the LAST ')' rather than by splitting the whole line. macOS
+    has no /proc, so `ps` answers there.
+    """
+    try:
+        with open(f"/proc/{pid}/stat") as fh:
+            raw = fh.read()
+        return raw[raw.rindex(")") + 1:].split()[0]
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        done = subprocess.run(["ps", "-o", "state=", "-p", str(pid)],
+                              capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    state = done.stdout.strip()
+    return state[0] if state else None
+
+
 def pid_alive(pid: int) -> bool:
+    """True while `pid` names a process that has not yet exited.
+
+    A ZOMBIE does not count. It has already died and is only waiting for a
+    parent that will never wait() for it -- which is precisely the state a
+    correctly killed synthetic engine ends up in here, because it is
+    orphaned the moment its probe exits. `os.kill(pid, 0)` cannot tell the
+    two apart and reports a zombie as living, so on its own it fails every
+    "the engine is gone" assertion in this suite wherever orphans are not
+    reaped promptly: green on macOS, where launchd reaps at once, and red
+    in a CI container whose PID 1 does not reap at all.
+
+    An unreadable state is treated as alive, so a broken `process_state`
+    fails these assertions rather than passing them vacuously.
+    """
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
-    return True
+    return process_state(pid) != "Z"
 
 
-def wait_pid_gone(pid: int, seconds: float = 10.0) -> bool:
+def wait_pid_gone(pid: int, seconds: float = 15.0) -> bool:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         if not pid_alive(pid):
             return True
         time.sleep(0.05)
     return not pid_alive(pid)
-
-
-def wait_group_gone(pgid: int, seconds: float = 20.0) -> bool:
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        if not run_probes._group_alive(pgid):
-            return True
-        time.sleep(0.05)
-    return not run_probes._group_alive(pgid)
 
 
 def wait_file(path: Path, seconds: float = 60.0) -> bool:
@@ -657,14 +685,56 @@ def test_ctrl_c_in_the_launch_window_leaves_nothing() -> None:
         expect(raised == "KeyboardInterrupt",
                f"the interrupt still reaches the caller (got {raised})")
         expect("pgid" in launched, "the probe really was spawned")
-        pgid = launched.get("pgid")
-        expect(pgid is not None and wait_group_gone(pgid),
-               f"nothing from its process group survives (pgid {pgid})")
+        pid = launched.get("pgid")
+        expect(pid is not None and wait_pid_gone(pid),
+               f"the probe process itself is gone (pid {pid})")
+        engine = tree.engine_pid("launch")
+        expect(engine is None or wait_pid_gone(engine),
+               f"and so is anything it managed to boot (pid {engine})")
     finally:
         tree.cleanup()
 
 
+def test_liveness_check_does_not_count_a_zombie_as_running() -> None:
+    print("\n-- this suite's own liveness check reads a zombie as gone, not running")
+    # Every "the engine is gone" assertion below rests on pid_alive, and a
+    # pid_alive that answered "running" for a dead-but-unreaped process
+    # would fail them all (CI, 2026-08-17), while one that answered "gone"
+    # for a LIVE process would pass them all vacuously. Both directions are
+    # pinned here so the predicate itself is gated rather than trusted.
+    zombie = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        deadline = time.monotonic() + 15.0
+        while time.monotonic() < deadline:
+            if process_state(zombie.pid) == "Z":
+                break
+            time.sleep(0.05)
+        expect(process_state(zombie.pid) == "Z",
+               f"a real zombie was produced and its state is readable "
+               f"(got {process_state(zombie.pid)!r})")
+        naive_says_alive = True
+        try:
+            os.kill(zombie.pid, 0)
+        except ProcessLookupError:
+            naive_says_alive = False
+        expect(naive_says_alive,
+               "os.kill(pid, 0) still reports it -- so it alone cannot be "
+               "the check, which is the CI failure this pins")
+        expect(pid_alive(zombie.pid) is False,
+               "pid_alive reports the zombie as NOT running")
+    finally:
+        zombie.wait()
+    live = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        expect(pid_alive(live.pid) is True,
+               "and it still reports a genuinely running process as alive")
+    finally:
+        live.kill()
+        live.wait()
+
+
 def main() -> int:
+    test_liveness_check_does_not_count_a_zombie_as_running()
     test_success_reaps_the_engine()
     test_failure_reaps_the_engine_and_keeps_the_tail()
     test_clean_probe_is_unaffected()
