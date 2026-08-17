@@ -666,6 +666,63 @@ spec = aroundAll withSharedFixture $
                 , "return s.resolveSource({1}, nil, ep, s.ESCORT_ACTION)" ])
             ok `shouldBe` "1"
 
+        -- #1250 review round 3: both panes named their widgets
+        -- "cargo_inv", so their tab controls got identical element
+        -- names — and control focus survives a rebuild by NAME,
+        -- restoring the FIRST visible match. Focus parked on the
+        -- destination pane came back on the SOURCE pane's
+        -- corresponding tab: a silently wrong control, not a missing
+        -- one.
+        it "keyboard control focus on the DESTINATION pane comes back on \
+           \the destination pane across a resize, not its source-pane twin" $
+           \(env, ls) → do
+            resetFixture env ls
+            placeUnit env carrierUid (42, 41)
+            _ ← evalOk ls (createLua "building" 7)
+            _ ← evalOk ls "return _G.__tick(1)"
+            -- The two panes' controls must be distinguishable by name
+            -- at all: that is the property by-name restore relies on.
+            names ← evalOk ls (luaLines
+                [ "local c = require('scripts.cargo_inventory_panel');"
+                , "local il = require('scripts.ui.item_list');"
+                , "local lvl = c.getLevel(1);"
+                , "local function firstTab(key)"
+                , "  local p = c.getPane(lvl, key);"
+                , "  local t = il.getTabs(p.listId)[1];"
+                , "  local i = t and UI.getElementInfo(t.boxId);"
+                , "  return t and t.boxId, i and i.name end;"
+                , "local sh, sn = firstTab('source');"
+                , "local dh, dn = firstTab('destination');"
+                , "_G.__srcTab, _G.__dstTab = sh, dh;"
+                , "return { src = sn, dst = dn, distinct = sn ~= dn }" ])
+            names `shouldSatisfy` T.isInfixOf "\"distinct\":true"
+            names `shouldSatisfy` T.isInfixOf "cargo_inv_destination"
+            -- Now the real round trip, through the SAME snapshot/restore
+            -- pair hud.createUI wraps its rebuild in.
+            restored ← evalOk ls (luaLines
+                [ "local c = require('scripts.cargo_inventory_panel');"
+                , "local r = require('scripts.ui.responsive');"
+                , "local il = require('scripts.ui.item_list');"
+                , "UI.setControlFocus(_G.__dstTab);"
+                , "local want = r.snapshotControlFocusName();"
+                , "local snap = c.snapshotStack();"
+                , "require('scripts.ui.view_teardown').run('resize');"
+                , "c.restoreStack(snap);"
+                , "r.restoreControlFocusName(want);"
+                , "local lvl = c.getLevel(1);"
+                , "local focus = UI.getControlFocus();"
+                , "local function ownsFocus(key)"
+                , "  local p = c.getPane(lvl, key);"
+                , "  for _, t in ipairs(il.getTabs(p.listId)) do"
+                , "    if t.boxId == focus then return true end end;"
+                , "  return false end;"
+                , "return { want = want, focused = focus ~= nil,"
+                , "         onDestination = ownsFocus('destination'),"
+                , "         onSource = ownsFocus('source') }" ])
+            restored `shouldSatisfy` T.isInfixOf "\"focused\":true"
+            restored `shouldSatisfy` T.isInfixOf "\"onDestination\":true"
+            restored `shouldSatisfy` T.isInfixOf "\"onSource\":false"
+
         it "both panes are framebuffer-clamped and do not overlap each other" $
            \(env, ls) → do
             resetFixture env ls

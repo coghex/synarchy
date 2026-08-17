@@ -757,14 +757,14 @@ end
 -- fitted escort boxes and lists shrink while full-size headers would
 -- reach down into the rows. One scale in, three bands and three labels
 -- out.
-local function buildTitle(level, pane, originX, originY, view, uiscale)
+local function buildTitle(level, pane, originX, originY, view, uiscale, name)
     local h = cargoInventoryPanel.hud
     if not h then return end
     local page = levelPage(level)
     local titleBase, subBase, ageBase = headerBaselines(uiscale)
 
     pane.titleId = label.new({
-        name     = "cargo_inv_title",
+        name     = name .. "_title",
         text     = view.title,
         font     = h.menuFont,
         fontSize = TITLE_FONT,
@@ -777,7 +777,7 @@ local function buildTitle(level, pane, originX, originY, view, uiscale)
     UI.setZIndex(th, 132)
 
     pane.subtitleId = label.new({
-        name     = "cargo_inv_subtitle",
+        name     = name .. "_subtitle",
         text     = view.subtitle or "",
         font     = h.menuFont,
         fontSize = SUBTITLE_FONT,
@@ -797,7 +797,7 @@ local function buildTitle(level, pane, originX, originY, view, uiscale)
     local age = ageText(view)
     if age then
         pane.ageId = label.new({
-            name     = "cargo_inv_age",
+            name     = name .. "_age",
             text     = age,
             font     = h.menuFont,
             fontSize = AGE_FONT,
@@ -1006,15 +1006,27 @@ local function placePanes(level, measures)
     return out
 end
 
+-- Every UI element this pane creates is named from here, and the name
+-- has to be PANE-UNIQUE (#1250 review round 3). Control focus survives
+-- a geometry rebuild by NAME
+-- (responsive.snapshotControlFocusName / restoreControlFocusName, which
+-- restores the FIRST visible match), so two panes sharing one widget
+-- name means focus parked on the destination pane's tab comes back on
+-- the source pane's — a silently wrong control, not a missing one.
+local function paneWidgetName(pane)
+    return cargoInventoryPanel.paneWidgetName(pane.paneKey or MAIN_PANE)
+end
+
 local function buildPane(level, pane, view, m, pos)
     local h = cargoInventoryPanel.hud
     local kind = levelKind(level)
     local page = levelPage(level)
     local dataParams = m.dataParams
+    local widgetName = paneWidgetName(pane)
 
     destroyPaneElements(pane)
     pane.panelId = panel.new({
-        name       = "cargo_inv_panel",
+        name       = widgetName .. "_panel",
         page       = page,
         x          = pos.x,
         y          = pos.y,
@@ -1033,9 +1045,9 @@ local function buildPane(level, pane, view, m, pos)
     local cy = pos.y + pbounds.y
     local cw = pbounds.width
 
-    buildTitle(level, pane, cx, cy, view, m.uiscale)
+    buildTitle(level, pane, cx, cy, view, m.uiscale, widgetName)
 
-    dataParams.name         = "cargo_inv"
+    dataParams.name         = widgetName
     dataParams.page         = page
     dataParams.font         = h.menuFont
     dataParams.x            = cx
@@ -1244,6 +1256,17 @@ function cargoInventoryPanel.refreshLevel(level)
     if not views then return false end
     buildLevel(level, views)
     return true
+end
+
+-- The element-name prefix every widget of `paneKey` is built under —
+-- the ONE rule that keeps two panes' controls distinguishable by name
+-- (see paneWidgetName). The single-pane case keeps the historic bare
+-- "cargo_inv", so every element name a lone container window has ever
+-- had is unchanged. Exposed so a gate can address a pane's controls
+-- without restating it.
+function cargoInventoryPanel.paneWidgetName(paneKey)
+    if paneKey == nil or paneKey == MAIN_PANE then return "cargo_inv" end
+    return "cargo_inv_" .. paneKey
 end
 
 -- The pane of `level` addressed by `paneKey` (default: its first), or

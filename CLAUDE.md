@@ -423,6 +423,11 @@ equipment AND accessories (the three the unit-info list merges).
 same way and owns no lifecycle either. The
 stack is transient session UI: `hud.createUI()` snapshots and restores
 the WHOLE thing across a resize (path + per-PANE tab and scroll), and
+every pane names its widgets from `paneWidgetName` — the single pane
+keeps the historic bare `cargo_inv`, a further pane appends its key —
+because keyboard control focus is restored BY NAME to the first visible
+match, so two panes sharing one name would return focus to the wrong
+one. Also,
 `uiManager.onSaveLoaded` drops it. A level teardown carries a REASON,
 and `"layout"` — passed only by that resize snapshot/restore pass and
 by `view_teardown`'s `resize` hook — is the one that does NOT fire a
