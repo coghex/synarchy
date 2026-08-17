@@ -22,8 +22,8 @@ proves the grace is not charged to the probe's elapsed time), timeout
 with the SIGTERM-to-SIGKILL escalation, a shutting-down runner refusing
 to launch one more probe, runner interruption (a real SIGINT to a real
 runner process), parallel cancellation, an interrupt landing DURING
-future submission, and a probe launched into an already-starting
-shutdown.
+future submission, a probe launched into an already-starting shutdown,
+and an interrupt landing in the launch window itself.
 
 Usage:
   python3 tools/test_run_probes.py
@@ -190,6 +190,15 @@ def wait_pid_gone(pid: int, seconds: float = 10.0) -> bool:
             return True
         time.sleep(0.05)
     return not pid_alive(pid)
+
+
+def wait_group_gone(pgid: int, seconds: float = 20.0) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if not run_probes._group_alive(pgid):
+            return True
+        time.sleep(0.05)
+    return not run_probes._group_alive(pgid)
 
 
 def wait_file(path: Path, seconds: float = 60.0) -> bool:
@@ -615,6 +624,46 @@ def test_probe_launched_into_shutdown_is_killed_promptly() -> None:
         tree.cleanup()
 
 
+def test_ctrl_c_in_the_launch_window_leaves_nothing() -> None:
+    print("\n-- a Ctrl-C in the launch window still reaps the probe it spawned")
+    tree = Tree()
+    try:
+        script = tree.add("launch", hang=True)
+        launched: dict[str, int] = {}
+        real_popen = subprocess.Popen
+
+        def popen_then_interrupt(*a, **kw):
+            # Deliver a REAL SIGINT in the exact window the concern names:
+            # the probe is spawned, and run_one has not yet recorded its
+            # pgid. Undeferred, the KeyboardInterrupt lands here and the
+            # Popen object never reaches run_one at all, so nothing can
+            # reap the probe or the engine it goes on to boot.
+            proc = real_popen(*a, **kw)
+            launched["pgid"] = proc.pid
+            os.kill(os.getpid(), signal.SIGINT)
+            return proc
+
+        raised = None
+        run_probes.subprocess.Popen = popen_then_interrupt
+        try:
+            with patched(tree):
+                run_probes.run_one(script, None, 120.0, run_probes.ProbeGroups())
+        except KeyboardInterrupt:
+            raised = "KeyboardInterrupt"
+        except BaseException as exc:  # pragma: no cover - reported below
+            raised = repr(exc)
+        finally:
+            run_probes.subprocess.Popen = real_popen
+        expect(raised == "KeyboardInterrupt",
+               f"the interrupt still reaches the caller (got {raised})")
+        expect("pgid" in launched, "the probe really was spawned")
+        pgid = launched.get("pgid")
+        expect(pgid is not None and wait_group_gone(pgid),
+               f"nothing from its process group survives (pgid {pgid})")
+    finally:
+        tree.cleanup()
+
+
 def main() -> int:
     test_success_reaps_the_engine()
     test_failure_reaps_the_engine_and_keeps_the_tail()
@@ -629,6 +678,7 @@ def main() -> int:
     test_ctrl_c_cancels_queued_parallel_work()
     test_ctrl_c_during_submission_starts_nothing_more()
     test_probe_launched_into_shutdown_is_killed_promptly()
+    test_ctrl_c_in_the_launch_window_leaves_nothing()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:

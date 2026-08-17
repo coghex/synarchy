@@ -375,6 +375,55 @@ def reap_group(pgid: int, grace: float | None = None) -> None:
     _signal_group(pgid, signal.SIGKILL)
 
 
+class _DeferSigint:
+    """Hold a Ctrl-C until a freshly spawned probe is trackable.
+
+    The interpreter checks for signals BETWEEN bytecodes, so a
+    KeyboardInterrupt can land after `Popen` has already forked and even
+    between that call and the assignment naming its result. A probe
+    spawned in that window is one nothing can reach: `groups` never
+    learned its pgid, and the `finally` that reaps has not been entered —
+    so Ctrl-C leaves it, and the engine it goes on to boot, running.
+
+    Deferring by HANDLER rather than by `pthread_sigmask` is deliberate: a
+    blocked mask survives fork/exec (measured), so masking here would hand
+    every probe a SIGINT it could no longer receive. Swapping the handler
+    leaves the child alone, since exec resets handlers anyway.
+
+    Only the main thread may hold a signal handler, and only the main
+    thread is ever sent KeyboardInterrupt — so off it this is a no-op,
+    which is exactly the `--jobs` worker case.
+    """
+
+    def __init__(self) -> None:
+        self._caught = False
+        self._previous = None
+        self._armed = False
+
+    def _record(self, signum, frame) -> None:
+        self._caught = True
+
+    def __enter__(self) -> "_DeferSigint":
+        if threading.current_thread() is threading.main_thread():
+            try:
+                self._previous = signal.signal(signal.SIGINT, self._record)
+                self._armed = True
+            except (ValueError, OSError):
+                self._armed = False
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        if self._armed:
+            signal.signal(signal.SIGINT, self._previous)
+            self._armed = False
+        # Only synthesize the interrupt when nothing else is already
+        # propagating: that exception reaches the same teardown, and
+        # replacing it would hide why the launch failed.
+        if self._caught and exc_type is None:
+            raise KeyboardInterrupt
+        return False
+
+
 def _terminate_probe(proc: subprocess.Popen, pgid: int,
                      grace: float | None = None) -> str:
     """End a probe that is still running, and collect its output.
@@ -452,27 +501,38 @@ def run_one(script: str, port: int | None, timeout: float,
         # more engine on its way out.
         return False, False, 0.0, "(not started: the runner is shutting down)\n"
     start = time.time()
-    proc = subprocess.Popen(
-        cmd, cwd=REPO_ROOT,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, start_new_session=True,
-    )
-    # `start_new_session=True` makes the child a session AND process-group
-    # leader, so its pgid IS its pid. Capture it here rather than calling
-    # os.getpgid(proc.pid) later, for two reasons: once communicate() reaps
-    # the leader that call raises, leaving the descendants we still have to
-    # reap unaddressable; and calling it right now could race the child's
-    # own setsid() and hand back the RUNNER's group.
-    pgid = proc.pid
-    # Did the runner begin shutting down between the check above and this
-    # Popen? `reap_all` may then already have taken its snapshot without
-    # this group in it, so this call has to own the escalation itself.
+    proc = None
+    pgid = None
     launched_into_shutdown = False
-    if groups is not None:
-        groups.add(pgid)
-        launched_into_shutdown = groups.stopping.is_set()
     timed_out = False
     try:
+        # The launch window is held against Ctrl-C: a KeyboardInterrupt
+        # between the spawn and `pgid` being recorded would leave a probe
+        # nothing knows about — outside `groups`, and outside this
+        # `finally` — surviving the interrupt with its engine.
+        with _DeferSigint():
+            proc = subprocess.Popen(
+                cmd, cwd=REPO_ROOT,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, start_new_session=True,
+            )
+            # `start_new_session=True` makes the child a session AND
+            # process-group leader, so its pgid IS its pid. Capture it here
+            # rather than calling os.getpgid(proc.pid) later, for two
+            # reasons: once communicate() reaps the leader that call
+            # raises, leaving the descendants we still have to reap
+            # unaddressable; and calling it right now could race the
+            # child's own setsid() and hand back the RUNNER's group.
+            pgid = proc.pid
+            # Did the runner begin shutting down between the check above
+            # and this Popen? `reap_all` may then already have taken its
+            # snapshot without this group in it, so this call has to own
+            # the escalation itself.
+            if groups is not None:
+                groups.add(pgid)
+                launched_into_shutdown = groups.stopping.is_set()
+        # Leaving that block re-raises a deferred Ctrl-C — here, inside the
+        # try, so the reap below owns it.
         if launched_into_shutdown:
             # A bare SIGTERM is not enough: a probe that ignores it would
             # otherwise sit in communicate() for the whole `--timeout`
@@ -493,10 +553,13 @@ def run_one(script: str, port: int | None, timeout: float,
         elapsed = time.time() - start
     finally:
         # Every exit from here on, including a KeyboardInterrupt raised in
-        # the runner while communicate() was blocked.
-        reap_group(pgid)
-        if groups is not None:
-            groups.discard(pgid)
+        # the runner while communicate() was blocked, and one deferred
+        # across the launch window above. `pgid` is None only when the
+        # spawn itself failed, in which case there is nothing to reap.
+        if pgid is not None:
+            reap_group(pgid)
+            if groups is not None:
+                groups.discard(pgid)
     ok = (rc == 0) and not timed_out
     return ok, timed_out, elapsed, out or ""
 
