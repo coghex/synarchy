@@ -574,6 +574,19 @@ function M.close(reason)
     pcall(function()
         require("scripts.transfer_session_panels").closeFor(s.id)
     end)
+    -- STOP the unit, not just release it. A session that ends while its
+    -- escort is still APPROACHING leaves a walk in flight toward an
+    -- endpoint that no longer means anything, and the AI will not
+    -- interrupt that walk on its own: unit_ai's execute gate re-runs an
+    -- action only on a SWITCH or when the unit is idle, and this action
+    -- is deliberately not forceExecute (re-issuing moveTo mid-walk wipes
+    -- the engine-side path). So a replacement session on the SAME unit
+    -- would keep walking to the OLD destination until that path ran out
+    -- before it ever looked at the new one. Stopping here is what makes
+    -- the unit idle, which is what makes the next tick re-decide
+    -- immediately -- and it is a no-op for the far commoner case, a
+    -- session closed while the escort is already standing still.
+    unit.stop(s.source.id)
     nudgeUnit(s.source.id)
     return true
 end

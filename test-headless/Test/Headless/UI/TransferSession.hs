@@ -254,12 +254,16 @@ sceneLua = luaLines
     , "  unit.moveTo = function(uid, x, y, sp)"
     , "    _G.__moves = _G.__moves + 1; _G.__lastMove = {uid = uid, x = x, y = y};"
     , "    return realMoveTo(uid, x, y, sp) end;"
+    , "  local realStop = unit.stop;"
+    , "  unit.stop = function(uid)"
+    , "    _G.__stops = _G.__stops + 1; _G.__lastStop = uid;"
+    , "    return realStop(uid) end;"
     , "  local realEmitFor = engine.emitEventForUnit;"
     , "  engine.emitEventForUnit = function(cat, text, uid, gx, gy)"
     , "    _G.__events[#_G.__events + 1] = cat .. '|' .. text;"
     , "    return realEmitFor(cat, text, uid, gx, gy) end;"
     , "end;"
-    , "_G.__snaps = 0; _G.__reveals = 0; _G.__moves = 0;"
+    , "_G.__snaps = 0; _G.__reveals = 0; _G.__moves = 0; _G.__stops = 0;"
     -- Capture whatever menu a row gesture opens, without ever
     -- serializing a Lua function back to Haskell.
     , "local cm = require('scripts.ui.context_menu');"
@@ -469,6 +473,48 @@ spec = aroundAll withSharedFixture $
             -- place — UIT-4's two-sided hold is deliberately absent.
             targetScore ← evalOk ls "return tostring(_G.__tick(2))"
             targetScore `shouldBe` "\"-inf\""
+
+        -- #1250 post-merge review: unit_ai's execute gate re-runs an
+        -- action only on a SWITCH or when the unit is idle, and this
+        -- action is deliberately not forceExecute — so a replacement
+        -- session on the SAME unit kept walking to the OLD endpoint
+        -- until that path ran out before it ever looked at the new one.
+        it "replacing a session mid-APPROACH interrupts the walk it was on, \
+           \so the new one routes to its own destination immediately" $
+           \(env, ls) → do
+            resetFixture env ls
+            placeUnit env matesUid (60, 60)
+            _ ← evalOk ls (createLua "building" 7)
+            first ← evalOk ls
+                "_G.__tick(1); return { moves = _G.__moves, \
+                \ stops = _G.__stops, x = _G.__lastMove.x, \
+                \ y = _G.__lastMove.y }"
+            -- Walking toward the hold at (40,40)..(41,41), and not yet
+            -- stopped: this is the in-flight approach the replacement
+            -- has to interrupt.
+            first `shouldSatisfy` T.isInfixOf "\"moves\":1"
+            first `shouldSatisfy` T.isInfixOf "\"stops\":0"
+            first `shouldSatisfy` T.isInfixOf "\"x\":39.5"
+            -- Replace it with a session on the MATE, far away in the
+            -- other direction.
+            replaced ← evalOk ls
+                "_G.__session().create(1, 'unit', 2); \
+                \return { stops = _G.__stops, stopped = _G.__lastStop, \
+                \         phase = _G.__phase() }"
+            replaced `shouldSatisfy` T.isInfixOf "\"phase\":\"approaching\""
+            -- The release STOPPED the escort rather than merely letting
+            -- go of it, which is what makes the unit idle and the next
+            -- tick re-decide.
+            replaced `shouldSatisfy` T.isInfixOf "\"stops\":1"
+            replaced `shouldSatisfy` T.isInfixOf "\"stopped\":1"
+            -- ...and the very next tick walks toward the MATE at
+            -- (60,60), not back to the hold.
+            rerouted ← evalOk ls
+                "_G.__tick(1); return { x = _G.__lastMove.x, \
+                \ y = _G.__lastMove.y, moves = _G.__moves }"
+            rerouted `shouldSatisfy` T.isInfixOf "\"moves\":2"
+            rerouted `shouldSatisfy` T.isInfixOf "\"x\":59.5"
+            rerouted `shouldSatisfy` T.isInfixOf "\"y\":59.5"
 
         it "closing the window closes BOTH panes, ends the session and \
            \releases the unit — and doing it again changes nothing" $

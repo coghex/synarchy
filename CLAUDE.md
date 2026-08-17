@@ -1283,7 +1283,11 @@ before touching each area:
   remainder by count and cause (D-1), and both panes refresh within the
   gesture. The hold is released BY the session ending
   — there is no separate release call, so no path can end a session and
-  leave a unit pinned — and every teardown is the same coupled,
+  leave a unit pinned — and that release STOPS the unit rather than
+  merely letting go of it: the AI re-runs an action only on a switch or
+  when the unit is idle, so an in-flight approach to a now-meaningless
+  endpoint would otherwise run to completion before the next session
+  was ever considered — and every teardown is the same coupled,
   idempotent one (panel close, replacement, `clear`, Exit to Menu, the
   save-load reset). A REJECTED replacement leaves the running session
   untouched; only a resize is exempt (see the container-window stack

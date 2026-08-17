@@ -157,7 +157,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from probelib import (boot, camera_state, centred_within,
+from probelib import (boot, camera_state, centred_within, clear_find_water,
                       focus_and_locate, locate_building_pixel, poll_until,
                       quit_engine, send, send_json, set_paused,
                       targeting_report, viewport, win_to_fb)
@@ -1723,6 +1723,13 @@ def escort_session_scenario(port: int, bid: int, bax: int, bay: int,
                  esc_raw.strip() not in ("", "nil", "null"), f"got {esc_raw!r}"):
         return
     esc_uid = int(float(esc_raw))
+    # A freshly spawned acolyte carries the standing `find_water` goal,
+    # whose search utility competes with the escort hold for this very
+    # unit. Retiring it is what makes the arrival below a measurement of
+    # the ESCORT rather than a race against thirst on whatever terrain
+    # this run's world happened to generate.
+    check("the escort's standing find_water goal is retired",
+          clear_find_water(port, esc_uid))
     # Three MORE rations on top of the spawn loadout's own, so the row
     # is unambiguously merged and "Store all" has more than one instance
     # to name.
