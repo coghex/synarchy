@@ -375,6 +375,29 @@ def reap_group(pgid: int, grace: float | None = None) -> None:
     _signal_group(pgid, signal.SIGKILL)
 
 
+def _terminate_probe(proc: subprocess.Popen, pgid: int,
+                     grace: float | None = None) -> str:
+    """End a probe that is still running, and collect its output.
+
+    SIGTERM the group, give it ``grace`` to leave, SIGKILL what is left.
+    The LEADER is reaped here (via ``communicate``) as well as signalled,
+    which is what lets `reap_group` afterwards find an empty group at once
+    instead of waiting out its own grace on a zombie.
+
+    Shared by the two paths that have to stop a live probe: the wall-clock
+    timeout, and a probe launched into an already-starting shutdown.
+    """
+    if grace is None:
+        grace = GROUP_GRACE
+    _signal_group(pgid, signal.SIGTERM)
+    try:
+        out, _ = proc.communicate(timeout=grace)
+    except subprocess.TimeoutExpired:
+        _signal_group(pgid, signal.SIGKILL)
+        out, _ = proc.communicate()
+    return out
+
+
 class ProbeGroups:
     """The probe process groups running right now, plus the stop flag.
 
@@ -441,30 +464,30 @@ def run_one(script: str, port: int | None, timeout: float,
     # reap unaddressable; and calling it right now could race the child's
     # own setsid() and hand back the RUNNER's group.
     pgid = proc.pid
+    # Did the runner begin shutting down between the check above and this
+    # Popen? `reap_all` may then already have taken its snapshot without
+    # this group in it, so this call has to own the escalation itself.
+    launched_into_shutdown = False
     if groups is not None:
         groups.add(pgid)
-        if groups.stopping.is_set():
-            # The shutdown began between the check above and this Popen,
-            # so `reap_all` may already have taken its snapshot. Signalling
-            # here rather than letting the probe run to completion is what
-            # keeps the executor's shutdown from waiting out a whole
-            # scenario: the probe exits at once, communicate() below
-            # collects it, and the finally reaps whatever it did start.
-            _signal_group(pgid, signal.SIGTERM)
+        launched_into_shutdown = groups.stopping.is_set()
     timed_out = False
     try:
-        try:
-            out, _ = proc.communicate(timeout=timeout)
-            rc = proc.returncode
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            _signal_group(pgid, signal.SIGTERM)
-            try:
-                out, _ = proc.communicate(timeout=GROUP_GRACE)
-            except subprocess.TimeoutExpired:
-                _signal_group(pgid, signal.SIGKILL)
-                out, _ = proc.communicate()
+        if launched_into_shutdown:
+            # A bare SIGTERM is not enough: a probe that ignores it would
+            # otherwise sit in communicate() for the whole `--timeout`
+            # (900 s by default) before the finally below could escalate,
+            # while the interrupted runner waits on this worker.
+            out = _terminate_probe(proc, pgid)
             rc = -1
+        else:
+            try:
+                out, _ = proc.communicate(timeout=timeout)
+                rc = proc.returncode
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                out = _terminate_probe(proc, pgid)
+                rc = -1
         # Measured BEFORE the reap below, so a probe's recorded elapsed
         # time stays the probe's own and never absorbs teardown's grace.
         elapsed = time.time() - start
@@ -581,8 +604,16 @@ def main() -> int:
                 return key, script, status, elapsed, out
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
-                futs = [ex.submit(work, i, p) for i, p in enumerate(chosen)]
+                # SUBMISSION is inside the try as well as completion: a
+                # Ctrl-C partway through it would otherwise leave the `with`
+                # directly, and shutdown(wait=True) then runs every future
+                # submitted so far — launching probes, and engines, after
+                # the interrupt. `futs` is grown as we go so the handler
+                # sees exactly what has been submitted.
+                futs: list[concurrent.futures.Future] = []
                 try:
+                    for i, probe in enumerate(chosen):
+                        futs.append(ex.submit(work, i, probe))
                     for done, fut in enumerate(concurrent.futures.as_completed(futs), 1):
                         key, script, status, elapsed, out = fut.result()
                         print(f"[{done}/{n}] {script} ... {status} ({elapsed:.1f}s)")

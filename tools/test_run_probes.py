@@ -21,7 +21,9 @@ case that reaches the reap's own SIGKILL escalation, and the one that
 proves the grace is not charged to the probe's elapsed time), timeout
 with the SIGTERM-to-SIGKILL escalation, a shutting-down runner refusing
 to launch one more probe, runner interruption (a real SIGINT to a real
-runner process), and parallel cancellation.
+runner process), parallel cancellation, an interrupt landing DURING
+future submission, and a probe launched into an already-starting
+shutdown.
 
 Usage:
   python3 tools/test_run_probes.py
@@ -337,6 +339,13 @@ def test_a_stopping_runner_launches_no_further_probe() -> None:
                "and therefore no engine was booted")
         expect(ok is False and timed_out is False,
                "the un-run probe is reported as neither ok nor timed out")
+        # NEVER LAUNCHED, not launched-and-killed: the shutdown branch
+        # inside run_one would also end this probe, a moment later and
+        # after a real Popen, which these two distinguish.
+        expect(elapsed == 0.0,
+               f"no probe was timed because none ran (got {elapsed!r})")
+        expect("not started" in out,
+               f"and it reports itself as never started (got {out!r})")
     finally:
         tree.cleanup()
 
@@ -420,24 +429,38 @@ def test_retry_reaps_between_attempts() -> None:
 # Interruption: a real SIGINT to a real runner process
 # --------------------------------------------------------------------------
 DRIVER_SRC = textwrap.dedent("""\
-    import sys
+    import sys, time
     sys.path.insert(0, {tools!r})
     import run_probes
     run_probes.REPO_ROOT = {root!r}
     run_probes.PROBES = {probes!r}
     run_probes.GROUP_GRACE = {grace!r}
+    submit_delay = {submit_delay!r}
+    if submit_delay:
+        # Widen the SUBMISSION window so an interrupt can land inside it.
+        # This slows submission down; it does not change what the runner
+        # does with the futures, which is what the test is about.
+        import concurrent.futures as _cf
+        _real = _cf.ThreadPoolExecutor.submit
+
+        def _slow_submit(self, fn, *a, **kw):
+            time.sleep(submit_delay)
+            return _real(self, fn, *a, **kw)
+
+        _cf.ThreadPoolExecutor.submit = _slow_submit
     sys.argv = ["run_probes.py"] + {argv!r}
     sys.exit(run_probes.main())
     """)
 
 
 def _run_driver(tree: Tree, argv: list[str], wait_for: list[str],
-                grace: float = TEST_GRACE, exit_budget: float = 60.0):
+                grace: float = TEST_GRACE, exit_budget: float = 60.0,
+                submit_delay: float = 0.0):
     """Start the real runner in its own session and SIGINT it mid-run."""
     driver = tree.root / "driver.py"
     driver.write_text(DRIVER_SRC.format(
         tools=TOOLS_DIR, root=str(tree.root), probes=list(tree.probes),
-        grace=grace, argv=argv))
+        grace=grace, argv=argv, submit_delay=submit_delay))
     proc = subprocess.Popen(
         [sys.executable, str(driver)],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -507,6 +530,91 @@ def test_ctrl_c_cancels_queued_parallel_work() -> None:
         tree.cleanup()
 
 
+def test_ctrl_c_during_submission_starts_nothing_more() -> None:
+    print("\n-- Ctrl-C DURING future submission launches no further probe")
+    tree = Tree()
+    names = [f"sub_{i}" for i in range(8)]
+    try:
+        for name in names:
+            tree.add(name, hang=True)
+        # Submission is normally instantaneous, so it is slowed here to make
+        # the window reachable. Interrupting inside it used to leave the
+        # executor's own shutdown(wait=True) to run every future submitted
+        # so far -- booting engines after the interrupt.
+        ready, rc, out = _run_driver(
+            tree, ["--jobs", "2"], ["sub_0"], submit_delay=0.35)
+        expect(ready, "the first probe booted its engine while submission continued")
+        expect(rc == 130, f"the runner still exits 130 (got {rc})")
+        started = [n for n in names if tree.started(n)]
+        expect(len(started) < len(names),
+               f"submission really was interrupted partway "
+               f"(started {len(started)}/{len(names)})")
+        leaked = []
+        for name in names:
+            pid = tree.engine_pid(name)
+            if pid is not None and not wait_pid_gone(pid):
+                leaked.append(name)
+        expect(not leaked,
+               f"no engine survives the interrupt (still running: {leaked})")
+    finally:
+        tree.cleanup()
+
+
+class StopOnAdd(run_probes.ProbeGroups):
+    """Forces the interleaving a natural run only hits by chance.
+
+    Shutdown begins AFTER run_one's pre-Popen stop check and before
+    `reap_all` could have snapshotted the group this call just created --
+    so that group is reachable from nothing but run_one itself.
+
+    ``ready_marker`` widens that window rather than changing its shape:
+    production constrains only WHERE the flag may be set relative to the
+    runner, never how far the probe has got by then, and a descheduled
+    worker thread can leave it arbitrarily far along. Waiting until the
+    probe is genuinely up is what makes the case discriminating -- signal
+    it at t=0 instead and it dies to the default SIGTERM action before it
+    has installed the handler under test, so a runner with no escalation
+    at all would pass.
+    """
+
+    def __init__(self, ready_marker: Path | None = None) -> None:
+        super().__init__()
+        self._ready = ready_marker
+
+    def add(self, pgid: int) -> None:
+        super().add(pgid)
+        if self._ready is not None:
+            wait_file(self._ready)
+        self.stopping.set()
+
+
+def test_probe_launched_into_shutdown_is_killed_promptly() -> None:
+    print("\n-- a probe launched into a starting shutdown is ended, not left to run")
+    tree = Tree()
+    try:
+        # Ignores SIGTERM, so only a real escalation ends it. Without one it
+        # would sit in communicate() for the whole --timeout (900 s in
+        # production) while the interrupted runner waited on this worker.
+        script = tree.add("late", hang=True, ignore_term=True,
+                          engine_ignores_term=True)
+        started = time.monotonic()
+        with patched(tree):
+            ok, timed_out, elapsed, out = run_probes.run_one(
+                script, None, 30.0,
+                StopOnAdd(tree.root / "late.enginepid"))
+        wall = time.monotonic() - started
+        pid = tree.engine_pid("late")
+        expect(ok is False, "the probe is not reported as ok")
+        expect(timed_out is False, "and not as a timeout -- it was cut short")
+        expect(wall < 12.0,
+               f"run_one returns on the teardown grace, not the --timeout "
+               f"(took {wall:.1f}s of a 30s timeout)")
+        expect(pid is not None and wait_pid_gone(pid),
+               f"the engine it had already booted is gone too (pid {pid})")
+    finally:
+        tree.cleanup()
+
+
 def main() -> int:
     test_success_reaps_the_engine()
     test_failure_reaps_the_engine_and_keeps_the_tail()
@@ -519,6 +627,8 @@ def main() -> int:
     test_retry_reaps_between_attempts()
     test_ctrl_c_leaves_no_engine_behind()
     test_ctrl_c_cancels_queued_parallel_work()
+    test_ctrl_c_during_submission_starts_nothing_more()
+    test_probe_launched_into_shutdown_is_killed_promptly()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
