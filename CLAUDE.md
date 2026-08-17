@@ -1291,14 +1291,38 @@ before touching each area:
   idempotent one (panel close, replacement, `clear`, Exit to Menu, the
   save-load reset). A REJECTED replacement leaves the running session
   untouched; only a resize is exempt (see the container-window stack
-  above). The target-side hold is UIT-4's and session failure handling
-  UIT-5B's. Gates: hspec `--match "Unit transfer"`
+  above). **A UNIT destination is held too** (#1251, UIT-4), because
+  unit-to-unit is the one pairing where BOTH ends can walk away. It is
+  the SAME `escort_transfer` action at the same 7.5 — one registration,
+  one utility, so neither end can outscore the other — and which side a
+  unit is on is the session's own `roleOf`: `"source"` walks and then
+  stands, `"target"` stands from CREATION, so the approach has a fixed
+  destination and the walk-away problem cannot arise during it. Being
+  the same lock is what makes the target's hold preempt its autonomous
+  work like any player order, and `create` nudges BOTH units so that
+  happens on the next tick rather than at a thought cadence. Release is
+  the one coupled teardown, extended to the pair: every path (panel
+  close, replacement — which must let go of the PRIOR target — Escape,
+  `clear`, Exit to Menu, the SUCCESSFUL-load reset) stops and nudges
+  both, and stopping is all it does to either, so a durable Mode B
+  order a load just restored onto a reused uid survives untouched. The
+  hold adds no refusal of its own: eligibility stays
+  `isPlayerCommandable` of the live faction, never a def allowlist, and
+  D-6 is unchanged and unreimplemented — a worn item is not in an
+  endpoint's `contents` at all, so no pane can offer one, and the
+  contract refuses it as `item_not_transferable` if anything names one
+  anyway. Session failure handling stays UIT-5B's. Gates: hspec
+  `--match "Unit transfer"`
   (contract + both Lua surfaces + the cancel/prune verbs and the
   destroyed-carrier cleanup) and `--match "Transfer context menu"` (both
-  gesture modes, the "Cancel transfer" entry, AND the escort session),
+  gesture modes, the "Cancel transfer" entry, AND the escort session,
+  two-sided hold included),
   plus `--match "durable transfer orders survive"` for the post-prune
   save; `tools/transfer_order_probe.py` and
-  `tools/item_list_widget_probe.py` (both manual-only).
+  `tools/item_list_widget_probe.py` (both manual-only; the latter owns
+  the real-AI behavioural proof that a MOVING target is preempted and
+  then stays put for the whole approach, which no fixture that ticks no
+  simulation can state).
 - **Power (#358-#361, #590/#591)** — solar/battery nodes are
   item-consuming placements (`power.placeNode` via
   `buildTool.commitPlacement`); networks (wire 4-adjacency +

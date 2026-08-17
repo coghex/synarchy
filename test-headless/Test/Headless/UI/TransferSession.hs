@@ -66,6 +66,15 @@ carrierUid = UnitId 1
 matesUid ∷ UnitId
 matesUid = UnitId 2
 
+-- | uid 3 — a technomule, the OTHER unit-to-unit pairing #1251
+--   requirement 3 names. A different species on purpose: nothing about
+--   the hold or the commit policy may key on a unit definition (the
+--   eligibility rule is @isPlayerCommandable@ of the live faction and
+--   nothing else), so this pair is the same code path as
+--   acolyte↔acolyte or the endpoint abstraction has leaked.
+muleUid ∷ UnitId
+muleUid = UnitId 3
+
 -- | The hold the carrier walks to. Deliberately 2x2 so every distance
 --   in this gate is measured against a real FOOTPRINT: an
 --   anchor-to-anchor rule would call the carrier adjacent one tile too
@@ -101,6 +110,33 @@ holdStorage =
     , mkItem "crowbar"   210 3.0
     ]
 
+-- | The mule's own stock, so a mule↔acolyte session has rows to
+--   RETRIEVE as well as rows to store. Carried by the fixture rather
+--   than by a case because uid 3 is new here and no pre-#1251 scenario
+--   reads it, whereas the two acolytes' loads are asserted on exactly
+--   as they stand and are therefore stocked per case ('stockUnit').
+muleInventory ∷ [ItemInstance]
+muleInventory =
+    [ mkItem "steel_plate" 401 3.0
+    , mkItem "steel_plate" 402 3.0
+    ]
+
+-- | The mate's own stock, for the acolyte↔acolyte direction.
+mateInventory ∷ [ItemInstance]
+mateInventory =
+    [ mkItem "bandage" 301 0.2
+    , mkItem "bandage" 302 0.2
+    , mkItem "canteen" 310 1.0
+    ]
+
+-- | An ACCESSORY (#1251 requirement 4, D-6): it weighs into capacity
+--   like everything else and is never transferable.
+--   'Test.Headless.Unit.Transfer' proves that refusal against the pure
+--   policy; what this fixture adds is that the session's own two
+--   surfaces agree with it.
+carrierWorn ∷ [ItemInstance]
+carrierWorn = [ mkItem "acolyte_robe" 120 1.5 ]
+
 onPage ∷ UnitInstance → UnitInstance
 onPage u = u { uiPage = fixturePage }
 
@@ -113,6 +149,19 @@ placeUnit env uid (gx, gy) =
     atomicModifyIORef' (unitManagerRef env) $ \um →
         (um { umInstances = HM.adjust
                 (\u → u { uiGridX = gx, uiGridY = gy }) uid (umInstances um) }
+        , ())
+
+-- | Give one unit a loose inventory and a set of worn accessories for
+--   the duration of one case. Every pre-#1251 scenario asserts the two
+--   acolytes' loads exactly as 'resetWorld' leaves them, so a case that
+--   needs a different scene says so itself rather than moving the
+--   shared one out from under them.
+stockUnit ∷ EngineEnv → UnitId → [ItemInstance] → [ItemInstance] → IO ()
+stockUnit env uid inv worn =
+    atomicModifyIORef' (unitManagerRef env) $ \um →
+        (um { umInstances = HM.adjust
+                (\u → u { uiInventory = inv, uiAccessories = worn })
+                uid (umInstances um) }
         , ())
 
 -- | Fill BOTH endpoints past a pane's 10-row cap, so each pane renders
@@ -147,13 +196,17 @@ resetWorld env = do
     writeIORef (unitManagerRef env) emptyUnitManager
         { umDefs = HM.fromList
             [ ("acolyte", minimalDef "acolyte" "Acolyte")
+            , ("technomule", minimalDef "technomule" "Technomule")
             , ("wolf", minimalDef "wolf" "Wolf") ]
         , umInstances = HM.fromList
             [ (carrierUid, onPage
                   (mkUnit "acolyte" FactionPlayer (10, 10) 100
                           carrierInventory []))
             , (matesUid, onPage
-                  (mkUnit "acolyte" FactionPlayer (60, 60) 100 [] [])) ]
+                  (mkUnit "acolyte" FactionPlayer (60, 60) 100 [] []))
+            , (muleUid, onPage
+                  (mkUnit "technomule" FactionPlayer (70, 70) 200
+                          muleInventory [])) ]
         }
     writeIORef (buildingManagerRef env) emptyBuildingManager
         { bmDefs = HM.fromList
@@ -451,13 +504,38 @@ spec = aroundAll withSharedFixture $
             again `shouldSatisfy` T.isInfixOf "\"reveals\":1"
             again `shouldSatisfy` T.isInfixOf "\"depth\":1"
 
-        it "a UNIT destination opens a session with only the SOURCE held — \
-           \the target is not commanded and not reveal-refreshed" $
+        it "a UNIT destination is held from CREATION — before any tick, \
+           \before the source has walked anywhere, and with no reveal" $
            \(env, ls) → do
             resetFixture env ls
             placeUnit env matesUid (11, 10)
             created ← evalOk ls (createLua "unit" 2)
             created `shouldBe` "\"true\""
+            -- #1251 requirement 1: the target's hold begins HERE, while
+            -- the session is still approaching, which is what gives the
+            -- source's walk a fixed destination. Read before a single
+            -- tick has run.
+            atCreation ← evalOk ls
+                "return { phase = _G.__phase(), \
+                \         src = _G.__session().roleOf(1), \
+                \         dst = _G.__session().roleOf(2), \
+                \         held = _G.__session().holdsUnit(2) }"
+            atCreation `shouldSatisfy` T.isInfixOf "\"phase\":\"approaching\""
+            atCreation `shouldSatisfy` T.isInfixOf "\"src\":\"source\""
+            atCreation `shouldSatisfy` T.isInfixOf "\"dst\":\"target\""
+            atCreation `shouldSatisfy` T.isInfixOf "\"held\":true"
+            -- ...and the lock it scores is the SAME 7.5 the escort's is,
+            -- so neither end can outscore the other and the target's
+            -- routine work (<=6.0) and even a move order (7.0) lose to
+            -- it, exactly like any player order.
+            targetScore ← evalOk ls "return tostring(_G.__tick(2))"
+            targetScore `shouldBe` "\"7.5\""
+            -- Holding the target is STANDING, never approaching: it
+            -- issues no walk of its own in either phase.
+            heldStill ← evalOk ls
+                "return { moves = _G.__moves, stopped = _G.__lastStop }"
+            heldStill `shouldSatisfy` T.isInfixOf "\"moves\":0"
+            heldStill `shouldSatisfy` T.isInfixOf "\"stopped\":2"
             opened ← evalOk ls "_G.__tick(1); return _G.__phase()"
             opened `shouldBe` "\"open\""
             -- A unit endpoint has no remembered snapshot, so the reveal
@@ -468,11 +546,26 @@ spec = aroundAll withSharedFixture $
                 "return { src = _G.__session().holdsUnit(1), \
                 \         dst = _G.__session().holdsUnit(2) }"
             holds `shouldSatisfy` T.isInfixOf "\"src\":true"
-            holds `shouldSatisfy` T.isInfixOf "\"dst\":false"
-            -- The target scores nothing at all, so nothing holds it in
-            -- place — UIT-4's two-sided hold is deliberately absent.
-            targetScore ← evalOk ls "return tostring(_G.__tick(2))"
-            targetScore `shouldBe` "\"-inf\""
+            holds `shouldSatisfy` T.isInfixOf "\"dst\":true"
+            -- Still standing once the window is open, and still no walk.
+            openMoves ← evalOk ls "_G.__tick(2); return _G.__moves"
+            openMoves `shouldBe` "0"
+
+        it "a BUILDING destination still holds its source alone — there is \
+           \no second endpoint to hold" $ \(env, ls) → do
+            resetFixture env ls
+            placeUnit env carrierUid (42, 41)
+            _ ← evalOk ls (createLua "building" 7)
+            _ ← evalOk ls "return _G.__tick(1)"
+            holds ← evalOk ls
+                "return { src = _G.__session().roleOf(1), \
+                \         mate = tostring(_G.__session().roleOf(2)), \
+                \         phase = _G.__phase() }"
+            holds `shouldSatisfy` T.isInfixOf "\"src\":\"source\""
+            holds `shouldSatisfy` T.isInfixOf "\"mate\":\"nil\""
+            holds `shouldSatisfy` T.isInfixOf "\"phase\":\"open\""
+            bystander ← evalOk ls "return tostring(_G.__tick(2))"
+            bystander `shouldBe` "\"-inf\""
 
         -- #1250 post-merge review: unit_ai's execute gate re-runs an
         -- action only on a SWITCH or when the unit is idle, and this
@@ -543,6 +636,137 @@ spec = aroundAll withSharedFixture $
             -- The released unit scores nothing, which IS the release.
             score ← evalOk ls "return tostring(_G.__tick(1))"
             score `shouldBe` "\"-inf\""
+
+        -- #1251 requirement 2: every path that ends a unit-to-unit
+        -- session releases BOTH ends. The four below are the whole set —
+        -- the coupled panel close, a successful replacement, Exit to
+        -- Menu, and the successful-load reset — and each asserts release
+        -- as the AI sees it (a -inf score, which is what actually lets
+        -- the unit be steered again) rather than as a cleared table.
+        it "closing the window releases BOTH units of a unit-to-unit \
+           \session, and both can be steered again" $ \(env, ls) → do
+            resetFixture env ls
+            placeUnit env matesUid (11, 10)
+            _ ← evalOk ls (createLua "unit" 2)
+            _ ← evalOk ls "_G.__tick(1); return _G.__tick(2)"
+            open' ← evalOk ls "return _G.__phase()"
+            open' `shouldBe` "\"open\""
+            closed ← evalOk ls
+                "local cip = require('scripts.cargo_inventory_panel'); \
+                \_G.__stops = 0; cip.popLevel(); \
+                \return { depth = cip.depth(), \
+                \         session = tostring(_G.__session().get()), \
+                \         src = _G.__session().holdsUnit(1), \
+                \         dst = _G.__session().holdsUnit(2), \
+                \         stops = _G.__stops }"
+            closed `shouldSatisfy` T.isInfixOf "\"depth\":0"
+            closed `shouldSatisfy` T.isInfixOf "\"session\":\"nil\""
+            closed `shouldSatisfy` T.isInfixOf "\"src\":false"
+            closed `shouldSatisfy` T.isInfixOf "\"dst\":false"
+            -- The teardown STOPPED each of them rather than merely
+            -- letting go, which is what makes both idle and so what
+            -- makes the next tick re-decide instead of running out an
+            -- approach nobody wants any more.
+            closed `shouldSatisfy` T.isInfixOf "\"stops\":2"
+            -- Neither is held by anything now, so ordinary AI is free to
+            -- steer both: the escort action itself concedes.
+            scores ← evalOk ls
+                "return { a = tostring(_G.__tick(1)), \
+                \         b = tostring(_G.__tick(2)) }"
+            scores `shouldSatisfy` T.isInfixOf "\"a\":\"-inf\""
+            scores `shouldSatisfy` T.isInfixOf "\"b\":\"-inf\""
+            -- ...and neither release issued a walk of its own, so a unit
+            -- carrying its own orders is handed back where it stands.
+            noWalks ← evalOk ls "return _G.__moves"
+            noWalks `shouldBe` "0"
+
+        it "a SUCCESSFUL replacement releases the PRIOR unit target, not \
+           \just the source it reuses" $ \(env, ls) → do
+            resetFixture env ls
+            placeUnit env matesUid (11, 10)
+            _ ← evalOk ls (createLua "unit" 2)
+            _ ← evalOk ls "_G.__tick(1); return _G.__tick(2)"
+            heldBefore ← evalOk ls
+                "return tostring(_G.__session().holdsUnit(2))"
+            heldBefore `shouldBe` "\"true\""
+            -- The same source, a DIFFERENT destination: the mate stops
+            -- being an endpoint of anything and must be let go, or a
+            -- unit the player never mentioned again stands pinned
+            -- forever with no window left to close.
+            _ ← evalOk ls (createLua "building" 7)
+            after ← evalOk ls
+                "return { phase = _G.__phase(), \
+                \         src = _G.__session().holdsUnit(1), \
+                \         mate = _G.__session().holdsUnit(2), \
+                \         mateScore = tostring(_G.__tick(2)) }"
+            after `shouldSatisfy` T.isInfixOf "\"phase\":\"approaching\""
+            after `shouldSatisfy` T.isInfixOf "\"src\":true"
+            after `shouldSatisfy` T.isInfixOf "\"mate\":false"
+            after `shouldSatisfy` T.isInfixOf "\"mateScore\":\"-inf\""
+
+        it "Exit to Menu releases BOTH ends of a unit-to-unit session" $
+           \(env, ls) → do
+            resetFixture env ls
+            placeUnit env matesUid (11, 10)
+            _ ← evalOk ls (createLua "unit" 2)
+            _ ← evalOk ls "_G.__tick(1); return _G.__tick(2)"
+            _ ← evalOk ls "world.destroyAll = function() end; return 'ok'"
+            exited ← evalOk ls
+                "require('scripts.pause_menu').onExitToMenu(); \
+                \return { session = tostring(_G.__session().get()), \
+                \         src = tostring(_G.__tick(1)), \
+                \         dst = tostring(_G.__tick(2)), \
+                \         depth = require('scripts.cargo_inventory_panel').depth() }"
+            exited `shouldSatisfy` T.isInfixOf "\"session\":\"nil\""
+            exited `shouldSatisfy` T.isInfixOf "\"src\":\"-inf\""
+            exited `shouldSatisfy` T.isInfixOf "\"dst\":\"-inf\""
+            exited `shouldSatisfy` T.isInfixOf "\"depth\":0"
+
+        -- The reset hook is registered through `registerResetHook`, and
+        -- saveModules.applyAll runs those only after every component has
+        -- applied successfully — so "the load reset releases both" is a
+        -- statement about a SUCCESSFUL, session-replacing load. A failed
+        -- load never reaches this hook at all and therefore leaves the
+        -- running session and both its holds exactly as they were; that
+        -- half is 'Test.Headless.Lua.SaveModules''s rollback coverage,
+        -- which this must not duplicate by asserting on a stub.
+        it "the successful-load reset releases BOTH units and leaves a \
+           \restored durable Mode B order on a reused uid alone" $
+           \(env, ls) → do
+            resetFixture env ls
+            placeUnit env matesUid (11, 10)
+            _ ← evalOk ls
+                "require('scripts.transfer_session').init('transfer_session'); \
+                \return 'ok'"
+            -- A REAL durable order on the very unit the session holds,
+            -- created through the engine's own verb against the live
+            -- per-page store — the D-3 hazard is that the transient
+            -- session's teardown reaches into durable state a load just
+            -- restored onto the same uid.
+            queued ← evalOk ls
+                "return #unit.getTransferOrders(1) .. '/' .. tostring(\
+                \unit.createTransferOrder(1, { source = { kind = 'unit', \
+                \  id = 1 }, destination = { kind = 'building', id = 7 }, \
+                \  items = { { instanceId = 110, defName = 'rope' } } }) \
+                \  ~= nil)"
+            queued `shouldBe` "\"0/true\""
+            _ ← evalOk ls (createLua "unit" 2)
+            _ ← evalOk ls "_G.__tick(1); return _G.__tick(2)"
+            after ← evalOk ls
+                "local sm = require('scripts.lib.save_modules'); \
+                \sm.resetHooks['transfer_session'](); \
+                \return { session = tostring(_G.__session().get()), \
+                \         src = tostring(_G.__tick(1)), \
+                \         dst = tostring(_G.__tick(2)), \
+                \         orders = #unit.getTransferOrders(1), \
+                \         depth = require('scripts.cargo_inventory_panel').depth() }"
+            after `shouldSatisfy` T.isInfixOf "\"session\":\"nil\""
+            after `shouldSatisfy` T.isInfixOf "\"src\":\"-inf\""
+            after `shouldSatisfy` T.isInfixOf "\"dst\":\"-inf\""
+            after `shouldSatisfy` T.isInfixOf "\"depth\":0"
+            -- The order is still there and still the carrier's: the
+            -- release stops a unit, it never cancels or prunes its work.
+            after `shouldSatisfy` T.isInfixOf "\"orders\":1"
 
         it "the save-load reset hook ends the session and releases the unit, \
            \and the session still contributes NO save component (D-3)" $
@@ -980,6 +1204,29 @@ spec = aroundAll withSharedFixture $
                 _ ← evalOk ls (createLua "building" 7)
                 _ ← evalOk ls "return _G.__tick(1)"
                 pure ()
+            -- #1251: a unit-to-unit session, already arrived, with both
+            -- endpoints carrying something. `destUid` is the ONLY thing
+            -- that differs between the two species pairings below, which
+            -- is the point — an endpoint is an endpoint.
+            openPair env ls destUid destStock = do
+                resetFixture env ls
+                stockUnit env carrierUid carrierInventory []
+                stockUnit env destUid destStock []
+                placeUnit env carrierUid (10, 10)
+                placeUnit env destUid (11, 10)
+                let destId = fromIntegral (unUnitId destUid) ∷ Int
+                created ← evalOk ls (createLua "unit" destId)
+                created `shouldBe` "\"true\""
+                _ ← evalOk ls ("_G.__tick(1); return _G.__tick("
+                                <> tshow destId <> ")")
+                phase ← evalOk ls "return _G.__phase()"
+                phase `shouldBe` "\"open\""
+                both ← evalOk ls ("return { src = _G.__session().roleOf(1), \
+                                  \         dst = _G.__session().roleOf("
+                                  <> tshow destId <> ") }")
+                both `shouldSatisfy` T.isInfixOf "\"src\":\"source\""
+                both `shouldSatisfy` T.isInfixOf "\"dst\":\"target\""
+                pure destId
 
         it "the source pane offers Store and the destination pane Retrieve, \
            \each 1-and-all on a merged row and 1 alone on a single instance" $
@@ -1092,8 +1339,12 @@ spec = aroundAll withSharedFixture $
             _ ← evalOk ls "return _G.__tick(1)"
             opened ← evalOk ls "return _G.__phase()"
             opened `shouldBe` "\"open\""
-            -- The mate walks away. Nothing re-approaches: the hold is
-            -- source-only until UIT-4.
+            -- The mate is TELEPORTED away — a direct fixture write, not
+            -- a walk, so #1251's hold on it is not what is under test
+            -- here and could not have prevented this. What is under test
+            -- is that the COMMIT is authoritative about reach however
+            -- the drift happened. Nothing re-approaches: closing that
+            -- gap is UIT-5B's failure handling, not this slice's.
             placeUnit env matesUid (60, 60)
             _ ← evalOk ls "_G.__events = {}; return 'ok'"
             _ ← evalOk ls
@@ -1112,6 +1363,133 @@ spec = aroundAll withSharedFixture $
             survives `shouldSatisfy` T.isInfixOf "\"phase\":\"open\""
             survives `shouldSatisfy` T.isInfixOf "\"held\":true"
             survives `shouldSatisfy` T.isInfixOf "\"depth\":1"
+
+        -- #1251 requirement 3 / D-10: acolyte↔acolyte and mule↔acolyte
+        -- are the SAME path. Store and Retrieve are exercised in one
+        -- session each, because "both directions" is a property of the
+        -- open window rather than of two separate gestures — the pane
+        -- the player clicked is what picks the direction.
+        it "acolyte to acolyte: Store and Retrieve both commit exact \
+           \instances between two held units, in one session" $
+           \(env, ls) → do
+            _ ← openPair env ls matesUid mateInventory
+            labels ← evalOk ls
+                "return { store = _G.__labels(_G.__rowMenu('source', 'ration')), \
+                \         take  = _G.__labels(_G.__rowMenu('destination', 'bandage')) }"
+            labels `shouldSatisfy` T.isInfixOf "Store 1|Store all"
+            labels `shouldSatisfy` T.isInfixOf "Retrieve 1|Retrieve all"
+            _ ← evalOk ls
+                "return tostring(_G.__fire(_G.__rowMenu('source', 'ration'), \
+                \                          'Store all'))"
+            _ ← evalOk ls
+                "return tostring(_G.__fire(_G.__rowMenu('destination', 'bandage'), \
+                \                          'Retrieve all'))"
+            mate ← evalOk ls "return _G.__ids('unit', 2)"
+            mate `shouldBe` "\"canteen#310,ration#101,ration#102,ration#103\""
+            carrier ← evalOk ls "return _G.__ids('unit', 1)"
+            carrier `shouldBe` "\"bandage#301,bandage#302,rope#110\""
+            -- Repeatable while adjacent, exactly as against a building:
+            -- neither commit ended the session or moved the window.
+            still ← evalOk ls
+                "return { phase = _G.__phase(), \
+                \         src = _G.__session().holdsUnit(1), \
+                \         dst = _G.__session().holdsUnit(2), \
+                \         depth = require('scripts.cargo_inventory_panel').depth() }"
+            still `shouldSatisfy` T.isInfixOf "\"phase\":\"open\""
+            still `shouldSatisfy` T.isInfixOf "\"src\":true"
+            still `shouldSatisfy` T.isInfixOf "\"dst\":true"
+            still `shouldSatisfy` T.isInfixOf "\"depth\":1"
+
+        it "acolyte to technomule commits identically — a DIFFERENT \
+           \species on the far end changes nothing" $ \(env, ls) → do
+            _ ← openPair env ls muleUid muleInventory
+            _ ← evalOk ls
+                "return tostring(_G.__fire(_G.__rowMenu('source', 'rope'), \
+                \                          'Store 1'))"
+            _ ← evalOk ls
+                "return tostring(_G.__fire(_G.__rowMenu('destination', 'steel_plate'), \
+                \                          'Retrieve all'))"
+            mule ← evalOk ls "return _G.__ids('unit', 3)"
+            mule `shouldBe` "\"rope#110\""
+            carrier ← evalOk ls "return _G.__ids('unit', 1)"
+            carrier `shouldBe`
+                "\"ration#101,ration#102,ration#103,\
+                \steel_plate#401,steel_plate#402\""
+
+        it "a technomule may be the ESCORT too: the source side is no more \
+           \species-specific than the target side" $ \(env, ls) → do
+            resetFixture env ls
+            stockUnit env muleUid muleInventory []
+            placeUnit env muleUid (10, 10)
+            placeUnit env matesUid (11, 10)
+            created ← evalOk ls
+                "return tostring(_G.__session().create(3, 'unit', 2) ~= nil)"
+            created `shouldBe` "\"true\""
+            opened ← evalOk ls "_G.__tick(3); _G.__tick(2); return _G.__phase()"
+            opened `shouldBe` "\"open\""
+            roles ← evalOk ls
+                "return { src = _G.__session().roleOf(3), \
+                \         dst = _G.__session().roleOf(2), \
+                \         carrier = tostring(_G.__session().roleOf(1)) }"
+            roles `shouldSatisfy` T.isInfixOf "\"src\":\"source\""
+            roles `shouldSatisfy` T.isInfixOf "\"dst\":\"target\""
+            roles `shouldSatisfy` T.isInfixOf "\"carrier\":\"nil\""
+            _ ← evalOk ls
+                "return tostring(_G.__fire(_G.__rowMenu('source', 'steel_plate'), \
+                \                          'Store all'))"
+            mate ← evalOk ls "return _G.__ids('unit', 2)"
+            mate `shouldBe` "\"steel_plate#401,steel_plate#402\""
+
+        -- #1251 requirement 4 (D-6, contract-enforced — not
+        -- reimplemented here). 'Test.Headless.Unit.Transfer' owns the
+        -- policy proof; what this adds is that BOTH of the session's own
+        -- surfaces agree with it, which is the only place a unit-to-unit
+        -- session could have introduced a way around it.
+        it "a worn accessory is not a session row at all, and the contract \
+           \still refuses it by name if anything names it anyway" $
+           \(env, ls) → do
+            _ ← openPair env ls matesUid mateInventory
+            -- Put the robe on the carrier with the window already open,
+            -- then refresh, so the pane is re-derived from the endpoint
+            -- as it stands rather than from an opening snapshot.
+            stockUnit env carrierUid carrierInventory carrierWorn
+            _ ← evalOk ls
+                "local c = require('scripts.cargo_inventory_panel'); \
+                \c.refreshLevel(c.getLevel(1)); return 'ok'"
+            -- It weighs into the endpoint's load — 3 x 0.5 + 2.0 loose,
+            -- plus the 1.5 robe — which is the whole reason the contract
+            -- keeps worn gear visible to the capacity gate...
+            weighed ← evalOk ls
+                "local i = unit.transferEndpointInfo({kind='unit', id=1}); \
+                \return string.format('%.2f', i.storedWeight)"
+            weighed `shouldBe` "\"5.00\""
+            -- ...but it is not among the rows, so no menu can offer it.
+            rows ← evalOk ls "return _G.__ids('unit', 1)"
+            rows `shouldBe` "\"ration#101,ration#102,ration#103,rope#110\""
+            noMenu ← evalOk ls
+                "return tostring(_G.__rowMenu('source', 'acolyte_robe'))"
+            noMenu `shouldBe` "\"nil\""
+            -- And naming it directly on the session's OWN endpoint pair
+            -- — the identical request `commitNow` builds — is refused by
+            -- the contract's own reason, with nothing moved.
+            refused ← evalOk ls
+                "local s = _G.__session().get(); \
+                \local r = unit.commitTransfer({ source = s.source, \
+                \  destination = s.destination, \
+                \  items = { { instanceId = 120, defName = 'acolyte_robe' } } }); \
+                \local o = r and (r.outcomes or {})[1]; \
+                \return { accepted = r and r.accepted, \
+                \         state = o and o.state, reason = o and o.reason }"
+            refused `shouldSatisfy` T.isInfixOf "\"accepted\":true"
+            refused `shouldSatisfy` T.isInfixOf "\"state\":\"failed\""
+            refused `shouldSatisfy` T.isInfixOf "\"reason\":\"item_not_transferable\""
+            intact ← evalOk ls
+                "return { mate = _G.__ids('unit', 2), \
+                \         carrier = _G.__ids('unit', 1) }"
+            intact `shouldSatisfy`
+                T.isInfixOf "\"mate\":\"bandage#301,bandage#302,canteen#310\""
+            intact `shouldSatisfy`
+                T.isInfixOf "\"carrier\":\"ration#101,ration#102,ration#103,rope#110\""
 
     describe "registration" $
         -- A source guard beside the behavioural cases above, following

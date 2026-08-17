@@ -4,6 +4,12 @@
 -- its source unit to the destination and HOLDS it there while the
 -- player moves items by hand, for as long as the window is open.
 --
+-- #1251 (UIT-4) gave the action its second role. A session whose
+-- DESTINATION is a unit holds that unit too, from creation, and this one
+-- action serves both sides: which side a unit is on is the session's own
+-- answer (`roleOf`), so there is no second registration, no second
+-- utility and no way for the two ends to be scored differently.
+--
 -- Split out of scripts/unit_ai_transfer.lua, which owns Mode B's queued
 -- order and is at its #538 line budget. The two still share their whole
 -- vocabulary -- the same rect-to-rect approach and the same
@@ -41,16 +47,24 @@ end
 -- sim keeps walking) and neither is a completed move order (the unit
 -- reverts to wander the moment it arrives) --
 -- docs/expedition_survival_calibration.md E3 measured both.
+--
+-- ONE constant for BOTH sides of a unit-to-unit session (#1251, UIT-4):
+-- the target's hold is the same in-progress lock as the escort's, which
+-- is what makes it preempt that unit's autonomous work exactly like any
+-- player order, and what keeps a pair from being pulled apart by one end
+-- outscoring the other.
 local ESCORT_UTILITY = 7.5
 
--- The session holding this unit, or nil. Read through package.loaded so
--- a build with the gesture module unloaded simply never scores this
+-- The session holding this unit and WHICH SIDE of it the unit is on
+-- ("source" or "target"), or nil. Read through package.loaded so a
+-- build with the gesture module unloaded simply never scores this
 -- action, rather than pulling a UI module into the AI thread.
 local function heldSession(uid)
     local session = package.loaded["scripts.transfer_session"]
-    if not session or type(session.holdsUnit) ~= "function" then return nil end
-    if not session.holdsUnit(uid) then return nil end
-    return session
+    if not session or type(session.roleOf) ~= "function" then return nil end
+    local role = session.roleOf(uid)
+    if not role then return nil end
+    return session, role
 end
 
 -- There is deliberately NO stall timer here. Mode B's exists because an
@@ -69,19 +83,30 @@ local function escortUtility(uid, _s)
 end
 
 local function escortExecute(uid, _s)
-    local session = heldSession(uid)
+    local session, role = heldSession(uid)
     if not session then return end
     local active = session.get()
     local info = unit.getInfo(uid)
     if not (active and info) then return end
 
-    -- Already open: stand still. `unit.stop` on a unit that is already
-    -- stopped is a no-op, and re-running it is what makes this a hold
-    -- rather than a one-shot -- an interruption that walked the unit
-    -- away (combat, a mental break) leaves it standing wherever it
-    -- ended up once this action wins again, which is the honest
-    -- best-effort until UIT-5B owns that case.
-    if active.phase ~= session.PHASE_APPROACHING then
+    -- Stand still. Two reasons reach the same behaviour, and the
+    -- disjunction is what makes the pair's ONE approach the source's:
+    --
+    --   * the TARGET of a unit-to-unit session (#1251) stands in BOTH
+    --     phases -- being where the escort is walking to, from the
+    --     moment the session exists, is its entire job, and holding
+    --     still through the approach is exactly what gives that walk a
+    --     fixed destination. It must never reach the approach below.
+    --   * the SOURCE stands once the window is open, its own approach
+    --     already finished.
+    --
+    -- `unit.stop` on a unit that is already stopped is a no-op, and
+    -- re-running it is what makes this a hold rather than a one-shot --
+    -- an interruption that walked the unit away (combat, a mental break)
+    -- leaves it standing wherever it ended up once this action wins
+    -- again, which is the honest best-effort until UIT-5B owns that
+    -- case.
+    if role == "target" or active.phase ~= session.PHASE_APPROACHING then
         unit.stop(uid)
         return
     end
