@@ -39,9 +39,14 @@ the module table as the first ACCEPTED declaration means a file whose
 real module table is unrecognized can fall through to a later PRIVATE
 table (`local widget = { value = 1 }` followed by `local instances =
 {}`) and report a clean analysis of the wrong table, hiding duplicate
-`widget.*` exports. So an export attached to a table no accepted
-declaration covers is reported too -- recognition is tied to the
-exports, not merely to the first declaration that happens to parse.
+`widget.*` exports. So a table this file DECLARES locally and exports
+onto, under a declaration the grammar rejects, is reported too.
+
+That check is deliberately keyed on the local declaration, which is
+what keeps it inside the preserved scope: a `function other.g(...)`
+whose `other` this file never declares is a foreign or global table and
+stays out of scope exactly as it always was, rather than being
+misreported as an unrecognized module export.
 
 The supported module-table grammar stays deliberately CLOSED -- exactly
 the two forms below. Anything else is reported as an unrecognized
@@ -91,6 +96,15 @@ DECLARATION_FORMS = ('local <name> = {}',
 
 FUNC_DEF_RE = re.compile(r'^function\s+(\w+)\.(\w+)\s*\(')
 
+# Any top-level `local <name> = ...`, accepted form or not. This is not
+# a third module-table grammar: it is only used to tell a table this
+# file DECLARES from one it merely references. A table with column-zero
+# exports and a local declaration the accepted grammar rejects is this
+# file's module table under an unrecognized declaration; a table with
+# exports and no local declaration at all is a foreign or global table,
+# which stays out of scope exactly as it always was.
+LOCAL_DECL_RE = re.compile(r'^local\s+(\w+)\s*=')
+
 
 def declared_tables(lines: list[str]) -> list[str]:
     """Every table declared by an accepted form, in source order.
@@ -134,9 +148,15 @@ def check_file(path: Path, repo_root: Path) -> tuple[bool, list[str]]:
             f"file's exported functions were analyzed. Fix the "
             f"declaration rather than widening the audit's grammar."]
 
+    local_decls: dict[str, int] = {}
+    for lineno, line in enumerate(lines, start=1):
+        d = LOCAL_DECL_RE.match(line)
+        if d:
+            local_decls.setdefault(d.group(1), lineno)
+
     name = declared[0]
     seen: dict[str, int] = {}
-    orphans: dict[str, int] = {}
+    unrecognized: dict[str, int] = {}
     failures: list[str] = []
     for lineno, line in enumerate(lines, start=1):
         m = FUNC_DEF_RE.match(line)
@@ -144,13 +164,18 @@ def check_file(path: Path, repo_root: Path) -> tuple[bool, list[str]]:
             continue
         table = m.group(1)
         if table not in declared:
-            # An export attached to a table no accepted declaration
-            # covers. Identifying the module table by "first accepted
-            # declaration" alone would let this file fall through to a
-            # later PRIVATE table and report a clean analysis of the
-            # wrong one, which is the same false-green class this guard
-            # exists to close -- so it is reported, not guessed at.
-            orphans.setdefault(table, lineno)
+            # A table this file DECLARES locally, exports onto, and yet
+            # declares in a shape the grammar rejects, is this file's
+            # module table under an unrecognized declaration. Picking
+            # the module table as the first ACCEPTED declaration alone
+            # would fall through to a later PRIVATE table and report a
+            # clean analysis of the wrong one -- the same false-green
+            # class this guard exists to close.
+            #
+            # A table with no local declaration is foreign or global,
+            # and its definitions stay out of scope as they always were.
+            if table in local_decls:
+                unrecognized.setdefault(table, lineno)
             continue
         if table != name:
             continue
@@ -163,16 +188,17 @@ def check_file(path: Path, repo_root: Path) -> tuple[bool, list[str]]:
         else:
             seen[fn] = lineno
 
-    for table, lineno in orphans.items():
+    for table, lineno in unrecognized.items():
         failures.append(
-            f"{rel}:{lineno}: `function {table}.` definitions attach to "
-            f"`{table}`, which has no recognized declaration in this file "
-            f"(recognized here: {', '.join(declared)}) -- so they were not "
-            f"analyzed. A declaration the grammar does not accept is "
-            f"reported rather than silently replaced by another table; fix "
-            f"the declaration rather than widening the audit's grammar.")
+            f"{rel}:{local_decls[table]}: `{table}` is declared here, has "
+            f"column-zero `function {table}.` exports (first at line "
+            f"{lineno}), and its declaration is not one the grammar "
+            f"accepts -- so those exports were not analyzed, and the "
+            f"module table was NOT silently taken to be a later one "
+            f"(recognized here: {', '.join(declared)}). Fix the "
+            f"declaration rather than widening the audit's grammar.")
 
-    return not orphans, failures
+    return not unrecognized, failures
 
 
 def main(repo_root: Path = REPO_ROOT) -> int:

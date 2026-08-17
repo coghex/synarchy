@@ -299,7 +299,7 @@ def test_unrecognized_declaration_is_not_masked_by_a_later_private_table():
         code, output = _run(root)
         _expect_failure(
             code, output,
-            ["scripts/ui/widget.lua", "widget", "no recognized declaration"],
+            ["scripts/ui/widget.lua", "widget", "not one the grammar"],
             "an unrecognized declaration followed by a private table")
         # The file must not be counted as analyzed on the strength of
         # the private table it fell through to.
@@ -324,7 +324,12 @@ def test_the_same_file_with_a_recognized_declaration_reports_its_duplicate():
             "the same file once its module table is recognized")
 
 
-def test_export_attached_to_an_undeclared_table_is_an_attributed_failure():
+def test_export_attached_to_a_foreign_table_stays_out_of_scope():
+    # PR #1351 round-2 review: the attribution rule must not classify an
+    # unrelated foreign-table definition as an unanalyzable module
+    # export. `other` is never declared locally here, so it is a foreign
+    # or global table and its definitions are out of scope -- including
+    # duplicated ones -- exactly as before this issue.
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         _write(root, "scripts/ui/widget.lua", """\
@@ -335,12 +340,41 @@ end
 
 function other.g()
 end
+
+function other.g(extra)
+end
+""")
+        code, output = _run(root)
+        _expect_clean(code, output, 1,
+                      "a valid module carrying foreign-table definitions")
+
+
+def test_unrecognized_declaration_is_caught_even_when_it_also_exports():
+    # The residual of the round-1 case: the private table it fell
+    # through to carries exports of its own, so "the module table has no
+    # exports" would not have caught it. Keying on the declaration does.
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        _write(root, "scripts/ui/widget.lua", """\
+local widget = { value = 1 }
+local instances = {}
+
+function instances.track()
+end
+
+function widget.f(a)
+    return a
+end
+
+function widget.f(a, b)
+    return a, b
+end
 """)
         code, output = _run(root)
         _expect_failure(
             code, output,
-            ["scripts/ui/widget.lua", "other", "no recognized declaration"],
-            "an export attached to a table declared nowhere in the file")
+            ["scripts/ui/widget.lua", "widget", "not one the grammar"],
+            "an unrecognized declaration whose private table also exports")
 
 
 def test_export_attached_to_a_declared_private_table_is_attributed():
@@ -512,6 +546,12 @@ end
 function widget:method(extra)
 end
 
+function other.f()
+end
+
+function other.f()
+end
+
 do
     function widget.f()
     end
@@ -526,8 +566,9 @@ widget.assigned = function() end
         code, output = _run(root)
         _expect_clean(
             code, output, 1,
-            "duplicated local helpers, colon methods, nested and indented "
-            "definitions, and assigned anonymous functions")
+            "duplicated local helpers, colon methods, foreign-table "
+            "functions, nested and indented definitions, and assigned "
+            "anonymous functions")
 
 
 def test_nested_directories_and_non_lua_files_are_out_of_scope():
@@ -556,7 +597,8 @@ TESTS = [
     test_singleton_near_misses_are_attributed_failures,
     test_unrecognized_declaration_is_not_masked_by_a_later_private_table,
     test_the_same_file_with_a_recognized_declaration_reports_its_duplicate,
-    test_export_attached_to_an_undeclared_table_is_an_attributed_failure,
+    test_export_attached_to_a_foreign_table_stays_out_of_scope,
+    test_unrecognized_declaration_is_caught_even_when_it_also_exports,
     test_export_attached_to_a_declared_private_table_is_attributed,
     test_trailing_code_after_a_declaration_is_an_attributed_failure,
     test_recognized_declaration_passes_where_the_near_miss_failed,
