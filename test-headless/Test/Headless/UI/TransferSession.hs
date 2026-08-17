@@ -289,6 +289,18 @@ sceneLua = luaLines
     -- array serializes to a JSON OBJECT, not [], so "moved everything"
     -- and "moved nothing" would otherwise decode through different
     -- shapes.
+    -- The header labels' OWN rasterised font sizes, which is where a
+    -- pane's effective scale actually lands: label.new stores
+    -- floor(baseFontSize * uiscale), so a header drawn at the
+    -- configured scale inside a fitted pane is visible here as a size
+    -- the fitted box never reserved room for.
+    , "_G.__headerFonts = function(paneKey)"
+    , "  local c = require('scripts.cargo_inventory_panel');"
+    , "  local l = require('scripts.ui.label');"
+    , "  local pane = c.getPane(c.getLevel(1), paneKey);"
+    , "  if not pane then return nil end;"
+    , "  return { title = l.getFontSize(pane.titleId),"
+    , "           subtitle = l.getFontSize(pane.subtitleId) } end;"
     , "_G.__ids = function(kind, id)"
     , "  local info = unit.transferEndpointInfo({kind = kind, id = id});"
     , "  local out = {};"
@@ -678,6 +690,13 @@ spec = aroundAll withSharedFixture $
             geom `shouldSatisfy` T.isInfixOf "\"leftFirst\":true"
             geom `shouldSatisfy` T.isInfixOf "\"keyA\":\"source\""
             geom `shouldSatisfy` T.isInfixOf "\"keyB\":\"destination\""
+            -- With room to spare nothing is fitted, so the headers
+            -- rasterise at their configured sizes — the other half of
+            -- the minimum-viewport case below, which is what stops a
+            -- fix there from simply shrinking every header everywhere.
+            fonts ← evalOk ls "return _G.__headerFonts('source')"
+            fonts `shouldSatisfy` T.isInfixOf "\"title\":16"
+            fonts `shouldSatisfy` T.isInfixOf "\"subtitle\":13"
 
         -- #1250 review round 1: at the envelope's FORMAL MINIMUM the
         -- pair's natural width (2x440 + gap = 904) exceeds the
@@ -734,6 +753,22 @@ spec = aroundAll withSharedFixture $
                 \         cfg = require('scripts.ui.scale').get() }"
             fitted `shouldSatisfy` T.isInfixOf "\"cfg\":1"
             fitted `shouldNotSatisfy` T.isInfixOf "\"list\":1"
+            -- ...and so did the HEADERS (#1250 review round 2). Their
+            -- three bands are reserved at the pane's fitted scale, so a
+            -- title still rasterised at the configured 16 would reach
+            -- down into rows the panel never sized for it.
+            headers ← evalOk ls "return { src = _G.__headerFonts('source'), \
+                                \         dst = _G.__headerFonts('destination') }"
+            headers `shouldNotSatisfy` T.isInfixOf "\"title\":16"
+            headers `shouldNotSatisfy` T.isInfixOf "\"subtitle\":13"
+            smaller ← evalOk ls (luaLines
+                [ "local f = _G.__headerFonts('source');"
+                , "local g = _G.__headerFonts('destination');"
+                , "return tostring(f.title > 0 and f.title < 16"
+                , "                and f.subtitle > 0 and f.subtitle < 13"
+                , "                and g.title == f.title"
+                , "                and g.subtitle == f.subtitle)" ])
+            smaller `shouldBe` "\"true\""
 
     describe "the session's row gestures" $ do
         let openOnHold env ls = do

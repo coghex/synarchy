@@ -749,11 +749,18 @@ local function headerBaselines(uiscale)
            titleH + subH + math.floor(AGE_FONT * uiscale * 0.85)
 end
 
-local function buildTitle(level, pane, originX, originY, view)
+-- `uiscale` is the PANE's effective scale, not the configured one
+-- (#1250 review round 2). measurePane reserves the header's three bands
+-- at that scale and buildPane places the list below them from the same
+-- number, so rasterising the labels at any other scale would draw
+-- glyphs into space that was never measured for them — at 800x600 the
+-- fitted escort boxes and lists shrink while full-size headers would
+-- reach down into the rows. One scale in, three bands and three labels
+-- out.
+local function buildTitle(level, pane, originX, originY, view, uiscale)
     local h = cargoInventoryPanel.hud
     if not h then return end
     local page = levelPage(level)
-    local uiscale = scale.get()
     local titleBase, subBase, ageBase = headerBaselines(uiscale)
 
     pane.titleId = label.new({
@@ -1026,7 +1033,7 @@ local function buildPane(level, pane, view, m, pos)
     local cy = pos.y + pbounds.y
     local cw = pbounds.width
 
-    buildTitle(level, pane, cx, cy, view)
+    buildTitle(level, pane, cx, cy, view, m.uiscale)
 
     dataParams.name         = "cargo_inv"
     dataParams.page         = page
