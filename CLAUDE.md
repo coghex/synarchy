@@ -1184,8 +1184,45 @@ before touching each area:
   its cause, and only `ready_to_commit` entries are ever submitted — a
   create-time refusal is never retried. The stall timer is a STALL timer
   (60 s of ELIGIBLE time, reset on every new closest approach), never a
-  trip budget. Terminal orders STAY in the store — exactly-once comes from
-  the lifecycle, not from deletion, and pruning is #1253's.
+  trip budget.
+  **Every way an order ENDS is one rule** (#1253,
+  `scripts/unit_ai_transfer_outcome.lua`): the outcome is surfaced to the
+  player exactly once, and the order is then PRUNED. The store holds live
+  work only, like `Craft.Bills` — so nothing terminal rides a save, and
+  the integrity sweep has nothing to say about a demolished endpoint. The
+  durable history is the session event log, which is NOT persisted, so
+  none of this writes an outcome into a save. Surfacing comes FIRST and
+  pruning is unconditional on it (a muted notification category must not
+  strand an order forever); pruning is also what makes the handling
+  edge-triggered and idempotent, since a later tick has nothing left to
+  re-surface. Failures use `unit_warning` naming the carrier and the
+  target, and that now includes the vanished counterpart #1247 retired
+  QUIETLY: with the entries pruned there is no other record left, so
+  silence would mean the player never hears about it. No new vocabulary
+  — a stall is `out_of_range`, an arrival refusal is `became_stale`
+  carrying the real cause. `unit.cancelTransferOrder` (pending entries
+  only, `cancelBatch`) + `unit.pruneTransferOrder` (TERMINAL orders only,
+  ownership-scoped, idempotent) are the two verbs; **"Cancel transfer"**
+  on the right-clicked unit's own context menu is the player's way in
+  (omitted, never disabled, when that unit carries no live order), and it
+  cancels every non-terminal order the unit carries, stops only
+  transfer-directed movement, and touches no other command field. The one
+  exit the executor cannot reach is the CARRIER ceasing to act — so
+  `Unit.Transfer.Live.retireTransferOrdersEverywhere` (the
+  `retirePowerNodeEverywhere` pattern) drops its orders engine-side from
+  BOTH `Unit.Thread.Command.Lifecycle`'s destroy and
+  `Unit.Thread.Command.Pose`'s kill. Death matters as much as destruction
+  and is easier to miss: the instance REMAINS, so every reference still
+  resolves and the sweep stays quiet, while `scripts/unit_ai.lua`
+  short-circuits a `dead` pose before any action scores. The recoverable
+  poses (collapsed, crawling) are deliberately excluded — their orders
+  are merely suspended. Keyed on the ACTING unit alone: a unit that is
+  merely an endpoint of somebody else's order is not orphaned by its own
+  death, and that order's live carrier retires it properly with the
+  reason recorded. **A commit result reports EVERY requested item**,
+  create-time refusals included, so the arrival report excludes what the
+  command-time gate already surfaced (`settledIds`) — otherwise the four
+  that never fit in a twelve-into-eight batch get warned about twice.
   **The player's own gestures are Mode B** (#1249,
   `scripts/transfer_gestures.lua` — ONE builder both hosts call): a
   unit-info inventory row offers **Store 1 / Store all** into whatever
@@ -1209,9 +1246,10 @@ before touching each area:
   registered and untouched for the AI ladders (D-7).
   **Mode A is the ESCORT** (#1250, `scripts/transfer_session.lua`): walk
   FIRST, then choose items. Selecting "Transfer" records a session, and
-  `scripts/unit_ai_transfer.lua`'s `escort_transfer` action — a 7.5
-  in-progress LOCK, peer of the queued order, so wander and utility churn
-  cannot steal the unit — walks the source to the destination's
+  `scripts/unit_ai_escort.lua`'s `escort_transfer` action — a 7.5
+  in-progress LOCK, peer of the queued order (whose module owns the
+  shared approach and reach rule and re-exports this action, so both
+  modes register from one name) — walks the source to the destination's
   FOOTPRINT and stops. An eligible SOURCE is therefore one whose species
   actually registered that action, not merely a player-commandable unit:
   `scripts/unit_ai_actions.lua` records every species' action names as
@@ -1251,9 +1289,12 @@ before touching each area:
   untouched; only a resize is exempt (see the container-window stack
   above). The target-side hold is UIT-4's and session failure handling
   UIT-5B's. Gates: hspec `--match "Unit transfer"`
-  (contract + both Lua surfaces) and `--match "Transfer context menu"`
-  (both gesture modes AND the escort session); `tools/transfer_order_probe.py`
-  and `tools/item_list_widget_probe.py` (both manual-only).
+  (contract + both Lua surfaces + the cancel/prune verbs and the
+  destroyed-carrier cleanup) and `--match "Transfer context menu"` (both
+  gesture modes, the "Cancel transfer" entry, AND the escort session),
+  plus `--match "durable transfer orders survive"` for the post-prune
+  save; `tools/transfer_order_probe.py` and
+  `tools/item_list_widget_probe.py` (both manual-only).
 - **Power (#358-#361, #590/#591)** — solar/battery nodes are
   item-consuming placements (`power.placeNode` via
   `buildTool.commitPlacement`); networks (wire 4-adjacency +

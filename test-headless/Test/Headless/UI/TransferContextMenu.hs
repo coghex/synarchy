@@ -376,6 +376,196 @@ spec = describe "Transfer context menu" $ do
                 labels `shouldSatisfy` T.isInfixOf "Info"
                 labels `shouldNotSatisfy` T.isInfixOf "Transfer"
 
+    -- #1253 requirement 1: the way out of a durable order (#1246) the
+    -- player queued. Stubs unit.getTransferOrders / cancelTransferOrder /
+    -- pruneTransferOrder because this bare backend has no live page and
+    -- therefore no order store at all -- what is under test here is the
+    -- MENU's gate and the gesture's own sequencing, not the engine verbs
+    -- (which 'Test.Headless.Unit.TransferOrderApi' drives against a real
+    -- store).
+    describe "cancel transfer (#1253)" $ do
+        it "a target carrying an active order offers Cancel transfer" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (unitTargetStub 77 <> selectedStub [7]
+                    <> transferOrderStub 77 [(4, False)])
+            claimed ← evalDebug ls "return require('scripts.init_context_menu').tryUnitMenu(10, 20)"
+            claimed `shouldBe` "true"
+            labels ← capturedLabels ls
+            labels `shouldSatisfy` T.isInfixOf "Cancel transfer"
+
+        it "a target with NO order omits the entry entirely (never a \
+           \disabled row)" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (unitTargetStub 78 <> selectedStub [7]
+                    <> transferOrderStub 78 [])
+            claimed ← evalDebug ls "return require('scripts.init_context_menu').tryUnitMenu(10, 20)"
+            claimed `shouldBe` "true"
+            labels ← capturedLabels ls
+            labels `shouldSatisfy` T.isInfixOf "Info"
+            labels `shouldNotSatisfy` T.isInfixOf "Cancel transfer"
+
+        it "a target whose only order is already TERMINAL omits the entry" $ \env → do
+            -- A terminal order is finished work awaiting its prune, not
+            -- something the player can still call off. Offering it would
+            -- promise a cancellation that cancels nothing.
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (unitTargetStub 79 <> selectedStub [7]
+                    <> transferOrderStub 79 [(4, True)])
+            claimed ← evalDebug ls "return require('scripts.init_context_menu').tryUnitMenu(10, 20)"
+            claimed `shouldBe` "true"
+            labels ← capturedLabels ls
+            labels `shouldNotSatisfy` T.isInfixOf "Cancel transfer"
+
+        it "the entry gates on the TARGET's own orders, not the selection's" $ \env → do
+            -- The right-clicked unit is the one carrying the order and
+            -- the one the menu describes; a selected bystander's haul is
+            -- somebody else's business.
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (unitTargetStub 80 <> selectedStub [7]
+                    <> transferOrderStub 7 [(4, False)])
+            claimed ← evalDebug ls "return require('scripts.init_context_menu').tryUnitMenu(10, 20)"
+            claimed `shouldBe` "true"
+            labels ← capturedLabels ls
+            labels `shouldNotSatisfy` T.isInfixOf "Cancel transfer"
+
+        it "invoking it cancels the order, prunes it, and releases the \
+           \carrier -- in that order" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (unitTargetStub 81 <> selectedStub [7]
+                    <> transferOrderStub 81 [(4, False), (9, False)])
+            -- The carrier is mid-haul, so the gesture must stop its walk.
+            -- scripts.unit_ai_core reads the singleton out of
+            -- package.loaded["scripts.unit_ai"], so the entry module has
+            -- to be pulled in first -- exactly as any real caller does.
+            run ls "require('scripts.unit_ai'); \
+                   \require('scripts.unit_ai_core').ensureState(81)\
+                   \.currentAction = 'transfer_order'; "
+            claimed ← evalDebug ls "return require('scripts.init_context_menu').tryUnitMenu(10, 20)"
+            claimed `shouldBe` "true"
+            invoke ← evalDebug ls "_G.__cancelCallback(); return 'ok'"
+            invoke `shouldNotSatisfy` isLuaError
+            -- EVERY non-terminal order, because the entry promises to
+            -- release the unit and releasing it from one of two queued
+            -- hauls would send it straight off on the other.
+            trace ← evalDebug ls "return table.concat(_G.__orderCalls, ',')"
+            trace `shouldBe` "\"stop:81,cancel:4,event,prune:4,\
+                             \cancel:9,event,prune:9\""
+            -- The event really is player-visible and attributed, and the
+            -- prune follows it rather than racing it.
+            evs ← evalDebug ls "return table.concat(_G.__emitted, ' | ')"
+            evs `shouldSatisfy` T.isInfixOf "unit_event"
+            evs `shouldSatisfy` T.isInfixOf "cancelled"
+            evs `shouldSatisfy` T.isInfixOf "uid=81"
+
+        it "cancelling a unit that is NOT running the transfer job leaves \
+           \its current action alone" $ \env → do
+            -- Requirement: cancellation stops transfer-directed movement
+            -- and nothing else. A unit interrupted mid-meal keeps eating;
+            -- its queued order is still cancelled.
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (unitTargetStub 82 <> selectedStub [7]
+                    <> transferOrderStub 82 [(4, False)])
+            run ls "require('scripts.unit_ai'); \
+                   \require('scripts.unit_ai_core').ensureState(82)\
+                   \.currentAction = 'eat_from_inventory'; "
+            _ ← evalDebug ls "return require('scripts.init_context_menu').tryUnitMenu(10, 20)"
+            _ ← evalDebug ls "_G.__cancelCallback(); return 'ok'"
+            trace ← evalDebug ls "return table.concat(_G.__orderCalls, ',')"
+            trace `shouldBe` "\"cancel:4,event,prune:4\""
+
+    -- Lives in this file because it needs exactly this bare-Lua fixture
+    -- and the executor (scripts/unit_ai_transfer.lua) has no headless
+    -- home of its own -- everything else about it is probe-gated. What
+    -- is pinned here is the RULE, deterministically; the probe's
+    -- partial-batch phase pins the resulting occurrence count against a
+    -- real engine.
+    describe "outcome reporting is exactly-once (#1253)" $ do
+        it "an arrival report SKIPS failures the command-time gate \
+           \already surfaced, and reports the ones it did not" $ \env → do
+            -- Twelve into room for eight: the four create-time
+            -- receiver_full refusals were warned about when the order was
+            -- queued, and the commit result carries them again alongside
+            -- the eight it just decided. Reporting the whole list would
+            -- file a second warning for one refusal.
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls emitSpyLua
+            run ls "require('scripts.unit_ai'); "
+            reported ← evalDebug ls (T.concat
+                [ "local o = require('scripts.unit_ai_transfer_outcome'); "
+                -- The order as it stood BEFORE the commit: one entry
+                -- still walking, one already refused at create time.
+                , "local pre = { entries = { "
+                , "  { instanceId = 1, state = 'in_transit' }, "
+                , "  { instanceId = 2, state = 'failed', reason = 'receiver_full' } "
+                , "} }; "
+                , "local settled = o.settledIds(pre); "
+                -- …and what the commit reports: BOTH, per pushBatchResult.
+                -- The two carry DIFFERENT causes so the emitted text says
+                -- which one survived the filter -- reportOutcomes quotes
+                -- the cause, since for an arrival refusal that is the
+                -- explanation.
+                , "local outcomes = { "
+                , "  { instanceId = 1, defName = 'ration', state = 'failed', "
+                , "    reason = 'became_stale', cause = 'instance_missing' }, "
+                , "  { instanceId = 2, defName = 'ration', state = 'failed', "
+                , "    reason = 'receiver_full' } "
+                , "}; "
+                , "return o.reportOutcomes(7, outcomes, 'couldn\\'t transfer', "
+                , "                        settled)" ])
+            reported `shouldBe` "1"
+            evs ← evalDebug ls "return table.concat(_G.__emitted, ' | ')"
+            evs `shouldSatisfy` T.isInfixOf "instance_missing"
+            evs `shouldNotSatisfy` T.isInfixOf "receiver_full"
+            -- ONE warning, for the entry THIS commit refused, and with no
+            -- "(and 1 more)" tail claiming the excluded one alongside it.
+            evs `shouldNotSatisfy` T.isInfixOf " | "
+            evs `shouldNotSatisfy` T.isInfixOf "more)"
+
+        it "with no exclusion set every failure is reported, so the \
+           \command-time gate itself still says everything" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls emitSpyLua
+            run ls "require('scripts.unit_ai'); "
+            reported ← evalDebug ls (T.concat
+                [ "local o = require('scripts.unit_ai_transfer_outcome'); "
+                , "return o.reportOutcomes(7, { "
+                , "  { instanceId = 1, defName = 'ration', state = 'failed', "
+                , "    reason = 'receiver_full' }, "
+                , "  { instanceId = 2, defName = 'ration', state = 'failed', "
+                , "    reason = 'receiver_full' } "
+                , "}, 'can\\'t transfer')" ])
+            -- Two refusals, still ONE bounded warning naming the first
+            -- and counting the rest.
+            reported `shouldBe` "2"
+            evs ← evalDebug ls "return table.concat(_G.__emitted, ' | ')"
+            evs `shouldSatisfy` T.isInfixOf "(and 1 more)"
+
+        it "settledIds names every terminal state and nothing pending" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls "require('scripts.unit_ai'); "
+            ids ← evalDebug ls (T.concat
+                [ "local o = require('scripts.unit_ai_transfer_outcome'); "
+                , "local s = o.settledIds({ entries = { "
+                , "  { instanceId = 1, state = 'queued' }, "
+                , "  { instanceId = 2, state = 'in_transit' }, "
+                , "  { instanceId = 3, state = 'ready_to_commit' }, "
+                , "  { instanceId = 4, state = 'completed' }, "
+                , "  { instanceId = 5, state = 'cancelled' }, "
+                , "  { instanceId = 6, state = 'failed' } } }); "
+                , "local out = {}; for i = 1, 6 do "
+                , "  out[i] = s[i] and '1' or '0' end; "
+                , "return table.concat(out, '')" ])
+            ids `shouldBe` "\"000111\""
+
     describe "session creation (scripts/transfer_session.lua)" $ do
         it "selecting Transfer creates a session with the exact endpoint identities" $ \env → do
             ls ← newBareLuaBackend env
@@ -647,11 +837,14 @@ baseSetupLua = T.concat
     [ "local contextMenu = require('scripts.ui.context_menu'); "
     , "_G.__lastLabels = nil; "
     , "_G.__transferCallback = nil; "
+    , "_G.__cancelCallback = nil; "
     , "contextMenu.show = function(items, mx, my) "
     , "  local labels = {}; "
     , "  for i, it in ipairs(items) do "
     , "    labels[i] = it.label; "
-    , "    if it.label == 'Transfer' then _G.__transferCallback = it.callback end "
+    , "    if it.label == 'Transfer' then _G.__transferCallback = it.callback end; "
+    , "    if it.label == 'Cancel transfer' then "
+    , "      _G.__cancelCallback = it.callback end "
     , "  end; "
     , "  _G.__lastLabels = labels; "
     , "end; "
@@ -780,10 +973,57 @@ buildingStub bid activity capacity ops = T.concat
     , T.intercalate "," (map (\o → "'" <> o <> "'") ops) <> "} end; "
     ]
 
+-- | Capture every @engine.emitEventForUnit@ call into @_G.__emitted@,
+-- joined ' | ' by the reader below, so "how many warnings did that file"
+-- is answerable without a real event log.
+emitSpyLua ∷ Text
+emitSpyLua = T.concat
+    [ "_G.__emitted = {}; "
+    , "engine.emitEventForUnit = function(cat, msg, u) "
+    , "  table.insert(_G.__emitted, cat .. ':' .. msg "
+    , "    .. ' uid=' .. tostring(u)) end; "
+    ]
+
 -- | @unit.hitTestAt@ fixed to this target uid.
 unitTargetStub ∷ Int → Text
 unitTargetStub uid = "unit.hitTestAt = function(x, y) return "
     <> T.pack (show uid) <> " end; "
+
+-- | The #1253 order surface for ONE unit: @unit.getTransferOrders@
+-- answering the given @(orderId, terminal)@ list for @uid@ and an empty
+-- list for every other unit, plus recording stubs for the three verbs
+-- the cancel gesture drives.
+--
+-- Stubbed rather than live because this bare backend has no world page
+-- and therefore no order store to create an order IN; what these cases
+-- gate is the menu's own condition and the gesture's SEQUENCING (stop,
+-- then per order: cancel -> surface -> prune), which is exactly what
+-- @_G.__orderCalls@ records. The verbs' own behaviour is driven against
+-- a real store in 'Test.Headless.Unit.TransferOrderApi'.
+transferOrderStub ∷ Int → [(Int, Bool)] → Text
+transferOrderStub uid entries = T.concat
+    [ "_G.__orderCalls = {}; _G.__emitted = {}; "
+    , "unit.getTransferOrders = function(u) "
+    , "  if u ~= ", tshow uid, " then return {} end; "
+    , "  return {"
+    , T.intercalate ", "
+        [ T.concat [ "{ id = ", tshow oid, ", terminal = "
+                   , if term then "true" else "false", " }" ]
+        | (oid, term) ← entries ]
+    , "} end; "
+    , "unit.cancelTransferOrder = function(u, oid) "
+    , "  table.insert(_G.__orderCalls, 'cancel:' .. tostring(oid)); "
+    , "  return true end; "
+    , "unit.pruneTransferOrder = function(u, oid) "
+    , "  table.insert(_G.__orderCalls, 'prune:' .. tostring(oid)); "
+    , "  return true end; "
+    , "unit.stop = function(u) "
+    , "  table.insert(_G.__orderCalls, 'stop:' .. tostring(u)) end; "
+    , "engine.emitEventForUnit = function(cat, msg, u) "
+    , "  table.insert(_G.__orderCalls, 'event'); "
+    , "  table.insert(_G.__emitted, cat .. ':' .. msg "
+    , "    .. ' uid=' .. tostring(u)) end; "
+    ]
 
 -- | Put the REAL @unit.transferEndpointInfo@ back after baseSetupLua
 -- stubbed it out, so a case can exercise the engine's own

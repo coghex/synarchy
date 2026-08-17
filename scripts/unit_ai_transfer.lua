@@ -58,6 +58,22 @@
 -- carries on walking. s.transferOrder below is trip bookkeeping only
 -- (the stall budget and the closest approach so far), stripped at
 -- snapshot time by unit_ai_save.lua.
+--
+-- FAILURE HANDLING (#1253, UIT-5A) is the other half of that, and it
+-- lives next door in unit_ai_transfer_outcome.lua: whichever way an
+-- order ends, the outcome is surfaced to the player exactly once and the
+-- order is then pruned from the store (finishOrder). Four ways out reach
+-- it from this file -- a completed or partly-completed commit, a
+-- counterpart that stopped existing, a carrier that stalled short of one,
+-- and the player's own "Cancel transfer" -- plus a fifth the executor
+-- cannot reach at all, the carrier itself dying or being destroyed,
+-- which the engine handles in Unit.Transfer.Live.
+--
+-- One consequence lands HERE rather than there: the quiet retirement
+-- #1247 gave a vanished counterpart is now surfaced like every other
+-- failure. Pruning removes the only place a dead order's reason could
+-- still have been read, so silence would mean the player never hears
+-- about it at all.
 
 local unitAi = package.loaded["scripts.unit_ai"]
 local core = require("scripts.unit_ai_core")
@@ -71,6 +87,11 @@ local mv = require("scripts.movement_speed")
 -- action won, or one the AI never ticked through, costs a pending order
 -- nothing.
 local stall = require("scripts.unit_ai_stall")
+-- Outcome surfacing, terminal pruning and the cancel gesture (#1253).
+local outcome = require("scripts.unit_ai_transfer_outcome")
+local targetPhrase   = outcome.targetPhrase
+local finishOrder    = outcome.finishOrder
+local reportOutcomes = outcome.reportOutcomes
 -- The player-facing item/unit labels the pickup order already
 -- established ("Field Radio", not "radio"; a personal name if the unit
 -- has one). Required rather than re-derived so a transfer warning and a
@@ -141,12 +162,15 @@ end
 -- The order this unit should be working, or nil.
 --
 -- Two independent reasons to pass one over, and they are NOT the same
--- thing: a TERMINAL order is finished (it stays in the store because
--- pruning is UIT-5A's, so it must be skipped rather than re-run -- this
--- is what keeps commit exactly-once after the fact), while an order
--- with no approachRole is one whose acting unit is neither endpoint --
--- a building-to-building order (D-10), valid in the store and simply
--- not this executor's to claim.
+-- thing. A TERMINAL order is finished; since #1253 it is normally
+-- pruned on the tick that ended it, so one showing up here at all means
+-- a save was taken inside that sub-tick window -- skipping it is what
+-- keeps commit exactly-once even then, without re-surfacing an outcome
+-- that has already been reported. An order with no approachRole is a
+-- different thing entirely: its acting unit is neither endpoint -- a
+-- building-to-building order (D-10), valid in the store and simply not
+-- this executor's to claim. The cancel gesture deliberately reaches
+-- that one (unit_ai_transfer_outcome.pendingOrders); this must not.
 local function actionableOrder(uid)
     for _, o in ipairs(unit.getTransferOrders(uid) or {}) do
         if not o.terminal and o.approachRole then return o end
@@ -177,31 +201,6 @@ local function approachDist(info, a)
                            a.gridX, a.gridY, a.tileW or 1, a.tileH or 1)
 end
 
--- One player-visible warning for a set of refused entries, naming the
--- carrier and the item -- bounded, because a twelve-item batch that
--- wholly refuses must not file twelve separate warnings. The first
--- refused item is named in full and the rest are counted, which is what
--- a player needs to act ("it wouldn't fit") without a wall of text.
---
--- `reason`/`cause` come straight from the engine's structured
--- vocabulary; the message quotes the cause when there is one, since for
--- an arrival refusal (`became_stale`) the cause IS the explanation.
-local function reportOutcomes(uid, outcomes, lead)
-    local first, n = nil, 0
-    for _, o in ipairs(outcomes or {}) do
-        if o.state == "failed" then
-            n = n + 1
-            if not first then first = o end
-        end
-    end
-    if n == 0 then return 0 end
-    local extra = (n > 1) and string.format(" (and %d more)", n - 1) or ""
-    reportFailure(uid, string.format("%s %s %s%s -- %s",
-        unitLabel(uid), lead, itemLabel(first.defName), extra,
-        first.cause or first.reason or "refused"))
-    return n
-end
-
 -----------------------------------------------------------
 -- Utility
 -----------------------------------------------------------
@@ -221,20 +220,26 @@ local function transferUtility(uid, s)
     end
     s.transferCandidate = order
 
-    -- The counterpart stopped existing during the walk. Retire the
-    -- order QUIETLY (requirement 4): a destination that was demolished
-    -- or a carrier's partner that died is ordinary attrition, not a
-    -- failure worth interrupting the player over -- but the entries
-    -- still have to reach a terminal state, with the reason recorded,
-    -- or the order sits pending forever. became_stale + source_missing
-    -- / receiver_missing, which side depending on which end the unit
-    -- was walking TO.
+    -- The counterpart stopped existing during the walk: became_stale +
+    -- source_missing / receiver_missing, which side depending on which
+    -- end the unit was walking TO.
+    --
+    -- #1247 retired this one QUIETLY, on the reasoning that a demolished
+    -- destination is ordinary attrition rather than a failure worth
+    -- interrupting the player over. That held only while the terminal
+    -- entries stayed in the store to be read afterwards. #1253 prunes
+    -- them, so silence here would mean an order the player queued simply
+    -- disappearing with its cargo still aboard and nothing anywhere
+    -- saying why -- the one outcome this issue exists to rule out. It is
+    -- surfaced like every other failure, and pruned like every other
+    -- terminal order.
     if not order.approach then
         unit.failTransferOrder(uid, order.id, "became_stale",
             order.approachRole == "source" and "source_missing"
                                             or "receiver_missing")
-        s.transferOrder = nil
-        s.transferCandidate = nil
+        reportFailure(uid, string.format("%s couldn't transfer -- the %s "
+            .. "no longer exists", unitLabel(uid), targetPhrase(order)))
+        finishOrder(uid, s, order.id)
         return -math.huge
     end
 
@@ -258,12 +263,14 @@ local function transferUtility(uid, s)
     if stall.charge(t, eligible, now) > TRANSFER_ORDER_TIMEOUT then
         -- Stalled short of an endpoint that is still there: a real
         -- failure, and one the player should hear about. out_of_range
-        -- is the honest reason -- the carrier never got in range.
-        reportFailure(uid, unitLabel(uid)
-            .. " couldn't reach the transfer destination")
+        -- is the honest reason -- the carrier never got in range -- and
+        -- requirement 6 forbids inventing an "unreachable" one for it.
+        -- The endpoint is still live, so the warning can name it.
+        local phrase = targetPhrase(order)
         unit.failTransferOrder(uid, order.id, "out_of_range")
-        s.transferOrder = nil
-        s.transferCandidate = nil
+        reportFailure(uid, string.format("%s couldn't reach the %s",
+            unitLabel(uid), phrase))
+        finishOrder(uid, s, order.id)
         return -math.huge
     end
     return TRANSFER_ORDER_UTILITY
@@ -302,10 +309,24 @@ local function transferExecute(uid, s)
     -- still fit -- is the arrival gate, and whatever it refuses comes
     -- back as became_stale carrying the real cause.
     unit.advanceTransferOrder(uid, order.id, "ready_to_commit")
+    -- Snapshot which entries were ALREADY terminal, BEFORE the commit
+    -- rewrites the rest. A commit result reports every requested item,
+    -- create-time refusals included, and commandTransferOrder warned
+    -- about those when the order was queued -- so without this the four
+    -- that never fit in a twelve-into-eight batch get a second warning
+    -- on arrival for the same refusal. Neither advance above can move an
+    -- entry into or out of this set: both only step a pending state on.
+    local alreadyReported = outcome.settledIds(order)
     local result = unit.commitTransferOrder(uid, order.id)
-    s.transferOrder = nil
-    s.transferCandidate = nil
-    if not result then return end
+    if not result then
+        -- The order vanished between this tick's read and the commit --
+        -- the only way the verb answers nil for an order it just
+        -- resolved. There is no outcome to surface and nothing left to
+        -- prune; drop the trip bookkeeping and let the next tick decide.
+        s.transferOrder = nil
+        s.transferCandidate = nil
+        return
+    end
 
     local moved = {}
     for _, o in ipairs(result.outcomes or {}) do
@@ -327,9 +348,17 @@ local function transferExecute(uid, s)
                 or "storage"),
             uid, math.floor(info.gridX), math.floor(info.gridY))
     end
-    -- D-1 / requirement 5: whatever did not make it is reported, so a
-    -- partial batch is visibly partial rather than silently short.
-    reportOutcomes(uid, result.outcomes, "couldn't transfer")
+    -- D-1 / #1247 requirement 5: whatever did not make it is reported,
+    -- so a partial batch is visibly partial rather than silently short --
+    -- but only what THIS commit refused (see above). An arrival refusal
+    -- comes back as became_stale carrying the real precondition as its
+    -- cause, and reportOutcomes quotes the cause, which is the part that
+    -- explains itself.
+    reportOutcomes(uid, result.outcomes, "couldn't transfer", alreadyReported)
+    -- Both halves of the outcome have now been surfaced, so the order
+    -- has no reader left. Every entry the commit touched is terminal, so
+    -- this is the terminal transition (#1253 requirement 5).
+    finishOrder(uid, s, order.id)
 end
 
 -----------------------------------------------------------
@@ -376,114 +405,30 @@ function unitAi.commandTransferOrder(uid, request)
     return result.orderId
 end
 
------------------------------------------------------------
--- Mode A: the escort hold (#1250)
------------------------------------------------------------
--- The in-progress LOCK that IS the hold (requirement 5). A Mode A
--- session is the player standing an acolyte somewhere and working its
--- pockets by hand, so it sits at the same 7.5 as a queued order and
--- pickup: above follow_command (7.0) and every routine-work lock
--- (<=6.0), below combat / treatment (>=8.0) and dire survival, which
--- still preempt.
---
--- Constant while a session names this unit, which is the whole point.
--- unit.setFrozen is NOT this (it only pins the render publish while the
--- sim keeps walking) and neither is a completed move order (the unit
--- reverts to wander the moment it arrives) --
--- docs/expedition_survival_calibration.md E3 measured both.
-local ESCORT_UTILITY = 7.5
-
--- The session holding this unit, or nil. Read through package.loaded so
--- a build with the gesture module unloaded simply never scores this
--- action, rather than pulling a UI module into the AI thread.
-local function heldSession(uid)
-    local session = package.loaded["scripts.transfer_session"]
-    if not session or type(session.holdsUnit) ~= "function" then return nil end
-    if not session.holdsUnit(uid) then return nil end
-    return session
-end
-
--- There is deliberately NO stall timer here. Mode B's exists because an
--- order must reach a terminal state on its own; a session is the
--- player's own window, ends when they close it, and a unit that cannot
--- reach its destination is UIT-5B's failure handling, not this slice's.
---
--- It keeps NO per-unit state either, deliberately: the SESSION is the
--- state, so there is nothing to reconcile, nothing to strip at snapshot
--- time (scripts/unit_ai_save.lua persists an aiState row minus an
--- explicit transient list, so a scratch field here would ride into
--- `lua.unit_ai`), and nothing an interrupted tick can leave behind.
-local function escortUtility(uid, _s)
-    if not heldSession(uid) then return -math.huge end
-    return ESCORT_UTILITY
-end
-
-local function escortExecute(uid, _s)
-    local session = heldSession(uid)
-    if not session then return end
-    local active = session.get()
-    local info = unit.getInfo(uid)
-    if not (active and info) then return end
-
-    -- Already open: stand still. `unit.stop` on a unit that is already
-    -- stopped is a no-op, and re-running it is what makes this a hold
-    -- rather than a one-shot -- an interruption that walked the unit
-    -- away (combat, a mental break) leaves it standing wherever it
-    -- ended up once this action wins again, which is the honest
-    -- best-effort until UIT-5B owns that case.
-    if active.phase ~= session.PHASE_APPROACHING then
-        unit.stop(uid)
-        return
-    end
-
-    local dest = session.destinationNow()
-    if not dest then
-        -- The destination stopped existing mid-approach. Retire the
-        -- session QUIETLY rather than holding a unit against nothing;
-        -- the richer player-facing failure handling is UIT-5B's.
-        session.close("destination_missing")
-        return
-    end
-
-    -- The contract's OWN Chebyshev <= 1 rect-to-rect rule, measured
-    -- against the endpoint's live footprint, so "close enough to walk
-    -- no further" and "close enough to commit" cannot disagree.
-    if approachDist(info, dest) > 1 then
-        moveBesideRect(uid, info, dest.gridX, dest.gridY,
-                       dest.tileW or 1, dest.tileH or 1)
-        return
-    end
-    unit.stop(uid)
-    session.markArrived()
-end
-
 M.action = {
     name = "transfer_order",
     utility = transferUtility,
     execute = transferExecute,
 }
+-- The rect-to-rect approach and the contract's own reach measure, both
+-- of which Mode A's escort shares verbatim. Exported rather than
+-- copied: "close enough to walk no further" and "close enough to
+-- commit" must be ONE rule for both modes.
+M.moveBesideRect = moveBesideRect
+M.approachDist   = approachDist
+
+-- Mode A's action, re-exported (#1250). Its body lives in
+-- scripts/unit_ai_escort.lua -- this module is at its #538 line budget
+-- and the escort is a self-contained concern -- but the REGISTRATION
+-- point stays one name here, beside the queued order it is a peer of,
+-- so scripts/unit_ai.lua names both from the same require.
+--
 -- Registered AFTER M.action in every action list, so a unit that
 -- somehow holds both resolves the equal-utility tie to the queued order
 -- by list order; neither clears the other.
---
--- Deliberately NOT forceExecute, exactly like the queued order beside
--- it: re-executing while the unit is actively walking re-issues
--- `unit.moveTo`, which wipes the engine-side `usLocalPath` and leaves
--- the unit barely making progress between AI ticks (see unit_ai.lua's
--- re-execute conditions). So the approach is issued once and the
--- arrival is noticed when the walk ends and the unit is idle again --
--- moveBesideRect aims at the ring tile just OUTSIDE the footprint, so
--- ending that walk IS satisfying the contract's reach rule. Once the
--- session is open the unit stands idle, so this then runs every tick,
--- which is what makes the hold a hold.
-M.escortAction = {
-    name = "escort_transfer",
-    utility = escortUtility,
-    execute = escortExecute,
-}
+M.escortAction = require("scripts.unit_ai_escort").action
+
 M.transferUtility = transferUtility
 M.transferExecute = transferExecute
-M.escortUtility   = escortUtility
-M.escortExecute   = escortExecute
 
 return M

@@ -453,6 +453,7 @@ library
                      Unit.Anim
                      Unit.Stats
                      Unit.Transfer
+                     Unit.Transfer.Live
                      Unit.Transfer.Orders
                      Unit.Render
                      Unit.Sprite
@@ -1245,6 +1246,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.WidthTruncation
                    Test.Headless.Lua.ShellInput
                    Test.Headless.Lua.RandomStream
+                   Test.Headless.Lua.InjuryNarration
                    Test.Headless.Graphics.BindlessRebind
                    Test.Headless.Graphics.BindlessRelease
     build-depends: base >=4.20 && <5

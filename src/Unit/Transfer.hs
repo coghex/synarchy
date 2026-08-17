@@ -743,6 +743,11 @@ step from to q
 
 -- | Player or AI abandoned the order: every PENDING entry becomes
 --   cancelled; already terminal entries are left exactly as they are.
+--
+--   Pending-ONLY is load-bearing, not tidiness (#1253, whose
+--   @unit.cancelTransferOrder@ is the live caller): a cancel landing
+--   after a partial commit must record six delivered and six abandoned,
+--   never overwrite six real deliveries with an intent nobody had.
 cancelBatch ∷ TransferBatch → TransferBatch
 cancelBatch = overEntries $ \q →
     if isPending (qtState q) then q { qtState = TransferCancelled } else q

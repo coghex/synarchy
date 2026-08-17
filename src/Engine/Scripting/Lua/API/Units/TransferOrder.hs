@@ -10,6 +10,8 @@
 --   * @unit.advanceTransferOrder@ — @in_transit@ / @ready_to_commit@
 --   * @unit.commitTransferOrder@  — commit on arrival, exactly once
 --   * @unit.failTransferOrder@    — self-terminate a doomed order
+--   * @unit.cancelTransferOrder@  — the player abandoned it (#1253)
+--   * @unit.pruneTransferOrder@   — drop a SURFACED terminal order
 --
 --   __Nothing here is a second transfer policy.__ #1246 owns the store
 --   ("Unit.Transfer.Orders"), #1000/#1085 own eligibility, proximity,
@@ -61,19 +63,25 @@
 --   and re-checking @troUnit@ against it means one unit can never
 --   advance or commit another's order.
 --
---   __Terminal orders are left in the store.__ Nothing here removes an
---   order because it finished: pruning is UIT-5A's (#1253), and until
---   then a completed or failed order stays inspectable with its
---   per-item outcomes intact. What keeps "commit exactly once" true is
---   the LIFECYCLE, not deletion — a terminal batch has no
---   @ready_to_commit@ entry left, so a second commit moves nothing, and
---   the unit job skips terminal orders entirely.
+--   __A terminal order is PRUNED, not left lying__ (#1253, UIT-5A).
+--   'unitPruneTransferOrderFn' is how, and the executor calls it one
+--   step after surfacing the outcome, so the store holds live work only
+--   and nothing terminal rides a save. Removal is still not automatic:
+--   no verb here retires an order merely because 'batchTerminal' became
+--   true, because the outcome has to reach the player FIRST and only
+--   the caller knows whether it has. What keeps "commit exactly once"
+--   true is unchanged and does not depend on the pruning — it is the
+--   LIFECYCLE: a terminal batch has no @ready_to_commit@ entry left, so
+--   a second commit moves nothing, and the unit job skips terminal
+--   orders entirely.
 module Engine.Scripting.Lua.API.Units.TransferOrder
   ( unitCreateTransferOrderFn
   , unitGetTransferOrdersFn
   , unitAdvanceTransferOrderFn
   , unitCommitTransferOrderFn
   , unitFailTransferOrderFn
+  , unitCancelTransferOrderFn
+  , unitPruneTransferOrderFn
   ) where
 
 import UPrelude
@@ -428,9 +436,9 @@ unitGetTransferOrdersFn env = do
 --   harmless and neither can resurrect a terminal entry.
 --
 --   No other state is settable: @completed@ is the arrival commit's to
---   write, @failed@ is 'unitFailTransferOrderFn''s, and @cancelled@
---   belongs to UIT-5A's explicit cancel, which does not exist yet.
---   @false@ means the id names no order this unit is carrying.
+--   write, @failed@ is 'unitFailTransferOrderFn''s, and @cancelled@ is
+--   'unitCancelTransferOrderFn''s. @false@ means the id names no order
+--   this unit is carrying.
 unitAdvanceTransferOrderFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitAdvanceTransferOrderFn env = do
     mUid   ← readId 1
@@ -552,8 +560,10 @@ applyOutcomes outs b = b { tbEntries = zipWith step [0 ..] (tbEntries b) }
 --   provably cannot finish — the carrier stalled short of a counterpart
 --   that is still there (@out_of_range@), and a counterpart that
 --   stopped existing (@became_stale@ with @source_missing@ /
---   @receiver_missing@ as the cause). UIT-5A owns explicit
---   cancellation, pruning, and any richer policy on top.
+--   @receiver_missing@ as the cause). Somebody CHOOSING to abandon a
+--   still-runnable order is 'unitCancelTransferOrderFn' instead, and
+--   what happens to a terminal order afterwards is
+--   'unitPruneTransferOrderFn'.
 --
 --   @reason@ and @cause@ are the contract's own ids
 --   ('transferReasonFromId'), so this adds no vocabulary and the caller
@@ -583,4 +593,85 @@ unitFailTransferOrderFn env = do
                 _ → pushErr $ "unit.failTransferOrder: unknown transfer \
                               \reason in (" <> reasonId <> ", "
                               <> fromMaybe "nil" mCauseId <> ")"
+        _ → pushArgError
+
+-- | @unit.cancelTransferOrder(uid, orderId)@ → true | false | nil, err.
+--
+--   The player abandoned an order that could still have run (#1253,
+--   requirement 1): every PENDING entry becomes @cancelled@, already
+--   terminal entries are left exactly as they are, and NOTHING moves.
+--   'Unit.Transfer.cancelBatch' is the whole transition — pending-only
+--   is what makes a cancel arriving after a partial commit record the
+--   truth (six delivered, six abandoned) instead of overwriting six
+--   real deliveries with an intent nobody had.
+--
+--   Deliberately a SEPARATE verb from 'unitFailTransferOrderFn' rather
+--   than a @cancelled@ spelling accepted by
+--   'unitAdvanceTransferOrderFn', because the distinction is who
+--   decided: @failed@ carries a structured reason the order could not
+--   finish, and a cancellation has none to carry. Neither could report
+--   the other honestly.
+--
+--   Cancelling does NOT remove the order — 'unitPruneTransferOrderFn'
+--   does, once the caller has surfaced the outcome. @false@ means the
+--   id names no order this unit is carrying, which is also what a
+--   second cancel of an order already pruned reports.
+unitCancelTransferOrderFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitCancelTransferOrderFn env = do
+    mUid ← readId 1
+    mOid ← readId 2
+    case (mUid, mOid) of
+        (Just u, Just o) → do
+            r ← Lua.liftIO $ withOwnedOrder env (UnitId u) (TransferOrderId o)
+                                (const cancelBatch)
+            pushBool (isJust r)
+        _ → pushArgError
+
+-- | @unit.pruneTransferOrder(uid, orderId)@ → true | false | nil, err.
+--
+--   Drop a finished order from the store (#1253, requirement 5). The
+--   store holds LIVE work only, like 'Craft.Bills': once an outcome has
+--   been surfaced to the player the entries have no reader left, and
+--   leaving them means a completed haul rides every later save while a
+--   failed one keeps reporting its demolished endpoint to
+--   "World.Save.Integrity" forever.
+--
+--   __Only a TERMINAL order prunes__ ('Unit.Transfer.batchTerminal'),
+--   and that guard is the safety property: pruning a pending order
+--   would silently abandon work the player asked for, with no
+--   @cancelled@ entry and no event to say so. A caller that means to
+--   stop a live order calls 'unitCancelTransferOrderFn' first, which is
+--   exactly what makes the abandonment visible.
+--
+--   Idempotent by construction: @false@ covers an unknown id, another
+--   unit's order, a still-pending one, and an order this call already
+--   removed — so a repeated tick cannot double-prune, and the caller
+--   needs no record of whether it has run.
+unitPruneTransferOrderFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitPruneTransferOrderFn env = do
+    mUid ← readId 1
+    mOid ← readId 2
+    case (mUid, mOid) of
+        (Just u, Just o) → do
+            let uid = UnitId u
+                oid = TransferOrderId o
+            mWs ← Lua.liftIO $ unitOrderStore env uid
+            case mWs of
+                Nothing → pushErr "unit.pruneTransferOrder: no such unit, \
+                                  \or its world page is not loaded"
+                Just (_, ws) → do
+                    -- Lookup, terminality test and delete in ONE
+                    -- atomicModifyIORef', so a transition landing
+                    -- between them cannot make this remove an order
+                    -- that had just become live again.
+                    done ← Lua.liftIO $ atomicModifyIORef'
+                        (wsTransferOrdersRef ws) $ \orders →
+                            case lookupTransferOrder oid orders of
+                                Just order
+                                    | troUnit order ≡ uid
+                                    , batchTerminal (troBatch order) →
+                                        (fst (removeTransferOrder oid orders)
+                                        , True)
+                                _ → (orders, False)
+                    pushBool done
         _ → pushArgError

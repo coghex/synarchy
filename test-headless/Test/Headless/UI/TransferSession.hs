@@ -230,7 +230,8 @@ sceneLua = luaLines
     , "cip.setup({page = _G.__page, fbW = 1280, fbH = 720,"
     , "           boxTexSet = 1, menuFont = 1});"
     -- The unit AI is not loaded here; unit_ai_transfer's module scope
-    -- expects the singleton to exist, exactly as the sibling AI specs
+    -- expects the singleton to exist (and unit_ai_escort reaches that
+    -- module for the shared approach), exactly as the sibling AI specs
     -- arrange it.
     , "package.loaded['scripts.unit_ai'] = {};"
     -- Wrapped ONCE for the whole fixture, not once per case: `_G`
@@ -274,7 +275,7 @@ sceneLua = luaLines
     -- row, which the real action reads and writes.
     , "_G.__ai = {};"
     , "_G.__tick = function(uid)"
-    , "  local tr = require('scripts.unit_ai_transfer');"
+    , "  local tr = require('scripts.unit_ai_escort');"
     , "  _G.__ai[uid] = _G.__ai[uid] or {};"
     , "  local s = _G.__ai[uid];"
     , "  local u = tr.escortUtility(uid, s);"
