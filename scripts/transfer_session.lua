@@ -78,6 +78,15 @@ local REASON_RECEIVER_MISSING     = "receiver_missing"
 local REASON_RECEIVER_INELIGIBLE  = "receiver_ineligible"
 local REASON_CONTRACT_UNAVAILABLE = "contract_unavailable"
 
+-- Likewise NOT engine vocabulary, and named the same way and for the
+-- same reason as the constant above (#1250 review round 1): the chosen
+-- source is a real, live, player-commandable unit -- the contract would
+-- accept it as an endpoint -- but its SPECIES cannot run the escort
+-- action, so no session on it could ever walk, arrive or open. That is
+-- a Mode A capability failure, not a transfer policy refusal, and
+-- reporting it as one of the contract's own reasons would be a lie.
+local REASON_SOURCE_NOT_ESCORTABLE = "source_not_escortable"
+
 -- This session's initial lifecycle state (Unit.Transfer.
 -- transferStateId's 'TransferQueued'), validated by MEMBERSHIP against
 -- the live contract, never by array position.
@@ -105,6 +114,12 @@ local KIND_BUILDING = "building"
 -- many requests (or none at all). These name where the ESCORT is.
 local PHASE_APPROACHING = "approaching"
 local PHASE_OPEN        = "open"
+
+-- The AI action a Mode A source must be able to run for a session on it
+-- to mean anything (scripts/unit_ai_transfer.lua's own name for it).
+-- Named here rather than duplicated at each gate below.
+local ESCORT_ACTION = "escort_transfer"
+M.ESCORT_ACTION = ESCORT_ACTION
 
 M.PHASE_APPROACHING = PHASE_APPROACHING
 M.PHASE_OPEN        = PHASE_OPEN
@@ -305,8 +320,20 @@ end
 -- in which case every candidate is equidistant and the lowest-uid
 -- tiebreak alone decides -- still deterministic, never a nil-arithmetic
 -- error.
-function M.resolveSource(selectedUids, excludeUid, target)
+--
+-- `requiredAction` (optional, #1250 review round 1) additionally
+-- requires a candidate's SPECIES to be able to run that AI action, and
+-- it filters BEFORE ranking for the same reason commandability does: a
+-- candidate that cannot do the job must not win by being nearest and
+-- then do nothing. Mode A passes "escort_transfer", because a source
+-- whose species never registered it would sit in `approaching`
+-- forever. Mode B's own resolution (transfer_gestures.retrieveEntries)
+-- deliberately passes nothing: this issue does not change a shipped
+-- gesture, and the equivalent question for a QUEUED order's executor is
+-- its own concern to raise.
+function M.resolveSource(selectedUids, excludeUid, target, requiredAction)
     if not selectedUids then return nil end
+    local aiActions = require("scripts.unit_ai_actions")
     local tx = target and target.gridX and math.floor(target.gridX)
     local ty = target and target.gridY and math.floor(target.gridY)
     local best, bestUid = nil, nil
@@ -315,7 +342,9 @@ function M.resolveSource(selectedUids, excludeUid, target)
             local info = unit.getInfo(uid)
             local fac = info and unit.getFaction(uid)
             if info and info.gridX and info.gridY and fac
-               and faction.isPlayerCommandable(fac) then
+               and faction.isPlayerCommandable(fac)
+               and (requiredAction == nil
+                    or aiActions.unitHas(uid, requiredAction)) then
                 local d = 0
                 if tx and ty then
                     local cx = math.floor(info.gridX)
@@ -372,6 +401,19 @@ function M.create(sourceUid, kind, destinationId)
     -- membership rule exists to prevent. A contract that dropped
     -- 'unit' would otherwise still mint a session whose source kind no
     -- engine verb recognises.
+    -- Defence in depth behind the menu's omission (#1250 review round
+    -- 1): 'M.create' is the ONE place a session is built and is
+    -- deliberately reusable by surfaces that never ran resolveSource,
+    -- so the capability is re-checked here rather than trusted. Placed
+    -- after the destination checks so a call that is wrong on both
+    -- counts still reports the destination first, as it always did.
+    if not require("scripts.unit_ai_actions").unitHas(sourceUid,
+                                                      ESCORT_ACTION) then
+        engine.emitEventForUnit("unit_warning",
+            "Cannot transfer: this unit cannot be escorted", sourceUid)
+        return nil, REASON_SOURCE_NOT_ESCORTABLE
+    end
+
     local sourceKind = resolveEndpointKind(KIND_UNIT)
     local destinationKind = resolveEndpointKind(kind)
     local state = resolveState(STATE_QUEUED)

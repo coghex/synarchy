@@ -1207,7 +1207,18 @@ before touching each area:
   `scripts/unit_ai_transfer.lua`'s `escort_transfer` action — a 7.5
   in-progress LOCK, peer of the queued order, so wander and utility churn
   cannot steal the unit — walks the source to the destination's
-  FOOTPRINT and stops. The one-way transition to the open/held state
+  FOOTPRINT and stops. An eligible SOURCE is therefore one whose species
+  actually registered that action, not merely a player-commandable unit:
+  `scripts/unit_ai_actions.lua` records every species' action names as
+  `unitAi.registerActions` builds the list, and both `resolveSource`
+  (omitting the row) and `create` (refusing with `source_not_escortable`)
+  consult it, so a debug-spawned bear can never become a session that
+  never walks. An EMPTY inventory means no AI is loaded in this process
+  and answers yes to everything — never a refusal invented from absence.
+  Two 440-wide panes need 904 px at 1x, so the PAIR is fitted to the
+  framebuffer through `responsive.fitScale` before placement (a level
+  kind's `paneScale`), box and font together: clamping each panel alone
+  would stack them at the envelope's 800x600 minimum. The one-way transition to the open/held state
   fires EXACTLY ONCE and is what does everything else: it calls
   `building.refreshContainerKnowledge` (the reveal that verb was shipped
   for, and the only caller in the game), opens the two flanking panes,

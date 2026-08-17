@@ -596,6 +596,64 @@ spec = aroundAll withSharedFixture $
             restored `shouldSatisfy` T.isInfixOf "\"snaps\":1"
             restored `shouldSatisfy` T.isInfixOf "\"reveals\":1"
 
+        -- #1250 review round 1: a species the escort action was never
+        -- registered for could be made a session's source, and the
+        -- session then sat in `approaching` forever -- no walk, no
+        -- panels, and a "hold" holding nothing.
+        it "a source whose species cannot run the escort is skipped by the \
+           \shared rule and refused by create, so no stuck session exists" $
+           \(env, ls) → do
+            resetFixture env ls
+            -- A REAL registration, through the same public API every
+            -- satellite AI script plugs itself in with: the bear is
+            -- player-commandable here and registers no escort action.
+            _ ← evalOk ls (luaLines
+                [ "local a = require('scripts.unit_ai_actions');"
+                , "a.byDef = {};"
+                , "a.record('acolyte', { {name = 'wander'},"
+                , "                      {name = 'escort_transfer'} });"
+                , "a.record('bear', { {name = 'wander'} });"
+                , "return 'ok'" ])
+            -- uid 2 is the ONLY candidate and is a bear, so the rule has
+            -- to answer nil rather than pick the only unit it has.
+            _ ← evalOk ls (luaLines
+                [ "local um = unit.getInfo;"
+                , "unit.getInfo = function(uid)"
+                , "  local i = um(uid); if not i then return nil end;"
+                , "  if uid == 2 then i.defName = 'bear' end;"
+                , "  return i end;"
+                , "return 'ok'" ])
+            resolved ← evalOk ls (luaLines
+                [ "local s = require('scripts.transfer_session');"
+                , "local ep = unit.transferEndpointInfo("
+                , "  {kind = 'building', id = 7});"
+                , "return { unfiltered = s.resolveSource({2}, nil, ep),"
+                , "         filtered = tostring(s.resolveSource({2}, nil, ep,"
+                , "                                s.ESCORT_ACTION)) }" ])
+            resolved `shouldSatisfy` T.isInfixOf "\"unfiltered\":2"
+            resolved `shouldSatisfy` T.isInfixOf "\"filtered\":\"nil\""
+            -- ...and the ONE creation path refuses it too, so a surface
+            -- that never ran the rule cannot mint the stuck session
+            -- either.
+            refused ← evalOk ls
+                "local s, reason = require('scripts.transfer_session')\
+                \.create(2, 'building', 7); \
+                \return { made = tostring(s), reason = tostring(reason) }"
+            refused `shouldSatisfy` T.isInfixOf "\"made\":\"nil\""
+            refused `shouldSatisfy`
+                T.isInfixOf "\"reason\":\"source_not_escortable\""
+            open' ← evalOk ls
+                "return require('scripts.cargo_inventory_panel').depth()"
+            open' `shouldBe` "0"
+            -- The acolyte, which DID register it, still resolves and
+            -- still creates — the filter must not refuse everything.
+            ok ← evalOk ls (luaLines
+                [ "local s = require('scripts.transfer_session');"
+                , "local ep = unit.transferEndpointInfo("
+                , "  {kind = 'building', id = 7});"
+                , "return s.resolveSource({1}, nil, ep, s.ESCORT_ACTION)" ])
+            ok `shouldBe` "1"
+
         it "both panes are framebuffer-clamped and do not overlap each other" $
            \(env, ls) → do
             resetFixture env ls
@@ -620,6 +678,62 @@ spec = aroundAll withSharedFixture $
             geom `shouldSatisfy` T.isInfixOf "\"leftFirst\":true"
             geom `shouldSatisfy` T.isInfixOf "\"keyA\":\"source\""
             geom `shouldSatisfy` T.isInfixOf "\"keyB\":\"destination\""
+
+        -- #1250 review round 1: at the envelope's FORMAL MINIMUM the
+        -- pair's natural width (2x440 + gap = 904) exceeds the
+        -- framebuffer, and clamping each panel on its own — all
+        -- measurePane and UI.placePopup can do — lands them on top of
+        -- each other. The PAIR is fitted first now.
+        it "at the supported minimum 800x600 @ 1x the pair still flanks: \
+           \fitted to width, in frame, source left, no overlap" $
+           \(env, ls) → do
+            resetFixture env ls
+            writeIORef (framebufferSizeRef env) (800, 600)
+            _ ← evalOk ls "require('scripts.cargo_inventory_panel')\
+                          \.setup({page = _G.__page, fbW = 800, fbH = 600, \
+                          \        boxTexSet = 1, menuFont = 1}); return 'ok'"
+            placeUnit env carrierUid (42, 41)
+            _ ← evalOk ls (createLua "building" 7)
+            _ ← evalOk ls "return _G.__tick(1)"
+            tight ← evalOk ls (luaLines
+                [ "local d = require('scripts.cargo_inventory_panel').dump();"
+                , "local p = d.levels[1].panes;"
+                , "local a, b = p[1], p[2];"
+                , "local function inFrame(r)"
+                , "  return r.x >= 0 and r.y >= 0"
+                , "     and r.x + r.width <= 800 and r.y + r.height <= 600 end;"
+                , "local overlap = not (a.x + a.width <= b.x"
+                , "                     or b.x + b.width <= a.x"
+                , "                     or a.y + a.height <= b.y"
+                , "                     or b.y + b.height <= a.y);"
+                , "return { inFrame = inFrame(a) and inFrame(b),"
+                , "         overlap = overlap, leftFirst = a.x < b.x,"
+                , "         keyA = a.paneKey, keyB = b.paneKey,"
+                -- `shrunk` proves this is a FIT and not merely a clamp:
+                -- an unfitted pane would still measure its full 440.
+                -- (A Lua comment cannot ride inside these chunks — the
+                -- debug console is single-line, so `--` would swallow
+                -- the rest of the statement.)
+                , "         shrunk = a.width < 440 and b.width < 440,"
+                , "         panes = d.levels[1].paneCount }" ])
+            tight `shouldSatisfy` T.isInfixOf "\"inFrame\":true"
+            tight `shouldSatisfy` T.isInfixOf "\"overlap\":false"
+            tight `shouldSatisfy` T.isInfixOf "\"leftFirst\":true"
+            tight `shouldSatisfy` T.isInfixOf "\"keyA\":\"source\""
+            tight `shouldSatisfy` T.isInfixOf "\"keyB\":\"destination\""
+            tight `shouldSatisfy` T.isInfixOf "\"shrunk\":true"
+            tight `shouldSatisfy` T.isInfixOf "\"panes\":2"
+            -- ...and the rows inside shrank WITH the box rather than
+            -- overflowing it, which is what makes this a fit and not a
+            -- crop.
+            fitted ← evalOk ls
+                "local c = require('scripts.cargo_inventory_panel'); \
+                \local il = require('scripts.ui.item_list'); \
+                \local lvl = c.getLevel(1); \
+                \return { list = il.getScale(c.getPane(lvl, 'source').listId), \
+                \         cfg = require('scripts.ui.scale').get() }"
+            fitted `shouldSatisfy` T.isInfixOf "\"cfg\":1"
+            fitted `shouldNotSatisfy` T.isInfixOf "\"list\":1"
 
     describe "the session's row gestures" $ do
         let openOnHold env ls = do

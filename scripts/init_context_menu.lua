@@ -40,14 +40,18 @@ function M.tryBuildingMenu(x, y)
     -- when the selection holds no eligible candidate at all -- which
     -- omits the entry rather than showing a disabled row. The endpoint
     -- query runs FIRST here because its gridX/gridY is the point
-    -- candidates are ranked against.
+    -- candidates are ranked against. Since #1250 "eligible" also means
+    -- the species can actually RUN the escort, so a debug-spawned bear
+    -- in the selection is skipped here rather than becoming a session
+    -- that never walks.
     local transferSession = require("scripts.transfer_session")
     local endpointInfo =
         unit.transferEndpointInfo({ kind = "building", id = hitBid })
     local source = nil
     if endpointInfo and endpointInfo.eligible then
         source = transferSession.resolveSource(unit.getSelected(), nil,
-                                               endpointInfo)
+                                               endpointInfo,
+                                               transferSession.ESCORT_ACTION)
     end
     local hasTransfer = source ~= nil
 
@@ -182,7 +186,8 @@ function M.tryUnitMenu(x, y)
         local source = nil
         if endpointInfo and endpointInfo.eligible then
             source = transferSession.resolveSource(selectedUids, targetUid,
-                                                   endpointInfo)
+                                                   endpointInfo,
+                                                   transferSession.ESCORT_ACTION)
         end
         if source then
             table.insert(items, { label = "Transfer",

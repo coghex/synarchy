@@ -51,6 +51,7 @@ package.loaded["scripts.transfer_session_panels"] = M
 
 local scale           = require("scripts.ui.scale")
 local reservedRegions = require("scripts.ui.reserved_regions")
+local responsive      = require("scripts.ui.responsive")
 
 -- The manager is required lazily: it requires this module too (for
 -- levelKinds), and a top-level require in both directions is a load
@@ -66,6 +67,55 @@ local PANE_DESTINATION = "destination"
 -- panels are already framebuffer-clamped and reserved-region-nudged, so
 -- this only has to read as "two panels", not reserve real estate.
 local PANE_GAP = 24
+
+-- One pane's natural width at uiscale 1. TWO of these plus the gap is
+-- what has to fit, which is why nothing here reads it alone.
+local PANE_WIDTH_BASE = 440
+
+-- The framebuffer the pair is fitted and placed against: the window
+-- manager's own recorded extent when it has one, the engine's live
+-- answer otherwise. ONE source for both, so the width a pane is sized
+-- to and the width it is clamped against can never be different
+-- numbers.
+local function framebuffer()
+    local hud = manager().hud
+    local w = (hud and hud.fbW) or 0
+    local h = (hud and hud.fbH) or 0
+    if w <= 0 or h <= 0 then
+        local ew, eh = engine.getFramebufferSize()
+        w, h = ew or 0, eh or 0
+    end
+    return w, h
+end
+
+local function gapPx(uiscale)
+    return math.floor(PANE_GAP * uiscale)
+end
+
+-- The LOCAL effective uiscale BOTH panes render at (#1250 review round
+-- 1; #750's fixed-size-widget rule).
+--
+-- Two 440-wide panels need 904 px at uiscale 1, and the supported
+-- envelope's formal minimum framebuffer is 800 wide — so at 800x600@1x
+-- the pair does not fit, and clamping each panel independently (which
+-- is all `measurePane` and `UI.placePopup` can do on their own) lands
+-- them on top of each other rather than beside each other.
+-- `reserved_regions` cannot rescue that either: nudging cannot solve
+-- geometry with no solution.
+--
+-- So the PAIR is fitted first, through the same `responsive.fitScale`
+-- every other fixed-size widget here uses, and the result is used for
+-- the panel box AND for the item list inside it — shrinking a box's
+-- font together with its box, never separately. Above the envelope's
+-- minimum, or at a scale where the pair already fits, this returns the
+-- configured uiscale unchanged and nothing moves.
+local function paneScale()
+    local base = scale.get()
+    local fbW = framebuffer()
+    if fbW <= 0 then return base end
+    local natural = 2 * math.floor(PANE_WIDTH_BASE * base) + gapPx(base)
+    return responsive.fitScale(natural, fbW, base)
+end
 
 -- Which endpoint a pane shows. The whole kind is written against this
 -- one function, which is why "the source pane" and "the unit side"
@@ -209,17 +259,13 @@ local function fitClear(rect, reserved, fbW, fbH)
     return reservedRegions.avoidReserved(rect, reserved, fbW, fbH)
 end
 
-local function placePanes(_level, measures, hud)
-    local fbW = (hud and hud.fbW) or 0
-    local fbH = (hud and hud.fbH) or 0
-    if fbW <= 0 or fbH <= 0 then
-        fbW, fbH = engine.getFramebufferSize()
-    end
-    fbW = fbW or 0
-    fbH = fbH or 0
-
+local function placePanes(_level, measures, _hud)
+    local fbW, fbH = framebuffer()
+    -- The gap is measured at the SAME fitted scale the panes were sized
+    -- at, so the pair's total width here is exactly the total
+    -- `paneScale` fitted.
     local cx  = math.floor(fbW * 0.5)
-    local gap = math.floor(PANE_GAP * scale.get() * 0.5)
+    local gap = math.floor(gapPx(paneScale()) * 0.5)
     local reserved = toolbarRects()
 
     local out = {}
@@ -275,7 +321,8 @@ local function buildKinds()
     local m = manager()
     return {
       escort = {
-          panelWidthBase = 440,
+          panelWidthBase = PANE_WIDTH_BASE,
+          paneScale      = paneScale,
           maxRows        = 10,
           tabs           = m.endpointTabSpec(),
           paneKeys       = { PANE_SOURCE, PANE_DESTINATION },
@@ -304,6 +351,10 @@ local function buildKinds()
           listParams = function(src, view, paneKey)
               local ep = endpointFor(src, paneKey)
               local p = manager().endpointListParams(ep.kind, view)
+              -- The list renders at the PAIR's fitted scale, not the
+              -- configured one, so its rows and tab strip shrink with
+              -- the box they sit in rather than overflowing it.
+              p.uiscale = paneScale()
               -- The pane key joins the rebuild comparison because the two
               -- panes are two INDEPENDENT list instances describing two
               -- endpoints that can look identical (two acolytes of the

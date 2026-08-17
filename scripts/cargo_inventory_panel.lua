@@ -463,6 +463,9 @@ end
 --   paneKeys                          #1250: more than one pane. Absent
 --                                     means exactly one, addressed as
 --                                     MAIN_PANE
+--   paneScale(level, paneKey)         #1250: a LOCAL effective uiscale
+--                                     for this kind's panes. Absent
+--                                     means the configured one
 --   placePanes(level, measures, hud)  #1250: where each pane's panel
 --                                     goes. Absent means the shared
 --                                     anchor-and-clamp rule
@@ -930,7 +933,13 @@ local function measurePane(level, pane, view)
     dataParams.model = model
     pane.activeTab = model.activeTab
 
-    local uiscale = scale.get()
+    -- A kind may render its panes at a LOCAL effective uiscale rather
+    -- than the configured one (#1250): the escort pair has to fit TWO
+    -- panels side by side, which is a constraint no single pane can see.
+    -- Its own listParams sets the same value on the widget, so the box
+    -- and the text inside it shrink together (#750).
+    local uiscale = (kind.paneScale and kind.paneScale(level, pane.paneKey))
+                      or scale.get()
     local panelW  = math.floor(kind.panelWidthBase * uiscale)
     local padTop  = math.floor(PANEL_PAD_TOP * uiscale)
     local padBot  = math.floor(PANEL_PAD_BOT * uiscale)

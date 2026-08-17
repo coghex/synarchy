@@ -124,7 +124,9 @@ Verifies, in order:
      offers Store and only Store while a destination-pane row offers
      Retrieve and only Retrieve; firing Store all moves the items for
      real and refreshes BOTH panes' headers within the gesture, leaving
-     the session open; and one dismissal closes both panels and ends the
+     the session open; a real resize keeps the PAIR sized to the
+     framebuffer it is drawn on, in frame and flanking rather than
+     stacked; and one dismissal closes both panels and ends the
      session.
   7. tracked temperature (#1268): both raw-item hosts present a row's
      summary in the row text AND in a tooltip line, derived from the
@@ -1848,6 +1850,55 @@ def escort_session_scenario(port: int, bid: int, bax: int, bay: int,
                   "the source pane still lists a rations row")
         else:
             close_menu(port)
+
+    # -- a real resize, rendered (#1250 review round 1).
+    #
+    #    Two 440-wide panels need 904 px at 1x, so on a framebuffer
+    #    narrower than that the PAIR has to be fitted to width — each
+    #    panel clamped on its own would land them on top of each other.
+    #    What is asserted here is the invariant that holds at EVERY
+    #    width: the pair's combined width fits the framebuffer it is
+    #    drawn on, and the two still flank rather than stack.
+    #
+    #    Deliberately NOT asserted as "narrower than 440": `--offscreen`
+    #    renders to a fixed-size target, so `engine.setWindowSize` moves
+    #    the window without necessarily moving the FRAMEBUFFER this
+    #    geometry is measured against, and demanding a shrink would then
+    #    be demanding one that was never required. The envelope's formal
+    #    minimum (800x600 @ 1x, where the fit genuinely fires and each
+    #    pane really does come out under 440) is pinned deterministically
+    #    by hspec instead — Test.Headless.UI.TransferSession drives the
+    #    real framebuffer ref down to it.
+    send(port, "return engine.setWindowSize(800, 600)")
+    time.sleep(1.5)
+    tight = stack_dump(port)
+    tlv = (tight.get("levels") or [{}])[0]
+    tpanes = tlv.get("panes") or []
+    if check("the session survives a real resize",
+             tight.get("depth") == 1 and tlv.get("kind") == "escort"
+             and len(tpanes) == 2, f"got {tight!r}"):
+        tvp = viewport(port, fallback=(800, 600))
+        a, b = tpanes[0], tpanes[1]
+
+        def fits(p):
+            return (p["x"] >= 0 and p["y"] >= 0
+                    and p["x"] + p["width"] <= tvp["fb_w"]
+                    and p["y"] + p["height"] <= tvp["fb_h"])
+
+        overlap = not (a["x"] + a["width"] <= b["x"]
+                       or b["x"] + b["width"] <= a["x"]
+                       or a["y"] + a["height"] <= b["y"]
+                       or b["y"] + b["height"] <= a["y"])
+        check("after the resize both panels still fit the framebuffer and "
+              "still flank, source left",
+              fits(a) and fits(b) and not overlap and a["x"] < b["x"]
+              and a.get("paneKey") == "source",
+              f"framebuffer {tvp['fb_w']}x{tvp['fb_h']}, panes {a!r} {b!r}")
+        check("the PAIR is sized to the framebuffer it is drawn on, not "
+              "each panel independently",
+              a["width"] + b["width"] <= tvp["fb_w"],
+              f"framebuffer width {tvp['fb_w']}, "
+              f"panes {a['width']} + {b['width']}")
 
     dst_rows = item_rows(port, pane_list_id("destination"))
     target = dst_rows[0] if dst_rows else None
