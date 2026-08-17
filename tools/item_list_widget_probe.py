@@ -1779,7 +1779,18 @@ def escort_session_scenario(port: int, bid: int, bax: int, bay: int,
               " return s and s.phase or 'none'").strip('"') == "open",
         interval=0.5)
     if not check("the REAL unit AI holds the escort and opens the pair on "
-                 "arrival", bool(opened)):
+                 "arrival", bool(opened),
+                 # WHICH action owns the escort, and whether the session
+                 # is even still there, are the two things that tell a
+                 # timeout apart from a hold that lost to a higher band
+                 # (this check has been seen to lose to `treat_ally`) or
+                 # from panels that refused to open. Reported rather than
+                 # left to a second run to guess at.
+                 "escort running "
+                 f"{ai_action(port, esc_uid)!r}, session phase "
+                 + send(port,
+                        "local s = require('scripts.transfer_session').get();"
+                        " return s and s.phase or 'none'")):
         send(port, "require('scripts.transfer_session').clear(); return 'ok'")
         return
     time.sleep(0.6)
@@ -2031,64 +2042,118 @@ def chebyshev(a, b) -> float:
     return max(abs(b[0] - a[0]), abs(b[1] - a[1]))
 
 
-def walk_target_clear(port: int, dst_uid: int, src_uid: int,
-                      ax: int, ay: int):
-    """Walk the target until it is genuinely OUT of the escort's reach,
-    and answer `(start, sent_to)` — or `(start, None)` if it never got
-    clear.
+def spawn_pair_apart(port: int, ax: int, ay: int):
+    """Put the escort a few tiles from its target, and answer
+    `(src_uid, dst_uid)`.
 
-    A commanded move rather than the ambient wander, for two reasons:
-    `follow_command` sits at 7.0, above every routine-work lock, so the
-    escort hold preempting it is strictly harder than preempting the
-    wander tick; and its destination is chosen here rather than rolled,
-    so "it never got there" is a fact the caller can check.
+    Reachability is established by WALKING, never assumed. The escort is
+    spawned on the anchor and sent to a candidate tile; only a tile it
+    actually reaches is used, and the TARGET is then spawned on the
+    anchor the escort has just left — so the escort's own approach is
+    the path it has already walked, in reverse.
 
-    The acceptance condition is the CONTRACT's own reach rule (Chebyshev
-    > 1 from the escort), because that is precisely what makes the
-    escort's approach a real walk rather than an arrival on the spot.
+    Both weaker versions of this failed on real terrain. Walking the
+    TARGET clear put the measurement behind a second pathfinding
+    problem: once it could not get two tiles clear in any of twelve
+    directions, once it could not leave its spawn tile at all while the
+    escort beside it wandered four tiles. Spawning it on a
+    surface-checked tile instead removed that, but a tile with a surface
+    is not necessarily a tile the escort can REACH, and the pair then
+    never opened inside a minute across three tiles. Walking the leg
+    that the scenario depends on is the only version that proves it.
 
-    Terrain is generated and this probe's fixture sites are only
-    verified dry AT the anchor tile, so offsets are tried longest-first
-    and shrink, each against a destination whose own surface has been
-    checked. A destination the unit cannot path to produces almost no
-    movement rather than partial movement (the AI's own stuck-walk
-    watchdog stops it), which is why a shorter hop is the fallback — and
-    not a weaker check, since two tiles clear is two tiles the escort
-    still has to cover. Chunks are loaded around the anchor first: the
-    camera has been somewhere else for the whole probe, and pathing
-    across terrain that was never generated is the other way this
-    produces a unit that does not move."""
+    Chunks around the anchor are loaded first: the camera has been
+    elsewhere for this whole probe, and pathing across terrain that was
+    never generated is its own way to produce a unit that does not
+    move."""
     ai = "require('scripts.unit_ai')"
     ccx, ccy = ax // CHUNK_TILES, ay // CHUNK_TILES
     send(port, f"return world.loadChunksInRegion({ccx - 1}, {ccy - 1},"
                f" {ccx + 1}, {ccy + 1})")
     send(port, "return world.waitForChunks(60)", timeout=65.0)
-    start = unit_pos(port, dst_uid)
-    for dx, dy in ((5, 0), (0, 5), (-5, 0), (0, -5), (4, 4), (-4, -4),
-                   (3, 0), (0, 3), (-3, 0), (0, -3), (2, 2), (-2, -2)):
+    src_raw = send(port, f"return unit.spawn('acolyte', {ax}, {ay},"
+                         " nil, 'player')")
+    if src_raw.strip() in ("", "nil", "null"):
+        return None, None
+    src_uid = int(float(src_raw))
+    # Its own standing goals must not fight the scouting walk below, for
+    # the same reason they must not fight the measurement afterwards.
+    clear_find_water(port, src_uid)
+    retire_medic_drive(port, src_uid)
+    for dx, dy in ((2, 0), (0, 2), (-2, 0), (0, -2), (2, 2), (-2, -2),
+                   (3, 0), (0, 3), (-3, 0), (0, -3)):
         tx, ty = ax + dx, ay + dy
         surface = tile_surface(port, tx, ty)
         if surface is None or not surface[1]:
             continue
-        send(port, f"{ai}.commandMove({dst_uid}, {tx}, {ty}); return 'ok'")
-        # TWO tiles clear, not one: the caller re-measures the pair with
-        # the simulation stopped and needs strictly more than one there,
-        # so the spare tile is what any residual drift may eat.
-        #
-        # The escort is cut short on every pass, because it is a live
-        # acolyte with an ambient wander of its own and nothing has given
-        # it a reason to stand still yet — left alone it follows the
-        # target around and the gap never opens. `unit.stop` does not
-        # suppress the next wander, it just keeps each one to a step, and
-        # a step is what the spare tile absorbs.
-        for _ in range(20):
+        send(port, f"unit.stop({src_uid});"
+                   f" {ai}.commandMove({src_uid}, {tx}, {ty}); return 'ok'")
+        if poll_until(20.0,
+                      lambda: tile_gap(unit_pos(port, src_uid),
+                                       (float(tx), float(ty))) < 0.9,
+                      interval=0.5):
+            dst_raw = send(port, f"return unit.spawn('acolyte', {ax}, {ay},"
+                                 " nil, 'player')")
+            if dst_raw.strip() in ("", "nil", "null"):
+                return src_uid, None
+            # Leave the escort idle where it stands, so nothing it was
+            # told to do earlier is still in flight when the session is
+            # created.
             send(port, f"unit.stop({src_uid}); return 'ok'")
-            here = unit_pos(port, dst_uid)
-            if (chebyshev(unit_pos(port, src_uid), here) > 2.0
-                    and tile_gap(start, here) > 0.5):
-                return start, (float(tx), float(ty))
-            time.sleep(0.5)
-    return start, None
+            return src_uid, int(float(dst_raw))
+    return src_uid, None
+
+
+def order_target_away(port: int, dst_uid: int, src_uid: int):
+    """Put the target under a real player move order pointing AWAY from
+    the escort; answer where it was sent, or None if the AI never took
+    one up.
+
+    A commanded move rather than the ambient wander: `follow_command`
+    sits at 7.0, above every routine-work lock, so the escort hold
+    preempting it is strictly harder than preempting the wander tick,
+    and its destination is chosen here rather than rolled, so "it never
+    got there" is a fact the caller can check.
+
+    AWAY is load-bearing. An earlier version aimed at fixed offsets from
+    the anchor, and since the escort had walked out to a tile of its
+    own, the first of those pointed straight at it: the target dutifully
+    closed the gap to 0.58 tiles and the pair was in reach before the
+    session was ever created. Perpendicular fallbacks are offered next
+    because they at least do not close it.
+
+    Taking the order UP is what this waits for — `follow_command`
+    becoming the unit's current action, which is the AI selecting it and
+    issuing the walk. How far that walk then gets is generated terrain's
+    business, and it is not what the hold is measured against: the
+    caller checks separately that the target does not move once held,
+    and that it never reached where it was sent."""
+    ai = "require('scripts.unit_ai')"
+    here = unit_pos(port, dst_uid)
+    src = unit_pos(port, src_uid)
+    if here is None or src is None:
+        return None
+    vx, vy = here[0] - src[0], here[1] - src[1]
+    norm = math.hypot(vx, vy)
+    if norm < 0.01:
+        vx, vy, norm = 1.0, 0.0, 1.0
+    ux, uy = vx / norm, vy / norm
+    bearings = ((ux, uy), (-uy, ux), (uy, -ux))
+    for reach in (6, 4, 3):
+        for bx, by in bearings:
+            tx = int(round(here[0] + bx * reach))
+            ty = int(round(here[1] + by * reach))
+            surface = tile_surface(port, tx, ty)
+            if surface is None or not surface[1]:
+                continue
+            send(port, f"unit.stop({dst_uid});"
+                       f" {ai}.commandMove({dst_uid}, {tx}, {ty});"
+                       " return 'ok'")
+            if poll_until(8.0,
+                          lambda: ai_action(port, dst_uid) == "follow_command",
+                          interval=0.4):
+                return (float(tx), float(ty))
+    return None
 
 
 def accepts_movement(port: int, uid: int, ax: int, ay: int,
@@ -2097,8 +2162,8 @@ def accepts_movement(port: int, uid: int, ax: int, ay: int,
     watching the real AI either SELECT the order or act on it.
 
     Selecting counts, and that is the point rather than a concession.
-    The hold is a utility, so "released" means `escort_transfer` stops
-    winning and the ordinary ladder decides again — and `follow_command`
+    The hold is a utility, so "released" means neither side of it wins
+    any more and the ordinary ladder decides again — and `follow_command`
     becoming this unit's current action IS the ladder taking the
     player's order. Whether the unit then covers ground is generated
     terrain's business: a unit that cannot path anywhere from a ledge
@@ -2114,7 +2179,7 @@ def accepts_movement(port: int, uid: int, ax: int, ay: int,
     walk to the old one — the same reason `transfer_session.close` stops
     rather than merely releasing.
 
-    Several destinations, for the reason `walk_target_clear` offers
+    Several destinations, for the reason `order_target_away` offers
     several: one reachable tile is the whole answer."""
     ai = "require('scripts.unit_ai')"
     for dx, dy in ((0, 0), (2, 0), (0, 2), (-2, 0), (0, -2),
@@ -2160,16 +2225,14 @@ def unit_escort_session_scenario(port: int, aax: int, aay: int) -> None:
     send(port, "require('scripts.cargo_inventory_panel').closeIfOpen();"
                " return 'ok'")
 
-    pair = []
-    for role in ("source", "target"):
-        raw = send(port, f"return unit.spawn('acolyte', {aax}, {aay},"
-                         " nil, 'player')")
-        if not check(f"unit-to-unit escort {role} spawned",
-                     raw.strip() not in ("", "nil", "null"), f"got {raw!r}"):
-            return
-        pair.append(int(float(raw)))
-    src_uid, dst_uid = pair
-    for uid in pair:
+    src_uid, dst_uid = spawn_pair_apart(port, aax, aay)
+    if not check("the escort stands a few tiles from its target, over ground "
+                 "it has WALKED — so its approach below is a leg this world "
+                 "is known to admit",
+                 src_uid is not None and dst_uid is not None,
+                 f"escort={src_uid!r} target={dst_uid!r}"):
+        return
+    for uid in (src_uid, dst_uid):
         check(f"unit {uid}'s standing find_water goal is retired",
               clear_find_water(port, uid))
         # After clear_find_water, which is what waits for the AI state to
@@ -2184,49 +2247,48 @@ def unit_escort_session_scenario(port: int, aax: int, aay: int) -> None:
                f" for i = 1, 2 do unit.addItem({dst_uid}, 'bandage') end;"
                " return 'ok'", timeout=20.0)
 
-    # Open the gap, then COMMIT to the measurement with the simulation
-    # stopped.
+    # Order the target away, let it open the gap, and COMMIT to the
+    # measurement with the simulation stopped.
     #
-    # Both acolytes keep ticking while the target walks, and the escort's
-    # own ambient wander drifts it after the target — so a separation
-    # observed during the walk can be gone a couple of console round
-    # trips later, which is exactly how the first version of this check
-    # failed (escort and target 0.84 tiles apart at creation, having been
-    # two apart moments earlier). `engine.setPaused` is the only thing
-    # that really holds a unit still (`unit.setFrozen` is a render pin,
-    # CLAUDE.md), and positions must be re-read AFTER pausing. The walk
-    # therefore opens a two-tile margin, and the pair is re-measured
-    # frozen; if the gap closed anyway, it is reopened and retried rather
-    # than measured through.
-    started, sent_to, at_create, src_at_create = None, None, None, None
-    for _ in range(3):
-        started, sent_to = walk_target_clear(port, dst_uid, src_uid, aax, aay)
+    # Both acolytes keep ticking, so a separation observed a moment ago
+    # can be gone a couple of console round trips later — which is how
+    # two earlier versions of this check failed (once at 0.84 tiles
+    # apart, once at 0.58, each having been clear moments before).
+    # `engine.setPaused` is the only thing that really holds a unit still
+    # (`unit.setFrozen` is a render pin, CLAUDE.md) and positions must be
+    # re-read AFTER pausing; the order points away, so a gap that has not
+    # opened yet opens by waiting rather than by trying something else.
+    sent_to, at_create, src_at_create = None, None, None
+    for _ in range(4):
+        sent_to = order_target_away(port, dst_uid, src_uid)
         if sent_to is None:
             break
+        time.sleep(1.5)
         set_paused(port, True)
         at_create = unit_pos(port, dst_uid)
         src_at_create = unit_pos(port, src_uid)
         if chebyshev(src_at_create, at_create) > 1.0:
             break
         set_paused(port, False)
-    if not check("the target is in real, observable motion before the "
-                 "session exists — a commanded move, which outranks every "
-                 "routine-work lock — and has walked clear of the escort's "
-                 "reach", sent_to is not None,
-                 f"started {started!r}, now {unit_pos(port, dst_uid)!r}, "
-                 f"escort at {unit_pos(port, src_uid)!r}"):
+    if not check("the target is under a real player move order before the "
+                 "session exists — its own AI has SELECTED follow_command "
+                 "(7.0, above every routine-work lock), so an idle unit "
+                 "standing still afterwards is not what gets measured",
+                 sent_to is not None,
+                 f"running {ai_action(port, dst_uid)!r} at "
+                 f"{unit_pos(port, dst_uid)!r}"):
         set_paused(port, False)
         return
 
-    # WHICH action is walking it matters as much as that it walks: the
-    # claim below is that the hold preempts a player move order, so the
-    # thing preempted has to be named, not assumed from the fact that
-    # something moved. (The first run of this gate found the target
-    # walking under `treat_ally` instead — see `retire_medic_drive`.)
-    # Read off the AI state, so pausing does not disturb it.
+    # WHICH action is pending matters as much as that one is: the claim
+    # below is that the hold preempts a player move order, so the thing
+    # preempted has to be named, not assumed from the fact that something
+    # moved. (The first run of this gate found the target walking under
+    # `treat_ally` instead — see `retire_medic_drive`.) Read off the AI
+    # state, so pausing does not disturb it.
     walking_under = ai_action(port, dst_uid)
-    check("the motion really is the move order, not some other action "
-          "that happens to walk",
+    check("the pending action really is the move order, not some other "
+          "action that happens to walk",
           walking_under == "follow_command", f"got {walking_under!r}")
 
     check("the escort has a real approach to make — the pair is outside "
@@ -2245,12 +2307,29 @@ def unit_escort_session_scenario(port: int, aax: int, aay: int) -> None:
     if not check("a unit-to-unit Mode A session is created",
                  made.strip().strip('"') == "true", f"got {made!r}"):
         return
-    took = poll_until(10.0,
-                      lambda: ai_action(port, dst_uid) == "escort_transfer",
-                      interval=0.2)
+    # `escort_hold`, not `escort_transfer`: the TARGET side is its own
+    # registered action so that every commandable species has it, while
+    # the source side stays the per-species capability the source gate
+    # asks about (#1251 review round 1).
+    took = poll_until(20.0,
+                      lambda: ai_action(port, dst_uid) == "escort_hold",
+                      interval=0.3)
     if not check("session creation PREEMPTS the target's move order — the "
                  "hold wins on its very next tick, mid-walk", bool(took),
-                 f"currentAction={ai_action(port, dst_uid)!r}"):
+                 # A hold that never wins and a session that quietly
+                 # ENDED look identical from currentAction alone: with no
+                 # session, `roleOf` answers nil, the hold scores -inf
+                 # and the target goes straight back to its move order.
+                 # The escort retires a session whose destination stops
+                 # resolving, so the phase and both roles are what tell
+                 # those apart.
+                 f"currentAction={ai_action(port, dst_uid)!r}, session "
+                 + send(port,
+                        "local s = require('scripts.transfer_session');"
+                        " local a = s.get();"
+                        " return (a and a.phase or 'gone') .. ' src='"
+                        f" .. tostring(s.roleOf({src_uid})) .. ' dst='"
+                        f" .. tostring(s.roleOf({dst_uid}))")):
         send(port, "require('scripts.transfer_session').clear(); return 'ok'")
         return
     held = unit_pos(port, dst_uid)
@@ -2364,9 +2443,11 @@ def unit_escort_session_scenario(port: int, aax: int, aay: int) -> None:
     # flag. Two observations per unit: the hold has stopped winning, and
     # an ordinary move order is taken up.
     for role, uid in (("escort", src_uid), ("target", dst_uid)):
-        loose = poll_until(10.0,
-                           lambda: ai_action(port, uid) != "escort_transfer",
-                           interval=0.4)
+        loose = poll_until(
+            10.0,
+            lambda: ai_action(port, uid) not in ("escort_transfer",
+                                                 "escort_hold"),
+            interval=0.4)
         check(f"the released {role} is no longer being decided by the hold "
               "— the ordinary action ladder has taken it back",
               bool(loose), f"still running {ai_action(port, uid)!r}")

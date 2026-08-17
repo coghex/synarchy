@@ -327,17 +327,32 @@ sceneLua = luaLines
     -- through, so the scene records them rather than trusting a count.
     , "_G.__eventText = function()"
     , "  return table.concat(_G.__events, '\\n') end;"
-    -- One AI tick of the escort action for `uid`: score, then execute
-    -- if it won anything at all. `_G.__ai[uid]` is that unit's aiState
-    -- row, which the real action reads and writes.
+    -- One AI tick of Mode A's actions for `uid`: score BOTH sides the
+    -- way the dispatch loop does, then execute whichever won. Since
+    -- #1251 review round 1 the source-side escort and the target-side
+    -- hold are two registered actions, so scoring only one of them
+    -- would model a loop this engine does not run. `_G.__ai[uid]` is
+    -- that unit's aiState row, which the real actions read and write,
+    -- and `_G.__lastAction` records WHICH side won — the two are
+    -- mutually exclusive by construction, and that is worth asserting
+    -- rather than assuming.
     , "_G.__ai = {};"
+    , "_G.__lastAction = nil;"
     , "_G.__tick = function(uid)"
     , "  local tr = require('scripts.unit_ai_escort');"
     , "  _G.__ai[uid] = _G.__ai[uid] or {};"
     , "  local s = _G.__ai[uid];"
-    , "  local u = tr.escortUtility(uid, s);"
-    , "  if u > -math.huge then tr.escortExecute(uid, s) end;"
-    , "  return u end;"
+    , "  local best, run, name = -math.huge, nil, nil;"
+    , "  local sides = {"
+    , "    {'escort_transfer', tr.escortUtility, tr.escortExecute},"
+    , "    {'escort_hold',     tr.holdUtility,   tr.holdExecute} };"
+    , "  for _, c in ipairs(sides) do"
+    , "    local u = c[2](uid, s);"
+    , "    if u > best then best, run, name = u, c[3], c[1] end"
+    , "  end;"
+    , "  _G.__lastAction = (best > -math.huge) and name or nil;"
+    , "  if best > -math.huge then run(uid, s) end;"
+    , "  return best end;"
     -- Open a session and walk it to arrival, however many ticks that
     -- takes, teleporting is NOT done here: the scenario decides where
     -- the unit stands and this only drives the action.
@@ -530,6 +545,11 @@ spec = aroundAll withSharedFixture $
             -- it, exactly like any player order.
             targetScore ← evalOk ls "return tostring(_G.__tick(2))"
             targetScore `shouldBe` "\"7.5\""
+            -- The TARGET side is what won, not the escort's: the two are
+            -- mutually exclusive, which is what lets them be registered
+            -- separately without either end being scored twice.
+            side ← evalOk ls "return _G.__lastAction"
+            side `shouldBe` "\"escort_hold\""
             -- Holding the target is STANDING, never approaching: it
             -- issues no walk of its own in either phase.
             heldStill ← evalOk ls
@@ -550,6 +570,72 @@ spec = aroundAll withSharedFixture $
             -- Still standing once the window is open, and still no walk.
             openMoves ← evalOk ls "_G.__tick(2); return _G.__moves"
             openMoves `shouldBe` "0"
+
+        -- #1251 review round 1. `roleOf` makes EVERY unit destination
+        -- the held target, but being a session's SOURCE is a per-species
+        -- capability — so scoping the hold to the species that register
+        -- `escort_transfer` would leave a legal target (endpoint
+        -- eligibility is player-commandability and nothing else) whose
+        -- AI never evaluated it: it would keep walking while an escort
+        -- approached where it used to be. The hold is therefore
+        -- registered universally, and the two questions stay separate.
+        it "a commandable species that never registered the ESCORT is still \
+           \held as a TARGET, while the SOURCE gate still refuses it" $
+           \(env, ls) → do
+            resetFixture env ls
+            placeUnit env matesUid (11, 10)
+            -- A REAL registration through the public API, as the #1250
+            -- source-gate case does: uid 2's species can run neither the
+            -- escort nor anything else this fixture drives.
+            _ ← evalOk ls (luaLines
+                [ "local a = require('scripts.unit_ai_actions');"
+                , "a.byDef = {};"
+                , "a.record('acolyte', { {name = 'wander'},"
+                , "                      {name = 'escort_transfer'} });"
+                , "a.record('bear', { {name = 'wander'} });"
+                , "local um = unit.getInfo;"
+                , "unit.getInfo = function(uid)"
+                , "  local i = um(uid); if not i then return nil end;"
+                , "  if uid == 2 then i.defName = 'bear' end;"
+                , "  return i end;"
+                , "return 'ok'" ])
+            -- It is still an eligible ENDPOINT — that rule reads the
+            -- live faction, never the action registry — so the session
+            -- is created and it becomes the target.
+            created ← evalOk ls (createLua "unit" 2)
+            created `shouldBe` "\"true\""
+            held ← evalOk ls
+                "return { role = _G.__session().roleOf(2), \
+                \         score = tostring(_G.__tick(2)), \
+                \         won = _G.__lastAction, \
+                \         stopped = _G.__lastStop, moves = _G.__moves }"
+            held `shouldSatisfy` T.isInfixOf "\"role\":\"target\""
+            held `shouldSatisfy` T.isInfixOf "\"score\":\"7.5\""
+            held `shouldSatisfy` T.isInfixOf "\"won\":\"escort_hold\""
+            held `shouldSatisfy` T.isInfixOf "\"stopped\":2"
+            held `shouldSatisfy` T.isInfixOf "\"moves\":0"
+            -- ...and the SOURCE question is untouched: the same species
+            -- still cannot be made an escort, by either gate.
+            asSource ← evalOk ls (luaLines
+                [ "local s = require('scripts.transfer_session');"
+                , "local ep = unit.transferEndpointInfo("
+                , "  {kind = 'building', id = 7});"
+                , "local made, reason = s.create(2, 'building', 7);"
+                , "return { resolved = tostring(s.resolveSource({2}, nil, ep,"
+                , "                               s.ESCORT_ACTION)),"
+                , "         made = tostring(made),"
+                , "         reason = tostring(reason) }" ])
+            asSource `shouldSatisfy` T.isInfixOf "\"resolved\":\"nil\""
+            asSource `shouldSatisfy` T.isInfixOf "\"made\":\"nil\""
+            asSource `shouldSatisfy`
+                T.isInfixOf "\"reason\":\"source_not_escortable\""
+            -- The refused creation left the running session alone, so
+            -- the bear is STILL held as its target.
+            intact ← evalOk ls
+                "return { role = _G.__session().roleOf(2), \
+                \         src = _G.__session().roleOf(1) }"
+            intact `shouldSatisfy` T.isInfixOf "\"role\":\"target\""
+            intact `shouldSatisfy` T.isInfixOf "\"src\":\"source\""
 
         it "a BUILDING destination still holds its source alone — there is \
            \no second endpoint to hold" $ \(env, ls) → do
@@ -1491,13 +1577,34 @@ spec = aroundAll withSharedFixture $
             intact `shouldSatisfy`
                 T.isInfixOf "\"carrier\":\"ration#101,ration#102,ration#103,rope#110\""
 
-    describe "registration" $
-        -- A source guard beside the behavioural cases above, following
-        -- the "random stream ownership" precedent: the hold is only
-        -- reachable if the action is in the real per-species lists, and
+    describe "registration" $ do
+        -- Source guards beside the behavioural cases above, following
+        -- the "random stream ownership" precedent: neither side of the
+        -- hold is reachable unless it is in the real action lists, and
         -- nothing this fixture can drive would notice its absence.
         it "the escort action is registered for every player-commandable \
            \species the source rule can resolve" $ \_ → do
             src ← TIO.readFile "scripts/unit_ai.lua"
             let regs = length (T.breakOnAll "transfer.escortAction," src)
             regs `shouldBe` 2
+
+        -- #1251 review round 1: the TARGET side must reach every
+        -- species, so it lives in the auto-prepended universal list and
+        -- NOWHERE else. Two per-species mentions would be the same
+        -- allowlist this exists to avoid, one species at a time.
+        it "the target-side hold is registered UNIVERSALLY — once, in the \
+           \list every species is given, never per species" $ \_ → do
+            src ← TIO.readFile "scripts/unit_ai.lua"
+            -- Named exactly once, and that once is inside the universal
+            -- list: a second mention would be the per-species allowlist
+            -- this exists to avoid, one species at a time.
+            let named = length (T.breakOnAll "transfer.escortHoldAction" src)
+            named `shouldBe` 1
+            let universal = snd (T.breakOn "local UNIVERSAL_ACTIONS = {" src)
+                listBody  = fst (T.breakOn "\n}" universal)
+            listBody `shouldSatisfy` T.isInfixOf "transfer.escortHoldAction"
+            -- ...and registerActions really prepends that list, so a
+            -- species registering through the public API gets it
+            -- without asking.
+            src `shouldSatisfy`
+                T.isInfixOf "for _, a in ipairs(UNIVERSAL_ACTIONS) do"

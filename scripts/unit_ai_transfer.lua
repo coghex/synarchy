@@ -428,6 +428,14 @@ M.approachDist   = approachDist
 -- by list order; neither clears the other.
 M.escortAction = require("scripts.unit_ai_escort").action
 
+-- Mode A's TARGET-side hold (#1251), re-exported the same way. It is
+-- NOT listed beside the two above: scripts/unit_ai.lua prepends it to
+-- EVERY species, because a session's destination may be any
+-- player-commandable unit while being a session's SOURCE is a
+-- per-species capability. See scripts/unit_ai_escort.lua's header for
+-- why that asymmetry is the point rather than an oversight.
+M.escortHoldAction = require("scripts.unit_ai_escort").holdAction
+
 M.transferUtility = transferUtility
 M.transferExecute = transferExecute
 

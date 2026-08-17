@@ -1292,15 +1292,24 @@ before touching each area:
   save-load reset). A REJECTED replacement leaves the running session
   untouched; only a resize is exempt (see the container-window stack
   above). **A UNIT destination is held too** (#1251, UIT-4), because
-  unit-to-unit is the one pairing where BOTH ends can walk away. It is
-  the SAME `escort_transfer` action at the same 7.5 — one registration,
-  one utility, so neither end can outscore the other — and which side a
-  unit is on is the session's own `roleOf`: `"source"` walks and then
-  stands, `"target"` stands from CREATION, so the approach has a fixed
-  destination and the walk-away problem cannot arise during it. Being
-  the same lock is what makes the target's hold preempt its autonomous
-  work like any player order, and `create` nudges BOTH units so that
-  happens on the next tick rather than at a thought cadence. Release is
+  unit-to-unit is the one pairing where BOTH ends can walk away. Which
+  side a unit is on is the session's own `roleOf`, the ONE answer both
+  actions consult: `"source"` (`escort_transfer`) walks and then stands,
+  `"target"` (`escort_hold`) stands from CREATION, so the approach has a
+  fixed destination and the walk-away problem cannot arise during it.
+  Both score the same 7.5 constant, so neither end can outscore the
+  other, and being that lock is what makes the target's hold preempt its
+  autonomous work like any player order; `create` nudges BOTH units so
+  that happens on the next tick rather than at a thought cadence. They
+  are TWO registrations, and the asymmetry is the point: being a SOURCE
+  is a per-species capability (`escort_transfer`'s presence is exactly
+  what `resolveSource`/`create` ask), while being a TARGET is not — the
+  endpoint rule is player-commandability and nothing else — so
+  `escort_hold` is auto-prepended to every species by
+  `unitAi.registerActions` beside the universal combat candidates.
+  Scoping it per species would leave a legal target (a debug-spawned
+  bear in the player faction) whose AI never evaluated the hold, walking
+  away while an escort approached where it used to be. Release is
   the one coupled teardown, extended to the pair: every path (panel
   close, replacement — which must let go of the PRIOR target — Escape,
   `clear`, Exit to Menu, the SUCCESSFUL-load reset) stops and nudges

@@ -4,11 +4,32 @@
 -- its source unit to the destination and HOLDS it there while the
 -- player moves items by hand, for as long as the window is open.
 --
--- #1251 (UIT-4) gave the action its second role. A session whose
--- DESTINATION is a unit holds that unit too, from creation, and this one
--- action serves both sides: which side a unit is on is the session's own
--- answer (`roleOf`), so there is no second registration, no second
--- utility and no way for the two ends to be scored differently.
+-- #1251 (UIT-4) added the other side. A session whose DESTINATION is a
+-- unit holds that unit too, from creation, and this module owns BOTH
+-- sides: which side a unit is on is the session's own answer
+-- (`roleOf`), and the two actions share one utility constant, so
+-- neither end can outscore the other.
+--
+-- They are two REGISTRATIONS rather than one, and the split is exactly
+-- where the two sides differ in who may do them (#1251 review round 1):
+--
+--   escort_transfer  the SOURCE side. Registered per species, because
+--                    its presence is the question
+--                    `transfer_session.resolveSource` and `M.create`
+--                    ask before making a unit an escort -- a species
+--                    that cannot walk a session over must not be
+--                    offered as one (#1250).
+--   escort_hold      the TARGET side. Prepended to EVERY species by
+--                    `unitAi.registerActions`, because a session's
+--                    destination may be ANY player-commandable unit and
+--                    the endpoint rule is commandability, never a def
+--                    list. Scoping this one per species would leave a
+--                    legal target -- a debug-spawned bear put in the
+--                    player faction -- whose AI never evaluated the
+--                    hold, so it would keep walking while an escort
+--                    approached where it used to be. Making it
+--                    universal is what keeps the hold endpoint-generic
+--                    WITHOUT inventing a def-specific refusal.
 --
 -- Split out of scripts/unit_ai_transfer.lua, which owns Mode B's queued
 -- order and is at its #538 line budget. The two still share their whole
@@ -19,9 +40,10 @@
 -- happens on arrival: the order commits and finishes, the escort stops
 -- and waits for the player.
 --
--- The action is REGISTERED through unit_ai_transfer's own
--- `M.escortAction` re-export, so scripts/unit_ai.lua names both modes
--- from one require and the two sit adjacent in every action list.
+-- Both are REGISTERED through unit_ai_transfer's own `M.escortAction` /
+-- `M.escortHoldAction` re-exports, so scripts/unit_ai.lua names every
+-- mode from one require and Mode A's source action sits adjacent to
+-- Mode B's in each species list.
 
 local M = {}
 
@@ -52,19 +74,23 @@ end
 -- the target's hold is the same in-progress lock as the escort's, which
 -- is what makes it preempt that unit's autonomous work exactly like any
 -- player order, and what keeps a pair from being pulled apart by one end
--- outscoring the other.
+-- outscoring the other. Two actions, one number.
 local ESCORT_UTILITY = 7.5
 
--- The session holding this unit and WHICH SIDE of it the unit is on
--- ("source" or "target"), or nil. Read through package.loaded so a
--- build with the gesture module unloaded simply never scores this
--- action, rather than pulling a UI module into the AI thread.
-local function heldSession(uid)
+-- The session holding this unit, IF it holds it on the side this action
+-- speaks for; nil otherwise. Read through package.loaded so a build with
+-- the gesture module unloaded simply never scores either action, rather
+-- than pulling a UI module into the AI thread.
+--
+-- Asking for the SIDE rather than filtering afterwards is what makes
+-- the two actions mutually exclusive by construction: exactly one of
+-- them can score for a given unit, so the dispatch loop never has to
+-- break a tie between them.
+local function heldAs(uid, side)
     local session = package.loaded["scripts.transfer_session"]
     if not session or type(session.roleOf) ~= "function" then return nil end
-    local role = session.roleOf(uid)
-    if not role then return nil end
-    return session, role
+    if session.roleOf(uid) ~= side then return nil end
+    return session
 end
 
 -- There is deliberately NO stall timer here. Mode B's exists because an
@@ -78,35 +104,25 @@ end
 -- explicit transient list, so a scratch field here would ride into
 -- `lua.unit_ai`), and nothing an interrupted tick can leave behind.
 local function escortUtility(uid, _s)
-    if not heldSession(uid) then return -math.huge end
+    if not heldAs(uid, "source") then return -math.huge end
     return ESCORT_UTILITY
 end
 
 local function escortExecute(uid, _s)
-    local session, role = heldSession(uid)
+    local session = heldAs(uid, "source")
     if not session then return end
     local active = session.get()
     local info = unit.getInfo(uid)
     if not (active and info) then return end
 
-    -- Stand still. Two reasons reach the same behaviour, and the
-    -- disjunction is what makes the pair's ONE approach the source's:
-    --
-    --   * the TARGET of a unit-to-unit session (#1251) stands in BOTH
-    --     phases -- being where the escort is walking to, from the
-    --     moment the session exists, is its entire job, and holding
-    --     still through the approach is exactly what gives that walk a
-    --     fixed destination. It must never reach the approach below.
-    --   * the SOURCE stands once the window is open, its own approach
-    --     already finished.
-    --
+    -- Already open: stand still, this unit's own approach finished.
     -- `unit.stop` on a unit that is already stopped is a no-op, and
     -- re-running it is what makes this a hold rather than a one-shot --
     -- an interruption that walked the unit away (combat, a mental break)
     -- leaves it standing wherever it ended up once this action wins
     -- again, which is the honest best-effort until UIT-5B owns that
     -- case.
-    if role == "target" or active.phase ~= session.PHASE_APPROACHING then
+    if active.phase ~= session.PHASE_APPROACHING then
         unit.stop(uid)
         return
     end
@@ -148,7 +164,35 @@ M.action = {
     utility = escortUtility,
     execute = escortExecute,
 }
+
+-- The TARGET side (#1251). Its entire job is to be where the escort is
+-- walking to, from the moment the session exists — standing still
+-- through the approach is what gives that walk a fixed destination — so
+-- it never approaches anything and has no phase to consult. `unit.stop`
+-- every tick for the same reason the source's open phase does it.
+--
+-- No forceExecute here either: a held target is idle, so this runs every
+-- tick anyway, and re-issuing anything mid-walk is exactly what the
+-- source side avoids.
+local function holdUtility(uid, _s)
+    if not heldAs(uid, "target") then return -math.huge end
+    return ESCORT_UTILITY
+end
+
+local function holdExecute(uid, _s)
+    if not heldAs(uid, "target") then return end
+    unit.stop(uid)
+end
+
+M.holdAction = {
+    name = "escort_hold",
+    utility = holdUtility,
+    execute = holdExecute,
+}
+
 M.escortUtility = escortUtility
 M.escortExecute = escortExecute
+M.holdUtility   = holdUtility
+M.holdExecute   = holdExecute
 
 return M

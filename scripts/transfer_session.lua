@@ -22,11 +22,11 @@
 --              fires the one camera snap, the one container reveal and
 --              the panels.
 --   THE HOLD   which unit(s) are standing there.
---              scripts/unit_ai_escort.lua's `escort_transfer` action
---              reads this module every tick and scores an in-progress
---              LOCK for as long as a session names that unit, which is
---              what keeps the wander tick and ordinary utility churn
---              from stealing it. The hold is RELEASED by the session
+--              scripts/unit_ai_escort.lua's two actions read this
+--              module every tick and score an in-progress LOCK for as
+--              long as a session names that unit, which is what keeps
+--              the wander tick and ordinary utility churn from
+--              stealing it. The hold is RELEASED by the session
 --              ending -- there is no separate release call, and
 --              therefore no way to end a session and leave a unit
 --              pinned.
@@ -35,13 +35,16 @@
 --              holds BOTH ends, because unit-to-unit is the one
 --              endpoint pairing where both of them can walk away. The
 --              two roles differ only in what the held unit DOES: the
---              SOURCE walks and then stands, the TARGET stands from
---              the moment the session is created, so the approach has
---              a fixed destination and the walk-away problem cannot
---              occur during it. Both are the same 7.5 in-progress
---              lock, so the target's hold preempts its autonomous work
---              exactly like any player order. A BUILDING destination
---              has nothing to hold and this is unchanged for it.
+--              SOURCE walks and then stands (`escort_transfer`), the
+--              TARGET stands from the moment the session is created
+--              (`escort_hold`), so the approach has a fixed
+--              destination and the walk-away problem cannot occur
+--              during it. Both score the same 7.5 in-progress lock, so
+--              the target's hold preempts its autonomous work exactly
+--              like any player order and neither end can outscore the
+--              other. `roleOf` is what tells them apart, and it is the
+--              ONE answer both consult. A BUILDING destination has
+--              nothing to hold and this is unchanged for it.
 --
 -- What this module deliberately does NOT own: the panels themselves
 -- (scripts/transfer_session_panels.lua supplies the window manager's
