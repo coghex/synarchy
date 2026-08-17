@@ -688,6 +688,37 @@ def debug_console_load_rebind_phase(port: int) -> None:
           "the pre-load page", hud_world_id == "debug_rebind_b")
 
 
+class Engines:
+    """The offscreen engines booted and not yet stopped (#1323).
+
+    This probe runs THREE engines: the main one, a briefly-parallel
+    second, and — only when the icon phase produced a target — a third
+    that restarts on the FIRST one's port after it was stopped. So the
+    teardown that has to survive an unexpected exception cannot be a flat
+    "quit all three at the end": it would miss the not-yet-created one,
+    re-quit the deliberately stopped ones, and send a quit for a stale
+    handle to whatever now holds a reused port. Registering each handle
+    the moment it boots — before the fallible work that follows it — and
+    dropping it again on a deliberate stop keeps the set exact.
+    """
+
+    def __init__(self) -> None:
+        self._live: dict[int, object] = {}
+
+    def start(self, port: int, **kw) -> None:
+        self._live[port] = boot(port, **kw)
+
+    def stop(self, port: int) -> None:
+        """Deliberate shutdown; a later boot may reuse this port."""
+        proc = self._live.pop(port, None)
+        if proc is not None:
+            quit_engine(port, proc)
+
+    def stop_all(self) -> None:
+        for port in reversed(list(self._live)):
+            self.stop(port)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=9418)
@@ -699,9 +730,17 @@ def main() -> int:
     w, h = (int(v) for v in args.size.lower().split("x"))
     shots = tempfile.mkdtemp(prefix="offscreen_probe_")
 
+    engines = Engines()
+    try:
+        return _run(args, w, h, shots, engines)
+    finally:
+        engines.stop_all()
+
+
+def _run(args, w: int, h: int, shots: str, engines: Engines) -> int:
     print(f"== offscreen boot (port {args.port}, {args.size}) ==")
-    proc = boot(args.port, mode=("--offscreen",),
-                args=["--size", args.size], label="offscreen engine")
+    engines.start(args.port, mode=("--offscreen",),
+                  args=["--size", args.size], label="offscreen engine")
 
     # -- 1. real UI flow: the loading screen finishes and the menu's
     # widgets exist. GPU-less --headless never gets here, so this is
@@ -735,8 +774,8 @@ def main() -> int:
     # -- 4. parallel instances: a second engine while the first runs.
     port2 = args.port + 1
     print(f"== parallel second instance (port {port2}) ==")
-    proc2 = boot(port2, mode=("--offscreen",),
-                 args=["--size", args.size], label="second offscreen engine")
+    engines.start(port2, mode=("--offscreen",),
+                  args=["--size", args.size], label="second offscreen engine")
     menu2 = poll_until(60.0, lambda: find_widget(port2, "Create World"))
     check("second instance reaches its own menu", bool(menu2))
     shot2 = os.path.join(shots, "second.png")
@@ -744,7 +783,7 @@ def main() -> int:
           screenshot(port2, shot2) and bool(png_stats(shot2)))
     check("first instance still answering alongside the second",
           bool(find_widget(args.port, "Generate World")))
-    quit_engine(port2, proc2)
+    engines.stop(port2)
 
     # -- 5. through real worldgen to the in-game HUD.
     if not args.skip_worldgen:
@@ -790,17 +829,17 @@ def main() -> int:
     else:
         icon_target = None
 
-    quit_engine(args.port, proc)
+    engines.stop(args.port)
 
     # -- 7 (cont'd): fresh restart -> load, proving the discovered icon
     # state (not the one-off in-process view) actually round-trips.
     if icon_target:
         print("== fresh restart -> load (icon persistence, #781) ==")
-        proc3 = boot(args.port, mode=("--offscreen",),
-                     args=["--size", args.size],
-                     label="offscreen engine (icon reload)")
+        engines.start(args.port, mode=("--offscreen",),
+                      args=["--size", args.size],
+                      label="offscreen engine (icon reload)")
         location_map_icons_reload_check(args.port, *icon_target)
-        quit_engine(args.port, proc3)
+        engines.stop(args.port)
 
     print(f"\nscreenshots kept in {shots}")
     if failures:

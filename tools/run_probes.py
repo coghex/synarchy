@@ -27,8 +27,15 @@ Usage:
   python3 tools/run_probes.py --port 9500       # override every probe's --port
   python3 tools/run_probes.py --timeout 300
 
+Probes are launched into their own session, and this runner reaps that
+process group after EVERY completion path — not just the timeout (#1323).
+A probe that dies of an unexpected exception after booting its engine
+never reaches its own teardown, and the engine then outlives it holding
+the probe's port; see `reap_group` below.
+
 Exit 0 = all selected probes passed. 1 = at least one failed. 2 = bad
-invocation (e.g. --only matched nothing).
+invocation (e.g. --only matched nothing). 130 = interrupted with Ctrl-C,
+after terminating every probe still running and the engine it booted.
 """
 from __future__ import annotations
 import argparse
@@ -37,6 +44,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -298,6 +306,105 @@ PROBES = [
 # the default needs real margin above that for CI's slower runner.
 DEFAULT_TIMEOUT = 900.0
 
+# How long a signalled probe process group gets to leave on its own before
+# the escalation to SIGKILL. One grace period shared by the timeout path
+# (which has always spent it waiting on the probe leader) and the
+# after-every-completion reap below (which spends it polling the GROUP,
+# because by then the leader has already been reaped).
+GROUP_GRACE = 10.0
+
+
+# --------------------------------------------------------------------------
+# Process-group teardown (#1323)
+# --------------------------------------------------------------------------
+def _signal_group(pgid: int, sig: int) -> bool:
+    """Send ``sig`` to a whole process group; True if the group was there.
+
+    ``ProcessLookupError`` (ESRCH) means the group is already empty, which
+    is the ORDINARY outcome for a probe that tore its own engine down —
+    success, not an error, and it must leave the probe's recorded result
+    alone. ``PermissionError`` means a member exists that we may not
+    signal, so the group is still alive.
+    """
+    try:
+        os.killpg(pgid, sig)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _group_alive(pgid: int) -> bool:
+    return _signal_group(pgid, 0)
+
+
+def reap_group(pgid: int, grace: float | None = None) -> None:
+    """Terminate anything still running in a probe's process group.
+
+    Called on EVERY completion path (#1323) — success, ordinary nonzero
+    exit, timeout, and an exception in the runner itself — not just on the
+    timeout, because a probe that dies of an unexpected exception after
+    booting its engine never reaches its own ``quit_engine``. The engine
+    then outlives it holding the probe's port, and `--retries` (and the
+    parallel solo-retry, which reuses PARALLEL_PORT_BASE) re-runs onto that
+    held port, where #1190 aborts the boot and reports the leak as an
+    unrelated "exited before READY".
+
+    ``communicate()`` cannot detect that: ``probelib.boot`` redirects the
+    engine's output to a log file rather than the runner's inherited pipe,
+    so the pipe reaches EOF the moment the probe itself exits.
+
+    Reaping an empty group is a no-op. Once ``communicate()`` has reaped
+    the probe leader there is nothing left to wait on, so the SIGTERM grace
+    is spent polling the GROUP for liveness before escalating to SIGKILL.
+    """
+    if grace is None:
+        grace = GROUP_GRACE
+    # Check first: the common case is an empty group, and skipping the
+    # signal entirely there keeps this from ever addressing a recycled pid.
+    if not _group_alive(pgid):
+        return
+    if not _signal_group(pgid, signal.SIGTERM):
+        return
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        if not _group_alive(pgid):
+            return
+        time.sleep(0.1)
+    _signal_group(pgid, signal.SIGKILL)
+
+
+class ProbeGroups:
+    """The probe process groups running right now, plus the stop flag.
+
+    Ctrl-C reaches the RUNNER only: every probe is launched into its own
+    session (``start_new_session=True``), so the terminal's SIGINT never
+    touches a probe, let alone the engine it booted. The runner therefore
+    has to signal them itself — in the sequential path and the ``--jobs``
+    path alike — and has to stop worker threads from picking up the next
+    queued probe while it does.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._pgids: set[int] = set()
+        self.stopping = threading.Event()
+
+    def add(self, pgid: int) -> None:
+        with self._lock:
+            self._pgids.add(pgid)
+
+    def discard(self, pgid: int) -> None:
+        with self._lock:
+            self._pgids.discard(pgid)
+
+    def reap_all(self) -> None:
+        with self._lock:
+            pgids = sorted(self._pgids)
+        for pgid in pgids:
+            reap_group(pgid)
+
 
 def select(only: str | None, exact: bool = False) -> list[tuple[str, str, str]]:
     if not only:
@@ -312,49 +419,77 @@ def select(only: str | None, exact: bool = False) -> list[tuple[str, str, str]]:
     return selected
 
 
-def run_one(script: str, port: int | None, timeout: float):
+def run_one(script: str, port: int | None, timeout: float,
+            groups: ProbeGroups | None = None):
     cmd = ["python3", os.path.join("tools", script)]
     if port is not None:
         cmd += ["--port", str(port)]
+    if groups is not None and groups.stopping.is_set():
+        # The runner is tearing down; a queued worker must not boot one
+        # more engine on its way out.
+        return False, False, 0.0, "(not started: the runner is shutting down)\n"
     start = time.time()
     proc = subprocess.Popen(
         cmd, cwd=REPO_ROOT,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, start_new_session=True,
     )
+    # `start_new_session=True` makes the child a session AND process-group
+    # leader, so its pgid IS its pid. Capture it here rather than calling
+    # os.getpgid(proc.pid) later, for two reasons: once communicate() reaps
+    # the leader that call raises, leaving the descendants we still have to
+    # reap unaddressable; and calling it right now could race the child's
+    # own setsid() and hand back the RUNNER's group.
+    pgid = proc.pid
+    if groups is not None:
+        groups.add(pgid)
+        if groups.stopping.is_set():
+            # The shutdown began between the check above and this Popen,
+            # so `reap_all` may already have taken its snapshot. Signalling
+            # here rather than letting the probe run to completion is what
+            # keeps the executor's shutdown from waiting out a whole
+            # scenario: the probe exits at once, communicate() below
+            # collects it, and the finally reaps whatever it did start.
+            _signal_group(pgid, signal.SIGTERM)
     timed_out = False
     try:
-        out, _ = proc.communicate(timeout=timeout)
-        rc = proc.returncode
-    except subprocess.TimeoutExpired:
-        timed_out = True
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
-            out, _ = proc.communicate(timeout=10)
+            out, _ = proc.communicate(timeout=timeout)
+            rc = proc.returncode
         except subprocess.TimeoutExpired:
+            timed_out = True
+            _signal_group(pgid, signal.SIGTERM)
             try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            out, _ = proc.communicate()
-        rc = -1
-    elapsed = time.time() - start
+                out, _ = proc.communicate(timeout=GROUP_GRACE)
+            except subprocess.TimeoutExpired:
+                _signal_group(pgid, signal.SIGKILL)
+                out, _ = proc.communicate()
+            rc = -1
+        # Measured BEFORE the reap below, so a probe's recorded elapsed
+        # time stays the probe's own and never absorbs teardown's grace.
+        elapsed = time.time() - start
+    finally:
+        # Every exit from here on, including a KeyboardInterrupt raised in
+        # the runner while communicate() was blocked.
+        reap_group(pgid)
+        if groups is not None:
+            groups.discard(pgid)
     ok = (rc == 0) and not timed_out
     return ok, timed_out, elapsed, out or ""
 
 
-def run_with_retry(script, port, timeout, retries, announce=None):
+def run_with_retry(script, port, timeout, retries, announce=None, groups=None):
     """Run a probe, re-running SOLO up to `retries` times on failure.
 
     Returns (status, elapsed, out, attempts). `announce(kind, attempt,
     retries)` is an optional callback for live progress before each retry.
+    A retry never starts before the previous attempt's group is reaped —
+    `run_one` does that before it returns — so it can never be handed a
+    port a leaked engine still holds.
     """
     attempt = 0
     while True:
-        ok, timed_out, elapsed, out = run_one(script, port, timeout)
+        ok, timed_out, elapsed, out = run_one(script, port, timeout, groups)
         attempt += 1
         if ok or attempt > retries:
             break
@@ -409,73 +544,96 @@ def main() -> int:
     n = len(chosen)
     results: dict[str, tuple[str, str, float, str]] = {}  # key -> (script, status, elapsed, out)
     wall_start = time.time()
+    groups = ProbeGroups()
 
-    if args.jobs <= 1:
-        # Sequential — the mode CI relies on: live, ordered, inline retry.
-        print(f"Running {n} probe(s) sequentially (timeout {args.timeout:.0f}s each)...\n")
+    try:
+        if args.jobs <= 1:
+            # Sequential — the mode CI relies on: live, ordered, inline retry.
+            print(f"Running {n} probe(s) sequentially (timeout {args.timeout:.0f}s each)...\n")
 
-        def announce(kind, attempt, retries):
-            print(f"{kind}, retrying solo ({attempt}/{retries}) ... ", end="", flush=True)
+            def announce(kind, attempt, retries):
+                print(f"{kind}, retrying solo ({attempt}/{retries}) ... ", end="", flush=True)
 
-        for i, (key, script, purpose) in enumerate(chosen, 1):
-            print(f"[{i}/{n}] {script} ... ", end="", flush=True)
-            status, elapsed, out, attempts = run_with_retry(
-                script, args.port, args.timeout, args.retries, announce)
-            note = f"  [passed on retry {attempts}]" if status == "PASS" and attempts > 1 else ""
-            print(f"{status} ({elapsed:.1f}s){note}")
-            if status != "PASS" and args.tail > 0:
-                for ln in out.splitlines()[-args.tail:]:
-                    print(f"    {ln}")
-            results[key] = (script, status, elapsed, out)
-    else:
-        # Parallel (#531) — one independent engine per probe, up to --jobs at
-        # once, each on a unique port. No isolation issue: separate processes,
-        # separate ports, unique save names. Retries run SOLO afterward,
-        # since parallel contention is exactly what a retry needs to escape.
-        jobs = args.jobs
-        print(f"Running {n} probe(s), up to {jobs} concurrently "
-              f"(timeout {args.timeout:.0f}s each)...\n")
-
-        def work(idx, probe):
-            key, script, _ = probe
-            ok, timed_out, elapsed, out = run_one(
-                script, PARALLEL_PORT_BASE + idx, args.timeout)
-            status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
-            return key, script, status, elapsed, out
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
-            futs = [ex.submit(work, i, p) for i, p in enumerate(chosen)]
-            for done, fut in enumerate(concurrent.futures.as_completed(futs), 1):
-                key, script, status, elapsed, out = fut.result()
-                print(f"[{done}/{n}] {script} ... {status} ({elapsed:.1f}s)")
-                results[key] = (script, status, elapsed, out)
-
-        failed = [p for p in chosen if results[p[0]][1] != "PASS"]
-        if failed and args.retries > 0:
-            # The parallel batch was already the FIRST attempt, so a probe
-            # gets exactly `--retries` more solo attempts here — total
-            # attempts (1 + retries) match the sequential path, no bonus try.
-            print(f"\nRe-running {len(failed)} failed probe(s) SOLO "
-                  f"(up to {args.retries} more attempt(s) each; the parallel "
-                  f"batch was the first)...")
-            for key, script, _ in failed:
-                for r in range(1, args.retries + 1):
-                    ok, timed_out, elapsed, out = run_one(
-                        script, PARALLEL_PORT_BASE, args.timeout)
-                    status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
-                    print(f"  {script} solo retry {r}/{args.retries} ... "
-                          f"{status} ({elapsed:.1f}s)")
-                    results[key] = (script, status, elapsed, out)
-                    if ok:
-                        break
-
-        if args.tail > 0:
-            for key, script, _ in chosen:
-                r = results[key]
-                if r[1] != "PASS":
-                    print(f"\n--- {r[0]} ({r[1]}) ---")
-                    for ln in r[3].splitlines()[-args.tail:]:
+            for i, (key, script, purpose) in enumerate(chosen, 1):
+                print(f"[{i}/{n}] {script} ... ", end="", flush=True)
+                status, elapsed, out, attempts = run_with_retry(
+                    script, args.port, args.timeout, args.retries, announce, groups)
+                note = f"  [passed on retry {attempts}]" if status == "PASS" and attempts > 1 else ""
+                print(f"{status} ({elapsed:.1f}s){note}")
+                if status != "PASS" and args.tail > 0:
+                    for ln in out.splitlines()[-args.tail:]:
                         print(f"    {ln}")
+                results[key] = (script, status, elapsed, out)
+        else:
+            # Parallel (#531) — one independent engine per probe, up to --jobs at
+            # once, each on a unique port. No isolation issue: separate processes,
+            # separate ports, unique save names. Retries run SOLO afterward,
+            # since parallel contention is exactly what a retry needs to escape.
+            jobs = args.jobs
+            print(f"Running {n} probe(s), up to {jobs} concurrently "
+                  f"(timeout {args.timeout:.0f}s each)...\n")
+
+            def work(idx, probe):
+                key, script, _ = probe
+                ok, timed_out, elapsed, out = run_one(
+                    script, PARALLEL_PORT_BASE + idx, args.timeout, groups)
+                status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
+                return key, script, status, elapsed, out
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
+                futs = [ex.submit(work, i, p) for i, p in enumerate(chosen)]
+                try:
+                    for done, fut in enumerate(concurrent.futures.as_completed(futs), 1):
+                        key, script, status, elapsed, out = fut.result()
+                        print(f"[{done}/{n}] {script} ... {status} ({elapsed:.1f}s)")
+                        results[key] = (script, status, elapsed, out)
+                except BaseException:
+                    # Ctrl-C, or any orchestration failure. cancel() alone
+                    # cannot stop a work item a free worker already picked
+                    # up, so `stopping` short-circuits those before they
+                    # Popen anything; reap_all then takes down the engines
+                    # already running. Leaving the `with` waits for the
+                    # in-flight workers to finish their own cleanup.
+                    groups.stopping.set()
+                    for pending in futs:
+                        pending.cancel()
+                    groups.reap_all()
+                    raise
+
+            failed = [p for p in chosen if results[p[0]][1] != "PASS"]
+            if failed and args.retries > 0:
+                # The parallel batch was already the FIRST attempt, so a probe
+                # gets exactly `--retries` more solo attempts here — total
+                # attempts (1 + retries) match the sequential path, no bonus try.
+                print(f"\nRe-running {len(failed)} failed probe(s) SOLO "
+                      f"(up to {args.retries} more attempt(s) each; the parallel "
+                      f"batch was the first)...")
+                for key, script, _ in failed:
+                    for r in range(1, args.retries + 1):
+                        ok, timed_out, elapsed, out = run_one(
+                            script, PARALLEL_PORT_BASE, args.timeout, groups)
+                        status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
+                        print(f"  {script} solo retry {r}/{args.retries} ... "
+                              f"{status} ({elapsed:.1f}s)")
+                        results[key] = (script, status, elapsed, out)
+                        if ok:
+                            break
+
+            if args.tail > 0:
+                for key, script, _ in chosen:
+                    r = results[key]
+                    if r[1] != "PASS":
+                        print(f"\n--- {r[0]} ({r[1]}) ---")
+                        for ln in r[3].splitlines()[-args.tail:]:
+                            print(f"    {ln}")
+    except KeyboardInterrupt:
+        # Each run_one already reaped its own group on the way out; this is
+        # the backstop for a group whose worker never got that far.
+        groups.stopping.set()
+        groups.reap_all()
+        print("\ninterrupted — every probe still running, and the engine it "
+              "booted, has been terminated", file=sys.stderr)
+        return 130
 
     wall = time.time() - wall_start
     ordered = [(key, results[key][0], results[key][1], results[key][2]) for key, *_ in chosen]

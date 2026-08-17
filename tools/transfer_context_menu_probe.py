@@ -424,7 +424,16 @@ def main() -> int:
     print(f"== offscreen boot (port {port}, {args.size}) ==")
     proc = boot(port, mode=("--offscreen",), args=["--size", args.size],
                 label="offscreen engine")
+    # Registered for teardown before ANY fallible work below (#1323): an
+    # unexpected socket/parsing/widget exception used to skip every
+    # quit_engine call and strand this engine holding its port.
+    try:
+        return _run(port, args)
+    finally:
+        quit_engine(port, proc)
 
+
+def _run(port: int, args) -> int:
     # -- Real UI flow to the in-game HUD (same path as
     # tools/construction_blueprint_footprint_probe.py / tools/offscreen_probe.py).
     menu_up = poll_until(60.0, lambda: find_widget(port, "Create World"))
@@ -470,7 +479,6 @@ def main() -> int:
     sites = allocate_dry_anchors(port, 5)
     if not check("found five separated dry sites for the fixtures",
                  sites is not None):
-        quit_engine(port, proc)
         return 1
     (bax, bay), (max_, may_), (aax, aay), (a2x, a2y), (wax, way) = sites
     print(f"  (fixture sites: building={(bax, bay)} mule={(max_, may_)} "
@@ -483,7 +491,6 @@ def main() -> int:
     bid_raw = send(port, f"return building.spawn('{DEF_CARGO}', {bax}, {bay})")
     if not check("storage building spawned", bid_raw not in ("", "nil", "null"),
                  f"got {bid_raw!r}"):
-        quit_engine(port, proc)
         return 1
     bid = int(float(bid_raw))
     mule_raw = send(port, f"return unit.spawn('technomule', {max_}, {may_}, nil, 'player')")
@@ -554,7 +561,6 @@ def main() -> int:
     if not check("located the storage building's own screen pixel",
                  bpixel is not None):
         print(targeting_report(port, vp, "building", bid, site=(bax, bay)))
-        quit_engine(port, proc)
         return 1
     check("the camera centres on the building "
           "(its hit-test pixel is near the screen centre)",
@@ -632,7 +638,6 @@ def main() -> int:
     # ------------------------------------------------------------------
     print("== unit destination (technomule) ==")
     if not right_click_unit(port, mule_uid, vp, "technomule"):
-        quit_engine(port, proc)
         return 1
 
     info_row = find_widget(port, "Info")
@@ -668,7 +673,6 @@ def main() -> int:
     # ------------------------------------------------------------------
     print("== unit destination (a second player acolyte, A2 widening) ==")
     if not right_click_unit(port, acolyte2_uid, vp, "acolyte"):
-        quit_engine(port, proc)
         return 1
     check("acolyte menu: 'Info' appears", bool(find_widget(port, "Info")))
     transfer_row_a = find_widget(port, "Transfer")
@@ -707,7 +711,6 @@ def main() -> int:
               find_widget(port, "Transfer") is None)
     close_menu(port)
 
-    quit_engine(port, proc)
     if failures:
         print(f"\ntransfer_context_menu_probe: {failures} check(s) FAILED")
         return 1
