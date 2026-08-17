@@ -115,6 +115,26 @@ placeUnit env uid (gx, gy) =
                 (\u → u { uiGridX = gx, uiGridY = gy }) uid (umInstances um) }
         , ())
 
+-- | Fill BOTH endpoints past a pane's 10-row cap, so each pane renders
+--   its tallest possible panel. The minimum-viewport case needs that:
+--   a short pair fits almost anywhere, and it is the TALL one that has
+--   nowhere left to go once a toolbar reserves a band (#1250 review
+--   round 4).
+stockTall ∷ EngineEnv → IO ()
+stockTall env = do
+    let many prefix n =
+            [ mkItem (prefix <> "_" <> T.pack (show i))
+                     (fromIntegral (900 + i)) 0.1
+            | i ← [1 .. n ∷ Int] ]
+    atomicModifyIORef' (unitManagerRef env) $ \um →
+        (um { umInstances = HM.adjust
+                (\u → u { uiInventory = many "carried" 14 })
+                carrierUid (umInstances um) }, ())
+    atomicModifyIORef' (buildingManagerRef env) $ \bm →
+        (bm { bmInstances = HM.adjust
+                (\b → b { biStorage = many "stored" 16 })
+                holdBid (bmInstances bm) }, ())
+
 -- | The carrier starts FAR from the hold (a walk is required), the mate
 --   stands beside the hold, and both holds sit apart so no scenario can
 --   be adjacent to one by accident.
@@ -826,6 +846,85 @@ spec = aroundAll withSharedFixture $
                 , "                and g.title == f.title"
                 , "                and g.subtitle == f.subtitle)" ])
             smaller `shouldBe` "\"true\""
+
+        -- #1250 review round 4: the pair was fitted to the FULL
+        -- framebuffer and each panel then placed independently, so at
+        -- the envelope's minimum with the real toolbar reserving a
+        -- band, the first panel's own avoidance consumed the space the
+        -- second needed and avoidReserved's best-effort fallback landed
+        -- them on top of each other.
+        it "at 800x600 @ 1x WITH the toolbar reserved and both lists at \
+           \their row cap, the pair still fits beside it and still flanks" $
+           \(env, ls) → do
+            resetFixture env ls
+            writeIORef (framebufferSizeRef env) (800, 600)
+            stockTall env
+            -- Supplied through the same lazy require the placement
+            -- reads it with, so this is the production path and not a
+            -- parallel one. A FULL-HEIGHT left rail deliberately: a
+            -- short bottom-left cluster leaves the pair a vertical
+            -- escape, and it is the reservation with no way around it
+            -- that forces the pair to be narrow enough to sit BESIDE
+            -- it — which is the half `availableWidth` buys and a
+            -- fit-to-whole-framebuffer cannot.
+            _ ← evalOk ls (luaLines
+                [ "package.loaded['scripts.hud'] = {"
+                , "  getToolbarRects = function()"
+                , "    return { {name = 'tool_rail', x = 16, y = 0,"
+                , "              w = 64, h = 600} } end };"
+                , "require('scripts.cargo_inventory_panel').setup("
+                , "  {page = _G.__page, fbW = 800, fbH = 600,"
+                , "   boxTexSet = 1, menuFont = 1});"
+                , "return 'ok'" ])
+            placeUnit env carrierUid (42, 41)
+            _ ← evalOk ls (createLua "building" 7)
+            _ ← evalOk ls "return _G.__tick(1)"
+            crowded ← evalOk ls (luaLines
+                [ "local d = require('scripts.cargo_inventory_panel').dump();"
+                , "local p = d.levels[1].panes;"
+                , "local a, b = p[1], p[2];"
+                , "local bar = {x = 16, y = 0, w = 64, h = 600};"
+                , "local function hits(r, o)"
+                , "  return not (r.x + r.width <= o.x or o.x + o.w <= r.x"
+                , "              or r.y + r.height <= o.y"
+                , "              or o.y + o.h <= r.y) end;"
+                , "local function inFrame(r)"
+                , "  return r.x >= 0 and r.y >= 0"
+                , "     and r.x + r.width <= 800 and r.y + r.height <= 600 end;"
+                , "local overlap = not (a.x + a.width <= b.x"
+                , "                     or b.x + b.width <= a.x"
+                , "                     or a.y + a.height <= b.y"
+                , "                     or b.y + b.height <= a.y);"
+                , "return { inFrame = inFrame(a) and inFrame(b),"
+                , "         overlap = overlap, leftFirst = a.x < b.x,"
+                , "         onToolbar = hits(a, bar) or hits(b, bar),"
+                , "         gap = b.x - (a.x + a.width),"
+                , "         rows = a.rowCount .. '/' .. b.rowCount,"
+                , "         panes = d.levels[1].paneCount }" ])
+            crowded `shouldSatisfy` T.isInfixOf "\"panes\":2"
+            -- Both lists really are at the cap, so these are the
+            -- TALLEST panels this window can produce.
+            crowded `shouldSatisfy` T.isInfixOf "\"rows\":\"10/10\""
+            crowded `shouldSatisfy` T.isInfixOf "\"inFrame\":true"
+            crowded `shouldSatisfy` T.isInfixOf "\"overlap\":false"
+            crowded `shouldSatisfy` T.isInfixOf "\"leftFirst\":true"
+            crowded `shouldSatisfy` T.isInfixOf "\"onToolbar\":false"
+            -- The pair is laid out as ONE rect and then split, so the
+            -- two panes sit exactly one scaled gap apart WHEREVER
+            -- arbitration puts them. Placing each panel on its own and
+            -- nudging the second clear of the first leaves that spacing
+            -- to whatever the nudge produced, so this is the assertion
+            -- that pins the structure rather than the outcome. The base
+            -- gap is 24 at uiscale 1 and the pair is fitted below that
+            -- here, so a positive gap no larger than 24 is the fitted
+            -- one and nothing else.
+            gapText ← evalOk ls (luaLines
+                [ "local d = require('scripts.cargo_inventory_panel').dump();"
+                , "local p = d.levels[1].panes;"
+                , "local g = p[2].x - (p[1].x + p[1].width);"
+                , "return tostring(g > 0 and g <= 24)" ])
+            gapText `shouldBe` "\"true\""
+
 
     describe "the session's row gestures" $ do
         let openOnHold env ls = do

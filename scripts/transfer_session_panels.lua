@@ -109,12 +109,40 @@ end
 -- font together with its box, never separately. Above the envelope's
 -- minimum, or at a scale where the pair already fits, this returns the
 -- configured uiscale unchanged and nothing moves.
+-- The toolbar clusters, or an empty list when there is no HUD to ask
+-- (every headless UI fixture, and the moment before hud.createUI has
+-- built its toggles). pcall-isolated like every other cross-module
+-- introspection read on this path.
+local function toolbarRects()
+    local ok, rects = pcall(function()
+        return require("scripts.hud").getToolbarRects()
+    end)
+    if not ok or type(rects) ~= "table" then return {} end
+    return rects
+end
+
+-- The width the pair may actually occupy: the framebuffer LESS whatever
+-- the always-reachable toolbar clusters block (#1250 review round 4).
+-- Measured across the FULL height on purpose -- the pair's own height
+-- is not known until it has been fitted, and a width that clears every
+-- reservation at every y clears it wherever the pair ends up. Falls
+-- back to the whole framebuffer when nothing is reserved or the answer
+-- is degenerate.
+local function availableWidth(fbW)
+    local reserved = toolbarRects()
+    if #reserved == 0 then return fbW end
+    local _, fbH = framebuffer()
+    local avail = reservedRegions.maxAvailableWidth(0, fbH, reserved, fbW)
+    if not avail or avail <= 0 then return fbW end
+    return math.min(avail, fbW)
+end
+
 local function paneScale()
     local base = scale.get()
     local fbW = framebuffer()
     if fbW <= 0 then return base end
     local natural = 2 * math.floor(PANE_WIDTH_BASE * base) + gapPx(base)
-    return responsive.fitScale(natural, fbW, base)
+    return responsive.fitScale(natural, availableWidth(fbW), base)
 end
 
 -- Which endpoint a pane shows. The whole kind is written against this
@@ -242,18 +270,6 @@ end
 -- always-reachable toolbar clusters (#750).
 -----------------------------------------------------------
 
--- The toolbar clusters, or an empty list when there is no HUD to ask
--- (every headless UI fixture, and the moment before hud.createUI has
--- built its toggles). pcall-isolated like every other cross-module
--- introspection read on this path.
-local function toolbarRects()
-    local ok, rects = pcall(function()
-        return require("scripts.hud").getToolbarRects()
-    end)
-    if not ok or type(rects) ~= "table" then return {} end
-    return rects
-end
-
 local function fitClear(rect, reserved, fbW, fbH)
     if #reserved == 0 then return rect end
     return reservedRegions.avoidReserved(rect, reserved, fbW, fbH)
@@ -261,39 +277,49 @@ end
 
 local function placePanes(_level, measures, _hud)
     local fbW, fbH = framebuffer()
-    -- The gap is measured at the SAME fitted scale the panes were sized
-    -- at, so the pair's total width here is exactly the total
-    -- `paneScale` fitted.
-    local cx  = math.floor(fbW * 0.5)
-    local gap = math.floor(gapPx(paneScale()) * 0.5)
     local reserved = toolbarRects()
-
-    local out = {}
     local lm, rm = measures[1], measures[2]
+    local gap = gapPx(paneScale())
 
-    local lx, ly = UI.placePopup(cx - gap,
-                                 math.floor((fbH - lm.h) * 0.5),
-                                 0, 0, lm.w, lm.h, "left")
-    local left = fitClear({ x = math.floor(lx), y = math.floor(ly),
-                            w = lm.w, h = lm.h }, reserved, fbW, fbH)
-    out[1] = { x = left.x, y = left.y }
+    if not rm then
+        local x, y = UI.placePopup(math.floor((fbW - lm.w) * 0.5),
+                                   math.floor((fbH - lm.h) * 0.5),
+                                   0, 0, lm.w, lm.h, "anchored")
+        local only = fitClear({ x = math.floor(x), y = math.floor(y),
+                                w = lm.w, h = lm.h }, reserved, fbW, fbH)
+        return { { x = only.x, y = only.y } }
+    end
 
-    if not rm then return out end
-
-    local rx, ry = UI.placePopup(cx + gap,
-                                 math.floor((fbH - rm.h) * 0.5),
-                                 0, 0, rm.w, rm.h, "right")
-    -- The left pane is now a reservation of its own, so the right one
-    -- is nudged clear of BOTH it and the toolbar in a single pass —
-    -- avoidReserved evaluates every candidate against the whole set,
-    -- which is what stops a push that clears one from re-entering the
-    -- other.
-    local withSibling = { { x = left.x, y = left.y, w = lm.w, h = lm.h } }
-    for _, r in ipairs(reserved) do withSibling[#withSibling + 1] = r end
-    local right = fitClear({ x = math.floor(rx), y = math.floor(ry),
-                             w = rm.w, h = rm.h }, withSibling, fbW, fbH)
-    out[2] = { x = right.x, y = right.y }
-    return out
+    -- ONE rect, placed once, then split (#1250 review round 4).
+    --
+    -- Placing each panel independently and nudging the second clear of
+    -- the first cannot work at the envelope's minimum: with a toolbar
+    -- reserving a band, the FIRST panel's own avoidance can consume the
+    -- space the second needed, and `avoidReserved`'s documented
+    -- best-effort fallback then overlaps them. Laying the pair out as a
+    -- single rect makes their separation STRUCTURAL -- neither
+    -- placement nor arbitration can take it away -- and leaves the two
+    -- mechanisms doing exactly what each owns: UI.placePopup clamps the
+    -- pair to the framebuffer (#747), reserved_regions arbitrates it
+    -- against the toolbar (#750). `paneScale` has already fitted the
+    -- pair to the width those reservations leave, so this placement has
+    -- a solution to find.
+    local totalW = lm.w + gap + rm.w
+    local totalH = math.max(lm.h, rm.h)
+    local px, py = UI.placePopup(math.floor((fbW - totalW) * 0.5),
+                                 math.floor((fbH - totalH) * 0.5),
+                                 0, 0, totalW, totalH, "anchored")
+    local pair = fitClear({ x = math.floor(px), y = math.floor(py),
+                            w = totalW, h = totalH }, reserved, fbW, fbH)
+    -- Each pane is centred within the pair's own band, so a short list
+    -- beside a tall one reads as a pair rather than as two panels that
+    -- happen to share one edge.
+    return {
+        { x = pair.x,
+          y = pair.y + math.floor((totalH - lm.h) * 0.5) },
+        { x = pair.x + lm.w + gap,
+          y = pair.y + math.floor((totalH - rm.h) * 0.5) },
+    }
 end
 
 -----------------------------------------------------------

@@ -1220,10 +1220,16 @@ before touching each area:
   consult it, so a debug-spawned bear can never become a session that
   never walks. An EMPTY inventory means no AI is loaded in this process
   and answers yes to everything — never a refusal invented from absence.
-  Two 440-wide panes need 904 px at 1x, so the PAIR is fitted to the
-  framebuffer through `responsive.fitScale` before placement (a level
-  kind's `paneScale`), box and font together: clamping each panel alone
-  would stack them at the envelope's 800x600 minimum. The one-way transition to the open/held state
+  Two 440-wide panes need 904 px at 1x, so the PAIR is fitted — through
+  `responsive.fitScale` (a level kind's `paneScale`), box, header and
+  font together — to the width `reserved_regions.maxAvailableWidth`
+  says the toolbar clusters leave, and then PLACED as one rect that is
+  split. Both halves matter at the envelope's 800x600 minimum: fitting
+  to the whole framebuffer leaves the pair unable to sit beside a
+  reserved rail, and placing each panel independently lets the first
+  one's own avoidance consume the space the second needed, which
+  `avoidReserved`'s documented best-effort fallback then resolves by
+  overlapping them. The one-way transition to the open/held state
   fires EXACTLY ONCE and is what does everything else: it calls
   `building.refreshContainerKnowledge` (the reveal that verb was shipped
   for, and the only caller in the game), opens the two flanking panes,
