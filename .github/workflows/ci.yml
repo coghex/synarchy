@@ -301,9 +301,15 @@ jobs:
       # module gains a second top-level definition of an already-defined
       # exported function, which silently overwrites the earlier one in
       # the module table with no error (the slider.findByElementHandle
-      # regression this issue fixed).
+      # regression this issue fixed). The fixture suite (#1324) runs
+      # first: it pins both directions of every rule the audit enforces,
+      # including the two false-greens -- an unrecognized in-scope file
+      # and an empty corpus -- that used to report the same clean
+      # success a real scan does.
       - name: Lua duplicate function audit
-        run: python3 tools/lua_duplicate_function_audit.py
+        run: |
+          python3 tools/test_lua_duplicate_function_audit.py
+          python3 tools/lua_duplicate_function_audit.py
 
       # Cheap, no-engine guard (#787): fails if a Haskell module split
       # to stay reviewable (the input-thread facade + its dispatch
