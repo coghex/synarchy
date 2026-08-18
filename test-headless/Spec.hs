@@ -60,6 +60,7 @@ import qualified Test.Headless.World.Save.Contract as SaveContract
 import qualified Test.Headless.World.Identity as WorldIdentity
 import qualified Test.Headless.World.TransferOrders as WorldTransferOrders
 import qualified Test.Headless.World.CursorInfo as CursorInfo
+import qualified Test.Headless.World.CursorTextureDispatch as CursorTextureDispatch
 import qualified Test.Headless.World.SelectTileZ as SelectTileZ
 import qualified Test.Headless.World.SelectChunk as SelectChunk
 import qualified Test.Headless.World.ChunkQueueFrame as ChunkQueueFrame
@@ -381,6 +382,7 @@ main = hspec $ do
     LuaWorkClaimCapacity.spec
     LuaFaction.spec
     describe "World.CursorInfo" CursorInfo.spec
+    CursorTextureDispatch.spec
     describe "World.SelectChunk" SelectChunk.spec
     describe "World.Spoil" Spoil.spec
     describe "rendered fluid surface rule (#1112)" RenderedSurface.spec

@@ -40,7 +40,7 @@ import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
-import Test.Headless.Harness (withHeadlessEngine)
+import Test.Headless.Harness (withHeadlessEngine, installHudWorldPage)
 import Tutorial.Types (emptyTutorialRegistry)
 import UI.Types (emptyUIPageManager)
 
@@ -62,6 +62,12 @@ resetFixture ∷ EngineEnv → LuaBackendState → IO ()
 resetFixture env ls = do
     writeIORef (uiManagerRef env) emptyUIPageManager
     atomicModifyIORef' (videoConfigRef env) $ \c → (c { vcUIScale = 1.0 }, ())
+    -- #1366: every case here boots the HUD, and hud.createUI() submits
+    -- six cursor-texture commands against hud.worldId ("main_world").
+    -- Without the page they take the correct-but-noisy missing-page
+    -- branch; see 'installHudWorldPage' for why the page carries no
+    -- generation parameters and is not visible.
+    installHudWorldPage env
     -- The tutorial registry is shared engine state that only
     -- 'Test.Headless.Tutorial.Definitions' and this suite ever touch,
     -- and both put it back empty rather than trusting the other to.

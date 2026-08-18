@@ -7,6 +7,7 @@ module Test.Headless.Harness
   , headlessWorkerLabel
   , checkHeadlessWorkers
   , withHeadlessWorkerCheck
+  , installHudWorldPage
   , sharedWorld
   , sendWorldCommand
   , waitForWorldInit
@@ -140,6 +141,59 @@ withHeadlessWorkerCheck expectedStopped workers body = do
     result ← body
     checkHeadlessWorkers expectedStopped workers
     pure result
+
+-- | The page id @scripts\/hud.lua@ defaults @hud.worldId@ to
+--   (@scripts\/hud.lua:25@). Stated once, here, because the fixture
+--   helper below only works while it matches.
+hudDefaultWorldPageId ∷ WorldPageId
+hudDefaultWorldPageId = WorldPageId "main_world"
+
+-- | Make 'hudDefaultWorldPageId' resolve, by installing one bare
+--   in-memory page under it as the manager's only entry (#1366).
+--
+--   @hud.createUI()@ submits six cursor-texture commands
+--   (@scripts\/hud.lua:389-398@) against @hud.worldId@ whenever its
+--   texture handles are present — which they always are in a fixture,
+--   because @hud.init@ is handed synthetic ones. A fixture that boots
+--   the HUD without a world therefore drives
+--   "World.Thread.Command.Cursor.Select" down its missing-page branch
+--   six times per boot, and each one logs a warning. That is correct
+--   production behaviour on a page that genuinely is not there
+--   (@Test.Headless.World.CursorTextureDispatch@ pins it); the fixture
+--   is what is wrong, since a real session has @main_world@ live before
+--   @hud.createUI()@ ever runs. 158 HUD boots across the three
+--   HUD-booting suites were emitting 948 of the headless step's 988
+--   @WARN@ lines — 96 % of them, which is what a real diagnostic had to
+--   be found among, and one of which landed mid-line inside an example's
+--   own result row.
+--
+--   Two deliberate properties, both load-bearing:
+--
+--   * __No generation parameters.__ 'emptyWorldState' leaves
+--     @wsGenParamsRef@ 'Nothing', and both world-thread page walks
+--     ('World.Thread.ChunkLoading.updateChunkLoading',
+--     'World.Thread.ChunkLoading.drainInitQueues') and
+--     'World.Thread.Discovery.tickLocationDiscovery' skip such a page
+--     outright. Handing a fixture page 'defaultWorldGenParams' instead
+--     is exactly what killed the world worker with
+--     @twoNearestPlates: no plates@ (#1362) — trading a warning flood
+--     for a dead thread is not a repair. Since #1388 that is no longer
+--     only a convention: 'checkHeadlessWorkers' fails every example in
+--     these three suites if this page ever does kill the worker.
+--
+--   * __Not visible.__ The cursor-texture handlers resolve their page
+--     through @wmWorlds@ alone, so visibility buys nothing here, while
+--     an entry in @wmVisible@ would newly give these UI suites an
+--     ACTIVE page (@world.getActiveWorldId@, chunk loading, the sun
+--     angle). These are layout and widget-behaviour tests: the only
+--     thing this may change about them is that the six commands now
+--     find their page.
+installHudWorldPage ∷ EngineEnv → IO ()
+installHudWorldPage env = do
+    ws ← emptyWorldState
+    writeIORef (worldManagerRef env) WorldManager
+        { wmWorlds  = [(hudDefaultWorldPageId, ws)]
+        , wmVisible = [] }
 
 -- | Boot engine in headless mode, run action, shut down.
 --   Sets camera zoom low so updateChunkLoading will trigger.
