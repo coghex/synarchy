@@ -108,7 +108,7 @@ local unitAiSave    = require("scripts.unit_ai_save")
 -----------------------------------------------------------
 -- Action registry per unit type. Per-species ambient action lists,
 -- filled in below via registerActions — see its own block for the
--- universal combat prepend every one of them gets.
+-- UNIVERSAL prepend every one of them gets.
 -----------------------------------------------------------
 local actions, actionNames = {}, require("scripts.unit_ai_actions")
 
@@ -116,19 +116,15 @@ local actions, actionNames = {}, require("scripts.unit_ai_actions")
 -- Public registration API (for satellite AI scripts)
 --
 -- A wildlife or species-specific script (bear_ai.lua, future
--- panda_ai.lua, …) declares its own ambient candidates +
--- config block, then calls these to wire itself into the
--- dispatch loop. The universal combat candidates (retreat /
--- engage / attack_target) are auto-prepended to every
--- registered ambient list so each species automatically picks
--- up combat behavior without restating it.
---
--- Goal helpers are exposed below so satellite scripts can
--- read/write the activeGoal layer without poking the state
--- struct directly.
+-- panda_ai.lua, …) declares its own ambient candidates + config block,
+-- then calls these to wire itself into the dispatch loop. The UNIVERSAL
+-- candidates below are auto-prepended to every registered ambient list,
+-- so each species picks them up without restating them. Goal helpers
+-- are exposed below too, so satellite scripts can read/write the
+-- activeGoal layer without poking the state struct directly.
 -----------------------------------------------------------
 
-local UNIVERSAL_COMBAT_ACTIONS = {
+local UNIVERSAL_ACTIONS = {
     { name = "retreat",        utility = combat.retreatUtility,
       execute = combat.retreatExecute,
       forceExecute = true },
@@ -137,6 +133,11 @@ local UNIVERSAL_COMBAT_ACTIONS = {
     { name = "attack_target",  utility = combatAttack.attackTargetUtility,
       execute = combatAttack.attackTargetExecute,
       forceExecute = true },
+    -- The TARGET side of a Mode A session (#1251): universal because a
+    -- session's destination may be ANY player-commandable unit, while
+    -- being its SOURCE is a per-species capability the source gate asks
+    -- about — scripts/unit_ai_escort.lua's header has the asymmetry.
+    transfer.escortHoldAction,
 }
 
 function unitAi.setConfig(defName, cfg)
@@ -145,7 +146,7 @@ end
 
 function unitAi.registerActions(defName, ambientActions)
     local list = {}
-    for _, a in ipairs(UNIVERSAL_COMBAT_ACTIONS) do
+    for _, a in ipairs(UNIVERSAL_ACTIONS) do
         table.insert(list, a)
     end
     for _, a in ipairs(ambientActions or {}) do
@@ -154,15 +155,14 @@ function unitAi.registerActions(defName, ambientActions)
     actions[defName] = actionNames.record(defName, list)
 end
 
--- Expose goal-layer helpers so satellite scripts can read/write
--- s.activeGoal through the canonical API.
+-- Goal-layer helpers: satellite scripts read/write s.activeGoal here.
 unitAi.isGoalActive         = core.isGoalActive
 unitAi.setGoal               = core.setGoal
 unitAi.markGoalAccomplished  = core.markGoalAccomplished
 
--- Register acolyte's ambient action list. Combat candidates are
--- prepended by registerActions so the universal-combat invariant
--- holds for acolytes the same way it does for bears.
+-- Register acolyte's ambient action list. The universal candidates are
+-- prepended by registerActions, so that invariant holds for acolytes
+-- the same way it does for bears.
 unitAi.registerActions("acolyte", {
     { name = "idle", utility = needs.idleUtility, execute = needs.idleExecute },
     { name = "wander", utility = needs.wanderUtility, execute = needs.wanderExecute },

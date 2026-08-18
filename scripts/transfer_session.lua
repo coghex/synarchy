@@ -21,14 +21,30 @@
 --              arrived. The transition happens exactly once and is what
 --              fires the one camera snap, the one container reveal and
 --              the panels.
---   THE HOLD   which unit is standing there. scripts/unit_ai_transfer.
---              lua's `escort_transfer` action reads this module every
---              tick and scores an in-progress LOCK for as long as a
---              session names its unit, which is what keeps the wander
---              tick and ordinary utility churn from stealing it. The
---              hold is RELEASED by the session ending -- there is no
---              separate release call, and therefore no way to end a
---              session and leave a unit pinned.
+--   THE HOLD   which unit(s) are standing there.
+--              scripts/unit_ai_escort.lua's two actions read this
+--              module every tick and score an in-progress LOCK for as
+--              long as a session names that unit, which is what keeps
+--              the wander tick and ordinary utility churn from
+--              stealing it. The hold is RELEASED by the session
+--              ending -- there is no separate release call, and
+--              therefore no way to end a session and leave a unit
+--              pinned.
+--
+--              Since #1251 (UIT-4) a session with a UNIT destination
+--              holds BOTH ends, because unit-to-unit is the one
+--              endpoint pairing where both of them can walk away. The
+--              two roles differ only in what the held unit DOES: the
+--              SOURCE walks and then stands (`escort_transfer`), the
+--              TARGET stands from the moment the session is created
+--              (`escort_hold`), so the approach has a fixed
+--              destination and the walk-away problem cannot occur
+--              during it. Both score the same 7.5 in-progress lock, so
+--              the target's hold preempts its autonomous work exactly
+--              like any player order and neither end can outscore the
+--              other. `roleOf` is what tells them apart, and it is the
+--              ONE answer both consult. A BUILDING destination has
+--              nothing to hold and this is unchanged for it.
 --
 -- What this module deliberately does NOT own: the panels themselves
 -- (scripts/transfer_session_panels.lua supplies the window manager's
@@ -205,6 +221,22 @@ end
 local function liveEndpoint(ep)
     if not ep or ep.id == nil then return nil end
     return unit.transferEndpointInfo({ kind = ep.kind, id = ep.id })
+end
+
+-- Every unit this session holds, in a fixed order: the escort first,
+-- then a UNIT destination (#1251). A building destination contributes
+-- nothing, so this is a one-element list for the commonest session and
+-- the callers below need no `if kind == unit` of their own.
+--
+-- Derived from the session rather than recorded on it, so there is no
+-- second copy of "who is held" that could disagree with `roleOf`.
+local function heldUnits(s)
+    if not s then return {} end
+    if s.destination.kind == KIND_UNIT
+       and s.destination.id ~= s.source.id then
+        return { s.source.id, s.destination.id }
+    end
+    return { s.source.id }
 end
 
 -- Ask `uid` to re-decide on its NEXT tick rather than at its natural
@@ -479,7 +511,16 @@ function M.create(sourceUid, kind, destinationId)
     -- Decide on the next tick rather than at the unit's natural
     -- cadence, the same responsiveness commandMove / commandPickup /
     -- commandTransferOrder buy.
-    nudgeUnit(sourceUid)
+    --
+    -- BOTH held units (#1251), and for the target that is not a nicety:
+    -- its hold begins HERE, so whatever autonomous work it was doing
+    -- has to be preempted at the next tick rather than whenever its own
+    -- thought cadence next came round. A unit walking somewhere would
+    -- otherwise keep walking for up to a full thought interval after the
+    -- session that pinned it existed.
+    for _, uid in ipairs(heldUnits(M.active)) do
+        nudgeUnit(uid)
+    end
     return M.active
 end
 
@@ -488,11 +529,31 @@ function M.get()
     return M.active
 end
 
--- Is `uid` the unit this session is holding? The AI action's whole
--- question, asked every tick.
-function M.holdsUnit(uid)
+-- Which side of this session `uid` is on: "source" (the escort that
+-- walks and then stands) or "target" (a UNIT destination, held from
+-- creation), or nil for a unit no session names. The AI action's whole
+-- question, asked every tick -- it needs the ROLE and not just a
+-- boolean, because the two sides do different things with the same
+-- lock.
+--
+-- The source is tested FIRST, so a degenerate session whose two
+-- endpoints are the same unit reads as the source and behaves exactly
+-- as it did before this issue. The contract refuses such a transfer at
+-- request time; nothing here has to invent a second answer for it.
+function M.roleOf(uid)
     local s = M.active
-    return s ~= nil and s.source.id == uid
+    if not s or type(uid) ~= "number" then return nil end
+    if s.source.id == uid then return "source" end
+    if s.destination.kind == KIND_UNIT and s.destination.id == uid then
+        return "target"
+    end
+    return nil
+end
+
+-- Is `uid` held by this session at all? Kept as its own predicate
+-- because most callers only need the fact, not the side.
+function M.holdsUnit(uid)
+    return M.roleOf(uid) ~= nil
 end
 
 -- The destination as it is RIGHT NOW: position, footprint and
@@ -574,20 +635,32 @@ function M.close(reason)
     pcall(function()
         require("scripts.transfer_session_panels").closeFor(s.id)
     end)
-    -- STOP the unit, not just release it. A session that ends while its
-    -- escort is still APPROACHING leaves a walk in flight toward an
-    -- endpoint that no longer means anything, and the AI will not
-    -- interrupt that walk on its own: unit_ai's execute gate re-runs an
-    -- action only on a SWITCH or when the unit is idle, and this action
-    -- is deliberately not forceExecute (re-issuing moveTo mid-walk wipes
-    -- the engine-side path). So a replacement session on the SAME unit
-    -- would keep walking to the OLD destination until that path ran out
-    -- before it ever looked at the new one. Stopping here is what makes
-    -- the unit idle, which is what makes the next tick re-decide
-    -- immediately -- and it is a no-op for the far commoner case, a
-    -- session closed while the escort is already standing still.
-    unit.stop(s.source.id)
-    nudgeUnit(s.source.id)
+    -- STOP each held unit, not just release it. A session that ends
+    -- while its escort is still APPROACHING leaves a walk in flight
+    -- toward an endpoint that no longer means anything, and the AI will
+    -- not interrupt that walk on its own: unit_ai's execute gate re-runs
+    -- an action only on a SWITCH or when the unit is idle, and this
+    -- action is deliberately not forceExecute (re-issuing moveTo
+    -- mid-walk wipes the engine-side path). So a replacement session on
+    -- the SAME unit would keep walking to the OLD destination until that
+    -- path ran out before it ever looked at the new one. Stopping here
+    -- is what makes the unit idle, which is what makes the next tick
+    -- re-decide immediately -- and it is a no-op for the far commoner
+    -- case, a unit that is already standing still.
+    --
+    -- BOTH ends for a unit-to-unit session (#1251, requirement 2): no
+    -- session path may leave either unit held, and there is exactly one
+    -- teardown, so covering the pair here covers a panel close, a
+    -- replacement, an endpoint that vanished, Exit to Menu and the
+    -- successful-load reset alike. Stopping is all this does to the
+    -- target: it cancels no order and clears no goal, so a durable
+    -- Mode B order the target is carrying (its own, or one a load just
+    -- restored onto a reused uid) survives the release and its executor
+    -- simply re-issues the walk on its next tick.
+    for _, uid in ipairs(heldUnits(s)) do
+        unit.stop(uid)
+        nudgeUnit(uid)
+    end
     return true
 end
 

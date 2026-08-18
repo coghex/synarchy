@@ -400,9 +400,12 @@ local function buildKinds()
                                               and PANE_SOURCE
                                               or PANE_DESTINATION)
               if not (from and to) then return {} end
-              -- The held unit is the session's source in BOTH directions:
-              -- it is the acolyte the player is standing there, and every
-              -- warning and event this gesture emits belongs in its log.
+              -- The gesture's EXECUTOR is the session's source in BOTH
+              -- directions: it is the acolyte the player walked over,
+              -- and every warning and event this gesture emits belongs
+              -- in its log. Since #1251 a unit destination is held too,
+              -- but which unit is held is not what this decides -- an
+              -- executor is one unit, and it is the one that came.
               local heldUid = src.source and src.source.id
               if type(heldUid) ~= "number" then return {} end
               local verb = (paneKey == PANE_DESTINATION) and "Retrieve"
