@@ -25,7 +25,6 @@ module Test.Headless.UI.SettingsDefaultsKeybinds (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Exception (finally)
 import qualified Data.ByteString as BS
 import Data.IORef (newIORef, readIORef)
 import Data.List (sort)
@@ -42,15 +41,15 @@ import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import System.Directory
-  ( createDirectoryIfMissing, createDirectoryLink, doesDirectoryExist
-  , doesFileExist, getCurrentDirectory, getTemporaryDirectory
-  , listDirectory, pathIsSymbolicLink, removeDirectoryRecursive
+  ( createDirectoryLink, doesDirectoryExist, doesFileExist
+  , getCurrentDirectory, listDirectory, pathIsSymbolicLink
   , withCurrentDirectory )
 import System.FilePath ((</>))
 import System.IO (stderr)
 import Test.Headless.Harness (withHeadlessEngine)
 import Test.Headless.Harness.Isolation
-  (isInsideIsolatedResourceRoot, withIsolatedResourceRoot)
+  ( isInsideIsolatedResourceRoot, withExclusiveTempDirectory
+  , withIsolatedResourceRoot )
 
 -- | The cwd-relative path 'Engine.Scripting.Lua.API.Keybinds.saveKeybindsFn'
 --   hard-codes, and therefore the exact path this issue is about.
@@ -105,17 +104,6 @@ evalOk ls code = do
 
 liveBindings ∷ EngineEnv → IO KeyBindings
 liveBindings env = readIORef (icKeyBindingsRef (toInputCapability env))
-
--- | Scratch state for the fixture's own cases lives under the system
---   temp directory, never in the checkout, and is wiped before and after
---   use so a failed example cannot poison the next run.
-removeIfPresent ∷ FilePath → IO ()
-removeIfPresent path = do
-    present ← doesDirectoryExist path
-    when present (removeDirectoryRecursive path)
-
-finallyCleanup ∷ IO α → FilePath → IO α
-finallyCleanup action path = action `finally` removeIfPresent path
 
 spec ∷ Spec
 spec = describe "Settings Defaults keybind persistence (#1357)" $ do
@@ -175,14 +163,10 @@ spec = describe "Settings Defaults keybind persistence (#1357)" $ do
     -- real checkout directory, and discarding the root must unlink those
     -- rather than walk into them.
     it "tearing the root down severs its symlinks without touching what \
-       \they point at" $ do
-        tmp ← getTemporaryDirectory
-        let victim   = tmp </> "synarchy-1357-symlink-victim"
-            sentinel = victim </> "keep-me.txt"
-        removeIfPresent victim
-        createDirectoryIfMissing True victim
-        writeFile sentinel "untouched"
-        flip finallyCleanup victim $ do
+       \they point at" $
+        withExclusiveTempDirectory "synarchy-1357-symlink-victim" $ \victim → do
+            let sentinel = victim </> "keep-me.txt"
+            writeFile sentinel "untouched"
             withIsolatedResourceRoot $ do
                 root ← getCurrentDirectory
                 createDirectoryLink victim (root </> "linked-victim")
@@ -200,11 +184,7 @@ spec = describe "Settings Defaults keybind persistence (#1357)" $ do
     it "no on-disk file can make a directory look like a scratch root" $ do
         inCheckout ← isInsideIsolatedResourceRoot
         inCheckout `shouldBe` False
-        tmp ← getTemporaryDirectory
-        let lookalike = tmp </> "synarchy-1357-lookalike-root"
-        removeIfPresent lookalike
-        createDirectoryIfMissing True lookalike
-        flip finallyCleanup lookalike $ do
+        withExclusiveTempDirectory "synarchy-1357-lookalike-root" $ \lookalike → do
             -- Every marker name this fixture has ever used, plus the
             -- shape of a scratch root's own name.
             forM_ [ ".synarchy-isolated-resource-root"

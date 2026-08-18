@@ -66,6 +66,7 @@
 module Test.Headless.Harness.Isolation
   ( withIsolatedResourceRoot
   , isInsideIsolatedResourceRoot
+  , withExclusiveTempDirectory
   ) where
 
 import UPrelude
@@ -130,35 +131,52 @@ withIsolatedResourceRoot action = do
         -- was created is always removed even if 'populateRoot' throws
         -- half way, and the inner guarantees the recorded active root is
         -- cleared before that removal happens.
-        bracket createExclusiveScratchRoot discardRoot $ \root → do
+        bracket (createExclusiveTempDirectory scratchRootPrefix)
+                discardTempDirectory $ \root → do
             populateRoot srcRoot root
             bracket_ (writeIORef activeIsolatedRootRef (Just root))
                      (writeIORef activeIsolatedRootRef Nothing)
                      (withCurrentDirectory root action)
 
--- | Create a brand new scratch root under the system temp directory and
---   return its path.
+-- | Run an action with a brand new, exclusively created directory under
+--   the system temp directory, removed afterwards.
+--
+--   This is the one primitive anything in this suite should use for
+--   throwaway filesystem state, and 'withIsolatedResourceRoot' is built
+--   on it. Its rule — established by the fixture and then applied to the
+--   fixture's own tests (PR #1373 review) — is that a cleanup routine
+--   may only ever delete a directory the SAME call created. Deleting
+--   whatever happens to sit at a predictable path in order to claim it
+--   is the bug, not the setup step: that path may hold a stale root from
+--   an interrupted run, or somebody else's data entirely.
+withExclusiveTempDirectory ∷ String → (FilePath → IO α) → IO α
+withExclusiveTempDirectory prefix =
+    bracket (createExclusiveTempDirectory prefix) discardTempDirectory
+
+-- | Create a brand new directory named @<prefix>-<random>@ under the
+--   system temp directory and return its path.
 --
 --   'createDirectory' — never 'createDirectoryIfMissing' — is the whole
 --   point: it fails with an already-exists error if ANYTHING occupies
 --   the path, including a symlink, so a successful return means this
---   call created that directory and 'discardRoot' can only ever remove
---   something this module made. The name is randomized so a stale root
---   from an interrupted run is never adopted, reused, or cleaned.
-createExclusiveScratchRoot ∷ IO FilePath
-createExclusiveScratchRoot = do
+--   call created that directory and 'discardTempDirectory' can only ever
+--   remove something this module made. The name is randomized so a stale
+--   directory from an interrupted run is never adopted, reused, or
+--   cleaned.
+createExclusiveTempDirectory ∷ String → IO FilePath
+createExclusiveTempDirectory prefix = do
     tmp ← getTemporaryDirectory
     go tmp (0 ∷ Int)
   where
     maxAttempts = 64
     go tmp attempt
       | attempt ≥ maxAttempts = ioError $ userError $
-          "withIsolatedResourceRoot: could not create a fresh scratch \
-          \resource root under " ⧺ tmp ⧺ " after " ⧺ show maxAttempts
-            ⧺ " attempts"
+          "withExclusiveTempDirectory: could not create a fresh "
+            ⧺ prefix ⧺ " directory under " ⧺ tmp ⧺ " after "
+            ⧺ show maxAttempts ⧺ " attempts"
       | otherwise = do
           n ← Random.randomRIO (0 ∷ Int, 999999999)
-          let path = tmp </> ("synarchy-headless-isolated-root-" ⧺ show n)
+          let path = tmp </> (prefix ⧺ "-" ⧺ show n)
           outcome ← try (createDirectory path)
           case outcome ∷ Either IOException () of
               Right ()               → pure path
@@ -194,23 +212,27 @@ copyTree src dst = do
           then copyTree (src </> name) (dst </> name)
           else copyFile (src </> name) (dst </> name)
 
--- | Tear the scratch root down.
+-- | Name every scratch resource root starts with.
+scratchRootPrefix ∷ String
+scratchRootPrefix = "synarchy-headless-isolated-root"
+
+-- | Tear one exclusively created temp directory down.
 --
---   The root itself is never TRAVERSED when it is a symbolic link — it
---   is unlinked and nothing more. That cannot happen given
---   'createExclusiveScratchRoot', which is why the check is cheap
+--   The directory itself is never TRAVERSED when it is a symbolic link —
+--   it is unlinked and nothing more. That cannot happen given
+--   'createExclusiveTempDirectory', which is why the check is cheap
 --   insurance rather than a code path with a story: enumerating a link's
 --   target here would mean deleting somebody else's directory.
 --
---   Inside a real root, every symlink is severed EXPLICITLY, one entry
---   at a time, before anything recursive runs: recursive removal is
+--   Inside a real directory, every symlink is severed EXPLICITLY, one
+--   entry at a time, before anything recursive runs: recursive removal is
 --   documented not to follow symbolic links, but the cost of that
 --   guarantee not holding here is the developer's whole checkout, so the
---   links are gone before the question can be asked. Only fixture-owned
---   real directories (@config/@, plus anything a spec created relative
---   to the root) are then removed recursively.
-discardRoot ∷ FilePath → IO ()
-discardRoot root = do
+--   links are gone before the question can be asked. Only owned real
+--   directories (a scratch root's @config/@, plus anything a spec created
+--   relative to it) are then removed recursively.
+discardTempDirectory ∷ FilePath → IO ()
+discardTempDirectory root = do
     rootIsLink ← pathIsSymbolicLink root
     if rootIsLink
       then severLink root
@@ -221,7 +243,7 @@ discardRoot root = do
             forM_ entries $ \name → removeEntry (root </> name)
             removeDirectory root
 
--- | Remove one direct child of the scratch root: a symlink is severed
+-- | Remove one direct child: a symlink is severed
 --   without touching its target, a real directory goes recursively, and
 --   anything else is a plain file.
 removeEntry ∷ FilePath → IO ()
