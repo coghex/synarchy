@@ -1780,9 +1780,26 @@ before touching each area:
   one-time migration source: `Engine.Core.Init.migrateLegacyConfig`
   copies a legacy file to the local path iff the local file is absent
   AND the legacy file decodes against the real target schema; failures
-  fall back to defaults and never touch a valid local file. Gates:
-  `config_state_probe.py`, `config_migration_probe.py`; hspec
-  `--match "config"`.
+  fall back to defaults and never touch a valid local file.
+  **A headless spec that drives a production path which WRITES
+  `config/` must wrap `Test.Headless.Harness.Isolation.withIsolatedResourceRoot`
+  AROUND `withHeadlessEngine`** (#1266's "tests never modify, truncate or
+  regenerate the developer's `config/*.local.yaml`", enforced after #1357):
+  it points the process cwd at a scratch root that symlinks every
+  top-level entry but owns a real copy of `config/`, so every
+  cwd-relative write lands in a temp dir. Outside, never inside — engine
+  init is itself a writer (`migrateLegacyConfig`, the notification
+  overrides materializer). It writes nothing in the checkout, so there is
+  no backup/restore window to crash inside. The two suites that need it
+  (`UI.ResponsiveMenus`, `UI.ResponsiveGameplay`, both reaching the
+  write-through `settingsMenu.onDefaults()`) each carry a one-line
+  in-suite guard asserting they run under it, because every other
+  assertion in them passed while the developer's bindings were being
+  replaced. Gates: `config_state_probe.py`, `config_migration_probe.py`;
+  hspec `--match "config"`,
+  `--match "Settings Defaults keybind persistence"` (the isolation
+  boundary itself, plus the player-facing Defaults write-through it must
+  not weaken).
 
 ## Save / Load
 
