@@ -3,6 +3,7 @@ module Main where
 import UPrelude
 import Test.Hspec
 import Test.Headless.Harness (withHeadlessEngine, withHeadlessEngineNoWorld)
+import qualified Test.Headless.Harness.WorkerHealth as HarnessWorkerHealth
 import qualified Test.Headless.WorldGen as WorldGen
 import qualified Test.Headless.WorldGen.Geology as Geology
 import qualified Test.Headless.WorldGen.Parity as Parity
@@ -326,6 +327,7 @@ main = hspec $ do
     -- so it generates its own cheap private w8 page rather than sharing
     -- or disturbing the worldgen specs' engine/camera state.
     aroundAll withHeadlessEngine SelectChunk.sharedSpec
+    HarnessWorkerHealth.spec
     describe "Wrap Seam" WrapSeam.spec
     describe "WorldGen.CoastBreach" CoastBreach.spec
     describe "WorldGen.BedDepth" BedDepth.spec
