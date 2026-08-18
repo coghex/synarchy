@@ -64,6 +64,36 @@
 -- identical reason. Both paths run the SAME coupled teardown, so
 -- neither can leave panels open or a unit held.
 --
+-- FAILURE HANDLING (#1254, slice UIT-5B). Every way a session can be
+-- interrupted ends it through that one teardown, and the module's job
+-- is to NOTICE each of them:
+--
+--   an endpoint that vanished, stopped being eligible, or is dead or
+--   unconscious      'M.update', every tick, in BOTH phases
+--   a new player order to a held unit
+--                    'M.notePlayerOrder', from the player's own
+--                    ingress sites only
+--   a replacement session
+--                    'M.create', after every validation has passed
+--   the window closing, an endpoint the manager saw vanish
+--                    'M.onLevelClosed', the window stack's own side
+--   a zoom-band change or the HUD leaving the screen
+--                    scripts/ui/view_teardown.lua (#156), which is
+--                    where a new teardown trigger belongs -- never a
+--                    one-off call at the transition site
+--   Exit to Menu     scripts/pause_menu.lua's 'M.clear', before
+--                    world.destroyAll() so the release still reaches
+--                    live entities
+--   a successful load
+--                    the reset hook above
+--
+-- What none of them changes is COMMIT atomicity (requirement 7): a
+-- session owns no transaction of its own. Each row gesture is one
+-- 'unit.checkTransfer' + 'unit.commitTransfer' pair on the identical
+-- request, and src/Unit/Transfer.hs commits each item both-or-neither,
+-- so an interruption can only ever land between two whole requests.
+-- Ending a session never rolls back what already committed.
+--
 -- Reusable on purpose (#1014 requirement 8): 'M.create' is the ONE
 -- place a session gets built. scripts/init_context_menu.lua's
 -- "Transfer" callback calls it below; a future drag-and-drop surface
@@ -239,6 +269,53 @@ local function heldUnits(s)
     return { s.source.id }
 end
 
+-- The poses in which a unit has stopped being commandable ALTOGETHER,
+-- named exactly as scripts/unit_ai.lua's own short-circuit names them
+-- (its `pose == "collapsed" or pose == "dead"` gate, which returns
+-- before any action is scored). A unit in one of them runs no AI at
+-- all, so a hold on it holds nothing and an escort on it will never
+-- take another step.
+--
+-- Deliberately NOT the recoverable poses beside them -- crawling,
+-- sleeping, an engine animation -- which are interruptions a session
+-- is expected to sit through, the same way a queued Mode B order does.
+local INCAPACITATED_POSES = { collapsed = true, dead = true }
+
+-- Why `ep` can no longer be an endpoint of a LIVE session, or nil
+-- while it still can. `role` ("source" / "destination") only names
+-- which side the answer is about.
+--
+-- The contract's own endpoint projection answers most of it: a
+-- demolished building and a unit that left the player's factions both
+-- stop resolving, or stop being `eligible`, right there. What it
+-- deliberately does not answer is whether a live unit is in any state
+-- to be HELD -- Unit.Transfer.endpointEligible is
+-- `uevCommandable` and nothing else, so a dead acolyte is still a
+-- perfectly eligible endpoint by the contract's lights. Requirement 2
+-- is exactly that case, so the pose test is added HERE rather than
+-- widened in the contract, which owns transfer POLICY (may these two
+-- endpoints exchange this item?) and not the session's own liveness.
+--
+-- Every string returned is a DEBUG-LOG reason for `M.close`, in the
+-- same free-form family as "replaced" / "cleared" / "save_loaded".
+-- None of them is contract vocabulary and none reaches the player:
+-- this issue adds no failure vocabulary (its own out-of-scope list),
+-- and `Unit.Transfer`'s reason ids are untouched.
+local function endpointFailure(ep, role)
+    if not ep or ep.id == nil then return role .. "_gone" end
+    local info = liveEndpoint(ep)
+    if not info then return role .. "_gone" end
+    if info.eligible ~= true then return role .. "_ineligible" end
+    if ep.kind == KIND_UNIT then
+        local pose = unit.getPose(ep.id)
+        if pose == nil then return role .. "_gone" end
+        if INCAPACITATED_POSES[pose] then
+            return role .. "_incapacitated"
+        end
+    end
+    return nil
+end
+
 -- Ask `uid` to re-decide on its NEXT tick rather than at its natural
 -- thought cadence -- the same responsiveness every direct command
 -- (commandMove / commandPickup / commandTransferOrder) buys, and what
@@ -295,10 +372,74 @@ function M.init(scriptId)
     -- replaces the whole session, so panels pointing at endpoints the
     -- replacement may not even have must go with it, and the unit the
     -- old session was holding must be released.
+    -- `unitsAreStale` is what makes this the ONE teardown every other
+    -- path also runs, without it reaching into a session it no longer
+    -- describes. saveModules.applyAll fires reset hooks only after
+    -- every component has committed, so by the time this runs the uids
+    -- this session recorded name whatever the LOAD restored onto them
+    -- -- session-global entity ids are reused across sessions. Panels
+    -- and identity are this module's own state and go; stopping and
+    -- nudging a unit is not, and would be applied to a stranger.
     saveMods.registerResetHook("transfer_session", function()
-        M.close("save_loaded")
+        M.close("save_loaded", { unitsAreStale = true })
     end)
     checkVocabulary()
+end
+
+-- The engine's own per-tick entry point (scripts/init_loader.lua
+-- loadScript's this module), and the ONE place requirements 1 and 2
+-- are noticed.
+--
+-- It has to be here rather than on the window, because a session
+-- spends its whole APPROACH with no window at all: the container
+-- manager's per-tick `stillThere` hook covers an endpoint that
+-- vanishes while the panels are open, and nothing covered the walk. A
+-- demolished cargo, a dead escort or a target that dropped out of the
+-- player's factions mid-approach would otherwise leave the pair held
+-- against nothing until the player noticed and closed a window that
+-- was never opened.
+--
+-- Cheap by construction: a tick with no session reads nothing at all.
+function M.update(_dt)
+    if not M.active then return end
+    local reason = M.staleReason()
+    if reason then M.close(reason) end
+end
+
+-- Why the active session can no longer continue, or nil while it can.
+-- Public because it is the rule, not an implementation detail: a gate
+-- asserting "this interruption ends the session" should be able to ask
+-- the same question the tick asks.
+function M.staleReason()
+    local s = M.active
+    if not s then return nil end
+    return endpointFailure(s.source, "source")
+        or endpointFailure(s.destination, "destination")
+end
+
+-- The shared PLAYER-ORDER boundary (requirement 3, signed off
+-- 2026-08-11): a player giving a held unit a new order ends the
+-- session, and the order then proceeds. Player intent wins, which is
+-- both the RTS convention and this codebase's own rule for every other
+-- window where a player verb races an automated one.
+--
+-- Called from the player's own ingress sites and from nowhere else --
+-- scripts/init_mouse.lua's right-click move order, and
+-- scripts/init_context_menu.lua's Attack / Pick up / Move here. It is
+-- deliberately NOT inside unitAi.commandMove / commandAttack /
+-- commandPickup: scripts/building_spawn.lua and
+-- scripts/unit_ai_combat.lua call those for scripted and autonomous
+-- behaviour, and a session must not be cancelled by a spawn roster
+-- walking a fresh acolyte out of a portal.
+--
+-- Ending the session STOPS every unit it held (see `M.close`), so this
+-- must run BEFORE the order is issued or the teardown would wipe the
+-- walk the player just asked for. Returns whether it ended anything,
+-- so the caller can order unconditionally either way.
+function M.notePlayerOrder(uid)
+    if not M.holdsUnit(uid) then return false end
+    M.close("player_order")
+    return true
 end
 
 -- The B1-owned "valid source" rule, NEAREST-OF-N (#1239; design
@@ -612,9 +753,25 @@ function M.markArrived()
 end
 
 -- Coupled teardown (requirement 7), and the ONLY way a session ends.
--- Idempotent, and the same call for every path that ends one: a closed
--- panel, a replacement, an endpoint that vanished, Exit to Menu, a save
--- load.
+-- Idempotent, non-throwing, and the same call for every path that ends
+-- one: a closed panel, a replacement, an endpoint that vanished or was
+-- incapacitated, a new player order, a view transition, Exit to Menu, a
+-- save load. Each of those is a TRIGGER; none of them is a second
+-- teardown, which is what keeps "no interruption leaves a unit held"
+-- one fact to check rather than one per trigger.
+--
+-- Every step is isolated from the ones after it: the panels close
+-- inside a pcall and each held unit is released inside its own, so an
+-- endpoint that has already stopped resolving cannot cost the OTHER
+-- endpoint its release or leave a panel on screen.
+--
+-- `opts.unitsAreStale` says the recorded uids no longer name the units
+-- this session held, so the release below must not touch them. The
+-- successful-load reset is the one caller: its hook fires after every
+-- component has applied, and session-global entity ids are reused
+-- across sessions, so `unit.stop(1)` there stops whatever the save
+-- restored onto uid 1. Panels and identity are this module's own state
+-- and go regardless.
 --
 -- The active session is cleared FIRST and deliberately: closing the
 -- level fires the escort kind's own `onClose`, which calls back into
@@ -626,7 +783,7 @@ end
 -- action scores -inf on its next tick with nothing left to hold it --
 -- so the only thing left to do is ask that unit to re-decide NOW rather
 -- than at its natural cadence.
-function M.close(reason)
+function M.close(reason, opts)
     local s = M.active
     if not s then return false end
     M.active = nil
@@ -651,15 +808,23 @@ function M.close(reason)
     -- BOTH ends for a unit-to-unit session (#1251, requirement 2): no
     -- session path may leave either unit held, and there is exactly one
     -- teardown, so covering the pair here covers a panel close, a
-    -- replacement, an endpoint that vanished, Exit to Menu and the
-    -- successful-load reset alike. Stopping is all this does to the
-    -- target: it cancels no order and clears no goal, so a durable
-    -- Mode B order the target is carrying (its own, or one a load just
-    -- restored onto a reused uid) survives the release and its executor
-    -- simply re-issues the walk on its next tick.
-    for _, uid in ipairs(heldUnits(s)) do
-        unit.stop(uid)
-        nudgeUnit(uid)
+    -- replacement, an endpoint that vanished or was incapacitated, a
+    -- new player order, a HUD/zoom-band transition and Exit to Menu
+    -- alike. Stopping is all this does to the target: it cancels no
+    -- order and clears no goal, so a durable Mode B order the target is
+    -- carrying survives the release and its executor simply re-issues
+    -- the walk on its next tick.
+    --
+    -- The successful-load reset is the ONE path that skips this
+    -- entirely, and skips it because its uids are stale rather than
+    -- because a restored unit deserves less care -- see `opts` above.
+    if not (opts and opts.unitsAreStale) then
+        for _, uid in ipairs(heldUnits(s)) do
+            pcall(function()
+                unit.stop(uid)
+                nudgeUnit(uid)
+            end)
+        end
     end
     return true
 end

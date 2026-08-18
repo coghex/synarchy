@@ -159,7 +159,12 @@ function M.tryUnitMenu(x, y)
             callback = function()
                 -- Player order → committed (holds far longer
                 -- before futility breaks it; soft, not absolute).
+                -- #1254: a player order to a unit a Mode A transfer
+                -- session is holding ends that session first, then
+                -- proceeds — player intent wins. Before the command,
+                -- because the teardown stops every unit it held.
                 for _, uid in ipairs(attackers) do
+                    require("scripts.transfer_session").notePlayerOrder(uid)
                     unitAi.commandAttack(uid, targetUid, true)
                 end
             end,
@@ -395,6 +400,7 @@ function M.tryItemMenu(x, y)
         end
         if ipos then
             local unitAi = require("scripts.unit_ai")
+            local transferSession = require("scripts.transfer_session")
             table.insert(menuItems, {
                 label = "Pick up",
                 callback = function()
@@ -410,6 +416,9 @@ function M.tryItemMenu(x, y)
                         end
                     end
                     if bestUid then
+                        -- #1254, as on Attack above: a player order to
+                        -- a held unit ends the Mode A session first.
+                        transferSession.notePlayerOrder(bestUid)
                         unitAi.commandPickup(bestUid, gid)
                     end
                 end })
@@ -417,6 +426,7 @@ function M.tryItemMenu(x, y)
                 label = "Move here",
                 callback = function()
                     for _, uid in ipairs(selUids) do
+                        transferSession.notePlayerOrder(uid)
                         unitAi.commandMove(uid, ipos.x, ipos.y)
                     end
                 end })

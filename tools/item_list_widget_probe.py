@@ -1966,6 +1966,108 @@ def escort_session_scenario(port: int, bid: int, bax: int, bay: int,
                          ".get())").strip('"') == "nil",
           f"got {closed!r}")
 
+    # -- #1254 (UIT-5B): an ABNORMAL close leaves a usable window stack.
+    #
+    # The one thing this needs a GPU for. Every failure TRIGGER, and the
+    # release of every hold, is pinned deterministically by hspec
+    # (Test.Headless.UI.TransferSession, `session failure handling`);
+    # what no fixture that renders nothing can state is that the real
+    # panels' ELEMENTS went with the session, and that the next window to
+    # open on the same page draws and hit-tests normally rather than over
+    # two orphaned panels.
+    #
+    # A FRESH escort, spawned on a surface-checked tile just OUTSIDE the
+    # cargo's footprint — adjacent, so the contract's Chebyshev-1
+    # rect-to-rect rule already reports it in reach and the session opens
+    # on the first AI tick with no walk at all — and destroyed again at
+    # the end.
+    #
+    # Both halves of that are deliberate. Fresh, because this probe's
+    # world reliably contains bleeding acolytes (see
+    # `retire_medic_drive`) and one that has been standing in it for a
+    # few minutes can be at a third of its blood; since #1254 an
+    # UNCONSCIOUS held unit correctly ends its own session, so a second
+    # session on a worn-down unit would measure the world's attrition
+    # instead of the teardown. And OUTSIDE the footprint, because
+    # spawning on the anchor puts a unit inside the building, where the
+    # drop to the ground can wound it — the same hazard, arriving faster.
+    #
+    # `unit.destroy` rather than `unit.kill`: a death is a world EVENT (a
+    # corpse, witnesses, the mood and combat reactions they provoke) and
+    # the very next scenario measures AI priority on a pair nearby, so a
+    # kill here would make that measurement depend on this one. WHICH
+    # detector fires is hspec's business — `session failure handling`
+    # covers death, unconsciousness, faction loss and demolition
+    # separately; what needs a GPU is only that the panels really left the
+    # screen and that the stack still works.
+    ab_uid, ab_raw = None, ""
+    for dx, dy in ((-1, 0), (2, 0), (0, -1), (0, 2), (-1, -1), (2, 2)):
+        tx, ty = bax + dx, bay + dy
+        surface = tile_surface(port, tx, ty)
+        if surface is None or not surface[1]:
+            continue
+        ab_raw = send(port, f"return unit.spawn('acolyte', {tx}, {ty},"
+                            " nil, 'player')")
+        if ab_raw.strip() not in ("", "nil", "null"):
+            ab_uid = int(float(ab_raw))
+            break
+    if not check("a fresh acolyte is spawned beside the cargo for the "
+                 "abnormal-close phase",
+                 ab_uid is not None, f"got {ab_raw!r}"):
+        return
+    check("its standing find_water goal is retired", clear_find_water(port, ab_uid))
+    check("it is out of the medic squad, so nothing outranks the hold",
+          retire_medic_drive(port, ab_uid))
+    reopened = send(port, "return tostring(require('scripts.transfer_session')"
+                          f".create({ab_uid}, 'building', {bid}) ~= nil)")
+    if check("a second Mode A session opens on the same endpoint",
+             reopened.strip().strip('"') == "true", f"got {reopened!r}"):
+        again = poll_until(45.0, lambda: send(
+            port, "local s = require('scripts.transfer_session').get();"
+                  " return s and s.phase or 'none'").strip('"') == "open",
+            interval=0.5)
+        if check("it reaches the open state with both panes drawn",
+                 again and (stack_dump(port).get("levels")
+                            or [{}])[0].get("paneCount") == 2,
+                 "session "
+                 + send(port,
+                        "local s = require('scripts.transfer_session').get();"
+                        " return (s and s.phase or 'gone') .. ' pose='"
+                        f" .. tostring(unit.getPose({ab_uid}))")):
+            send(port, f"return unit.destroy({ab_uid})")
+            time.sleep(1.5)
+            abnormal = stack_dump(port)
+            alive = send(port, f"return tostring(unit.exists({ab_uid}))")
+            check("losing the held escort ends the session and takes both "
+                  "panels with it (#1254 requirements 1 and 5)",
+                  alive.strip().strip('"') == "false"
+                  and abnormal.get("depth") == 0
+                  and send(port, "return tostring(require('scripts"
+                                 ".transfer_session').get())").strip('"')
+                      == "nil",
+                  f"exists {alive!r}, stack {abnormal!r}")
+            # Nothing orphaned: the panels' own widgets are gone from the
+            # live UI, not merely forgotten by the manager.
+            panes_left = [w for w in widgets(port)
+                          if (w.get("name") or "").startswith("cargo_inv")]
+            check("no escort panel widget is left on screen",
+                  not panes_left, f"still present: {panes_left!r}")
+            # ...and the stack accepts the next open, rendering rows.
+            if check("the next container window opens normally after the "
+                     "abnormal close", open_window_on(port, bid)):
+                rows = item_rows(port, level_list_id(1))
+                nxt = stack_dump(port)
+                check("that window is an ordinary endpoint level with real "
+                      "rows",
+                      nxt.get("depth") == 1
+                      and (nxt.get("levels") or [{}])[0].get("kind")
+                          == "endpoint"
+                      and len(rows) > 0,
+                      f"stack {nxt!r}, {len(rows)} row(s)")
+            send(port, "require('scripts.cargo_inventory_panel')"
+                       ".closeIfOpen(); return 'ok'")
+    send(port, f"return unit.destroy({ab_uid})")
+
 
 # --------------------------------------------------------------------------
 # #1251: the unit-to-unit escort's two-sided hold
