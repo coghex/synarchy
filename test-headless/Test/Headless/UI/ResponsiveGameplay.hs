@@ -42,6 +42,8 @@ import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Test.Headless.Harness (withHeadlessEngine)
+import Test.Headless.Harness.Isolation
+  (isInsideIsolatedResourceRoot, withIsolatedResourceRoot)
 import UI.Types (UIPageManager(..), emptyUIPageManager)
 
 -- | Join Lua statements with a single space instead of GHC string-gap
@@ -82,10 +84,19 @@ luaLines = T.intercalate " "
 -- touches them already asserts existence/relative-preservation rather
 -- than an exact count, so cross-case accumulation there is inert by
 -- construction.
+--
+-- #1357: the shared fixture also establishes the filesystem boundary,
+-- OUTSIDE 'withHeadlessEngine' — this module's round-11 case drives the
+-- real @settingsMenu.onDefaults()@, whose write-through keybind reset
+-- persisted through the production @engine.saveKeybinds()@ straight into
+-- the developer's @config/keybinds.local.yaml@. Engine initialization is
+-- itself a config writer, so the wrap has to sit outside it (see
+-- 'Test.Headless.Harness.Isolation').
 withSharedFixture ∷ ((EngineEnv, LuaBackendState) → IO ()) → IO ()
-withSharedFixture action = withHeadlessEngine $ \env → do
-    ls ← newBareLuaBackend env
-    action (env, ls)
+withSharedFixture action = withIsolatedResourceRoot $
+    withHeadlessEngine $ \env → do
+        ls ← newBareLuaBackend env
+        action (env, ls)
 
 resetFixture ∷ EngineEnv → LuaBackendState → IO ()
 resetFixture env ls = do
@@ -97,6 +108,16 @@ resetFixture env ls = do
 
 spec ∷ Spec
 spec = aroundAll withSharedFixture $ do
+    -- #1357's guard, for the same reason ResponsiveMenus carries one:
+    -- the round-11 case below drives the real settingsMenu.onDefaults(),
+    -- which persists factory keybinds through the production
+    -- engine.saveKeybinds() to the cwd-relative
+    -- config/keybinds.local.yaml. Nothing else in this suite would
+    -- notice if 'withSharedFixture' stopped isolating the filesystem.
+    describe "suite config isolation (#1357)" $
+        it "runs inside the scratch resource root, never the checkout" $ \_ → do
+            inScratch ← isInsideIsolatedResourceRoot
+            inScratch `shouldBe` True
 
     describe "hud.getToolbarRects() (#750) — the reserved 'required controls'" $ do
         it "every configured resolution (1x) produces exactly 3 real, in-frame toolbar clusters" $ \(env, ls) → do

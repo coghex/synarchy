@@ -37,6 +37,8 @@ import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), ScriptValue(..))
 import Engine.Scripting.Lua.Util (broadcastToModules)
 import Test.Headless.Harness (withHeadlessEngine)
+import Test.Headless.Harness.Isolation
+  (isInsideIsolatedResourceRoot, withIsolatedResourceRoot)
 import UI.Types (UIPageManager(..), emptyUIPageManager)
 
 -- | Join Lua statements/fragments with a single space — every multi-line
@@ -60,8 +62,17 @@ menusBaselineUIScale = 1.0
 --   This is an in-memory mutation ONLY — the same narrow one
 --   @engine.setUIScale@ performs ('Engine.Scripting.Lua.API.Config'),
 --   whose persistence is a separate @saveVideoConfig@ call this suite
---   never makes. Running these specs therefore cannot modify,
---   truncate, or regenerate a developer's @config/*.local.yaml@.
+--   never makes.
+--
+--   That fact alone never made the whole SUITE non-writing, and #1357
+--   found the gap: three examples (two here, one in
+--   'Test.Headless.UI.ResponsiveGameplay') drive the real
+--   @settingsMenu.onDefaults()@, whose keybind reset is write-through
+--   by contract — it called the production @engine.saveKeybinds()@ and
+--   silently replaced the developer's @config/keybinds.local.yaml@.
+--   What guarantees #1266's \"tests never modify, truncate or
+--   regenerate @config/*.local.yaml@\" is now the filesystem boundary
+--   in 'withMenusEngine' below, not this function.
 normalizeUIScale ∷ EngineEnv → IO ()
 normalizeUIScale env =
     atomicModifyIORef' (videoConfigRef env) $ \c →
@@ -90,13 +101,31 @@ normalizeUIScale env =
 --   normalization for the same reason; it just folds it into a
 --   shared-fixture reset rather than a per-example wrapper, because
 --   that suite shares one engine across its cases.
+--
+--   The wrapper ALSO establishes #1357's filesystem boundary, and does
+--   so OUTSIDE 'withHeadlessEngine': engine initialization is itself a
+--   config writer (see 'Test.Headless.Harness.Isolation'), so isolating
+--   only after the engine came up would already be too late.
 withMenusEngine ∷ (EngineEnv → IO α) → IO α
-withMenusEngine action = withHeadlessEngine $ \env → do
-    normalizeUIScale env
-    action env
+withMenusEngine action = withIsolatedResourceRoot $
+    withHeadlessEngine $ \env → do
+        normalizeUIScale env
+        action env
 
 spec ∷ Spec
 spec = around withMenusEngine $ do
+    describe "suite config isolation (#1357)" $ do
+        -- The guard that keeps 'withMenusEngine's filesystem boundary
+        -- from being quietly unwired: two cases below drive the real
+        -- settingsMenu.onDefaults(), whose write-through keybind reset
+        -- persists through the production engine.saveKeybinds() to the
+        -- cwd-relative config/keybinds.local.yaml. Every assertion in
+        -- this suite passed while that overwrote the developer's file,
+        -- so nothing else here would notice its return.
+        it "runs inside the scratch resource root, never the checkout" $ \_ → do
+            inScratch ← isInsideIsolatedResourceRoot
+            inScratch `shouldBe` True
+
     describe "suite UI-scale baseline (#1266)" $ do
         it "pins the effective scale to 1x whatever the local video config resolved to, preserving every other video setting" $ \env → do
             -- Simulate an arbitrary developer overlay landing in the
