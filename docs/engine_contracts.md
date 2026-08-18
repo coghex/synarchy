@@ -770,10 +770,12 @@ own `--self-test`). CLAUDE.md states the rule and the two hard facts about
 the baseline (it is GENERATED; a pure append ratchets it with
 `--update-baseline`). This is the rest.
 
-**Coverage.** Of the 37 guarded types, 32 are reachable from a save-wire
-DTO today; the rest are guarded pre-emptively, which is the point of
-keying on the `Serialize`-via-`Generic` instance rather than on save
-reachability.
+**Coverage.** Of the 43 guarded types, 38 are on the save wire and 28 are
+named by a live component today; the rest are guarded pre-emptively, which
+is the point of keying on the `Serialize`-via-`Generic` instance rather
+than on save reachability. Don't hand-count these: the audit prints the
+guarded total on every run, and `docs/save_compat/enum_baseline.json`'s
+per-type `onSaveWire` / `components` fields are the other two.
 
 **What the baseline records.** Module-qualified constructor lists, each
 constructor recording its name and its ordered PAYLOAD signature, plus the
