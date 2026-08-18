@@ -24,7 +24,11 @@ to launch one more probe, runner interruption (a real SIGINT to a real
 runner process), parallel cancellation, an interrupt landing DURING
 future submission, a probe launched into an already-starting shutdown,
 an interrupt landing in the launch window itself, and a retry rebinding
-the port a SIGKILLed engine had held.
+the port a SIGKILLed engine had held. Also covers `select`/`main`'s
+`--exact` unknown-key rejection (issue #1321): a mixed valid/invalid
+request, the pre-existing all-invalid empty-selection diagnostic, a
+wholly valid request's registry-order and duplicate-collapse behavior,
+and substring selection's unchanged permissiveness.
 
 Usage:
   python3 tools/test_run_probes.py
@@ -465,7 +469,8 @@ def _main_with(tree: Tree, argv: list[str]) -> tuple[int, str]:
     saved_argv = sys.argv
     sys.argv = ["run_probes.py"] + argv
     try:
-        with patched(tree), contextlib.redirect_stdout(buf):
+        with patched(tree), contextlib.redirect_stdout(buf), \
+             contextlib.redirect_stderr(buf):
             rc = run_probes.main()
     finally:
         sys.argv = saved_argv
@@ -491,6 +496,94 @@ def test_aggregate_exit_codes_unchanged() -> None:
         expect("FAIL" in out, "and reports FAIL")
         expect("diagnostic line 4" in out,
                "and still prints the failing probe's output tail")
+    finally:
+        tree.cleanup()
+
+
+# --------------------------------------------------------------------------
+# Exact selection: unknown keys are rejected rather than silently dropped
+# (#1321)
+# --------------------------------------------------------------------------
+def test_exact_mixed_selection_is_rejected_before_listing() -> None:
+    print("\n-- --exact + --list with unknown keys alongside a valid one is "
+          "rejected, not partially listed")
+    tree = Tree()
+    try:
+        tree.add("good", exit_code=0)
+        rc, out = _main_with(
+            tree, ["--only", "good,not_a_probe,also_bad", "--exact", "--list"])
+        expect(rc != 0,
+               f"a mixed valid/invalid --exact selection must fail (got {rc})")
+        expect("not_a_probe" in out and "also_bad" in out,
+               f"the diagnostic names every unknown key, got: {out!r}")
+        expect("good_probe.py" not in out,
+               f"no partial listing of the valid probe leaks through, got: {out!r}")
+    finally:
+        tree.cleanup()
+
+
+def test_exact_mixed_selection_never_runs_the_valid_probe() -> None:
+    print("\n-- the same rejection happens before RUNNING anything, not just listing")
+    tree = Tree()
+    try:
+        tree.add("good", exit_code=0)
+        rc, out = _main_with(tree, ["--only", "good,not_a_probe", "--exact"])
+        expect(rc != 0, f"the mixed selection is rejected (got {rc})")
+        expect(not tree.started("good"), "the valid probe never actually started")
+    finally:
+        tree.cleanup()
+
+
+def test_exact_all_invalid_selection_keeps_existing_diagnostic() -> None:
+    print("\n-- an all-invalid --exact selection keeps the pre-existing "
+          "empty-selection error and exit code")
+    tree = Tree()
+    try:
+        tree.add("good", exit_code=0)
+        rc, out = _main_with(tree, ["--only", "not_a_probe", "--exact", "--list"])
+        expect(rc == 2, f"an all-invalid --exact selection still exits 2 (got {rc})")
+        expect("matched no probes" in out,
+               f"and keeps the existing 'matched no probes' diagnostic, got: {out!r}")
+    finally:
+        tree.cleanup()
+
+
+def test_exact_all_valid_selection_is_unaffected() -> None:
+    print("\n-- a wholly valid --exact selection lists in registry order, unchanged")
+    tree = Tree()
+    try:
+        tree.add("alpha", exit_code=0)
+        tree.add("beta", exit_code=0)
+        rc, out = _main_with(tree, ["--only", "beta,alpha", "--exact", "--list"])
+        expect(rc == 0, f"a wholly valid --exact selection still exits 0 (got {rc})")
+        expect(out.index("alpha_probe.py") < out.index("beta_probe.py"),
+               f"registry order survives regardless of request order, got: {out!r}")
+    finally:
+        tree.cleanup()
+
+
+def test_exact_duplicate_valid_keys_still_collapse() -> None:
+    print("\n-- a wholly valid --exact selection with a duplicated key lists it once")
+    tree = Tree()
+    try:
+        tree.add("alpha", exit_code=0)
+        rc, out = _main_with(tree, ["--only", "alpha,alpha", "--exact", "--list"])
+        expect(rc == 0, f"still exits 0 (got {rc})")
+        expect(out.count("alpha_probe.py") == 1,
+               f"a duplicated valid key is listed exactly once, got: {out!r}")
+    finally:
+        tree.cleanup()
+
+
+def test_substring_selection_stays_permissive() -> None:
+    print("\n-- substring (non --exact) selection still ignores an unmatched needle")
+    tree = Tree()
+    try:
+        tree.add("craft", exit_code=0)
+        rc, out = _main_with(tree, ["--only", "craft,not_a_probe", "--list"])
+        expect(rc == 0,
+               f"substring selection with one unmatched needle still succeeds (got {rc})")
+        expect("craft_probe.py" in out, "the matching probe is still listed")
     finally:
         tree.cleanup()
 
@@ -947,6 +1040,12 @@ def main() -> int:
     test_a_stopping_runner_launches_no_further_probe()
     test_reap_group_on_a_dead_group_is_a_noop()
     test_aggregate_exit_codes_unchanged()
+    test_exact_mixed_selection_is_rejected_before_listing()
+    test_exact_mixed_selection_never_runs_the_valid_probe()
+    test_exact_all_invalid_selection_keeps_existing_diagnostic()
+    test_exact_all_valid_selection_is_unaffected()
+    test_exact_duplicate_valid_keys_still_collapse()
+    test_substring_selection_stays_permissive()
     test_retry_reaps_between_attempts()
     test_ctrl_c_leaves_no_engine_behind()
     test_ctrl_c_cancels_queued_parallel_work()

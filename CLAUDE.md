@@ -34,6 +34,9 @@ seconds and the expensive gates at the end.
    `test_audit.py` only when changing `world_audit.py`/`world_check.py`;
    `test_run_probes.py` (deterministic, GPU-free, ~15 s) only when
    changing `run_probes.py`;
+   `test_persistence_contract_sweep.py` (pure, no engine, <1 s) only
+   when changing `persistence_contract_sweep.py`'s
+   `SELECTABLE_CROSS_REFERENCED_PROBE_KEYS` or `run_probes.PROBES`;
    `findings_report_audit.py` only when editing a findings report;
    the unit-asset gate (`test_pack_atlas.py` +
    `pack_atlas.py --validate-only --strict`, ~2 s — inventory,
