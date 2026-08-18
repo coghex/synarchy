@@ -2,7 +2,7 @@ module Main where
 
 import UPrelude
 import Test.Hspec
-import Test.Headless.Harness (withHeadlessEngine)
+import Test.Headless.Harness (withHeadlessEngine, withHeadlessEngineNoWorld)
 import qualified Test.Headless.WorldGen as WorldGen
 import qualified Test.Headless.WorldGen.Geology as Geology
 import qualified Test.Headless.WorldGen.Parity as Parity
@@ -310,7 +310,15 @@ main = hspec $ do
     -- to drive world.getEtymology across the target/recurrence boundary.
     -- Named so `--match "Language etymology"` reaches it alongside the
     -- pure suite below.
-    aroundAll withHeadlessEngine $
+    --
+    -- WORLD-THREAD-FREE (#1362): those pages are hand-built
+    -- emptyWorldStates and the spec sends no world command, but the
+    -- visible one carries defaultWorldGenParams -- whose wgpPlates is
+    -- empty -- so a real worker picked it up for chunk loading and
+    -- died in twoNearestPlates on the FIRST example, leaving every
+    -- later one running against a CleaningUp engine while hspec
+    -- reported green. The spec never needed the worker.
+    aroundAll withHeadlessEngineNoWorld $
         describe "Language etymology (page scope)"
             LanguageEtymologyPageScope.spec
     -- Own engine (not the shared-worlds one above): needs a real

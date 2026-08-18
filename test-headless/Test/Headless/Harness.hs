@@ -1,5 +1,6 @@
 module Test.Headless.Harness
   ( withHeadlessEngine
+  , withHeadlessEngineNoWorld
   , sharedWorld
   , sendWorldCommand
   , waitForWorldInit
@@ -41,6 +42,42 @@ withHeadlessEngine action = bracket setup teardown (\(env, _) → action env)
         writeIORef (lifecycleRef env) CleaningUp
         mapM_ shutdownThread threads
         threadDelay 100000
+
+-- | Boot engine in headless mode with NO world thread, run action, shut
+--   down (#1362).
+--
+--   'withHeadlessEngine' starts a real world worker, which is what a
+--   spec that sends a world command or generates a page needs. A spec
+--   that only installs in-memory 'World.State.Types.emptyWorldState'
+--   pages and reads them straight back needs no worker — and paying for
+--   one is not free. The worker's chunk loading picks up every VISIBLE
+--   page carrying generation parameters and generates against them, so
+--   a fixture whose params come from 'defaultWorldGenParams' (seed 42,
+--   worldSize 128, plateCount 10, and an EMPTY @wgpPlates@) drives
+--   'World.Plate.Query.twoNearestPlates' into its own @error@.
+--   'World.Thread' catches that, logs @World thread crashed@, writes
+--   'CleaningUp' and stops the loop without rethrowing — so every later
+--   example runs against a dead worker and a cleaning-up engine while
+--   hspec still reports green.
+--
+--   Booting 'initializeEngineHeadless' with no thread at all is the
+--   in-tree idiom for that shape: 'Test.Headless.Unit.LineOfSight' and
+--   'Test.Headless.Core.LoopStartup' both do it directly. This is the
+--   same thing as an 'aroundAll'-shaped wrapper, so a spec written
+--   against 'withHeadlessEngine' switches by changing only which
+--   wrapper 'Spec.hs' names.
+--
+--   Camera zoom is deliberately left alone: 'withHeadlessEngine' lowers
+--   it only so 'updateChunkLoading' triggers, and there is no worker
+--   here to trigger.
+withHeadlessEngineNoWorld ∷ (EngineEnv → IO α) → IO α
+withHeadlessEngineNoWorld = bracket setup teardown
+  where
+    setup = do
+        EngineInitResult env ← initializeEngineHeadless
+        writeIORef (lifecycleRef env) EngineRunning
+        pure env
+    teardown env = writeIORef (lifecycleRef env) CleaningUp
 
 -- | Get (or lazily create) a world keyed by its generation params.
 --
