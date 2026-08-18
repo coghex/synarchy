@@ -519,6 +519,36 @@ it by hand.
 `--list` shows the full probe registry but not CI status. For that, see
 `tools/ci_probes.py --status` below.
 
+**The runner reaps each probe's process group on EVERY completion path**
+(#1323) — success, ordinary nonzero exit, timeout, and an exception in the
+runner itself — reusing one SIGTERM-then-SIGKILL escalation. Probes are
+launched into their own session precisely so this is possible. It matters
+because a probe that dies of an unexpected exception after booting its
+engine never reaches its own teardown, and `communicate()` cannot notice:
+`probelib.boot` redirects the engine's output to a log file rather than
+the runner's inherited pipe, so the pipe reaches EOF the moment the probe
+exits. The stranded engine keeps its port, and the next `--retries`
+attempt (or a parallel solo retry, which reuses `PARALLEL_PORT_BASE`) then
+fails its boot under #1190 — reporting a leak as an unrelated "exited
+before READY". Reaping a group that already exited is a silent no-op and
+never alters a probe's status, elapsed time, or output tail. Ctrl-C exits
+130 after terminating every probe still running, its engine included, and
+launches none of the probes still queued.
+
+The reap returns only once nothing in the group is still RUNNING, not when
+the signal is sent: SIGKILL delivery is asynchronous, and until the last
+member exits it still owns the port the next retry is about to reuse. A
+ZOMBIE deliberately does not count as running there — it has already
+exited and released its port, and signals cannot tell it apart from a live
+process (a zombie-only group answers EPERM on macOS and succeeds on
+Linux), so the reap consults process state and would otherwise spend its
+whole grace on an engine that was long gone.
+
+`python3 tools/test_run_probes.py` is that behavior's gate: deterministic,
+GPU-free, synthetic probes and synthetic engine descendants in a throwaway
+tree, no registered probe ever run. It is a blocking CI step alongside
+`ci_probes.py --self-test`.
+
 ### `ci_probes.py` — CI probe selection + eligibility (#530, #540)
 
 Computes which probes CI should run for a given set of changed files (see
