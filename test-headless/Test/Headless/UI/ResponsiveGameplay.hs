@@ -34,7 +34,6 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Lazy as BL
 import Data.IORef (newIORef, readIORef, writeIORef, atomicModifyIORef')
 import qualified Data.Map.Strict as Map
-import System.Directory (doesFileExist)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Graphics.Config (vcUIScale)
@@ -44,7 +43,7 @@ import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Test.Headless.Harness (withHeadlessEngine)
 import Test.Headless.Harness.Isolation
-  (isolationMarkerName, withIsolatedResourceRoot)
+  (isInsideIsolatedResourceRoot, withIsolatedResourceRoot)
 import UI.Types (UIPageManager(..), emptyUIPageManager)
 
 -- | Join Lua statements with a single space instead of GHC string-gap
@@ -117,7 +116,7 @@ spec = aroundAll withSharedFixture $ do
     -- notice if 'withSharedFixture' stopped isolating the filesystem.
     describe "suite config isolation (#1357)" $
         it "runs inside the scratch resource root, never the checkout" $ \_ → do
-            inScratch ← doesFileExist isolationMarkerName
+            inScratch ← isInsideIsolatedResourceRoot
             inScratch `shouldBe` True
 
     describe "hud.getToolbarRects() (#750) — the reserved 'required controls'" $ do

@@ -25,6 +25,7 @@ module Test.Headless.UI.SettingsDefaultsKeybinds (spec) where
 
 import UPrelude
 import Test.Hspec
+import Control.Exception (finally)
 import qualified Data.ByteString as BS
 import Data.IORef (newIORef, readIORef)
 import Data.List (sort)
@@ -41,11 +42,15 @@ import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import System.Directory
-  (doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory)
+  ( createDirectoryIfMissing, createDirectoryLink, doesDirectoryExist
+  , doesFileExist, getCurrentDirectory, getTemporaryDirectory
+  , listDirectory, pathIsSymbolicLink, removeDirectoryRecursive
+  , withCurrentDirectory )
 import System.FilePath ((</>))
 import System.IO (stderr)
 import Test.Headless.Harness (withHeadlessEngine)
-import Test.Headless.Harness.Isolation (withIsolatedResourceRoot)
+import Test.Headless.Harness.Isolation
+  (isInsideIsolatedResourceRoot, withIsolatedResourceRoot)
 
 -- | The cwd-relative path 'Engine.Scripting.Lua.API.Keybinds.saveKeybindsFn'
 --   hard-codes, and therefore the exact path this issue is about.
@@ -101,6 +106,17 @@ evalOk ls code = do
 liveBindings ∷ EngineEnv → IO KeyBindings
 liveBindings env = readIORef (icKeyBindingsRef (toInputCapability env))
 
+-- | Scratch state for the fixture's own cases lives under the system
+--   temp directory, never in the checkout, and is wiped before and after
+--   use so a failed example cannot poison the next run.
+removeIfPresent ∷ FilePath → IO ()
+removeIfPresent path = do
+    present ← doesDirectoryExist path
+    when present (removeDirectoryRecursive path)
+
+finallyCleanup ∷ IO α → FilePath → IO α
+finallyCleanup action path = action `finally` removeIfPresent path
+
 spec ∷ Spec
 spec = describe "Settings Defaults keybind persistence (#1357)" $ do
 
@@ -130,6 +146,85 @@ spec = describe "Settings Defaults keybind persistence (#1357)" $ do
        \between examples" $ do
         scratchRoot ← withIsolatedResourceRoot getCurrentDirectory
         doesDirectoryExist scratchRoot `shouldReturn` False
+
+    -- PR #1373 review, blocker 1: a FIXED scratch path could already be
+    -- occupied by a symlink, and teardown would then enumerate and
+    -- recursively delete that link's target. The root is therefore
+    -- created fresh and exclusively per invocation, so teardown can only
+    -- ever remove a directory the fixture itself made.
+    it "each invocation creates its own brand-new root directory, never \
+       \adopting or reusing a path that already existed" $ do
+        (firstRoot, firstWasRealDir) ← withIsolatedResourceRoot $ do
+            here ← getCurrentDirectory
+            link ← pathIsSymbolicLink here
+            dir  ← doesDirectoryExist here
+            pure (here, dir ∧ not link)
+        (secondRoot, secondWasRealDir) ← withIsolatedResourceRoot $ do
+            here ← getCurrentDirectory
+            link ← pathIsSymbolicLink here
+            dir  ← doesDirectoryExist here
+            pure (here, dir ∧ not link)
+        firstWasRealDir `shouldBe` True
+        secondWasRealDir `shouldBe` True
+        secondRoot `shouldNotBe` firstRoot
+        doesDirectoryExist firstRoot `shouldReturn` False
+        doesDirectoryExist secondRoot `shouldReturn` False
+
+    -- The mechanism that keeps teardown off the checkout: every
+    -- top-level entry of the scratch root but config/ is a symlink to a
+    -- real checkout directory, and discarding the root must unlink those
+    -- rather than walk into them.
+    it "tearing the root down severs its symlinks without touching what \
+       \they point at" $ do
+        tmp ← getTemporaryDirectory
+        let victim   = tmp </> "synarchy-1357-symlink-victim"
+            sentinel = victim </> "keep-me.txt"
+        removeIfPresent victim
+        createDirectoryIfMissing True victim
+        writeFile sentinel "untouched"
+        flip finallyCleanup victim $ do
+            withIsolatedResourceRoot $ do
+                root ← getCurrentDirectory
+                createDirectoryLink victim (root </> "linked-victim")
+            doesDirectoryExist victim `shouldReturn` True
+            doesFileExist sentinel `shouldReturn` True
+            readFile sentinel `shouldReturn` "untouched"
+
+    -- PR #1373 review, blocker 2: "am I isolated?" was answered by a
+    -- marker FILE, so any file of that name anywhere made the real
+    -- checkout look like a scratch root — which would have let the two
+    -- UI suites' own guards pass while production code wrote the
+    -- developer's config again. The answer now comes from fixture-owned
+    -- state, so no file, in the checkout or in a lookalike directory,
+    -- can forge it.
+    it "no on-disk file can make a directory look like a scratch root" $ do
+        inCheckout ← isInsideIsolatedResourceRoot
+        inCheckout `shouldBe` False
+        tmp ← getTemporaryDirectory
+        let lookalike = tmp </> "synarchy-1357-lookalike-root"
+        removeIfPresent lookalike
+        createDirectoryIfMissing True lookalike
+        flip finallyCleanup lookalike $ do
+            -- Every marker name this fixture has ever used, plus the
+            -- shape of a scratch root's own name.
+            forM_ [ ".synarchy-isolated-resource-root"
+                  , "synarchy-headless-isolated-root" ] $ \name →
+                writeFile (lookalike </> name) "not a real scratch root"
+            withCurrentDirectory lookalike $
+                isInsideIsolatedResourceRoot `shouldReturn` False
+
+    it "a nested call reuses the root already in effect instead of \
+       \building and tearing down a second one" $ do
+        (outer, inner, stillIsolated) ← withIsolatedResourceRoot $ do
+            o ← getCurrentDirectory
+            i ← withIsolatedResourceRoot getCurrentDirectory
+            -- The nested call must not have discarded the outer root on
+            -- the way out.
+            s ← isInsideIsolatedResourceRoot
+            pure (o, i, s)
+        inner `shouldBe` outer
+        stillIsolated `shouldBe` True
+        doesDirectoryExist outer `shouldReturn` False
 
     it "production settingsMenu.onDefaults() resets the live bindings to \
        \factory AND persists them (the write-through contract #1357 must \

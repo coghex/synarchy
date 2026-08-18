@@ -1,4 +1,3 @@
-{-# LANGUAGE ScopedTypeVariables #-}
 -- | Filesystem isolation for headless specs that drive PRODUCTION code
 --   paths which WRITE into @config/@ (#1357).
 --
@@ -44,72 +43,135 @@
 --   Nothing here ever writes, moves, backs up or restores a
 --   checkout-owned file: the checkout is only ever READ, so there is no
 --   window in which a crash could leave the developer's state damaged.
+--
+--   Two properties carry that promise, and both exist because a fixture
+--   whose whole job is not to delete the wrong thing has to be built so
+--   it cannot (PR #1373 review):
+--
+--     * The scratch root is created FRESH and EXCLUSIVELY per
+--       invocation, under a random name, with 'createDirectory' — which
+--       fails if anything already occupies the path, a symlink
+--       included. Teardown therefore only ever removes a directory this
+--       module itself made. A fixed, predictable path would not be
+--       enough: @doesDirectoryExist@ follows symlinks, so a pre-existing
+--       symlink sitting at a fixed scratch path would have had its
+--       TARGET's children enumerated and recursively deleted.
+--     * "Am I isolated?" is answered from fixture-OWNED state
+--       ('isInsideIsolatedResourceRoot' — the active root this module
+--       recorded, checked against the real working directory), never
+--       from a marker file on disk. A file cannot be created anywhere
+--       that makes the checkout look like a scratch root, so neither
+--       the nesting check nor the suites' own guards can be spoofed
+--       into skipping isolation.
 module Test.Headless.Harness.Isolation
   ( withIsolatedResourceRoot
-  , isolationMarkerName
+  , isInsideIsolatedResourceRoot
   ) where
 
 import UPrelude
-import Control.Exception (finally)
+import Control.Exception (IOException, bracket, bracket_, try)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import System.Directory
-  ( copyFile, createDirectoryIfMissing, createDirectoryLink, createFileLink
-  , doesDirectoryExist, doesFileExist, getCurrentDirectory
-  , getTemporaryDirectory, listDirectory, pathIsSymbolicLink, removeDirectory
-  , removeDirectoryLink, removeDirectoryRecursive, removeFile
-  , withCurrentDirectory )
+  ( canonicalizePath, copyFile, createDirectory, createDirectoryIfMissing
+  , createDirectoryLink, createFileLink, doesDirectoryExist
+  , getCurrentDirectory, getTemporaryDirectory, listDirectory
+  , pathIsSymbolicLink, removeDirectory, removeDirectoryLink
+  , removeDirectoryRecursive, removeFile, withCurrentDirectory )
 import System.FilePath ((</>))
+import System.IO.Error (isAlreadyExistsError)
+import System.IO.Unsafe (unsafePerformIO)
+import qualified System.Random as Random
 
 -- | The one resource family production code WRITES into, and therefore
 --   the one the scratch root owns outright instead of symlinking.
 configDirName ∷ FilePath
 configDirName = "config"
 
--- | Dropped at the scratch root so a nested 'withIsolatedResourceRoot'
---   is a no-op instead of tearing down the root the outer call is
---   standing in. No layout in this suite nests today; the guard is here
---   because the failure mode if one ever does would be silent and
---   confusing rather than a compile error.
-isolationMarkerName ∷ FilePath
-isolationMarkerName = ".synarchy-isolated-resource-root"
+-- | The scratch root currently in effect, or 'Nothing' outside the
+--   fixture. This module is its only writer, which is exactly why it is
+--   trustworthy: unlike a marker file, nothing a spec or a checkout can
+--   create is able to forge it. The suite runs its examples
+--   sequentially, so a plain 'IORef' is sufficient.
+activeIsolatedRootRef ∷ IORef (Maybe FilePath)
+activeIsolatedRootRef = unsafePerformIO (newIORef Nothing)
+{-# NOINLINE activeIsolatedRootRef #-}
 
--- | The scratch root's location. A single fixed path under the system
---   temp directory, wiped before and after use — the same convention
---   'Test.Headless.Core.ConfigState' uses, and safe for the same reason:
---   this suite runs its examples sequentially.
-isolatedRootPath ∷ IO FilePath
-isolatedRootPath = do
-    tmp ← getTemporaryDirectory
-    pure (tmp </> "synarchy-headless-isolated-root")
+-- | True when the process is running inside a live scratch resource
+--   root — the fixture's recorded root AND the real working directory
+--   agreeing. Both halves matter: the recorded root alone would still
+--   read True if something had since changed directory out of it.
+--
+--   This is what the two UI suites assert, so that unwiring their
+--   'withIsolatedResourceRoot' wrap fails loudly instead of silently
+--   restoring the bug (nothing else in either suite notices).
+isInsideIsolatedResourceRoot ∷ IO Bool
+isInsideIsolatedResourceRoot = do
+    mRoot ← readIORef activeIsolatedRootRef
+    case mRoot of
+        Nothing   → pure False
+        Just root → do
+            rootReal ← canonicalizePath root
+            hereReal ← canonicalizePath =≪ getCurrentDirectory
+            pure (hereReal ≡ rootReal)
 
 -- | Run an action with the process working directory pointed at a fresh
 --   scratch resource root (see the module header). The root is removed
---   afterwards whether or not the action succeeded.
+--   afterwards whether or not the action succeeded. A nested call is a
+--   no-op — it runs the action in the root already in effect rather than
+--   building, and later tearing down, a second one.
 withIsolatedResourceRoot ∷ IO α → IO α
 withIsolatedResourceRoot action = do
-    nested ← doesFileExist isolationMarkerName
-    if nested
-      then action
-      else do
+    alreadyIsolated ← readIORef activeIsolatedRootRef
+    case alreadyIsolated of
+      Just _  → action
+      Nothing → do
         srcRoot ← getCurrentDirectory
-        root    ← isolatedRootPath
-        discardRoot root
-        populateRoot srcRoot root
-        withCurrentDirectory root action `finally` discardRoot root
+        -- Two nested brackets, not one: the outer guarantees a root that
+        -- was created is always removed even if 'populateRoot' throws
+        -- half way, and the inner guarantees the recorded active root is
+        -- cleared before that removal happens.
+        bracket createExclusiveScratchRoot discardRoot $ \root → do
+            populateRoot srcRoot root
+            bracket_ (writeIORef activeIsolatedRootRef (Just root))
+                     (writeIORef activeIsolatedRootRef Nothing)
+                     (withCurrentDirectory root action)
+
+-- | Create a brand new scratch root under the system temp directory and
+--   return its path.
+--
+--   'createDirectory' — never 'createDirectoryIfMissing' — is the whole
+--   point: it fails with an already-exists error if ANYTHING occupies
+--   the path, including a symlink, so a successful return means this
+--   call created that directory and 'discardRoot' can only ever remove
+--   something this module made. The name is randomized so a stale root
+--   from an interrupted run is never adopted, reused, or cleaned.
+createExclusiveScratchRoot ∷ IO FilePath
+createExclusiveScratchRoot = do
+    tmp ← getTemporaryDirectory
+    go tmp (0 ∷ Int)
+  where
+    maxAttempts = 64
+    go tmp attempt
+      | attempt ≥ maxAttempts = ioError $ userError $
+          "withIsolatedResourceRoot: could not create a fresh scratch \
+          \resource root under " ⧺ tmp ⧺ " after " ⧺ show maxAttempts
+            ⧺ " attempts"
+      | otherwise = do
+          n ← Random.randomRIO (0 ∷ Int, 999999999)
+          let path = tmp </> ("synarchy-headless-isolated-root-" ⧺ show n)
+          outcome ← try (createDirectory path)
+          case outcome ∷ Either IOException () of
+              Right ()               → pure path
+              Left e
+                | isAlreadyExistsError e → go tmp (attempt + 1)
+                | otherwise              → ioError e
 
 -- | Mirror @srcRoot@ into @root@: symlinks for everything but
 --   'configDirName', which is copied so it is writable fixture state.
 populateRoot ∷ FilePath → FilePath → IO ()
 populateRoot srcRoot root = do
-    createDirectoryIfMissing True root
-    writeFile (root </> isolationMarkerName) $
-        "Scratch resource root for the headless test suite (#1357).\n\
-        \Mirrors " ⧺ srcRoot ⧺ " with a fixture-owned config/.\n"
     entries ← listDirectory srcRoot
-    -- 'isolationMarkerName' is skipped alongside @config@ purely so a
-    -- checkout that happens to carry that name cannot collide with the
-    -- marker just written above.
-    forM_ entries $ \name →
-      unless (name ≡ configDirName ∨ name ≡ isolationMarkerName) $ do
+    forM_ entries $ \name → unless (name ≡ configDirName) $ do
         let src = srcRoot </> name
         isDir ← doesDirectoryExist src
         if isDir
@@ -132,24 +194,50 @@ copyTree src dst = do
           then copyTree (src </> name) (dst </> name)
           else copyFile (src </> name) (dst </> name)
 
--- | Tear the scratch root down. Every symlink is severed EXPLICITLY,
---   one entry at a time, before anything recursive runs: recursive
---   removal is documented not to follow symbolic links, but the cost of
---   that guarantee not holding here is the developer's whole checkout,
---   so the links are gone before the question can be asked. Only
---   fixture-owned real directories (@config/@, plus anything a spec
---   created relative to the root) are then removed recursively.
+-- | Tear the scratch root down.
+--
+--   The root itself is never TRAVERSED when it is a symbolic link — it
+--   is unlinked and nothing more. That cannot happen given
+--   'createExclusiveScratchRoot', which is why the check is cheap
+--   insurance rather than a code path with a story: enumerating a link's
+--   target here would mean deleting somebody else's directory.
+--
+--   Inside a real root, every symlink is severed EXPLICITLY, one entry
+--   at a time, before anything recursive runs: recursive removal is
+--   documented not to follow symbolic links, but the cost of that
+--   guarantee not holding here is the developer's whole checkout, so the
+--   links are gone before the question can be asked. Only fixture-owned
+--   real directories (@config/@, plus anything a spec created relative
+--   to the root) are then removed recursively.
 discardRoot ∷ FilePath → IO ()
 discardRoot root = do
-    exists ← doesDirectoryExist root
-    when exists $ do
-        entries ← listDirectory root
-        forM_ entries $ \name → removeEntry (root </> name)
-        removeDirectory root
-  where
-    removeEntry path = do
-        isLink ← pathIsSymbolicLink path
-        isDir  ← doesDirectoryExist path
-        if isLink
-          then if isDir then removeDirectoryLink path else removeFile path
-          else if isDir then removeDirectoryRecursive path else removeFile path
+    rootIsLink ← pathIsSymbolicLink root
+    if rootIsLink
+      then severLink root
+      else do
+        isDir ← doesDirectoryExist root
+        when isDir $ do
+            entries ← listDirectory root
+            forM_ entries $ \name → removeEntry (root </> name)
+            removeDirectory root
+
+-- | Remove one direct child of the scratch root: a symlink is severed
+--   without touching its target, a real directory goes recursively, and
+--   anything else is a plain file.
+removeEntry ∷ FilePath → IO ()
+removeEntry path = do
+    isLink ← pathIsSymbolicLink path
+    if isLink
+      then severLink path
+      else do
+        isDir ← doesDirectoryExist path
+        if isDir then removeDirectoryRecursive path else removeFile path
+
+-- | Unlink a symbolic link, never its target. 'removeDirectoryLink' is
+--   the portable spelling for a link that resolves to a directory
+--   (identical to 'removeFile' on POSIX, distinct on Windows); a
+--   dangling link resolves to neither and is a plain unlink.
+severLink ∷ FilePath → IO ()
+severLink path = do
+    pointsAtDir ← doesDirectoryExist path
+    if pointsAtDir then removeDirectoryLink path else removeFile path

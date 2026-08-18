@@ -28,7 +28,6 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Lazy as BL
 import Data.IORef (newIORef, readIORef, writeIORef, atomicModifyIORef')
 import qualified Data.Map.Strict as Map
-import System.Directory (doesFileExist)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Graphics.Config (VideoConfig(..))
@@ -39,7 +38,7 @@ import Engine.Scripting.Lua.Types (LuaBackendState(..), ScriptValue(..))
 import Engine.Scripting.Lua.Util (broadcastToModules)
 import Test.Headless.Harness (withHeadlessEngine)
 import Test.Headless.Harness.Isolation
-  (isolationMarkerName, withIsolatedResourceRoot)
+  (isInsideIsolatedResourceRoot, withIsolatedResourceRoot)
 import UI.Types (UIPageManager(..), emptyUIPageManager)
 
 -- | Join Lua statements/fragments with a single space — every multi-line
@@ -124,7 +123,7 @@ spec = around withMenusEngine $ do
         -- this suite passed while that overwrote the developer's file,
         -- so nothing else here would notice its return.
         it "runs inside the scratch resource root, never the checkout" $ \_ → do
-            inScratch ← doesFileExist isolationMarkerName
+            inScratch ← isInsideIsolatedResourceRoot
             inScratch `shouldBe` True
 
     describe "suite UI-scale baseline (#1266)" $ do

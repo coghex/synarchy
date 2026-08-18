@@ -1790,7 +1790,16 @@ before touching each area:
   cwd-relative write lands in a temp dir. Outside, never inside — engine
   init is itself a writer (`migrateLegacyConfig`, the notification
   overrides materializer). It writes nothing in the checkout, so there is
-  no backup/restore window to crash inside. The two suites that need it
+  no backup/restore window to crash inside. Two properties keep the
+  fixture from ever deleting the wrong thing, and neither is optional:
+  the root is created FRESH and EXCLUSIVELY per invocation under a
+  random name via `createDirectory` (a fixed path could already hold a
+  symlink, and `doesDirectoryExist` follows one, so teardown would
+  enumerate and recursively delete the TARGET's children), and
+  "am I isolated?" is `isInsideIsolatedResourceRoot` — fixture-owned
+  state checked against the real cwd, never a marker file, which any
+  same-named file on disk could forge into skipping isolation
+  altogether. The two suites that need it
   (`UI.ResponsiveMenus`, `UI.ResponsiveGameplay`, both reaching the
   write-through `settingsMenu.onDefaults()`) each carry a one-line
   in-suite guard asserting they run under it, because every other
