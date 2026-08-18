@@ -93,10 +93,15 @@ local function heldAs(uid, side)
     return session
 end
 
--- There is deliberately NO stall timer here. Mode B's exists because an
--- order must reach a terminal state on its own; a session is the
--- player's own window, ends when they close it, and a unit that cannot
--- reach its destination is UIT-5B's failure handling, not this slice's.
+-- There is deliberately NO stall timer here, and UIT-5B (#1254) landed
+-- without adding one. Mode B's exists because an order must reach a
+-- terminal state on its own; a session is the player's own window and
+-- ends when they close it, when a player order preempts it, or when
+-- transfer_session's own tick finds an endpoint gone, ineligible, dead
+-- or unconscious. A destination that is merely UNREACHABLE is none of
+-- those: the escort keeps walking and the player can close the window,
+-- which is why a timer would be a change to the hold mechanism rather
+-- than failure handling.
 --
 -- It keeps NO per-unit state either, deliberately: the SESSION is the
 -- state, so there is nothing to reconcile, nothing to strip at snapshot
@@ -120,8 +125,10 @@ local function escortExecute(uid, _s)
     -- re-running it is what makes this a hold rather than a one-shot --
     -- an interruption that walked the unit away (combat, a mental break)
     -- leaves it standing wherever it ended up once this action wins
-    -- again, which is the honest best-effort until UIT-5B owns that
-    -- case.
+    -- again. Still the honest best-effort after UIT-5B (#1254), which
+    -- covers a held unit that stops being commandable AT ALL and
+    -- deliberately not one that was merely pulled off its mark and can
+    -- resume.
     if active.phase ~= session.PHASE_APPROACHING then
         unit.stop(uid)
         return
@@ -130,8 +137,11 @@ local function escortExecute(uid, _s)
     local dest = session.destinationNow()
     if not dest then
         -- The destination stopped existing mid-approach. Retire the
-        -- session QUIETLY rather than holding a unit against nothing;
-        -- the richer player-facing failure handling is UIT-5B's.
+        -- session QUIETLY rather than holding a unit against nothing.
+        -- Since UIT-5B (#1254) transfer_session.update notices this on
+        -- its own tick, and a wider set of failures with it, so this is
+        -- the AI-side belt rather than the only detector -- both run the
+        -- same one teardown, whichever gets there first.
         session.close("destination_missing")
         return
     end

@@ -453,16 +453,16 @@ function M.onMouseDown(button, x, y)
             if gx and gy then
                 local tx = gx + 0.5
                 local ty = gy + 0.5
-                local unitAi = require("scripts.unit_ai")
                 for _, uid in ipairs(selected) do
                     -- Route through the AI so the command becomes a
-                    -- utility-scored candidate that high-priority
-                    -- needs (thirst, etc.) can interrupt and resume.
-                    -- No explicit speed → the "ordered" regime (a
-                    -- sustainable push above comfort). A hard-coded
-                    -- fast speed here exhausts the unit's stamina and
-                    -- collapses it mid-move.
-                    unitAi.commandMove(uid, tx, ty)
+                    -- utility-scored candidate that high-priority needs
+                    -- (thirst, etc.) can interrupt and resume. No explicit
+                    -- speed → the "ordered" regime (a sustainable push above
+                    -- comfort); a hard-coded fast speed here exhausts the
+                    -- unit's stamina and collapses it mid-move. #1254: a
+                    -- PLAYER order, ending any Mode A session on this unit.
+                    require("scripts.transfer_session").notePlayerOrder(uid)
+                    require("scripts.unit_ai").commandMove(uid, tx, ty)
                 end
                 recordClick("move_order", nil, x, y)
             else

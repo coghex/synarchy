@@ -485,6 +485,84 @@ spec = describe "Transfer context menu" $ do
     -- is pinned here is the RULE, deterministically; the probe's
     -- partial-batch phase pins the resulting occurrence count against a
     -- real engine.
+    -- #1254 requirement 3, signed off 2026-08-11: a PLAYER order to a
+    -- unit a Mode A session is holding ends that session and then
+    -- proceeds. The rule itself, and the two-sided release, are pinned
+    -- against a real scene in 'Test.Headless.UI.TransferSession'; what
+    -- these cases add is that the player's own INGRESS actually reaches
+    -- it — and that it does so BEFORE the command, which is the half a
+    -- test of the boundary alone cannot see.
+    --
+    -- Two DIFFERENT orders on purpose (the issue review's "not
+    -- move-only"): Attack from the unit menu and Move here from the
+    -- item menu, which between them cover both of
+    -- 'scripts/init_context_menu.lua''s command families. The
+    -- right-click move order in 'scripts/init_mouse.lua' is the same
+    -- one-line call against the same boundary.
+    describe "a player order ends a held session (#1254)" $ do
+        let sessionOn ∷ Text
+            sessionOn = "require('scripts.transfer_session')\
+                        \.create(7, 'unit', 99); "
+            -- Replace the command with a recorder that reports what the
+            -- session looked like AT THE MOMENT it ran. "nil" there is
+            -- the ordering proof: the teardown had already finished, so
+            -- nothing it does can undo the order about to be issued.
+            recorder ∷ Text → Text
+            recorder verb = T.concat
+                [ "require('scripts.unit_ai'); "
+                , "package.loaded['scripts.unit_ai'].", verb
+                , " = function(uid, a, b) _G.__ordered = { uid = uid, "
+                , "  session = tostring("
+                , "    require('scripts.transfer_session').get()) } end; " ]
+
+        it "Attack ends it first, then commands — the boundary is not \
+           \move-only" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (unitTargetStub 99 <> selectedStub [7]
+                    <> endpointInfoStub "unit" 99 True "Technomule")
+            run ls sessionOn
+            held ← evalDebug ls
+                "return tostring(require('scripts.transfer_session')\
+                \.holdsUnit(7))"
+            held `shouldBe` "\"true\""
+            run ls (recorder "commandAttack")
+            claimed ← evalDebug ls
+                "return require('scripts.init_context_menu').tryUnitMenu(10, 20)"
+            claimed `shouldBe` "true"
+            invoke ← evalDebug ls "_G.__callbacks['Attack'](); return 'ok'"
+            invoke `shouldNotSatisfy` isLuaError
+            ordered ← evalDebug ls "return _G.__ordered"
+            ordered `shouldSatisfy` T.isInfixOf "\"uid\":7"
+            ordered `shouldSatisfy` T.isInfixOf "\"session\":\"nil\""
+            gone ← evalDebug ls
+                "return tostring(require('scripts.transfer_session').get())"
+            gone `shouldBe` "\"nil\""
+
+        it "Move here does the same, and a unit no session holds is \
+           \commanded exactly as before" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (selectedStub [7] <> endpointInfoStub "unit" 99 True "Mule"
+                    <> groundItemStub 55 (3, 4))
+            run ls sessionOn
+            run ls (recorder "commandMove")
+            claimed ← evalDebug ls
+                "return require('scripts.init_context_menu').tryItemMenu(10, 20)"
+            claimed `shouldBe` "true"
+            _ ← evalDebug ls "_G.__callbacks['Move here'](); return 'ok'"
+            ordered ← evalDebug ls "return _G.__ordered"
+            ordered `shouldSatisfy` T.isInfixOf "\"uid\":7"
+            ordered `shouldSatisfy` T.isInfixOf "\"session\":\"nil\""
+            -- With no session left, the identical gesture still issues
+            -- the identical command: the boundary adds a teardown, it
+            -- does not gate the order.
+            _ ← evalDebug ls "_G.__ordered = nil; \
+                             \_G.__callbacks['Move here'](); return 'ok'"
+            again ← evalDebug ls "return _G.__ordered"
+            again `shouldSatisfy` T.isInfixOf "\"uid\":7"
+            again `shouldSatisfy` T.isInfixOf "\"session\":\"nil\""
+
     describe "outcome reporting is exactly-once (#1253)" $ do
         it "an arrival report SKIPS failures the command-time gate \
            \already surfaced, and reports the ones it did not" $ \env → do
@@ -838,10 +916,16 @@ baseSetupLua = T.concat
     , "_G.__lastLabels = nil; "
     , "_G.__transferCallback = nil; "
     , "_G.__cancelCallback = nil; "
+    , "_G.__callbacks = {}; "
     , "contextMenu.show = function(items, mx, my) "
     , "  local labels = {}; "
+    , "  _G.__callbacks = {}; "
     , "  for i, it in ipairs(items) do "
     , "    labels[i] = it.label; "
+    -- #1254 needs rows the two named captures below never covered
+    -- (Attack, Move here), and by LABEL rather than by adding a third
+    -- one-off global for each.
+    , "    _G.__callbacks[it.label] = it.callback; "
     , "    if it.label == 'Transfer' then _G.__transferCallback = it.callback end; "
     , "    if it.label == 'Cancel transfer' then "
     , "      _G.__cancelCallback = it.callback end "
@@ -988,6 +1072,16 @@ emitSpyLua = T.concat
 unitTargetStub ∷ Int → Text
 unitTargetStub uid = "unit.hitTestAt = function(x, y) return "
     <> T.pack (show uid) <> " end; "
+
+-- | @item.hitTestAt@ / @item.listGround@ answering for ONE ground
+-- item, which is all @tryItemMenu@ reads to build its Pick up / Move
+-- here rows.
+groundItemStub ∷ Int → (Int, Int) → Text
+groundItemStub gid (gx, gy) = T.concat
+    [ "item.hitTestAt = function(x, y) return ", tshow gid, " end; "
+    , "item.listGround = function() return { { id = ", tshow gid
+    , ", x = ", tshow gx, ", y = ", tshow gy
+    , ", defName = 'rope', weight = 1.0 } } end; " ]
 
 -- | The #1253 order surface for ONE unit: @unit.getTransferOrders@
 -- answering the given @(orderId, terminal)@ list for @uid@ and an empty

@@ -149,11 +149,16 @@ function M.load()
 
     -- Transfer session (#1014, epic #1013 phase B1): owns the transient
     -- player-managed-transfer session record right-click "Transfer"
-    -- creates. No per-tick work; loadScript'd (like pause above) so
-    -- init() runs and registers its reset hook before any world can
-    -- load.
+    -- creates. loadScript'd (like pause above) so init() runs and
+    -- registers its reset hook before any world can load.
+    --
+    -- 0.2s, matching the container window below rather than pause's 1s
+    -- (#1254): a Mode A session spends its whole APPROACH with no
+    -- window, so this tick is the only thing that can notice an
+    -- endpoint dying or being demolished before the panels open. A tick
+    -- with no active session reads nothing at all.
     transferSessionScriptId = engine.loadScript(
-        "scripts/transfer_session.lua", 1.0)
+        "scripts/transfer_session.lua", 0.2)
 
     -- Tutorial objective progress (#958): owns the durable completed-
     -- objective set and the live subobjective checks, and registers the

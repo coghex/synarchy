@@ -92,6 +92,25 @@ local registry = {
           require("scripts.cargo_inventory_panel").closeIfOpen("layout")
       end },
 
+    -- Mode A escort session (#1250/#1254): the entry above closes the
+    -- WINDOW, and while the pair is open that already ends the session
+    -- through the escort level's own onClose. What it cannot reach is a
+    -- session still APPROACHING — the escort is walking and there is no
+    -- window yet — so a zoom-band change or a HUD hide would leave a
+    -- unit held for a window that is now guaranteed never to open where
+    -- the player is looking. Same judgement the container window makes
+    -- above, applied to the half of the session's life that has no
+    -- window to make it with.
+    --
+    -- Registered HERE rather than as one-off calls at the transition
+    -- sites (#156, requirement 4), and idempotent: past the window
+    -- entry above this is almost always a no-op. Deliberately NOT
+    -- hooked on "resize" — that is the one teardown hud.createUI undoes
+    -- immediately, and the session and its hold must survive it.
+    { name = "transfer_session",
+      zoomBand = function() require("scripts.transfer_session").clear() end,
+      hudHide  = function() require("scripts.transfer_session").clear() end },
+
     -- Crafting station bills popup (#330): same story — mounted on
     -- hud.world_page, own module-level "open" state, opened via
     -- right-click. closeIfOpen() is idempotent.
