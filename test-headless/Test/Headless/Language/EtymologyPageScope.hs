@@ -33,7 +33,10 @@
 --
 --   Pages are in-memory 'emptyWorldState's carrying hand-built
 --   identities, location instances and river names, so two live worlds
---   cost no worldgen.
+--   cost no worldgen. That is also why 'Spec.hs' wraps this module in
+--   'Test.Headless.Harness.withHeadlessEngineNoWorld' rather than the
+--   world-thread-starting 'withHeadlessEngine' (#1362) — see
+--   'requireLiveEngine' below.
 --
 --   Run just this gate: @cabal test synarchy-test-headless
 --   --test-options='--match \"Language etymology (page scope)\"'@.
@@ -44,9 +47,9 @@ import Test.Hspec
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
-import Data.IORef (newIORef, writeIORef)
+import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.List (sort)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
@@ -283,11 +286,39 @@ evalDebug ls = executeDebugLua (lbsLuaState ls)
 --   next one.
 runProbe ∷ EngineEnv → SceneOpts → Text → IO (Catalogue, Text)
 runProbe env opts call = do
+    requireLiveEngine env
     cat ← loadRealCatalogue
     ls  ← newBareLuaBackend env
     installScene env cat opts
     out ← evalDebug ls (etymologyProbe call)
+    requireLiveEngine env
     pure (cat, unquote out)
+
+-- | Every example must run against a LIVE engine (#1362).
+--
+--   This spec used to be wrapped in the world-thread-starting
+--   'Test.Headless.Harness.withHeadlessEngine'. Its pages are in-memory
+--   'emptyWorldState's, but the visible one carries 'paramsFor', built
+--   on 'defaultWorldGenParams' — seed 42, worldSize 128, and an EMPTY
+--   'wgpPlates'. The worker's chunk loading picked that up and died in
+--   'twoNearestPlates'; 'World.Thread' catches the exception, logs it,
+--   writes 'CleaningUp' and stops WITHOUT rethrowing, so the whole
+--   spec ran green against a dead worker. 'Spec.hs' now wraps this
+--   module in 'withHeadlessEngineNoWorld', which starts no worker at
+--   all.
+--
+--   'CleaningUp' is the state that crash writes, and nothing in this
+--   spec's own path ever sets it, so checking it on both sides of every
+--   probe is what keeps that false-green from returning silently: a
+--   reintroduced worker that dies again fails these examples instead of
+--   passing them. It adds no example of its own, so the gate's count is
+--   unchanged.
+requireLiveEngine ∷ EngineEnv → IO ()
+requireLiveEngine env = do
+    lifecycle ← readIORef (lifecycleRef env)
+    when (lifecycle ≡ CleaningUp) $ expectationFailure
+        "engine lifecycle is CleaningUp: a background worker died \
+        \mid-suite, so this example is not testing a live engine (#1362)"
 
 -- | The debug console renders a returned STRING the way it would print
 --   it, quotes included. Strip the one balanced pair so the assertions
