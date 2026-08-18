@@ -1,6 +1,12 @@
 module Test.Headless.Harness
   ( withHeadlessEngine
+  , withHeadlessEngineExpectingStopped
   , withHeadlessEngineNoWorld
+  , HeadlessWorker(..)
+  , worldWorker
+  , headlessWorkerLabel
+  , checkHeadlessWorkers
+  , withHeadlessWorkerCheck
   , sharedWorld
   , sendWorldCommand
   , waitForWorldInit
@@ -14,22 +20,153 @@ module Test.Headless.Harness
 
 import UPrelude
 import Control.Concurrent (threadDelay)
+import Control.Concurrent.MVar (isEmptyMVar)
 import Control.Exception (bracket)
+import Control.Monad (filterM)
+import Data.List (intercalate)
 import Data.IORef (readIORef, writeIORef, modifyIORef', atomicModifyIORef')
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
-import Engine.Core.Thread (shutdownThread)
+import Engine.Core.Thread (ThreadState(..), shutdownThread)
 import Engine.Graphics.Camera (Camera2D(..))
+import Test.Hspec (expectationFailure)
 import qualified Engine.Core.Queue as Q
 import World.Thread (startWorldThread)
 import World.Types
 
+-- | A worker the headless harness started, identified by name.
+--
+--   Named rather than positional because both halves of the health
+--   check have to talk about ONE worker: a failure says which worker
+--   exited, and the opt-out exempts one worker without silencing the
+--   rest. Call sites use the constants below rather than spelling a
+--   name inline; a second worker gets its own constant here and an
+--   entry in @setup@, and is then covered automatically.
+newtype HeadlessWorker = HeadlessWorker String
+    deriving (Show, Eq)
+
+-- | The world worker 'withHeadlessEngine' starts. The only one today —
+--   covering the unit, combat, sim and Lua workers belongs with
+--   whatever harness starts them.
+worldWorker ∷ HeadlessWorker
+worldWorker = HeadlessWorker "world"
+
+-- | The name a worker is reported and opted out by.
+headlessWorkerLabel ∷ HeadlessWorker → String
+headlessWorkerLabel (HeadlessWorker name) = name
+
+-- | Fail the example for every started worker that has already exited
+--   (#1388).
+--
+--   The signal is the worker's own @tsDone@. 'Engine.Core.Thread'
+--   documents it as filled exactly once when the loop actually exits,
+--   from a @finally@ at the fork site
+--   ('World.Thread.startWorldThread'), so a FILLED @tsDone@ observed
+--   before teardown means the worker stopped on its own — a fail-stop.
+--   A worker that fail-stops catches its own exception, logs it, and
+--   returns without rethrowing, so nothing reaches the hspec example
+--   and every assertion that does not touch the worker keeps passing.
+--
+--   Deliberately NOT keyed on 'EngineLifecycle'. @CleaningUp@ has many
+--   writers — every worker's crash handler, the input worker, the debug
+--   console, @engine.quit()@'s Lua handler, the normal loop shutdown
+--   and dump shutdown — so a lifecycle-keyed check would fail any test
+--   that legitimately quits the engine and would fire for workers this
+--   harness never started. @tsDone@ is per-thread and means one thing.
+--   This function takes the workers and NOTHING else, so it cannot
+--   consult the lifecycle even by accident; 'withHeadlessEngine' still
+--   uses @lifecycleRef@ for ordinary setup and teardown, which is a
+--   separate concern.
+--
+--   The probe is 'isEmptyMVar': non-blocking (the healthy case is an
+--   empty @MVar@ and never waits) and non-consuming. 'shutdownThread'
+--   takes @tsDone@ with @takeMVar@, so a consuming probe here would
+--   make failure-path teardown sit out its full 10 s timeout.
+--
+--   @expectedStopped@ names workers this caller stopped on purpose;
+--   every other worker is still checked strictly.
+checkHeadlessWorkers ∷ [HeadlessWorker] → [(HeadlessWorker, ThreadState)]
+                     → IO ()
+checkHeadlessWorkers expectedStopped workers = do
+    dead ← filterM hasExited
+             [ w | w@(name, _) ← workers
+                 , name `notElem` expectedStopped ]
+    unless (null dead) $
+        expectationFailure $ headlessWorkerReport (map fst dead)
+  where
+    hasExited (_, ts) = not ⊚ isEmptyMVar (tsDone ts)
+
+-- | The diagnostic for one or more exited workers. @tsDone@ records
+--   THAT a thread ended, not why, so the report points at the crash
+--   line the worker itself logged (requirement 2 of #1388).
+headlessWorkerReport ∷ [HeadlessWorker] → String
+headlessWorkerReport dead = unlines
+    [ "headless harness: worker exited before teardown: " ⧺ names
+    , ""
+    , "A worker that ends on its own has fail-stopped: it catches its"
+    , "own exception, logs it and stops its loop without rethrowing, so"
+    , "hspec never saw a failure and every assertion that does not touch"
+    , "that worker kept passing."
+    , ""
+    , "tsDone records THAT the thread ended, not why. For the cause,"
+    , "look in this run's captured output for the worker's own crash"
+    , "line — the world worker logs \"World thread crashed: ...\"."
+    , ""
+    , "If this spec stops the worker deliberately, say so narrowly:"
+    , "  withHeadlessEngineExpectingStopped [" ⧺ optOut ⧺ "] $ \\env → ..."
+    ]
+  where
+    names  = intercalate ", " (map headlessWorkerLabel dead)
+    optOut = intercalate ", " (map show dead)
+
+-- | Run @body@, then assert every started worker is still alive.
+--
+--   The action's own exception wins: when @body@ throws, the health
+--   check never runs, so a dead worker can never mask a real assertion
+--   failure (requirement 4 of #1388). Teardown is the caller's
+--   'bracket' and still runs on every path.
+--
+--   Under @aroundAll@ that precedence holds at the GROUP level too, and
+--   hspec is what enforces it: a wrapper failure raised after the last
+--   item is merged into that item's result, and @mergeResults@ keeps an
+--   already-failing item's own failure. So a group that was already red
+--   stays red for its own reason, and a group that was GREEN — the
+--   false-green this check exists for — turns red here.
+withHeadlessWorkerCheck ∷ [HeadlessWorker] → [(HeadlessWorker, ThreadState)]
+                        → IO α → IO α
+withHeadlessWorkerCheck expectedStopped workers body = do
+    result ← body
+    checkHeadlessWorkers expectedStopped workers
+    pure result
+
 -- | Boot engine in headless mode, run action, shut down.
 --   Sets camera zoom low so updateChunkLoading will trigger.
+--
+--   After the action returns, every worker this harness started must
+--   still be running; one that already exited fails the example
+--   ('checkHeadlessWorkers'). A spec that stops a worker on purpose
+--   uses 'withHeadlessEngineExpectingStopped' to exempt exactly that
+--   worker.
 withHeadlessEngine ∷ (EngineEnv → IO α) → IO α
-withHeadlessEngine action = bracket setup teardown (\(env, _) → action env)
+withHeadlessEngine = withHeadlessEngineExpectingStopped []
+
+-- | 'withHeadlessEngine', exempting the named workers from the
+--   post-action health check.
+--
+--   The opt-out is narrow by construction: it names workers, so the
+--   remaining ones stay strictly checked, and it cannot turn the check
+--   off globally. It also does not touch exception precedence — an
+--   action that throws still surfaces its own failure. Nothing in the
+--   suite needs this today (no spec inside a 'withHeadlessEngine'
+--   wrapper stops a worker), so it exists for a future spec that
+--   deliberately shuts one down mid-example.
+withHeadlessEngineExpectingStopped ∷ [HeadlessWorker] → (EngineEnv → IO α)
+                                   → IO α
+withHeadlessEngineExpectingStopped expectedStopped action =
+    bracket setup teardown $ \(env, workers) →
+        withHeadlessWorkerCheck expectedStopped workers (action env)
   where
     setup = do
         EngineInitResult env ← initializeEngineHeadless
@@ -37,10 +174,10 @@ withHeadlessEngine action = bracket setup teardown (\(env, _) → action env)
         modifyIORef' (cameraRef env) $ \cam → cam { camZoom = 0.5 }
         writeIORef (lifecycleRef env) EngineRunning
         worldTS ← startWorldThread env
-        pure (env, [worldTS])
-    teardown (env, threads) = do
+        pure (env, [(worldWorker, worldTS)])
+    teardown (env, workers) = do
         writeIORef (lifecycleRef env) CleaningUp
-        mapM_ shutdownThread threads
+        mapM_ (shutdownThread ∘ snd) workers
         threadDelay 100000
 
 -- | Boot engine in headless mode with NO world thread, run action, shut

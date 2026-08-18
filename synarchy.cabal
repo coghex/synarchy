@@ -1055,6 +1055,7 @@ test-suite synarchy-test-headless
     other-modules: App.Cli
                    Test.Headless.Harness
                    Test.Headless.Harness.Isolation
+                   Test.Headless.Harness.WorkerHealth
                    Test.Headless.WorldGen
                    Test.Headless.WorldGen.Geology
                    Test.Headless.WorldGen.Parity
