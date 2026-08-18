@@ -2,9 +2,21 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Deep per-issue history (review-round narratives, verification stories) was trimmed from this
-file on 2026-07-23 — see `docs/history/claude_md_2026-07-23_pretrim.md`, git history, and the
-referenced issues/PRs when you need the full story behind a contract stated here.
+This file carries the rules that prevent damage: what you must not undo,
+and which gate proves it. The layer below — the as-built mechanics behind
+those rules — lives in
+[`docs/engine_contracts.md`](docs/engine_contracts.md), which the sections
+here point at by name. Read the relevant section there before changing
+code in the area it covers; every contract in it is enforced by the gate
+its entry names, which is why it could move out of the always-loaded file.
+
+Two trims have shrunk this file, both archived verbatim: deep per-issue
+history (review-round narratives, verification stories) on 2026-07-23
+(`docs/history/claude_md_2026-07-23_pretrim.md`), and the 2026-08-18 pass
+that removed verbosity and extracted `docs/engine_contracts.md`
+(`docs/history/claude_md_2026-08-18_pretrim.md`). Consult those snapshots,
+git history, or the referenced issues/PRs when you need the full story
+behind a contract stated tersely here.
 
 ## Build Commands
 
@@ -25,48 +37,48 @@ seconds and the expensive gates at the end.
    Worldgen-output sanity: `python3 tools/world_check.py --quick` (6 seeds, <1 min).
 2. **Before reporting done — select only relevant checks.** A targeted
    `--match` describe exercising the changed behavior, plus the focused
-   probe for the affected subsystem when one exists. Run
-   `world_check.py --quick` only for worldgen-output changes; the
-   persistence inventory audit only when its root owners/registry or
-   inventory docs change; the EngineEnv capability audit only when
-   `EngineEnv`'s field set or `docs/engineenv_capability_inventory.md`
-   changes; a module-budget guard only when changing a capped module;
-   `test_audit.py` only when changing `world_audit.py`/`world_check.py`;
-   `test_run_probes.py` (deterministic, GPU-free, ~15 s) only when
-   changing `run_probes.py`;
-   `findings_report_audit.py` only when editing a findings report;
-   the unit-asset gate (`test_pack_atlas.py` +
-   `pack_atlas.py --validate-only --strict`, ~2 s — inventory,
-   freshness AND budget) when touching `assets/textures/units/`
-   (source frames or generated `atlas/` artifacts), `data/units/`,
-   `tools/unit_texture_budget.json`, `src/Unit/Atlas/`, or the
-   unit-YAML / preview / registration decoders.
+   probe for the affected subsystem when one exists. Run each of these
+   ONLY when its own inputs changed:
+
+   | Gate | Run it when you changed |
+   |---|---|
+   | `world_check.py --quick` | worldgen output |
+   | persistence inventory audit | its root owners/registry or inventory docs |
+   | EngineEnv capability audit | `EngineEnv`'s field set or `docs/engineenv_capability_inventory.md` |
+   | a module-budget guard | a capped module |
+   | `test_audit.py` | `world_audit.py` / `world_check.py` |
+   | `test_run_probes.py` (~15 s, GPU-free) | `run_probes.py` |
+   | `test_persistence_contract_sweep.py` (pure, no engine, <1 s) | `persistence_contract_sweep.py`'s `SELECTABLE_CROSS_REFERENCED_PROBE_KEYS` or `run_probes.PROBES` |
+   | `findings_report_audit.py` | a findings report |
+   | unit-asset gate (`test_pack_atlas.py` + `pack_atlas.py --validate-only --strict`, ~2 s) | `assets/textures/units/` (source frames or generated `atlas/`), `data/units/`, `tools/unit_texture_budget.json`, `src/Unit/Atlas/`, or the unit-YAML / preview / registration decoders |
+
    Do NOT run the whole headless suite, the 21-seed world check, or
    `make ci` by default — CI is the full-suite authority.
-
-**Module-budget scope:** the 500-line Haskell/Lua limits are per-split
-ratchets, enforced only for module families explicitly listed in the relevant
-budget tool. They are not a tree-wide size policy. For a structural split with
-no explicit budget entry, extract the cohesive, correctness-relevant boundary
-first even if the facade remains above 500 lines; record a later pass rather
-than forcing unrelated `EngineEnv`/capability refactoring just to hit 500.
 3. **Worldgen-OUTPUT changes only (full tier).**
    `SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless` (+~25 s),
    then re-capture baselines `python3 tools/world_baseline.py` (~7 min)
    and re-run world_check. Remember the save-version bump.
-4. **Behavior probes — opt-in, not a default gate.** ~55 headless
+4. **Behavior probes — opt-in, not a default gate.** ~84 headless
    `tools/*_probe.py` scripts each boot a real engine and gate one
-   system — see `tools/README.md` and the subsystem table below. Run the
-   ones relevant to what you touched, or `python3 tools/run_probes.py
+   system — see `tools/README.md` and **Subsystem probes & domain
+   contracts** below. Run the ones relevant to what you touched, or
+   `python3 tools/run_probes.py
    --only <substrings> [--jobs N]` (bare run = full sweep, tens of
    minutes). `python3 tools/ci_probes.py --status` is the authoritative
-   list of every probe's CI eligibility (CI-eligible vs manual-only with
-   reason) — never trust a prose list of probe names. The path→probe map
-   for CI's blocking, path-selective PR probe gate lives in
-   `tools/ci_probes.py` (a change there re-runs its `--self-test`);
-   promoting a probe to the gate = move its key from
+   list of every probe's CI eligibility — never trust a prose list of
+   probe names. The path→probe map for CI's blocking, path-selective PR
+   probe gate lives in `tools/ci_probes.py` (a change there re-runs its
+   `--self-test`); promoting a probe to the gate = move its key from
    `MANUAL_ONLY_REASONS` to `CI_ELIGIBLE` after proving it
    deterministic, broad, and cheap.
+
+**Module-budget scope:** the 500-line Haskell/Lua limits are per-split
+ratchets, enforced only for module families explicitly listed in the
+relevant budget tool. They are not a tree-wide size policy. For a
+structural split with no explicit budget entry, extract the cohesive,
+correctness-relevant boundary first even if the facade remains above 500
+lines; record a later pass rather than forcing unrelated
+`EngineEnv`/capability refactoring just to hit 500.
 
 Baselines (`tools/baselines/`) are **tracked in git**: a fresh
 clone/worktree runs world_check directly, and a tier-3 re-capture lands
@@ -147,58 +159,60 @@ picked per call site by readability, not enforced either way.
 Modules are split into `Base.hs` and `Types.hs` files. Base files have **no local dependencies** (only external packages). Types files import from other project modules freely. This prevents circular imports.
 
 ### Core monad: EngineM
-`Engine.Core.Monad` defines `EngineM σ α` — a continuation-passing-style monad with a concrete `EngineEnv` Reader environment, concrete `EngineState` mutable state, IO, error handling, and logging. Its two type parameters are `σ` (the continuation result) and `α` (the value); neither the environment nor the state is a parameter. Most engine code runs in this monad.
+`Engine.Core.Monad` defines `EngineM σ α` — a continuation-passing-style
+monad with a concrete `EngineEnv` Reader environment, concrete
+`EngineState` mutable state, IO, error handling, and logging. Its two type
+parameters are `σ` (the continuation result) and `α` (the value); neither
+the environment nor the state is a parameter. Most engine code runs in
+this monad.
 
-`Engine.Core.State`'s `EngineEnv` is one shared record (83 fields)
-reachable from any thread. The capability-split epic (#537) that
-narrowed it is **complete** (#889–#899).
-`docs/engineenv_capability_inventory.md` (#876) is the authoritative
-capability/thread/lifecycle ownership inventory for every field — read
-it before adding a field, changing which thread touches one, or
-changing its lifecycle; `tools/engine_env_capability_audit.py` (in CI
-and `make ci`) fails if a classification drifts from the live record.
-**Before adding any state, read its §6.4 post-flip procedure** — it
-leads with the case that resolves most of them: the state doesn't
-belong on `EngineEnv` at all (`WorldState`, a manager, `EngineState`,
-or a local), and needs no new field.
+`Engine.Core.State`'s `EngineEnv` is one shared record (87 fields)
+reachable from any thread. The capability-split epic (#537/#889–#899) that
+narrowed it is **complete**.
+[`docs/engineenv_capability_inventory.md`](docs/engineenv_capability_inventory.md)
+(#876) is the authoritative capability/thread/lifecycle ownership
+inventory for every field, and `tools/engine_env_capability_audit.py` (CI
++ `make ci`) fails if a classification drifts from the live record.
 
-**Capability records (#889–#899, epic complete):** each capability gets
-its own `Engine.Core.Capability.<Name>` module exporting one
-`<Name>Capability` record plus a total `to<Name>Capability ∷ EngineEnv
-→ <Name>Capability` projection.
-`docs/engineenv_capability_inventory.md` §2.1's canonical convention
-block is the one authoritative statement of the naming/placement,
-one-way-projection, shared-live-container, no-back-import,
-no-record-ahead-of-need, and thread-private-split rules — read it
-before adding a capability record rather than inferring the shape from
-an existing one. `EngineM` stays hard-wired to `MonadReader EngineEnv`
-(no capability typeclass layer), so a narrowed module's own public API
-is typically two layers: primitives taking the capability explicitly,
-plus thin `MonadReader EngineEnv` wrappers preserving existing call
-sites (see `Engine.Core.Log.Monad`/`Engine.Core.Capability.Core`) —
-narrowing the *module's own field access* is the goal, not rewriting
-every caller. There are **eight capability identifiers and thirteen
-record/view types** (§2.1's table): five capabilities are split, four
-of them by the thread-private-split rule above (§3.1).
+**Before adding any state, read that doc's §6.4 post-flip procedure** —
+it leads with the case that resolves most of them: the state doesn't
+belong on `EngineEnv` at all (`WorldState`, a manager, `EngineState`, or
+a local), and needs no new field. Before adding a capability record, read
+§2.1's canonical convention block rather than inferring the shape from an
+existing one — it is the one authoritative statement of the
+naming/placement, one-way-projection, shared-live-container,
+no-back-import, no-record-ahead-of-need and thread-private-split rules.
+Currently **eight capability identifiers and thirteen record/view types**
+(§2.1's table): five capabilities are split, four by the thread-private
+rule (§3.1).
 
-The same audit enforces a production-only (`src/`+`app/`, `test/`
-exempt) full-access boundary: importing `Engine.Core.State` with
-`EngineEnv(..)` or as a bare import (either shape, regardless of
-`qualified`/`as`/multiline) is unrestricted access. Since #899 (E8)
-that is allowed **only** for §6.1's hard-coded permanent allowlist —
-the 24 genuine whole-session orchestration boundaries (the definer and
-constructor, the monad carrier, per-profile boot wire-up, the main
-loop, Lua dispatch, and the save/load transaction). §6.2's temporary
-ceiling is **empty**, and it is shrink-only, so "add the field now,
-narrow it later" no longer exists: a module gaining unrestricted access
-fails the audit even if §6.2 is also edited to document it. The audit
-additionally parses §6.1 itself and requires its documented set to
-equal the checked-in `PERMANENT_DEFINER`/`PERMANENT_IMPORTERS`
-constants, with a real justification on every row — so neither the doc
-nor the constants can admit a permanent importer alone. §6.4(c)/(d)
-govern the two escape hatches (a ninth capability; a new §6.1 module);
-both need explicit maintainer approval and synchronized doc + constant
-+ self-test changes.
+Each capability lives in its own `Engine.Core.Capability.<Name>` module
+exporting one `<Name>Capability` record plus a total `to<Name>Capability
+∷ EngineEnv → <Name>Capability` projection. `EngineM` stays hard-wired to
+`MonadReader EngineEnv` (no capability typeclass layer), so a narrowed
+module's public API is typically two layers: primitives taking the
+capability explicitly, plus thin `MonadReader EngineEnv` wrappers
+preserving existing call sites (see
+`Engine.Core.Log.Monad`/`Engine.Core.Capability.Core`). Narrowing the
+*module's own field access* is the goal, not rewriting every caller.
+
+**Full access is a closed allowlist.** The same audit treats importing
+`Engine.Core.State` with `EngineEnv(..)` or as a bare import (either
+shape, regardless of `qualified`/`as`/multiline) as unrestricted access,
+production-only (`src/`+`app/`; `test/` exempt). Since #899 that is
+allowed **only** for §6.1's hard-coded permanent allowlist — the 24
+genuine whole-session orchestration boundaries (the definer and
+constructor, the monad carrier, per-profile boot wire-up, the main loop,
+Lua dispatch, the save/load transaction). §6.2's temporary ceiling is
+**empty** and shrink-only, so "add the field now, narrow it later" no
+longer exists: a module gaining unrestricted access fails the audit even
+if §6.2 is edited to document it. The audit also parses §6.1 and requires
+its documented set to equal the checked-in
+`PERMANENT_DEFINER`/`PERMANENT_IMPORTERS` constants with a real
+justification per row, so neither the doc nor the constants can admit a
+permanent importer alone. §6.4(c)/(d) govern the two escape hatches (a
+ninth capability; a new §6.1 module) — both need explicit maintainer
+approval and synchronized doc + constant + self-test changes.
 
 ### Threading model
 The engine uses multiple worker threads communicating via STM (TVar, queues):
@@ -282,63 +296,60 @@ InteractiveBounds, ResponsiveMenus, ResponsiveGameplay). Contracts:
 **Text coordinates:** `UI.TextBuffer`/`UI.getCursor`/`UI.setCursor` use
 zero-based Unicode code-point offsets. Lua strings are UTF-8 byte
 arrays — editable widgets must use `scripts/ui/utf8_safe.lua`, never
-`#text` or byte-based `string.sub`. Since #1187 the debug console's own
-input line (`scripts/shell.lua`) holds the same contract: `cursorPos`
-and `inputScrollOffset` are code-point offsets into `inputBuffer`, and
-that includes the derived paths — tab completion (`longestCommonPrefix`
-snaps its byte-wise agreement point back to a character boundary, since
-two candidates can agree on part of one emoji), the ghost hint, and the
-scroll/measure walk. The Delete key arrives as `onTextDelete`
-(`LuaTextDelete`), not `onDelete`. `config/shell_history.txt` is the one
-buffer ingress that isn't engine-delivered text, so a line that isn't
-valid UTF-8 is dropped at load. Gate: hspec `--match "Lua.ShellInput"`.
+`#text` or byte-based `string.sub`. The debug console's own input line
+(`scripts/shell.lua`) holds the same contract, including the derived
+contract: `cursorPos` and `inputScrollOffset` are code-point offsets into
+`inputBuffer`, and that includes the derived paths — tab completion
+(`longestCommonPrefix` snaps its byte-wise
+agreement point back to a character boundary, since two candidates can
+agree on part of one emoji), the ghost hint, and the scroll/measure walk.
+The Delete key arrives as `onTextDelete` (`LuaTextDelete`), not
+`onDelete`. `config/shell_history.txt` is the one buffer ingress that
+isn't engine-delivered text, so a line that isn't valid UTF-8 is dropped
+at load. Gate: hspec `--match "Lua.ShellInput"`.
 
 **Text display (#1159):** the same rule binds read-only DISPLAY paths —
 wrapping, truncation, and any other per-character walk advances one code
 point at a time, or non-ASCII text renders as mojibake and gets measured
 once per byte. Lua PATTERNS are byte-oriented too, so `gmatch(".")` is a
-byte loop, not a character loop. Pixel-width wrapping goes through
-`scripts/ui/text_wrap.lua` — `byCharacter` (the debug console) and
-`byWord` (word wrap with a character hard-break; all three log panels) —
+byte loop. Pixel-width wrapping goes through `scripts/ui/text_wrap.lua` —
+`byCharacter` (the debug console) and `byWord` (all three log panels) —
 rather than a fourth private copy. Unlike `utf8_safe`, it never raises on
-malformed UTF-8 and never drops a byte: display paths wrap whatever an
-arbitrary Lua value stringified to. Gate: hspec
+malformed UTF-8 and never drops a byte. Gate: hspec
 `--match "Lua.TextWrapping"`.
 
 **Layers + modal boundary (#742):** pages live on six `UILayer`s,
 painted bottom-to-top `LayerHUD < LayerOverlay < LayerMenu < LayerModal
 < LayerTooltip < LayerDebug`; `uiLayerBand` is the single paint-order
 source of truth shared by hit-testing and rendering. Whether a page
-BLOCKS pointer input is the separate per-page `upInputExclusive` flag
-(`UI.InputOwnership`) — `LayerModal` defaults exclusive, everything
-else pass-through. The topmost visible exclusive page owns the modal
-boundary: input that misses every control on or above it is consumed
-(empty modal space blocks). Stacking-only modal pages opt out via
-`UI.setPageInputExclusive(page, false)` (e.g. `popup.lua` cards).
-`LayerDebug` (shell; F8 overlay, which hit-tests itself via a parallel
-`tryClaimClick`) is pass-through above any modal. `UI.isInputBlocked()`
-reflects the boundary; `ui_manager.lua`'s `isGameplayInputActive()`
-folds it in so gameplay handlers go inert behind a modal; Escape's
-dismiss cascade (`init_keys.lua`) deliberately runs before that gate.
-Raw handlers that iterate widget instances outside `routePointer` use
+BLOCKS pointer input is the separate per-page `upInputExclusive` flag —
+`LayerModal` defaults exclusive, everything else pass-through. The
+topmost visible exclusive page owns the modal boundary: input that misses
+every control on or above it is consumed (empty modal space blocks).
+Stacking-only modal pages opt out via `UI.setPageInputExclusive(page,
+false)`. `LayerDebug` is pass-through above any modal.
+`UI.isInputBlocked()` reflects the boundary; `ui_manager.lua`'s
+`isGameplayInputActive()` folds it in; Escape's dismiss cascade
+(`init_keys.lua`) deliberately runs before that gate. Raw handlers that
+iterate widget instances outside `routePointer` use
 `UI.isPageInScope(pageHandle)`.
 
 **Per-element input policies (#743):** three independent policies —
 fires a click callback, blocks pointer (`UI.setPointerBlocking`),
 captures scroll (`UI.setScrollCapture`); query via
-`UI.isPointerBlocking`/`isScrollCapturing`. A click callback still
-implies pointer-blocking by default; a blocking element with no
-relevant callback consumes the press (`RouteBlocked`), across all three
-buttons. Wheel routing (`routeScroll`) picks the topmost in-scope
-scroll-capturing surface via the same `topHitBy` paint-order walk —
-never the click machinery.
+`UI.isPointerBlocking`/`isScrollCapturing`. A click callback still implies
+pointer-blocking by default; a blocking element with no relevant callback
+consumes the press (`RouteBlocked`) across all three buttons. Wheel
+routing (`routeScroll`) picks the topmost in-scope scroll-capturing
+surface via the same `topHitBy` paint-order walk — never the click
+machinery.
 
 **Scroll dispatch (#744):** plain and Shift wheel go through the
 IDENTICAL pipeline (`Engine.Input.Thread.Scroll`): a capturing element
-wins first (`LuaUIScrollEvent`, carrying the Shift flag), else a
-visible modal boundary consumes, and only past both does Shift select
-z-slice vs camera zoom. Don't reintroduce `UI.isInputBlocked()`
-self-gates in the Lua handlers — the engine decides once, upstream.
+wins first (`LuaUIScrollEvent`, carrying the Shift flag), else a visible
+modal boundary consumes, and only past both does Shift select z-slice vs
+camera zoom. Don't reintroduce `UI.isInputBlocked()` self-gates in the
+Lua handlers — the engine decides once, upstream.
 
 **Control activation + keyboard focus (#745):** a press on a discrete
 control records `UI.ControlActivation.PendingActivation` (firing
@@ -346,34 +357,34 @@ control records `UI.ControlActivation.PendingActivation` (firing
 activates if it still resolves to the same element. Interruptions
 reverted before release are caught by epochs: global `upmPageEpoch`
 (bumped ONLY by `hidePage`/`showPage`) + per-element `ueRouteEpoch`
-(bumped by `setVisible`/`setClickable`/detach on THAT element, only on
-a real value change); `PendingActivation` snapshots the pressed
-element's and every ancestor's epoch and cancels on mismatch. Unrelated
+(bumped by `setVisible`/`setClickable`/detach on THAT element, only on a
+real value change); `PendingActivation` snapshots the pressed element's
+and every ancestor's epoch and cancels on mismatch. Unrelated
 sibling/child churn (hover highlights, focus-ring attach) must never
 cancel an activation — that constraint shaped this design; don't
-"simplify" it back to a global counter. Sliders/scrollbar thumbs opt
-out via `UI.setDragActivation` (fire-on-press + drag). Keyboard CONTROL
-focus (`upmControlFocus`, `UI.FocusNavigation`) is independent of text
-focus: Tab/Shift+Tab traverse in-scope focusables (a modal traps
-traversal like pointers; `LayerDebug` stays reachable), Enter/Space
-fire the real `LuaUIClickEvent`, arrows step `ueSteppable` controls
-(`LuaUIStepEvent`); consumed keys are withheld from `inpKeyStates`.
-`UI.getElementInfo`'s `focused` stays text-only; control focus reports
-as `controlFocused`.
+"simplify" it back to a global counter. Sliders/scrollbar thumbs opt out
+via `UI.setDragActivation`. Keyboard CONTROL focus (`upmControlFocus`,
+`UI.FocusNavigation`) is independent of text focus: Tab/Shift+Tab
+traverse in-scope focusables (a modal traps traversal like pointers;
+`LayerDebug` stays reachable), Enter/Space fire the real
+`LuaUIClickEvent`, arrows step `ueSteppable` controls (`LuaUIStepEvent`);
+consumed keys are
+withheld from `inpKeyStates`. `UI.getElementInfo`'s `focused` stays
+text-only; control focus reports as `controlFocused`.
 
 **Clipping + popup placement (#747):** `UI.setClipChildren(el, true)`
-clips DESCENDANTS to the container's live bounds (overflow:hidden;
-nested clips intersect; recomputed fresh, nothing cached).
-`UI.Clipping.effectiveClip` is the ONE helper both rendering
-(`clipQuadUV` — partial quads, not all-or-nothing culling) and
-hit-testing (`UI.Manager.Query.isPointInElement`) consult, so paint and
-hit-test can't drift. Floating root-mounted content (dropdown lists,
-context menus) is unaffected — clipping walks real ancestors only.
-`UI.placePopup(anchorX, anchorY, anchorW, anchorH, contentW, contentH,
-direction)` (`"below"/"above"/"right"/"left"/"anchored"`) is the one
-placement algorithm for floating content (pass the FULL interactive
-size incl. scrollbar); `UI.fitVisibleRows` backs oversized-list row
-reduction. Tooltips keep their own separate cursor-relative clamp.
+clips DESCENDANTS to the container's live bounds (overflow:hidden; nested
+clips intersect; recomputed fresh, nothing cached).
+`UI.Clipping.effectiveClip` is the ONE helper both rendering (`clipQuadUV`
+— partial quads, not all-or-nothing culling) and hit-testing
+(`UI.Manager.Query.isPointInElement`) consult, so paint and hit-test
+can't drift. Floating root-mounted content is unaffected — clipping walks
+real ancestors only. `UI.placePopup(anchorX, anchorY, anchorW, anchorH,
+contentW, contentH, direction)` (`"below"/"above"/"right"/"left"/
+"anchored"`) is the one placement algorithm for floating content (pass
+the FULL interactive size incl. scrollbar); `UI.fitVisibleRows` backs
+oversized-list row reduction. Tooltips keep their own cursor-relative
+clamp.
 
 **Interactive bounds (#749):** three rects per element — LOGICAL
 (`uePosition`+`ueSize`), VISUAL (overflow-expanded render rect), and
@@ -381,64 +392,45 @@ INTERACTIVE (what all hit-testing uses,
 `UI.InteractiveBounds.interactiveRect`). A box opts its visible border
 into interaction via `UI.setInteractiveOverflow`; overflow alone never
 enlarges a target. Overflow is clamped: non-finite → 0, astronomically
-large → capped, inverting → zero-extent, non-hittable AND
-non-rendering. `UI.getElementInfo` adds `interactiveOverflow` +
-`interactiveBounds` (`x/y/width/height` stay content bounds).
+large → capped, inverting → zero-extent, non-hittable AND non-rendering.
+`UI.getElementInfo` adds `interactiveOverflow` + `interactiveBounds`
+(`x/y/width/height` stay content bounds).
 
-**Container window stack (#1238):** `scripts/cargo_inventory_panel.lua`
+**Container window stack (#1238/#1250):** `scripts/cargo_inventory_panel.lua`
 is THE container window and owns an ordered STACK of levels, not one
-popup. Level 1 is an endpoint (a storage building or a unit); a
-container row inside level N opens level N+1, and the nesting PATH is
-remembered. Two windows never coexist at one level: opening container B
-where A is open REPLACES A and discards every deeper level, and an
-EXTERNAL request (a cargo right-click, the unit-info "Contents" entry)
+popup. Level 1 is an endpoint (a storage building or a unit); a container
+row inside level N opens level N+1, and the nesting PATH is remembered.
+Two windows never coexist at one level: opening container B where A is
+open REPLACES A and discards every deeper level, and an EXTERNAL request
 always targets the base. Only the DEEPEST level is interactive, and
 nothing enforces that by hand — a level past the base gets its own
 `LayerModal` page, so #742's boundary makes every shallower level
-painted-but-unclickable and closing it restores the parent. The base
-level keeps its pre-#1238 non-modal behaviour on `hud.world_page`.
-Escape closes ONE level per press (the one dismiss-cascade tier; the
-item-contents module has no key handler of its own). Four level kinds:
-`endpoint`, `unitItem` (LIVE, `unit.getItemContents`),
-`buildingItem` (the player's REMEMBERED contents,
-`building.getRememberedItemContents`, carrying the PARENT record's own
-`revealedAt` — never a live storage read, never a knowledge write) and
-`escort` (#1250's Mode A pair). The two item kinds
-descend by EXACT INSTANCE IDENTITY along a path of instance ids, and a
-path that stops resolving closes that level AND every level below it
-rather than retargeting a same-def sibling. A level owns one or more
-PANES (#1250) — a pane being one panel box, its header and one item
-list, with its own tab and scroll — and for every kind but `escort`
-the level table IS its own single pane (`panes[1] == level`), so
-`level.listId`/`activeTab`/`scroll` still mean exactly what they meant
-before. A level stays the unit of NESTING, modality, teardown and
-restore, which is what makes two flanking panels ONE level.
-An item-container level is
-RENDER-ONLY (D-5): no transfer endpoint, no transfer operation — only
-inspection (scroll, close, open a child), so a building row keeps its
-Withdraw entry and merely GAINS "Contents". `scripts/item_contents_panel.lua`
-no longer owns a window lifecycle (D-13): it supplies the two item-level
-kinds and nothing else — no page, no panel, no singleton, no `setup()`,
-no `update()`. `unit.getItemContents` searches loose inventory,
-equipment AND accessories (the three the unit-info list merges).
-`scripts/transfer_session_panels.lua` supplies the `escort` kind the
-same way and owns no lifecycle either. The
-stack is transient session UI: `hud.createUI()` snapshots and restores
-the WHOLE thing across a resize (path + per-PANE tab and scroll), and
-every pane names its widgets from `paneWidgetName` — the single pane
-keeps the historic bare `cargo_inv`, a further pane appends its key —
-because keyboard control focus is restored BY NAME to the first visible
-match, so two panes sharing one name would return focus to the wrong
-one. Also,
-`uiManager.onSaveLoaded` drops it. A level teardown carries a REASON,
-and `"layout"` — passed only by that resize snapshot/restore pass and
-by `view_teardown`'s `resize` hook — is the one that does NOT fire a
-kind's `onClose`; every other teardown does. That distinction is what
-lets an escort session (and the unit it holds) survive a resize while
-a zoom-band change, a HUD hide, Escape, or another container replacing
-it all end it. Gates: hspec
-`--match "container window stack"` / `--match "Container knowledge"` /
-`--match "Nested item contents"` / `--match "Item list widget"`, plus
+painted-but-unclickable. The base level keeps its non-modal behaviour on
+`hud.world_page`. Escape closes ONE level per press.
+
+Four level kinds — `endpoint`, `unitItem` (LIVE), `buildingItem` (the
+player's REMEMBERED contents, never a live storage read or a knowledge
+write) and `escort` (#1250's Mode A pair). The two item kinds descend by
+EXACT INSTANCE IDENTITY, and a path that stops resolving closes that
+level AND every level below it rather than retargeting a same-def
+sibling. An item-container level is RENDER-ONLY (D-5): inspection only,
+so a building row keeps its Withdraw entry and merely GAINS "Contents".
+`scripts/item_contents_panel.lua` and
+`scripts/transfer_session_panels.lua` supply level kinds and own no
+window lifecycle at all — no page, no panel, no singleton, no
+`setup()`/`update()`. A level owns one or more PANES and remains the unit
+of NESTING, modality, teardown and restore, which is what makes two
+flanking panels ONE level. The stack is transient session UI:
+`hud.createUI()` snapshots and restores the whole thing across a resize,
+and `uiManager.onSaveLoaded` drops it.
+
+Pane semantics, the load-bearing `paneWidgetName` rule (control focus is
+restored BY NAME, so two panes sharing one name return focus to the wrong
+one), and the teardown REASONS — `"layout"` being the one that does not
+fire `onClose`, which is what lets an escort session survive a resize —
+are in `docs/engine_contracts.md` §Container window stack. Gates: hspec
+`--match "container window stack"` / `"Container knowledge"` /
+`"Nested item contents"` / `"Item list widget"`, plus
 `tools/item_list_widget_probe.py` (manual-only, `needs-gpu`).
 
 **Responsive lifecycle (#748 menus / #750 gameplay):**
@@ -450,44 +442,37 @@ combinations degrade best-effort (never crash, never invalid geometry,
 fixed actions stay reachable), typically via `math.max(20, ...)` floors
 and `math.min(panelW, fbW)` caps. Menu screens register via
 `responsive.register(name, mod)` + `responsive.notifyResize(w, h)`
-(0x0-minimize-guarded; re-notify with the SAME size = scale-only
-change). Gameplay surfaces stay OFF that registry: they're reached
-either through `ui_manager_boot.lua`'s manual forward or the engine's
-automatic `broadcastToModules` resize — registering a broadcast-reached
-module DOUBLE-FIRES it every resize. Scale-only changes reach gameplay
-via `uiManager.notifyGameplayRescale` (called from Settings
-Apply/Save/Back/Defaults when the scale actually changed).
+(0x0-minimize-guarded; re-notify with the SAME size = scale-only change).
+Gameplay surfaces stay OFF that registry: they're reached either through
+`ui_manager_boot.lua`'s manual forward or the engine's automatic
+`broadcastToModules` resize — registering a broadcast-reached module
+DOUBLE-FIRES it. Scale-only changes reach gameplay via
+`uiManager.notifyGameplayRescale`.
 
 Rules that keep resizes correct — follow them for any new screen/panel:
 - A geometry rebuild must preserve state a semantic re-entry may reset:
-  pending settings edits, scroll offsets, in-progress text
-  (textbox/randbox/dropdown raw filter text all have
-  `snapshotPage`/`restoreAll`), selected tabs, open-panel targets.
-  `hud.createUI()` snapshots each world-page panel's "open for" state
-  before the `view_teardown.lua` `"resize"` sweep and reopens via each
-  panel's real entry point (`reopenWithTab`/`reopenWithState`/
-  `restoreStack`); restores must not re-fire `onChange`/`onSelect` (use
-  the widgets' `silent` params, `toggle.restoreSlotIdentity`,
-  `list.setSelectedIndex` — never `selectItem`). A surface with NESTING
-  restores the whole nesting path, not just its topmost window (#1238's
-  container stack).
+  pending settings edits, scroll offsets, in-progress text, selected
+  tabs, open-panel targets. `hud.createUI()` snapshots each world-page
+  panel's "open for" state before the `view_teardown.lua` `"resize"`
+  sweep and reopens via each panel's real entry point; restores must not
+  re-fire `onChange`/`onSelect` (use the widgets' `silent` params,
+  `toggle.restoreSlotIdentity`, `list.setSelectedIndex` — never
+  `selectItem`). A surface with NESTING restores the whole nesting path.
 - Keyboard control focus survives rebuilds by NAME:
   `responsive.snapshotControlFocusName()`/`restoreControlFocusName()`
   around any destroy+recreate; restore only after pages are re-shown.
 - Fixed-size widgets fit via a LOCAL effective uiscale
-  (`responsive.fitScale` against the reserved column/row/panel width) —
-  the recurring pattern for dropdowns, tab bars, buttons, and labels
-  (row labels reserve a `LABEL_COLUMN_FRACTION` 0.35 column). Shrink a
+  (`responsive.fitScale` against the reserved column/row/panel width);
+  row labels reserve a `LABEL_COLUMN_FRACTION` 0.35 column. Shrink a
   box's font together with its box, never separately.
 - Panels sized as `BASE * uiscale` must cap width/height to the
-  framebuffer, and their content must derive from the panel's REAL
-  bounds (`panel.getContentBounds()`), never an independently
-  recomputed value that can drift. `scripts/ui/reserved_regions.lua`
-  (pure) keeps popups clear of toolbar clusters
-  (`hud.getToolbarRects()`, `avoidReserved`, `maxAvailableWidth`,
-  `maxRightAnchoredWidth`, `findEscapes`).
-- zIndex ACCUMULATES through the parent chain (`elementPaintKey` sums
-  up `ueParent`) — leave wrapper/viewport elements at zIndex 0.
+  framebuffer, and their content must derive from the panel's REAL bounds
+  (`panel.getContentBounds()`), never an independently recomputed value
+  that can drift. `scripts/ui/reserved_regions.lua` (pure) keeps popups
+  clear of toolbar clusters (`hud.getToolbarRects()`, `avoidReserved`,
+  `maxAvailableWidth`, `maxRightAnchoredWidth`, `findEscapes`).
+- zIndex ACCUMULATES through the parent chain (`elementPaintKey` sums up
+  `ueParent`) — leave wrapper/viewport elements at zIndex 0.
 - Resize ordering: hud rebuilds first; dependent surfaces (`popup`,
   `unit_info_v2`) expose a separate `reflow()` called after it so they
   never read stale hud geometry.
@@ -501,7 +486,7 @@ end-to-end UI verification.
 
 ## Project Layout
 
-- `src/` — Library source (360+ modules)
+- `src/` — Library source (~730 modules)
 - `app/Main.hs` — Executable entry point (draw loop)
 - `test/` — hspec unit tests (engine core and Vulkan primitives)
 - `cbits/` — C code (stb_truetype font rasterization, Lua debug FFI)
@@ -513,20 +498,20 @@ end-to-end UI verification.
 
 ## Working-tree discipline
 
-**`~/work/synarchy` is the PRIMARY checkout and must be left CLEAN.** The PR
-drainer fast-forwards it after every merge, which means it autostashes whatever
-uncommitted work it finds there and restores it afterwards. A restore that
-CONFLICTS leaves unmerged entries in the index, and every later drainer pass
-then refuses to run — post-merge cleanup wedges until a human resolves it. That
-happened four times (2026-08-01, 08-03, 08-05, 08-09), every single time on
-`docs/code_health_findings.md`, because report-processing writes long-lived
-uncommitted edits into the one file that merged PRs also rewrite.
+**`~/work/synarchy` is the PRIMARY checkout and must be left CLEAN.** The
+PR drainer fast-forwards it after every merge, autostashing whatever
+uncommitted work it finds and restoring it afterwards. A restore that
+CONFLICTS leaves unmerged entries in the index, and every later drainer
+pass then refuses to run until a human resolves it. That happened four
+times in 2026-08, every time on `docs/code_health_findings.md`, because
+report-processing writes long-lived uncommitted edits into the one file
+that merged PRs also rewrite.
 
-So: **any file you write into the repo but do not commit belongs in the docs
-worktree, never the primary checkout.** That covers report annotation
-(`/process-report`), findings documents, design-doc drafts, and anything else a
-workflow leaves sitting for review. Resolve it by BRANCH — never hard-code the
-path, and never assume the current directory is right:
+So: **any file you write into the repo but do not commit belongs in the
+docs worktree, never the primary checkout** — report annotation
+(`/process-report`), findings documents, design-doc drafts, anything a
+workflow leaves sitting for review. Resolve it by BRANCH — never
+hard-code the path, never assume the current directory is right:
 
 ```bash
 DOCS_WT="$(git worktree list --porcelain \
@@ -535,12 +520,8 @@ DOCS_WT="$(git worktree list --porcelain \
                        git worktree add "$DOCS_WT" -b docs-wip origin/master; }
 ```
 
-Docs land on master by direct push, not a PR. Landing ONE document while others
-are still being written is the normal case, so the rebase must tolerate a dirty
-tree — a plain `git rebase` aborts with "cannot rebase: You have unstaged
-changes" and strands the landing:
-
-**Use `tools/docs_land.sh`, not a hand-rolled sequence:**
+Docs land on master by direct push, not a PR. **Use `tools/docs_land.sh`,
+not a hand-rolled sequence:**
 
 ```bash
 tools/docs_land.sh -m "Commit subject" docs/foo.md [docs/bar.md …]
@@ -548,17 +529,17 @@ tools/docs_land.sh -n -m "…" docs/foo.md      # dry run
 tools/docs_land.sh -f -m "…" docs/foo.md      # proceed despite the risk warning
 ```
 
-It resolves the worktree by branch, commits ONLY the paths you name, skips the
-rebase entirely when master has not moved, judges success by `rev-list` rather
-than push output, and fast-forwards the primary checkout only when it is clean.
-
-Its reason to exist is the pre-flight check: it refuses, before committing or
-stashing anything, when a file that is dirty here but NOT being landed has also
-changed on master. That combination is exactly what makes a rebase autostash
-conflict — and it is what actually happens, repeatedly, on
-`docs/code_health_findings.md`, which merged PRs rewrite constantly.
-
-The equivalent by hand, if you ever need it:
+It resolves the worktree by branch, commits ONLY the paths you name,
+skips the rebase when master has not moved, judges success by `rev-list`
+rather than push output, and fast-forwards the primary checkout only when
+it is clean. Its reason to exist is the pre-flight check: it refuses,
+before committing or stashing anything, when a file that is dirty here
+but NOT being landed has also changed on master — exactly the combination
+that makes a rebase autostash conflict, and exactly what keeps happening
+on `docs/code_health_findings.md`. Landing ONE document while others are
+still being written is the normal case, so the rebase must tolerate a
+dirty tree; a plain `git rebase` aborts with "cannot rebase: You have
+unstaged changes" and strands the landing. By hand, if ever needed:
 
 ```bash
 cd "$DOCS_WT" && git add -- <paths> && git commit -m "…" \
@@ -566,63 +547,50 @@ cd "$DOCS_WT" && git add -- <paths> && git commit -m "…" \
   && git push origin docs-wip:master
 ```
 
-`--autostash` is required there, not decorative. Should ITS restore conflict,
-the damage is confined to this worktree and surfaces immediately in front of
-you — it cannot wedge the drainer, which is the whole point of doing the work
-here.
+`--autostash` is required there, not decorative: a conflicting restore is
+confined to this worktree instead of wedging the drainer. **`docs-wip` is
+not a feature branch** — it tracks `origin/master` and lands by direct
+push. That push prints `Cannot update this protected ref` and then
+**succeeds anyway** under admin bypass, so judge it by `git rev-list
+--left-right --count HEAD...origin/master`, never the warning. Details:
+`docs/engine_contracts.md` §Docs landing.
 
-**`docs-wip` is not a feature branch.** It tracks `origin/master` and lands by
-direct push, so it is a second working copy of master rather than something that
-accumulates and merges later. Uncommitted work can sit in it indefinitely
-without the drainer ever seeing it; that is its whole job.
-
-A bare `git push` from this worktree fails safe: `docs-wip` tracks
-`origin/master`, and the differing name makes `push.default=simple` refuse. Use
-the explicit refspec above.
-
-That push prints `Cannot update this protected ref` and
-`N of N required status checks are expected` and then **succeeds anyway** under
-admin bypass — judge it by
-`git rev-list --left-right --count HEAD...origin/master`, not by the warning.
-
-Exempt, because they either create their own worktree or must operate on the
-primary checkout: `solve`, `pr-revise`, `repair`, the read-only `pr-review` /
-`pr-rereview` / `issue-review` reviewers, `drain-prs`, `janitor`, `finalize`.
+Exempt, because they either create their own worktree or must operate on
+the primary checkout: `solve`, `pr-revise`, `repair`, the read-only
+`pr-review` / `pr-rereview` / `issue-review` reviewers, `drain-prs`,
+`janitor`, `finalize`.
 
 ## Findings-report field ownership
 
-A findings report (`docs/code_health_findings.md` and its siblings) is written
-by two independent lanes, and they own DIFFERENT FIELDS of the same entry.
+A findings report (`docs/code_health_findings.md` and its siblings) is
+written by two independent lanes, and they own DIFFERENT FIELDS of the
+same entry.
 
-**The report-processing lane (`/process-report`) exclusively owns an entry's
-status fields:** the checklist checkbox, the trailing checklist marker, and the
-heading marker (`[#N]`, `[#N, <note>]`, `[no-issue]`, `[deferred]`, or none).
-It is the only lane that may add, remove, or change any of the three, and it
-changes them together in one edit.
+**The report-processing lane (`/process-report`) exclusively owns an
+entry's status fields:** the checklist checkbox, the trailing checklist
+marker, and the heading marker (`[#N]`, `[#N, <note>]`, `[no-issue]`,
+`[deferred]`, or none). It is the only lane that may add, remove, or
+change any of the three, and it changes them together in one edit.
 
-**An implementation PR may add to or update a finding's narrative body, and
-nothing else.** Landing the fix for a finding does not disposition it — a PR
-that marks the entry it resolves has answered a question the processing lane
-had not asked yet. Say what changed in the body if it helps; leave the box, the
-checklist marker, and the heading marker exactly as you found them.
+**An implementation PR may add to or update a finding's narrative body,
+and nothing else.** Landing the fix for a finding does not disposition it
+— a PR that marks the entry it resolves has answered a question the
+processing lane had not asked yet. Say what changed in the body if it
+helps; leave the box, the checklist marker, and the heading marker
+exactly as you found them.
 
-That split is not stylistic. The two lanes had already drifted an entry in each
-direction — `82607204` marked CH-126's heading while landing the fix and left
-its checklist bare, `89b015d3` marked CH-73's checklist and left its heading
-bare — and each drift re-files merged work, because the processor selects a
-bare-headed finding as unprocessed and the "headings win, correct the
-checklist" tie-break then unchecks a finding an issue already resolved. The
-cost lands on other people's PRs too:
-`.github/workflows/review-gate.yml:106-116` strips `reviewed:approve` when a
-push touches a file an open PR also owns, so every master-side report edit
-costs an open PR that touches the report its approval.
+That split is not stylistic: the two lanes had already drifted an entry in
+each direction, and each drift re-files merged work. The mechanism, and
+why a master-side report edit costs an open PR its approval, are in
+`docs/engine_contracts.md` §Findings-report lane split.
 
 `tools/findings_report_audit.py` (CI + `make ci`, with its own
-`tools/test_findings_report_audit.py` self-test) fails when a CH item's heading
-marker and checklist marker disagree, and when the two sides do not declare the
-same set of CH numbers exactly once each. It audits AGREEMENT only — whether a
-marker is the right one, and whether the box matches its terminality, stay the
-processing lane's judgement.
+`tools/test_findings_report_audit.py` self-test)
+fails when a CH item's heading marker and checklist marker disagree, and
+when the two sides do not declare the same set of CH numbers exactly once
+each. It audits AGREEMENT only — whether a marker is the right one, and
+whether the box matches its terminality, stay the processing lane's
+judgement.
 
 ## Resource Root
 
@@ -667,20 +635,16 @@ The rejection table lives in `app/Main.hs`'s `incompatibleFlagTable`;
 `tools/preview_cli_probe.py` is the no-boot gate covering it.
 
 **A present-but-malformed value is an error, not a default (#1191).** In
-a mode that honours it, `--seed`/`--worldSize`/`--plates`/`--ages`/
-`--port` that isn't a whole number, a `--size` that isn't `WxH` with both
-dimensions positive, a `--dump=` selection naming an unknown layer, and
-an empty selection or empty segment (`--dump=`, `--dump=terrain,`) each
-exit 1 pre-boot naming the flag and the offending token. **Omitting** a
-flag still keeps its documented default — only a value the user actually
-typed can fail. Validation runs after the mode-compatibility rejection
-above (which keeps its priority: a malformed `--seed` given to
-`--headless` still reports as unsupported in headless mode) and before
-every mode-specific early exit, regardless of whether the selected mode
-would consume the value. `--region` is deliberately excluded — its
-identical silent default is `docs/code_health_findings.md` CH-67,
-sequenced after #1081. Gates: hspec `--match "App.Cli"`,
-`tools/preview_cli_probe.py`.
+a mode that honours it, a non-numeric
+`--seed`/`--worldSize`/`--plates`/`--ages`/`--port`, a `--size` that isn't
+`WxH` with both dimensions positive, and a `--dump=` selection that is
+empty or names an unknown layer each exit 1 pre-boot naming the flag and
+the offending token. **Omitting** a flag still keeps its documented
+default — only a value the user actually typed can fail. `--region` is
+deliberately excluded (`docs/code_health_findings.md` CH-67). Ordering
+against the mode-compatibility rejection, and the full token rules, are in
+`docs/engine_contracts.md` §CLI value validation. Gates: hspec
+`--match "App.Cli"`, `tools/preview_cli_probe.py`.
 
 ## Headless Mode & Debug Console
 
@@ -757,227 +721,85 @@ always opens a real window** (see the warning above) — there is no
 offscreen/headless variant, so treat it exactly like the graphical path.
 
 Canonical category contract (`App.Cli.classifyPreviewCategory`) — the
-unknown-category error message lists exactly this set, no compatibility
-aliases:
+unknown-category error lists exactly this set, no compatibility aliases:
 
-- **Simple** (a flat, recursively-browsable asset folder — bare
-  `--preview icons` lists every texture under `assets/textures/icons/`):
-  `icons`, `items`, `ui`, `world`.
+- **Simple** (a flat, recursively-browsable asset folder): `icons`,
+  `items`, `ui`, `world`.
 - **Grouped** (one named entry per item — a bare grouped category prints
-  "select a specific ..." and exits without booting; you must give
-  `--preview <category>/<item>`, e.g. `--preview units/acolyte`,
-  `--preview buildings/acolyte_portal`, `--preview flora/scots_pine`,
-  `--preview structures/wire`): `units`, `flora`, `buildings`,
-  `structures`. An item is exactly ONE contained, non-symlinked direct
-  child DIRECTORY of the category root
-  (`Engine.Preview.Discovery.resolveItemDir`, shared by all four): an
-  unknown name, a name with path structure or `.`/`..`/absolute
-  traversal, a symlinked directory, and a FILE where a directory was
-  expected (`flora/unknown_flora.png`) all exit 1 **before a window
-  exists**.
+  "select a specific ..." and exits without booting): `units`, `flora`,
+  `buildings`, `structures`.
 - `equipment`, `hud`, `facemap`, `utility`, `vegetation` are NOT exposed
-  (no top-level `assets/textures/` directory of that name, or — for
-  `hud`, which lives under `ui/hud` — folded into `ui`'s recursive
-  simple-category listing instead).
+  (no top-level directory of that name, or — for `hud` — folded into
+  `ui`'s recursive listing).
 
-Simple-category behavior (`Engine.Preview.Discovery`, pre-boot; the
-in-engine browser is `scripts/ui/asset_browser.lua` + `scripts/ui/list.lua`):
+**Pre-boot rejection is the load-bearing rule** (`Engine.Preview.Discovery`
+/ `.Unit` / `.Building`; `resolveItemDir` shared by all four grouped
+categories): an unknown name, a name with path structure or
+`.`/`..`/absolute traversal, a symlinked directory, and a FILE where a
+directory was expected all exit 1 **before a window exists**. For
+`units/<name>`, BOTH symlink levels matter — `doesDirectoryExist` follows
+links, so a real unit directory with a symlinked `animations/` would
+otherwise browse another tree's assets and break trimmed loading.
 
-- **Bare category** (`--preview icons`): a scrollable left-hand list of
-  every texture found recursively under the category root, labeled by
-  its category-relative path with `/` separators and the file extension
-  INCLUDED (e.g. `skill/climbing.png`) — sorted lexicographically. The
-  first entry auto-selects; its texture renders in the main panel,
-  nearest-neighbour scaled (`previewManager.init` forces
-  `engine.setTextureFilter("nearest")` live-session-only — never assumed
-  from the default video config, which a user's persisted
-  `config/video.local.yaml` can override to `"linear"`), fit to the panel
-  with aspect ratio preserved. Click a row to select it; wheel-scroll the
-  list. A resize (the preview window is resizable) reflows the panel/list
-  bounds while preserving the current selection and scroll offset
-  (`previewManager.onFramebufferResize`).
-  A label displayed here is ALWAYS a valid item target for the form below
-  — discovery and item resolution apply the identical extension rule, so
-  they can never disagree.
-- **Focused item** (`--preview icons/skill/climbing.png`): shows only
-  that one texture, no list. A nonexistent item, a directory, an absolute
-  path, or a path containing `..` (including a symlink escape) all reject
-  **before ever creating a window** — same pre-boot exit code convention
-  as the unknown-category/missing-target errors below.
-- **`flora/<name>` and `structures/<name>` reuse this exact browser**
-  (#888), rooted at the ITEM's folder instead of the category root: they
-  are flat sets of static PNGs (stage textures, piece sprites), so they
-  deliberately have no viewer of their own — same list, same first-entry
-  default, same static preview, `mode == "list"` in the dump. Anything
-  beyond routing the resolved folder into `discoverEntries` means the
-  routing is wrong, not the reuse. (Assembled-structure visualization
-  and animated flora stay epic-deferred.)
-- Trimmed loading: preview mode loads only its font, the list widget's
-  own chrome textures (`assets/textures/ui/{highlight,scroll*}.png`,
-  loaded once, list-mode only), and textures within the requested
-  category/item — never `data/*.yaml` gameplay catalogs. There are
-  exactly TWO exceptions, both a single file for the requested item:
-  the units viewer's `data/units/<name>.yaml` and the buildings
-  viewer's `data/buildings/<name>.yaml`.
-- Debug-console introspection: `require("scripts.preview_manager").dump()`
-  (self-registered into `package.loaded` the same way `unit_ai.lua`/
-  `debug.lua` are, despite being `engine.loadScript`-loaded, not
-  `require`d) reports `mode`
-  (`"list"`/`"item"`/`"unit"`/`"building"` — #632's `"placeholder"` is
-  GONE as of #888, every canonical category now dispatching to real
-  behavior), `state`
-  (`"loading"`/`"ready"`/`"empty"`), the current `selected` entry, and in
-  list mode the FULL ordered `entries` list (not just its `entryCount`
-  — a probe needs the complete list to catch an omission/substitution
-  anywhere past the visible/selected rows), `scrollOffset`, and
-  per-visible-row interactive bounds/handles (`rows`,
-  `scripts/ui/list.lua`'s existing F3 dump contract) — enough to drive
-  real `input.click`/`input.scroll` against a located row without ever
-  hardcoding a screen coordinate.
+**Trimmed loading:** only its font, the list widget's own chrome textures
+(loaded once, list-mode only), and textures within the requested
+category/item — never `data/*.yaml` gameplay catalogs. Exactly TWO
+exceptions, each a single file for the requested item: the units viewer's
+`data/units/<name>.yaml` and the buildings viewer's
+`data/buildings/<name>.yaml`.
 
-Units viewer (`--preview units/<name>`, #887; `Engine.Preview.Unit`
-pre-boot + `scripts/ui/unit_animation_view.lua` in-engine):
+**Shared browser** (in-engine: `scripts/ui/asset_browser.lua` +
+`scripts/ui/list.lua`): a bare simple category lists every texture found
+recursively under the root, labeled by its category-relative path with the
+extension INCLUDED (`skill/climbing.png`), sorted lexicographically; the
+first entry auto-selects and renders nearest-neighbour scaled.
+`previewManager.init` forces `engine.setTextureFilter("nearest")`
+live-session-only — never assumed from the video config, which a user's
+persisted `video.local.yaml` can override. A label displayed here is
+ALWAYS a valid item target: discovery and item resolution apply the
+identical extension rule. **`flora/<name>` and `structures/<name>` reuse
+this exact browser** (#888) rooted at the ITEM's folder, so anything
+beyond routing the resolved folder into `discoverEntries` means the
+routing is wrong, not the reuse. Selection/scroll/resize behavior:
+`docs/engine_contracts.md` §Preview mode.
 
-- **`data/units/<name>.yaml` and its compiled `atlas/index.json` decide
-  everything** (#1261, TEX-6, replacing #887's filesystem-first
-  discovery and #1260's membership/rendering split). The YAML declares
-  which animations exist; the index says how each is stored; the viewer
-  takes its list, directions, per-direction frame counts, cell geometry
-  and `fps`/`loop`/`flip` from that pair and samples the compiled
-  atlas, through the same loader (`Unit.Atlas.Yaml.resolveUnitAtlases`)
-  and the same frozen cell arithmetic
-  (`Unit.Atlas.Types.atlasCellUV`) the game uses — D-9's whole point,
-  since a preview-only decoder would miss the regressions the viewer
-  exists to catch. A rejected index is a **pre-boot failure**
-  (`UnitFocusError`'s `UnitAtlasRejected`), never a quiet fall back to
-  the source frames beside it. A preview frame is therefore a texture
-  plus a sub-rect plus its cell size (`PreviewFrame` — all three
-  unconditional since #1261), published to a sprite with
-  `UI.setSpriteFrame`, never a bare path, which would draw the whole
-  sheet. The asset tree still decides what a unit TARGET must contain
-  (an `animations/` directory, neither it nor the unit directory a
-  symlink), but no longer which animations browse: an animation folder
-  present on disk and absent from the YAML is **excluded from the
-  browse list**, because there is no per-frame path left to render it
-  through. Nothing committed can be in that state —
-  `pack_atlas.py --validate-only --strict` fails on any animation PNG
-  no declaration owns, which is where an undeclared folder is reported
-  loudly and by path.
-- **Ordering + default selection:** animations sort case-sensitively by
-  exact directory name (the same `Ord`-on-the-label rule
-  `Engine.Preview.Discovery.sortEntries` uses); `idle` is selected when
-  present, else the first entry in that order, direction south.
-- **Directions:** the game's own `S, SW, W, NW, N, NE, E, SE` order. A
-  directly authored direction ALWAYS wins; W/SW/NW mirror SE/E/NE only
-  when flipping is permitted, which is the index's `flip` (proved equal
-  to the YAML's before anything is published). A direction the
-  animation does not author and may not mirror stays unavailable rather
-  than being invented or filled from another unit's textures. #1261
-  retired the no-YAML-entry INFERENCE with the rest of the YAML-less
-  path: since #1257 every shipped animation declares its own `flip`,
-  and the three trees #1261 promoted declare `flip: true` over the
-  canonical five, which is exactly what the inference used to produce.
-  A mirrored cell renders genuinely mirrored
-  via `UI.setSpriteFlipX` (#887's `ussFlipX`, applied to the CLIPPED UV
-  slice — flipping before clipping would sample the wrong slice; #1259
-  generalized that reflection to the sprite's own source sub-rect).
-- **Playback:** ONE clock per selected animation. Every direction
-  computes its own index from the SAME elapsed value against its OWN
-  frame count, so unequal per-direction frame counts (four checked-in
-  acolyte animations have them) stay phase-aligned. Selecting a
-  different ANIMATION resets the clock; enlarging a different DIRECTION
-  does not. Non-loop end-of-clip HOLDS the last frame — the same clamp
-  `Unit.Render.pickFrame` applies in game. The frame index comes from a
-  wall clock, so the script tick rate only affects smoothness.
-- **Reflow:** a resize preserves the selected animation, selected
-  direction, list scroll offset, AND playback phase.
-- **Pre-boot rejection:** `units/<name>` must be exactly one contained,
-  non-symlinked direct child of `assets/textures/units` holding a
-  non-symlinked `animations/` subtree. An unknown unit, a name with path
-  structure or `.`/`..`/absolute traversal, a symlinked unit directory
-  OR symlinked `animations/` root, and a unit with no animations all
-  exit 1 before a window exists. Both symlink levels matter —
-  `doesDirectoryExist` follows links, so a real unit directory with a
-  symlinked `animations/` would otherwise browse and load another
-  tree's assets, breaking trimmed loading. Since #1261 a missing,
-  animation-less, or uncompiled YAML IS a rejection: with no
-  declaration there is nothing to browse (`UnitNoAnimations`), and a
-  declaration whose compiled artifacts are missing or stale rejects as
-  `UnitAtlasRejected` — the same refusal the game makes.
-- **Dump extension:** unit mode adds `unit`, the animation `entries`
-  list (each with `fps`/`loop`/`flip`/`thumb`/`directionCount`, plus
-  #1260's `storage` and `atlas` path — the WHOLE list, so a probe can
-  prove every animation selected the atlas, not just the one playing.
-  Since #1261 `storage` can only read `"atlas"`, but it is still
-  DERIVED Lua-side from the atlas path the engine actually pushed
-  rather than asserted, so a missing one reports `"legacy"` and fails a
-  probe instead of passing silently), `defaultAnim`, and `playback` —
-  current `animation`, `direction`, `mirrored`, `sourceDirection`,
-  `frameIndex`, effective `fps`/`loop`, the same `storage`/`atlas` pair
-  with the playing frame's `texturePath` and index-derived `cell`, plus
-  a per-direction `directions` array carrying each cell's own mirrored
-  flag, source, frame index, sampled `texturePath`/`uv`, and interactive
-  bounds/handle (enough to locate and click a real cell without a
-  hardcoded coordinate).
+**Units viewer** (`--preview units/<name>`, #887/#1261;
+`scripts/ui/unit_animation_view.lua`) — **`data/units/<name>.yaml` and
+its compiled `atlas/index.json` decide everything.** The viewer samples
+the compiled atlas through the same loader (`Unit.Atlas.Yaml.resolveUnitAtlases`)
+and the same frozen cell arithmetic (`Unit.Atlas.Types.atlasCellUV`) the
+game uses — a preview frame being a texture plus a sub-rect plus its cell
+size (`PreviewFrame`), and a rejected target a pre-boot `UnitFocusError`;
+a preview-only decoder would miss the
+regressions the viewer exists to catch. A rejected, missing,
+animation-less or uncompiled index is a PRE-BOOT failure, never a quiet
+fall back to source frames, and an animation folder present on disk but
+absent from the YAML is EXCLUDED from the browse list.
 
-Buildings viewer (`--preview buildings/<name>`, #888;
-`Engine.Preview.Building` pre-boot +
-`scripts/ui/building_asset_view.lua` in-engine):
+**Buildings viewer** (`--preview buildings/<name>`, #888;
+`scripts/ui/building_asset_view.lua`) — **the filesystem is
+authoritative**, and `data/buildings/<name>.yaml` only AUGMENTS a matched
+animation with `fps`/`loop` plus default-selection hints; a missing,
+malformed or unmatched YAML never rejects a valid asset folder. YAML
+association is by CONTENT, never by equal names. Playback defaults are
+`fps=8`, `loop=false` — NOT the units viewer's `loop=true`.
 
-- **The filesystem is authoritative**, the same split the units viewer
-  uses. The building's own folder decides which entries exist and, in an
-  animation directory, the numeric `frame_NNN.png` order;
-  `data/buildings/<name>.yaml` only AUGMENTS a matched animation with
-  `fps`/`loop` and supplies the default-selection hints. A missing,
-  malformed, or unmatched YAML never rejects a valid asset folder
-  (`dungeon_1` has no YAML at all; `cargo_hold_S`/`furnace` ship a
-  `demolish/` folder no YAML mentions).
-- **One list, both kinds.** A recognized animation directory is ONE
-  entry labeled by its directory name; every other directory is
-  descended into so its textures surface as ordinary item-relative
-  statics (`dungeon_1/damaged/floor.png`) rather than being played as
-  one clip or silently lost. Ordering is the single label-lexicographic
-  rule the rest of the browser uses, across both kinds together.
-- **A directory is an animation** iff a YAML animation's declared frame
-  paths live in it, OR every `.png` in it follows the numbered-frame
-  convention (`frame_000.png`, `frame_10.png`, `frame-3.png`).
-- **YAML association is by CONTENT, never by equal names.**
-  `acolyte_portal.yaml` names its animations `portal-appear`/
-  `portal-idle` while the directories are `appear/`/`idle/`, so a
-  directory is matched through the frame paths its animation declares.
-- **Default selection ladder:** `state_animations.built`'s animation
-  (resolved that same way — selected label `idle`, not `portal-idle`),
-  else the def's own `sprite` when it names a discovered static, else
-  `default.png`, else the first entry. `dungeon_1` (no YAML, no
-  `default.png`) lands on the last rung.
-- **Playback defaults are `fps=8`, `loop=false`** — `BuildingYamlAnim`'s
-  own, NOT the units viewer's `loop=true`. One wall clock per selected
-  animation, reset on a real selection change but preserved across a
-  resize; non-loop end-of-clip HOLDS the last frame. A STATIC selection
-  has no playback at all.
-- **Dump extension:** building mode adds `building`, the ordered
-  `entries` list (each with `kind` `"animation"`/`"static"`, `animated`,
-  `fps`, `loop`, `frameCount`), `defaultEntry`, `selected`,
-  `scrollOffset`, per-visible-row `rows` bounds/handles, and — for an
-  animation selection ONLY — `playback` (`entry`, `frameIndex`,
-  `frameCount`, effective `fps`/`loop`, `ready`).
+Ordering, direction mirroring, the playback-clock rules, both
+default-selection ladders, and the full `previewManager.dump()` field
+contract (which is what lets a probe click a located row instead of a
+hardcoded coordinate) are in `docs/engine_contracts.md` §Preview mode.
 
 Gates: `tools/preview_cli_probe.py` (CI-eligible, no boot at all — every
-check above the "always opens a real window" line, units and
-flora/buildings/structures item rejections included) and
-`tools/preview_probe.py` (manual-only, `needs-gpu`, ~15 window boots —
-the real-boot browser checks: discovery/selection/scroll/resize via the
-dump, forced nearest filtering, the whole units and buildings viewers
-above, flora/structures dispatching into the shared simple browser, a
-final every-canonical-category no-placeholder sweep, and trimmed loading
-verified against `engine.getLoadedTexturePaths()` — `Engine.Asset`'s
-`apAssetPaths`, populated by `engine.loadTexture`'s own Haskell handler
-regardless of Lua caller, so this is the engine's own authoritative
-loaded-texture record, not previewManager's self-reported bookkeeping).
-Focused hspec coverage for the pure
-discovery/labeling/ordering/containment logic:
-`cabal test synarchy-test-headless --test-options='--match "Preview.Discovery"'`,
-`--match "Preview.UnitAnimation"`, and `--match "Preview.Building"`.
+rejection above) and `tools/preview_probe.py` (manual-only, `needs-gpu`,
+~15 window boots — discovery/selection/scroll/resize via the dump, forced
+nearest filtering, both viewers, flora/structures dispatching into the
+shared browser, and trimmed loading verified against
+`engine.getLoadedTexturePaths()`, which is `Engine.Asset`'s
+`apAssetPaths` populated by `engine.loadTexture`'s own Haskell handler —
+the engine's authoritative record, not previewManager's self-reported
+bookkeeping). Pure discovery/labeling/ordering/containment logic: hspec
+`--match "Preview.Discovery"` / `"Preview.UnitAnimation"` /
+`"Preview.Building"`.
 
 ### Dump mode (no TCP, JSON to stdout)
 
@@ -1067,312 +889,106 @@ echo 'engine.quit()' | nc -w 2 localhost 9008                     # shutdown
 ### Subsystem probes & domain contracts
 
 Each area below has a turnkey `tools/*_probe.py` gate (real headless
-engine, pass/fail checks). `tools/README.md` lists all ~55;
+engine, pass/fail checks). `tools/README.md` lists all ~84;
 `ci_probes.py --status` gives CI eligibility. Durable contracts to know
 before touching each area:
 
 - **Unit/combat animations** — no pixels headless, but
-  `unit.getInfo(uid)` returns `currentAnim`/`animStart` (unit thread
-  runs headless); poll over time to verify animation timelines. Gate:
-  `combat_anim_probe.py`. Drive by hand: load
-  `scripts/unit_stats.lua` + `unit_resources` + `unit_ai`, then
+  `unit.getInfo(uid)` returns `currentAnim`/`animStart` (unit thread runs
+  headless); poll over time to verify timelines. Gate:
+  `combat_anim_probe.py`. Drive by hand: load `scripts/unit_stats.lua` +
+  `unit_resources` + `unit_ai`, then
   `require('scripts.unit_ai').commandAttack(atk,tgt)`.
-- **Movement** — `scripts/movement_arena.lua` builds obstacle courses
-  on a flat `world.initArena` world via the tile-edit API
-  (`world.addTile`/`deleteTile`/`setFluidTile`/`setSlope` — `setSlope`
-  is the ONLY way to make a step walkable). Gate: `movement_probe.py`
-  (neutralises the unit_ai wander tick so `moveTo` is the only
-  steering). `startFall` clears the move target on landing — fall
-  checks assert the fall + landing z, not arrival.
-- **Tile-coordinate frame at the U seam (#1175)** — chunks are STORED
-  u-wrapped, so one physical tile has two names near the seam. ONE
-  contract, stated in full on `World.Render.HitTest`: `pickWorldTile`
-  and every Lua caller it backs (`world.pickTile`/`pickPos`/
-  `getHoverTile`/`getHoverPos`) report CANONICAL coords, and the
-  fractional hover position takes the SAME whole-tile shift as the
-  integer tile; designation maps (mine/chop/till/plant/construct) store
-  canonical keys; every point read, mutation and cancellation accepts
-  any alias and returns canonical — including the verbs a worker
-  FINISHES a job with (`world.getDigInfoAt`/`digTile`, `harvestFlora`,
-  `setVegAt`, `plantCropAt`/`plantRowCropAt`, `structure.place`/`hasAt`/
-  `floorZAt`/`clear`, and `building.spawn`/`canPlaceAt` — whose footprint
-  walk resolves each tile, since a footprint is stepped off its anchor
-  and straddles the seam even from a canonical one), which is what lets a
-  job coord persisted by a pre-#1175 save run to completion with no
-  migration. Rectangles are the exception that
-  makes it work: canonical is a STORAGE frame, not a geometry one — two
-  adjacent tiles across the seam sit a whole world apart in it — so a
-  drag's second endpoint is re-expressed in the anchor's local alias
-  frame (`localizeTileToAnchor`, shared by
-  `World.Thread.Command.Cursor.Common.designateRect`, the
-  `CursorQuads` previews, and Lua via `world.localizeTile` for
-  `build_tool.lua`'s wire snap / occupancy scan) BEFORE any clamp or
-  `min`/`max`, with canonicalisation per enumerated tile at
-  lookup/storage only. A job-SELECTION range gate needs that frame too —
-  a seam-side job measures a world away in canonical coords and would
-  never be claimed — so `construction.getPendingJobs` reports `lx`/`ly`
-  beside the canonical `x`/`y`, and `unit_ai_construct.lua` measures with
-  those. Canonicalising one end alone was MEASURED worse
-  than the old seam-blind behaviour; don't do it. Away from the seam,
-  and in arena / non-wrapping worlds, every step is the identity.
-  **Terrain LOOKUPS take the same frame** (#1230):
-  `World.Tile.Types.lookupChunk` is a plain hashmap lookup that wraps
-  nothing, so any consumer resolving a tile to a chunk must
-  `wrapChunkCoordU` the key first — `Unit.LineOfSight.tileTerrainZ` now
-  does, for both the visible-tile rasterization and the combat
-  sightline. A raw key from an alias frame misses a chunk that IS
-  loaded, and every one of these lookups reads a miss as "not loaded →
-  assume flat", which for occlusion means "nothing blocks": before that
-  fix a seam-side unit revealed a location straight through a hill.
-  Gate: hspec `--match "a seam-frame unit"`.
-  Persistence: the canonical-key invariant arrived as `world-activity`
-  v2 (same bytes as v1, different promise); a v1 payload is re-keyed on
-  load, and since #1233 bumped the component to v3 for the item shape,
-  v1 and v2 share one frozen layout and BOTH take that repair. The init
-  QUEUE
-  (`world.loadChunksInRegion`, `World.Load.Stage`'s saved-camera radius,
-  world init) is wrapped at the drain, so every loader stores canonically
-  — before that, a seam-crossing region generated a SECOND chunk for one
-  physical place and canonical readers resolved to whichever the camera
-  loader had put there. Seam VISIBILITY is the
-  separate axis #1176 owns — which tile a pixel NAMES is this contract,
-  where that tile is DRAWN is `bestWrapOffset`'s facing-aware `(x, y)`
-  offset; both hold at all four facings. Gates: hspec
-  `--match "World.Render.PickSeam"`, `--match "World.DesignationSeam"`.
+- **Movement** — `scripts/movement_arena.lua` builds obstacle courses on
+  a flat `world.initArena` world via the tile-edit API
+  (`world.addTile`/`deleteTile`/`setFluidTile`/`setSlope` — `setSlope` is
+  the ONLY way to make a step walkable). `startFall` clears the move
+  target on landing, so fall checks assert the fall + landing z, not
+  arrival. Gate: `movement_probe.py` (neutralises the unit_ai wander tick
+  so `moveTo` is the only steering).
+- **Tile-coordinate frame at the U seam (#1175/#1230)** — chunks are
+  STORED u-wrapped, so one physical tile has two names near the seam. ONE
+  contract, stated in full on `World.Render.HitTest`: picking
+  (`pickWorldTile` and every Lua caller it backs —
+  `world.pickTile`/`pickPos`/`getHoverTile`/`getHoverPos`),
+  designation maps, and every point read / mutation / cancellation —
+  including the verbs a worker FINISHES a job with
+  (`world.getDigInfoAt`/`digTile`, `harvestFlora`, `setVegAt`,
+  `plantCropAt`/`plantRowCropAt`, `structure.place`/`hasAt`/`floorZAt`/
+  `clear`, and `building.spawn`/`canPlaceAt`, whose footprint walk
+  resolves each tile) — use CANONICAL coords
+  and accept any alias, so pre-#1175 saved job coords need no migration.
+  RECTANGLES are the exception: canonical is a STORAGE frame, not a
+  geometry one, so a drag's second endpoint is re-expressed in the
+  anchor's local alias frame (`localizeTileToAnchor`, shared by
+  `World.Thread.Command.Cursor.Common.designateRect` and the `CursorQuads`
+  previews; Lua `world.localizeTile` for `build_tool.lua`'s wire snap /
+  occupancy scan) BEFORE any clamp/`min`/`max`, canonicalising per
+  enumerated tile at lookup/storage only. Job-SELECTION ranges need that
+  frame too — `construction.getPendingJobs` reports `lx`/`ly` beside
+  canonical `x`/`y`, and `unit_ai_construct.lua` measures with those.
+  Canonicalising one end alone MEASURED worse than
+  seam-blind behaviour; don't. Terrain LOOKUPS take the same frame:
+  `World.Tile.Types.lookupChunk` wraps nothing, so any consumer must
+  `wrapChunkCoordU` first — `Unit.LineOfSight.tileTerrainZ` now does — a
+  miss reads as "not loaded → assume flat", which for occlusion
+  means "nothing blocks". The chunk-init queue is wrapped at the drain.
+  Where a tile is DRAWN is the separate `bestWrapOffset` axis (#1176).
+  Away from the seam, and in arenas, every step is the identity.
+  `world-activity` v1/v2 payloads are re-keyed on load. Gates: hspec
+  `--match "World.Render.PickSeam"` / `"World.DesignationSeam"` /
+  `"a seam-frame unit"`.
 - **Construction (#95/#96)** — `construction.*` designations +
   construct_job AI (claim → source materials → progress → place →
   stake); build costs in `data/structure_packs/*.yaml` `build:` blocks.
   Gate: `construction_probe.py` (stake phase runs LAST).
 - **Roles (#265)** — DERIVED labels, never assigned: highest work skill
-  ≥ 30 (+5 switch hysteresis). Roles multiply work-action ENTRY
-  utilities only (on-role ×1.4, off-role ×0.7) — never the 6.0
-  in-progress locks, never survival/combat/orders. `unitAi.getRole`.
-  Gate: `role_probe.py`.
+  ≥ 30 (+5 switch hysteresis). Roles multiply work-action ENTRY utilities
+  only (on-role ×1.4, off-role ×0.7) — never the 6.0 in-progress locks,
+  never survival/combat/orders. `unitAi.getRole`. Gate: `role_probe.py`.
 - **Crafting (#325/#326/#329/#343/#795)** — recipes in
   `data/recipes/*.yaml` (station tag, inputs, optional
   fuel/knowledge/skill, work, outputs, optional `power_draw`).
   `craft.execute(uid, recipeId)` is station-blind (tests/console);
   `craft.executeAt(uid, recipeId, bid[, billId])` needs a Built station
-  offering the operation with the unit adjacent (Chebyshev ≤ 1).
-  Bills (`Craft.Bills`, per-page, engine-side atomic claims, persisted)
-  have three modes: fixed count, repeat-forever, until-stock
-  (`craft.addBill(bid, recipeId[, count[, untilTarget]])`; until-stock
-  re-checks LIVE ground stock via `unit_ai_fetch.untilStockSatisfied` —
-  the same formula the crafting panel uses, so they can't disagree).
-  Skill-tagged recipes derive output quality from the crafter, then
-  shift by live mental effectiveness (±10) — tests asserting quality
-  must pin the neutral-effectiveness precondition (#878). Gates:
-  `craft_probe.py`, `craft_bill_probe.py`.
-- **Player transfers + orders (#1000/#1085/#1246/#1247/#1249/#1250)** — ONE policy
-  (`src/Unit/Transfer.hs`, pure) decides whether exact item instances may
-  move between two endpoints (a unit inventory or a built building's loose
-  storage, on BOTH sides; direction is DERIVED from the pair). Proximity is
-  Chebyshev ≤ 1 between the occupied RECTANGLES, capacity weighs the actual
-  instance, a batch is ordered and reports per-item outcomes, and no item
-  ever half-moves. The lax AI verbs
-  (`unit.transferItemToUnit`/`transferItemToBuilding`/`depositToCargo`/
+  offering the operation with the unit adjacent (Chebyshev ≤ 1). Bills
+  (`Craft.Bills`, per-page, engine-side atomic claims, persisted) have
+  three modes: fixed count, repeat-forever, until-stock — the last
+  re-checks LIVE ground stock via `unit_ai_fetch.untilStockSatisfied`,
+  the same formula the crafting panel uses. Skill-tagged recipes derive
+  output quality from the crafter, then shift by live mental
+  effectiveness (±10), so quality assertions must pin the
+  neutral-effectiveness precondition (#878). Gates: `craft_probe.py`,
+  `craft_bill_probe.py`.
+- **Player transfers + orders (#1000/#1085/#1246-#1251)** — design
+  authority: [`docs/unified_item_transfers.md`](docs/unified_item_transfers.md).
+  ONE pure policy (`src/Unit/Transfer.hs`) decides whether exact item
+  instances may move between two endpoints (a unit inventory or a built
+  building's loose storage, on BOTH sides; direction DERIVED from the
+  pair): Chebyshev ≤ 1 between occupied RECTANGLES, capacity weighs the
+  actual instance, batches are ordered and report per-item outcomes, and
+  no item ever half-moves. The lax AI verbs
+  (`transferItemToUnit`/`transferItemToBuilding`/`depositToCargo`/
   `withdrawFromCargo`) are a SEPARATE, deliberately unchecked path the
   fetch/repair/medic ladders depend on — never route AI work through the
-  strict one. A durable ORDER (#1246's per-page store, `wsTransferOrdersRef`)
-  adds distance: `unit.createTransferOrder` validates with adjacency DEFERRED
-  (`ReachPolicy`) — same page still required — because the endpoints are not
-  adjacent yet and the create-time capacity gate must be reached anyway;
-  `unit.checkTransfer`/`commitTransfer` keep requiring adjacency, unchanged.
-  `scripts/unit_ai_transfer.lua` then walks the ACTING unit (recorded beside
-  the endpoint pair, so a building→building order has no approach and this
-  executor skips it) at comfort pace, holding a 7.5 in-progress lock, and
-  ARRIVAL IS THE COMMIT: `unit.commitTransferOrder` re-validates atomically,
-  so a refusal there is recorded as `became_stale` carrying the real reason as
-  its cause, and only `ready_to_commit` entries are ever submitted — a
-  create-time refusal is never retried. The stall timer is a STALL timer
-  (60 s of ELIGIBLE time, reset on every new closest approach), never a
-  trip budget.
-  **Every way an order ENDS is one rule** (#1253,
-  `scripts/unit_ai_transfer_outcome.lua`): the outcome is surfaced to the
-  player exactly once, and the order is then PRUNED. The store holds live
-  work only, like `Craft.Bills` — so nothing terminal rides a save, and
-  the integrity sweep has nothing to say about a demolished endpoint. The
-  durable history is the session event log, which is NOT persisted, so
-  none of this writes an outcome into a save. Surfacing comes FIRST and
-  pruning is unconditional on it (a muted notification category must not
-  strand an order forever); pruning is also what makes the handling
-  edge-triggered and idempotent, since a later tick has nothing left to
-  re-surface. Failures use `unit_warning` naming the carrier and the
-  target, and that now includes the vanished counterpart #1247 retired
-  QUIETLY: with the entries pruned there is no other record left, so
-  silence would mean the player never hears about it. No new vocabulary
-  — a stall is `out_of_range`, an arrival refusal is `became_stale`
-  carrying the real cause. `unit.cancelTransferOrder` (pending entries
-  only, `cancelBatch`) + `unit.pruneTransferOrder` (TERMINAL orders only,
-  ownership-scoped, idempotent) are the two verbs; **"Cancel transfer"**
-  on the right-clicked unit's own context menu is the player's way in
-  (omitted, never disabled, when that unit carries no live order), and it
-  cancels every non-terminal order the unit carries, stops only
-  transfer-directed movement, and touches no other command field. The one
-  exit the executor cannot reach is the CARRIER ceasing to act — so
-  `Unit.Transfer.Live.retireTransferOrdersEverywhere` (the
-  `retirePowerNodeEverywhere` pattern) drops its orders engine-side from
-  BOTH `Unit.Thread.Command.Lifecycle`'s destroy and
-  `Unit.Thread.Command.Pose`'s kill. Death matters as much as destruction
-  and is easier to miss: the instance REMAINS, so every reference still
-  resolves and the sweep stays quiet, while `scripts/unit_ai.lua`
-  short-circuits a `dead` pose before any action scores. The recoverable
-  poses (collapsed, crawling) are deliberately excluded — their orders
-  are merely suspended. Keyed on the ACTING unit alone: a unit that is
-  merely an endpoint of somebody else's order is not orphaned by its own
-  death, and that order's live carrier retires it properly with the
-  reason recorded. **A commit result reports EVERY requested item**,
-  create-time refusals included, so the arrival report excludes what the
-  command-time gate already surfaced (`settledIds`) — otherwise the four
-  that never fit in a twelve-into-eight batch get warned about twice.
-  **The player's own gestures are Mode B** (#1249,
-  `scripts/transfer_gestures.lua` — ONE builder both hosts call): a
-  unit-info inventory row offers **Store 1 / Store all** into whatever
-  endpoint the OPEN CONTAINER WINDOW's ACTIVE level is showing, and a
-  container-window row offers **Retrieve 1 / Retrieve all** into the unit
-  `transfer_session.resolveSource` picks from the selection. Both queue
-  an order and NEITHER requires adjacency — that is the whole promotion,
-  and it retired the two immediate paths that did: the adjacent-cargo
-  "Store in \<cargo\>" enumeration and the window's "Withdraw with
-  \<unit\>" plus its disabled placeholder. Batch granularity is
-  1-and-all only (the 1/N/all picker stays deferred), and "all" is
-  every instance id the merged row stands for —
-  `itemList.rowInstanceIds`, recorded during grouping and signed into the
-  rebuild identity, because a row of twelve rations is twelve distinct
-  ids and never a count. A gesture is OMITTED, never shown disabled,
-  whenever it could not run: no window open, no eligible source, an
-  equipped/accessory item, a self-transfer, or an ACTIVE level that is an
-  item container (render-only per D-5 — and it must never fall back to a
-  transfer-capable ancestor) or an escort pair (two endpoints, so "the
-  endpoint this window shows" has no single answer). The lax verbs stay
-  registered and untouched for the AI ladders (D-7).
-  **Mode A is the ESCORT** (#1250, `scripts/transfer_session.lua`): walk
-  FIRST, then choose items. Selecting "Transfer" records a session, and
-  `scripts/unit_ai_escort.lua`'s `escort_transfer` action — a 7.5
-  in-progress LOCK, peer of the queued order (whose module owns the
-  shared approach and reach rule and re-exports this action, so both
-  modes register from one name) — walks the source to the destination's
-  FOOTPRINT and stops. An eligible SOURCE is therefore one whose species
-  actually registered that action, not merely a player-commandable unit:
-  `scripts/unit_ai_actions.lua` records every species' action names as
-  `unitAi.registerActions` builds the list, and both `resolveSource`
-  (omitting the row) and `create` (refusing with `source_not_escortable`)
-  consult it, so a debug-spawned bear can never become a session that
-  never walks. An EMPTY inventory means no AI is loaded in this process
-  and answers yes to everything — never a refusal invented from absence.
-  Two 440-wide panes need 904 px at 1x, so the PAIR is fitted — through
-  `responsive.fitScale` (a level kind's `paneScale`), box, header and
-  font together — to the width `reserved_regions.maxAvailableWidth`
-  says the toolbar clusters leave, and then PLACED as one rect that is
-  split. Both halves matter at the envelope's 800x600 minimum: fitting
-  to the whole framebuffer leaves the pair unable to sit beside a
-  reserved rail, and placing each panel independently lets the first
-  one's own avoidance consume the space the second needed, which
-  `avoidReserved`'s documented best-effort fallback then resolves by
-  overlapping them. The one-way transition to the open/held state
-  fires EXACTLY ONCE and is what does everything else: it calls
-  `building.refreshContainerKnowledge` (the reveal that verb was shipped
-  for, and the only caller in the game), opens the two flanking panes,
-  and snaps the camera onto the pair (D-4 — no other gesture moves it).
-  Every one of those reads LIVE endpoint positions and footprints, never
-  the creation-time snapshot; a resize, a reflow and every later commit
-  repeat none of them. Rows commit IMMEDIATELY through
-  `unit.checkTransfer` then `unit.commitTransfer` on the identical
-  request, the COMMIT being authoritative: a target that drifted out of
-  reach is refused with the contract's own proximity reason — whether
-  that arrives as a whole-request rejection or as every item's own
-  outcome — and the session stays open, a partial batch reports the
-  remainder by count and cause (D-1), and both panes refresh within the
-  gesture. The hold is released BY the session ending
-  — there is no separate release call, so no path can end a session and
-  leave a unit pinned — and that release STOPS the unit rather than
-  merely letting go of it: the AI re-runs an action only on a switch or
-  when the unit is idle, so an in-flight approach to a now-meaningless
-  endpoint would otherwise run to completion before the next session
-  was ever considered — and every teardown is the same coupled,
-  idempotent one (see **Mode A session failures** below for the whole
-  trigger list). A REJECTED replacement leaves the running session
-  untouched; only a resize is exempt (see the container-window stack
-  above). **A UNIT destination is held too** (#1251, UIT-4), because
-  unit-to-unit is the one pairing where BOTH ends can walk away. Which
-  side a unit is on is the session's own `roleOf`, the ONE answer both
-  actions consult: `"source"` (`escort_transfer`) walks and then stands,
-  `"target"` (`escort_hold`) stands from CREATION, so the approach has a
-  fixed destination and the walk-away problem cannot arise during it.
-  Both score the same 7.5 constant, so neither end can outscore the
-  other, and being that lock is what makes the target's hold preempt its
-  autonomous work like any player order; `create` nudges BOTH units so
-  that happens on the next tick rather than at a thought cadence. They
-  are TWO registrations, and the asymmetry is the point: being a SOURCE
-  is a per-species capability (`escort_transfer`'s presence is exactly
-  what `resolveSource`/`create` ask), while being a TARGET is not — the
-  endpoint rule is player-commandability and nothing else — so
-  `escort_hold` is auto-prepended to every species by
-  `unitAi.registerActions` beside the universal combat candidates.
-  Scoping it per species would leave a legal target (a debug-spawned
-  bear in the player faction) whose AI never evaluated the hold, walking
-  away while an escort approached where it used to be. Release is
-  the one coupled teardown, extended to the pair: every path stops and
-  nudges both, and stopping is all it does to either, so a durable
-  Mode B order the unit is carrying survives untouched — the
-  SUCCESSFUL-load reset being the one path that stops neither, because
-  its recorded uids no longer name those units (below). The
-  hold adds no refusal of its own: eligibility stays
-  `isPlayerCommandable` of the live faction, never a def allowlist, and
-  D-6 is unchanged and unreimplemented — a worn item is not in an
-  endpoint's `contents` at all, so no pane can offer one, and the
-  contract refuses it as `item_not_transferable` if anything names one
-  anyway. **Every way a Mode A session can be interrupted ends it
-  through that ONE teardown** (#1254, UIT-5B), and the module's job is
-  to NOTICE each of them, which splits by phase: while the pair is open
-  the container window's own per-tick `stillThere` hook closes the level
-  (and with it the session) on an endpoint that vanished, but a session
-  spends its whole APPROACH with no window at all, so
-  `transfer_session.update` — a real 0.2 s script tick, the cadence the
-  container window already runs at — is the canonical liveness check and
-  covers BOTH phases. Its rule is `staleReason`: either endpoint gone,
-  the contract's own `eligible` gone (a demolished building, a unit that
-  left the player's factions), or a UNIT endpoint whose pose is `dead`
-  or `collapsed`. That last one cannot come from the contract —
-  `Unit.Transfer.endpointEligible` is `uevCommandable` alone, so a
-  corpse is a perfectly eligible endpoint by its lights — so it is
-  tested here rather than widened there, and the RECOVERABLE poses
-  (crawling, sleeping) are deliberately excluded: a session sits those
-  out. A **new player order to a held unit** ends the session and then
-  proceeds (signed off 2026-08-11 — player intent wins), through the one
-  shared `notePlayerOrder` boundary called from the player's own ingress
-  sites and NOWHERE else (`init_mouse.lua`'s right-click move order,
-  `init_context_menu.lua`'s Attack / Pick up / Move here) — never from
-  inside `unitAi.commandMove`/`commandAttack`/`commandPickup`, which
-  `building_spawn.lua` and `unit_ai_combat.lua` also call for scripted
-  and autonomous behaviour, and never from the escort's own approach.
-  It runs BEFORE the command, since the teardown stops every unit it
-  held. A zoom-band change or a HUD hide reaches the session through
-  `scripts/ui/view_teardown.lua` (#156) rather than a one-off call —
-  which is what covers the approach, where the container window's own
-  entry has no window to close — while `"resize"` stays exempt. Exit to
-  Menu keeps calling `clear` BEFORE `world.destroyAll`, so the release
-  still reaches live entities. The teardown itself is step-isolated: the
-  panels close first and each held unit is released independently, so a
-  missing FIRST endpoint costs neither the other endpoint its release
-  nor either panel its close. Requirement 7 is per-REQUEST atomicity and
-  nothing wider: a session owns no transaction, so ending one never
-  rolls back a commit that already succeeded and can only ever land
-  between two whole requests. Deliberately NOT added: a stall timer, and
-  any handling of an endpoint that is merely unreachable or drifted —
-  both are live and commandable, so neither is a session failure. Gates:
-  hspec `--match "Unit transfer"`
-  (contract + both Lua surfaces + the cancel/prune verbs and the
-  destroyed-carrier cleanup) and `--match "Transfer context menu"` (both
-  gesture modes, the "Cancel transfer" entry, AND the escort session,
-  two-sided hold and every #1254 failure trigger included),
-  plus `--match "durable transfer orders survive"` for the post-prune
-  save; `tools/transfer_order_probe.py` and
-  `tools/item_list_widget_probe.py` (both manual-only; the latter owns
-  the real-AI behavioural proof that a MOVING target is preempted and
-  then stays put for the whole approach, which no fixture that ticks no
-  simulation can state).
-- **Power (#358-#361, #590/#591)** — solar/battery nodes are
+  strict one, and never delete them.
+
+  The three player-facing modes — durable ORDERS (#1246/#1247/#1253, where
+  arrival is the commit and every ending surfaces once then prunes), Mode
+  B queued GESTURES (#1249, Store/Retrieve 1-and-all, neither requiring
+  adjacency), and Mode A ESCORT (#1250/#1251, walk first then choose, with
+  a two-sided hold) — are specified in `docs/engine_contracts.md`
+  §Player transfers. Read it before touching an executor, a gesture's
+  eligibility, or a teardown path: the rules about what is OMITTED rather
+  than disabled, which timer is a stall rather than a trip budget, and why
+  `escort_hold` is auto-prepended to every species are all load-bearing.
+
+  Gates: hspec `--match "Unit transfer"` / `"Transfer context menu"` /
+  `"durable transfer orders survive"`; `tools/transfer_order_probe.py`
+  and `tools/item_list_widget_probe.py` (manual-only; the latter owns the
+  real-AI proof that a MOVING target is preempted and then stays put for
+  the whole approach).
+- **Power (#358-#361, #590/#591, #1206)** — solar/battery nodes are
   item-consuming placements (`power.placeNode` via
   `buildTool.commitPlacement`); networks (wire 4-adjacency +
   nodes/consumers) are recomputed fresh every tick — only battery
@@ -1380,445 +996,260 @@ before touching each area:
   `world.setTimeScale`. Electrical load lives on the RECIPE
   (`power_draw`), not the building (`power_drain` exists only for
   hypothetical always-on devices; no shipped building sets it): a bill
-  draws only while claimed AND `cbWorking` (set at the walking→working
-  transition, cleared on exit/release/complete).
+  draws only while claimed AND `cbWorking`.
   `power.isStationPoweredForRecipe(bid, recipeId[, billId])` is the
   gating query — pass the bill's own id so its already-registered draw
-  isn't double-counted, while other consumers still sum.
-  **A node's LIFETIME is its building's** (#1206): `BuildingDestroy`
-  retires the node in the same live transaction that removes the
-  instance (`Power.Live.retirePowerNodeEverywhere`, resolving the
-  session-global `BuildingId` across every live page — the
-  `forgetContainerEverywhere` pattern), so a demolition never reaches
-  the save. That is NOT load-time pruning: the #758/#763 tolerance
-  stands, and a save already carrying a dangling node still restores it
-  verbatim. Retirement is a delete, never a compaction — surviving ids
-  are untouched and `pnsNextId` keeps advancing, so a retired id is
-  never handed to a later placement. There is deliberately no public
-  `power.removeNode`. Gates: `power_probe.py`, `power_workshop_probe.py`,
-  `machine_shop_probe.py`, hspec `--match "power node demolition"`;
-  pure algorithm in `Test.Headless.Power.Network`.
-- **Farming (#331-#336, growth #332, tilling #333)** — flora growth is
-  DERIVED state from the advancing calendar (nothing per-instance in
-  saves; `world.getDate`/`setDate`, `world.getFloraGrowthAt`). Fruiting
-  windows gate bare food-harvest calls only; tagged calls (chop's
-  `"wood"`) skip the window, and chop-claim keys on
-  `regrowthRemaining`+`tags`, not `harvestable`. Tilling: `till.*`
-  mirrors `chop.*`; completion writes `world.setVegAt` (edit-log —
-  survives eviction/saves); consumers must use `world.isPlantable`,
-  never compare `getVegAt` to raw id 77. Gates:
+  isn't double-counted while other consumers still sum. A node's LIFETIME
+  is its building's: `BuildingDestroy` retires it in the same live
+  transaction that removes the instance
+  (`Power.Live.retirePowerNodeEverywhere`, resolving the session-global
+  `BuildingId` across every live page — the `forgetContainerEverywhere`
+  pattern), so a demolition never reaches the save. That is NOT load-time
+  pruning — a save already carrying a
+  dangling node still restores it verbatim. Retirement is a delete, never
+  a compaction: `pnsNextId` keeps advancing and a retired id is never
+  reissued. There is deliberately no public `power.removeNode`. Gates:
+  `power_probe.py`, `power_workshop_probe.py`, `machine_shop_probe.py`,
+  hspec `--match "power node demolition"`; pure algorithm in
+  `Test.Headless.Power.Network`.
+- **Farming (#331-#336)** — flora growth is DERIVED state from the
+  advancing calendar (nothing per-instance in saves;
+  `world.getDate`/`setDate`, `world.getFloraGrowthAt`). Fruiting windows
+  gate bare food-harvest calls only; tagged calls (chop's `"wood"`) skip
+  the window, and chop-claim keys on `regrowthRemaining`+`tags`, not
+  `harvestable`. Tilling: `till.*` mirrors `chop.*`; completion writes
+  `world.setVegAt` (edit-log — survives eviction/saves); consumers must
+  use `world.isPlantable`, never compare `getVegAt` to raw id 77. Gates:
   `flora_growth_probe.py` (registers a max-tolerance `probe_berry`
   species), `till_probe.py`.
 - **Location instances (#911)** — a placed location is a persisted
   per-page record (`Location.Instance`) keyed by a stable
   `LocationInstanceId` (from 1), allocated at PLACEMENT time in the
   deterministic overlay's `overlayToList` order — never at stamp time,
-  never from hashmap order — so ids survive save/load and chunk
-  eviction. It stores its definition id, anchor, resolved absolute
-  bounds (#777), display name AND optional English
-  gloss (#1101 — see below), one-time content-spawn flag
-  (#90), and lifecycle `unknown → hinted → discovered → active →
-  cleared → depleted`. Consumers read the STORED values, never
-  re-derive them from the live registry. `wgpLocationStamped` stays
-  chunk-keyed (#424) and was untouched. Transitions are one-way
-  (`promoteLifecycle` refuses backward AND same-state), which is what
-  makes discovery fire exactly one event. Nothing drives an instance
-  past `discovered` yet; `hinted` is deliberately unreachable and #1230
-  retired the future information-reveal class it was reserved for — it
-  is now simply an ordinary unknown state (shared unknown icon,
-  promotable to `discovered` on sight), kept because the enum is
-  positionally serialized and append-only, so don't delete it. Queries:
-  `world.listPlacedLocations([pageId])` (extended, not repurposed —
-  `id` is still the DEFINITION id; `instance_id`/`lifecycle`/`name`/
-  `contents_spawned` are new), `world.getLocationInstance(id[, pageId])`,
-  `world.setLocationLifecycle(id, name[, pageId])`,
-  `world.markLocationContentsSpawnedById(id[, pageId])`. The
-  coordinate-addressed `hasSpawnedLocationContents`/
-  `markLocationContentsSpawned` remain compatibility wrappers resolving
-  to the chunk's first instance. Persistence: `world-pages` (v7 since
-  #1230, which dropped the stored discovery margin; v6 since
-  #1104; v5 since #1102; v4 since #1101; v3 since #1092; #911 introduced
-  its v2), with a
-  frozen v1 DTO whose per-chunk flags decode PENDING and are resolved
-  against the location registry at the load path's content-validation
-  stage (`resolveLegacyLocations`) before publication. Gates: hspec
+  never from hashmap order — so ids survive save/load and chunk eviction.
+  It stores definition id, anchor, resolved absolute bounds, display name
+  + optional gloss, a one-time content-spawn flag, and lifecycle
+  `unknown → hinted → discovered → active → cleared → depleted`.
+  Consumers read the STORED values, never re-derive from the live
+  registry. `wgpLocationStamped` stays chunk-keyed (#424). Transitions
+  are one-way (`promoteLifecycle` refuses backward AND same-state), which
+  is what makes discovery fire exactly one event. Nothing drives an
+  instance past `discovered`; `hinted` is deliberately unreachable but
+  must NOT be deleted (the enum is positionally serialized and
+  append-only). Queries: `world.listPlacedLocations([pageId])` (extended,
+  not repurposed — `id` is still the DEFINITION id),
+  `getLocationInstance`, `setLocationLifecycle`,
+  `markLocationContentsSpawnedById` (`instance_id`/`lifecycle`/`name`/
+  `contents_spawned` are the new fields); the coordinate-addressed
+  `hasSpawnedLocationContents`/`markLocationContentsSpawned` remain
+  compatibility wrappers resolving to the chunk's first
+  instance. Persistence: `world-pages` v7, with a frozen v1 DTO whose
+  per-chunk flags decode PENDING and resolve against the registry at the
+  load path's content-validation stage (`resolveLegacyLocations`). Gates: hspec
   `--match "Location instance identity"`, `location_content_probe.py`.
-- **Location naming (#1101)** — a placed instance's `name` is rendered
-  in its PAGE's own generated language, resolved from the identity's
-  #1092 provenance, and its `gloss` is the same `NameExpr`'s English
-  reading. Which concepts a location may draw on is DATA
-  (`ldNaming`: two ordered, nonempty `heads`/`modifiers` concept-id
-  pools on the definition, validated against `data/language/concepts.yaml`
-  when the file loads — an unknown id or a missing lexical form rejects
-  the whole file rather than degrading to `ldLabel`); the engine has no
-  `ldType`→concept mapping. The expression is always
-  `Modifier modifier head`, chosen deterministically from the
-  instance's own stable `liId` (plus the language seed/version and the
-  def id), never from hashmap order. Names are WRITE-ONCE (#708
-  principle 5): rendered at instance creation
-  (`Location.Instance.newLocationInstance`, the only writer) and read
-  thereafter — no load, migration, or definition edit re-derives one, so
-  a location placed before this landed keeps its label forever. A page
-  with NO provenance (a custom-named world, a pre-#1092 save) falls back
-  to `ldLabel` with the `gloss` key ABSENT; absence is never papered
-  over by inventing a language. Gate: hspec `--match "Location naming"`,
-  plus `location_content_probe.py` phase 5.
-- **River identity + naming (#1102)** — `world.getRivers()` gives every
-  river an `id`: the `GeoFeatureId` the timeline already allocated, so
-  the durable identity is `(WorldPageId, GeoFeatureId)` (feature ids
-  restart at zero per timeline, and the query only ever reads the ACTIVE
-  page). `World.River.Identity` is the ONE place events are paired with
-  features — compaction re-emits exactly one event per active river
-  feature in `gtFeatures` order, and the pairing is CHECKED against
-  source/mouth/flow before it is trusted, so a violated invariant yields
-  no id rather than a wrong one. A named river also carries `name` and
-  `gloss`; both keys are ABSENT (nil) otherwise. Names live in a
-  per-page `wgpRiverNames` table keyed by `GeoFeatureId` — deliberately
-  NOT on `PersistentFeature`, whose `GeoTimeline` is a positionally
-  serialized worldgen-OUTPUT schema; naming moves no terrain and no
-  baseline. The expression is `Modifier modifier head` over a NARROW
-  in-code head pool (`riverHeadConcepts`: `RIVER` — added to the
-  catalogue by this issue — plus `FORD`, `CROSSING`, `BAY`, `VALE`,
-  `HOLLOW`) and a WIDE modifier pool (every catalogue concept with a
-  modifier form): the asymmetry is what makes a head morpheme recur
-  across a map's rivers and in the world's own name. Rivers have no
-  definition file to author pools on, which is why these are code and
-  not data. WRITE-ONCE (#708 principle 5): `buildRiverNames` at world
-  init is the only writer, so growing the catalogue never re-renders a
-  stored name even though `assignLanguageRoots` re-resolves collisions
-  over the whole concept set. A page with no provenance has an EMPTY
-  table — ids still work. `Language.Naming` holds the machinery both
-  this and #1101 use. `Language.Suggest` (#1106) resolves the same
-  profile + roots + catalogue triple itself and is the one remaining
-  copy — fold it in rather than adding a fourth. A river's stored
-  `rvnEtymology` (#1104) is what lets its name be decomposed.
-  Gates: hspec `--match "River naming"` / `--match "River identity"`,
-  the shared-world identity specs under `--match "Location overlay"`,
-  and `tools/river_naming_probe.py`.
-- **Name etymology (#1104)** — a generated name can be decomposed into
-  its roots and meanings. What makes that possible is a small optional
-  `EtymologySource` (the originating `NameExpr` plus the
-  `LanguageProvenance` that rendered it) persisted beside the name on all
-  three carriers: `wiEtymology`, `liEtymology`, `rvnEtymology`. A
-  precomputed morpheme list is deliberately NOT stored — the presentation
-  is reconstructed on query. `Language.Generated.Render` now produces an
-  ordered token TRACE and `renderNative` IS its concatenation, so
-  "concatenating the trace reproduces the stored name" holds by
-  construction; `Language.Generated.Boundary.joinMorphemesTrace` is the
-  one implementation both views of a boundary share. `Language.Etymology`
-  re-renders from the source and CHECKS the result against the
-  authoritative stored text before showing any of it — a mismatch (a
-  tampered name, a source from another language, a historical version
-  this build renders differently) reports unavailable rather than
-  explaining the wrong word. Morpheme identity is
-  `(LanguageProvenance, ConceptId)` — never spelling — so #1096's bound
-  form and its free root are ONE morpheme while two languages'
-  homographs, and the SAME seed under two generator versions, are not.
-  Capitalization is a surface-POSITION effect: the leading token carries
-  it, every canonical free spelling stays the unmarked lowercase root.
-  A source is additionally
-  required to belong to the PAGE's own recorded language
-  (`decomposeEntityName`): the surface check proves an expression renders
-  to the stored text under ITS OWN language, so a stale or foreign source
-  that happens to reproduce those letters would otherwise pass while
-  attributing every morpheme — and every recurrence link — to a language
-  the world does not have. A page with no provenance admits no source at
-  all. `world.getEtymology(kind[, id][, pageId])` feeds world/location/river
-  adapters into that one path; an unavailable reply still carries the
-  stored name so the UI can keep showing it. Recurrence is computed on
-  demand from the ACTIVE page — current world + `LifecycleDiscovered`-or-
-  later locations + ONLY the river being inspected (a world or location
-  target admits no river at all), the inspected entity excluded from its
-  own links, entries exposing nothing but an entity kind and an
-  already-visible name. There is no session history. The optional
-  `pageId` names the TARGET only (#1265) and never widens that set:
-  omitted, target and recurrence are both `resolveActiveWorld`'s page; a
-  live INACTIVE page resolves the target there — its stored name, gloss,
-  source and page-language validation all that page's — while candidates
-  still come only from the active page, so no inactive name is ever a
-  recurrence entry; a page that does not exist is the unchanged
-  `available=false`/`no_entity`. With no visible page, recurrence follows
-  `resolveActiveWorld` exactly, head-of-`wmWorlds` fallback included, and
-  substitutes nothing when that resolves to `Nothing` — a missing
-  ingredient on the RECURRENCE page (no active page, no gen params)
-  leaves an explicitly selected target's result intact with recurrence
-  empty, never downgrading it. That crossing is what makes
-  self-exclusion PAGE-QUALIFIED: every page's world entry is
-  `("world", Nothing)` and location ids are page-local, so comparing kind
-  and id alone would silently drop the active page's own world name, or
-  an equal-numbered active location, from an inactive target's links.
-  A river target on another page admits no river at all — the inspected
-  river is not on the active page, and its `GeoFeatureId` re-resolved
-  there is a different river. `world.getRiverAt`
-  is the minimal selected-segment→identity resolution (channel
-  containment, nearest wins, no global river list). The expression
-  travels the whole Create World chain — `world.suggestName`'s `expr` →
-  `name_suggest` → `generation` → `world_view` → `world_manager` →
-  `world.init`'s 9th argument — and is cleared with the gloss and
-  provenance the moment the player edits the name. UI:
-  `scripts/etymology_panel.lua` is the ONE panel all three entry points
-  open, hosted by `scripts/name_plate.lua` on `hud.global_page` (NOT
-  `world_page` — a world's name is not a zoomed-in concern, and a plate
-  on a band-swapped page is unhittable in the zoom map). Persistence:
-  `world-pages` v7 (v6 frozen by #1230 as
-  `PageCoreDTOv6`/`WorldGenParamsDTOv5`/`LocationInstancesDTOv3`), with
-  `PageCoreDTOv5`/`WorldGenParamsDTOv4`/
-  `WorldIdentityDTOv2`/`LocationInstanceDTOv2`/`RiverNameDTOv1` frozen —
-  every historical shape decodes with the source ABSENT, never inferred.
-  Gates: hspec `--match "Language etymology"` / `--match "Etymology
-  panel"`, `tools/etymology_probe.py` (manual-only, `needs-gpu`).
+- **Location + river naming, etymology (#1101/#1102/#1104)** — a placed
+  instance's `name` is rendered in its PAGE's own generated language
+  (from the identity's #1092 provenance); `gloss` is the same
+  `NameExpr`'s English reading. A LOCATION's concept pools are DATA
+  (`ldNaming`'s ordered, nonempty `heads`/`modifiers`, validated against
+  `data/language/concepts.yaml` at load — an unknown id rejects the whole
+  file rather than degrading to `ldLabel`); the engine has no
+  `ldType`→concept mapping. RIVERS have no definition file, so their
+  pools are in code (`riverHeadConcepts`: `RIVER`, `FORD`, `CROSSING`,
+  `BAY`, `VALE`, `HOLLOW` — a NARROW head pool against a WIDE modifier
+  pool of every catalogue concept with a modifier form, which is what
+  makes a head morpheme recur across a
+  map and in the world's own name). The expression is always `Modifier
+  modifier head`, chosen deterministically from the entity's own stable
+  id plus the language seed/version, never from hashmap order. Names are
+  WRITE-ONCE (#708 principle 5): rendered by the single writer at
+  creation (`newLocationInstance`; `buildRiverNames` at world init) and
+  read thereafter, so growing the catalogue never re-renders one. A page
+  with NO provenance falls back to `ldLabel` with `gloss` ABSENT / an
+  EMPTY river-name table — absence is never papered over by inventing a
+  language.
+  River identity is `(WorldPageId, GeoFeatureId)`, reusing the id the
+  timeline already allocated. `World.River.Identity` is the ONE place
+  events are paired with features, and the pairing is CHECKED against
+  source/mouth/flow before it is trusted — a violated invariant yields no
+  id rather than a wrong one. Names live in a per-page `wgpRiverNames`
+  keyed by `GeoFeatureId`, deliberately NOT on `PersistentFeature`
+  (whose `GeoTimeline` is positionally serialized worldgen OUTPUT).
+  Etymology (#1104): an optional `EtymologySource` (originating `NameExpr`
+  + the `LanguageProvenance` that rendered it) is persisted beside the
+  name on all three carriers; a precomputed morpheme list deliberately is
+  not. `Language.Etymology` re-renders and CHECKS against the stored text
+  before showing any of it, and the source must belong to the PAGE's own
+  recorded language. `world.getEtymology(kind[, id][, pageId])` is the
+  one path; `pageId` names the TARGET only (#1265) and never widens the
+  recurrence set, which is always the ACTIVE page — so self-exclusion is
+  PAGE-QUALIFIED. `world.getRiverAt` is the minimal
+  selected-segment→identity resolution. `Language.Suggest` (#1106) is the
+  one remaining copy of the profile+roots+catalogue resolution — fold it
+  in rather than adding a fourth. UI: `scripts/etymology_panel.lua` is
+  the ONE panel all three entry points open, hosted by
+  `scripts/name_plate.lua` on `hud.global_page` (NOT `world_page` — a
+  plate on a band-swapped page is unhittable in the zoom map). The token
+  trace, morpheme identity, capitalization, the recurrence rules and the
+  frozen DTOs are in `docs/engine_contracts.md` §Name etymology. Gates:
+  hspec `--match "Location naming"` / `"River naming"` /
+  `"River identity"` / `"Language etymology"` / `"Etymology panel"`;
+  `river_naming_probe.py`, `location_content_probe.py`,
+  `etymology_probe.py` (manual-only, `needs-gpu`).
+
 - **Location discovery (#780, sight-based since #1230)** — a one-way
-  lifecycle promotion to `discovered`, fired when a
-  `uiFactionId == "player"` unit SEES the location: its visible-tile set
-  intersects the instance's own stored `liBounds`, seam-aware, one tile
-  being enough. The `discovery_margin` halo is GONE — from the YAML, the
-  def, the instance, both Lua tables and the wire (`world-pages` v7) —
-  and `bounds` is the only location footprint left. Sight is
-  `Unit.LineOfSight.visibleTilesOnPage`, the SAME calculation the public
-  `unit.getVisibleTiles` runs (perception radius scaled by the
-  page-local `nightPerceptionFactor`, 120° facing cone, terrain-Z
-  occlusion) minus that query's `wmVisible` gate, which is what keeps
-  reveal working on a loaded-but-hidden page while
-  `unitVisibleTiles` still reports `[]` there. Terrain, clock and world
-  size come from the RESOLVED page's own refs, never
-  `activeWorldSizeChunks` (its visibility fallback would compute a
-  hidden page's night radius from the wrong circumference). Ticks for
+  promotion to `discovered`, fired when a `uiFactionId == "player"` unit
+  SEES the location: its visible-tile set intersects the instance's
+  stored `liBounds`, seam-aware, one tile being enough. The
+  `discovery_margin` halo is GONE from YAML, def, instance, Lua and wire;
+  `bounds` is the only location footprint left. Sight is
+  `Unit.LineOfSight.visibleTilesOnPage` — the SAME calculation
+  `unit.getVisibleTiles` runs (perception radius scaled by the page-local
+  `nightPerceptionFactor`, 120° facing cone, terrain-Z occlusion) minus
+  that query's `wmVisible` gate, which keeps reveal working on a
+  loaded-but-hidden page while `unitVisibleTiles` still reports `[]`
+  there. Terrain, clock and world size come from the
+  RESOLVED page's own refs, never `activeWorldSizeChunks`. Ticks for
   EVERY loaded page, independent of pause; emits exactly one
-  `location_discovery` event (hidden-page discoveries omit clickable
-  coords). Independent of the stamped/contents-spawned flags. A
-  night-scaled radius is intentionally shorter, so any distance-sensitive
-  expectation over `unit.getVisibleTiles` (`scripts/unit_ai_water.lua`'s
-  `scanForWater`, `tools/tutorial_probe.py`'s `sees_water`) must pin the
-  clock rather than trust whatever hour a run reaches. Gates:
+  `location_discovery` event. A night-scaled radius is intentionally
+  shorter, so any distance-sensitive expectation over
+  `unit.getVisibleTiles` (`scripts/unit_ai_water.lua`'s `scanForWater`,
+  `tools/tutorial_probe.py`'s `sees_water`) must pin the clock. Gates:
   `location_content_probe.py`, `location_embark_probe.py`; hspec
-  `--match "Location discovery"` / `--match "Location map icons"` /
-  `--match "Unit.LineOfSight"`.
-- **Location map icons (#781, reshaped by #1230)** — a definition
-  declares ONE optional `map_icon: <path>` (its TYPE icon); the paired
-  `map_icons: {undiscovered, discovered}` schema is gone. All six
-  lifecycle constructors map explicitly
-  (`World.Render.Zoom.Icons.locationIconAppearance`): `unknown`/`hinted`
-  draw the ONE shared `assets/textures/icons/location/location_unknown.png`
-  — registered once under `locationUnknownIconTextureName`,
-  independently of every definition, so the zoom map never leaks WHAT is
-  there before a unit has seen it — `discovered`/`active` draw the
-  def's own `map_icon`, and `cleared`/`depleted` draw that SAME bitmap
-  with darkened RGB (`clearedIconTint`), the supplied zoom-fade alpha
-  preserved exactly in all six. The dark tint is an explicit,
-  enumerated exception to the no-tinting rule, authorized by
-  `docs/expedition_gameplay_loop.md` D-16 and confined to the icon
-  quad's own `Vec4`. A def with no `map_icon` places no annotation at
-  all. Asset gate: `tools/location_map_icon_asset_check.py`.
+  `--match "Location discovery"` / `"Location map icons"` /
+  `"Unit.LineOfSight"`.
+- **Location map icons (#781/#1230)** — a definition declares ONE
+  optional `map_icon` (its TYPE icon). All six lifecycle constructors map
+  explicitly (`World.Render.Zoom.Icons.locationIconAppearance`):
+  `unknown`/`hinted` draw the ONE shared `location_unknown.png`
+  (registered once under `locationUnknownIconTextureName`,
+  independently of every definition) so the zoom map never
+  leaks WHAT is there before a unit has seen it; `discovered`/`active`
+  draw the def's own `map_icon`; `cleared`/`depleted` draw that SAME
+  bitmap with darkened RGB (`clearedIconTint`), the zoom-fade alpha
+  preserved exactly in all six. That dark tint is an explicit, enumerated
+  exception to the no-tinting rule (`docs/expedition_gameplay_loop.md`
+  D-16), confined to the icon quad's own `Vec4`. A def with no `map_icon`
+  places no annotation. Asset gate:
+  `tools/location_map_icon_asset_check.py`.
 - **Per-unit location knowledge (#915)** — the EXPERIENTIAL layer beside
   that CARTOGRAPHIC one, and neither derives from the other: global
-  lifecycle = "the player has mapped it", `aiState[uid].knownLocations`
-  = "this acolyte knows where it is". Keyed by the durable
-  `(page, instance id)` pair — dedup is by IDENTITY, never by distance
-  (don't copy `knownWaterSources`' 6-tile rule across; two locations are
-  never the same location). Both layers come from ONE containment
-  enumeration in `Location.Discovery` (`findDiscoveries` /
-  `findAwareness`), so they cannot drift; awareness additionally reports
-  EVERY qualifying unit and ignores lifecycle, so a unit arriving at an
-  already-mapped ruin still learns it. `world.getLocationAwareness()`
-  walks every loaded page; `scripts/unit_ai.lua` ingests it BEFORE its
-  pause guard, mirroring the discovery tick's pause independence.
-  Persisted via `lua.unit_ai` v4 as typed
-  `{__ref="location_instance", page, id, x, y}` entries (v1-v3 decode
-  with the field ABSENT — never inferred from discovery); a memory whose
-  `(page, id)` is missing from the restored session is a non-blocking
-  diagnostic, scrubbed at reconcile time. Sharing over the radio and
-  radio range are deliberately deferred. Gates: hspec `--match "unit
-  location knowledge"`, `location_content_probe.py`.
-- **Expedition retrieval (#920)** — recovering an item from a remote
-  location uses ONLY the direct-RTS verbs a player already has
-  (`unitAi.commandPickup` → `unitAi.commandMove` home → adjacent
-  `unit.depositToCargo`); the design doc forbids a caravan/logistics
+  lifecycle = "the player has mapped it", `aiState[uid].knownLocations` =
+  "this acolyte knows where it is". Keyed by the durable `(page, instance
+  id)` pair — dedup is by IDENTITY, never by distance (don't copy
+  `knownWaterSources`' 6-tile rule across; two locations are never the
+  same location). Both layers come from ONE containment enumeration in
+  `Location.Discovery` (`findDiscoveries`/`findAwareness`), so they
+  cannot drift; awareness additionally reports EVERY qualifying unit and
+  ignores lifecycle, so a unit arriving at an already-mapped ruin still
+  learns it. `world.getLocationAwareness()` walks every loaded page;
+  `scripts/unit_ai.lua` ingests it BEFORE its pause guard. Persisted via
+  `lua.unit_ai` v4 as typed `{__ref="location_instance", …}` entries
+  (v1-v3 decode with the field ABSENT, never inferred from discovery); a
+  memory whose `(page, id)` is missing is a non-blocking diagnostic,
+  scrubbed at reconcile. Radio sharing/range deliberately deferred.
+  Gates: hspec `--match "unit location knowledge"`,
+  `location_content_probe.py`.
+- **Expedition retrieval (#920)** — recovering a remote item uses ONLY
+  the direct-RTS verbs a player already has (`unitAi.commandPickup` →
+  `commandMove` home → adjacent `unit.depositToCargo`);
+  `docs/expedition_gameplay_loop.md` forbids a caravan/logistics
   interface until direct retrieval proves inadequate. That last step is
-  the LAX verb, not a player gesture: #1249 retired the adjacent "Store
-  in \<cargo\>" menu entry that used to make the identical call, so
-  `tools/expedition_retrieval_probe.py` now reproduces a rule of its
-  own rather than a menu's (the player's own way to bank it is a queued
-  Store order). `commandPickup`
-  gates capacity at COMMAND time (refuses, returns false, emits a
-  player-visible `unit_warning` naming carrier and item, sets no
-  `pickupOrder`) AND still on ARRIVAL, both measuring
-  `unit.getCarryingWeight` against the ground instance's live
-  `item.listGround().weight` — keep both; the load changes en route. A
-  completed pickup emits a `unit_event` naming the item, tagged with
-  the carrier's uid — that is the surface answering "who has it".
-  `pickup_timeout` and `TASK_TIMEOUT_SEC` are STALL timers, not
-  total-trip budgets: they reset on a new closest approach, so a
-  long-but-progressing leg completes while an unreachable target still
-  gives up. Don't restore the from-`issuedAt`/`startedAt` shape — it
-  capped ordered retrieval at ~21 tiles and ordered moves at ~42. Since
-  #1291 they are also spent in ELIGIBLE time only
-  (`scripts/unit_ai_stall.lua`, which owns both the accounting and
-  `maintainTask`; `unit_ai_core` re-exports it): an interval another
-  action won (the #306 ladder's eating/drinking/refill/combat/
-  `treat_ally`, or a `forage` that walks the unit AWAY) or one the AI
-  never ticked through at all (collapse, an engine animation, a mental
-  break, a load boundary — seen here as a gap longer than
-  `MAX_CHARGED_INTERVAL`) costs a pending order nothing, however long
-  it lasts. The budget still ACCUMULATES across interruptions rather
-  than restarting after one, so eligible non-progress still expires on
-  schedule and no order becomes immortal. That state
-  (`stalledFor`/`stallSeenAt` on the order) rides `lua.unit_ai` v5; a
-  v1–v4 order carries the old absolute `progressAt` instead and is
-  seeded from it on its first tick, so it expires exactly when it
-  would have. Gates: `expedition_retrieval_probe.py` (manual-only),
-  hspec `--match "commanded order stall budget"`.
-- **The expedition loop (#923)** — the arc's shipped slice is
-  **prepare → travel → discover → extract → return → invest**, run as
-  ONE session by `tools/expedition_loop_probe.py` (manual-only,
-  fixed-seed, ~15 min, two engine boots). `docs/expedition_gameplay_loop.md`
-  remains the design authority; step 9's original combat encounter and
-  guaranteed progression reward are deliberately deferred (#916/#917),
-  so "invest" here means the recovered loot is banked in colony storage
-  and is afterwards ordinary colony stock — not a completed project.
-  Contracts the gate pins, and which new expedition work must not break:
-  the colony comes from a real `acolyte_portal` and its OWN roster
-  (`scripts/building_spawn.lua`), never hand-spawned units; the expected
-  end lifecycle is `discovered` with contents spawned exactly once
-  (nothing in the game drives an instance further — a gate that called
-  `world.setLocationLifecycle` would be asserting its own writes); the
-  extraction target is whichever def the ruin's own loot rolls produced,
-  never a staged item; and every durable identity is re-checked in a
-  FRESH PROCESS — `(page, instance id)` lifecycle, per-unit
-  `knownLocations`, the exact completed objective-ID set, and the
-  recovered item's instance id / definition / mutable properties /
-  storage ownership. The gate also runs an **unprepared control**: a
-  second traveller sharing ONE identical leg with the first — mustered
-  to a single staging tile and held there by the PAUSE, then same verb,
-  same destination, same paused window, same seeded hunger deficit —
-  measured once BOTH are
-  at the ruin, differing only in FOOD (the canteen is left
-  full on both: a dry one puts `refill_canteen` at its 7.5 peak, above
-  `follow_command`, and the control then abandons the leg to walk to
-  the water the scout radioed about — a behavioural difference, not the
-  supply being measured), and which must end
-  measurably worse off. That is what makes the scenario prove
-  preparation matters rather than prove a walk succeeds. Six conditions
-  keep the comparison honest, and weakening any one of them quietly
-  turns the control into theatre: `find_water` is retired and
-  `forage_max_fraction` disabled for the session (#94's emergency ladder
-  has its own gate, `foraging_probe.py`); BOTH travellers are shed to
-  inside their carrying capacity first (an over-encumbered acolyte
-  crawls, its order stall-times-out and it never arrives —
-  `docs/expedition_survival_calibration.md` E1); the control is given NO
-  retrieval target of its own, because a ruin can roll food and a
-  control that eats what it finds destroys the measurement; the travel
-  VERB matches, since `commandMove` walks at `movement_speed.ordered` =
-  comfort × 1.15 while `pickup_ground` walks at comfort (so the
-  retrieval order is issued only after the measurement); the ORIGINS are
-  equalised as a PLACE and not merely a distance, because hunger drains
-  with time on the road and route shape is time — a radial band is
-  satisfied anywhere on a circle, so the check asserts separation as
-  well as distance spread, verified with the SIMULATION STOPPED (a
-  completed move order does not hold position, E3, and
-  **`unit.setFrozen` is not a hold at all**: `uiFrozen` only makes
-  `publishToRender` skip the sim-derived update, so a "frozen" unit
-  keeps walking while `unit.getInfo` reports where it was when the flag
-  went up — use `engine.setPaused` when you need a unit to actually
-  stay put, and re-read positions after pausing); and the observation
-  point is both
-  travellers at the ruin in ONE COHERENT SNAPSHOT — a single paired
-  read revalidated with the simulation STOPPED, since two separate
-  `unit.getInfo` round trips let the sim run in between and a pair that
-  was never inside together can satisfy them, and since a unit that
-  finishes its move reverts to wander and can drift back out while the
-  other is still walking. The eating itself is
-  watched live as a real `eat_from_inventory` action, so the delta is
-  attributed to a mechanism rather than inferred from a number two
-  differently-massed acolytes could reach by other routes. The gated
-  metric is FOOD (stomach fraction), matching what
-  `docs/expedition_survival_calibration.md` measured actually goes live
-  on a trip this length; water is reported as evidence, not gated.
-  **Don't "fix" that by seeding a thirst deficit** — `scripts/salts.lua`
-  derives blood salt concentration as saltFrac/hydrationFrac and
-  `scripts/brain.lua` folds it straight into consciousness, so a unit
-  dehydrated far enough to prefer drinking over its orders is knocked
-  unconscious by the electrolyte imbalance, and scaling the `salt` pool
-  down to compensate just moves the blackout to the first meal's salt
-  bolus (`salts.mealSalt` restores 0.30 of max_salt per feed). Both were
-  observed live while building the gate.
-- **Testing blood decals headless (#603 epic, #604/#606/#607/#788/#882/#883)**
-  — full architecture record: `docs/blood_decals.md`. Five hspec
-  groups (`test-headless/Test/Headless/Blood/`), each independently
-  targetable via `--match`: `Blood.Types` (texture-pool/decal-store FIFO
-  + matching), `Blood.Texture` (deterministic pixel generation),
-  `Blood.Impact` (wound → one-shot mark mapping), `Blood.Trail`
-  (ongoing-bleeding gating/conservation/partition-invariance math —
-  includes `Blood.Pool` coverage: stationary pooling arbitration,
-  layer bound, placement), and `Blood.Teardown` (GPU-dispose queue
-  plumbing, no device). Turnkey probes: `blood_decal_probe.py`
-  (texture reuse/eviction/render), `blood_impact_probe.py` (wound-to-
-  mark mapping), `bleeding_trail_probe.py` (#882/#883 moving trail +
-  stationary pooling), and the needs-GPU
-  `blood_gpu_lifecycle_probe.py` (#788 upload/dispose against a real
-  device — manual-only). **Transience contract**: blood is transient
-  BY DESIGN — `wsBloodStoreRef` and every unit's
-  `Unit.Types.Trail.TrailState` are deliberately never persisted, and
-  a loaded session always starts with no decals and no active
-  trail/pool accumulators, even one that was saved with plenty of
-  both (closed issue #884 is the specification for reversing this,
-  should it ever be revisited). A test asserting a mark or an
-  accumulator survives a save/load round trip is testing for behavior
-  this engine deliberately does not have.
+  the LAX verb, not a player gesture. `commandPickup` gates capacity at
+  COMMAND time (refuses, returns false, emits `unit_warning`, sets no
+  `pickupOrder`) AND again on ARRIVAL, both measuring
+  `unit.getCarryingWeight` against the ground instance's live weight —
+  keep both; the load changes en route. A completed pickup emits a
+  `unit_event` tagged with the carrier's uid.
+  `pickup_timeout`/`TASK_TIMEOUT_SEC` are STALL timers, not trip budgets:
+  they reset on a new closest approach. Don't restore the
+  from-`issuedAt`/`startedAt` shape — it capped ordered retrieval at ~21
+  tiles. Since
+  #1291 they are spent in ELIGIBLE time only (`unit_ai_stall.lua`, which
+  owns the accounting and `maintainTask`): an interval another action
+  won (the #306 ladder's eating/drinking/refill/combat/`treat_ally`, or a
+  `forage` that walks the unit AWAY), or one the AI never ticked through
+  at all (collapse, an engine
+  animation, a mental break, a load boundary — seen as a gap longer than
+  `MAX_CHARGED_INTERVAL`), costs a pending order nothing, while the
+  budget still ACCUMULATES across interruptions so no order becomes
+  immortal. That state (`stalledFor`/`stallSeenAt` on the order) rides
+  `lua.unit_ai` v5; a v1–v4 order carries the
+  old absolute `progressAt` and is seeded from it on its first tick.
+  Gates: `expedition_retrieval_probe.py` (manual-only), hspec
+  `--match "commanded order stall budget"`.
+- **The expedition loop (#923)** — the shipped slice is **prepare →
+  travel → discover → extract → return → invest**, run as ONE session by
+  `tools/expedition_loop_probe.py` (manual-only, fixed-seed, ~15 min,
+  two engine boots). `docs/expedition_gameplay_loop.md` is the design
+  authority; step 9's combat encounter and progression reward are
+  deferred (#916/#917), so "invest" means the loot is banked as ordinary
+  colony stock. Contracts the gate pins: the colony comes from a real
+  `acolyte_portal` and its OWN roster, never hand-spawned units; the
+  expected end lifecycle is `discovered` with contents spawned exactly
+  once (a gate calling `setLocationLifecycle` would be asserting its own
+  writes); the extraction target is whichever def the ruin's loot rolls
+  produced; and every durable identity is re-checked in a FRESH PROCESS.
+  It also runs an **unprepared control** — a second traveller sharing ONE
+  identical leg, differing only in FOOD — which must end measurably worse
+  off, which is what makes the scenario prove preparation matters rather
+  than prove a walk succeeds. Six conditions keep that comparison honest
+  and weakening any one turns the control into theatre; they are
+  enumerated, with the two live-observed physiology traps (don't seed a
+  thirst deficit; `unit.setFrozen` is not a hold) in
+  `docs/engine_contracts.md` §The expedition loop. Read it before editing
+  this gate.
+- **Blood decals (#603 epic)** — architecture record:
+  [`docs/blood_decals.md`](docs/blood_decals.md). Five `--match`-able
+  hspec groups under `test-headless/Test/Headless/Blood/`:
+  `Blood.Types`, `Blood.Texture`, `Blood.Impact`, `Blood.Trail`
+  (includes `Blood.Pool`), `Blood.Teardown`. Probes:
+  `blood_decal_probe.py`, `blood_impact_probe.py`,
+  `bleeding_trail_probe.py`, and the needs-GPU
+  `blood_gpu_lifecycle_probe.py` (manual-only). **Transience contract**:
+  blood is transient BY DESIGN — `wsBloodStoreRef` and every unit's
+  `TrailState` are deliberately never persisted, and a loaded session
+  always starts with no decals and no accumulators. A test asserting a
+  mark survives a save/load round trip is testing for behavior this
+  engine deliberately does not have (closed issue #884 is the spec for
+  reversing it).
 - **Logging streams** — event log: `engine.getEventLog()`, emit via
   `engine.emitEvent(cat,text)` / `emitEventAt` /
-  `emitEventForUnit(cat,text,uid[,gx,gy])`; a category lands only if
-  its notifications YAML has `log: true`. Combat:
-  `combat.drainEvents()`. Injury (NON-combat only — falls, hazards,
-  wound deaths): `injury.drainEvents()`. These are DRAINED streams —
-  don't drain manually in a test while the panel script is loaded, or
-  you'll race it. Gate: `injury_log_probe.py`.
-- **Autosave (#913)** — OFF by default (`config/save_default.yaml`,
+  `emitEventForUnit(cat,text,uid[,gx,gy])`; a category lands only if its
+  notifications YAML has `log: true`. Combat: `combat.drainEvents()`.
+  Injury (NON-combat only — falls, hazards, wound deaths):
+  `injury.drainEvents()`. These are DRAINED streams — don't drain
+  manually in a test while the panel script is loaded, or you'll race it.
+  Gate: `injury_log_probe.py`.
+- **Autosave (#913)** — OFF by default (`config/save_default.yaml`
   overlaid key-by-key with `config/save.local.yaml`; Settings → General
   edits it). `scripts/autosave.lua` owns the WALL-CLOCK interval and
-  fires only when `uiManager.isGameplayView()` is true — a deadline
-  reached in a menu / with no world / during a save or load is SKIPPED
-  silently (no request, no failure event, nothing queued), and menus
+  fires only when `uiManager.isGameplayView()` — a deadline reached in a
+  menu / with no world / mid save-or-load is SKIPPED silently, and menus
   never suspend or reset the cadence. Slots are the reserved
   `autosave-<n>` family, `autosave-1` newest; ownership is the durable
-  `smAutosave` metadata flag (`"metadata"` component v2, v1 payloads
-  migrate to manual via `World.Save.Compat.MetadataV1`), NEVER the
-  name — a manual save (directory OR pre-#762 flat file) squatting on
-  one of those names fails the attempt through `save_load` with nothing
-  rotated. PUBLISH FIRST, ROTATE SECOND: every autosave is written to
-  the reserved `autosave-incoming` staging slot and the family only
-  ages down once that transaction reports success, so a failed
-  autosave can never have discarded or renumbered a generation; a
-  staged generation left by a crash is rotated in by the next cycle. The
-  rotation is ordered the same way — the oldest is RETIRED by rename and
-  only deleted once every other move succeeded — so an interrupted
-  rotation leaves a partially shifted family, never a shorter one. The
-  shift plan is DERIVED from what's on disk (retire only when the family
-  is genuinely full; then walk down from the first free index), which is
-  what makes a resumed rotation land the interrupted generations where
-  they belong instead of ageing a second one out. A SUCCESSFUL
-  autosave restores the pre-request pause + visible time scale, but
-  only if `playerIntentGenRef` still matches — an `MVar` that doubles
-  as the mutex, so the comparison and the writes are one critical
-  section with those verbs: any `engine.setPaused` /
-  `world.setTimeScale` during the window means the player wins. A
-  FAILED one stays paused and zero-scaled (the existing ratchet — the
-  acceptance step zeroes the visible clock too, so a failure BEFORE the
-  world thread's own capture can't leave a half-paused world), every
-  terminal failure of an accepted save reports through `save_load`, and
-  the success event's own pause (if the category is configured for it)
-  is authoritative over the restore. Gate: `autosave_probe.py`
-  (manual-only).
+  `smAutosave` metadata flag (`"metadata"` v2; v1 payloads migrate to
+  manual via `World.Save.Compat.MetadataV1`),
+  NEVER the name — a manual save squatting on one of those names fails
+  the attempt through `save_load` with nothing rotated. PUBLISH FIRST,
+  ROTATE SECOND, and the
+  rotation is itself ordered so an interruption leaves a partially
+  shifted family rather than a shorter one; the staging slot, the
+  retire-by-rename ordering, the DERIVED shift plan and the
+  `playerIntentGenRef` mutex are in `docs/engine_contracts.md` §Autosave.
+  A FAILED autosave stays paused and zero-scaled. Gate:
+  `autosave_probe.py` (manual-only).
 - **Config state (#638/#786)** — settings save to gitignored
   `config/*.local.yaml`; boot falls back to tracked `*_default.yaml`
   (notifications self-materializes from
-  `data/notification_categories.yaml`; `save` (#913) resolves as an
-  explicit KEY-LEVEL overlay instead — a sparse local file keeps every
-  tracked default it doesn't mention). The tracked legacy
+  `data/notification_categories.yaml`; `save` resolves as an explicit
+  KEY-LEVEL overlay instead, so a sparse local file keeps every tracked
+  default it doesn't mention). The tracked legacy
   `video.yaml`/`keybinds.yaml`/`notifications.yaml` exist ONLY as a
   one-time migration source: `Engine.Core.Init.migrateLegacyConfig`
-  copies a legacy file to the local path iff the local file is absent
-  AND the legacy file decodes against the real target schema; failures
-  fall back to defaults and never touch a valid local file. Gates:
+  copies a legacy file to the local path iff the local file is absent AND
+  the legacy file decodes against the real target schema; failures fall
+  back to defaults and never touch a valid local file. Gates:
   `config_state_probe.py`, `config_migration_probe.py`; hspec
   `--match "config"`.
 
@@ -1839,10 +1270,9 @@ adding state to `EngineEnv`, `WorldState`, `World.Save.Types`, or
 echo 'engine.saveWorld("test", "my_save"); return "saved"' | nc -w 2 localhost 9008
 echo 'engine.loadSave("my_save"); return "queued"' | nc -w 2 localhost 9008
 # loadSave only ACCEPTS synchronously (#763) — poll engine.getLoadStatus()
-# for phase == "LoadPublished" (or "LoadFailed", or #1204's
-# "LoadReconciliationFailed") before touching anything.
-# Loaded pages keep their saved ids (no main_world remap) —
-# world.getActiveWorldId() to find the active one.
+# for phase == "LoadPublished" (or "LoadFailed", or "LoadReconciliationFailed")
+# before touching anything. Loaded pages keep their saved ids (no
+# main_world remap) — world.getActiveWorldId() finds the active one.
 echo 'return engine.getLoadStatus()' | nc -w 2 localhost 9008
 # Loads come up paused: engine.setPaused(false) (in-game: scripts.pause,
 # which also restores the time scale).
@@ -1856,15 +1286,15 @@ flow, edited tiles (chunks regen + edits replay), buildings (with
 spawn-roster countdown), units (stats/modifiers/skills/inventory/sim
 state), Lua AI memory, pause state. **Not preserved by design (load
 policy):** selection, build-tool placement mode, active toolbar tool
-(always default tool post-load; HUD resets via the `onSaveLoaded`
-broadcast), and time scale (always 1). Older schema versions are
-rejected with "expected vN, got vM".
+(always default post-load; HUD resets via the `onSaveLoaded` broadcast),
+and time scale (always 1). Older schema versions are rejected with
+"expected vN, got vM".
 
-**Autosave (#913):** interval autosaves ride the SAME transaction —
-they only add a request-time `AutosaveRequest` (pre-request pause,
-visible time scale, player-intent generation) plus the durable
-`smAutosave` classification `engine.listSaves()` exposes. See the
-subsystem table above for the full contract.
+**Autosave (#913):** interval autosaves ride the SAME transaction — they
+only add a request-time `AutosaveRequest` (pre-request pause, visible time
+scale, player-intent generation) plus the durable `smAutosave`
+classification `engine.listSaves()` exposes. Full contract: **Subsystem probes
+& domain contracts** above, and `docs/engine_contracts.md` §Autosave.
 
 **Enum schema policy:** `Direction`, `Pose`, `UnitActivity` (and any
 enum serialized via `Generic Serialize`) are positional by constructor
@@ -1874,590 +1304,347 @@ constructor's own FIELDS are positional too, so reordering them or
 changing one field's serialized type corrupts saves the same way while
 moving no tag (#1270).
 
-Enforced mechanically since #1145 by `tools/enum_append_only_audit.py`
-(in CI and `make ci`, with its own `--self-test`), which is the
-authority on which types are guarded and why — read its module
-docstring before adding, moving, or changing one. It guards **every**
-`data` declaration under `src/`/`app/` that derives `Serialize` through
-`Generic` and has two or more constructors — a deliberate superset of
-"reachable from a save component", currently 37 types (32 of them
-reachable from a save-wire DTO today), so a type that becomes persisted
-later was already guarded the day its instance was derived.
-`docs/save_compat/enum_baseline.json` is the golden constructor list —
-module-qualified, each constructor recording its name and its ordered
-PAYLOAD signature (`arity` is that payload's length) — plus the
-save-wire attribution captured with it; it is GENERATED end to end, so
-don't hand-edit it — a pure append ratchets it with `--update-baseline`,
-and anything else is a wire-format break the audit refuses to record. A
-payload slot is the field's declared type, normalized (strictness
-markers, `{-# UNPACK #-}`, layout, `::`/`∷` and the parentheses a `!`
-forces are all erased; field order and type structure are not), with the
-selector kept for a record alternative — which is what makes swapping
-two same-typed record fields visible, and means a selector rename
-reports too. An incompatible change's output names every component and
-historical shape that carries the type, with the reachability path —
-including for a type that was renamed or deleted, which is read back
-from the recorded attribution because there is nothing left to walk.
-Since #1270 this audit is the one exhaustive gate owning payload drift
-inside a multi-constructor sum; single-constructor record field order
-stays the frozen-DTO boundary's and `tools/save_compat_audit.py`'s.
+Enforced since #1145 by `tools/enum_append_only_audit.py` (CI + `make
+ci`, with its own `--self-test`), which is the authority on which types
+are guarded and why — read its module docstring before adding, moving, or
+changing one. It guards **every** `data` declaration under `src/`/`app/`
+that derives `Serialize` through `Generic` and has two or more
+constructors — a deliberate superset of "reachable from a save
+component", currently 37 types — so a type that becomes persisted later
+was already guarded the day its instance was derived.
+`docs/save_compat/enum_baseline.json` is the GENERATED golden constructor
+list; don't hand-edit it — a pure append ratchets it with
+`--update-baseline`, and anything else is a wire-format break the audit
+refuses to record. How a payload slot is normalized, what the recorded
+attribution buys for a renamed or deleted type, and the split against
+`tools/save_compat_audit.py` are in `docs/engine_contracts.md`
+§Enum append-only audit.
 
 **Architecture (persistence-overhaul epic #756-#768, landed):**
 - `World.Save.Snapshot.SessionSnapshot` is the immutable, validated
   in-memory capture (pure `captureSessionSnapshot`) — NOT the wire
   format. The save barrier (`Engine.Save.Barrier`) quiesces every
-  state-owner thread, releases its capture lock only after the encode
-  is forced (`evaluate`), and reports the outcome only after the disk
-  write resolves.
+  state-owner thread, releases its capture lock only after the encode is
+  forced (`evaluate`), and reports the outcome only after the disk write
+  resolves.
 - On-disk `world.synworld` is a tagged, checksummed component ENVELOPE
   (`World.Save.Envelope`): FNV-1a-checksummed manifest + independently
   versioned components (`core-session`, `world-pages`, `world-edits`,
   `world-activity`, `buildings`, `units`, `unit-sim`, `craft-bills`,
   `power-nodes`, `texture-palette`, `metadata`, the two OPTIONAL
-  `container-knowledge` (#1087) and `transfer-orders` (#1246), plus
-  dynamic `lua.<module>` components). Registry:
-  `World.Save.Component.saveComponentRegistry`. Every gameplay
-  component is REQUIRED except those two, each of whose absence has an
-  honest default ("no container has ever been inspected"; "no transfer
-  order is queued") — see `docs/persistence_contract.md` §5 before
-  declaring a third one.
-  Component evolution =
-  per-component schema version bumps + explicit migrations from frozen
-  vN DTOs — NOT a global save-version bump. `currentSaveVersion`
-  (`src/World/Save/Types.hs`) now versions only the transitional
-  in-memory load bridge (`SaveData`) and is bumped freely — don't trust
-  any number written in docs. `listSaves` decodes only the `metadata`
-  component (never gameplay payloads). Pre-envelope flat saves are a
-  clean break (rejected), and `world_gen.yaml` no longer exists.
+  `container-knowledge` and `transfer-orders`, plus dynamic
+  `lua.<module>` components). Registry:
+  `World.Save.Component.saveComponentRegistry`. Every gameplay component
+  is REQUIRED except those two, each of whose absence has an honest
+  default — see `docs/persistence_contract.md` §5 before declaring a
+  third. Component evolution = per-component schema version bumps +
+  explicit migrations from frozen vN DTOs, NOT a global save-version
+  bump. `currentSaveVersion` now versions only the transitional in-memory
+  load bridge (`SaveData`) and is bumped freely — don't trust any number
+  written in docs. `listSaves` decodes only the `metadata` component.
+  Pre-envelope flat saves are a clean break (rejected), and
+  `world_gen.yaml` no longer exists.
 - Lua-owned state persists via `scripts/lib/save_modules.lua`
   (`saveModules.register(id, spec)` — versioned
   snapshot/decode/validate/apply, dependency-ordered, `required` vs
-  optional-with-`default`; `registerResetHook` for non-durable modules)
+  optional-with-`default`; `registerResetHook` for non-durable modules),
   with canonical data-only payloads from `scripts/lib/data_codec.lua`
   (decoding never executes code). A required component's failure aborts
   the whole save/load.
 - Disk I/O goes ONLY through `World.Save.Storage.publishGeneration` — a
   write-fsync-revalidate-rotate transaction keeping a
-  `world.synworld.prev` recovery generation. A corrupt authoritative
-  file falls back to `.prev` (loudly logged; `recovered` flag in
-  `engine.listSaves()`); an INCOMPATIBLE one reports directly with no
-  fallback. Symlinked slot dirs/files are refused. Failures name their
-  `StoragePhase` through `engine.getSaveStatus()`.
+  `world.synworld.prev` recovery generation, with `.prev` fallback on
+  corruption (`recovered` in `engine.listSaves()`) but never on an
+  INCOMPATIBLE file. Symlinked slot dirs/files are refused.
 - `engine.loadSave` is a whole-session TRANSACTION
   (`World.Load.Stage`/`Publish`): stage the entire replacement session
-  against fresh values, swap in one quiesced window. A load REPLACES
-  the complete session — live pages not in the save do not survive.
-  Save and load mutually exclude for their whole duration; a failed
-  load leaves the old session unchanged and paused (pause is a one-way
-  ratchet per attempt). `engine.getLoadStatus()` exposes the 12-phase
-  lifecycle, plus #1204's 13th terminal phase
-  `LoadReconciliationFailed`: publication SUCCEEDED but a Lua
-  `onSaveLoaded` callback raised, so the live session is incompletely
-  reconciled. It is a THIRD terminal disposition, not a flavour of
-  either existing one — every poller must treat it as terminal (its
-  outcome is non-nil, so `loadInProgress` is already false) and as
-  UNSUCCESSFUL, and it deliberately leaves `failedAtPhase` unset
-  because that field's presence promises the old session survived
-  unchanged, which a post-publish failure cannot. The outcome
-  aggregates every failing module; `reconciliationFailures` carries the
-  per-module `{module, error}` breakdown. Callback isolation is
-  unchanged — the broadcast still attempts every module.
+  against fresh values, swap in one quiesced window. A load REPLACES the
+  complete session — live pages not in the save do not survive. Save and
+  load mutually exclude; a failed load leaves the old session unchanged
+  and paused (a one-way ratchet per attempt).
 - Typed persistent references (`World.Save.Reference`:
-  `SamePageRef`/`CrossPageRef` newtypes; Lua `{__ref=kind, id=N}`
-  wrapping in `unit_ai_save_refs.lua`/`building_spawn.lua`) feed the
-  shared integrity graph (`World.Save.Integrity`), run at both save and
-  load boundaries — wrong-PAGE targets are hard errors; DANGLING
-  targets are tolerated, non-blocking diagnostics (a demolished
-  station's lingering bill is gameplay, not corruption). NB: ground-item
-  ids are ZERO-based; every other allocator starts at 1.
+  `SamePageRef`/`CrossPageRef`; Lua `{__ref=kind, id=N}` in
+  `unit_ai_save_refs.lua`/`building_spawn.lua`) feed the shared integrity
+  graph (`World.Save.Integrity`) at both save and load boundaries —
+  wrong-PAGE targets are hard errors; DANGLING targets are tolerated,
+  non-blocking diagnostics. NB: ground-item ids are ZERO-based; every
+  other allocator starts at 1.
+
+The 13-phase load lifecycle, `LoadReconciliationFailed`'s terminal
+semantics, and the `StoragePhase` reporting are in
+`docs/engine_contracts.md` §Save/load transaction.
 
 **Key gates:** pure hspec — `--match "persistence contract"` (full
 representative session through the real codec, every field via derived
 `Eq`), `--match "persistence reference integrity"`, `--match "Lua
-persistence components"`, `--match "save envelope"` / `"save
-components"` / `"atomic save storage"`. Probes —
-`persistence_contract_probe.py` (CI-eligible smoke: three real
-fresh-process save→load→save cycles compared via
-`tools/persistence_snapshot.compare_session_files`),
-`persistence_contract_sweep.py` (manual full sweep; runs the 12
-cross-referenced persistence probes on isolated resource roots),
-`save_barrier_probe.py`, `save_storage_probe.py`,
+persistence components"`, `--match "save envelope"` / `"save components"`
+/ `"atomic save storage"`. Probes — `persistence_contract_probe.py`
+(CI-eligible smoke: three real fresh-process save→load→save cycles
+compared via `tools/persistence_snapshot.compare_session_files`),
+`persistence_contract_sweep.py` (manual full sweep on isolated resource
+roots), `save_barrier_probe.py`, `save_storage_probe.py`,
 `transactional_load_probe.py`, `persistence_integrity_probe.py`,
 `multiworld_save_probe.py`. NB #365: a save containing an arena page
 hangs the world thread on load — never use arenas as a save-test page.
 
-## Unit asset inventory
+## Unit animation art: inventory, compiler, budgets, runtime
 
-`python3 tools/pack_atlas.py --validate-only --strict` is the
-authoritative, enforceable inventory of unit ANIMATION art (#1257).
+Design authority: [`docs/texture_infrastructure.md`](docs/texture_infrastructure.md)
+(TEX-2…TEX-7, decisions D-1…D-12, and **Measured results** — the
+before/after numbers and the budget threshold's derivation).
+Fresh-checkout workflow (regenerate, validate, inspect, review, recover)
+and D-7's restart-to-reload rule:
+[`docs/asset_generation.md`](docs/asset_generation.md).
+
+Source PNG frames stay the editable artwork (D-1); unit YAML stays the
+only hand-edited semantic authority (D-11); everything under a unit's
+`atlas/` directory is DERIVED and nobody hand-edits it. `atlas/` is a
+SIBLING of `animations/`, which keeps generated artifacts outside the
+filesystem-first inventory walk.
+
+**One command covers all four concerns:**
+`python3 tools/pack_atlas.py --validate-only --strict` runs the art
+inventory, the compiler's freshness comparison, AND the two budgets. Add
+`--compile [--unit <name>]` to regenerate, or `--compile --check` to
+report staleness without writing. Deps are pinned in
+`tools/requirements-assets.txt` (PyYAML + Pillow), spelled again in
+`.github/ci/Dockerfile` because the image tag is that file's own hash —
+`test_pack_atlas.py` fails if the two drift. Pillow is load-bearing for
+VALIDATION too: an absent decoder is one loud error naming the install
+command, never a silent skip.
+
+### Inventory (#1257, #1311)
+
 Discovery is **filesystem-first**: it walks every PNG under
 `assets/textures/units/<unit>/animations/<animation>/<direction>/` and
-checks the declarations against it, never the other way round — the
-YAML-first version it replaced simply never looked at the three asset
-trees that had no YAML. The current corpus is 7 unit trees, 116
-animations, 4,620 frames, and strict validation exits 0 with zero
-warnings. **Every committed animation PNG is owned by exactly one
+checks the declarations against it, never the other way round. Corpus: 7
+unit trees, 116 animations, 4,620 frames; strict validation exits 0 with
+zero warnings. **Every committed animation PNG is owned by exactly one
 animation-frame declaration; there is no directory or glob exemption
-mechanism.** Adding an undeclared frame fails the gate.
+mechanism.** Scope is `animations/` — non-animation unit textures
+(`sprite`, `directional_sprites`, `portrait`,
+`unknown_unit/rotations/*.png`) are existence-checked only.
+**"Duplicate" means duplicate ANIMATION-FRAME claims only** — reusing an
+animation frame as a `sprite`, `directional_sprites` entry, or `portrait`
+is deliberately legal (20 shipped references do this).
 
-That one command is now THREE checks — the inventory here, the
-compiler's freshness comparison (below), and #1262's two budgets — so
-the sections below are all one gate, not three commands to remember.
-
-**Two declaration forms live under `data/units/`,** and which top-level
-key an entry sits under is the entire runtime distinction:
+Two declaration forms live under `data/units/`, and the top-level key is
+the entire runtime distinction:
 
 - `units:` — a gameplay unit. `Engine.Asset.YamlUnits.loadUnitYaml`
   returns these, so they register, load textures, list, and spawn.
   `name` and `sprite` are mandatory.
-- `asset_units:` — an ASSET-ONLY unit. Declares exactly `name` +
-  `animations` — a WHITELIST, so an unknown key fails as surely as a
-  gameplay one, and BOTH decoders enforce it (Aeson ignores keys a
-  parser doesn't ask for, so `UnitYamlAssetDef` checks the key set
-  explicitly; a silently accepted `sprite:` would decode fine and then
-  be skipped by `loadUnitYaml`, looking exactly like a unit that failed
-  to register). `loadUnitYaml` never returns one —
-  `loadUnitYamlAssets` does — so nothing registers, textures, lists, or
-  spawns it. **NO shipped file uses this form since #1261** (TEX-6),
-  which promoted `tiller`, `unknown_unit` and `white_tailed_deer` to
-  real `units:` entries: with per-frame unit-animation loading retired
-  an animation renders only through its compiled atlas, and the owner
-  decision of 2026-08-11 kept all three as preview targets. They are
-  minimal by construction — a name, one direct sprite (which may reuse
-  an animation frame), and the animation inventory #1257 already
-  authored — with no gameplay role, state mappings, body, or combat
-  design; adding any is a separate decision. The form itself stays
-  supported and tested against fixtures. `unknown_unit`'s hard-coded
-  missing-texture fallback (`unknownUnitTexture` in
-  `Engine.Scripting.Lua.API.Units.List`) is untouched by any of this.
+- `asset_units:` — asset-only: exactly `name` + `animations`, as a
+  WHITELIST enforced by BOTH decoders (Aeson ignores keys a parser
+  doesn't ask for, so `UnitYamlAssetDef` checks the key set explicitly; a
+  silently accepted `sprite:` would decode fine, be skipped by
+  `loadUnitYaml`, and look exactly like a unit that failed to register).
+  `loadUnitYamlAssets` returns them; nothing registers, textures, lists,
+  or spawns them. **NO shipped file uses this form since #1261** — it
+  stays supported and fixture-tested.
 
 A file may hold either key or both; a file holding NEITHER is refused
 rather than decoded as zero units (that is what a mistyped top-level key
-looks like), and so is a key present with an explicit `null` — aeson's
-`.:?` reads that as absent, so the engine's own decoder refuses the
-file, and accepting it in the gate would leave CI green while startup
-logged a parse failure. Three decoders share the shape:
-`Engine.Asset.YamlUnits.UnitYamlFile`, `Engine.Preview.Unit`'s
-`UnitAnimMetaFile` (which reads both, since the preview never
-registers anything), and `tools/pack_atlas.py`. Animation and direction
-keys are strings, never coerced — YAML resolves an unquoted `123:` to an
-int whose `str()` would look like a valid identifier.
+looks like), and so is a key present with an explicit `null` (aeson's
+`.:?` reads that as absent, so accepting it would leave CI green while
+startup logged a parse failure). Three decoders share the shape:
+`UnitYamlFile`, `Engine.Preview.Unit`'s `UnitAnimMetaFile`, and
+`pack_atlas.py`. Animation/direction keys are strings, never coerced —
+YAML resolves an unquoted `123:` to an int whose `str()` looks like a
+valid identifier.
 
-Enforced invariants — a unit identifier is one lowercase `[a-z0-9_]+`
-path component; an animation identifier is the same, plus ONE narrowly
-matched approved exception, `<lowercase>_RH_<lowercase>`, for the
-documented asymmetric-weapon animations (so `attack_heavy_RH_dagger`
-passes while `AnyThing`, `attack_heavy_RH_Dagger` and `attack_LH_dagger`
-do not); frames are `frame_NNN.png` with exactly three digits, so
-`frame_1.png` and `frame_0002.png` are rejected rather than read as
-another spelling of an index; a declared path is
-relative, `..`-free, symlink-free, and resolves inside its EXACT
-`<unit>/animations/<animation>/<direction>/` directory, so cross-unit,
-cross-animation and cross-direction references are each named as such;
-`flip: true` declares exactly the canonical five authored directions and
-`flip: false` exactly all eight; per direction, indices start at 0,
-ASCEND in the order they are declared (playback walks the declared list,
-so a contiguous-but-shuffled list plays out of sequence while every
-set-based check still passes), and have no gaps or duplicates, while
-different directions of one animation may hold different counts; `fps`
-is a positive number that survives the engine's 32-bit `Float`, and
-`loop` a boolean, rejected rather than coerced when they are not. The
-`fps` guards stack because a positivity test alone is not enough:
-PyYAML resolves `.nan`/`.inf` to real floats (`nan <= 0` is False like
-every NaN comparison, and infinity really is greater); a Python int has
-unbounded precision, so a thousand-digit `fps:` is valid YAML that makes
-`math.isfinite` RAISE rather than answer; and `1.0e+100`/`1.0e-100` fit
-a 64-bit double but land in `UnitYamlAnim`'s single-precision field as
-infinity and zero. No symlink may appear anywhere in the walk — unit
-directory, `animations/` root, animation directory, direction directory,
-or frame — so nothing can be linked past the inventory: a symlinked
-entry is an ERROR, never a skipped one, or a linked tree would evade the
-inventory while its frames still ship. A `--unit` naming neither a
-declaration nor an asset tree exits non-zero rather than reporting a
-clean run of an empty inventory.
+Structural invariants, and the three independent CONTENT checks every
+declared frame is put through (#1311), are enumerated in
+`docs/engine_contracts.md` §Unit animation art — read it before adding,
+relaxing or "simplifying" a rule there. In outline: identifiers are one
+lowercase `[a-z0-9_]+` component (plus the one approved
+`<lowercase>_RH_<lowercase>` asymmetric-weapon form); frames are
+`frame_NNN.png` with exactly three digits; declared paths are relative,
+`..`-free, symlink-free and resolve inside their EXACT direction
+directory; `flip` decides five authored directions or all eight; indices
+start at 0, ASCEND in declared order, and have no gaps or duplicates,
+while counts may differ per direction; `fps`/`loop` are rejected rather
+than coerced; and no symlink may appear anywhere in the walk. Contents
+are decoded, CRC-checked and framing-checked — three checks because each
+has a fixture the other two accept, so do not fold them into one. Content
+findings are ERRORS in plain `--validate-only`; `--strict` only promotes
+warnings. Pillow is load-bearing for validation, so an absent decoder is
+one loud error, never a silent skip.
 
-**"Duplicate" means duplicate ANIMATION-FRAME claims only.** Reusing an
-animation frame as a unit's `sprite`, a `directional_sprites` entry, or
-its `portrait` is deliberately legal (20 shipped references do this) and
-is never reported.
+**Deleting art needs the owner's explicit confirmation** (#1257 R4):
+present an exact path-level classification first. #1257 deleted nothing —
+all 695 previously-unowned paths were retained and declared.
 
-**The INVENTORY gate validates CONTENTS as well as structure** (#1311).
-Every declared frame is opened and decoded, in three checks because
-each covers ground the others cannot: a full `decode_rgba8` covers the
-compressed pixel stream (truncation, corrupt deflate data, a
-non-image, and — via its own format check — a valid image of another
-format renamed `.png`); Pillow's `verify()` then CRCs the chunks,
-which is the only thing that sees an intact payload under a WRONG
-checksum (the decoder reads and discards IDAT CRCs while streaming);
-and `locate_png_stream_end` covers the terminal **IEND** chunk, which
-`verify()` breaks ON without checksumming and the decoder never reads,
-plus anything appended after the image ends. That last one walks chunk
-FRAMING only — length, type, payload, CRC — decoding nothing, knowing
-no chunk type but IEND, and running only after Pillow has CRC-validated
-that sequence, so it cannot disagree with the real decoder about where
-a chunk lies; keep it that narrow (a second hand-rolled PNG parser is
-what sank the previous attempt at this issue). Checking the FILE's last
-bytes is NOT equivalent and was the round-2 review finding: appending a
-second canonical IEND leaves a perfect tail while the real image ended
-12 bytes earlier. Do not "simplify" the three into one:
-`tools/test_pack_atlas.py`'s `every content check earns its keep`
-exists because each has a fixture the other two accept.
-Every frame of one animation must then decode to the same pixel size —
-the atlas cell is that size and nothing resamples — while frame COUNTS
-may still differ per direction, unchanged.
-The rule is "decodes as a PNG", never "is already RGBA8":
-paletted, greyscale, greyscale+alpha, 16-bit and interlaced frames all
-pass. Content findings are ERRORS in plain `--validate-only` as much as
-under `--strict`; `--strict` still only promotes warnings.
-
-Pillow is therefore load-bearing for validation, not just for
-compilation: an absent decoder is one loud error naming the install
-command, never a silent skip that would print OK while checking
-nothing. It is still imported lazily, which now only spares a run with
-no declared frames. The content pass adds roughly half a second over
-the whole 4,620-frame corpus (~1 s structural, ~1.5 s total), so it is
-unconditional rather than hidden behind a flag.
-
-Still NOT content-validated: non-animation unit textures (`sprite`,
-`directional_sprites`, `portrait`, `unknown_unit/rotations/*.png`),
-which are existence-checked only — the inventory's scope is
-`animations/`.
-
-**Scope is `animations/` — deliberately not the whole unit tree.**
-`assets/textures/units/unknown_unit/rotations/*.png` and the per-unit
-`portrait.png` files are referenced from hard-coded Haskell or from
-non-animation YAML fields; they are outside this inventory.
-
-**Deleting art needs the owner's explicit confirmation** (`#1257` R4):
-present an exact path-level classification first. #1257 itself deleted
-nothing — all 695 previously-unowned paths were retained and declared.
-
-## Unit animation atlas compiler
-
-`python3 tools/pack_atlas.py --compile [--unit <name>]` is the same
-tool's other half (#1258, `docs/texture_infrastructure.md` TEX-2). It
-compiles the validated declarations into DERIVED artifacts; source PNG
-frames stay the editable artwork (D-1) and unit YAML stays the only
-hand-edited semantic authority (D-11). Runtime sampling is TEX-3's
-(#1259, below) and KTX2 encoding TEX-5's (which does not exist yet).
+### Compiler (#1258, TEX-2)
 
 Output is **one atlas per ANIMATION** (D-2),
 `assets/textures/units/<unit>/atlas/<animation>.png`, beside a generated
-`assets/textures/units/<unit>/atlas/index.json`. That directory is a
-SIBLING of `animations/`, which is what keeps generated artifacts
-outside the filesystem-first inventory walk.
+`atlas/index.json`.
 
 - **Rows** are the AUTHORED directions in `ATLAS_DIRECTION_ORDER` — the
-  engine's own `Unit.Direction` order `S, SW, W, NW, N, NE, E, SE` — so
-  `flip: true` yields five rows and `flip: false` eight (D-4). Each row
-  index is nevertheless recorded explicitly, so nothing downstream
-  re-derives the order.
-- **Columns** are the animation's maximum authored frame count.
-  Unequal per-direction lengths are real (D-5): the index records each
-  direction's TRUE count, shorter rows are rectangularized with
-  transparent RGBA8 zero cells, and no padding cell is addressable as a
-  frame — `frame_count` is the sole frame authority.
-- **Cells are exact integers**: frame `c` of row `r` is at
-  `(c * cell_width, r * cell_height)`. Every frame of one animation must
-  decode to that same size; a mismatch is a compile error, never an
-  implicit rescale (D-6 — nothing here resamples or blends). Each cell
-  is a byte-for-byte copy of its source frame's canonical decoded RGBA8
-  samples, alpha included — decoded SAMPLES, not PNG file bytes.
-- **The index** carries a `schema_version` (the format TEX-3 parses)
-  separately from `tool_version` (this compiler's revision), a
-  documented `direction_order`, and per animation its storage format
-  and path, atlas/cell dimensions, columns, rows, per-direction row and
-  frame count, `flip`/`fps`/`loop` as the engine will hold them (`fps`
-  narrowed to 32-bit), and two `sha256` digests: a PER-ANIMATION
-  `source_digest` over that animation's own declarations and decoded
-  pixels, and an `atlas_digest` over the atlas's decoded CONTENT rather
-  than its file bytes. Per-animation is the point — one animation's
-  edit must not invalidate an unrelated atlas (D-12). Nobody hand-edits
-  this file.
+  engine's own `Unit.Direction` order `S, SW, W, NW, N, NE, E, SE` — five for
+  `flip: true`, eight for `flip: false` (D-4), each row index recorded
+  explicitly so nothing downstream re-derives the order.
+- **Columns** are the max authored frame count. Unequal per-direction
+  lengths are real (D-5): the index records each direction's TRUE count,
+  shorter rows are padded with transparent RGBA8 zero cells, and no
+  padding cell is addressable — `frame_count` is the sole authority.
+- **Cells are exact integers**: frame `c` of row `r` at
+  `(c*cell_width, r*cell_height)`. A size mismatch is a compile error,
+  never an implicit rescale (D-6). Each cell is a byte-for-byte copy of
+  its source frame's decoded RGBA8 SAMPLES, alpha included.
+- **The index** carries `schema_version` (the format the runtime parses)
+  separately from `tool_version`, a documented `direction_order`, and per
+  animation its storage format and path, atlas/cell dimensions, columns,
+  rows, per-direction row and frame count, `flip`/`fps`/`loop` as the
+  engine will hold them (`fps` narrowed to 32-bit), and two `sha256`
+  digests: a PER-ANIMATION `source_digest` over that animation's own
+  declarations and decoded pixels, and an `atlas_digest` over the atlas's
+  decoded CONTENT rather than its file bytes. Per-animation is the point
+  — one animation's edit must not invalidate an unrelated atlas (D-12).
 - **Determinism and locality.** A clean rebuild under an unchanged
-  toolchain is byte-identical. An incremental run compares each
-  artifact against what it would generate and writes only on a real
-  difference, so an animation edit rewrites that atlas and its unit
-  index and nothing else. An mtime-only touch changes nothing — the
-  digest is over content. Obsolete atlases are removed from the unit's
-  own `atlas/` directory and nowhere else.
-- **`--validate-only` is index-aware.** A unit with NO index is valid
-  to THIS tool — an uncompiled tree is a legitimate working-copy state
-  — but not to the ENGINE, which since #1261 refuses to register a unit
-  that declares animations and ships no compiled artifacts. Every
-  shipped unit is compiled and tracked.
-  Where an index exists it is REGENERATED from the sources and compared, so
-  a stale digest, a hand-edited or non-canonically serialized index, a
-  missing indexed atlas and tampered pixels all report — and a tampered
-  index cannot certify a tampered atlas, because the comparison is
-  against a fresh regeneration rather than the numbers the file carries
-  about itself. `--compile --check` reports what is out of date and
-  writes nothing. Compilation refuses outright on an inventory that
-  does not validate.
-- **Every shipped unit's atlases ARE committed** — `acolyte` by #1260
-  (TEX-4, the pilot D-12 gated mass migration on), the other six by
-  #1261 (TEX-6). 116 per-animation PNGs plus seven generated
-  `index.json` files, tracked, so a fresh checkout runs with no packer
-  step. Measured against D-12's **2x** ceiling, counting animation
-  source frames only (portraits and default/directional sprites
-  excluded; indices reported separately and not in the ratio):
+  toolchain is byte-identical; an incremental run writes only on a real
+  content difference (an mtime-only touch changes nothing); obsolete
+  atlases are removed from that unit's `atlas/` and nowhere else.
+- **`--validate-only` is index-aware.** A unit with NO index is valid to
+  THIS tool (an uncompiled tree is a legitimate working-copy state) but
+  not to the ENGINE. Where an index exists it is REGENERATED from sources
+  and compared, so a stale digest, a hand-edited index, a missing atlas
+  and tampered pixels all report — and a tampered index cannot certify a
+  tampered atlas. Compilation refuses outright on an invalid inventory.
 
-  | | source frames | derived atlases | ratio | indices |
-  |---|---|---|---|---|
-  | acolyte (TEX-4) | 1.58 MiB (2,250) | 0.93 MiB (54) | **0.59x** | 59.4 KiB |
-  | the six TEX-6 trees | 5.35 MiB (2,370) | 3.94 MiB (62) | **0.74x** | 67.0 KiB |
-  | all seven | 6.93 MiB (4,620) | 4.88 MiB (116) | **0.70x** | 126.5 KiB |
-
-  Derived artifacts are SMALLER than their sources at every scope, so
-  D-12's stop-and-choose-a-distribution-strategy clause (Git LFS,
-  release artifacts, a build cache) is not reached. Had the cumulative
-  ratio exceeded 2x, that would have been an escalation to the owner
-  rather than something to land.
-
-**Dependencies are pinned in `tools/requirements-assets.txt`** (PyYAML +
-Pillow), which `.github/ci/Dockerfile` installs verbatim — the pins are
-spelled in the Dockerfile rather than COPYed because the image tag is
-that file's own hash, and `test_pack_atlas.py` fails if the two drift.
-Both are load-bearing for validation as well as compilation since
-#1311. Validation never needs the exact pinned toolchain, though: it
-decodes rather than encodes, and every recorded digest is over decoded
-RGBA8, so any reasonably recent Pillow verifies a committed atlas.
+**Every shipped unit's atlases ARE committed** — 116 PNGs + seven
+`index.json`, tracked, so a fresh checkout runs with no packer step.
+Against D-12's 2x on-disk ceiling (animation sources only): 6.93 MiB of
+sources → 4.88 MiB of atlases = **0.70x**, so the
+choose-a-distribution-strategy clause is not reached.
 
 Gates: `python3 tools/test_pack_atlas.py` (fixture-based, isolated temp
-trees, never touching the shipped assets; every negative case asserts a
-nonzero exit AND a diagnostic naming the real problem, a rule that
-tightens gets a positive case pinning the other direction, and each
-compiler SCENARIO asserts on real emitted pixels, the index document,
-or which files a second run actually wrote) and the
-strict run above. Both run unconditionally in `make ci`
-and post-merge master CI, and path-selectively on PRs via
-`tools/ci_expensive_gates.py --gate unit-assets`. hspec:
+trees, never touching shipped assets) plus the strict run. Both run
+unconditionally in `make ci` and post-merge CI, path-selectively on PRs
+via `tools/ci_expensive_gates.py --gate unit-assets`. hspec:
 `--match "Asset.UnitInventory"`.
 
-## Unit texture budgets
+### Budgets (#1262, TEX-7)
 
-`tools/unit_texture_budget.json` (#1262, TEX-7) is the SINGLE
-machine-readable source `pack_atlas.py --validate-only --strict` reads
-for two independent budgets. It is hand-edited policy, not a generated
-file, and a missing or malformed one is a hard error — never a skipped
-check, which would print a clean run while enforcing nothing.
+`tools/unit_texture_budget.json` is the SINGLE machine-readable source
+for two independent budgets. It is hand-edited policy, and a missing or
+malformed one is a hard error — never a skipped check that would print a
+clean run while enforcing nothing.
 
 - **Images and bindless slots — a hard ERROR.** At most one resident
-  image and one bindless registration per COMPILED ANIMATION (D-2),
-  the bound derived from each unit's own generated index rather than
-  from a frozen roster total or a frame count, so it keeps holding as
-  animations are added. A unit's `atlas/` directory must therefore hold
-  exactly that many images, each claimed by exactly one animation; a
-  breach names the unit, the expected and actual counts, and the
-  offending files. This is what makes a reintroduced per-frame
-  registration fail automatically. Non-animation textures are excluded
-  BY CONSTRUCTION, not by an exemption list — portraits, the direct
-  `sprite`, its `directional_sprites` T-pose overrides and
-  `unknown_unit/rotations/` all sit outside `atlas/` and are named by
-  no index.
-- **Resident memory — a WARNING, so `--strict` is what blocks.** The
-  decoded RGBA8 footprint (`atlas_width * atlas_height * 4`) summed
-  over the WHOLE tracked roster: `scripts/startup_loader.lua` feeds
-  every `data/units/*.yaml` to the loader at boot, so all of it is
-  resident in every session regardless of what spawns. Compared as
-  `measured x roster_growth_factor > threshold` — strict `>`, so
-  sitting exactly at the limit does not fire — and a breach IS D-10's
-  precondition for resuming deferred TEX-5 (KTX2 atlas loading).
-  Currently 101.60 MiB measured, 203.19 MiB projected at 2.0x, against
-  a 384 MiB threshold **confirmed by the project owner on 2026-08-16**.
-  Raising it is the owner's call, not a maintenance edit. A
-  single-unit `--unit` run deliberately does NOT evaluate this one: a
-  roster-wide budget measured from a fraction of the roster is a
-  measurement of nothing.
+  image and one bindless registration per COMPILED ANIMATION (D-2), the
+  bound derived from each unit's own generated index rather than a frozen
+  roster total, so it keeps holding as animations are added. This is what
+  makes a reintroduced per-frame registration fail automatically.
+  Non-animation textures are excluded BY CONSTRUCTION (outside `atlas/`,
+  named by no index), not by an exemption list.
+- **Resident memory — a WARNING, so `--strict` is what blocks.** Decoded
+  RGBA8 footprint summed over the WHOLE tracked roster
+  (`scripts/startup_loader.lua` feeds every `data/units/*.yaml` to the
+  loader at boot, so all of it is resident regardless of what spawns),
+  compared as `measured × roster_growth_factor > threshold` (strict `>`).
+  Currently 101.60 MiB measured, 203.19 MiB projected at 2.0x, against a
+  384 MiB threshold **confirmed by the project owner on 2026-08-16** —
+  raising it is the owner's call, not a maintenance edit. A breach IS
+  D-10's precondition for resuming deferred TEX-5 (KTX2 atlas loading). A
+  single-unit `--unit` run deliberately does NOT evaluate this one.
 
-This is NOT D-12's guardrail, which caps tracked derived artifact bytes
-ON DISK at two times their source frames. That is repository size; this
-is resident memory, and the two are measured independently.
-`docs/texture_infrastructure.md`'s **Measured results** section holds
-the full before/after record — image counts, bindless registrations,
-uploaded bytes, load time with its procedure and platform, tracked
-derived-vs-source bytes, and changed-artifact locality — plus the
-threshold's derivation. `docs/asset_generation.md` holds the
-fresh-checkout workflow (regenerate, validate, inspect, review,
-recover) and the restart-to-reload rule (D-7).
+Not to be confused with D-12's on-disk guardrail above: that is
+repository size, this is resident memory, measured independently.
 
-## Unit animation atlas runtime
+### Runtime (#1259/#1260/#1261, TEX-3/TEX-6)
 
-The engine loads and samples those compiled artifacts (#1259,
-`docs/texture_infrastructure.md` TEX-3). **Every shipped unit uses it,
-and there is no other way for a unit animation to load** (#1261,
-TEX-6): `acolyte`'s 54 animations were the #1260 pilot, and the
-remaining six trees' 62 followed. The per-frame unit-animation
-representation and its loader are GONE from the tree, not merely
-unused.
+**Every shipped unit uses the compiled path, and there is no other way
+for a unit animation to load.** The per-frame representation and its
+loader are GONE from the tree, not merely unused.
 
 **Storage is a named SUM with one constructor, so no animation is
 half-migrated.** `Unit.Types.Def.Animation` carries an `aStorage` of
-`Unit.Atlas.Types.AnimStorage`, which is now exactly `StorageAtlas`
-(one compiled image per animation, one handle, one bindless slot; each
-frame a UV cell). D-10's "exactly one resident representation" and
-"never mixed within one animation" are unrepresentable rather than
-merely enforced, and the named type stays the seam a later
-representation would be added at — though TEX-5's KTX2 slots in behind
-`AtlasStorageFormat` instead, which is the format-neutral boundary
-proper. Read frames through the module's storage-neutral accessors —
-`storageFrameCount` / `storageFrameCounts` / `storageMaxFrameCount` /
-`storageSampleAt` — never by matching the constructor. **Buildings are
-not on this type at all**: they were the other consumer of the
-per-frame record and are never compiled (D-8 leaves their storage
-untouched), so #1261 split them onto their own
+`Unit.Atlas.Types.AnimStorage`, now exactly `StorageAtlas` — D-10's
+"exactly one resident representation, never mixed within one animation"
+is unrepresentable rather than merely enforced, and the named type stays
+the seam a later representation would be added at (though TEX-5's KTX2
+slots in behind `AtlasStorageFormat` instead). Read frames through the
+storage-neutral accessors — `storageFrameCount` / `storageFrameCounts` /
+`storageMaxFrameCount` / `storageSampleAt` — never by matching the
+constructor. **Buildings are not on this type at all**: they were the
+other consumer and are never compiled (D-8), so they live on their own
 `Building.Types.BuildingAnimation` — same fields, same per-direction
-`DirS`-keyed frame map, byte-for-byte the behaviour they had — rather
-than deleting a representation they still need.
+`DirS`-keyed frame map, byte-for-byte the behaviour they had.
 
-**The index is the whole answer, and failure is failure.** A unit's
-`atlas/index.json` describes every animation its YAML declares.
-`Unit.Atlas.Load.loadUnitAtlasIndex` reads, parses, decodes, and
-verifies EVERY declared atlas before `loadUnitYaml` allocates one handle
-or queues one upload, and `Unit.Atlas.Index.planUnitAtlasStorage` then
-adds the YAML-staleness half — including, since #1261, the reverse
-coverage: an animation the YAML DECLARES that the index does not name
-rejects, because publishing the unit without it would silently drop art
-the file asks for. A missing, incomplete, stale, unsupported, or
-malformed index refuses the whole unit definition, with the unit,
-animation, and artifact named. No partial registration, and nothing to
-fall back to: an ABSENT `atlas/` directory now rejects as surely as a
-directory without its index (only a unit declaring NO animations needs
-no artifacts). `planUnitAtlasStorage`'s result therefore covers exactly
-the YAML's animation set, which is what lets the loader publish
-straight from `atlasTextureRequests` — its own upload set, each request
-carrying the animation's index record — with no second lookup that
-could miss.
-
-Validation runs in three passes, cheapest first, stopping at the first
-failure. **(1)** The index parses and is structurally sound: supported
-`schema_version` and `digest_algorithm`, the unit's own identity,
-duplicate animation names, containment of `atlas_path` inside that
-unit's `atlas/` directory AND its equality with that animation's
-canonical `<animation>.png` (which is what makes D-2's one-atlas-per-
-animation hold by construction: no two animations can name one file, so
-the upload path's otherwise-correct same-path aliasing can never
-collapse two animations onto one image and one bindless slot), positive
-geometry, every reachable cell lying
-inside the sheet, unique and in-range direction rows, real frame counts
-bounded by row capacity, a positive finite `fps`. **(2)** It still
-describes what the unit YAML declares: animation set, `fps`/`loop`/
-`flip`, direction set, per-direction frame counts, columns. **(3)** Each
-atlas decodes to the image the index describes (dimensions plus
-`atlas_digest` over decoded RGBA8), AND every declared SOURCE frame
-decodes to exactly the pixels its atlas cell holds.
-
-**Both** recorded digests are verified. `atlas_digest` catches an
-artifact the index does not describe; `source_digest`
-(`Unit.Atlas.Digest.sourceDigest`, recomputed from the same inputs the
-compiler digests) catches a forged digest and a frame whose PATH changed
-while its pixels did not — nothing else in the index records paths. The
-per-frame pixel comparison still runs first, because it localizes a
-stale artifact to one direction and one frame where the digest can only
-say that something moved.
-
-Reproducing `source_digest` means reproducing Python's `repr()` of the
-narrowed fps (`pythonFloatRepr`), whose positional/scientific thresholds
-Haskell's own `show` does not share. That is pinned against
-CPython-generated reference values across the whole float32 range: a
-formatting divergence must fail in the test, not by rejecting every
-atlas of a unit whose fps lands in the disagreeing range.
-
-Pass 3's source reading SURVIVED TEX-6, which #1259 expected to retire
-it. Its cost is the whole reason it was provisional, and that cost was
-measured rather than assumed: decoding all 4,620 shipped source frames
-across all seven units totals ~1.8 s of one-time unit-def loading
-(`bear_brown`, the largest, 0.74 s), paid on the Lua thread while YAMLs
-load and not on any frame. The source PNGs remain the tracked,
-hand-edited artwork (D-1), so they remain something a developer can
-repaint without recompiling, and CI's asset gate only runs on a push —
-this stays the check that catches it locally, in the same run that
-would otherwise have drawn the stale art.
+**The index is the whole answer, and failure is failure.**
+`Unit.Atlas.Load.loadUnitAtlasIndex` reads, parses, decodes and verifies
+EVERY declared atlas before `loadUnitYaml` allocates one handle or queues
+one upload; `Unit.Atlas.Index.planUnitAtlasStorage` adds the
+YAML-staleness half, including reverse coverage. A missing, incomplete,
+stale, unsupported or malformed index refuses the whole unit definition,
+naming unit, animation and artifact — no partial registration, and
+nothing to fall back to (an ABSENT `atlas/` rejects as surely as a
+directory without its index; only a unit declaring NO animations needs no
+artifacts). Validation runs in three passes, cheapest first, and BOTH
+recorded digests are verified — the three passes, what each digest
+catches, and the `pythonFloatRepr` pinning are in
+`docs/engine_contracts.md` §Unit animation atlas runtime. Read it before
+touching index parsing, the digests, or the upload cache.
 
 **`pickFrame` returns a `FrameSample`, and its arithmetic is FROZEN**
-(D-3). Every consumer reads the stable handle (#286 — never a slot), the
-frame's UV endpoints WITHIN that handle's image, the frame's pixel
-dimensions when the storage knows them, and the mirror flag. The only
-storage-dependent step is the per-direction frame COUNT, which for an
-atlas is the index's REAL count and never the padded column count, so
-padding is unreachable by construction (D-5).
-
-**Cell dimensions size everything.** `frameDimensions` is the one funnel:
-an atlas sample answers from its cell, a whole-image sample — the
-direct default/directional sprite a T-pose falls back to — falls
-through to `rvTextureSizeRef` as it always has. Nothing may measure an
-atlas handle's whole-image entry where it means a frame. That includes hit
-testing, which since #1259 sizes from the SAME `pickFrame` sample the
-renderer draws (`Unit.HitTest.unitHitRect`, shared by click and box
-selection) rather than the static T-pose it used before.
-
-**Mirroring reflects across the frame's own sub-rect**, never the whole
-image — with atlases, `1-u` lands in a different cell. This is #887's
-flip-the-clipped-slice rule generalized: it now governs every sample,
-not just the preview's. `UI.Render.renderSpriteBatch` takes the sprite's
-source sub-rect (`ussUV`, set from Lua by `UI.setSpriteUV`) and mirrors
-as `u' = su0 + su1 - u`; a whole-image sprite is the unchanged `1-u`.
-Anything DISPLAYING a unit's live frame must use `unit.getFrameSample`
-(handle + UV + flip + cell size), not `unit.getFrameTexture`, which
-cannot describe an atlas frame and would draw the whole sheet — and must
-publish it with `UI.setSpriteFrame`, which lands texture, sub-rect and
-mirror in ONE manager transition. The render thread reads the manager
-concurrently, so separate setters leave a window where the new atlas
-handle is paired with the previous frame's rect.
-
-Atlas slots are registered PINNED to the nearest sampler with one mip
-level (D-6), so a runtime `setTextureFilter` toggle cannot start
-bilinearly resampling unit art — which on a sheet would additionally
-bleed neighbouring cells across every frame edge. The upload path's
-path cache is therefore **policy-aware**: `apAssetPaths` is keyed by
-path alone while a slot's sampler was fixed by whichever policy first
-uploaded it, so a cache hit is taken only when the canonical texture's
-pinned-ness matches the request (`cacheEntryReusable` against
-`btsPinned`) and otherwise re-uploads into its own slot. Both directions
-matter — an atlas inheriting an ordinary slot would stop being nearest,
-and an ordinary texture inheriting a pinned one would be stuck on a
-filter it never asked for. Cell UVs sit on exact
-cell EDGES with no half-texel inset: unit art is nearest and pixel-
-snapped, so a fragment centre lands inside its cell, and an inset would
-shift the sampled texels and break pixel-identity with what the
-per-frame path drew.
-
-**The non-rendering consumers of a clip's LENGTH read the index's real
-per-direction counts too**, never the padded column count (D-5):
+(D-3): the stable handle (#286 — never a slot), the frame's UV endpoints
+within that handle's image, the frame's pixel dimensions when the storage
+knows them, and the mirror flag. The only storage-dependent step is the
+per-direction frame COUNT, which is the index's REAL count and never the
+padded column count, so padding is unreachable by construction (D-5).
+Non-rendering consumers of a clip's LENGTH read the real counts too:
 `Unit.Thread.Command.Pose`'s four pose-transition durations and
 `unit.getAnimDuration` (which `scripts/unit_ai_combat_attack.lua`
 consumes for attack timing) both go through `storageMaxFrameCount`.
 
+**Cell dimensions size everything.** `frameDimensions` is the one funnel:
+an atlas sample answers from its cell, a whole-image sample (the direct
+default/directional sprite a T-pose falls back to) falls through to
+`rvTextureSizeRef`. Nothing may measure an atlas handle's whole-image
+entry where it means a frame — including hit testing, which sizes from
+the SAME `pickFrame` sample the renderer draws (`Unit.HitTest.unitHitRect`,
+shared by click and box selection).
+
+**Mirroring reflects across the frame's own sub-rect**, never the whole
+image — with atlases, `1-u` lands in a different cell.
+`UI.Render.renderSpriteBatch` takes the sprite's source sub-rect
+(`ussUV`, set by `UI.setSpriteUV`) and mirrors as `u' = su0 + su1 - u`; a
+whole-image sprite is the unchanged `1-u`. Anything DISPLAYING a unit's
+live frame must use `unit.getFrameSample`, not `unit.getFrameTexture`
+(which cannot describe an atlas frame and would draw the whole sheet),
+and must publish it with `UI.setSpriteFrame`, which lands texture,
+sub-rect and mirror in ONE manager transition — the render thread reads
+the manager concurrently, so separate setters leave a window pairing the
+new handle with the previous frame's rect.
+
+Atlas slots are registered PINNED to the nearest sampler with one mip
+level (D-6), so a runtime `setTextureFilter` toggle cannot start
+bilinearly resampling unit art. The upload path's path cache is therefore
+policy-aware, and cell UVs sit on exact cell EDGES with no half-texel
+inset — see `docs/engine_contracts.md` §Unit animation atlas runtime.
+
 Gates: hspec `--match "pickFrame"` (the whole logical-choice matrix from
-one table, each case checked against `expectedChoice` — a restatement
-of the documented rule written independently of `pickFrame`, so an edit
-to either side fails; #1259's version compared two storage modes that
-shared this arithmetic and differed only in where they looked a frame
-up) and `--match "Unit.Atlas"`
-(index parsing/validation, the digest against `pack_atlas.py`'s own
-reference values, mode selection including the declared-but-uncompiled
-rejection, and the real consumer geometry — `unitToQuad`'s vertices,
-`unitHitRect`, `renderSpriteBatch`, a
-texel-level comparison of an atlas cell against its source frame with
-the mirrored case included, the pinned-nearest survival of a global
-filter toggle through `planFilterRebind`, the cache's policy awareness,
-and a real on-disk fixture tree driven through `loadUnitAtlasIndexIn`).
-`--match "the real unit registration boundary"` drives
-`registerUnitDefs` — what `loadUnitYamlFn` delegates to — against a live
-headless engine, a real asset pool and a real Lua→engine queue, and
-asserts on the messages actually queued and the definitions actually
-published: one atlas upload and one published `Animation` per
-animation, each with its own handle; no per-frame textures for any of
-them; a rejected index queueing nothing and publishing nothing; and —
-since #1261 — all SEVEN shipped units driven through the PRODUCTION
-resolver against their real YAML, real index and real source art, with
-the whole 116-animation corpus pinned. Roster-wide headless evidence
-also lives in `tools/combat_anim_probe.py` (`--roster-only` for the
-storage half alone), which reads the texture-NAME registry
-(`engine.getTextureHandle`) rather than `engine.getLoadedTexturePaths()`
-— the latter is written only inside the device branch of the batch
-upload handler and so is EMPTY headless, where a probe built on it
-would pass vacuously.
+one table, each case checked against `expectedChoice` — a restatement of
+the documented rule written independently, so an edit to either side
+fails), `--match "Unit.Atlas"` (index parsing/validation, the digest
+against `pack_atlas.py`'s reference values, mode selection, and real
+consumer geometry — `unitToQuad`, `unitHitRect`, `renderSpriteBatch`, a
+texel-level atlas-cell-vs-source comparison with the mirrored case, the
+pinned-nearest survival of a global filter toggle, the cache's policy
+awareness, and a real on-disk fixture tree), and `--match "the real unit
+registration boundary"` (drives `registerUnitDefs` against a live
+headless engine, real asset pool and real Lua→engine queue, asserting on
+the messages actually queued: one atlas upload and one published
+`Animation` per animation, no per-frame textures, a rejected index
+queueing and publishing nothing, and all SEVEN shipped units through the
+PRODUCTION resolver against real YAML/index/art). Roster-wide headless
+evidence: `tools/combat_anim_probe.py` (`--roster-only` for the storage
+half), which reads the texture-NAME registry (`engine.getTextureHandle`)
+rather than `engine.getLoadedTexturePaths()` — the latter is written only
+inside the device branch of the batch upload handler and so is EMPTY
+headless, where a probe built on it would pass vacuously.
 
 ## AI Asset Generation
 

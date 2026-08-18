@@ -65,3 +65,11 @@ the live code and the agent memory notes instead.
   the proposed per-category popup buttons in favor of clickable event lines
   and a single OK button. The archived brief preserves the original decisions
   and its own divergence note; it is not a current API reference.
+
+- **`claude_md_2026-08-18_pretrim.md`** — verbatim snapshot of CLAUDE.md
+  before its 2026-08-18 trim (151k → 99k chars). The trim removed
+  accumulated verbosity, corrected three stale counts (`EngineEnv` field
+  count, `src/` module count, probe-script count), and extracted the
+  deepest as-built mechanics into the live `docs/engine_contracts.md`.
+  Every contract survives in one of those two files — consult this
+  snapshot only for wording the trim rephrased.
