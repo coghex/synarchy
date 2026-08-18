@@ -40,8 +40,8 @@ generating it.
 - [x] CIT-11. Unit and blood helper tests use tautological determinism assertions — [#1369]
 - [x] CIT-12. Visual/layout helper tests use tautological determinism assertions — [#1370]
 - [x] CIT-13. Autosave race test does not force the competing restore to reach the lock boundary — [#1372]
-- [ ] CIT-14. Headless harness lets worker crashes pass as successful examples
-- [ ] CIT-15. Responsive-menu UI tests restart the engine for every example
+- [x] CIT-14. Headless harness lets worker crashes pass as successful examples — [#1388]
+- [ ] CIT-15. Responsive-menu UI tests restart the engine for every example — [deferred]: re-measure after #1363
 - [x] CIT-16. Location-overlay wiring test has a tautological assertion — [#1375]
 - [x] CIT-17. Location-loot suite contains two false-green assertions — [#1376]
 - [x] CIT-18. Blood texture and pool-placement determinism tests compare identical calls — [#1377]
@@ -50,11 +50,11 @@ generating it.
 - [ ] CIT-21. Settings scale-change fan-out coverage omits Save and tolerates duplicate shell rebuilds
 - [x] CIT-22. World-audit self-test compares identical pure calls — [#1380]
 - [x] CIT-23. Building spawn/preview agreement test compares the same helper to itself — [#1381]
-- [ ] CIT-24. Location-placement determinism test only compares pure same-input calls
-- [ ] CIT-25. Location-name determinism test compares the same pure construction twice
-- [ ] CIT-26. Location-instance mapping test derives both sides from the same construction
-- [ ] CIT-27. River-name determinism test compares the same pure construction twice
-- [ ] CIT-29. River-ID stability assertion repeats the same pure timeline query
+- [x] CIT-24. Location-placement determinism test only compares pure same-input calls — [#1382]
+- [x] CIT-25. Location-name determinism test compares the same pure construction twice — [#1383]
+- [x] CIT-26. Location-instance mapping test derives both sides from the same construction — [#1384]
+- [x] CIT-27. River-name determinism test compares the same pure construction twice — [#1385]
+- [x] CIT-29. River-ID stability assertion repeats the same pure timeline query — [#1386]
 - [ ] CIT-30. Focus-navigation integration tests restart the engine for nearly every example
 - [ ] CIT-31. Control-activation integration tests restart the engine for nearly every example
 - [ ] CIT-32. Lua text-contract tests boot a full engine for each Lua assertion
@@ -444,7 +444,7 @@ the test does not deterministically exercise it.
 
 ---
 
-### CIT-14. Headless harness lets worker crashes pass as successful examples
+### [#1388] CIT-14. Headless harness lets worker crashes pass as successful examples
 
 `withHeadlessEngine` starts a real world worker, runs an Hspec action, and then
 unconditionally shuts the worker down. It does not assert that the worker or
@@ -471,7 +471,14 @@ future engine-backed test.
 
 ---
 
-### CIT-15. Responsive-menu UI tests restart the engine for every example
+### [deferred] CIT-15. Responsive-menu UI tests restart the engine for every example
+
+> **Deferred:** 77% of this suite's runtime is the harness sleep #1363 deletes
+> (9.3 s of a measured 12.07 s, across 93 engine starts), so the consolidation's
+> remaining value is unmeasured — re-measure
+> `cabal test synarchy-test-headless --test-options='--match "UI.ResponsiveMenus"'`
+> once #1363 has merged, and file only if the residual justifies resetting UI,
+> Lua and scale state across 93 examples.
 
 The responsive-menu suite has 93 examples, all wrapped with Hspec's `around`
 and `withMenusEngine`. Each example therefore creates a fresh headless engine
@@ -904,7 +911,7 @@ wiring examples remain meaningful and should be kept.
 
 ---
 
-### CIT-24. Location-placement determinism test only compares pure same-input calls
+### [#1382] CIT-24. Location-placement determinism test only compares pure same-input calls
 
 The guaranteed-placement fixture's test titled "is deterministic" evaluates
 the same pure location-placement tuple again and compares the results. Its
@@ -950,7 +957,7 @@ example therefore adds no independent determinism or placement oracle.
 
 ---
 
-### CIT-25. Location-name determinism test compares the same pure construction twice
+### [#1383] CIT-25. Location-name determinism test compares the same pure construction twice
 
 The location-naming test titled "the same seed and world produce identical
 names every time" invokes `buildLocationInstances` with the exact same
@@ -995,7 +1002,7 @@ and the independent relationship between the placement constructor and
 
 ---
 
-### CIT-26. Location-instance mapping test derives both sides from the same construction
+### [#1384] CIT-26. Location-instance mapping test derives both sides from the same construction
 
 The location-instance identity test claims that a recomputed placement keeps
 the same ID → definition → anchor mapping, but compares a pure
@@ -1041,7 +1048,7 @@ with each allocated ID.
 
 ---
 
-### CIT-27. River-name determinism test compares the same pure construction twice
+### [#1385] CIT-27. River-name determinism test compares the same pure construction twice
 
 The river-naming example titled "produces the same names every time" repeats
 `buildRiverNames` with the same immutable namer and feature-ID list that
@@ -1083,7 +1090,7 @@ persistence, and catalogue drift.
 
 ---
 
-### CIT-29. River-ID stability assertion repeats the same pure timeline query
+### [#1386] CIT-29. River-ID stability assertion repeats the same pure timeline query
 
 The real-worldgen river-identity test makes several meaningful assertions:
 the canonical generated world has rivers, every river has a feature ID, and

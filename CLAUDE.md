@@ -1249,9 +1249,37 @@ before touching each area:
   one-time migration source: `Engine.Core.Init.migrateLegacyConfig`
   copies a legacy file to the local path iff the local file is absent AND
   the legacy file decodes against the real target schema; failures fall
-  back to defaults and never touch a valid local file. Gates:
-  `config_state_probe.py`, `config_migration_probe.py`; hspec
-  `--match "config"`.
+  back to defaults and never touch a valid local file.
+
+  **A headless spec that drives a production path which WRITES `config/`
+  must wrap `Test.Headless.Harness.Isolation.withIsolatedResourceRoot`
+  AROUND `withHeadlessEngine`** (#1357, enforcing #1266's "tests never
+  modify, truncate or regenerate the developer's `config/*.local.yaml`").
+  It points the process cwd at a scratch root that symlinks every
+  top-level checkout entry but owns a real COPY of `config/` — the one
+  family production code writes into — so every cwd-relative write lands
+  in a temp dir. Outside, never inside: engine init is itself a writer
+  (`migrateLegacyConfig`, the notification-overrides materializer), so a
+  fixture that intervened after the engine came up would already be too
+  late. The checkout is only ever READ, so no crash can leave developer
+  state half-restored. Two properties keep the fixture from deleting the
+  wrong thing: the root is created FRESH and EXCLUSIVELY per invocation
+  under a random name via `createDirectory` (a fixed path could already
+  hold a symlink, and `doesDirectoryExist` follows one, so teardown would
+  enumerate and recursively delete the TARGET's children), and "am I
+  isolated?" is `isInsideIsolatedResourceRoot` — fixture-owned state
+  checked against the real cwd, never a marker file, which any same-named
+  file on disk could forge into skipping isolation entirely. The two
+  suites that need it (`UI.ResponsiveMenus`, `UI.ResponsiveGameplay`,
+  both reaching the write-through `settingsMenu.onDefaults()`) each carry
+  a one-line in-suite guard asserting they run under it, because every
+  other assertion in them passed while the developer's bindings were
+  being replaced.
+
+  Gates: `config_state_probe.py`, `config_migration_probe.py`; hspec
+  `--match "config"`, `--match "Settings Defaults keybind persistence"`
+  (the isolation boundary itself, plus the player-facing Defaults
+  write-through it must not weaken).
 
 ## Save / Load
 
@@ -1310,8 +1338,9 @@ are guarded and why — read its module docstring before adding, moving, or
 changing one. It guards **every** `data` declaration under `src/`/`app/`
 that derives `Serialize` through `Generic` and has two or more
 constructors — a deliberate superset of "reachable from a save
-component", currently 37 types — so a type that becomes persisted later
-was already guarded the day its instance was derived.
+component" (43 types today, which the audit prints on every run) — so a
+type that becomes persisted later was already guarded the day its instance
+was derived.
 `docs/save_compat/enum_baseline.json` is the GENERATED golden constructor
 list; don't hand-edit it — a pure append ratchets it with
 `--update-baseline`, and anything else is a wire-format break the audit
