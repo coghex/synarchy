@@ -41,7 +41,7 @@ import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
-import Test.Headless.Harness (withHeadlessEngine)
+import Test.Headless.Harness (withHeadlessEngine, installHudWorldPage)
 import Test.Headless.Harness.Isolation
   (isInsideIsolatedResourceRoot, withIsolatedResourceRoot)
 import UI.Types (UIPageManager(..), emptyUIPageManager)
@@ -102,6 +102,12 @@ resetFixture ∷ EngineEnv → LuaBackendState → IO ()
 resetFixture env ls = do
     writeIORef (uiManagerRef env) emptyUIPageManager
     atomicModifyIORef' (videoConfigRef env) $ \c → (c { vcUIScale = 1.0 }, ())
+    -- #1366: every case here boots the HUD, and hud.createUI() submits
+    -- six cursor-texture commands against hud.worldId ("main_world").
+    -- Without the page they take the correct-but-noisy missing-page
+    -- branch; see 'installHudWorldPage' for why the page carries no
+    -- generation parameters and is not visible.
+    installHudWorldPage env
     cleared ← evalOk ls
         "for k, _ in pairs(package.loaded) do package.loaded[k] = nil end; return true"
     cleared `shouldBe` "true"
