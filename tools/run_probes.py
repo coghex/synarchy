@@ -551,10 +551,15 @@ class ProbeGroups:
             reap_group(pgid)
 
 
+def _only_tokens(only: str) -> list[str]:
+    """The trimmed, non-empty comma-separated tokens of a `--only` value."""
+    return [n.strip() for n in only.split(",") if n.strip()]
+
+
 def select(only: str | None, exact: bool = False) -> list[tuple[str, str, str]]:
     if not only:
         return list(PROBES)
-    needles = [n.strip() for n in only.split(",") if n.strip()]
+    needles = _only_tokens(only)
     if exact:
         # Match probe KEYS exactly. The CI gate (#530) needs this: a
         # substring "craft" would otherwise also pull in "craft_bill".
@@ -562,6 +567,21 @@ def select(only: str | None, exact: bool = False) -> list[tuple[str, str, str]]:
         return [p for p in PROBES if p[0] in wanted]
     selected = [p for p in PROBES if any(n in p[0] or n in p[1] for n in needles)]
     return selected
+
+
+def unknown_exact_keys(only: str | None) -> list[str]:
+    """`--exact` request tokens naming no registered probe key (#1321).
+
+    Empty `only` selects every probe (nothing to reject); otherwise
+    every requested token that `select(..., exact=True)` would silently
+    drop, in request order. Used to tell a MIXED valid/invalid request
+    apart from an all-invalid one, which keeps its own pre-existing
+    empty-selection diagnostic.
+    """
+    if not only:
+        return []
+    known = {p[0] for p in PROBES}
+    return [n for n in _only_tokens(only) if n not in known]
 
 
 def run_one(script: str, port: int | None, timeout: float,
@@ -691,6 +711,16 @@ def main() -> int:
         sys.exit("refusing --port 8008: that's the user's GUI port, see CLAUDE.md")
 
     chosen = select(args.only, exact=args.exact)
+    if args.exact:
+        # A MIXED valid/invalid request is reported by naming the unknown
+        # keys, before any listing or running. An ALL-invalid request
+        # falls through to the empty-selection branch below unchanged
+        # (`chosen` is empty there too, so this never fires for it).
+        unknown = unknown_exact_keys(args.only)
+        if unknown and chosen:
+            print(f"--only {args.only!r} names unknown probe key(s) with "
+                  f"--exact: {', '.join(unknown)}; see --list", file=sys.stderr)
+            return 2
     if not chosen:
         print(f"--only {args.only!r} matched no probes; see --list", file=sys.stderr)
         return 2

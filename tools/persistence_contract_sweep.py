@@ -88,6 +88,7 @@ from pathlib import Path
 from probelib import (boot, quit_engine, send, send_json, wait_load_published,
                        wait_save_complete, capture_request_id)
 from persistence_snapshot import compare_session_files
+from run_probes import PROBES as REGISTERED_PROBES
 from save_compat_audit import dump_canonical_summary
 
 REPO = Path(__file__).resolve().parent.parent
@@ -153,6 +154,22 @@ DEFAULT_CROSS_REFERENCED_PROBE_KEYS = [
     k for k in SELECTABLE_CROSS_REFERENCED_PROBE_KEYS
     if k not in FLAKY_CROSS_REFERENCED_PROBE_KEYS
 ]
+
+
+def unregistered_selectable_probe_keys(
+        selectable: list[str], registered_keys: set[str]) -> list[str]:
+    """``selectable`` entries that name no `tools/run_probes.py` probe (#1321).
+
+    Pure and parameterized so a test can feed it a deliberately stale
+    pairing without touching either real list. `main` calls this with
+    the real `SELECTABLE_CROSS_REFERENCED_PROBE_KEYS` and `run_probes`'s
+    real `PROBES` registry before anything boots — a key renamed or
+    removed there would otherwise be silently dropped by
+    `run_probes.py --exact` and reported as "all passed" (the false-
+    green this check exists to prevent), rather than caught here up
+    front with every stale key named at once.
+    """
+    return [k for k in selectable if k not in registered_keys]
 
 
 class Checks:
@@ -516,6 +533,22 @@ def main() -> int:
     args = ap.parse_args()
     port = args.port
     chk = Checks()
+
+    # Registry-drift guard (#1321) -- unconditional, cheap, and engine-free:
+    # a stale SELECTABLE_CROSS_REFERENCED_PROBE_KEYS entry must fail loudly
+    # here rather than being silently dropped downstream by
+    # `run_probes.py --exact` and reported as a pass. Runs even with
+    # --skip-cross-probes, since the list can drift stale whether or not
+    # this particular run exercises it.
+    stale = unregistered_selectable_probe_keys(
+        SELECTABLE_CROSS_REFERENCED_PROBE_KEYS,
+        {p[0] for p in REGISTERED_PROBES})
+    if stale:
+        sys.exit(
+            f"SELECTABLE_CROSS_REFERENCED_PROBE_KEYS names {stale!r}, which "
+            f"tools/run_probes.py no longer registers as probe key(s) -- "
+            f"update the list (or run_probes.py) before this sweep can "
+            f"trust --cross-probe-keys.")
 
     if not args.skip_cross_probes:
         requested_keys = [k for k in args.cross_probe_keys.split(",") if k.strip()]

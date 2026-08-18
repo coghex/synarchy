@@ -53,17 +53,17 @@ policy.
 
 ## Status
 
-- [ ] LUA-1. Settings rescale a disconnected shell module instance in production
-- [ ] LUA-2. Crafting and structure construction re-claim jobs whose input loads cannot fit
-- [ ] LUA-3. Unit-AI coordination tables leak across replacement save loads
-- [ ] LUA-4. The RandBox widget owns and advances gameplay’s global Lua RNG
-- [ ] LUA-5. Multi-part sever narration has process-dependent ordering
+- [x] LUA-1. Settings rescale a disconnected shell module instance in production — [#1325]
+- [x] LUA-2. Crafting and structure construction re-claim jobs whose input loads cannot fit — [#1326]
+- [x] LUA-3. Unit-AI coordination tables leak across replacement save loads — [#1329]
+- [x] LUA-4. The RandBox widget owns and advances gameplay’s global Lua RNG — [#1330]
+- [x] LUA-5. Multi-part sever narration has process-dependent ordering — [#1331]
 
 ---
 
 ## Module identity and lifecycle
 
-### LUA-1. Settings rescale a disconnected shell module instance in production
+### [#1325] LUA-1. Settings rescale a disconnected shell module instance in production
 
 Production first loads `scripts/shell.lua` through `engine.loadScript`, which
 executes it with `dofile`. The shell does not register the returned table in
@@ -128,7 +128,7 @@ that did not self-register.
 
 ## Gameplay work coordination
 
-### LUA-2. Crafting and structure construction re-claim jobs whose input loads cannot fit
+### [#1326] LUA-2. Crafting and structure construction re-claim jobs whose input loads cannot fit
 
 Craft and structure-construction preflight checks establish that every required
 material exists somewhere, but do not establish that the worker can carry all
@@ -213,7 +213,7 @@ probe.
 
 ## Save/load reconciliation
 
-### LUA-3. Unit-AI coordination tables leak across replacement save loads
+### [#1329] LUA-3. Unit-AI coordination tables leak across replacement save loads
 
 Several unit-AI modules keep coordination state outside the persisted
 `aiState`: dig, chop, construction, and repair claim tables, plus the
@@ -285,7 +285,7 @@ impact was not reproduced through the public API.
 
 ## Randomness ownership
 
-### LUA-4. The RandBox widget owns and advances gameplay’s global Lua RNG
+### [#1330] LUA-4. The RandBox widget owns and advances gameplay’s global Lua RNG
 
 `randbox.init` contains the only production call to `math.randomseed`, so a UI
 widget owns initialization of Lua’s process-global random stream. Generating an
@@ -344,7 +344,7 @@ and value `0.65829285845522778`.
 
 ## Presentation stability
 
-### LUA-5. Multi-part sever narration has process-dependent ordering
+### [#1331] LUA-5. Multi-part sever narration has process-dependent ordering
 
 The combat injury sentence builder detects severed subparts by inserting them
 into a set-like Lua table, then converts that table to display text with

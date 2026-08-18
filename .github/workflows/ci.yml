@@ -464,12 +464,18 @@ jobs:
       # path->probe mapping, which would otherwise only surface as a PR
       # mis-selecting; test_run_probes covers run_probes.py's own
       # process-group teardown (#1323) against synthetic probes and
-      # synthetic engine descendants, which nothing else exercises.
+      # synthetic engine descendants, plus (#1321) --exact rejecting
+      # unknown probe keys instead of silently dropping them;
+      # test_persistence_contract_sweep covers the companion registry-
+      # drift guard that keeps persistence_contract_sweep.py's own
+      # cross-probe key list from going stale against that registry
+      # (#1321), which nothing else exercises.
       - name: probe runner self-tests
         run: |
           python3 tools/ci_probes.py --self-test
           python3 tools/ci_expensive_gates.py --self-test
           python3 tools/test_run_probes.py
+          python3 tools/test_persistence_contract_sweep.py
 
       # Path-selective, BLOCKING behavior-probe gate (#530). Only on PRs:
       # diff against the base, pick the CI-eligible probes relevant to the
