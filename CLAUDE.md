@@ -2,19 +2,21 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-This file carries the rules that prevent damage: what you must not undo, and which gate
-proves it. The layer below — the as-built mechanics behind those rules — lives in
-[`docs/engine_contracts.md`](docs/engine_contracts.md), which the sections here point at by
-name. Read the relevant section there before changing code in the area it covers; every
-contract in it is enforced by the gate its entry names, which is why it could move out of the
-always-loaded file.
+This file carries the rules that prevent damage: what you must not undo,
+and which gate proves it. The layer below — the as-built mechanics behind
+those rules — lives in
+[`docs/engine_contracts.md`](docs/engine_contracts.md), which the sections
+here point at by name. Read the relevant section there before changing
+code in the area it covers; every contract in it is enforced by the gate
+its entry names, which is why it could move out of the always-loaded file.
 
-Two trims have shrunk this file, both archived verbatim: deep per-issue history
-(review-round narratives, verification stories) on 2026-07-23
-(`docs/history/claude_md_2026-07-23_pretrim.md`), and the 2026-08-18 pass that removed
-verbosity and extracted `docs/engine_contracts.md`
-(`docs/history/claude_md_2026-08-18_pretrim.md`). Consult those snapshots, git history, or
-the referenced issues/PRs when you need the full story behind a contract stated tersely here.
+Two trims have shrunk this file, both archived verbatim: deep per-issue
+history (review-round narratives, verification stories) on 2026-07-23
+(`docs/history/claude_md_2026-07-23_pretrim.md`), and the 2026-08-18 pass
+that removed verbosity and extracted `docs/engine_contracts.md`
+(`docs/history/claude_md_2026-08-18_pretrim.md`). Consult those snapshots,
+git history, or the referenced issues/PRs when you need the full story
+behind a contract stated tersely here.
 
 ## Build Commands
 
@@ -58,8 +60,9 @@ seconds and the expensive gates at the end.
    and re-run world_check. Remember the save-version bump.
 4. **Behavior probes — opt-in, not a default gate.** ~84 headless
    `tools/*_probe.py` scripts each boot a real engine and gate one
-   system — see `tools/README.md` and the subsystem table below. Run the
-   ones relevant to what you touched, or `python3 tools/run_probes.py
+   system — see `tools/README.md` and **Subsystem probes & domain
+   contracts** below. Run the ones relevant to what you touched, or
+   `python3 tools/run_probes.py
    --only <substrings> [--jobs N]` (bare run = full sweep, tens of
    minutes). `python3 tools/ci_probes.py --status` is the authoritative
    list of every probe's CI eligibility — never trust a prose list of
@@ -766,7 +769,8 @@ its compiled `atlas/index.json` decide everything.** The viewer samples
 the compiled atlas through the same loader (`Unit.Atlas.Yaml.resolveUnitAtlases`)
 and the same frozen cell arithmetic (`Unit.Atlas.Types.atlasCellUV`) the
 game uses — a preview frame being a texture plus a sub-rect plus its cell
-size (`PreviewFrame`), and a rejected target a pre-boot `UnitFocusError`; a preview-only decoder would miss the
+size (`PreviewFrame`), and a rejected target a pre-boot `UnitFocusError`;
+a preview-only decoder would miss the
 regressions the viewer exists to catch. A rejected, missing,
 animation-less or uncompiled index is a PRE-BOOT failure, never a quiet
 fall back to source frames, and an animation folder present on disk but
@@ -926,7 +930,8 @@ before touching each area:
   Canonicalising one end alone MEASURED worse than
   seam-blind behaviour; don't. Terrain LOOKUPS take the same frame:
   `World.Tile.Types.lookupChunk` wraps nothing, so any consumer must
-  `wrapChunkCoordU` first — `Unit.LineOfSight.tileTerrainZ` now does — a miss reads as "not loaded → assume flat", which for occlusion
+  `wrapChunkCoordU` first — `Unit.LineOfSight.tileTerrainZ` now does — a
+  miss reads as "not loaded → assume flat", which for occlusion
   means "nothing blocks". The chunk-init queue is wrapped at the drain.
   Where a tile is DRAWN is the separate `bestWrapOffset` axis (#1176).
   Away from the seam, and in arenas, every step is the identity.
@@ -999,7 +1004,8 @@ before touching each area:
   transaction that removes the instance
   (`Power.Live.retirePowerNodeEverywhere`, resolving the session-global
   `BuildingId` across every live page — the `forgetContainerEverywhere`
-  pattern), so a demolition never reaches the save. That is NOT load-time pruning — a save already carrying a
+  pattern), so a demolition never reaches the save. That is NOT load-time
+  pruning — a save already carrying a
   dangling node still restores it verbatim. Retirement is a delete, never
   a compaction: `pnsNextId` keeps advancing and a retired id is never
   reissued. There is deliberately no public `power.removeNode`. Gates:
@@ -1051,7 +1057,8 @@ before touching each area:
   `ldType`→concept mapping. RIVERS have no definition file, so their
   pools are in code (`riverHeadConcepts`: `RIVER`, `FORD`, `CROSSING`,
   `BAY`, `VALE`, `HOLLOW` — a NARROW head pool against a WIDE modifier
-  pool of every catalogue concept with a modifier form, which is what makes a head morpheme recur across a
+  pool of every catalogue concept with a modifier form, which is what
+  makes a head morpheme recur across a
   map and in the world's own name). The expression is always `Modifier
   modifier head`, chosen deterministically from the entity's own stable
   id plus the language seed/version, never from hashmap order. Names are
@@ -1156,7 +1163,8 @@ before touching each area:
   `unit_event` tagged with the carrier's uid.
   `pickup_timeout`/`TASK_TIMEOUT_SEC` are STALL timers, not trip budgets:
   they reset on a new closest approach. Don't restore the
-  from-`issuedAt`/`startedAt` shape — it capped ordered retrieval at ~21 tiles. Since
+  from-`issuedAt`/`startedAt` shape — it capped ordered retrieval at ~21
+  tiles. Since
   #1291 they are spent in ELIGIBLE time only (`unit_ai_stall.lua`, which
   owns the accounting and `maintainTask`): an interval another action
   won (the #306 ladder's eating/drinking/refill/combat/`treat_ally`, or a
@@ -1223,7 +1231,8 @@ before touching each area:
   `smAutosave` metadata flag (`"metadata"` v2; v1 payloads migrate to
   manual via `World.Save.Compat.MetadataV1`),
   NEVER the name — a manual save squatting on one of those names fails
-  the attempt through `save_load` with nothing rotated. PUBLISH FIRST, ROTATE SECOND, and the
+  the attempt through `save_load` with nothing rotated. PUBLISH FIRST,
+  ROTATE SECOND, and the
   rotation is itself ordered so an interruption leaves a partially
   shifted family rather than a shorter one; the staging slot, the
   retire-by-rename ordering, the DERIVED shift plan and the
@@ -1284,8 +1293,8 @@ and time scale (always 1). Older schema versions are rejected with
 **Autosave (#913):** interval autosaves ride the SAME transaction — they
 only add a request-time `AutosaveRequest` (pre-request pause, visible time
 scale, player-intent generation) plus the durable `smAutosave`
-classification `engine.listSaves()` exposes. Full contract: the subsystem
-table above, and `docs/engine_contracts.md` §Autosave.
+classification `engine.listSaves()` exposes. Full contract: **Subsystem probes
+& domain contracts** above, and `docs/engine_contracts.md` §Autosave.
 
 **Enum schema policy:** `Direction`, `Pose`, `UnitActivity` (and any
 enum serialized via `Generic Serialize`) are positional by constructor

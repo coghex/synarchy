@@ -19,6 +19,44 @@ exactly why the detail could move out of the always-loaded file.
 
 ---
 
+## Contents
+
+**Assets and rendering**
+
+- [Unit animation art: inventory structural invariants](#unit-animation-art-inventory-structural-invariants)
+- [Unit animation atlas runtime: index validation and digests](#unit-animation-atlas-runtime-index-validation-and-digests)
+- [Preview mode: the two viewers and the dump contract](#preview-mode-the-two-viewers-and-the-dump-contract)
+
+**UI**
+
+- [Container window stack: panes, widget naming, teardown reasons](#container-window-stack-panes-widget-naming-teardown-reasons)
+
+**World and naming**
+
+- [Name etymology: internals (#1104)](#name-etymology-internals-1104)
+
+**Gameplay systems**
+
+- [Player transfers: the three player-facing modes](#player-transfers-the-three-player-facing-modes)
+- [The expedition loop: the unprepared control](#the-expedition-loop-the-unprepared-control)
+
+**Persistence**
+
+- [Autosave: staging, rotation order, and the intent mutex](#autosave-staging-rotation-order-and-the-intent-mutex)
+- [Save/load transaction: phases and failure semantics](#saveload-transaction-phases-and-failure-semantics)
+- [Enum append-only audit: baseline and payload normalization](#enum-append-only-audit-baseline-and-payload-normalization)
+
+**CLI**
+
+- [CLI value validation (#1191)](#cli-value-validation-1191)
+
+**Process gates**
+
+- [Findings-report lane split: why it matters](#findings-report-lane-split-why-it-matters)
+- [Docs landing: docs-wip, autostash, and the protected-ref warning](#docs-landing-docs-wip-autostash-and-the-protected-ref-warning)
+
+---
+
 ## Unit animation art: inventory structural invariants
 
 #1261 (TEX-6) promoted `tiller`, `unknown_unit` and `white_tailed_deer`
@@ -617,40 +655,59 @@ stays `isPlayerCommandable` of the live faction, never a def allowlist.
 
 Enforced by `tools/expedition_loop_probe.py` (manual-only, fixed-seed,
 ~15 min, two engine boots). `docs/expedition_gameplay_loop.md` is the
-design authority for the arc; this is what the gate actually holds.
+design authority for the arc; CLAUDE.md states that the control exists and
+must end measurably worse off. This enumerates the six conditions that
+keep the comparison honest — weakening any one turns the control into
+theatre — and the traps found while building it.
 
-Calibration numbers behind the food/water thresholds live in
-`docs/expedition_survival_calibration.md`. Supporting detail: `#94`'s
-emergency foraging ladder has its own gate (`foraging_probe.py`); the
-eating is watched live as a real `eat_from_inventory` action, so the delta
-is attributed to a mechanism rather than inferred; `salts.mealSalt`
-restores 0.30 of max_salt per feed, which is why scaling `salt` down just
-moves the blackout to the first meal's bolus.
+1. **`find_water` retired and `forage_max_fraction` disabled** for the
+   session. #94's emergency foraging ladder has its own gate,
+   `foraging_probe.py`.
+2. **BOTH travellers shed to inside carrying capacity first.** An
+   over-encumbered acolyte crawls, its order stall-times-out, and it never
+   arrives (`docs/expedition_survival_calibration.md` E1).
+3. **The control gets NO retrieval target of its own** — a ruin can roll
+   food, and a control that eats what it finds destroys the measurement.
+4. **The travel VERB matches.** `commandMove` walks at
+   `movement_speed.ordered` = comfort × 1.15, while `pickup_ground` walks
+   at comfort, so the retrieval order is issued only after the
+   measurement.
+5. **The ORIGINS are equalised as a PLACE, not merely a distance.** Hunger
+   drains with time on the road and route shape is time; a radial band is
+   satisfied anywhere on a circle, so the check asserts separation as well
+   as distance spread, verified with the simulation STOPPED.
+6. **The observation point is both travellers at the ruin in ONE COHERENT
+   SNAPSHOT** — a single paired read revalidated with the simulation
+   stopped. Two separate `unit.getInfo` round trips let the sim run in
+   between, and a pair that was never inside together can satisfy them; a
+   unit that finishes its move reverts to wander and can drift back out
+   while the other is still walking.
 
-It also runs an **unprepared control** — a second traveller sharing ONE
-identical leg, differing only in FOOD — which must end measurably worse
-off, which is what makes the scenario prove preparation matters rather
-than prove a walk succeeds. Six conditions keep it honest; weakening
-any turns the control into theatre: `find_water` retired and
-`forage_max_fraction` disabled; BOTH travellers shed to inside carrying
-capacity (an over-encumbered acolyte crawls and stall-times-out); the
-control given NO retrieval target (a ruin can roll food); the travel
-VERB matched (`commandMove` walks at comfort × 1.15, `pickup_ground` at
-comfort); the ORIGINS equalised as a PLACE, not merely a distance; and
-both travellers observed at the ruin in ONE COHERENT SNAPSHOT,
-revalidated with the simulation STOPPED. Canteens stay full on both — a
-dry one puts `refill_canteen` above `follow_command` and the control
-abandons the leg. Gated metric is FOOD; water is evidence.
-**Don't seed a thirst deficit instead** — `scripts/salts.lua` derives
-blood salt as saltFrac/hydrationFrac and `brain.lua` folds it into
-consciousness, so a unit dehydrated enough to prefer drinking over its
-orders is knocked unconscious, and scaling `salt` down just moves the
-blackout to the first meal's bolus. Two instrument gotchas: a completed
-move order does NOT hold position, and **`unit.setFrozen` is not a hold
-at all** (`uiFrozen` only makes `publishToRender` skip the sim-derived
-update, so a "frozen" unit keeps walking while `unit.getInfo` reports
-where it was) — use `engine.setPaused`, and re-read positions after
-pausing.
+**Canteens stay full on both.** A dry one puts `refill_canteen` at its 7.5
+peak, above `follow_command`, and the control then abandons the leg to
+walk to the water the scout radioed about — a behavioural difference, not
+the supply being measured. The gated metric is FOOD (stomach fraction),
+matching what the calibration measured actually goes live on a trip this
+length; water is reported as evidence, not gated. The eating itself is
+watched live as a real `eat_from_inventory` action, so the delta is
+attributed to a mechanism rather than inferred from a number two
+differently-massed acolytes could reach by other routes.
+
+**Don't "fix" that by seeding a thirst deficit.** `scripts/salts.lua`
+derives blood salt concentration as saltFrac/hydrationFrac and
+`scripts/brain.lua` folds it straight into consciousness, so a unit
+dehydrated far enough to prefer drinking over its orders is knocked
+unconscious by the electrolyte imbalance — and scaling the `salt` pool
+down to compensate just moves the blackout to the first meal's salt bolus
+(`salts.mealSalt` restores 0.30 of max_salt per feed). Both were observed
+live while building the gate.
+
+**Two instrument gotchas.** A completed move order does NOT hold position
+(E3). And **`unit.setFrozen` is not a hold at all**: `uiFrozen` only makes
+`publishToRender` skip the sim-derived update, so a "frozen" unit keeps
+walking while `unit.getInfo` reports where it was when the flag went up.
+Use `engine.setPaused` when you need a unit to actually stay put, and
+re-read positions after pausing.
 
 ---
 
@@ -677,61 +734,88 @@ one stays paused and zero-scaled. Gate: `autosave_probe.py`
 
 ---
 
+## Save/load transaction: phases and failure semantics
+
+CLAUDE.md carries the four architectural bullets (the Lua save-module
+registry, `publishGeneration`'s write-fsync-revalidate-rotate transaction,
+the whole-session load transaction, and the typed-reference integrity
+graph). This is the phase and failure detail it defers.
+
+**`engine.getLoadStatus()` exposes a 12-phase lifecycle plus a 13th
+terminal phase, `LoadReconciliationFailed` (#1204):** publication
+SUCCEEDED but a Lua `onSaveLoaded` callback raised, so the live session is
+incompletely reconciled.
+
+It is a THIRD terminal disposition, not a flavour of either existing one.
+Every poller must treat it as terminal (its outcome is non-nil, so
+`loadInProgress` is already false) AND as UNSUCCESSFUL. It deliberately
+leaves `failedAtPhase` unset, because that field's presence promises the
+old session survived unchanged — which a post-publish failure cannot. The
+outcome aggregates every failing module, and `reconciliationFailures`
+carries the per-module `{module, error}` breakdown. Callback isolation is
+unchanged: the broadcast still attempts every module.
+
+**Storage failures name their `StoragePhase`** through
+`engine.getSaveStatus()`. A corrupt authoritative file falls back to
+`.prev` and says so loudly (`recovered` in `engine.listSaves()`); an
+INCOMPATIBLE one reports directly with no fallback. Symlinked slot
+dirs/files are refused.
+
+---
+
 ## Enum append-only audit: baseline and payload normalization
 
 Enforced by `tools/enum_append_only_audit.py` (CI + `make ci`, with its
-own `--self-test`). The rule itself — positional-by-constructor-tag,
-append-only, and a `currentSaveVersion` bump for anything more — stays in
-CLAUDE.md.
+own `--self-test`). CLAUDE.md states the rule and the two hard facts about
+the baseline (it is GENERATED; a pure append ratchets it with
+`--update-baseline`). This is the rest.
 
-Enforced since #1145 by `tools/enum_append_only_audit.py` (CI + `make
-ci`, with its own `--self-test`), which is the authority on which types
-are guarded and why — read its module docstring before adding, moving, or
-changing one. It guards **every** `data` declaration under `src/`/`app/`
-that derives `Serialize` through `Generic` and has two or more
-constructors — a deliberate superset of "reachable from a save
-component", currently 37 types (32 reachable from a save-wire DTO today),
-so a type that becomes persisted later was already guarded the day its
-instance was derived. `docs/save_compat/enum_baseline.json` is the golden
-constructor list (module-qualified, each constructor recording its name
-and its ordered PAYLOAD signature) plus the save-wire attribution
-captured with it; it is GENERATED end to end, so don't hand-edit it — a
-pure append ratchets it with `--update-baseline`, and anything else is a
-wire-format break the audit refuses to record. A payload slot is the
-field's declared type, normalized (strictness markers, `{-# UNPACK #-}`,
-layout, `::`/`∷` and the parentheses a `!` forces are all erased; field
-order and type structure are not), with the selector kept for a record
-alternative — which is what makes swapping two same-typed record fields
-visible. An incompatible change's output names every component and
-historical shape that carries the type, including for a type that was
-renamed or deleted (read back from the recorded attribution, since there
-is nothing left to walk). Since #1270 this audit owns payload drift
-inside a multi-constructor sum; single-constructor record field order
-stays the frozen-DTO boundary's and `tools/save_compat_audit.py`'s.
+**Coverage.** Of the 37 guarded types, 32 are reachable from a save-wire
+DTO today; the rest are guarded pre-emptively, which is the point of
+keying on the `Serialize`-via-`Generic` instance rather than on save
+reachability.
+
+**What the baseline records.** Module-qualified constructor lists, each
+constructor recording its name and its ordered PAYLOAD signature, plus the
+save-wire attribution captured alongside.
+
+**How a payload slot is normalized.** A slot is the field's declared type
+with strictness markers, `{-# UNPACK #-}`, layout, `::`/`∷` and the
+parentheses a `!` forces all erased. Field order and type structure are
+NOT erased. For a record alternative the selector is kept — which is what
+makes swapping two same-typed record fields visible, and means a selector
+rename reports too.
+
+**Diagnostics.** An incompatible change's output names every component and
+historical shape that carries the type, with the reachability path. That
+holds even for a type that was renamed or deleted, read back from the
+recorded attribution because there is nothing left in the tree to walk.
+
+**Boundary against `tools/save_compat_audit.py`.** Since #1270 this audit
+is the one exhaustive gate owning payload drift INSIDE a
+multi-constructor sum. Single-constructor record field order stays the
+frozen-DTO boundary's and `save_compat_audit.py`'s.
 
 ---
 
 ## CLI value validation (#1191)
 
 Enforced by hspec `--match "App.Cli"` and `tools/preview_cli_probe.py`
-(no boot). The rule — a typed-but-malformed value is an error, an omitted
-one keeps its default — stays in CLAUDE.md.
+(no boot). CLAUDE.md states the rule, the flags it covers, and
+`--region`'s exclusion. This is the rest.
 
-**A present-but-malformed value is an error, not a default (#1191).** In
-a mode that honours it, `--seed`/`--worldSize`/`--plates`/`--ages`/
-`--port` that isn't a whole number, a `--size` that isn't `WxH` with both
-dimensions positive, a `--dump=` selection naming an unknown layer, and
-an empty selection or empty segment (`--dump=`, `--dump=terrain,`) each
-exit 1 pre-boot naming the flag and the offending token. **Omitting** a
-flag still keeps its documented default — only a value the user actually
-typed can fail. Validation runs after the mode-compatibility rejection
-above (which keeps its priority: a malformed `--seed` given to
-`--headless` still reports as unsupported in headless mode) and before
-every mode-specific early exit, regardless of whether the selected mode
-would consume the value. `--region` is deliberately excluded — its
-identical silent default is `docs/code_health_findings.md` CH-67,
-sequenced after #1081. Gates: hspec `--match "App.Cli"`,
-`tools/preview_cli_probe.py`.
+**Empty selections and empty segments** are errors too, not just unknown
+layers: `--dump=` and `--dump=terrain,` each exit 1 naming the flag and
+the offending token.
+
+**Ordering.** Validation runs AFTER the mode-compatibility rejection,
+which keeps its priority — a malformed `--seed` given to `--headless`
+still reports as unsupported in headless mode, not as a bad number. It
+runs BEFORE every mode-specific early exit, regardless of whether the
+selected mode would ever consume the value.
+
+**`--region`'s exclusion** is deliberate and tracked: its identical silent
+default is `docs/code_health_findings.md` CH-67, sequenced after #1081.
 
 ---
 
@@ -771,51 +855,3 @@ the differing name) — use the explicit refspec above. That push prints
 `Cannot update this protected ref` and `N of N required status checks are
 expected` and then **succeeds anyway** under admin bypass — judge it by
 `git rev-list --left-right --count HEAD...origin/master`, not the warning.
-
----
-
-## Save/load transaction: phases and failure semantics
-
-The rules — one envelope, per-component versions, a whole-session
-transaction, tolerated dangling refs — stay in CLAUDE.md.
-
-- Lua-owned state persists via `scripts/lib/save_modules.lua`
-  (`saveModules.register(id, spec)` — versioned
-  snapshot/decode/validate/apply, dependency-ordered, `required` vs
-  optional-with-`default`; `registerResetHook` for non-durable modules)
-  with canonical data-only payloads from `scripts/lib/data_codec.lua`
-  (decoding never executes code). A required component's failure aborts
-  the whole save/load.
-- Disk I/O goes ONLY through `World.Save.Storage.publishGeneration` — a
-  write-fsync-revalidate-rotate transaction keeping a
-  `world.synworld.prev` recovery generation. A corrupt authoritative file
-  falls back to `.prev` (loudly logged; `recovered` flag in
-  `engine.listSaves()`); an INCOMPATIBLE one reports directly with no
-  fallback. Symlinked slot dirs/files are refused. Failures name their
-  `StoragePhase` through `engine.getSaveStatus()`.
-- `engine.loadSave` is a whole-session TRANSACTION
-  (`World.Load.Stage`/`Publish`): stage the entire replacement session
-  against fresh values, swap in one quiesced window. A load REPLACES the
-  complete session — live pages not in the save do not survive. Save and
-  load mutually exclude for their whole duration; a failed load leaves
-  the old session unchanged and paused (pause is a one-way ratchet per
-  attempt). `engine.getLoadStatus()` exposes the 12-phase lifecycle plus
-  a 13th terminal phase `LoadReconciliationFailed` (#1204): publication
-  SUCCEEDED but a Lua `onSaveLoaded` callback raised, so the live session
-  is incompletely reconciled. It is a THIRD terminal disposition, not a
-  flavour of either existing one — every poller must treat it as terminal
-  and as UNSUCCESSFUL (its outcome is non-nil, so `loadInProgress` is
-  already false), and it deliberately leaves `failedAtPhase` unset
-  because that field's presence promises the old session survived
-  unchanged, which a post-publish failure cannot. The outcome aggregates
-  every failing module; `reconciliationFailures` carries the per-module
-  breakdown. Callback isolation is unchanged — the broadcast still
-  attempts every module.
-- Typed persistent references (`World.Save.Reference`:
-  `SamePageRef`/`CrossPageRef` newtypes; Lua `{__ref=kind, id=N}`
-  wrapping in `unit_ai_save_refs.lua`/`building_spawn.lua`) feed the
-  shared integrity graph (`World.Save.Integrity`), run at both save and
-  load boundaries — wrong-PAGE targets are hard errors; DANGLING targets
-  are tolerated, non-blocking diagnostics (a demolished station's
-  lingering bill is gameplay, not corruption). NB: ground-item ids are
-  ZERO-based; every other allocator starts at 1.
