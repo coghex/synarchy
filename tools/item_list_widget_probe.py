@@ -2811,11 +2811,19 @@ def main() -> int:
     print(f"booting offscreen engine on port {port} ({args.size}) ...")
     proc = boot(port, args=["--size", args.size],
                 mode=("--offscreen",), ready_timeout=180.0)
+    # Registered for teardown before ANY fallible work below (#1323): an
+    # unexpected socket/parsing/widget exception used to skip every
+    # quit_engine call and strand this engine holding its port.
+    try:
+        return _run(port, args)
+    finally:
+        quit_engine(port, proc)
 
+
+def _run(port: int, args) -> int:
     menu_up = poll_until(60.0, lambda: find_widget(port, "Create World"))
     check("loading screen -> main menu", bool(menu_up))
     if not menu_up:
-        quit_engine(port, proc)
         return 1
     click_widget_center(port, find_widget(port, "Create World"))
     create_up = poll_until(20.0, lambda: find_widget(port, "Generate World"))
@@ -2864,7 +2872,6 @@ def main() -> int:
     sites = allocate_dry_anchors(port, 7)
     if not check("found seven separated dry sites for the fixtures",
                  sites is not None):
-        quit_engine(port, proc)
         return 1
     ((bax, bay), (aax, aay), (max_, may_), (wax, way),
      (eax, eay), (uax, uay), (cax, cay)) = sites
@@ -2884,7 +2891,6 @@ def main() -> int:
     bid_raw = send(port, f"return building.spawn('{DEF_CARGO}', {bax}, {bay})")
     if not check("storage building spawned",
                  bid_raw.strip() not in ("", "nil", "null"), f"got {bid_raw!r}"):
-        quit_engine(port, proc)
         return 1
     bid = int(float(bid_raw))
     check("storage building reaches Built activity",
@@ -2994,7 +3000,6 @@ def main() -> int:
     #    scenario just emptied.
     unit_escort_session_scenario(port, aax, aay)
 
-    quit_engine(port, proc)
     if failures:
         print(f"\nitem_list_widget_probe: {failures} check(s) FAILED")
         return 1

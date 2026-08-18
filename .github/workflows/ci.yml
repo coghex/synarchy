@@ -301,9 +301,15 @@ jobs:
       # module gains a second top-level definition of an already-defined
       # exported function, which silently overwrites the earlier one in
       # the module table with no error (the slider.findByElementHandle
-      # regression this issue fixed).
+      # regression this issue fixed). The fixture suite (#1324) runs
+      # first: it pins both directions of every rule the audit enforces,
+      # including the two false-greens -- an unrecognized in-scope file
+      # and an empty corpus -- that used to report the same clean
+      # success a real scan does.
       - name: Lua duplicate function audit
-        run: python3 tools/lua_duplicate_function_audit.py
+        run: |
+          python3 tools/test_lua_duplicate_function_audit.py
+          python3 tools/lua_duplicate_function_audit.py
 
       # Cheap, no-engine guard (#787): fails if a Haskell module split
       # to stay reviewable (the input-thread facade + its dispatch
@@ -453,13 +459,17 @@ jobs:
         if: steps.expensive-gates.outputs.worldgen == 'true'
         run: python3 tools/world_check.py --quick
 
-      # Validate the path->probe mapping wiring on every run (cheap, no
-      # engine) — a broken mapping would otherwise only surface when a PR
-      # mis-selects.
-      - name: ci_probes self-test
+      # Validate the probe-runner harness itself on every run (cheap, no
+      # engine, no GPU). ci_probes/ci_expensive_gates cover the
+      # path->probe mapping, which would otherwise only surface as a PR
+      # mis-selecting; test_run_probes covers run_probes.py's own
+      # process-group teardown (#1323) against synthetic probes and
+      # synthetic engine descendants, which nothing else exercises.
+      - name: probe runner self-tests
         run: |
           python3 tools/ci_probes.py --self-test
           python3 tools/ci_expensive_gates.py --self-test
+          python3 tools/test_run_probes.py
 
       # Path-selective, BLOCKING behavior-probe gate (#530). Only on PRs:
       # diff against the base, pick the CI-eligible probes relevant to the

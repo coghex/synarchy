@@ -270,7 +270,16 @@ def main() -> int:
     print(f"== offscreen boot (port {port}, {args.size}) ==")
     proc = boot(port, mode=("--offscreen",), args=["--size", args.size],
                 label="offscreen engine")
+    # Registered for teardown before ANY fallible work below (#1323): an
+    # unexpected socket/parsing/image exception used to skip every
+    # quit_engine call and strand this engine holding its port.
+    try:
+        return _run(port, shots)
+    finally:
+        quit_engine(port, proc)
 
+
+def _run(port: int, shots: str) -> int:
     # -- Real UI flow to the in-game HUD (same path as tools/offscreen_probe.py):
     # this is what actually wires up construction.setDesignateTexture (hud.lua),
     # which a raw debug-console world.initArena bypass would skip.
@@ -296,7 +305,6 @@ def main() -> int:
 
     pageid = wid(port)
     if not check("active world id resolves", bool(pageid)):
-        quit_engine(port, proc)
         return 1
 
     # -- Register the throwaway 2x3 + 1x1-control building defs.
@@ -322,10 +330,8 @@ def main() -> int:
         print(f"  (debug) got.getSurfaceAt raw: "
               f"{send(port, f'return world.getSurfaceAt({sample[0]}, {sample[1]})')!r}")
     if not check("found a dry site for the 1x1 control", anchor_1x1 is not None):
-        quit_engine(port, proc)
         return 1
     if not check("found a dry site for the 2x3 blueprint", anchor_2x3 is not None):
-        quit_engine(port, proc)
         return 1
     ax1, ay1, z1 = anchor_1x1
     ax2, ay2, z2 = anchor_2x3
@@ -391,7 +397,6 @@ def main() -> int:
           diff_2x3 >= diff_1x1 * 3,
           f"1x1 diff={diff_1x1}, 2x3 diff={diff_2x3}")
 
-    quit_engine(port, proc)
     print(f"\nscreenshots kept in {shots}")
     if failures:
         print(f"construction_blueprint_footprint_probe: {failures} check(s) FAILED")
