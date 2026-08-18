@@ -178,6 +178,7 @@ an entry's current status.
 - [ ] CH-135. Status markers are inconsistent, and two of the six that exist are wrong
 - [ ] CH-136. Minor doc defects for one cleanup issue
 - [ ] CH-137. Verified: four docs are accurate and worth using as the pattern
+- [ ] CH-138. Every GitHub Actions dependency is pinned by mutable tag, not by SHA
 
 ---
 
@@ -3883,3 +3884,45 @@ did not:
 The lesson for CH-133/CH-134: the failure is not that docs drift from code —
 these four don't — it is that *design* docs have no lifecycle step that marks
 them implemented.
+
+### CH-138. Every GitHub Actions dependency is pinned by mutable tag, not by SHA
+
+All seven third-party `uses:` references across the four workflows are pinned to
+a floating major tag rather than a commit SHA:
+
+```
+4  uses: actions/checkout@v4
+1  uses: actions/cache@v4
+1  uses: actions/cache/restore@v4
+1  uses: actions/cache/save@v4
+1  uses: docker/setup-buildx-action@v3
+1  uses: docker/login-action@v3
+1  uses: docker/build-push-action@v6
+```
+
+A tag is mutable: the owning repository can repoint `v4` at any commit at any
+time, and a compromised or simply retagged action then executes inside
+workflows holding `packages: write` (`ci.yml`'s `resolve-image`,
+`ci-image.yml`) and `pull-requests: write` (`review-gate.yml`), with access to
+`secrets.NTFY_URL` and the registry credentials. SHA pinning is the standard
+mitigation and is what `actions/checkout`'s own hardening guidance recommends
+for anything beyond a hobby repository.
+
+Nothing here is known to be compromised; this is unexercised risk, not an
+incident.
+
+Two things make it a real rather than theoretical concern for THIS repository:
+the merge pipeline is substantially automated (a drainer merges approved PRs
+under admin bypass), so a malicious action would run against a branch nobody is
+watching interactively; and the CI image is published to a registry the
+workflow can write to, so a compromise is persistent rather than per-run.
+
+Sequencing matters if this is taken up. The same four `actions/*` entries are
+also on a **deprecated major** — they target Node 20, GitHub currently
+force-runs them on Node 24 and warns in every build log, and the current majors
+are `checkout` v7 and `cache` v6. Pin AFTER bumping, or the SHAs land on the
+version that is about to stop working.
+
+**Owner note (2026-08-18):** raised during a CI review and deliberately not
+filed yet — the owner wants to explore SHA pinning before committing to it.
+Recorded here so the option is not lost.
