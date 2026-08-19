@@ -203,6 +203,7 @@ bareItemDef name w = ItemDef
     , idContainer = Nothing, idDefaultContents = [], idFood = Nothing
     , idWeapon = Nothing, idArmor = Nothing, idUnequippable = False
     , idBuffs = [], idInsulation = 0
+    , idSourcePath = "test-fixture"
     }
 
 -- | A live scene: two real pages, a storage container on page B (so

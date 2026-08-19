@@ -20,8 +20,10 @@ Phases:
      table. Each file must report a positive count of its OWN (a
      rejected file is invisible in a summed total, #1233), and the item
      registry additionally has to load exactly as many definitions as
-     `data/items/*.yaml` authors — the completeness check that makes
-     this the gate proving the shipped item corpus is fully valid.
+     the `data/items/` TREE authors — recursively, at any depth, since
+     item definitions may live in logical subdirectories (#1232) — the
+     completeness check that makes this the gate proving the shipped
+     item corpus is fully valid.
   2. Readers — one public query per registry: substance.get/getNames,
      item.listDefs, equipment.getClass/getClassNames,
      infection.get/getNames, craft.get/getNames (+ repair.get/getNames,
@@ -95,14 +97,24 @@ def num(port, lua, timeout=15.0):
         return None
 
 
+# The one recursive family: item definitions may sit in logical
+# subdirectories (#1232). `**` with recursive=True also matches zero
+# directories, so this covers the top level too.
+ITEM_YAML_GLOB = "data/items/**/*.yaml"
+
+
 def check(passed, ok, label, detail=""):
     print(f"  {'PASS' if ok else 'FAIL'}  {label}"
           + (f"   [{detail}]" if detail and not ok else ""))
     return passed and ok
 
 
-def load_all(port, fn, pattern):
+def load_all(port, fn, pattern, recursive=False):
     """Run `fn` over every file matching `pattern`.
+
+    `recursive` turns on `**` expansion, which only the item tree needs:
+    item definitions may be organized into subdirectories (#1232), and
+    every other family here is flat by design.
 
     Returns `(total, rejected)`: the summed count the loader reported, and
     the list of files that reported no answer at all or a count of zero.
@@ -115,7 +127,7 @@ def load_all(port, fn, pattern):
     definitions is a broken file, never a legitimate empty one.
     """
     total, rejected = 0, []
-    for path in sorted(glob.glob(pattern)):
+    for path in sorted(glob.glob(pattern, recursive=recursive)):
         n = num(port, f"return {fn}('{path}')")
         if n is None or int(n) <= 0:
             rejected.append(path)
@@ -129,12 +141,14 @@ def authored_item_defs():
 
     Derived from the files on disk rather than pinned, so this probe
     proves the ENGINE loaded everything that is authored without also
-    becoming a second place to update when an item is added. The exact
-    inventory (35 files / 61 definitions) is pinned separately, in the
-    `Item.BulkStorage` hspec group.
+    becoming a second place to update when an item is added. Walks the
+    whole `data/items/` tree, at any depth, for the same reason startup
+    discovery does (#1232). The exact inventory (35 files / 61
+    definitions) is pinned separately, in the `Item.BulkStorage` hspec
+    group.
     """
     total = 0
-    for path in sorted(glob.glob("data/items/*.yaml")):
+    for path in sorted(glob.glob(ITEM_YAML_GLOB, recursive=True)):
         with open(path, encoding="utf-8") as fh:
             for line in fh:
                 if re.match(r"^\s*-\s+name:", line):
@@ -155,7 +169,7 @@ def main():
         print("\n-- phase 1: registry writers (all seven load*Yaml verbs) --")
         writers = [
             ("substance", "engine.loadSubstanceYaml", "data/substances/*.yaml"),
-            ("item", "engine.loadItemYaml", "data/items/*.yaml"),
+            ("item", "engine.loadItemYaml", ITEM_YAML_GLOB),
             ("equipment", "engine.loadEquipmentYaml", "data/equipment/*.yaml"),
             ("infection", "engine.loadInfectionYaml", "data/infections/*.yaml"),
             ("recipe", "engine.loadRecipeYaml", "data/recipes/*.yaml"),
@@ -164,7 +178,8 @@ def main():
         ]
         item_total = None
         for label, fn, pattern in writers:
-            n, rejected = load_all(port, fn, pattern)
+            n, rejected = load_all(port, fn, pattern,
+                                   recursive=pattern == ITEM_YAML_GLOB)
             passed = check(passed, n > 0 and not rejected,
                            f"{label} writer loaded defs",
                            f"{fn} over {pattern} reported {n}; "
@@ -181,7 +196,7 @@ def main():
         passed = check(passed,
                        item_total is not None and item_total == expected_items,
                        "every authored item definition loaded",
-                       f"engine loaded {item_total}, data/items/*.yaml "
+                       f"engine loaded {item_total}, the data/items/ tree "
                        f"declares {expected_items}")
 
         # --- Phase 2: one public reader per registry -------------------
