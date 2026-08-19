@@ -14,7 +14,9 @@
 --   @--region@ is deliberately absent from this module:
 --   @docs\/code_health_findings.md@ CH-67 tracks 'parseRegion'\'s
 --   identical silent default, sequenced after #1081's named-region
---   type, and #1191 leaves its behavior untouched.
+--   type, and #1191 leaves its behavior untouched. That named type
+--   landed and has its own cases in "Test.Headless.App.ChunkRegion";
+--   the silent default it still applies is asserted there.
 module Test.Headless.App.Cli (spec) where
 
 import UPrelude

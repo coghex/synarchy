@@ -1,7 +1,8 @@
 -- | Dump boot path: generate a world, load a chunk region, and dump
 --   per-tile data as JSON to stdout, then exit. No TCP server, no loop.
 module App.Dump
-  ( runDump
+  ( DumpGenParams(..)
+  , runDump
   ) where
 
 import UPrelude
@@ -44,22 +45,43 @@ import Unit.Thread (startUnitThread)
 import Combat.Thread (startCombatThread)
 import Sim.Thread (startSimThread)
 import Sim.Command.Types (SimCommand(..))
-import App.Cli (DumpLayers(..))
+import App.Cli (DumpLayers(..), ChunkRegion(..), chunkRegionCoords)
 import Engine.Core.Workers (EngineWorkers(..), shutdownEngineWorkers)
 import App.Boot (FatalStream(..), bootConfig, handleBootResult
                 , luaThreadOrAbort)
 import App.Exception (guardNativeExceptions)
 
+-- | The three world-generation values a dump is given, named so that
+--   exchanging two of them at the call site is a compile error rather
+--   than a different world reported under the swapped labels (#1081).
+--
+--   Deliberately NOT 'World.Generate.Config.Types.WorldGenConfig',
+--   whose @wgcSeed@ is a @Maybe Word64@: the dump's seed is a concrete
+--   'Int' (so @--seed -1@ keeps parsing and meaning what it always
+--   did), and the widening to 'Word64' stays where it has always been,
+--   at the 'WorldInit' message below. Only the @wgc*@ naming idiom is
+--   borrowed — per-scalar newtypes exist nowhere in this tree.
+data DumpGenParams = DumpGenParams
+    { dgpSeed       ∷ !Int
+    , dgpWorldSize  ∷ !Int
+      -- ^ Already normalized by 'Main' ('normalizeWorldSize').
+    , dgpPlateCount ∷ !Int
+      -- ^ Already normalized by 'Main' ('normalizePlateCount').
+    } deriving (Eq, Show)
+
 -- | Run engine in dump mode: generate world, load chunks, dump tile
 --   data as JSON to stdout, and exit. No TCP server, no loop.
-runDump ∷ DumpLayers → Int → Int → Int → (Int, Int, Int, Int) → IO ()
-runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
+runDump ∷ DumpLayers → DumpGenParams → ChunkRegion → IO ()
+runDump layers gen region = do
+  let seed       = dgpSeed gen
+      worldSize  = dgpWorldSize gen
+      plateCount = dgpPlateCount gen
   hPutStrLn stderr $ "dump: seed=" ⧺ show seed
                    ⧺ " worldSize=" ⧺ show worldSize
                    ⧺ " plates=" ⧺ show plateCount
-                   ⧺ " region=(" ⧺ show cx1 ⧺ ","
-                   ⧺ show cy1 ⧺ "," ⧺ show cx2 ⧺ ","
-                   ⧺ show cy2 ⧺ ")"
+                   ⧺ " region=(" ⧺ show (crX1 region) ⧺ ","
+                   ⧺ show (crY1 region) ⧺ "," ⧺ show (crX2 region) ⧺ ","
+                   ⧺ show (crY2 region) ⧺ ")"
 
   -- Logger is born writing to stderr (not redirected after the fact),
   -- so init-time logging (e.g. loadNotificationCfg) can't pollute the
@@ -126,8 +148,8 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
             case wmWorlds manager of
                 ((_, ws):_) → do
                     td ← readIORef (wsTilesRef ws)
-                    let coords = [ ChunkCoord x y
-                                 | x ← [cx1..cx2], y ← [cy1..cy2] ]
+                    let coords = map (uncurry ChunkCoord)
+                                     (chunkRegionCoords region)
                         needed = filter
                             (\c → isNothing (lookupChunk c td)) coords
                     atomicModifyIORef' (wsInitQueueRef ws) $ \q →
@@ -168,7 +190,8 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
                                      wgpClimateState mParams
                     td ← readIORef (wsTilesRef ws)
                     registry ← readIORef (materialRegistryRef env')
-                    let json = dumpTilesJSON layers registry worldSize climate td cx1 cy1 cx2 cy2
+                    let json = dumpTilesJSON layers registry worldSize
+                                             climate td region
                     -- Phase 1 sanity print: how many lakes did the
                     -- global flood produce, how many chunks they
                     -- touch.
@@ -287,10 +310,10 @@ pollsPerSecond = 1000000 `div` pollInterval
 --   Every tile in the region gets one object. Fields are included
 --   based on the DumpLayers whitelist.
 dumpTilesJSON ∷ DumpLayers → MaterialRegistry → Int → ClimateState → WorldTileData
-              → Int → Int → Int → Int → BSL.ByteString
-dumpTilesJSON layers registry worldSize climate td cx1 cy1 cx2 cy2 =
+              → ChunkRegion → BSL.ByteString
+dumpTilesJSON layers registry worldSize climate td region =
     let entries = concatMap dumpChunkTiles
-            [ ChunkCoord x y | x ← [cx1..cx2], y ← [cy1..cy2] ]
+            (map (uncurry ChunkCoord) (chunkRegionCoords region))
     in encode entries <> "\n"
   where
     dumpChunkTiles coord = case lookupChunk coord td of
