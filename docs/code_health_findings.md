@@ -177,7 +177,7 @@ an entry's current status.
 - [x] CH-134. `blood_decals.md` (445 lines) is marked "design draft" for a shipped subsystem — [no-issue]
 - [x] CH-135. Status markers are inconsistent, and two of the six that exist are wrong — [no-issue]
 - [x] CH-136. Minor doc defects for one cleanup issue — [no-issue]
-- [ ] CH-137. Verified: four docs are accurate and worth using as the pattern
+- [x] CH-137. Verified: four docs are accurate and worth using as the pattern — [no-issue]
 - [ ] CH-138. Every GitHub Actions dependency is pinned by mutable tag, not by SHA
 
 ---
@@ -3918,7 +3918,27 @@ persistence and capability inventories.
   CLAUDE.md's subsystem contracts. Noted for completeness only; CLAUDE.md was
   excluded from this pass at the owner's request.
 
-### CH-137. Verified: four docs are accurate and worth using as the pattern
+### [no-issue] CH-137. Verified: four docs are accurate and worth using as the pattern
+> **Disposition:** No issue — this entry records a verification rather than a
+> defect, and re-verification confirms all four still hold.
+> `expedition_gameplay_loop.md`'s `### 9. Gate the full slice` still resolves
+> (moved `:327` → `:1308`) and `## Implementation status` is still at `:390`;
+> CLAUDE.md `:1185`'s claim that step 9's combat encounter and progression
+> reward are deferred to #916/#917 matches the tracker (both **OPEN**) and the
+> doc's own EXP-5 precondition. `persistence_contract.md` (`:87`, `:739`,
+> `:743`) and `persistence_state_inventory.md` (`:152`, `:727`) still cite
+> `LoadWorld.hs` and still mark it deleted, and the file is genuinely gone —
+> `src/World/Thread/Command/Save/` holds only `WriteWorld.hs`. `README.md`
+> spot-checks accurate on prerequisites, build commands, headless mode, the
+> resource-root precedence, and testing. Only the framing moved: CLAUDE.md's
+> 2026-08-18 trim dropped the "all discretionary work gates on step 9"
+> sentence this entry quoted. **The closing lesson has since been
+> implemented** — design docs now carry the lifecycle step it said they
+> lacked, a `Design state:` line plus a per-slice ledger advanced by
+> `/design-epic` → `/process-design-doc`, which `expedition_gameplay_loop.md`
+> itself gained at `:8` and `:37` (EPIC #1229, EXP-1…EXP-5). That is the same
+> convention CH-135's disposition rests on.
+
 Recorded because the reference sweep was expected to find widespread rot and
 did not:
 
