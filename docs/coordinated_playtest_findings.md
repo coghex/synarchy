@@ -55,7 +55,7 @@ implementation file, test, tracker item, or remote state was changed.
 - [x] PT-4. Combat-animation setup does not reliably establish combat — [#1396]
 - [x] PT-5. The combat-animation probe does not gate its death-animation contract — [#1397]
 - [x] PT-6. The default chop fixture cannot reach the promised partial-result oracle — [#1398]
-- [ ] PT-7. The portal outcome check still asserts the pre-confirmation contract
+- [x] PT-7. The portal outcome check still asserts the pre-confirmation contract — [#1399]
 
 ---
 
@@ -396,7 +396,7 @@ chop outcome reports 25 requested tiles as applied plus dropped tiles.
   arena fixture, or a pinned seed and coordinate offers the most stable
   long-term contract remains an implementation decision.
 
-### PT-7. The portal outcome check still asserts the pre-confirmation contract
+### [#1399] PT-7. The portal outcome check still asserts the pre-confirmation contract
 
 The action-outcome probe creates an empty arena, arms starting-portal
 placement, and clicks a valid tile. It then expects an immediate accepted
