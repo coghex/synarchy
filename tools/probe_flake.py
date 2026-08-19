@@ -92,10 +92,16 @@ DEFAULT_RTS_CAPS = 4
 DEFAULT_TIMEOUT = run_probes.DEFAULT_TIMEOUT
 
 ARTIFACT_DIR_NAME = "synarchy-probe-flake"
-LEASE_DIR_NAME = "synarchy-probe-flake-leases"
+
+# Port leases and live-invocation registrations are FLAT files under
+# `LEASE_ROOT`, named by this prefix. Flat on purpose — see
+# `_machine_wide_scratch`: a subdirectory would be owned by whichever
+# harness user created it, and a directory's owner may unlink entries in
+# it whatever the sticky bit says.
+SHARED_PREFIX = "synarchy-probe-flake"
 
 def _machine_wide_scratch() -> Path:
-    """The one host-wide location the port leases and registry live in.
+    """The one host-wide directory the port leases and registry live in.
 
     A TCP port is a HOST-global resource — one listener per port, whoever
     started it — so this namespace has to be host-global too. Anything
@@ -103,7 +109,7 @@ def _machine_wide_scratch() -> Path:
     they own a port, and put two engines on it, which is the exact
     collision atomic leasing exists to prevent; their concurrency
     registries stop seeing each other at the same time. Three things
-    would split it and all three are refused here:
+    would split it, and none of them appears here:
 
     * the ARTIFACT root, because `--artifact-root` overrides it;
     * `tempfile.gettempdir()`, because it follows `TMPDIR` — a
@@ -111,14 +117,20 @@ def _machine_wide_scratch() -> Path:
       launching shell exported anywhere else;
     * the UID, because two local accounts share one port namespace.
 
-    So it is a single fixed path under `/tmp`, the shared location POSIX
-    guarantees, with no uid in it. `_ensure_shared_dir` gives it `/tmp`'s
-    own permissions — world-writable plus the sticky bit — so every user
-    can take a lock while none can delete another's file. Resolved once
-    at import; only the self-test may redirect it, by rebinding
-    `LEASE_ROOT` explicitly.
+    It is `/tmp` ITSELF, with the lease files flat inside it, and that is
+    the load-bearing detail rather than a shortcut. A dedicated
+    subdirectory would be created by whichever harness user got there
+    first, and a directory's OWNER may unlink entries in it however the
+    sticky bit is set — so that user could remove another's lease
+    pathname while its lock was held, create a new file at the same name,
+    lock that, and put two engines on one port. `/tmp` is root-owned and
+    sticky on every supported platform, so no unprivileged account owns
+    the namespace and each lease is removable only by the harness that
+    created it. `_check_shared_dir` verifies exactly that rather than
+    assuming it. Resolved once at import; only the self-test may
+    redirect it, by rebinding `LEASE_ROOT` explicitly.
     """
-    return Path("/tmp") / LEASE_DIR_NAME
+    return Path("/tmp")
 
 
 LEASE_ROOT = _machine_wide_scratch()
@@ -230,46 +242,71 @@ SHARED_DIR_MODE = 0o1777
 SHARED_FILE_MODE = 0o666
 
 
-def _ensure_shared_dir(path: Path) -> Path:
-    """Create or validate a host-shared, sticky scratch directory.
+def _check_shared_dir(path: Path, uid: int | None = None) -> Path:
+    """Validate the host-shared scratch directory; never repair it.
 
-    Shared across USERS deliberately (see `_machine_wide_scratch`). The
-    only thing a hostile local account gains is the ability to hold a
-    lock on a port — which it could deny far more directly by binding
-    that port — while the sticky bit keeps it from deleting anyone
-    else's lease. A symlink in this position is refused outright rather
-    than followed, and a directory whose mode does not actually permit
-    sharing is a clean rejection rather than a namespace that silently
-    excludes other users.
+    Three properties make a cross-user lock namespace safe, and all
+    three are checked rather than assumed, because getting any of them
+    wrong silently produces two engines on one port:
+
+    * STICKY, so an entry can be removed only by its own creator (or by
+      the directory's owner, hence the next point);
+    * OWNED BY ROOT OR BY US, so no OTHER unprivileged account can
+      unlink our lease pathname out from under its held lock and
+      recreate it — the one hole a merely-sticky, user-owned directory
+      leaves open;
+    * WRITABLE by us, or we cannot take a lease at all.
+
+    `/tmp` satisfies all three out of the box on every supported
+    platform. Nothing here chmods: a shared directory is not ours to
+    repair, and quietly widening someone else's permissions would be a
+    worse answer than stopping. It is created only when absent, which in
+    practice happens only under the self-test's redirected root.
     """
-    if path.is_symlink():
-        raise Rejection(
-            f"the harness scratch path {path} is a symlink; refusing to "
-            f"follow it")
+    uid = os.getuid() if uid is None else uid
     try:
-        path.mkdir(mode=SHARED_DIR_MODE, parents=True, exist_ok=True)
-        info = path.lstat()
+        if not path.exists():
+            path.mkdir(mode=SHARED_DIR_MODE, parents=True, exist_ok=True)
+        # FOLLOWS a link deliberately, and then judges what it landed
+        # on: `/tmp` IS a symlink to `/private/tmp` on macOS, so
+        # refusing links outright would refuse the one path this is
+        # built around. Nothing is trusted because of how it was
+        # reached — the ownership, sticky and writability checks below
+        # apply to the real directory, so a link into a hostile tree is
+        # caught by them. Lease FILES are a different matter and are
+        # still opened `O_NOFOLLOW`.
+        info = path.stat()
     except OSError as error:
         raise Rejection(
-            f"could not create the harness scratch directory {path} "
+            f"could not use the harness scratch directory {path} "
             f"({error})") from None
-    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+    if not stat.S_ISDIR(info.st_mode):
         raise Rejection(f"the harness scratch path {path} is not a directory")
-    # `mkdir`'s mode is masked by the umask, which routinely clears the
-    # group and other write bits this namespace depends on. Only the
-    # owner may repair that.
-    if (info.st_uid == os.getuid()
-            and stat.S_IMODE(info.st_mode) != SHARED_DIR_MODE):
-        with contextlib.suppress(OSError):
-            path.chmod(SHARED_DIR_MODE)
-            info = path.lstat()
     mode = stat.S_IMODE(info.st_mode)
-    if not mode & stat.S_ISVTX or not os.access(path, os.W_OK | os.X_OK):
+    if not mode & stat.S_ISVTX:
         raise Rejection(
             f"the harness scratch directory {path} is mode {mode:04o}, which "
-            f"is not a sticky directory this user can write to; port leases "
-            f"must be shared with every local user, since a TCP port is")
+            f"is not sticky; any local user could then replace another's "
+            f"port lease and put two engines on one port")
+    if info.st_uid not in (0, uid):
+        raise Rejection(
+            f"the harness scratch directory {path} is owned by uid "
+            f"{info.st_uid}, which is neither root nor this user; that "
+            f"account could unlink a held port lease and recreate it, so "
+            f"the lease would stop meaning anything")
+    if not os.access(path, os.W_OK | os.X_OK):
+        raise Rejection(
+            f"the harness scratch directory {path} is not writable by this "
+            f"user; port leases cannot be taken")
     return path
+
+
+def _lease_path(port: int) -> Path:
+    return _check_shared_dir(LEASE_ROOT) / f"{SHARED_PREFIX}-lease-{port}"
+
+
+def _registration_glob() -> str:
+    return f"{SHARED_PREFIX}-live-*.json"
 
 
 def _open_shared_lock_file(path: Path, flags: int) -> int | None:
@@ -313,11 +350,6 @@ def _share_file(fd: int) -> None:
         os.fchmod(fd, SHARED_FILE_MODE)
 
 
-def _lease_dir() -> Path:
-    _ensure_shared_dir(LEASE_ROOT)
-    return _ensure_shared_dir(LEASE_ROOT / "ports")
-
-
 def port_is_clear(port: int, host: str = "127.0.0.1") -> bool:
     """True when nothing is listening on `port` right now."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -356,7 +388,7 @@ class PortLease:
             raise Rejection(
                 f"port {FORBIDDEN_PORT} is the user's graphical instance and "
                 f"is always forbidden")
-        path = _lease_dir() / f"{port}.lease"
+        path = _lease_path(port)
         # Unopenable, a symlink, a hard link, or not a regular file: we
         # cannot safely coordinate on it, so the port is not ours to
         # take and the scan moves on to the next one.
@@ -471,15 +503,15 @@ class LiveRegistry:
     """
 
     def __init__(self):
-        self.path = (LEASE_ROOT / "live" /
-                     f"{os.getpid()}-{uuid.uuid4().hex[:8]}.json")
+        self.path = (LEASE_ROOT /
+                     f"{SHARED_PREFIX}-live-{os.getpid()}-"
+                     f"{uuid.uuid4().hex[:8]}.json")
         self.peak = 0
         self._registered = False
         self._fd: int | None = None
 
     def __enter__(self) -> "LiveRegistry":
-        _ensure_shared_dir(LEASE_ROOT)
-        _ensure_shared_dir(self.path.parent)
+        _check_shared_dir(LEASE_ROOT)
         # The registration is LOCKED before it is named, and published
         # atomically. Locking first closes the window in which a
         # concurrently starting harness could see an unlocked entry and
@@ -538,14 +570,13 @@ class LiveRegistry:
         every other one is decided by `_registration_is_live`, never by
         the pid it records.
         """
-        directory = self.path.parent
         count = 1 if self._registered else 0
         try:
-            entries = list(directory.iterdir())
+            entries = list(LEASE_ROOT.glob(_registration_glob()))
         except OSError:
             return max(self.peak, 1)
         for entry in entries:
-            if entry.suffix != ".json" or entry == self.path:
+            if entry == self.path:
                 continue
             if _registration_is_live(entry):
                 count += 1

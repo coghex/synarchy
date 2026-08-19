@@ -235,7 +235,12 @@ class SyntheticTree:
         ci_probes.CI_ELIGIBLE = set()
         probe_flake.PROTOCOL_PROBES = {
             key: probe_protocol.PROTOCOL_VERSION for key in self.keys}
-        probe_flake.LEASE_ROOT = self.root / "leases"
+        # Stands in for `/tmp`: the harness requires a sticky directory
+        # it does not have to repair, so the fixture builds one.
+        leases = self.root / "leases"
+        leases.mkdir()
+        leases.chmod(0o1777)
+        probe_flake.LEASE_ROOT = leases
         return self
 
     def __exit__(self, *exc):
@@ -856,7 +861,7 @@ def test_ports() -> None:
 
         # A leftover lease FILE is not a lease: the lock is, and a dead
         # owner holds none. No age heuristic, nothing to unlink.
-        leftover = probe_flake._lease_dir() / "8009.lease"
+        leftover = probe_flake._lease_path(8009)
         leftover.write_text(json.dumps({"pid": _dead_pid(), "port": 8009}),
                             encoding="utf-8")
         lease = probe_flake.PortLease.try_acquire(8009)
@@ -882,7 +887,7 @@ def test_concurrent_leasing() -> None:
     print("\n-- concurrent lease acquisition --")
     with SyntheticTree() as tree:
         port = 8042
-        path = probe_flake._lease_dir() / f"{port}.lease"
+        path = probe_flake._lease_path(port)
         # A leftover file from an abnormally terminated harness: the
         # exact state in which two racing harnesses used to be able to
         # both "recover" it and both end up on this port.
@@ -1002,7 +1007,7 @@ def test_lease_root_is_tmpdir_independent() -> None:
         expect(first == second == third,
                f"the lease root is the same under any TMPDIR "
                f"({first}, {second}, {third})")
-        expect(str(first).startswith("/tmp/"),
+        expect(first == Path("/tmp"),
                f"the lease root is anchored at the fixed shared /tmp ({first})")
         expect(moved_artifacts != probe_flake.default_artifact_root(),
                "the ARTIFACT root does follow TMPDIR — only the lease "
@@ -1022,16 +1027,22 @@ def test_lease_root_is_tmpdir_independent() -> None:
     expect(str(os.getuid()) not in root.name,
            f"the lease root carries no uid, so every account resolves the "
            f"same one ({root})")
-    expect(root == Path("/tmp") / probe_flake.LEASE_DIR_NAME,
-           f"the lease root is one fixed host-wide path ({root})")
+    expect(root == Path("/tmp"),
+           f"the lease root is /tmp ITSELF ({root})")
+    # `stat`, not `lstat`: /tmp IS a symlink to /private/tmp on macOS,
+    # and what has to be root-owned and sticky is the directory it names.
+    info = root.stat()
+    expect(info.st_uid == 0 and stat.S_IMODE(info.st_mode) & stat.S_ISVTX,
+           f"which is root-owned and sticky here, so no unprivileged "
+           f"account owns the namespace (uid {info.st_uid}, mode "
+           f"{stat.S_IMODE(info.st_mode):04o})")
+    expect(probe_flake._check_shared_dir(root) == root,
+           "and the real /tmp passes every namespace check, symlinked or not")
+    expect(probe_flake._lease_path(8009).parent == root,
+           "lease files are FLAT in it — a harness-created subdirectory "
+           "would be owned by whoever made it, and a directory's owner may "
+           "unlink entries in it whatever the sticky bit says")
     with SyntheticTree() as shared:
-        probe_flake.LEASE_ROOT = shared.root / "shared-leases"
-        ports = probe_flake._lease_dir()
-        mode = stat.S_IMODE(ports.lstat().st_mode)
-        expect(mode == 0o1777,
-               f"the lease directory is sticky and world-writable, so any "
-               f"user can lock in it and none can delete another's entry "
-               f"(mode {mode:04o})")
         lease = probe_flake.PortLease.try_acquire(8009)
         try:
             file_mode = stat.S_IMODE(lease.path.lstat().st_mode)
@@ -1045,40 +1056,69 @@ def test_lease_root_is_tmpdir_independent() -> None:
             reg_mode = stat.S_IMODE(registry.path.lstat().st_mode)
             expect(reg_mode & 0o066 == 0o066,
                    f"so is a live-invocation registration (mode {reg_mode:04o})")
-        # A symlink in that position is refused, never followed.
+        # A symlinked root is FOLLOWED — `/tmp` is one on macOS — and
+        # then judged on what it landed on, so a link into a directory
+        # that fails any namespace check is still refused.
+        elsewhere = shared.root / "elsewhere"
+        elsewhere.mkdir()
+        elsewhere.chmod(0o777)
         hostile = shared.root / "hostile"
-        (shared.root / "elsewhere").mkdir()
-        hostile.symlink_to(shared.root / "elsewhere")
-        probe_flake.LEASE_ROOT = hostile
+        hostile.symlink_to(elsewhere)
         expect_raises(probe_flake.Rejection,
-                      lambda: probe_flake._lease_dir(),
-                      "a symlinked scratch path is refused, not followed",
-                      "is a symlink")
-        # A directory THIS user owns but whose mode excludes everyone
-        # else is repaired rather than accepted, because a restrictive
-        # umask would otherwise silently create a private namespace that
-        # other accounts cannot join. (The Rejection branch is for a
-        # directory another account owns, where repair is impossible;
-        # that needs a second user and so is unreachable from here.)
-        private = shared.root / "private-leases"
-        private.mkdir(mode=0o700)
-        private.chmod(0o700)
-        probe_flake.LEASE_ROOT = private
-        probe_flake._lease_dir()
-        expect(stat.S_IMODE(private.lstat().st_mode) == 0o1777,
-               f"a privately-created scratch directory this user owns is "
-               f"repaired to a shared one (mode "
-               f"{stat.S_IMODE(private.lstat().st_mode):04o})")
+                      lambda: probe_flake._check_shared_dir(hostile),
+                      "a symlink into a non-sticky directory is refused",
+                      "is not sticky")
+        elsewhere.chmod(0o1777)
+        expect(probe_flake._check_shared_dir(hostile) == hostile,
+               "while a symlink to a sound one is accepted, which is exactly "
+               "how /tmp is reached on macOS")
+        # A NON-STICKY directory is refused rather than repaired: in a
+        # directory without the sticky bit any local user may unlink any
+        # entry, so a held lease means nothing. Nothing here chmods a
+        # shared directory — quietly widening someone else's permissions
+        # would be a worse answer than stopping.
+        loose = shared.root / "loose-leases"
+        loose.mkdir()
+        loose.chmod(0o777)
+        expect_raises(probe_flake.Rejection,
+                      lambda: probe_flake._check_shared_dir(loose),
+                      "a non-sticky scratch directory is refused",
+                      "is not sticky")
+        expect(stat.S_IMODE(loose.lstat().st_mode) == 0o777,
+               "and is left exactly as it was found")
+
+        # THE PATHNAME-REPLACEMENT HOLE. A sticky directory still lets
+        # its OWNER unlink anyone's entry, so a namespace owned by
+        # another unprivileged account is refused outright — that
+        # account could remove a held lease pathname and recreate it,
+        # leaving two harnesses holding locks on different inodes for
+        # one port. `uid` is a parameter precisely so this is testable:
+        # a second local account cannot be created from a self-test.
+        sticky = shared.root / "someone-elses-leases"
+        sticky.mkdir()
+        sticky.chmod(0o1777)
+        expect(probe_flake._check_shared_dir(sticky, uid=os.getuid()) == sticky,
+               "a sticky directory this user owns is accepted")
+        expect_raises(probe_flake.Rejection,
+                      lambda: probe_flake._check_shared_dir(
+                          sticky, uid=os.getuid() + 1),
+                      "a sticky directory owned by ANOTHER unprivileged user "
+                      "is refused, because its owner could replace a held "
+                      "lease pathname",
+                      "neither root nor this user")
+        # Root-owned is the real case, and is accepted for any user.
+        expect(probe_flake._check_shared_dir(
+                   Path("/tmp"), uid=os.getuid() + 1) == Path("/tmp"),
+               "a root-owned sticky directory is accepted whoever is running")
 
         # THE SYMLINK OVERWRITE. The lease directory is world-writable,
         # so a local user can plant a symlink at an unused port's lease
         # name pointing at a file a harness user can write. Following it
         # would fchmod, truncate and overwrite that target.
-        probe_flake.LEASE_ROOT = shared.root / "shared-leases"
         victim = shared.root / "victim.txt"
         victim.write_text("precious", encoding="utf-8")
         victim.chmod(0o600)
-        planted = probe_flake._lease_dir() / "8100.lease"
+        planted = probe_flake._lease_path(8100)
         planted.symlink_to(victim)
         expect(probe_flake.PortLease.try_acquire(8100) is None,
                "a symlinked lease name makes the port unavailable, never "
@@ -1092,7 +1132,7 @@ def test_lease_root_is_tmpdir_independent() -> None:
         planted.unlink()
 
         # A planted HARD link is the same attack without a symlink.
-        hardlinked = probe_flake._lease_dir() / "8101.lease"
+        hardlinked = probe_flake._lease_path(8101)
         os.link(victim, hardlinked)
         expect(probe_flake.PortLease.try_acquire(8101) is None,
                "a hard-linked lease name makes the port unavailable too")
@@ -1101,7 +1141,7 @@ def test_lease_root_is_tmpdir_independent() -> None:
         hardlinked.unlink()
 
         # So is a non-regular file (a fifo stands in for any of them).
-        fifo = probe_flake._lease_dir() / "8102.lease"
+        fifo = probe_flake._lease_path(8102)
         os.mkfifo(fifo)
         expect(probe_flake.PortLease.try_acquire(8102) is None,
                "a non-regular lease entry makes the port unavailable")
@@ -1109,9 +1149,8 @@ def test_lease_root_is_tmpdir_independent() -> None:
 
         # And a planted symlink in the registry is never counted live
         # nor followed.
-        live_dir = probe_flake._ensure_shared_dir(
-            probe_flake.LEASE_ROOT / "live")
-        decoy = live_dir / "1-decoy.json"
+        decoy = (probe_flake.LEASE_ROOT /
+                 f"{probe_flake.SHARED_PREFIX}-live-1-decoy.json")
         decoy.symlink_to(victim)
         expect(probe_flake._registration_is_live(decoy) is False,
                "a symlinked registration is never counted as a live harness")
@@ -1120,14 +1159,46 @@ def test_lease_root_is_tmpdir_independent() -> None:
                "and its target is neither read as a registration nor removed")
         decoy.unlink()
 
+        # And the hole itself, demonstrated rather than argued: in a
+        # directory whose OWNER is not root, unlinking a held lease's
+        # pathname and recreating it leaves TWO harnesses holding locks
+        # on different inodes for one port. This is what the ownership
+        # check above refuses to operate in.
+        owned = shared.root / "owner-can-replace"
+        owned.mkdir()
+        owned.chmod(0o1777)
+        saved_root = probe_flake.LEASE_ROOT
+        probe_flake.LEASE_ROOT = owned
+        try:
+            first = probe_flake.PortLease.try_acquire(8009)
+            expect(first is not None, "a lease is held in the owned directory")
+            expect(probe_flake.PortLease.try_acquire(8009) is None,
+                   "and blocks a second acquire while the pathname stands")
+            # The directory's owner may unlink it regardless of sticky.
+            probe_flake._lease_path(8009).unlink()
+            second = probe_flake.PortLease.try_acquire(8009)
+            expect(first is not None and second is not None,
+                   "but once the pathname is replaced BOTH harnesses hold a "
+                   "lease for port 8009 — the hole a user-owned namespace "
+                   "leaves open, and the reason /tmp itself is used")
+            for lease in (first, second):
+                if lease:
+                    lease.release()
+        finally:
+            probe_flake.LEASE_ROOT = saved_root
+        expect_raises(probe_flake.Rejection,
+                      lambda: probe_flake._check_shared_dir(
+                          owned, uid=os.getuid() + 1),
+                      "so such a directory is refused for anyone who does not "
+                      "own it", "neither root nor this user")
+
         # A regular file where the directory belongs is refused outright.
         notadir = shared.root / "not-a-dir"
         notadir.write_text("", encoding="utf-8")
-        probe_flake.LEASE_ROOT = notadir
         expect_raises(probe_flake.Rejection,
-                      lambda: probe_flake._lease_dir(),
+                      lambda: probe_flake._check_shared_dir(notadir),
                       "a non-directory scratch path is refused",
-                      "could not create")
+                      "is not a directory")
 
     # The regression itself, cross-PROCESS and cross-TMPDIR: two
     # harnesses whose TMPDIRs differ must still contend for one port.
@@ -1226,12 +1297,13 @@ def test_concurrency_accounting() -> None:
                                                   for v in observed),
                f"every concurrent harness sees all {harnesses} of them "
                f"(observed {sorted(observed)})")
-        leftovers = [e for e in (probe_flake.LEASE_ROOT / "live").iterdir()]
+        leftovers = list(probe_flake.LEASE_ROOT.glob(
+            probe_flake._registration_glob()))
         expect(leftovers == [],
                f"every departed harness cleans its registration up ({leftovers})")
 
-        live_dir = probe_flake.LEASE_ROOT / "live"
-        live_dir.mkdir(parents=True, exist_ok=True)
+        live_dir = probe_flake.LEASE_ROOT
+        PREFIX = probe_flake.SHARED_PREFIX
 
         # THE PID-REUSE CASE. An abandoned registration naming a pid the
         # operating system has since handed to an unrelated live
@@ -1239,7 +1311,7 @@ def test_concurrency_accounting() -> None:
         # process's own pid. A pid-and-age test reads it as a second
         # live harness forever and inflates every later measurement;
         # the lock test sees an unheld file and reaps it.
-        recycled = live_dir / f"{os.getpid()}-recycled.json"
+        recycled = live_dir / f"{PREFIX}-live-{os.getpid()}-recycled.json"
         recycled.write_text(
             json.dumps({"pid": os.getpid(), "started": 0.0}), encoding="utf-8")
         os.utime(recycled, (0, 0))
@@ -1251,12 +1323,12 @@ def test_concurrency_accounting() -> None:
 
         # The same, with a pid that is merely gone, and with a corrupt
         # entry: neither needs an age heuristic any more.
-        stale = live_dir / "999999-deadbeef.json"
+        stale = live_dir / f"{PREFIX}-live-999999-deadbeef.json"
         stale.write_text(json.dumps({"pid": _dead_pid(), "started": 0.0}),
                          encoding="utf-8")
-        garbage = live_dir / "garbage.json"
+        garbage = live_dir / f"{PREFIX}-live-garbage.json"
         garbage.write_text("not json", encoding="utf-8")
-        fresh = live_dir / "77777-justwritten.json"
+        fresh = live_dir / f"{PREFIX}-live-77777-justwritten.json"
         fresh.write_text("", encoding="utf-8")          # current mtime
         with probe_flake.LiveRegistry() as registry:
             expect(registry.sample() == 1,

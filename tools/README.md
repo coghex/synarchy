@@ -612,12 +612,15 @@ process group, so concurrent harnesses never collide. The lease is an advisory
 `flock`, not a file anyone deletes, so a harness that dies releases it with no
 staleness heuristic — and the live-invocation registry behind the reported peak
 concurrency is held the same way, so an abandoned entry can never look live
-because the operating system recycled its pid; its namespace is one fixed `/tmp` path that neither
-`--artifact-root`, nor `TMPDIR`, nor the uid can move — a TCP port is
-host-global, so anything that split the namespace would let two harnesses lock
-different files and land on one port. That directory carries `/tmp`'s own
-permissions (world-writable, sticky), so every local user coordinates in it
-while none can delete another's lease. Artifacts,
+because the operating system recycled its pid; its namespace is `/tmp` ITSELF — not
+`--artifact-root`, not `TMPDIR`, and with no uid in it, because a TCP port is
+host-global and anything that split the namespace would let two harnesses lock
+different files and land on one port. The lease files are flat in `/tmp` rather
+than in a subdirectory: a directory's OWNER may unlink entries in it however
+the sticky bit is set, so a harness-created subdirectory would let whoever made
+it replace another user's held lease. `/tmp` is root-owned and sticky, which
+the harness verifies rather than assumes, and every lease file is opened
+`O_NOFOLLOW` and checked to be a plain unlinked-to file. Artifacts,
 by contrast, DO follow the platform temp dir —
 `<platform temp dir>/synarchy-probe-flake` — and never land inside a worktree;
 successful runs are deleted and `FAIL`/`TIMEOUT`/harness-error runs keep their
