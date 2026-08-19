@@ -136,6 +136,19 @@ local config = {
         -- flora / ground food instead (forage below, #94).
         eat_max_fraction        = 0.25,
         eat_weight              = 10.0,
+        -- Stop before waste (#1219, SURV-7). DISCRETE food is
+        -- indivisible — unit.feed eats a whole 250 kcal ration and bins
+        -- the overflow past max_hunger — so a meal's marginal ration is
+        -- mostly thrown away, and an expedition pair of them goes in one
+        -- decision. Open a discrete item only while remaining stomach
+        -- room >= this fraction of that item's own calories; equality
+        -- consumes (exactly half wasted is not MOSTLY wasted). Marginal
+        -- items only: the first item of a meal is always opened, so a
+        -- starving unit carrying nothing but rations still eats. Bulk
+        -- food draws just the deficit and wastes nothing, so it is never
+        -- withheld — a meal that stops opening rations finishes from the
+        -- quinoa sack.
+        eat_discrete_min_room_fraction = 0.5,
         -- Foraging (#94). Fires when the stomach is below
         -- forage_max_fraction AND the unit carries no food (eating
         -- what you hold always beats going to get more). Utility =

@@ -167,6 +167,10 @@ PROBES = [
      "a Haskell exception embedded in a LuaToEngineMsg/LuaMsg field must not escape and crash the engine (#622)"),
     ("machine_shop", "machine_shop_probe.py",
      "electric furnace smelt recipe + machine_shop wiring/motor recipes, real content (#591)"),
+    ("meal_waste", "meal_waste_probe.py",
+     "stop-before-waste meal policy: a mostly-wasted discrete ration is "
+     "withheld, bulk food still finishes the meal, the first item is "
+     "exempt, entry gates and the 10-feed bound unchanged (#1219)"),
     ("medic_coord", "medic_coord_probe.py",
      "bestMedicFor/medicAvailable distance-discounted selection fix"),
     ("mental_efficiency", "mental_efficiency_probe.py",
