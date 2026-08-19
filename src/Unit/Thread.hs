@@ -14,15 +14,15 @@ import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, writeIORef, newIORef, atomicModifyIORef'
                   , modifyIORef')
-import Control.Concurrent (forkIO, threadDelay)
-import Control.Exception (SomeException, catch, finally)
-import Control.Concurrent.MVar (newEmptyMVar, putMVar)
+import Control.Concurrent (threadDelay)
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
+import Engine.Core.Thread
+    (ThreadState, WorkerFailLevel(..), WorkerSpec(..), noRefusal
+    , startWorkerThread)
 import Engine.Core.State
     (EngineEnv, EngineLifecycle(..), lifecycleRef, loggerRef, saveBarrierRef)
 import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
-import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..))
+import Engine.Core.Log (logDebug, logError, LogCategory(..))
 import Unit.Types
 import Unit.Sim.Types
 import Unit.Anim (stateKey, resolveStateAnim, poseTag, chooseAnim)
@@ -35,102 +35,80 @@ unitTickRate ∷ Double
 unitTickRate = 1.0 / 30.0
 
 startUnitThread ∷ EngineEnv → IO ThreadState
-startUnitThread env = do
-    logger ← readIORef (loggerRef env)
-    stateRef ← newIORef ThreadRunning
-    doneVar ← newEmptyMVar
-    threadId ← catch
-        (do
-            logInfo logger CatThread "Starting unit thread..."
-            lastTimeRef ← getPOSIXTime ⌦ newIORef . realToFrac
-            -- utsRef now lives on EngineEnv (Phase 4 of save/load v2) so
-            -- the world thread can read+write sim state at save/load.
-            let uts = ucUtsRef (toUnitCombatCapability env)
-            tid ← forkIO $ unitLoop env stateRef lastTimeRef uts
-                             `finally` putMVar doneVar ()
-            logInfo logger CatThread "Unit thread started"
-            return tid
-        )
-        (\(e ∷ SomeException) → do
-            logError logger CatThread $ "Failed starting unit thread: "
-                <> T.pack (show e)
-            error "Unit thread start failure."
-        )
-    return $ ThreadState stateRef threadId doneVar
+startUnitThread env = startWorkerThread WorkerSpec
+    { wsLoggerRef   = loggerRef env
+    , wsCategory    = CatThread
+    , wsStartingMsg = "Starting unit thread..."
+    , wsStartedMsg  = Just "Unit thread started"
+    , wsFailMsg     = "Failed starting unit thread: "
+    , wsFailLevel   = WorkerFailError
+    , wsFailFatal   = "Unit thread start failure."
+    , wsStartup     = \_ → noRefusal $ do
+        lastTimeRef ← getPOSIXTime ⌦ newIORef . realToFrac
+        -- utsRef now lives on EngineEnv (Phase 4 of save/load v2) so
+        -- the world thread can read+write sim state at save/load.
+        let uts = ucUtsRef (toUnitCombatCapability env)
+        pure (lastTimeRef, uts)
+    , wsTick        = uncurry (unitTick env)
+    , wsOnStop      = \_ → do
+        logger ← readIORef (loggerRef env)
+        logDebug logger CatThread "Unit thread stopping..."
+    , wsOnCrash     = \_ e → do
+        logger ← readIORef (loggerRef env)
+        logError logger CatThread $ "Unit thread crashed: " <> T.pack (show e)
+        writeIORef (lifecycleRef env) CleaningUp
+    }
 
-unitLoop ∷ EngineEnv → IORef ThreadControl → IORef Double
-         → IORef UnitThreadState → IO ()
-unitLoop env stateRef lastTimeRef utsRef = do
-    control ← readIORef stateRef
-    case control of
-        ThreadStopped → do
-            logger ← readIORef (loggerRef env)
-            logDebug logger CatThread "Unit thread stopping..."
-            pure ()
-        ThreadPaused → do
-            threadDelay 100000
-            unitLoop env stateRef lastTimeRef utsRef
-        ThreadRunning → do
-            -- One guarded tick per iteration; the recursive call lives
-            -- OUTSIDE the catch — inside it, each tick pushes a catch
-            -- frame that never pops (unbounded stack growth).
-            ok ← catch
-              (do
-                tickStart ← realToFrac ⊚ getPOSIXTime
-                lastTime ← readIORef lastTimeRef
-                let dt = tickStart - lastTime
-                writeIORef lastTimeRef tickStart
+unitTick ∷ EngineEnv → IORef Double → IORef UnitThreadState
+         → IO (Maybe (IORef Double, IORef UnitThreadState))
+unitTick env lastTimeRef utsRef = do
+    tickStart ← realToFrac ⊚ getPOSIXTime
+    lastTime ← readIORef lastTimeRef
+    let dt = tickStart - lastTime
+    writeIORef lastTimeRef tickStart
 
-                locked ← captureLocked (saveBarrierRef env)
-                unless locked $ processAllUnitCommands env utsRef
-                paused ← readIORef (wsEnginePausedRef (toWorldSimCapability env))
-                unless paused $ do
-                    modifyIORef' (wsGameTimeRef (toWorldSimCapability env)) (+ dt)
-                    tickAllMovement dt env utsRef
-                -- Issue #763: a load publish
-                -- (World.Load.Publish.publishStagedSession) swaps
-                -- unitManagerRef and utsRef itself while THIS thread is
-                -- meant to be fully quiesced (SaveUnit) — but
-                -- publishToRender was never gated on 'locked' the way
-                -- every other write below is, so it could previously
-                -- copy STALE utsRef sim state onto the freshly-swapped
-                -- unitManagerRef mid-publish (or the old unitManagerRef
-                -- with freshly-swapped utsRef), corrupting a reused unit
-                -- id's render-facing pose/anim/position with data from
-                -- the session being replaced. A save never writes either
-                -- ref, so gating this costs nothing there beyond a
-                -- render-state update pausing for the same brief window
-                -- 'processAllUnitCommands' already skips.
-                unless locked $ publishToRender env utsRef
-                -- Buildings have no thread of their own (§2.2 of the
-                -- capability inventory), so their queue is drained
-                -- here — still outside the pause-only movement block,
-                -- still inside the save barrier's `unless locked`
-                -- gate, and still before BOTH acknowledgements below.
-                -- Since #896 the drain takes the narrow building
-                -- capability plus the logger and world/sim view rather
-                -- than this thread's whole environment.
-                unless locked $ processAllBuildingCommands
-                    (loggerRef env)
-                    (toWorldSimCapability env)
-                    (toContentRegistriesCapability env)
-                    (toBuildingCapability env)
-                acknowledgeCurrent (saveBarrierRef env) SaveUnit
-                acknowledgeCurrent (saveBarrierRef env) SaveBuilding
+    locked ← captureLocked (saveBarrierRef env)
+    unless locked $ processAllUnitCommands env utsRef
+    paused ← readIORef (wsEnginePausedRef (toWorldSimCapability env))
+    unless paused $ do
+        modifyIORef' (wsGameTimeRef (toWorldSimCapability env)) (+ dt)
+        tickAllMovement dt env utsRef
+    -- Issue #763: a load publish
+    -- (World.Load.Publish.publishStagedSession) swaps
+    -- unitManagerRef and utsRef itself while THIS thread is
+    -- meant to be fully quiesced (SaveUnit) — but
+    -- publishToRender was never gated on 'locked' the way
+    -- every other write below is, so it could previously
+    -- copy STALE utsRef sim state onto the freshly-swapped
+    -- unitManagerRef mid-publish (or the old unitManagerRef
+    -- with freshly-swapped utsRef), corrupting a reused unit
+    -- id's render-facing pose/anim/position with data from
+    -- the session being replaced. A save never writes either
+    -- ref, so gating this costs nothing there beyond a
+    -- render-state update pausing for the same brief window
+    -- 'processAllUnitCommands' already skips.
+    unless locked $ publishToRender env utsRef
+    -- Buildings have no thread of their own (§2.2 of the
+    -- capability inventory), so their queue is drained
+    -- here — still outside the pause-only movement block,
+    -- still inside the save barrier's `unless locked`
+    -- gate, and still before BOTH acknowledgements below.
+    -- Since #896 the drain takes the narrow building
+    -- capability plus the logger and world/sim view rather
+    -- than this thread's whole environment.
+    unless locked $ processAllBuildingCommands
+        (loggerRef env)
+        (toWorldSimCapability env)
+        (toContentRegistriesCapability env)
+        (toBuildingCapability env)
+    acknowledgeCurrent (saveBarrierRef env) SaveUnit
+    acknowledgeCurrent (saveBarrierRef env) SaveBuilding
 
-                tickEnd ← realToFrac ⊚ getPOSIXTime
-                let elapsed = tickEnd - tickStart ∷ Double
-                    sleepTime = max 0 (unitTickRate - elapsed)
-                threadDelay (floor (sleepTime * 1000000))
-                pure True
-              )
-              (\(e ∷ SomeException) → do
-                logger ← readIORef (loggerRef env)
-                logError logger CatThread $ "Unit thread crashed: " <> T.pack (show e)
-                writeIORef (lifecycleRef env) CleaningUp
-                pure False
-              )
-            when ok $ unitLoop env stateRef lastTimeRef utsRef
+    tickEnd ← realToFrac ⊚ getPOSIXTime
+    let elapsed = tickEnd - tickStart ∷ Double
+        sleepTime = max 0 (unitTickRate - elapsed)
+    threadDelay (floor (sleepTime * 1000000))
+    pure (Just (lastTimeRef, utsRef))
 
 -- | Copy sim-thread positions/facing into the render-visible UnitManager.
 --   Also drives unit animations: the resolved anim for (usPose, usState)

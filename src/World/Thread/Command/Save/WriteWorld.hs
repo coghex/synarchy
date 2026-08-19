@@ -91,7 +91,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
             -- load paused so the player can plan the next move).
             writeIORef (enginePausedRef env) True
             -- Globals: read once, shared across every page (we're on the
-            -- world thread, so no races with worldLoop writes).
+            -- world thread, so no races with worldTick writes).
             cam        ← readIORef (cameraRef env)
             gameTime   ← readIORef (gameTimeRef env)
             -- v54 (structure persistence): the texture palette is global.
