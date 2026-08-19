@@ -315,6 +315,16 @@ def scan_event_stream(text: str, descriptor: Descriptor):
             # A line-level fault is both earlier and more specific than
             # a truncated tail, so it is the error worth reporting.
             return events, outcomes, error
+        except Exception as error:  # noqa: BLE001
+            # A probe's event stream is untrusted input, and the
+            # contract says anything unclassifiable is a HARNESS ERROR —
+            # so an unforeseen shape must come back as one rather than
+            # as a traceback out of the measurement. Deliberately
+            # narrow in effect: it converts one bad line, and every
+            # rule that has a real diagnosis raises ProtocolError above.
+            return events, outcomes, ProtocolError(
+                f"protocol event line {number} could not be classified "
+                f"({type(error).__name__}: {error}): {line[:120]!r}")
     return events, outcomes, truncation
 
 
@@ -336,6 +346,15 @@ def _consume_event_line(line: str, number: int, descriptor: Descriptor,
     if kind == EVENT_CHECK:
         check_id = payload.get("id")
         outcome = payload.get("outcome")
+        # A STRING first, before the membership test below: a JSON
+        # `"id": []` or `{}` is unhashable, and asking a dict about it
+        # raises TypeError — which would escape every ProtocolError
+        # handler and traceback the harness instead of producing the
+        # harness-error result malformed input is supposed to produce.
+        if not isinstance(check_id, str):
+            raise ProtocolError(
+                f"protocol event line {number}: check `id` must be a string, "
+                f"got {check_id!r}")
         if check_id not in outcomes:
             raise ProtocolError(
                 f"protocol event line {number}: check identifier "

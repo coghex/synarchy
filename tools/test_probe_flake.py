@@ -438,6 +438,36 @@ def test_event_stream() -> None:
     expect_raises(probe_protocol.ProtocolError,
                   bad(_line(event="progress", id="alpha")),
                   "an unknown event kind is unclassifiable", "unclassifiable")
+    # A non-string `id` must be a PROTOCOL error, not a crash: an
+    # unhashable one (`[]`, `{}`) would otherwise raise TypeError out of
+    # the dictionary membership test, escape every handler, and
+    # traceback the harness instead of producing a harness error.
+    for value in ([], {}, 5, None, True, ["alpha"], {"id": "alpha"}):
+        expect_raises(probe_protocol.ProtocolError,
+                      bad(_line(event="check", id=value, outcome="PASS")),
+                      f"check id {value!r} is a protocol error, not a crash",
+                      "must be a string")
+    # And nothing a probe can put on a line may leak a non-ProtocolError.
+    hostile = [
+        _line(event="check", id=[], outcome="PASS"),
+        _line(event="check", id={}, outcome=[]),
+        _line(event="diagnostic", level=[], message={}),
+        _line(event=[], id="alpha"),
+        _line(event="check", id="alpha", outcome="PASS", detail=[[]]),
+        '{"event": {"nested": {"deep": [1, 2]}}}\n',
+        '{"event": "check", "id": "\\ud800", "outcome": "PASS"}\n',
+    ]
+    for line in hostile:
+        try:
+            probe_protocol.parse_event_stream(line, d)
+            leaked = "accepted"
+        except probe_protocol.ProtocolError:
+            leaked = None
+        except Exception as error:  # noqa: BLE001
+            leaked = f"{type(error).__name__}: {error}"
+        expect(leaked is None,
+               f"hostile event line {line.strip()[:48]!r} is a ProtocolError "
+               f"({leaked})")
     # A present `detail` must be an OBJECT. Every falsey non-object is
     # its own case: a truthiness fallback would coerce each to `{}` and
     # let a malformed event be counted as a pass.
@@ -1191,6 +1221,27 @@ def test_exit_codes() -> None:
             os.environ.pop("SYNTHETIC_MODE", None)
         expect(rc == probe_flake.EXIT_HARNESS_ERROR,
                "a harness error exits nonzero")
+
+        # The whole point of the class: malformed protocol input reaches
+        # the documented harness-error exit rather than a traceback.
+        for name, body in (("unhashable id", '{"event": "check", "id": [], '
+                                             '"outcome": "PASS"}\n'),
+                           ("object id", '{"event": "check", "id": {}, '
+                                         '"outcome": "PASS"}\n')):
+            raw = tree.root / f"hostile-{name.replace(' ', '-')}.jsonl"
+            raw.write_text(body, encoding="utf-8")
+            os.environ["SYNTHETIC_RAW_PATH"] = str(raw)
+            os.environ["SYNTHETIC_MODE"] = "raw"
+            try:
+                rc = probe_flake.main(
+                    ["--probe", "synthetic", "--runs", "1",
+                     "--artifact-root", str(tree.artifacts())])
+            finally:
+                os.environ.pop("SYNTHETIC_MODE", None)
+                os.environ.pop("SYNTHETIC_RAW_PATH", None)
+            expect(rc == probe_flake.EXIT_HARNESS_ERROR,
+                   f"a stream with an {name} exits {probe_flake.EXIT_HARNESS_ERROR}, "
+                   f"not a traceback (got {rc})")
 
         saved = (probe_flake.PORT_MIN, probe_flake.PORT_MAX)
         held = None
