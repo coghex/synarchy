@@ -9,7 +9,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 - [x] PRR-1. Fall regressions call sub-minute survival “well over a minute” — [#1412]
 - [x] PRR-2. Definition-free landless worlds lose the explicit `NoLand` outcome — [#1414]
 - [x] PRR-3. The envelope framing fingerprint changes on non-wire pragma edits — [#1416]
-- [ ] PRR-4. The tutorial toggle caption remains clipped at the right edge
+- [x] PRR-4. The tutorial toggle caption remains clipped at the right edge — [#1419]
 
 ## 1. Shallow-fall calibration
 
@@ -84,7 +84,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## 4. Tutorial HUD layout
 
-### PRR-4. The tutorial toggle caption remains clipped at the right edge
+### [#1419] PRR-4. The tutorial toggle caption remains clipped at the right edge
 
 > **Captured note:** Fit the tutorial toggle caption inside its right-anchored box. PR #991's own graphical verification measured `> Objectives` through the framebuffer edge as `> Objecti`, reported it out of scope, and no later change repaired or tracked it.
 
