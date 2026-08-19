@@ -9,7 +9,7 @@ The startup-handshake race visible in PR #1026's shared loop remains real, but i
 ## Status
 
 - [x] PRR-1. Autosave staging slots leak into the public save list — [#1413]
-- [ ] PRR-2. The reusable transfer-session entry point trusts an already-validated source
+- [x] PRR-2. The reusable transfer-session entry point trusts an already-validated source — [#1415]
 - [ ] PRR-3. Building preview accepts directories as animation frame files
 
 ## 1. Autosave presentation
@@ -40,7 +40,7 @@ The startup-handshake race visible in PR #1026's shared loop remains real, but i
 
 ## 2. Transfer session validity
 
-### PRR-2. The reusable transfer-session entry point trusts an already-validated source
+### [#1415] PRR-2. The reusable transfer-session entry point trusts an already-validated source
 
 > **Captured note:** Revalidate the source at `transfer_session.create`, not only while constructing today's context menu. PR #1030 made `create` the reusable boundary for future UI surfaces, but an existing source ID bypasses the player-commandable and self-transfer rules enforced by `resolveSource`.
 
