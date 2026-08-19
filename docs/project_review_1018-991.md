@@ -7,7 +7,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 ## Status
 
 - [x] PRR-1. Fall regressions call sub-minute survival “well over a minute” — [#1412]
-- [ ] PRR-2. Definition-free landless worlds lose the explicit `NoLand` outcome
+- [x] PRR-2. Definition-free landless worlds lose the explicit `NoLand` outcome — [#1414]
 - [ ] PRR-3. The envelope framing fingerprint changes on non-wire pragma edits
 - [ ] PRR-4. The tutorial toggle caption remains clipped at the right edge
 
@@ -36,7 +36,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## 2. Location-placement outcomes
 
-### PRR-2. Definition-free landless worlds lose the explicit `NoLand` outcome
+### [#1414] PRR-2. Definition-free landless worlds lose the explicit `NoLand` outcome
 
 > **Captured note:** Define which placement outcome wins when a world has no land and also has no placeable location definitions. `computeLocationPlacement` currently short-circuits to `NoPlaceableDefinitions`, even though `NoLand` is documented as the explicit result whenever the world holds no land at all.
 
