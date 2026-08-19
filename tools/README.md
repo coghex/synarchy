@@ -585,6 +585,15 @@ the blocking CI gate. Deterministic probes can still be manual-only when
 they are too narrow or too expensive for every matching PR, and paths
 covered only by manual-only probes select no behavior probe by default.
 
+A manual-only probe records ONE OR MORE reasons (#1440), each a
+`(category, explanation)` record naming one INDEPENDENT ground for
+exclusion — `expedition_retrieval` needs a real generated world *and*
+walks its legs in real time, either of which would keep it out on its
+own. Categories are unique within a probe, so two facets of the same
+category belong in one explanation; the declared order is the render
+order. Adding a `flaky` reason is the de-flake workflow's job (#1426),
+never an opportunistic edit from an unrelated branch.
+
 ```bash
 # What would CI run for these changed files?
 python3 tools/ci_probes.py --changed src/Power/Network.hs
@@ -592,9 +601,11 @@ python3 tools/ci_probes.py --changed src/Power/Network.hs
 # Validate the mapping (no engine) — also a blocking CI step
 python3 tools/ci_probes.py --self-test
 
-# Every registered probe's CI status: CI-eligible, or manual-only with a
-# reason category (flaky / base-failing / slow/worldgen-heavy /
-# scenario-heavy / targeted / needs-gpu / unclassified)
+# Every registered probe's CI status: CI-eligible, or manual-only with
+# EVERY reason excluding it, each tagged with its category (flaky /
+# base-failing / slow/worldgen-heavy / scenario-heavy / targeted /
+# needs-gpu / unclassified). A probe appears exactly once however many
+# reasons it carries.
 python3 tools/ci_probes.py --status
 ```
 
