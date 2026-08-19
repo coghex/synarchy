@@ -11,20 +11,194 @@ Exit codes:
 
 from __future__ import annotations
 
+import ast
 import json
 import sys
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import world_audit  # type: ignore
 from world_audit import (  # type: ignore
-    audit_dump, INT64_MIN, severity_of,
+    audit_dump, INT64_MIN, severity_of, classify_category,
     BUG_CATEGORIES, QUALITY_CATEGORIES, QUALITY_THRESHOLDS,
 )
 from world_check import (  # type: ignore
     CheckResult, check_issue_summary, check_determinism_status,
     PASS, FAIL, IMPROVED,
 )
+
+
+# ----- Emitted-category inventory ------------------------------------------
+#
+# The authoritative set of categories the audit can emit is the `category`
+# argument of every `Issue(...)` construction in world_audit.py. It is NOT
+# ALL_CHECKS, whose keys are check-function labels: TERRAIN_SPIKES_PITS is a
+# key but not a category, and six real categories (the river/lake-under-terrain
+# pair and the four floating-fluid variants) are categories but not keys.
+#
+# The inventory is therefore derived from the audit SOURCE by AST, so a
+# category added to a check function but classified nowhere fails
+# test_severity_classification instead of silently reaching world_check.py.
+# Anything that cannot be resolved statically is reported as a failure — never
+# skipped, since a skipped call site is exactly the fail-open hole this
+# derivation exists to close.
+
+
+def _resolve_category_expr(node: ast.expr) -> set[str] | None:
+    """Return the category strings an expression can yield, or None.
+
+    None means "not statically resolvable" and must be reported, not
+    ignored. Three shapes resolve, covering every form world_audit.py uses:
+
+      "LITERAL"                        a plain string constant
+      "A" if cond else "B"             the river/lake-under-terrain dispatch
+      {...}.get(key, "DEFAULT")        the floating-fluid family
+
+    A resolution is never empty: an expression that yields no category at
+    all is reported as unresolvable rather than contributing nothing, so a
+    call site can never be dropped from the inventory silently.
+    """
+    if isinstance(node, ast.Constant):
+        return {node.value} if isinstance(node.value, str) else None
+
+    if isinstance(node, ast.IfExp):
+        body = _resolve_category_expr(node.body)
+        orelse = _resolve_category_expr(node.orelse)
+        if body is None or orelse is None:
+            return None
+        return body | orelse
+
+    if (isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and isinstance(node.func.value, ast.Dict)
+            and not node.keywords
+            and 1 <= len(node.args) <= 2):
+        mapping = node.func.value
+        # A `**other` entry has a None key and hides values we cannot see.
+        if any(key is None for key in mapping.keys):
+            return None
+        out: set[str] = set()
+        for value in mapping.values:
+            resolved = _resolve_category_expr(value)
+            if resolved is None:
+                return None
+            out |= resolved
+        if len(node.args) == 2:
+            default = _resolve_category_expr(node.args[1])
+            if default is None:
+                return None
+            out |= default
+        return out or None
+
+    return None
+
+
+def _assignments_in(scope: ast.AST, *, shallow: bool = False
+                    ) -> dict[str, list[ast.expr]]:
+    """Map each name assigned in `scope` to every value assigned to it."""
+    nodes = getattr(scope, "body", []) if shallow else list(ast.walk(scope))
+    out: dict[str, list[ast.expr]] = {}
+    for node in nodes:
+        if isinstance(node, ast.Assign):
+            targets: list[ast.expr] = list(node.targets)
+            value = node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets = [node.target]
+            value = node.value
+        else:
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name):
+                out.setdefault(target.id, []).append(value)
+    return out
+
+
+def extract_issue_categories(source: str, filename: str
+                             ) -> tuple[set[str], list[str]]:
+    """Extract every category an `Issue(...)` call site can emit.
+
+    Returns (categories, unresolved). `unresolved` lists the call sites whose
+    category could not be determined statically, each as a
+    `<filename>:<line>: <reason>` string; a caller must treat a non-empty
+    list as a failure.
+    """
+    tree = ast.parse(source, filename=filename)
+
+    parents: dict[int, ast.AST] = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parents[id(child)] = parent
+
+    module_names = _assignments_in(tree, shallow=True)
+    scope_cache: dict[int, dict[str, list[ast.expr]]] = {}
+
+    def names_visible_at(node: ast.AST) -> dict[str, list[ast.expr]]:
+        current: ast.AST | None = node
+        while current is not None:
+            if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                cached = scope_cache.get(id(current))
+                if cached is None:
+                    cached = dict(module_names)
+                    cached.update(_assignments_in(current))
+                    scope_cache[id(current)] = cached
+                return cached
+            current = parents.get(id(current))
+        return module_names
+
+    categories: set[str] = set()
+    unresolved: list[str] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        called = (func.id if isinstance(func, ast.Name)
+                  else func.attr if isinstance(func, ast.Attribute) else None)
+        if called != "Issue":
+            continue
+
+        arg: ast.expr | None = node.args[0] if node.args else None
+        if arg is None:
+            for keyword in node.keywords:
+                if keyword.arg == "category":
+                    arg = keyword.value
+                    break
+        if arg is None:
+            unresolved.append(
+                f"{filename}:{node.lineno}: Issue(...) has no category argument"
+            )
+            continue
+
+        resolved = _resolve_category_expr(arg)
+        if resolved is None and isinstance(arg, ast.Name):
+            bound = names_visible_at(node).get(arg.id)
+            if bound:
+                accumulated: set[str] = set()
+                for value in bound:
+                    one = _resolve_category_expr(value)
+                    if one is None:
+                        accumulated = set()
+                        break
+                    accumulated |= one
+                resolved = accumulated or None
+
+        if resolved is None:
+            unresolved.append(
+                f"{filename}:{node.lineno}: cannot statically resolve the "
+                f"category of Issue({ast.unparse(arg)})"
+            )
+            continue
+        categories |= resolved
+
+    return categories, unresolved
+
+
+def emitted_categories() -> tuple[set[str], list[str]]:
+    """The audit's real emitted-category inventory, read from its source."""
+    path = Path(world_audit.__file__).resolve()
+    return extract_issue_categories(path.read_text(), str(path))
 
 
 # ----- Helpers -------------------------------------------------------------
@@ -413,23 +587,31 @@ def test_dry_below_sea_ocean_connected() -> None:
 
 
 def test_severity_classification() -> None:
-    """Every category produced by ALL_CHECKS must be classified as
-    either a BUG or a QUALITY metric — no implicit fallthrough."""
+    """Every category the audit can emit — the `category` argument of every
+    `Issue(...)` call in world_audit.py, extracted from its source rather
+    than restated here — must be classified as a BUG or a QUALITY metric,
+    and every QUALITY category must carry an explicit threshold."""
     print("test_severity_classification")
-    # The catch-all bag of categories the audit can produce
-    every_cat = {
-        "DRY_BELOW_SEA", "OCEAN_ON_LAND",
-        "RIVER_UNDER_TERRAIN", "LAKE_UNDER_TERRAIN",
-        "FLOATING_LAVA", "FLOATING_RIVER", "FLOATING_LAKE", "FLOATING_FLUID",
-        "TERRAIN_SPIKE", "TERRAIN_PIT",
-        "RIVER_CHUNK_GAP", "RIVER_MOUTH_DROP",
-        "ISLAND_1TILE", "LAKE_HOLE", "SUBMERGED_BUMP",
-        "WATER_ABOVE_LAND", "WATER_CLIFF", "WATER_WATER_CLIFF",
-        "MID_RIVER_CLIFF", "FLOATING_WATER", "MULTI_ISLAND",
-        "FLAT_ISOLATED_WATER", "ISOLATED_FLUID",
-        "MINBOUND_LEAK", "SURFACE_INCONSISTENT",
-        "WETLAND_ON_SLOPE", "DESERT_SOIL_ON_SLOPE",
-    }
+    every_cat, unresolved = emitted_categories()
+
+    # A call site we cannot read is a hole in the inventory, so it fails
+    # rather than shrinking the set we go on to check.
+    expect(not unresolved,
+           f"Issue(...) call sites whose category is not statically "
+           f"resolvable: {unresolved}")
+    expect(every_cat,
+           "no Issue(...) categories were extracted from world_audit.py — "
+           "the derivation is broken, not the audit")
+
+    # The two dynamic dispatches must keep resolving; losing them would
+    # shrink the inventory silently and re-open the fail-open hole.
+    dynamic = {"RIVER_UNDER_TERRAIN", "LAKE_UNDER_TERRAIN",
+               "FLOATING_LAVA", "FLOATING_RIVER", "FLOATING_LAKE",
+               "FLOATING_FLUID"}
+    expect(dynamic <= every_cat,
+           f"dynamically dispatched categories missing from the derived "
+           f"inventory: {sorted(dynamic - every_cat)}")
+
     classified = BUG_CATEGORIES | QUALITY_CATEGORIES
     missing = every_cat - classified
     expect(not missing,
@@ -453,6 +635,71 @@ def test_severity_classification() -> None:
     expect(severity_of("RIVER_UNDER_TERRAIN") == "QUALITY",
            "RIVER_UNDER_TERRAIN should be QUALITY severity (underground "
            "water is legitimate)")
+
+    # classify_category() is the closed variant the gate uses: it reports
+    # the absence instead of bucketing an unknown category as QUALITY.
+    expect(classify_category("OCEAN_ON_LAND") == "BUG",
+           "classify_category should agree with severity_of on a BUG")
+    expect(classify_category("ISOLATED_FLUID") == "QUALITY",
+           "classify_category should agree with severity_of on a QUALITY")
+    expect(classify_category("NEW_CORRUPTION") is None,
+           "classify_category must return None for an unclassified category, "
+           f"got {classify_category('NEW_CORRUPTION')!r}")
+
+
+def test_category_extraction_resolves_and_fails_loudly() -> None:
+    """The inventory derivation reads all three category shapes and reports
+    — never skips — a call site it cannot resolve statically."""
+    print("test_category_extraction_resolves_and_fails_loudly")
+
+    def extract(body: str) -> tuple[set[str], list[str]]:
+        return extract_issue_categories(
+            "def check(grid, issues):\n" + body, "<synthetic>")
+
+    cats, unresolved = extract('    issues.append(Issue("LITERAL", 0, 0, ""))\n')
+    expect(cats == {"LITERAL"} and not unresolved,
+           f"literal category should resolve, got {cats} / {unresolved}")
+
+    cats, unresolved = extract(
+        '    cat = "A" if ft == "river" else "B"\n'
+        '    issues.append(Issue(cat, 0, 0, ""))\n')
+    expect(cats == {"A", "B"} and not unresolved,
+           f"conditional category should resolve to both arms, got "
+           f"{cats} / {unresolved}")
+
+    cats, unresolved = extract(
+        '    cat = {"lava": "X", "river": "Y"}.get(ft, "Z")\n'
+        '    issues.append(Issue(cat, 0, 0, ""))\n')
+    expect(cats == {"X", "Y", "Z"} and not unresolved,
+           f"dict-dispatch category should resolve to values plus default, "
+           f"got {cats} / {unresolved}")
+
+    cats, unresolved = extract(
+        '    cat = compute_category(ft)\n'
+        '    issues.append(Issue(cat, 0, 0, ""))\n')
+    expect(not cats and len(unresolved) == 1,
+           f"a computed category must be reported unresolved, got "
+           f"{cats} / {unresolved}")
+
+    cats, unresolved = extract('    issues.append(Issue(cat, 0, 0, ""))\n')
+    expect(not cats and len(unresolved) == 1,
+           f"an unbound category name must be reported unresolved, got "
+           f"{cats} / {unresolved}")
+
+    cats, unresolved = extract(
+        '    cat = {}.get(ft)\n'
+        '    issues.append(Issue(cat, 0, 0, ""))\n')
+    expect(not cats and len(unresolved) == 1,
+           f"a dispatch that yields no category at all must be reported "
+           f"unresolved, got {cats} / {unresolved}")
+
+    # A partially unresolvable dispatch must not contribute its readable half.
+    cats, unresolved = extract(
+        '    cat = "A" if ft == "river" else compute_category(ft)\n'
+        '    issues.append(Issue(cat, 0, 0, ""))\n')
+    expect(not cats and len(unresolved) == 1,
+           f"a half-resolvable category must be reported unresolved rather "
+           f"than contributing its readable arm, got {cats} / {unresolved}")
 
 
 def test_wetland_on_slope() -> None:
@@ -638,6 +885,87 @@ def test_check_summary_threshold_overrides() -> None:
            f"expected threshold message, got {r.failures}")
 
 
+def test_check_summary_unclassified_category_fails() -> None:
+    """A category in neither BUG_CATEGORIES nor QUALITY_CATEGORIES fails the
+    seed by name, on both paths and at any count — never tolerated under an
+    implicit threshold."""
+    print("test_check_summary_unclassified_category_fails")
+    for strict, baseline in ((False, {}), (True, {"NEW_CORRUPTION": 1})):
+        r = _result()
+        check_issue_summary([{"NEW_CORRUPTION": 1}], baseline, {},
+                            strict=strict, result=r)
+        expect(r.status == FAIL,
+               f"unclassified category should FAIL (strict={strict}), "
+               f"got {r.status}")
+        expect(any("NEW_CORRUPTION" in f and "UNCLASSIFIED" in f
+                   for f in r.failures),
+               f"failure should name the category as unclassified "
+               f"(strict={strict}), got {r.failures}")
+
+    # The old implicit 1000 tolerated a brand-new corruption class up to
+    # that count in both modes; a single occurrence must now fail.
+    r = _result()
+    check_issue_summary([{"NEW_CORRUPTION": 999}], {}, {},
+                        strict=False, result=r)
+    expect(r.status == FAIL,
+           f"a sub-1000 unclassified count should FAIL, got {r.status}")
+    expect(not any("threshold 1000" in f for f in r.failures),
+           f"no implicit 1000 threshold should survive, got {r.failures}")
+
+
+def test_check_summary_unclassified_from_baseline_or_envelope() -> None:
+    """An unclassified category reaching the check only through the baseline
+    or the audit envelope fails too, even at a current count of zero."""
+    print("test_check_summary_unclassified_from_baseline_or_envelope")
+    r = _result()
+    check_issue_summary([{}], {"BASELINE_ONLY": 3}, {}, strict=True, result=r)
+    expect(r.status == FAIL,
+           f"baseline-only unclassified category should FAIL, got {r.status}")
+    expect(any("BASELINE_ONLY" in f for f in r.failures),
+           f"failure should name BASELINE_ONLY, got {r.failures}")
+
+    r = _result()
+    check_issue_summary([{}], {}, {"ENVELOPE_ONLY": {"max": 7}},
+                        strict=False, result=r)
+    expect(r.status == FAIL,
+           f"envelope-only unclassified category should FAIL, got {r.status}")
+    expect(any("ENVELOPE_ONLY" in f for f in r.failures),
+           f"failure should name ENVELOPE_ONLY, got {r.failures}")
+
+
+def test_check_summary_quality_without_threshold_fails() -> None:
+    """A QUALITY category with no QUALITY_THRESHOLDS entry fails by name
+    rather than silently receiving an implicit default."""
+    print("test_check_summary_quality_without_threshold_fails")
+    cat = "QUALITY_NO_THRESHOLD"
+    QUALITY_CATEGORIES.add(cat)
+    try:
+        for strict, baseline in ((False, {}), (True, {cat: 1})):
+            r = _result()
+            check_issue_summary([{cat: 1}], baseline, {},
+                                strict=strict, result=r)
+            expect(r.status == FAIL,
+                   f"threshold-less QUALITY category should FAIL "
+                   f"(strict={strict}), got {r.status}")
+            expect(any(cat in f and "no explicit threshold" in f
+                       for f in r.failures),
+                   f"failure should name the category and the missing "
+                   f"threshold (strict={strict}), got {r.failures}")
+
+        # Baseline-only, current count zero: still a failure.
+        r = _result()
+        check_issue_summary([{}], {cat: 0}, {}, strict=True, result=r)
+        expect(r.status == FAIL,
+               f"threshold-less QUALITY category should FAIL at count 0, "
+               f"got {r.status}")
+    finally:
+        QUALITY_CATEGORIES.discard(cat)
+
+    # The mutation is undone, so the category is unclassified again.
+    expect(classify_category(cat) is None,
+           f"{cat} should be unclassified after the test restores the set")
+
+
 def test_check_summary_racy_no_match_required() -> None:
     """Racy seeds don't require an exact match; under-threshold drift is a note."""
     print("test_check_summary_racy_no_match_required")
@@ -708,6 +1036,7 @@ def main() -> int:
         test_dry_below_sea_inland_basin,
         test_dry_below_sea_ocean_connected,
         test_severity_classification,
+        test_category_extraction_resolves_and_fails_loudly,
         test_wetland_on_slope,
         test_desert_soil_on_slope,
         test_check_summary_strict_match,
@@ -717,6 +1046,9 @@ def main() -> int:
         test_check_summary_bug_overrides_match,
         test_check_summary_threshold_overrides,
         test_check_summary_racy_no_match_required,
+        test_check_summary_unclassified_category_fails,
+        test_check_summary_unclassified_from_baseline_or_envelope,
+        test_check_summary_quality_without_threshold_fails,
         test_check_determinism_regression,
         test_check_determinism_improvement,
         test_check_determinism_single_run_safe,
