@@ -270,6 +270,14 @@ data ItemDef = ItemDef
       -- ^ Thermal insulation added while worn — slows the body's heat loss
       --   (scripts/thermo.lua sums it over equipped+accessory items via
       --   unit.getInsulation). 0 for non-clothing. Dress for the climate.
+    , idSourcePath  ∷ !Text
+      -- ^ The YAML file this definition was registered FROM (#1232) —
+      --   provenance only, never identity: 'idName' is the id, and moving
+      --   a definition anywhere within @data/items/@ changes this and
+      --   nothing else. Exists so a duplicate-id replacement can name
+      --   BOTH sides, which needs the loser's path and not just the
+      --   winner's. Not persisted: 'ItemManager' is a live registry
+      --   rebuilt from YAML every boot, and 'ItemDef' rides no wire DTO.
     } deriving (Show, Eq)
 
 -- | Per-unit instance. References its def by name; currentFill is for

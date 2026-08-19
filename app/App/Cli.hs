@@ -2,6 +2,12 @@
 --   selection, generic @--flag value@/region parsing, plus preview-target,
 --   image-size, language-report, and seed-range parsing.
 --
+--   It also owns the ONE encoding of which boot mode argv selects
+--   ('selectBootMode', #1086) — the precedence used to be written twice
+--   in @app\/Main.hs@, once by the dispatch and once by the function
+--   naming the mode in a flag-rejection error, with only a comment
+--   holding them together.
+--
 --   Absence and malformed presence are DIFFERENT answers (#1191). A
 --   parser here returns @'Either' 'CliError' ('Maybe' a)@: 'Right'
 --   'Nothing' means the flag never appeared and the caller's documented
@@ -11,7 +17,12 @@
 --   substitution: @--seed not-a-number@ generated seed 42 and exited 0
 --   with a full, valid, wrong dump.
 module App.Cli
-  ( DumpLayers(..)
+  ( BootModeSelection(..)
+  , selectBootMode
+  , selectionBootMode
+  , bootModeSelectionName
+  , dumpSelected
+  , DumpLayers(..)
   , defaultLayers
   , dumpLayerNames
   , CliError(..)
@@ -36,7 +47,9 @@ module App.Cli
 
 import UPrelude
 import Data.Char (toLower)
-import Data.List (intercalate, isPrefixOf)
+import Data.List (intercalate, stripPrefix)
+import qualified Data.Text as T
+import Engine.Core.Types (BootMode(..), bootModeName)
 
 -- | Which layers to include in dump output.
 data DumpLayers = DumpLayers
@@ -129,9 +142,21 @@ expectedLayers = " (expected one or more of: "
 parseDump ∷ [String] → Either CliError (Maybe DumpLayers)
 parseDump [] = Right Nothing
 parseDump (a:rest)
-    | a ≡ "--dump" = Right (Just defaultLayers)
-    | "--dump=" `isPrefixOf` a = Just ⊚ parseDumpSelection (drop 7 a)
-    | otherwise = parseDump rest
+    | a ≡ dumpFlag = Right (Just defaultLayers)
+    | otherwise = case stripPrefix dumpSelectionPrefix a of
+        Just sel → Just ⊚ parseDumpSelection sel
+        Nothing  → parseDump rest
+
+-- | The @--dump@ selector token, and the @--dump=@ prefix a layer
+--   selection carries — derived from it, so the flag is spelled once.
+--   'stripPrefix' then removes exactly the prefix it matched: the strip
+--   used to be a hand-counted seven characters, maintained separately
+--   from the literal it had to agree with (#1086).
+dumpFlag ∷ String
+dumpFlag = "--dump"
+
+dumpSelectionPrefix ∷ String
+dumpSelectionPrefix = dumpFlag ⧺ "="
 
 -- | Validate every token of a @--dump=@ selection, then build the
 --   layer set from it. Matching stays case-insensitive and keeps the
@@ -348,6 +373,75 @@ parseWord64Bound ∷ String → Maybe Word64
 parseWord64Bound s = case reads s ∷ [(Integer, String)] of
     [(v, "")] | v ≥ 0 ∧ v ≤ toInteger (maxBound ∷ Word64) → Just (fromInteger v)
     _ → Nothing
+
+-- | Which of the six boot modes @app\/Main.hs@ can dispatch argv
+--   selects. A closed set naming the modes only — the payload each one
+--   needs (the dump's layers, the preview's target, the port) is parsed
+--   separately, because mode compatibility is decided BEFORE value
+--   validation (#1191) and must survive a selector whose own value is
+--   malformed.
+data BootModeSelection
+    = SelectLanguageReport
+    | SelectDump
+    | SelectPreview
+    | SelectOffscreen
+    | SelectHeadless
+    | SelectGraphical
+    deriving (Eq, Show, Enum, Bounded)
+
+-- | The ONE encoding of boot-mode precedence (#1086):
+--   @language-report > dump > preview > offscreen > headless >
+--   graphical@. @app\/Main.hs@ calls this once and feeds the SAME value
+--   to both consumers — the incompatible-flag rejection, which names
+--   the selected mode, and the dispatch that runs it — so the mode a
+--   rejection reports cannot disagree with the mode that would have
+--   booted. The precedence used to be written out twice there, held
+--   together by a comment; adding or reordering a mode is now a single
+--   edit to this function (its dispatch implementation aside).
+--
+--   The order itself is unchanged, and each step of it is deliberate:
+--   @--dump@ and @--preview@ both win over the normal boot dispatch
+--   because a bare @--dump ...@\/@--preview ...@ must not ALSO stand up
+--   a headless\/graphical session, and @--offscreen@ (#650) wins over
+--   @--headless@ when both are given because it is the strictly more
+--   capable mode (GPU on, window off).
+selectBootMode ∷ [String] → BootModeSelection
+selectBootMode args
+    | parseLanguageReport args   = SelectLanguageReport
+    | dumpSelected args          = SelectDump
+    | isJust (parsePreview args) = SelectPreview
+    | "--offscreen" `elem` args  = SelectOffscreen
+    | "--headless" `elem` args   = SelectHeadless
+    | otherwise                  = SelectGraphical
+
+-- | Whether argv selects dump mode, INDEPENDENT of whether its layer
+--   selection parses. Mode compatibility is decided before value
+--   validation (#1191), so @--dump=bogus --port 9@ must still report
+--   @--port@ as unsupported in dump mode rather than fall through to
+--   another mode's name because the selection was malformed.
+dumpSelected ∷ [String] → Bool
+dumpSelected = either (const True) isJust ∘ parseDump
+
+-- | The engine 'BootMode' a selection boots with. 'Nothing' for
+--   @--language-report@ alone: it renders a report and exits without
+--   ever constructing an 'Engine.Core.State.EngineEnv', which is why
+--   'BootMode' has no constructor for it.
+selectionBootMode ∷ BootModeSelection → Maybe BootMode
+selectionBootMode SelectLanguageReport = Nothing
+selectionBootMode SelectDump           = Just ModeDump
+selectionBootMode SelectPreview        = Just ModePreview
+selectionBootMode SelectOffscreen      = Just ModeOffscreen
+selectionBootMode SelectHeadless       = Just ModeHeadless
+selectionBootMode SelectGraphical      = Just ModeGraphical
+
+-- | The mode's name as a diagnostic prints it (@"... is not supported
+--   in headless mode"@). Every engine-booting mode takes its name from
+--   'Engine.Core.Types.bootModeName', whose own haddock already claims
+--   to be this same vocabulary — derived rather than restated, so the
+--   two cannot drift.
+bootModeSelectionName ∷ BootModeSelection → String
+bootModeSelectionName =
+    maybe "language-report" (T.unpack ∘ bootModeName) ∘ selectionBootMode
 
 splitOn ∷ Char → String → [String]
 splitOn _ [] = [""]

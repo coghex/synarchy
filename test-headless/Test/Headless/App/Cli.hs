@@ -11,6 +11,13 @@
 --   That the errors reach stderr with a non-zero exit, ahead of every
 --   mode-specific early exit, is @tools\/preview_cli_probe.py@'s job.
 --
+--   #1086 added the boot-mode selection cases at the bottom:
+--   'selectBootMode' is now the ONE encoding of which mode argv picks,
+--   consumed both by @app\/Main.hs@'s dispatch and by the
+--   incompatible-flag rejection that names the selected mode, so a
+--   precedence regression can no longer show up as those two
+--   disagreeing at runtime.
+--
 --   @--region@ is deliberately absent from this module:
 --   @docs\/code_health_findings.md@ CH-67 tracks 'parseRegion'\'s
 --   identical silent default, sequenced after #1081's named-region
@@ -25,7 +32,11 @@ import Data.List (isInfixOf)
 import App.Cli
   ( DumpLayers(..), defaultLayers, dumpLayerNames
   , CliError(..), cliErrorMessage
-  , parseDump, parseArg, parseSize, lookupFlagValue )
+  , parseDump, parseArg, parseSize, lookupFlagValue
+  , BootModeSelection(..), selectBootMode, selectionBootMode
+  , bootModeSelectionName, dumpSelected )
+import Engine.Core.Types (BootMode(..), bootModeName)
+import qualified Data.Text as T
 
 -- | The layers a selection turned on, as a comparable tuple —
 --   'DumpLayers' has no 'Eq' instance and gaining one for a test would
@@ -158,6 +169,22 @@ spec = describe "App.Cli value validation (#1191)" $ do
       map (\n → isRight (dumpFlags ["--dump=" ⧺ n])) dumpLayerNames
         `shouldSatisfy` and
 
+    it "strips exactly the --dump= prefix it matched, whatever follows \
+       \it — the strip used to be a separately-maintained length \
+       \(#1086)" $ do
+      dumpFlags ["--dump=terrain"]
+        `shouldBe` Right (Just [True, False, False, False, False, False])
+      dumpFlags ["--dump=Terrain,ICE"]
+        `shouldBe` Right (Just [True, False, False, True, False, False])
+      -- A one-character selection: a strip one character too long would
+      -- silently eat it and report an EMPTY selection instead.
+      dumpFlags ["--dump=x"] `shouldBe` Left (UnknownDumpLayer "x")
+
+    it "does not treat a longer flag that merely starts with --dump as \
+       \a dump selector" $ do
+      dumpFlags ["--dumpsomething"] `shouldBe` Right Nothing
+      dumpFlags ["--dump-all"] `shouldBe` Right Nothing
+
   describe "cliErrorMessage" $ do
     it "names the flag and the offending token verbatim, so the user \
        \can find it in their own command line" $ do
@@ -187,6 +214,69 @@ spec = describe "App.Cli value validation (#1191)" $ do
           , EmptyDumpLayerName 1
           , UnknownDumpLayer "x" ]
         `shouldSatisfy` all (≡ 1)
+
+  describe "selectBootMode (#1086)" $ do
+    it "picks each mode from its own selector, and graphical when argv \
+       \names none" $ do
+      selectBootMode ["--language-report", "--seeds", "0:1"]
+        `shouldBe` SelectLanguageReport
+      selectBootMode ["--dump"] `shouldBe` SelectDump
+      selectBootMode ["--dump=terrain"] `shouldBe` SelectDump
+      selectBootMode ["--preview", "icons"] `shouldBe` SelectPreview
+      selectBootMode ["--offscreen"] `shouldBe` SelectOffscreen
+      selectBootMode ["--headless"] `shouldBe` SelectHeadless
+      selectBootMode [] `shouldBe` SelectGraphical
+      selectBootMode ["--arena", "--port", "9008"] `shouldBe` SelectGraphical
+
+    it "holds the documented precedence at every boundary: \
+       \language-report > dump > preview > offscreen > headless > \
+       \graphical" $ do
+      selectBootMode ["--language-report", "--dump"]
+        `shouldBe` SelectLanguageReport
+      selectBootMode ["--dump", "--preview", "icons"] `shouldBe` SelectDump
+      selectBootMode ["--preview", "icons", "--offscreen"]
+        `shouldBe` SelectPreview
+      selectBootMode ["--offscreen", "--headless"] `shouldBe` SelectOffscreen
+      -- The lowest boundary has no competing selector to mix in:
+      -- graphical is what argv naming no selector at all resolves to.
+      selectBootMode ["--headless"] `shouldBe` SelectHeadless
+
+    it "is decided by argv order-independently — a selector wins by \
+       \precedence, never by appearing first" $ do
+      selectBootMode ["--dump", "--language-report"]
+        `shouldBe` SelectLanguageReport
+      selectBootMode ["--headless", "--offscreen"] `shouldBe` SelectOffscreen
+
+    it "selects dump even when the layer selection does not parse — \
+       \mode compatibility is decided before value validation (#1191)" $ do
+      selectBootMode ["--dump=bogus_layer_typo"] `shouldBe` SelectDump
+      selectBootMode ["--dump="] `shouldBe` SelectDump
+      dumpSelected ["--dump=bogus_layer_typo"] `shouldBe` True
+      dumpSelected ["--headless"] `shouldBe` False
+
+    it "selects preview even for a bare --preview with no target, so \
+       \the missing target is reported rather than falling through to \
+       \a real graphical boot" $
+      selectBootMode ["--preview"] `shouldBe` SelectPreview
+
+  describe "bootModeSelectionName (#1086)" $ do
+    it "prints the vocabulary the rejection messages already used" $
+      map bootModeSelectionName [minBound .. maxBound]
+        `shouldBe` [ "language-report", "dump", "preview", "offscreen"
+                   , "headless", "graphical" ]
+
+    it "derives every engine-booting mode's name from \
+       \Engine.Core.Types.bootModeName rather than restating it" $
+      [ (bootModeSelectionName sel, T.unpack ⊚ (bootModeName ⊚ selectionBootMode sel))
+      | sel ← [minBound .. maxBound] ]
+        `shouldSatisfy` all (\(n, m) → maybe True (≡ n) m)
+
+    it "maps each selection onto the engine BootMode it boots, and only \
+       \--language-report onto none (it never builds an EngineEnv)" $ do
+      map selectionBootMode [minBound .. maxBound]
+        `shouldBe` [ Nothing, Just ModeDump, Just ModePreview
+                   , Just ModeOffscreen, Just ModeHeadless
+                   , Just ModeGraphical ]
 
 isRight ∷ Either a b → Bool
 isRight = either (const False) (const True)

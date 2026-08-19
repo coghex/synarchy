@@ -13,10 +13,22 @@ import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Cleanup (emptyCleanup)
 import Engine.Scene.Types
 
+-- | The debug console's default TCP port — the one place the value is
+--   written (#1086). @app\/Main.hs@ used to repeat the literal at every
+--   port-taking dispatch; it now hands the CLI's own @Maybe Int@
+--   straight through, and 'App.Boot.patchBootConfig' resolves an absent
+--   @--port@ against this.
+--
+--   CLAUDE.md warns agents off it repeatedly: it is the port the
+--   developer's graphical instance binds, so an automated run picks its
+--   own (@--port 9008@) rather than colliding here.
+defaultDebugPort ∷ Int
+defaultDebugPort = 8008
+
 defaultEngineConfig ∷ EngineConfig
 defaultEngineConfig = EngineConfig
   { ecHeadless   = False
-  , ecDebugPort  = 8008
+  , ecDebugPort  = defaultDebugPort
   , ecBootProfile = BootNormal
   -- Matches 'ecHeadless' above: the mode argv selects when it names no
   -- selector flag at all. Every real boot immediately stamps its own
