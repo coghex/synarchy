@@ -21,7 +21,7 @@ approval.
 ## Status
 
 - [x] NCT-1. Graphical GLFW “set time” test does not test setting time — [#1400]
-- [ ] NCT-2. Graphical Vulkan lifecycle tests never destroy their raw instances
+- [x] NCT-2. Graphical Vulkan lifecycle tests never destroy their raw instances — [#1401]
 - [ ] NCT-3. Vulkan extension tests require optional, platform-specific capabilities
 - [ ] NCT-4. Most graphical GLFW tests validate the upstream binding, not game behavior
 - [ ] NCT-5. Graphical device test bypasses the engine's GPU-selection contract
@@ -82,7 +82,7 @@ from the existing concern that CI does not execute that suite.
   global, so restore it to a neutral value after the assertion if subsequent
   graphical tests rely on its normal origin.
 
-### NCT-2. Graphical Vulkan lifecycle tests never destroy their raw instances
+### [#1401] NCT-2. Graphical Vulkan lifecycle tests never destroy their raw instances
 
 The graphical Vulkan specs call `createVulkanInstance` directly and leave the
 returned instances alive.  The repeat test is explicitly named “can create and
