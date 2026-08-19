@@ -17,10 +17,12 @@ import Engine.Preview.Unit (buildPreviewUnit, unitFocusErrorMessage
                            , unitsCategoryRoot)
 import Engine.Preview.Building (buildPreviewBuilding)
 import World.Plate (defaultPlatesFor)
-import App.Cli (parseDump, parseArg, parseRegion, parseSize, parsePreview
+import App.Cli (parseDump, defaultLayers, parseArg, parseRegion
+               , parseSize, parsePreview
                , PreviewCategoryKind(..), classifyPreviewCategory
                , simplePreviewCategories, groupedPreviewCategories
-               , parseLanguageReport, parseSeeds
+               , parseSeeds
+               , BootModeSelection(..), selectBootMode, bootModeSelectionName
                , CliError, cliErrorMessage)
 import App.ResourceRoot (applyResourceRoot)
 import App.Graphical (runGraphical)
@@ -45,10 +47,16 @@ main = do
   -- (#636): scripts/, assets/, data/, config/ are all loaded by
   -- cwd-relative paths from here on.
   applyResourceRoot args
+  -- The ONE boot-mode resolution (#1086). 'rejectIncompatibleFlags'
+  -- just below and the dispatch at the bottom both consume THIS value,
+  -- so the mode a rejection names can never be a different mode from
+  -- the one that would have run; the precedence itself, and why it runs
+  -- in that order, live in 'App.Cli.selectBootMode'.
+  let bootMode = selectBootMode args
   -- Reject a mode-specific flag given to a boot mode that ignores it
   -- (CH-58) before any normalization warning or boot dispatch, so an
   -- ignored value can never appear to have taken effect.
-  rejectIncompatibleFlags args
+  rejectIncompatibleFlags bootMode args
   -- Every handled value is parsed and validated HERE (#1191), after the
   -- mode-compatibility rejection above and before any mode-specific
   -- early exit, boot, or normalization warning. Two consequences are
@@ -79,9 +87,7 @@ main = do
   agesLeg ← orExitCli (parseArg "--ages" args)
   mSize   ← orExitCli (parseSize args)
 
-  let headless = "--headless" `elem` args
-      offscreen = "--offscreen" `elem` args
-      bootProfile = if "--arena" `elem` args then BootArena else BootNormal
+  let bootProfile = if "--arena" `elem` args then BootArena else BootNormal
       mPreview = parsePreview args
       region = parseRegion args
       rawWorldSize = fromMaybe 256 worldSz
@@ -104,74 +110,79 @@ main = do
         ⧺ " normalized to " ⧺ show plateCount
         ⧺ " (minimum 1)."
 
-  if parseLanguageReport args
-    then case parseSeeds args of
+  case bootMode of
+    SelectLanguageReport → case parseSeeds args of
       Just seeds → runLanguageReport seeds
       Nothing → do
           hPutStrLn stderr $ "--language-report requires --seeds LO:HI "
               ⧺ "(an inclusive range within 0.." ⧺ show (maxBound ∷ Word64) ⧺ ")"
           exitWith (ExitFailure 1)
-    else case mDump of
-      -- Field syntax, not three positional 'Int's: #1081. The seed's
-      -- own default lives here because 'parseArg' answers absence with
-      -- 'Nothing' and a malformed value with a 'Left' that already
-      -- exited above.
-      Just layers → runDump layers
-          DumpGenParams { dgpSeed       = fromMaybe 42 seed
-                        , dgpWorldSize  = worldSize
-                        , dgpPlateCount = plateCount }
-          region
-      Nothing → case mPreview of
-        -- --preview wins over headless/graphical dispatch, same as --dump
-        -- above: a bare `--preview ...` shouldn't also stand up the normal
-        -- boot path.
-        Just Nothing → do
+    -- Field syntax, not three positional 'Int's: #1081. The seed's own
+    -- default lives here because 'parseArg' answers absence with
+    -- 'Nothing' and a malformed value with a 'Left' that already
+    -- exited above. 'mDump' is necessarily 'Just' under 'SelectDump'
+    -- (that is what selected it, and a malformed selection exited
+    -- above); 'defaultLayers' is the bare @--dump@ answer either way.
+    SelectDump → runDump (fromMaybe defaultLayers mDump)
+        DumpGenParams { dgpSeed       = fromMaybe 42 seed
+                      , dgpWorldSize  = worldSize
+                      , dgpPlateCount = plateCount }
+        region
+    SelectPreview → case mPreview of
+        Just (Just (cat, mItem)) → runPreviewTarget cat mItem port
+        -- @--preview@ with no target at all. Plain 'Nothing' cannot
+        -- occur here — 'parsePreview' answering 'Just' is what selected
+        -- this mode — and would be the same user error if it did.
+        _ → do
             hPutStrLn stderr $ "--preview requires a target, e.g. "
                 ⧺ "--preview icons or --preview units/acolyte"
             exitWith (ExitFailure 1)
-        Just (Just (cat, mItem)) → case classifyPreviewCategory cat of
-          UnknownPreviewCategory → do
-              hPutStrLn stderr $ "Unrecognized preview category: " ⧺ cat
-                  ⧺ " (expected one of: " ⧺ intercalate ", "
-                      (simplePreviewCategories ⧺ groupedPreviewCategories)
-                  ⧺ ")"
-              exitWith (ExitFailure 1)
-          GroupedPreviewCategory → case mItem of
-              Nothing → do
-                  putStrLn $ "select a specific " ⧺ cat
-                      ⧺ ", e.g. --preview units/acolyte"
-                  exitSuccess
-              Just item → runGroupedPreview cat item (fromMaybe 8008 port)
-          SimplePreviewCategory → case mItem of
-            -- Bare simple category: recursively discover every texture
-            -- under its root (#886 Requirement 3) — always succeeds
-            -- (an empty/missing root just yields no entries, not a
-            -- pre-boot error; every canonical simple category is a
-            -- real, populated directory in this repo).
-            Nothing → do
-                entries ← discoverEntries (textureCategoryRoot cat)
-                runPreview (T.pack cat, Nothing) (Just (PreviewList entries))
-                           (Just (fromMaybe 8008 port))
-            -- Focused item: resolve + validate BEFORE ever creating a
-            -- window (#886 Requirement 4) — absolute paths, ".."
-            -- traversal, symlink escapes, directories, unsupported
-            -- extensions, and plain nonexistence all reject here.
-            Just item → resolveFocusedEntry (textureCategoryRoot cat) item ⌦ \case
-                Left err → do
-                    hPutStrLn stderr $ "--preview " ⧺ cat ⧺ "/" ⧺ item
-                        ⧺ ": " ⧺ T.unpack (focusErrorMessage err)
-                    exitWith (ExitFailure 1)
-                Right entry →
-                    runPreview (T.pack cat, Just (T.pack item))
-                               (Just (PreviewItem entry))
-                               (Just (fromMaybe 8008 port))
-        Nothing
-          -- Offscreen (#650) wins over --headless if both are given:
-          -- it is the strictly more capable mode (GPU on, window off).
-          | offscreen → runOffscreen bootProfile (Just (fromMaybe 8008 port))
-                                     mSize
-          | headless  → runHeadless bootProfile (Just (fromMaybe 8008 port))
-          | otherwise → runGraphical bootProfile (Just (fromMaybe 8008 port))
+    -- Every port-taking mode passes the CLI's own 'Maybe' 'Int'
+    -- through untouched (#1086): absence is 'Nothing', and
+    -- 'App.Boot.patchBootConfig' resolves it against the one
+    -- library-owned 'Engine.Core.Defaults.defaultDebugPort'.
+    SelectOffscreen → runOffscreen bootProfile port mSize
+    SelectHeadless  → runHeadless bootProfile port
+    SelectGraphical → runGraphical bootProfile port
+
+-- | Dispatch a resolved @--preview \<category\>[\/\<item\>]@ target.
+--   Lifted out of 'main' by #1086's single boot-mode resolution; the
+--   branches are exactly the ones that were nested inside it.
+runPreviewTarget ∷ String → Maybe String → Maybe Int → IO ()
+runPreviewTarget cat mItem port = case classifyPreviewCategory cat of
+    UnknownPreviewCategory → do
+        hPutStrLn stderr $ "Unrecognized preview category: " ⧺ cat
+            ⧺ " (expected one of: " ⧺ intercalate ", "
+                (simplePreviewCategories ⧺ groupedPreviewCategories)
+            ⧺ ")"
+        exitWith (ExitFailure 1)
+    GroupedPreviewCategory → case mItem of
+        Nothing → do
+            putStrLn $ "select a specific " ⧺ cat
+                ⧺ ", e.g. --preview units/acolyte"
+            exitSuccess
+        Just item → runGroupedPreview cat item port
+    SimplePreviewCategory → case mItem of
+        -- Bare simple category: recursively discover every texture
+        -- under its root (#886 Requirement 3) — always succeeds (an
+        -- empty/missing root just yields no entries, not a pre-boot
+        -- error; every canonical simple category is a real, populated
+        -- directory in this repo).
+        Nothing → do
+            entries ← discoverEntries (textureCategoryRoot cat)
+            runPreview (T.pack cat, Nothing) (Just (PreviewList entries)) port
+        -- Focused item: resolve + validate BEFORE ever creating a
+        -- window (#886 Requirement 4) — absolute paths, ".." traversal,
+        -- symlink escapes, directories, unsupported extensions, and
+        -- plain nonexistence all reject here.
+        Just item → resolveFocusedEntry (textureCategoryRoot cat) item ⌦ \case
+            Left err → do
+                hPutStrLn stderr $ "--preview " ⧺ cat ⧺ "/" ⧺ item
+                    ⧺ ": " ⧺ T.unpack (focusErrorMessage err)
+                exitWith (ExitFailure 1)
+            Right entry →
+                runPreview (T.pack cat, Just (T.pack item))
+                           (Just (PreviewItem entry)) port
 
 -- | Dispatch a @--preview \<grouped category\>/\<item\>@ target (#888
 --   completes the set). Every branch resolves and validates the item
@@ -187,25 +198,23 @@ main = do
 --   2). The @otherwise@ branch is therefore the general grouped-item
 --   rule, not a fallback: a future flat grouped category needs no code
 --   here at all.
-runGroupedPreview ∷ String → String → Int → IO ()
+runGroupedPreview ∷ String → String → Maybe Int → IO ()
 runGroupedPreview cat item port
     | cat ≡ "units" =
         buildPreviewUnit unitsCategoryRoot item ⌦ \case
             Left err → rejectItem (unitFocusErrorMessage err)
-            Right unit → runPreview target (Just (PreviewUnitAnims unit))
-                                    (Just port)
+            Right unit → runPreview target (Just (PreviewUnitAnims unit)) port
     | cat ≡ "buildings" =
         buildPreviewBuilding (textureCategoryRoot cat) item ⌦ \case
             Left err → rejectItem (itemDirErrorMessage err)
             Right building →
-                runPreview target (Just (PreviewBuildingAssets building))
-                           (Just port)
+                runPreview target (Just (PreviewBuildingAssets building)) port
     | otherwise =
         resolveItemDir (textureCategoryRoot cat) item ⌦ \case
             Left err → rejectItem (itemDirErrorMessage err)
             Right dir → do
                 entries ← discoverEntries dir
-                runPreview target (Just (PreviewList entries)) (Just port)
+                runPreview target (Just (PreviewList entries)) port
   where
     target = (T.pack cat, Just (T.pack item))
     rejectItem msg = do
@@ -224,62 +233,42 @@ orExitCli = either report pure
         hPutStrLn stderr (cliErrorMessage err)
         exitWith (ExitFailure 1)
 
--- | The boot mode argv selects, by the SAME precedence as the dispatch
---   above (language-report, then dump, then preview, then offscreen,
---   then headless, else graphical) — used only to name the selected mode
---   in a 'rejectIncompatibleFlags' error.
-selectedBootModeName ∷ [String] → String
-selectedBootModeName args
-    | parseLanguageReport args   = "language-report"
-    | dumpSelected args          = "dump"
-    | isJust (parsePreview args) = "preview"
-    | "--offscreen" `elem` args  = "offscreen"
-    | "--headless" `elem` args   = "headless"
-    | otherwise                  = "graphical"
-
--- | Whether argv selects dump mode, INDEPENDENT of whether its layer
---   selection parses. Mode compatibility is decided before value
---   validation (#1191), so @--dump=bogus --port 9@ must still report
---   @--port@ as unsupported in dump mode rather than fall through to
---   another mode's name because the selection was malformed.
-dumpSelected ∷ [String] → Bool
-dumpSelected = either (const True) isJust ∘ parseDump
-
 -- | Every ancillary (non-mode-selecting) flag Main parses, paired with
 --   the boot mode(s) that actually honour it (CH-58) — everything else
 --   silently discards it today. Detected by syntactic occurrence of the
 --   flag token in argv, not by whether the flag's own value parses: a
 --   malformed @--seed nonsense@ given to headless must still be rejected
 --   here rather than quietly vanishing into 'parseArg's @Nothing@.
-incompatibleFlagTable ∷ [(String, [String])]
+incompatibleFlagTable ∷ [(String, [BootModeSelection])]
 incompatibleFlagTable =
-    [ ("--seed",      ["dump"])
-    , ("--worldSize", ["dump"])
-    , ("--plates",    ["dump"])
-    , ("--ages",      ["dump"])
-    , ("--region",    ["dump"])
-    , ("--size",      ["offscreen"])
-    , ("--seeds",     ["language-report"])
-    , ("--arena",     ["headless", "graphical", "offscreen"])
-    , ("--port",      ["headless", "graphical", "offscreen", "preview"])
+    [ ("--seed",      [SelectDump])
+    , ("--worldSize", [SelectDump])
+    , ("--plates",    [SelectDump])
+    , ("--ages",      [SelectDump])
+    , ("--region",    [SelectDump])
+    , ("--size",      [SelectOffscreen])
+    , ("--seeds",     [SelectLanguageReport])
+    , ("--arena",     [SelectHeadless, SelectGraphical, SelectOffscreen])
+    , ("--port",      [SelectHeadless, SelectGraphical, SelectOffscreen
+                      , SelectPreview])
     ]
 
 -- | Exit 1 before any normalization warning or boot dispatch if argv
 --   carries a flag from 'incompatibleFlagTable' that the selected boot
 --   mode does not honour (CH-58) — the same pre-boot-rejection shape
 --   this file already uses for a bare/unknown @--preview@ target.
-rejectIncompatibleFlags ∷ [String] → IO ()
-rejectIncompatibleFlags args = case violations of
+rejectIncompatibleFlags ∷ BootModeSelection → [String] → IO ()
+rejectIncompatibleFlags bootMode args = case violations of
     []               → pure ()
     (flag, honoured) : _ → do
-        hPutStrLn stderr $ flag ⧺ " is not supported in " ⧺ mode
-            ⧺ " mode (only honoured in " ⧺ intercalate ", " honoured ⧺ ")"
+        hPutStrLn stderr $ flag ⧺ " is not supported in "
+            ⧺ bootModeSelectionName bootMode ⧺ " mode (only honoured in "
+            ⧺ intercalate ", " (map bootModeSelectionName honoured) ⧺ ")"
         exitWith (ExitFailure 1)
   where
-    mode = selectedBootModeName args
     violations =
         [ (flag, honoured)
         | (flag, honoured) ← incompatibleFlagTable
         , flag `elem` args
-        , mode `notElem` honoured
+        , bootMode `notElem` honoured
         ]
