@@ -50,12 +50,12 @@ implementation file, test, tracker item, or remote state was changed.
 ## Status
 
 - [x] PT-1. Survival interruptions consume a commanded move’s stall budget — [#1291]
-- [ ] PT-2. The remote-settlement title renders across the modal’s top border
-- [ ] PT-3. Final bleeding-pool cases spawn outside the loaded arena
-- [ ] PT-4. Combat-animation setup does not reliably establish combat
-- [ ] PT-5. The combat-animation probe does not gate its death-animation contract
-- [ ] PT-6. The default chop fixture cannot reach the promised partial-result oracle
-- [ ] PT-7. The portal outcome check still asserts the pre-confirmation contract
+- [x] PT-2. The remote-settlement title renders across the modal’s top border — [#1394]
+- [x] PT-3. Final bleeding-pool cases spawn outside the loaded arena — [#1395]
+- [x] PT-4. Combat-animation setup does not reliably establish combat — [#1396]
+- [x] PT-5. The combat-animation probe does not gate its death-animation contract — [#1397]
+- [x] PT-6. The default chop fixture cannot reach the promised partial-result oracle — [#1398]
+- [x] PT-7. The portal outcome check still asserts the pre-confirmation contract — [#1399]
 
 ---
 
@@ -131,7 +131,7 @@ interval.
 
 ## Modal layout and visual coverage
 
-### PT-2. The remote-settlement title renders across the modal’s top border
+### [#1394] PT-2. The remote-settlement title renders across the modal’s top border
 
 The supplied offscreen screenshot shows most of “Establish Colony Remotely?”
 behind or above the modal’s top border while the message and both actions remain
@@ -186,7 +186,7 @@ vertically as though its coordinate described the top of its visible bounds.
 
 ## Probe fixture integrity
 
-### PT-3. Final bleeding-pool cases spawn outside the loaded arena
+### [#1395] PT-3. Final bleeding-pool cases spawn outside the loaded arena
 
 The bleeding-trail probe reports success even though its final collapsed-unit,
 adjacent-bleeder, and time-scale pooling cases spawn units outside the flat
@@ -248,7 +248,7 @@ weaken the probe’s claimed arena-level coverage.
   blood accumulator itself. The final assertions passed, but their behavior on
   ordinary loaded terrain remains unproven by this run.
 
-### PT-4. Combat-animation setup does not reliably establish combat
+### [#1396] PT-4. Combat-animation setup does not reliably establish combat
 
 The combat-animation probe can fail before either combatant attacks. In the
 captured run, the acolyte progressed through running, walking, climbing,
@@ -300,7 +300,7 @@ classifies this exact approach-and-fall outcome as a recurring probe flake.
 
 ## Probe oracle integrity
 
-### PT-5. The combat-animation probe does not gate its death-animation contract
+### [#1397] PT-5. The combat-animation probe does not gate its death-animation contract
 
 The probe advertises two checks: a recognizable swing and, if a combatant dies,
 a settled death animation. Only the swing affects its exit result.
@@ -350,7 +350,7 @@ are accepted for display without changing the result.
 
 ## Action-outcome behavior coverage
 
-### PT-6. The default chop fixture cannot reach the promised partial-result oracle
+### [#1398] PT-6. The default chop fixture cannot reach the promised partial-result oracle
 
 The action-outcome probe’s default seed-42 run spends approximately eight
 minutes exercising its broader contract but cannot find a tree at the sparse
@@ -396,7 +396,7 @@ chop outcome reports 25 requested tiles as applied plus dropped tiles.
   arena fixture, or a pinned seed and coordinate offers the most stable
   long-term contract remains an implementation decision.
 
-### PT-7. The portal outcome check still asserts the pre-confirmation contract
+### [#1399] PT-7. The portal outcome check still asserts the pre-confirmation contract
 
 The action-outcome probe creates an empty arena, arms starting-portal
 placement, and clicks a valid tile. It then expects an immediate accepted

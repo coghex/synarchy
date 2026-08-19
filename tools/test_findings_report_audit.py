@@ -256,7 +256,33 @@ def test_real_report() -> None:
                f"the real report's `{form}` headings are recognised")
     expect(any(m.startswith("[#") for m in markers),
            "the real report's issue-number headings are recognised")
-    expect("" in markers, "the real report's bare headings are recognised")
+    # There is deliberately NO "at least one bare heading" case here, and
+    # reinstating one re-breaks this file. A bare heading is an
+    # UNDISPOSITIONED finding, so asserting the real report still has one
+    # measured how much work the processing lane had left rather than
+    # anything about the lexer -- and it failed the moment that lane
+    # caught up. Master 8f451433 dispositioned the last bare finding of
+    # 138, which turned this self-test red on master and on every branch
+    # built against it, none of which had touched the report.
+    #
+    # No coverage is lost. The bare-marker path is exercised three times
+    # over by the synthetic fixtures above -- bare on both sides, either
+    # side bare against a marked counterpart, and an open
+    # `> **Partial:**` -- and none of those can expire, because this file
+    # owns them.
+    #
+    # Nor is a substitute assertion available: `_MARKER` is a closed
+    # alternation, so a marker in an unrecognised shape does not lex into
+    # an odd marker to be caught, it raises at `parse_headings`. A check
+    # for one would be vacuous by construction, which is worse than an
+    # absent check because it reads as coverage.
+    #
+    # What the real report is here to catch is the lexer that silently
+    # stops recognising markers: every heading would read as bare, both
+    # sides would then agree, and the audit would pass everything. The
+    # three form assertions above ARE that guard -- each needs a real
+    # marker to survive lexing -- and they hold on a fully dispositioned
+    # report, because terminal dispositions accumulate and never leave.
 
     with tempfile.TemporaryDirectory() as tmp:
         result = subprocess.run(

@@ -178,7 +178,7 @@ an entry's current status.
 - [x] CH-135. Status markers are inconsistent, and two of the six that exist are wrong — [no-issue]
 - [x] CH-136. Minor doc defects for one cleanup issue — [no-issue]
 - [x] CH-137. Verified: four docs are accurate and worth using as the pattern — [no-issue]
-- [ ] CH-138. Every GitHub Actions dependency is pinned by mutable tag, not by SHA
+- [ ] CH-138. Every GitHub Actions dependency is pinned by mutable tag, not by SHA — [deferred]: #1356 must merge first
 
 ---
 
@@ -3960,7 +3960,28 @@ The lesson for CH-133/CH-134: the failure is not that docs drift from code —
 these four don't — it is that *design* docs have no lifecycle step that marks
 them implemented.
 
-### CH-138. Every GitHub Actions dependency is pinned by mutable tag, not by SHA
+### [deferred] CH-138. Every GitHub Actions dependency is pinned by mutable tag, not by SHA
+> **Deferred:** The SHAs must be taken from the versions the pending major bump
+> selects, so filing now would produce an issue that cannot be worked and whose
+> substance is not yet determined — **#1356** ("Move the four deprecated GitHub
+> Actions off their Node 20 majors", OPEN, `reviewed:approve`) already scopes
+> SHA pinning out and names this entry: *"bump first, pin second."* The
+> precondition that clears this: **#1356 is closed by a merged PR.**
+>
+> Verified 2026-08-18, with three corrections. (1) **`secrets.NTFY_URL` is NOT
+> exposed** — `ntfy-notify.yml` has zero `uses:` entries (pure `run:` + `curl`)
+> and secrets do not cross workflows, so no third-party action here can reach
+> it; drop that consequence. The real exposure stands on its own:
+> `packages: write` (`ci-image.yml:36-38`, `:64-66`; `ci.yml:153-155`),
+> `secrets.GITHUB_TOKEN` handed to `docker/login-action` at `ci-image.yml:79`,
+> and `pull-requests: write` (`review-gate.yml:52-54`) in the job running
+> `actions/checkout@v4` at `:57`. (2) It is seven DISTINCT actions across **ten**
+> call sites, not seven references. (3) **All seven are a major behind, not
+> four** — the `docker/*` entries escape the Node 20 warning but not currency:
+> `setup-buildx-action` v3 → **v4.2.0**, `login-action` v3 → **v4.6.0**,
+> `build-push-action` v6 → **v7.3.0**, beside `checkout` v4 → **v7.0.1** and
+> `cache` v4 → **v6.1.0**. A complete pinning pass therefore touches all ten
+> sites, which reinforces the bump-first ordering rather than changing it.
 
 All seven third-party `uses:` references across the four workflows are pinned to
 a floating major tag rather than a commit SHA:

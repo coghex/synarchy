@@ -20,10 +20,10 @@ approval.
 
 ## Status
 
-- [ ] NCT-1. Graphical GLFW “set time” test does not test setting time
-- [ ] NCT-2. Graphical Vulkan lifecycle tests never destroy their raw instances
-- [ ] NCT-3. Vulkan extension tests require optional, platform-specific capabilities
-- [ ] NCT-4. Most graphical GLFW tests validate the upstream binding, not game behavior
+- [x] NCT-1. Graphical GLFW “set time” test does not test setting time — [#1400]
+- [x] NCT-2. Graphical Vulkan lifecycle tests never destroy their raw instances — [#1401]
+- [x] NCT-3. Vulkan extension tests require optional, platform-specific capabilities — [#1402]
+- [ ] NCT-4. Most graphical GLFW tests validate the upstream binding, not game behavior — [deferred]: awaits #1153's build-only record
 - [ ] NCT-5. Graphical device test bypasses the engine's GPU-selection contract
 - [ ] NCT-6. Injury-log probe accepts a `unit.injure` event for the wrong unit
 - [ ] NCT-7. Injury-log probe never gates a real fall's event emission
@@ -47,7 +47,7 @@ approval.
 
 ## Graphical Hspec suite
 
-### NCT-1. Graphical GLFW “set time” test does not test setting time
+### [#1400] NCT-1. Graphical GLFW “set time” test does not test setting time
 
 The graphical GLFW test calls `GLFW.setTime 0`, then checks only that
 `GLFW.getTime` returns a nonnegative value. Time is naturally nonnegative, so
@@ -82,7 +82,7 @@ from the existing concern that CI does not execute that suite.
   global, so restore it to a neutral value after the assertion if subsequent
   graphical tests rely on its normal origin.
 
-### NCT-2. Graphical Vulkan lifecycle tests never destroy their raw instances
+### [#1401] NCT-2. Graphical Vulkan lifecycle tests never destroy their raw instances
 
 The graphical Vulkan specs call `createVulkanInstance` directly and leave the
 returned instances alive.  The repeat test is explicitly named “can create and
@@ -129,7 +129,7 @@ production wraps that operation at its owner.
 - **Remaining uncertainty:** None material; the resource ownership contract is
   explicit in the current implementation.
 
-### NCT-3. Vulkan extension tests require optional, platform-specific capabilities
+### [#1402] NCT-3. Vulkan extension tests require optional, platform-specific capabilities
 
 The graphical instance suite declares two portability-related extensions to be
 required and fails when the local Vulkan driver does not advertise them.  The
@@ -176,7 +176,17 @@ machine's driver inventory rather than the engine's cross-platform contract.
 - **Remaining uncertainty:** The exact extension inventory varies by Vulkan
   loader/driver, which is precisely why an unconditional test is unsuitable.
 
-### NCT-4. Most graphical GLFW tests validate the upstream binding, not game behavior
+### [deferred] NCT-4. Most graphical GLFW tests validate the upstream binding, not game behavior
+
+> **Deferred:** The retained smoke set is a policy question #1153 has not
+> answered — it explicitly puts "running the graphical suite anywhere" out of
+> scope while committing to record `test/` as build-only. Filing now would guess
+> between deleting these examples, relabelling them a manual preflight, and
+> writing project-owned coverage that could only run in a suite nothing
+> executes; the pure part is already covered headless by
+> `Test.Headless.Graphics.WindowMode` (27 examples, incl. `appliedModeAtCreation`).
+> Clears when #1153 lands and `test/`'s build-only status is recorded in
+> `CLAUDE.md` and the cabal stanza.
 
 Most of the graphical GLFW suite unwraps the raw GLFW handle and calls the
 upstream `Graphics.UI.GLFW` API directly.  Beyond the one-time suite setup
