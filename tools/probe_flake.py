@@ -93,14 +93,29 @@ DEFAULT_TIMEOUT = run_probes.DEFAULT_TIMEOUT
 ARTIFACT_DIR_NAME = "synarchy-probe-flake"
 LEASE_DIR_NAME = "synarchy-probe-flake-leases"
 
-# The port lease and the live-invocation registry live HERE, at a fixed
-# machine-wide location, and deliberately NOT under the artifact root:
-# the artifact root is CLI-overridable, so two harnesses started with
-# different `--artifact-root` values would otherwise keep disjoint lease
-# sets and could lease the same port — the exact collision atomic
-# leasing exists to prevent. Resolved once at import; only the self-test
-# may redirect it, by rebinding this attribute explicitly.
-LEASE_ROOT = Path(tempfile.gettempdir()) / LEASE_DIR_NAME
+def _machine_wide_scratch() -> Path:
+    """The fixed per-user location the port leases and registry live in.
+
+    Deliberately NOT under the artifact root, and deliberately NOT
+    `tempfile.gettempdir()`. Both vary per invocation — the artifact
+    root because `--artifact-root` overrides it, the temp dir because it
+    follows `TMPDIR`, which on macOS is a PER-SESSION `/var/folders/...`
+    path and on any platform is whatever the launching shell exported.
+    Either one splitting the namespace means two harnesses lock
+    different files, both believe they own a port, and put two engines
+    on it — the exact collision atomic leasing exists to prevent — while
+    their concurrency registries also stop seeing each other.
+
+    `/tmp` is the fixed, shared path POSIX guarantees; the uid suffix
+    keeps one user's namespace out of another's, and `_ensure_owned_dir`
+    refuses to share a directory this user does not own. Resolved once
+    at import; only the self-test may redirect it, by rebinding
+    `LEASE_ROOT` explicitly.
+    """
+    return Path("/tmp") / f"{LEASE_DIR_NAME}-{os.getuid()}"
+
+
+LEASE_ROOT = _machine_wide_scratch()
 
 # How long a live-invocation registration whose owner is gone is left
 # alone before it is treated as stale. Short, because the owning process
@@ -220,10 +235,32 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _lease_dir() -> Path:
-    path = LEASE_ROOT / "ports"
-    path.mkdir(parents=True, exist_ok=True)
+def _ensure_owned_dir(path: Path) -> Path:
+    """Create `path` privately, refusing one another user owns.
+
+    The lease namespace is under a shared `/tmp`, so "it exists" is not
+    the same as "it is mine": writing leases into a directory another
+    account created would make this harness's exclusion meaningless
+    against its own concurrent runs.
+    """
+    try:
+        path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        owner = path.stat().st_uid
+    except OSError as error:
+        raise Rejection(
+            f"could not create the harness scratch directory {path} "
+            f"({error})") from None
+    if owner != os.getuid():
+        raise Rejection(
+            f"the harness scratch directory {path} belongs to uid {owner}, "
+            f"not {os.getuid()}; refusing to share a port-lease namespace "
+            f"with another user")
     return path
+
+
+def _lease_dir() -> Path:
+    _ensure_owned_dir(LEASE_ROOT)
+    return _ensure_owned_dir(LEASE_ROOT / "ports")
 
 
 def port_is_clear(port: int, host: str = "127.0.0.1") -> bool:
@@ -341,7 +378,8 @@ class LiveRegistry:
         self._registered = False
 
     def __enter__(self) -> "LiveRegistry":
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_owned_dir(LEASE_ROOT)
+        _ensure_owned_dir(self.path.parent)
         # PUBLISHED ATOMICALLY. Writing straight to the final path would
         # leave a window in which a concurrently starting harness reads
         # an empty file, classifies it as corrupt, and unlinks it — and

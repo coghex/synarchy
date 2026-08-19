@@ -608,8 +608,13 @@ dir, engine-log dir, RTS capabilities) that default to today's behavior.
 
 Ports come from an atomic cross-process lease over 8009-8999 (8008 — the GUI
 port — is always forbidden), held until `run_one` has reaped the probe's whole
-process group, so concurrent harnesses never collide. Artifacts land under
-`<platform temp dir>/synarchy-probe-flake`, never inside a worktree;
+process group, so concurrent harnesses never collide. The lease is an advisory
+`flock`, not a file anyone deletes, so a harness that dies releases it with no
+staleness heuristic; its namespace is anchored at a fixed per-user `/tmp` path
+that neither `--artifact-root` nor `TMPDIR` can move, since either splitting it
+would let two harnesses lock different files and land on one port. Artifacts,
+by contrast, DO follow the platform temp dir —
+`<platform temp dir>/synarchy-probe-flake` — and never land inside a worktree;
 successful runs are deleted and `FAIL`/`TIMEOUT`/harness-error runs keep their
 stdout, protocol events and every engine log.
 

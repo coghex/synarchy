@@ -929,6 +929,91 @@ def test_concurrent_leasing() -> None:
             recovered.release()
 
 
+# A port deliberately OUTSIDE 8009-8999, so the cross-TMPDIR test below
+# contends in the REAL machine-wide lease namespace — which is the only
+# place the defect it covers can be observed — without ever touching a
+# port a real harness might be measuring on.
+TMPDIR_TEST_PORT = 65000
+
+# Source for a child harness that resolves LEASE_ROOT ITSELF. Rebinding
+# it here would defeat the point: what is under test is whether two
+# invocations under different TMPDIRs agree on the namespace.
+HOLDER_SRC = """\
+import sys, time
+sys.path.insert(0, {tools!r})
+import probe_flake
+lease = probe_flake.PortLease.try_acquire({port})
+print(('held ' if lease else 'missed ') + str(probe_flake.LEASE_ROOT),
+      flush=True)
+if lease:
+    time.sleep(120)
+"""
+
+
+def test_lease_root_is_tmpdir_independent() -> None:
+    print("\n-- lease namespace vs TMPDIR --")
+    saved = os.environ.get("TMPDIR")
+    try:
+        first = probe_flake._machine_wide_scratch()
+        os.environ["TMPDIR"] = tempfile.mkdtemp(prefix="probe-flake-tmpa-")
+        tempfile.tempdir = None
+        second = probe_flake._machine_wide_scratch()
+        moved_artifacts = probe_flake.default_artifact_root()
+        os.environ["TMPDIR"] = tempfile.mkdtemp(prefix="probe-flake-tmpb-")
+        tempfile.tempdir = None
+        third = probe_flake._machine_wide_scratch()
+        expect(first == second == third,
+               f"the lease root is the same under any TMPDIR "
+               f"({first}, {second}, {third})")
+        expect(str(first).startswith("/tmp/"),
+               f"the lease root is anchored at the fixed shared /tmp ({first})")
+        expect(moved_artifacts != probe_flake.default_artifact_root(),
+               "the ARTIFACT root does follow TMPDIR — only the lease "
+               "namespace is pinned")
+    finally:
+        tempfile.tempdir = None
+        if saved is None:
+            os.environ.pop("TMPDIR", None)
+        else:
+            os.environ["TMPDIR"] = saved
+
+    # The regression itself, cross-PROCESS and cross-TMPDIR: two
+    # harnesses whose TMPDIRs differ must still contend for one port.
+    scratch = Path(tempfile.mkdtemp(prefix="probe-flake-xtmp-"))
+    try:
+        holder = scratch / "holder.py"
+        holder.write_text(
+            HOLDER_SRC.format(tools=TOOLS_DIR, port=TMPDIR_TEST_PORT),
+            encoding="utf-8")
+        (scratch / "a").mkdir()
+        (scratch / "b").mkdir()
+        env_a = {**os.environ, "TMPDIR": str(scratch / "a")}
+        env_b = {**os.environ, "TMPDIR": str(scratch / "b")}
+        first_proc = subprocess.Popen([sys.executable, str(holder)],
+                                      stdout=subprocess.PIPE, text=True,
+                                      env=env_a)
+        try:
+            said = first_proc.stdout.readline().strip()
+            expect(said.startswith("held "),
+                   f"the first harness (TMPDIR A) holds the port ({said!r})")
+            done = subprocess.run([sys.executable, str(holder)],
+                                  capture_output=True, text=True,
+                                  env=env_b, timeout=60)
+            other = (done.stdout.strip().splitlines() or [""])[0]
+            expect(other.startswith("missed "),
+                   f"a harness under a DIFFERENT TMPDIR is blocked by it "
+                   f"({other!r})")
+            expect(" " in said and " " in other
+                   and said.split(" ", 1)[1] == other.split(" ", 1)[1],
+                   f"both resolved the SAME lease namespace "
+                   f"({said!r} vs {other!r})")
+        finally:
+            first_proc.kill()
+            first_proc.wait(timeout=30)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 def _dead_pid() -> int:
     """A pid that is certainly not running: spawn one and reap it."""
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
@@ -1520,6 +1605,7 @@ def main() -> int:
                  test_eligibility, test_descriptor_mismatch_rejection,
                  test_reconciliation, test_harness_errors, test_ports,
                  test_concurrent_leasing,
+                 test_lease_root_is_tmpdir_independent,
                  test_concurrency_accounting, test_artifacts,
                  test_no_tmpdir_default, test_result_document,
                  test_exit_codes, test_render, test_manifest_fixture,
