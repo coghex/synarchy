@@ -229,10 +229,26 @@ withHeadlessEngineExpectingStopped expectedStopped action =
         writeIORef (lifecycleRef env) EngineRunning
         worldTS ← startWorldThread env
         pure (env, [(worldWorker, worldTS)])
+    -- No settling delay after 'shutdownThread' (#1363).
+    --
+    -- 'shutdownThread' is a join, not a signal: on the normal path it
+    -- blocks on @takeMVar (tsDone ts)@, and 'World.Thread.startWorldThread'
+    -- fills that @MVar@ from a @finally@ at the fork site. So the worker's
+    -- loop has provably exited by the time this returns, and the harness
+    -- starts no other thread — @initializeEngineHeadless@ binds no socket
+    -- and starts no debug server. A fixed sleep here waited for nothing
+    -- and cost 100 ms per engine, ~27 s across the suite's 270 boots.
+    --
+    -- @shutdownThread@'s exceptional path (10 s timeout, then
+    -- @killThread@ with no subsequent join) is out of scope: a fixed
+    -- 100 ms would not have been a valid join there either.
+    --
+    -- If a spec ever needs settling time, it waits in that spec for the
+    -- condition it actually needs. A blanket delay charged to every
+    -- engine is what #1363 removed and must not come back here.
     teardown (env, workers) = do
         writeIORef (lifecycleRef env) CleaningUp
         mapM_ (shutdownThread ∘ snd) workers
-        threadDelay 100000
 
 -- | Boot engine in headless mode with NO world thread, run action, shut
 --   down (#1362).
