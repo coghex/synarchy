@@ -432,10 +432,29 @@ def test_event_stream() -> None:
     expect_raises(probe_protocol.ProtocolError,
                   bad(_line(event="progress", id="alpha")),
                   "an unknown event kind is unclassifiable", "unclassifiable")
-    expect_raises(probe_protocol.ProtocolError,
-                  bad(_line(event="check", id="alpha", outcome="PASS",
-                            detail="not-an-object")),
-                  "a non-object detail is a protocol error", "must be an object")
+    # A present `detail` must be an OBJECT. Every falsey non-object is
+    # its own case: a truthiness fallback would coerce each to `{}` and
+    # let a malformed event be counted as a pass.
+    for value in ("not-an-object", [], "", 0, False, None, 1, [1, 2]):
+        expect_raises(probe_protocol.ProtocolError,
+                      bad(_line(event="check", id="alpha", outcome="PASS",
+                                detail=value)),
+                      f"check detail {value!r} is a protocol error",
+                      "must be an object")
+        expect_raises(probe_protocol.ProtocolError,
+                      bad(_line(event="diagnostic", level="INFO",
+                                message="m", detail=value)),
+                      f"diagnostic detail {value!r} is a protocol error",
+                      "must be an object")
+    # An ABSENT key is the only thing that means "no detail".
+    _events, outcomes = probe_protocol.parse_event_stream(
+        _line(event="check", id="alpha", outcome="PASS"), d)
+    expect(outcomes["alpha"] == "PASS",
+           "an absent detail key is accepted as no detail")
+    events, _outcomes = probe_protocol.parse_event_stream(
+        _line(event="check", id="alpha", outcome="PASS", detail={}), d)
+    expect(events[0].detail == {},
+           "an explicitly empty detail object is accepted")
 
 
 def test_forbidden_markers() -> None:
@@ -636,6 +655,16 @@ def test_harness_errors() -> None:
                "a harness error reports no failure rate at all")
         expect("bracketed stdout markers" in (m.error or ""),
                "the harness error names the second result channel")
+        expect(m.error_run is not None
+               and m.error_run.checks.get("alpha") == "PASS"
+               and m.error_run.checks.get("beta") == "MISSING",
+               "a marker error still reports the valid partial check data "
+               "its stream did parse")
+        text = probe_flake.render(m)
+        expect("every run succeeded" not in text
+               and str(m.error_run.artifact_dir) in text,
+               "the table names the retained artifacts instead of claiming "
+               "success")
 
         raws = {
             "truncated": '{"event": "check", "id": "alpha"',
@@ -660,6 +689,18 @@ def test_harness_errors() -> None:
                    f"a {name} stream yields no flake rate")
             expect(len(m.runs) < 2,
                    f"a {name} stream stops the measurement rather than continuing")
+            expect(m.error_run is not None,
+                   f"a {name} stream still REPORTS the run it discarded")
+            expect(m.error_run is not None and m.retained_artifacts()
+                   and m.error_run.artifact_dir is not None
+                   and m.error_run.artifact_dir.exists(),
+                   f"a {name} run's retained artifacts are named in the result")
+            expect(m.error_run is not None
+                   and m.error_run.outcome == "HARNESS_ERROR"
+                   and m.error_run not in m.runs,
+                   f"a {name} run is not counted as a probe outcome")
+            expect("every run succeeded" not in probe_flake.render(m),
+                   f"the {name} table never claims every run succeeded")
 
 
 # ==========================================================================
@@ -832,6 +873,30 @@ def test_artifacts() -> None:
                           Path(run_probes.REPO_ROOT) / "artifacts"),
                       "an artifact root inside a working tree is refused",
                       "inside the working tree")
+
+        # An unusable root is a clean pre-execution rejection, not a
+        # traceback: /dev/null is a character device, so nothing can be
+        # created beneath it.
+        expect_raises(probe_flake.Rejection,
+                      lambda: probe_flake.check_artifact_root(
+                          Path("/dev/null/probe-artifacts")),
+                      "an uncreatable artifact root is rejected, not a crash",
+                      "cannot be created")
+        rc = probe_flake.main(["--probe", "synthetic", "--runs", "1",
+                               "--artifact-root", "/dev/null/probe-artifacts"])
+        expect(rc == probe_flake.EXIT_REJECTED,
+               "an uncreatable artifact root exits with the rejection code")
+        unwritable = tree.artifact_root / "readonly"
+        unwritable.mkdir()
+        unwritable.chmod(0o500)
+        try:
+            expect_raises(probe_flake.Rejection,
+                          lambda: probe_flake.check_artifact_root(
+                              unwritable / "under"),
+                          "an unwritable artifact root is rejected",
+                          "cannot be created")
+        finally:
+            unwritable.chmod(0o700)
 
 
 def test_no_tmpdir_default() -> None:

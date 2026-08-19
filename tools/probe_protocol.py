@@ -258,6 +258,25 @@ class EventWriter:
             pass
 
 
+def _event_detail(payload: dict, number: int) -> dict:
+    """One event's optional `detail`, which must be an object if present.
+
+    Presence is checked explicitly rather than through a truthiness
+    fallback: `"detail": []`, `""`, `0`, `false` and an explicit `null`
+    are all falsey, and coercing any of them to `{}` would let a
+    malformed event through and be counted as a pass. An ABSENT key is
+    the only thing that means "no detail".
+    """
+    if "detail" not in payload:
+        return {}
+    detail = payload["detail"]
+    if not isinstance(detail, dict):
+        raise ProtocolError(
+            f"protocol event line {number}: `detail` must be an object, "
+            f"got {detail!r}")
+    return detail
+
+
 def parse_event_stream(text: str, descriptor: Descriptor):
     """Parse a run's event stream against `descriptor`.
 
@@ -319,11 +338,7 @@ def parse_event_stream(text: str, descriptor: Descriptor):
                     f"protocol event line {number}: check {check_id!r} "
                     f"arrived before the declared check {missed!r}; the "
                     f"probe deviated from the sequence it declared")
-            detail = payload.get("detail") or {}
-            if not isinstance(detail, dict):
-                raise ProtocolError(
-                    f"protocol event line {number}: `detail` must be an "
-                    f"object, got {detail!r}")
+            detail = _event_detail(payload, number)
             outcomes[check_id] = outcome
             next_index = index + 1
             events.append(CheckEvent(check_id, outcome, detail))
@@ -338,11 +353,7 @@ def parse_event_stream(text: str, descriptor: Descriptor):
                 raise ProtocolError(
                     f"protocol event line {number}: diagnostic has no "
                     f"string `message`")
-            detail = payload.get("detail") or {}
-            if not isinstance(detail, dict):
-                raise ProtocolError(
-                    f"protocol event line {number}: `detail` must be an "
-                    f"object, got {detail!r}")
+            detail = _event_detail(payload, number)
             events.append(DiagnosticEvent(level, message, detail))
         else:
             raise ProtocolError(

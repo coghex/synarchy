@@ -116,6 +116,9 @@ EXIT_HARNESS_ERROR = 4
 RUN_PASS = "PASS"
 RUN_FAIL = "FAIL"
 RUN_TIMEOUT = "TIMEOUT"
+# Not a probe outcome. Only ever the label on `Measurement.error_run`,
+# the one run whose protocol stream could not be trusted.
+RUN_HARNESS_ERROR = "HARNESS_ERROR"
 
 
 class Rejection(Exception):
@@ -428,32 +431,51 @@ def _worktree_paths() -> list[Path]:
 
 
 def check_artifact_root(root: Path) -> Path:
-    """Resolve `root`, refusing any location inside a working tree.
+    """Resolve `root`, refusing anything inside a working tree or unusable.
 
     Raw probe artifacts must never land in a repository worktree: the
     primary checkout has to stay clean for the PR drainer, and a stray
     engine log inside an issue worktree wedges its post-merge cleanup.
+
+    An unusable root is a pre-execution REJECTION like any other, not a
+    traceback: `--artifact-root /dev/null/x` must exit with the
+    documented rejection code naming the path, before a probe or a port
+    lease exists.
     """
-    resolved = Path(root).expanduser().resolve()
+    try:
+        resolved = Path(root).expanduser().resolve()
+    except OSError as error:
+        raise Rejection(
+            f"artifact root {root} cannot be resolved ({error})") from None
     for tree in _worktree_paths():
         if resolved == tree or tree in resolved.parents:
             raise Rejection(
                 f"artifact root {resolved} is inside the working tree {tree}; "
                 f"raw probe artifacts must never be written into a repository "
                 f"worktree")
+    try:
+        resolved.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise Rejection(
+            f"artifact root {resolved} cannot be created ({error})") from None
+    if not os.access(resolved, os.W_OK | os.X_OK):
+        raise Rejection(f"artifact root {resolved} is not writable")
     return resolved
 
 
 def new_invocation_dir(root: Path, probe: str) -> Path:
     """A collision-free directory for this invocation, created fresh."""
-    root.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     while True:
         candidate = root / f"{probe}-{stamp}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
         try:
-            candidate.mkdir()
+            candidate.mkdir(parents=True)
         except FileExistsError:
             continue
+        except OSError as error:
+            raise Rejection(
+                f"could not create an artifact directory under {root} "
+                f"({error})") from None
         return candidate
 
 
@@ -497,6 +519,13 @@ class Measurement:
         self.artifact_root = artifact_root
         self.invocation_dir = invocation_dir
         self.runs: list[RunRecord] = []
+        # The run whose protocol stream could not be trusted, if any.
+        # Deliberately NOT in `runs`: that list is the complete VALID
+        # per-run outcome list, and a harness error is not a fourth
+        # probe outcome. It still has to be reported, with its retained
+        # artifacts and whatever partial checks parsed cleanly, or the
+        # measurement would claim nothing went wrong.
+        self.error_run: RunRecord | None = None
         self.peak_concurrency = 1
         self.status = "ok"
         self.error: str | None = None
@@ -542,7 +571,10 @@ class Measurement:
         return counts
 
     def retained_artifacts(self) -> list[str]:
-        return [str(r.artifact_dir) for r in self.runs if r.artifact_dir]
+        records = list(self.runs)
+        if self.error_run is not None:
+            records.append(self.error_run)
+        return [str(r.artifact_dir) for r in records if r.artifact_dir]
 
     # -- serialization -----------------------------------------------------
     def to_document(self) -> dict:
@@ -555,6 +587,8 @@ class Measurement:
             "requested_runs": self.requested_runs,
             "completed_runs": len(self.runs),
             "runs": [r.to_document() for r in self.runs],
+            "error_run": (self.error_run.to_document()
+                          if self.error_run is not None else None),
             "checks": [{"id": cid, "label": label}
                        for cid, label in self.descriptor.checks],
             "check_counts": self.check_counts(),
@@ -581,6 +615,24 @@ def _commit_sha() -> str:
     except (OSError, subprocess.SubprocessError):
         return "unknown"
     return done.stdout.strip() if done.returncode == 0 else "unknown"
+
+
+def salvage_checks(descriptor: probe_protocol.Descriptor,
+                   events_text: str) -> dict[str, str]:
+    """Whatever a broken run's event stream still says, or nothing.
+
+    Best effort by design: an untrustworthy stream yields no per-check
+    data at all rather than a half-parsed guess, but a stream that
+    parses fine and failed for another reason (a forbidden stdout
+    marker) keeps its outcomes as the "valid partial data" a harness
+    error must still report.
+    """
+    try:
+        _events, outcomes = probe_protocol.parse_event_stream(
+            events_text, descriptor)
+    except probe_protocol.ProtocolError:
+        return {}
+    return outcomes
 
 
 def reconcile(descriptor: probe_protocol.Descriptor, ok: bool, timed_out: bool,
@@ -666,31 +718,38 @@ def measure(probe: str, runs: int, *, artifact_root: Path | None = None,
                 lease.release()
 
             stdout_path.write_text(out or "", encoding="utf-8")
-            try:
-                events_text = events_path.read_text(encoding="utf-8")
-            except OSError as error:
-                events_text = ""
+
+            def stop_with_harness_error(detail: str) -> Measurement:
+                """Record the untrustworthy run and end the measurement.
+
+                The run is kept OUT of `runs` — a harness error is not a
+                fourth probe outcome — but it is reported, with its
+                retained artifact directory and whatever checks parsed
+                cleanly, so the result never reads as "nothing went
+                wrong, nothing retained".
+                """
                 measurement.status = "harness-error"
-                measurement.error = (
-                    f"run {index}: protocol event stream at {events_path} "
-                    f"is unreadable ({error})")
-                measurement.runs.append(RunRecord(
-                    index, lease.port, RUN_FAIL, elapsed,
-                    {cid: probe_protocol.MISSING for cid in descriptor.ids},
-                    run_dir))
+                measurement.error = f"run {index}: {detail}"
+                measurement.error_run = RunRecord(
+                    index, lease.port, RUN_HARNESS_ERROR, elapsed,
+                    salvage_checks(descriptor, events_text), run_dir)
                 registry.sample()
                 measurement.peak_concurrency = registry.peak
                 return measurement
 
             try:
+                events_text = events_path.read_text(encoding="utf-8")
+            except OSError as error:
+                events_text = ""
+                return stop_with_harness_error(
+                    f"protocol event stream at {events_path} is unreadable "
+                    f"({error})")
+
+            try:
                 outcome, outcomes = reconcile(descriptor, ok, timed_out,
                                               events_text, out or "")
             except HarnessError as error:
-                measurement.status = "harness-error"
-                measurement.error = f"run {index}: {error}"
-                registry.sample()
-                measurement.peak_concurrency = registry.peak
-                return measurement
+                return stop_with_harness_error(str(error))
 
             keep = outcome in (RUN_FAIL, RUN_TIMEOUT)
             if not keep:
@@ -735,6 +794,14 @@ def render(measurement: Measurement) -> str:
         lines.append(f"  HARNESS ERROR: {measurement.error}")
         lines.append("  no trustworthy failure rate — the partial data above "
                      "is what parsed cleanly")
+        broken = measurement.error_run
+        if broken is not None:
+            reported = ", ".join(f"{cid}={result}"
+                                 for cid, result in broken.checks.items()) \
+                or "(nothing parsed)"
+            lines.append(
+                f"  run {broken.index} on port {broken.port} was discarded "
+                f"after {broken.elapsed:.1f}s: {reported}")
     lines.append(
         f"  elapsed: total {measurement.total_elapsed:.1f}s, worst "
         f"{measurement.worst_elapsed:.1f}s   RTS capabilities: "
@@ -744,8 +811,10 @@ def render(measurement: Measurement) -> str:
     if retained:
         lines.append("  retained artifacts (unsuccessful runs):")
         lines.extend(f"    {path}" for path in retained)
-    else:
+    elif measurement.valid:
         lines.append("  retained artifacts: none (every run succeeded)")
+    else:
+        lines.append("  retained artifacts: none")
     return "\n".join(lines)
 
 
