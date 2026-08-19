@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -134,6 +135,16 @@ SYNTHETIC_PROBE = textwrap.dedent('''\
         open(os.environ[probe_protocol.ENV_EVENTS], "w").write(
             open(path).read())
         raise SystemExit(int(os.environ.get("SYNTHETIC_RC", "0")))
+
+    if mode == "rawbytes":
+        # Bytes that are not valid UTF-8 in any position, built without
+        # a single escape — this source lives inside a triple-quoted
+        # template that would eat one level of them.
+        payload = (b'{{"event": "check", "id": "' + bytes([0xff, 0xfe])
+                   + b'", "outcome": "PASS"}}' + bytes([10]))
+        with open(os.environ[probe_protocol.ENV_EVENTS], "wb") as fh:
+            fh.write(payload)
+        raise SystemExit(0)
 
     if mode == "marker":
         rep.check("alpha", True, "the first check")
@@ -716,6 +727,16 @@ def test_reconciliation() -> None:
 def test_harness_errors() -> None:
     print("\n-- harness errors --")
     with SyntheticTree() as tree:
+        m = run_synthetic(tree, "rawbytes", runs=1)
+        expect(not m.valid and m.status == "harness-error",
+               "an event stream of invalid UTF-8 is a harness error")
+        expect(m.failure_rate is None and m.error_run is not None
+               and m.error_run.artifact_dir is not None
+               and m.error_run.artifact_dir.exists(),
+               "and its run is retained and reported, with no rate")
+        expect("UnicodeDecodeError" in (m.error or ""),
+               f"the harness error names the decoding failure ({m.error})")
+
         m = run_synthetic(tree, "marker", runs=1)
         expect(not m.valid and m.status == "harness-error",
                "a forbidden bracketed stdout marker is a harness error")
@@ -992,6 +1013,71 @@ def test_lease_root_is_tmpdir_independent() -> None:
             os.environ.pop("TMPDIR", None)
         else:
             os.environ["TMPDIR"] = saved
+
+    # Cross-USER, too: a TCP port is host-global, so a uid in the path
+    # would let two accounts lease "the same" port through different
+    # files. A second account cannot be created from a self-test, so
+    # the properties that make sharing WORK are asserted instead.
+    root = probe_flake._machine_wide_scratch()
+    expect(str(os.getuid()) not in root.name,
+           f"the lease root carries no uid, so every account resolves the "
+           f"same one ({root})")
+    expect(root == Path("/tmp") / probe_flake.LEASE_DIR_NAME,
+           f"the lease root is one fixed host-wide path ({root})")
+    with SyntheticTree() as shared:
+        probe_flake.LEASE_ROOT = shared.root / "shared-leases"
+        ports = probe_flake._lease_dir()
+        mode = stat.S_IMODE(ports.lstat().st_mode)
+        expect(mode == 0o1777,
+               f"the lease directory is sticky and world-writable, so any "
+               f"user can lock in it and none can delete another's entry "
+               f"(mode {mode:04o})")
+        lease = probe_flake.PortLease.try_acquire(8009)
+        try:
+            file_mode = stat.S_IMODE(lease.path.lstat().st_mode)
+            expect(file_mode & 0o066 == 0o066,
+                   f"a lease file is readable and writable by other users, "
+                   f"because a lock nobody else can open coordinates nobody "
+                   f"else (mode {file_mode:04o})")
+        finally:
+            lease.release()
+        with probe_flake.LiveRegistry() as registry:
+            reg_mode = stat.S_IMODE(registry.path.lstat().st_mode)
+            expect(reg_mode & 0o066 == 0o066,
+                   f"so is a live-invocation registration (mode {reg_mode:04o})")
+        # A symlink in that position is refused, never followed.
+        hostile = shared.root / "hostile"
+        (shared.root / "elsewhere").mkdir()
+        hostile.symlink_to(shared.root / "elsewhere")
+        probe_flake.LEASE_ROOT = hostile
+        expect_raises(probe_flake.Rejection,
+                      lambda: probe_flake._lease_dir(),
+                      "a symlinked scratch path is refused, not followed",
+                      "is a symlink")
+        # A directory THIS user owns but whose mode excludes everyone
+        # else is repaired rather than accepted, because a restrictive
+        # umask would otherwise silently create a private namespace that
+        # other accounts cannot join. (The Rejection branch is for a
+        # directory another account owns, where repair is impossible;
+        # that needs a second user and so is unreachable from here.)
+        private = shared.root / "private-leases"
+        private.mkdir(mode=0o700)
+        private.chmod(0o700)
+        probe_flake.LEASE_ROOT = private
+        probe_flake._lease_dir()
+        expect(stat.S_IMODE(private.lstat().st_mode) == 0o1777,
+               f"a privately-created scratch directory this user owns is "
+               f"repaired to a shared one (mode "
+               f"{stat.S_IMODE(private.lstat().st_mode):04o})")
+
+        # A regular file where the directory belongs is refused outright.
+        notadir = shared.root / "not-a-dir"
+        notadir.write_text("", encoding="utf-8")
+        probe_flake.LEASE_ROOT = notadir
+        expect_raises(probe_flake.Rejection,
+                      lambda: probe_flake._lease_dir(),
+                      "a non-directory scratch path is refused",
+                      "could not create")
 
     # The regression itself, cross-PROCESS and cross-TMPDIR: two
     # harnesses whose TMPDIRs differ must still contend for one port.
@@ -1366,6 +1452,19 @@ def test_exit_codes() -> None:
             os.environ.pop("SYNTHETIC_MODE", None)
         expect(rc == probe_flake.EXIT_HARNESS_ERROR,
                "a harness error exits nonzero")
+
+        # Undecodable event bytes are malformed protocol input, so they
+        # must reach the harness-error exit rather than raising
+        # UnicodeDecodeError out of the measurement.
+        os.environ["SYNTHETIC_MODE"] = "rawbytes"
+        try:
+            rc = probe_flake.main(["--probe", "synthetic", "--runs", "1",
+                                   "--artifact-root", str(tree.artifacts())])
+        finally:
+            os.environ.pop("SYNTHETIC_MODE", None)
+        expect(rc == probe_flake.EXIT_HARNESS_ERROR,
+               f"an event stream of invalid UTF-8 exits "
+               f"{probe_flake.EXIT_HARNESS_ERROR}, not a traceback (got {rc})")
 
         # The whole point of the class: malformed protocol input reaches
         # the documented harness-error exit rather than a traceback.

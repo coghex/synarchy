@@ -50,6 +50,7 @@ import json
 import os
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -94,25 +95,30 @@ ARTIFACT_DIR_NAME = "synarchy-probe-flake"
 LEASE_DIR_NAME = "synarchy-probe-flake-leases"
 
 def _machine_wide_scratch() -> Path:
-    """The fixed per-user location the port leases and registry live in.
+    """The one host-wide location the port leases and registry live in.
 
-    Deliberately NOT under the artifact root, and deliberately NOT
-    `tempfile.gettempdir()`. Both vary per invocation — the artifact
-    root because `--artifact-root` overrides it, the temp dir because it
-    follows `TMPDIR`, which on macOS is a PER-SESSION `/var/folders/...`
-    path and on any platform is whatever the launching shell exported.
-    Either one splitting the namespace means two harnesses lock
-    different files, both believe they own a port, and put two engines
-    on it — the exact collision atomic leasing exists to prevent — while
-    their concurrency registries also stop seeing each other.
+    A TCP port is a HOST-global resource — one listener per port, whoever
+    started it — so this namespace has to be host-global too. Anything
+    that splits it lets two harnesses lock different files, both believe
+    they own a port, and put two engines on it, which is the exact
+    collision atomic leasing exists to prevent; their concurrency
+    registries stop seeing each other at the same time. Three things
+    would split it and all three are refused here:
 
-    `/tmp` is the fixed, shared path POSIX guarantees; the uid suffix
-    keeps one user's namespace out of another's, and `_ensure_owned_dir`
-    refuses to share a directory this user does not own. Resolved once
+    * the ARTIFACT root, because `--artifact-root` overrides it;
+    * `tempfile.gettempdir()`, because it follows `TMPDIR` — a
+      per-session `/var/folders/...` path on macOS, and whatever the
+      launching shell exported anywhere else;
+    * the UID, because two local accounts share one port namespace.
+
+    So it is a single fixed path under `/tmp`, the shared location POSIX
+    guarantees, with no uid in it. `_ensure_shared_dir` gives it `/tmp`'s
+    own permissions — world-writable plus the sticky bit — so every user
+    can take a lock while none can delete another's file. Resolved once
     at import; only the self-test may redirect it, by rebinding
     `LEASE_ROOT` explicitly.
     """
-    return Path("/tmp") / f"{LEASE_DIR_NAME}-{os.getuid()}"
+    return Path("/tmp") / LEASE_DIR_NAME
 
 
 LEASE_ROOT = _machine_wide_scratch()
@@ -198,10 +204,10 @@ def fetch_descriptor(key: str, script: str,
     try:
         done = subprocess.run(cmd, cwd=run_probes.REPO_ROOT, text=True,
                               capture_output=True, timeout=timeout)
-    except (OSError, subprocess.SubprocessError) as error:
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as error:
         raise Rejection(
             f"probe {key!r}: could not obtain its {probe_protocol.PROTOCOL_VERSION} "
-            f"descriptor ({error})") from None
+            f"descriptor ({type(error).__name__}: {error})") from None
     if done.returncode != 0:
         raise Rejection(
             f"probe {key!r}: `--describe` exited {done.returncode}; it does "
@@ -216,32 +222,71 @@ def fetch_descriptor(key: str, script: str,
 # --------------------------------------------------------------------------
 # Ports: atomic cross-process leasing
 # --------------------------------------------------------------------------
-def _ensure_owned_dir(path: Path) -> Path:
-    """Create `path` privately, refusing one another user owns.
+# `/tmp`'s own mode: writable by everyone, deletable only by the owner
+# of each entry. Exactly what a cross-user lock directory needs — a
+# lock is only useful if every participant can open the file, and the
+# sticky bit is what stops one user removing another's.
+SHARED_DIR_MODE = 0o1777
+SHARED_FILE_MODE = 0o666
 
-    The lease namespace is under a shared `/tmp`, so "it exists" is not
-    the same as "it is mine": writing leases into a directory another
-    account created would make this harness's exclusion meaningless
-    against its own concurrent runs.
+
+def _ensure_shared_dir(path: Path) -> Path:
+    """Create or validate a host-shared, sticky scratch directory.
+
+    Shared across USERS deliberately (see `_machine_wide_scratch`). The
+    only thing a hostile local account gains is the ability to hold a
+    lock on a port — which it could deny far more directly by binding
+    that port — while the sticky bit keeps it from deleting anyone
+    else's lease. A symlink in this position is refused outright rather
+    than followed, and a directory whose mode does not actually permit
+    sharing is a clean rejection rather than a namespace that silently
+    excludes other users.
     """
+    if path.is_symlink():
+        raise Rejection(
+            f"the harness scratch path {path} is a symlink; refusing to "
+            f"follow it")
     try:
-        path.mkdir(parents=True, exist_ok=True, mode=0o700)
-        owner = path.stat().st_uid
+        path.mkdir(mode=SHARED_DIR_MODE, parents=True, exist_ok=True)
+        info = path.lstat()
     except OSError as error:
         raise Rejection(
             f"could not create the harness scratch directory {path} "
             f"({error})") from None
-    if owner != os.getuid():
+    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        raise Rejection(f"the harness scratch path {path} is not a directory")
+    # `mkdir`'s mode is masked by the umask, which routinely clears the
+    # group and other write bits this namespace depends on. Only the
+    # owner may repair that.
+    if (info.st_uid == os.getuid()
+            and stat.S_IMODE(info.st_mode) != SHARED_DIR_MODE):
+        with contextlib.suppress(OSError):
+            path.chmod(SHARED_DIR_MODE)
+            info = path.lstat()
+    mode = stat.S_IMODE(info.st_mode)
+    if not mode & stat.S_ISVTX or not os.access(path, os.W_OK | os.X_OK):
         raise Rejection(
-            f"the harness scratch directory {path} belongs to uid {owner}, "
-            f"not {os.getuid()}; refusing to share a port-lease namespace "
-            f"with another user")
+            f"the harness scratch directory {path} is mode {mode:04o}, which "
+            f"is not a sticky directory this user can write to; port leases "
+            f"must be shared with every local user, since a TCP port is")
     return path
 
 
+def _share_file(fd: int) -> None:
+    """Let any local user open this lock file; ignore it if we cannot.
+
+    A lock nobody else can open coordinates nobody else. Failing is
+    fine and expected when the file belongs to another account — they
+    already made it shareable, or the lease simply is not available to
+    us, which `try_acquire` reports either way.
+    """
+    with contextlib.suppress(OSError):
+        os.fchmod(fd, SHARED_FILE_MODE)
+
+
 def _lease_dir() -> Path:
-    _ensure_owned_dir(LEASE_ROOT)
-    return _ensure_owned_dir(LEASE_ROOT / "ports")
+    _ensure_shared_dir(LEASE_ROOT)
+    return _ensure_shared_dir(LEASE_ROOT / "ports")
 
 
 def port_is_clear(port: int, host: str = "127.0.0.1") -> bool:
@@ -283,7 +328,14 @@ class PortLease:
                 f"port {FORBIDDEN_PORT} is the user's graphical instance and "
                 f"is always forbidden")
         path = _lease_dir() / f"{port}.lease"
-        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_RDWR, SHARED_FILE_MODE)
+        except OSError:
+            # Another account owns this lease file and did not leave it
+            # openable. We cannot coordinate on it, so the port is not
+            # ours to take — the scan moves on to the next one.
+            return None
+        _share_file(fd)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -398,8 +450,8 @@ class LiveRegistry:
         self._fd: int | None = None
 
     def __enter__(self) -> "LiveRegistry":
-        _ensure_owned_dir(LEASE_ROOT)
-        _ensure_owned_dir(self.path.parent)
+        _ensure_shared_dir(LEASE_ROOT)
+        _ensure_shared_dir(self.path.parent)
         # The registration is LOCKED before it is named, and published
         # atomically. Locking first closes the window in which a
         # concurrently starting harness could see an unlocked entry and
@@ -409,7 +461,8 @@ class LiveRegistry:
         # concurrent scan skips it, and the lock follows the inode
         # through the rename.
         staging = self.path.with_suffix(".staging")
-        fd = os.open(staging, os.O_CREAT | os.O_RDWR, 0o600)
+        fd = os.open(staging, os.O_CREAT | os.O_RDWR, SHARED_FILE_MODE)
+        _share_file(fd)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             os.write(fd, json.dumps(
@@ -801,11 +854,16 @@ def measure(probe: str, runs: int, *, artifact_root: Path | None = None,
 
             try:
                 events_text = events_path.read_text(encoding="utf-8")
-            except OSError as error:
+            except (OSError, UnicodeDecodeError) as error:
+                # Undecodable bytes are malformed protocol input like any
+                # other, and the contract makes that a harness error with
+                # the run retained — never a traceback out of the
+                # measurement, and never silently repaired by decoding
+                # with replacements, which would invent events.
                 events_text = ""
                 return stop_with_harness_error(
                     f"protocol event stream at {events_path} is unreadable "
-                    f"({error})")
+                    f"({type(error).__name__}: {error})")
 
             try:
                 outcome, outcomes = reconcile(descriptor, ok, timed_out,
