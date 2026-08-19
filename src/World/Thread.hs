@@ -7,12 +7,12 @@ module World.Thread
 import UPrelude
 import qualified Data.Text as T
 import Data.IORef (IORef, readIORef, writeIORef, newIORef)
-import Control.Concurrent (forkIO, threadDelay)
-import Control.Exception (SomeException, catch, finally)
-import Control.Concurrent.MVar (newEmptyMVar, putMVar)
+import Control.Concurrent (threadDelay)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.List (partition)
-import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
+import Engine.Core.Thread
+    (ThreadState, WorkerFailLevel(..), WorkerSpec(..), noRefusal
+    , startWorkerThread)
 import Engine.Core.State (EngineEnv, EngineLifecycle(..))
 import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
 import Engine.Core.Capability.SaveLoad
@@ -23,7 +23,7 @@ import Engine.Core.Capability.RenderView
     (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
-import Engine.Core.Log (logInfo, logDebug, logError, logWarn, LogCategory(..), LoggerState)
+import Engine.Core.Log (logDebug, logError, logWarn, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
 import World.Render (updateWorldTiles)
 import World.Thread.Cursor (pollCursorInfo)
@@ -36,93 +36,73 @@ import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
 -- * Start World Thread
 
 startWorldThread ∷ EngineEnv → IO ThreadState
-startWorldThread env = do
+startWorldThread env = startWorkerThread WorkerSpec
+    { wsLoggerRef   = ccLoggerRef (toCoreCapability env)
+    , wsCategory    = CatWorld
+    , wsStartingMsg = "Starting world thread..."
+    , wsStartedMsg  = Just "World thread started"
+    , wsFailMsg     = "Failed starting world thread: "
+    , wsFailLevel   = WorkerFailError
+    , wsFailFatal   = "World thread start failure."
+    , wsStartup     = \_ → noRefusal (getPOSIXTime ⌦ newIORef . realToFrac)
+    , wsTick        = worldTick env
+    , wsOnStop      = \_ → do
+        logger ← readIORef (ccLoggerRef (toCoreCapability env))
+        logDebug logger CatWorld "World thread stopping..."
+    , wsOnCrash     = \_ e → do
+        logger ← readIORef (ccLoggerRef (toCoreCapability env))
+        logError logger CatWorld $ "World thread crashed: " <> T.pack (show e)
+        writeIORef (ccLifecycleRef (toCoreCapability env)) CleaningUp
+    }
+
+-- * World Tick
+
+worldTick ∷ EngineEnv → IORef Double → IO (Maybe (IORef Double))
+worldTick env lastTimeRef = do
     logger ← readIORef (ccLoggerRef (toCoreCapability env))
-    stateRef ← newIORef ThreadRunning
-    doneVar ← newEmptyMVar
-    threadId ← catch
-        (do
-            logInfo logger CatWorld "Starting world thread..."
-            lastTimeRef ← getPOSIXTime ⌦ newIORef . realToFrac
-            tid ← forkIO $ worldLoop env stateRef lastTimeRef `finally` putMVar doneVar ()
-            logInfo logger CatWorld "World thread started"
-            return tid
-        )
-        (\(e ∷ SomeException) → do
-            logError logger CatWorld $ "Failed starting world thread: " <> T.pack (show e)
-            error "World thread start failure."
-        )
-    return $ ThreadState stateRef threadId doneVar
+    now ← realToFrac ⊚ getPOSIXTime
+    lastTime ← readIORef lastTimeRef
+    let dt = now - lastTime ∷ Double
+    writeIORef lastTimeRef now
 
--- * World Loop
+    locked ← captureLocked (slSaveBarrierRef (toSaveLoadCapability env))
+    if locked
+        then processAuthorizedSave env logger
+        else do
+            processAllCommands env logger
+            -- Acknowledging BEFORE the rest
+            -- of this tick's work (drainInitQueues/
+            -- tickWorldTime/updateChunkLoading/pollCursorInfo,
+            -- all of which can queue fresh Lua/HUD/sim
+            -- messages) let this ack be the FINAL one a
+            -- quiescence pass needed while this tick was
+            -- still mid-flight producing more side effects —
+            -- if the barrier then reached SaveSnapshotBoundary
+            -- before this tick finished, that later work
+            -- could straddle the publish boundary and land
+            -- against the replacement session. Folded into
+            -- this branch (all already unconditional on
+            -- "not locked", since this whole branch only
+            -- runs when locked is False) so the ack fires
+            -- only once every side-effect-producing step
+            -- below has actually completed.
+            drainInitQueues env logger
+            tickWorldTime env (realToFrac dt)
+            updateChunkLoading env logger
+            pollCursorInfo env
+            acknowledgeCurrent (slSaveBarrierRef (toSaveLoadCapability env))
+                               SaveWorld
 
-worldLoop ∷ EngineEnv → IORef ThreadControl → IORef Double → IO ()
-worldLoop env stateRef lastTimeRef = do
-    control ← readIORef stateRef
-    logger ← readIORef (ccLoggerRef (toCoreCapability env))
-    case control of
-        ThreadStopped → do
-            logDebug logger CatWorld "World thread stopping..."
-            pure ()
-        ThreadPaused → do
-            threadDelay 100000
-            worldLoop env stateRef lastTimeRef
-        ThreadRunning → do
-            -- One guarded tick per iteration; the recursive call lives
-            -- OUTSIDE the catch — inside it, each tick pushes a catch
-            -- frame that never pops (unbounded stack growth).
-            ok ← catch
-              (do
-                now ← realToFrac ⊚ getPOSIXTime
-                lastTime ← readIORef lastTimeRef
-                let dt = now - lastTime ∷ Double
-                writeIORef lastTimeRef now
-
-                locked ← captureLocked (slSaveBarrierRef (toSaveLoadCapability env))
-                if locked
-                    then processAuthorizedSave env logger
-                    else do
-                        processAllCommands env logger
-                        -- Acknowledging BEFORE the rest
-                        -- of this tick's work (drainInitQueues/
-                        -- tickWorldTime/updateChunkLoading/pollCursorInfo,
-                        -- all of which can queue fresh Lua/HUD/sim
-                        -- messages) let this ack be the FINAL one a
-                        -- quiescence pass needed while this tick was
-                        -- still mid-flight producing more side effects —
-                        -- if the barrier then reached SaveSnapshotBoundary
-                        -- before this tick finished, that later work
-                        -- could straddle the publish boundary and land
-                        -- against the replacement session. Folded into
-                        -- this branch (all already unconditional on
-                        -- "not locked", since this whole branch only
-                        -- runs when locked is False) so the ack fires
-                        -- only once every side-effect-producing step
-                        -- below has actually completed.
-                        drainInitQueues env logger
-                        tickWorldTime env (realToFrac dt)
-                        updateChunkLoading env logger
-                        pollCursorInfo env
-                        acknowledgeCurrent (slSaveBarrierRef (toSaveLoadCapability env))
-                                           SaveWorld
-
-                _camera ← readIORef (rvCameraRef (toRenderViewCapability env))
-                allQuads ← updateWorldTiles env
-                -- Plain writeIORef is fine here: the value is an immutable
-                -- LayeredQuads built entirely before the write, so the
-                -- reader (Frame.hs) always sees either the old or the new
-                -- value, never a torn pointer — at worst it draws one
-                -- frame against the previous quads.
-                writeIORef (rhWorldQuadsRef (toRenderHandoffCapability env)) allQuads
-                threadDelay 16666
-                pure True
-              )
-              (\(e ∷ SomeException) → do
-                logError logger CatWorld $ "World thread crashed: " <> T.pack (show e)
-                writeIORef (ccLifecycleRef (toCoreCapability env)) CleaningUp
-                pure False
-              )
-            when ok $ worldLoop env stateRef lastTimeRef
+    _camera ← readIORef (rvCameraRef (toRenderViewCapability env))
+    allQuads ← updateWorldTiles env
+    -- Plain writeIORef is fine here: the value is an immutable
+    -- LayeredQuads built entirely before the write, so the
+    -- reader (Frame.hs) always sees either the old or the new
+    -- value, never a torn pointer — at worst it draws one
+    -- frame against the previous quads.
+    writeIORef (rhWorldQuadsRef (toRenderHandoffCapability env)) allQuads
+    threadDelay 16666
+    pure (Just lastTimeRef)
 
 -- | Drain all pending commands from the queue
 processAllCommands ∷ EngineEnv → LoggerState → IO ()
