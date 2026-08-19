@@ -176,7 +176,7 @@ an entry's current status.
 - [x] CH-133. `player_events.md` (786 lines) is marked "ready to implement" for a system that shipped — [#1161]
 - [x] CH-134. `blood_decals.md` (445 lines) is marked "design draft" for a shipped subsystem — [no-issue]
 - [x] CH-135. Status markers are inconsistent, and two of the six that exist are wrong — [no-issue]
-- [ ] CH-136. Minor doc defects for one cleanup issue
+- [x] CH-136. Minor doc defects for one cleanup issue — [no-issue]
 - [ ] CH-137. Verified: four docs are accurate and worth using as the pattern
 - [ ] CH-138. Every GitHub Actions dependency is pinned by mutable tag, not by SHA
 
@@ -3870,7 +3870,33 @@ Proposal: require one status line on every `docs/*.md` — one of
 with a date, and check it in the same CI step that already validates the
 persistence and capability inventories.
 
-### CH-136. Minor doc defects for one cleanup issue
+### [no-issue] CH-136. Minor doc defects for one cleanup issue
+> **Disposition:** No issue — three of the five bullets are fixed and the two
+> survivors have shrunk below the bar this report files at. (1) The
+> `test/Test/Headless/Harness.hs` citation is gone:
+> `engineenv_capability_inventory.md:957` reads
+> `test-headless/Test/Headless/Harness.hs`, and no bare `test/` citation
+> remains in that document. (2) `texture_infrastructure.md`'s "still the plan,
+> or move to `docs/history/`?" is answered — neither: it became the design
+> authority for epic #1256, with TEX-1/2/3/4/6/7 shipped (#1257–#1262) and
+> TEX-5 deliberately deferred, and `animations.yaml` is recorded at `:169` and
+> `:389` as a **rejected** alternative rather than a pending plan (the
+> "pre-implementation" label this bullet cites survives only as
+> `**Legacy status:**` at `:840`). (5) The blood subsystem now has full
+> CLAUDE.md coverage at `:1202-1215` — architecture-record link, five hspec
+> groups, four probes, the transience contract. The two survivors both
+> weakened on inspection: `asset_generation.md`'s account state has not gone
+> stale and is not silent — checked live, `Tier 2: Pixel Artisan` /
+> `generations_total: 5000` matches the doc, whose same sentence already says
+> "Check with `get_balance`", and whose header self-dates its recipes to
+> 2026-06; and `player_manual.md` is demonstrably maintained rather than
+> drifting (`6d337004` #782, `4e8d2d08` #923, `8e17960d` #913 in six weeks,
+> plus #776's correctness fix), so a "which build" marker on a document that
+> feature PRs already update is itself a thing that goes stale. What is left is
+> one optional date stamp, below the bar of the filed siblings (#1011, #1086,
+> #1154, #1156) and in line with the closed ones (CH-27, CH-132). This is also
+> the answer to the residue CH-135 routed here.
+
 - **`engineenv_capability_inventory.md:709`** cites
   `test/Test/Headless/Harness.hs`; the file is at
   **`test-headless/`**`/Test/Headless/Harness.hs`. This is the same `test/` vs
