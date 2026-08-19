@@ -1283,4 +1283,8 @@ test-suite synarchy-test-headless
                 , scientific
                 , directory
                 , filepath
+                -- One fixture needs a special file (a FIFO named like a
+                -- frame) that `directory` cannot create; the library
+                -- already depends on `unix`.
+                , unix
     ghc-options: "-with-rtsopts=-N -A128M"
