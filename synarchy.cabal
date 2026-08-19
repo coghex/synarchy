@@ -1070,6 +1070,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.WrapSeam
                    Test.Headless.WorldGen.CoastBreach
                    Test.Headless.WorldGen.BedDepth
+                   Test.Headless.WorldGen.FluidSurfaceFold
                    Test.Headless.Unit.Pathing.Cost
                    Test.Headless.Unit.Pathing.AStar
                    Test.Headless.Unit.Pathing.Config
@@ -1208,6 +1209,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Core.LogMonad
                    Test.Headless.Core.LogParity
                    Test.Headless.Core.LoopStartup
+                   Test.Headless.Core.WorkerLifecycle
                    Test.Headless.Camera.GotoClamp
                    Test.Headless.Camera.ZoomScroll
                    Test.Headless.Scene.BatchMerge

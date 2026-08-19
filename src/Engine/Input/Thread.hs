@@ -12,8 +12,9 @@
 --       'Engine.Input.Thread.Scroll', reached only through 'Dispatch'
 --       — none of those modules are re-exported.
 --
---   'startInputThread' and @runInputLoop@ are defined in this facade
---   itself, not re-exported from elsewhere.
+--   'startInputThread' and @inputTick@ are defined in this facade
+--   itself, not re-exported from elsewhere; the loop skeleton they plug
+--   into is 'Engine.Core.Thread.startWorkerThread' (#1147).
 module Engine.Input.Thread
   ( startInputThread
   , processInputs
@@ -22,18 +23,16 @@ module Engine.Input.Thread
 
 import UPrelude
 import qualified Data.Text as T
-import Control.Concurrent (threadDelay, forkIO)
-import Control.Exception (SomeException, catch, finally)
-import Control.Concurrent.MVar (newEmptyMVar, putMVar)
-import Data.IORef (IORef, newIORef, writeIORef, readIORef)
-import Engine.Core.Log (logDebug, logError, logInfo, LogCategory(..))
+import Control.Concurrent (threadDelay)
+import Data.IORef (writeIORef, readIORef)
+import Engine.Core.Log (logDebug, logError, LogCategory(..))
 -- #892 (E4): `inputStateRef` through the input capability's
 -- worker-safe view, the logger/lifecycle/input-thread-started flag
 -- through `core-init` (#889), and `saveBarrierRef` as an explicit
 -- narrow value — the SS7.3 cross-capability read into
 -- `save-load-coordination`, which has no record of its own (SS7.8's
 -- own row is empty; its modules are permanent SS6.1 exceptions). The
--- opaque `EngineEnv` is still threaded into @runInputLoop@/
+-- opaque `EngineEnv` is still threaded into @inputTick@/
 -- 'processInputs', which hand it on to not-yet-narrowed callees.
 import Engine.Core.State (EngineEnv, EngineLifecycle(..), saveBarrierRef)
 import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
@@ -44,77 +43,57 @@ import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
 import Engine.Input.Thread.Dispatch (processInputs, processInput)
 
 startInputThread ∷ EngineEnv → IO ThreadState
-startInputThread env = do
-    let logRef        = ccLoggerRef (toCoreCapability env)
-    logger ← readIORef logRef
-    stateRef ← newIORef ThreadRunning
-    doneVar ← newEmptyMVar
-    threadId ← catch
-        (do
-            logInfo logger CatInput "Starting input thread..."
-            -- Only a REAL boot path (Graphical/Offscreen/Preview) ever
-            -- calls this — App.Headless never does (no GLFW window to
-            -- poll) — so this is the single source of truth
-            -- saveWorldFn/handleLoadStaged consult to decide whether
-            -- SaveInput belongs in a transaction's owner set (it must
-            -- not be a hard requirement headless boot can never
-            -- satisfy).
-            writeIORef (ccInputThreadActiveRef (toCoreCapability env)) True
-            tid ← forkIO $ runInputLoop env stateRef `finally` putMVar doneVar ()
-            return tid
-        )
-        (\(e ∷ SomeException) → do
-            logError logger CatInput $ "Failed starting input thread: " <> T.pack (show e)
-            error "Input thread start failure."
-        )
-    return $ ThreadState stateRef threadId doneVar
-
-runInputLoop ∷ EngineEnv → IORef ThreadControl → IO ()
-runInputLoop env stateRef = do
-  control ← readIORef stateRef
-  logger ← readIORef (ccLoggerRef (toCoreCapability env))
-  case control of
-    ThreadStopped → do
+startInputThread env = startWorkerThread WorkerSpec
+    { wsLoggerRef   = ccLoggerRef (toCoreCapability env)
+    , wsCategory    = CatInput
+    , wsStartingMsg = "Starting input thread..."
+      -- This worker has never logged a post-fork line.
+    , wsStartedMsg  = Nothing
+    , wsFailMsg     = "Failed starting input thread: "
+    , wsFailLevel   = WorkerFailError
+    , wsFailFatal   = "Input thread start failure."
+    , wsStartup     = \_ → noRefusal $
+        -- Only a REAL boot path (Graphical/Offscreen/Preview) ever
+        -- calls this — App.Headless never does (no GLFW window to
+        -- poll) — so this is the single source of truth
+        -- saveWorldFn/handleLoadStaged consult to decide whether
+        -- SaveInput belongs in a transaction's owner set (it must
+        -- not be a hard requirement headless boot can never
+        -- satisfy).
+        writeIORef (ccInputThreadActiveRef (toCoreCapability env)) True
+    , wsTick        = \_ → inputTick env
+    , wsOnStop      = \_ → do
+        logger ← readIORef (ccLoggerRef (toCoreCapability env))
         logDebug logger CatInput "Input thread stopping..."
+    , wsOnCrash     = \_ e → do
+        logger ← readIORef (ccLoggerRef (toCoreCapability env))
+        logError logger CatInput $ "Input thread crashed: " <> T.pack (show e)
+        writeIORef (ccLifecycleRef (toCoreCapability env)) CleaningUp
+    }
+
+inputTick ∷ EngineEnv → IO (Maybe ())
+inputTick env = do
+    -- Issue #763: Input joins the save
+    -- barrier's owner set as SaveInput so a load publish can
+    -- actually quiesce it, same as every other owner —
+    -- previously Input was not a SaveOwner at all, so it kept
+    -- draining inputQueue and dispatching fresh Lua/gameplay
+    -- messages for the ENTIRE captureLocked window, well past
+    -- the one-time luaQueue flush
+    -- 'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged'
+    -- performs before queuing WorldLoadPublish. Gating this the
+    -- same way Unit/Combat/Simulation already are closes that:
+    -- a pre-load input event still sitting in inputQueue at the
+    -- lock boundary is left there (and discarded by
+    -- World.Load.Publish's queue flush) rather than being
+    -- dispatched against the replacement session.
+    locked ← captureLocked (saveBarrierRef env)
+    unless locked $ do
+        inpSt ← readIORef (ivInputStateRef (toInputViewCapability env))
+        -- processInputs publishes to inputStateRef after each
+        -- event it processes (#697) — no batch write here.
+        _ ← processInputs env inpSt
         pure ()
-    ThreadPaused  → do
-        threadDelay 100000  -- 100ms pause check
-        runInputLoop env stateRef
-    ThreadRunning → do
-        -- One guarded tick per iteration; the recursive call lives
-        -- OUTSIDE the catch — inside it, each tick pushes a catch
-        -- frame that never pops (unbounded stack growth).
-        ok ← catch
-          (do
-            -- Issue #763: Input joins the save
-            -- barrier's owner set as SaveInput so a load publish can
-            -- actually quiesce it, same as every other owner —
-            -- previously Input was not a SaveOwner at all, so it kept
-            -- draining inputQueue and dispatching fresh Lua/gameplay
-            -- messages for the ENTIRE captureLocked window, well past
-            -- the one-time luaQueue flush
-            -- 'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged'
-            -- performs before queuing WorldLoadPublish. Gating this the
-            -- same way Unit/Combat/Simulation already are closes that:
-            -- a pre-load input event still sitting in inputQueue at the
-            -- lock boundary is left there (and discarded by
-            -- World.Load.Publish's queue flush) rather than being
-            -- dispatched against the replacement session.
-            locked ← captureLocked (saveBarrierRef env)
-            unless locked $ do
-                inpSt ← readIORef (ivInputStateRef (toInputViewCapability env))
-                -- processInputs publishes to inputStateRef after each
-                -- event it processes (#697) — no batch write here.
-                _ ← processInputs env inpSt
-                pure ()
-            acknowledgeCurrent (saveBarrierRef env) SaveInput
-            threadDelay 16666  -- ~60 FPS
-            pure True
-          )
-          (\(e ∷ SomeException) → do
-            logger ← readIORef (ccLoggerRef (toCoreCapability env))
-            logError logger CatInput $ "Input thread crashed: " <> T.pack (show e)
-            writeIORef (ccLifecycleRef (toCoreCapability env)) CleaningUp
-            pure False
-          )
-        when ok $ runInputLoop env stateRef
+    acknowledgeCurrent (saveBarrierRef env) SaveInput
+    threadDelay 16666  -- ~60 FPS
+    pure (Just ())

@@ -373,7 +373,7 @@ instance, defaulting to its own historical fixed port when unset (#723).
 
 | Probe | Gates | Boot | Purpose |
 |-------|-------|------|---------|
-| `action_outcome_probe.py` | #646 | worldgen | F4 action-outcome oracle through the real Lua contract: `debug.recordOutcome` requires kind+outcome, a full record round-trips through `debug.drainActionOutcomes` with every field intact, the ring drains destructively (second drain empty), a mixed tillable/non-tillable sweep reports `partial` with `requested == applied + dropped`, and an unloaded-anchor sweep reports `rejected`. |
+| `action_outcome_probe.py` | #646 | worldgen | F4 action-outcome oracle through the real Lua contract: `debug.recordOutcome` requires kind+outcome, a full record round-trips through `debug.drainActionOutcomes` with every field intact, the ring drains destructively (second drain empty), a mixed tillable/non-tillable sweep reports `partial` with `requested == applied + dropped`, and an unloaded-anchor sweep reports `rejected`. The chop fixture is located with the authoritative `world.findHarvestableFlora(..., 'wood')` query from origins covering the loaded region, and exits **2** (not 1) when no wood-bearing flora is found at all, so an unestablished fixture reads differently from a broken contract (#1398). Also drives starting-portal placement through the real remote-settlement confirmation (#779/#1399): the click records `buildTool.remoteWarning`/`presented` and spawns nothing, and only `establishHere()` records `confirmed` then `buildTool.commitPlacement`/`accepted` with exactly one new building id. |
 | `bleeding_trail_probe.py` | #882, #883 | arena | Ongoing bleeding, both halves off one accumulator. Trails (`Blood.Trail`): a moving, externally-bled unit leaves distance/cadence-gated marks along its route within documented bounds, invariant to `world.setTimeScale`; clot progression and an internal-only wound stop/suppress marks; death mid-route stops the trail cleanly. Pooling (`Blood.Pool`): a stationary or collapsed bleeder instead grows a clustered pool of layered additive spawns that saturates at the documented per-cluster bound, stops early on clot, survives walk↔stop transitions, drops its cluster at death while the marks persist and age, stays independent between adjacent bleeders, and keeps the same density under `world.setTimeScale` (`blood.getTrailState`, `blood.listTextures`). |
 | `blood_decal_probe.py` | #604, #606 | arena | Blood decal model + procedural texture generation: descriptor reuse/eviction, `blood.getRenderQuads()` render records, wetness-tint aging. |
 | `blood_impact_probe.py` | #607 | arena | Wound-kind/severity -> impact-blood mapping (`Blood.Impact`) driven through the debug `unit.injure` path. |
@@ -413,6 +413,7 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `lua_orphan_prune_probe.py` | #195 | worldgen | Lua per-id AI state is pruned (not inherited by id reuse) after a save load. |
 | `lua_strict_msg_probe.py` | #622 | none (no world/scripts needed) | A Haskell exception embedded, unevaluated, in a `LuaToEngineMsg`/`LuaMsg` field must not escape to the consuming thread and crash the whole engine — `engine.setText` with malformed UTF-8 must degrade to a caught Lua error instead. |
 | `machine_shop_probe.py` | #591 | arena | Electric furnace `smelt_steel_electric` recipe + the new `machine_shop` building's `machine_wiring`/`machine_electric_motor` recipes, real shipped content built on #590's power-draw mechanism. |
+| `meal_waste_probe.py` | #1219 | arena | Stop-before-waste meal policy: a hungry acolyte withholds the ration its stomach can no longer hold most of (zero `unit.feed`/`mealSalt` side effects for the withheld item), a part-full quinoa sack still finishes that same meal, the first item of a meal stays exempt, a near-starving unit still eats, and the 10-feed bound plus the eat/forage entry gates are unchanged. |
 | `medic_coord_probe.py` | squad-medic coordination (general) | arena | `bestMedicFor`/`medicAvailable` distance-discounted selection fix. |
 | `mental_efficiency_probe.py` | #353 | arena | Combat/craft mental-effectiveness plumbing end to end: `unit.getMentalEffectiveness` reads the documented 0.75..1.10 values off a real `UnitInstance`; real `craft.addBillProgress` scales by it; a real `craft.executeAt` applies the #353 quality delta on top of #343's skill × knowledge base, clamped; and mean landed-hit damage energy (`combat.drainEvents`) isn't shifted by it (a sanity bound on top of the hspec suite's deterministic proof). |
 | `mental_state_probe.py` | #352 | arena | Mental-state threshold ladder over `state_of_mind`: stable/stressed hysteresis, deterministic break episodes (wander/flee forced behaviours), cooldown. |
@@ -549,6 +550,30 @@ whole grace on an engine that was long gone.
 GPU-free, synthetic probes and synthetic engine descendants in a throwaway
 tree, no registered probe ever run. It is a blocking CI step alongside
 `ci_probes.py --self-test`.
+
+### `test_action_outcome_probe.py` — chop-fixture classification (#1398)
+
+`action_outcome_probe.py`'s chop stage has two failures that mean
+different things, and conflating them is what the old fixture did: "the
+loaded region holds no wood-bearing flora" says the contract went
+UNVERIFIED, while "the drained record is absent, the wrong kind, not
+`partial` or miscounted" says the contract is BROKEN. Only the first
+earns exit **2**, which takes precedence over any concurrent ordinary
+failure; a missing till box or an unusable portal fixture stays an
+ordinary exit **1**.
+
+`python3 tools/test_action_outcome_probe.py` is that classification's
+gate, and it is ENGINE-FREE by design — the probe itself boots a real
+headless engine and generates a 64-world, roughly eight minutes, which is
+exactly the cost this coverage exists to stop depending on. It imports the
+real probe and swaps its `send`/`jget` for a fake console, so the shipped
+`find_chop_fixture` / `evaluate_chop_designation` / `run_chop_stage` /
+`probe_exit_status` paths run rather than a copy. It also pins the
+property that makes "found nothing" trustworthy: the query origins'
+radius-64 Euclidean discs COVER the probe's loaded region, so discovery
+cannot regress into a sparse sample grid that misses trees. Blocking CI
+step alongside `test_run_probes.py`; `action_outcome` itself stays
+`manual-only`.
 
 ### `ci_probes.py` — CI probe selection + eligibility (#530, #540)
 

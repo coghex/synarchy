@@ -62,7 +62,7 @@ nowSeconds = realToFrac ∘ utcTimeToPOSIXSeconds ⊚ getCurrentTime
 
 -- | Broadcast a callback to all loaded Lua modules.
 --   Thread safety: only called from the Lua thread (via processLuaMsg
---   in runLuaLoop). The Lua.State is never touched from other threads;
+--   in luaTick). The Lua.State is never touched from other threads;
 --   inter-thread communication uses STM queues (luaQueue, debugQueue).
 broadcastToModules ∷ LuaBackendState → T.Text → [ScriptValue] → IO ()
 broadcastToModules ls funcName args =

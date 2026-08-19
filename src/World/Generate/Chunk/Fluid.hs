@@ -17,10 +17,12 @@ module World.Generate.Chunk.Fluid
     , maxColumnPeek
     , smoothIslandColumns
     , mkSurfaceMap
+    , lakeSurfaceMap
+    , riverSurfaceMap
     ) where
 
 import UPrelude
-import Control.Monad.ST (runST)
+import Control.Monad.ST (ST, runST)
 import Data.List (group, sort)
 import Data.STRef (newSTRef, readSTRef, modifySTRef')
 import qualified Data.HashMap.Strict as HM
@@ -35,8 +37,85 @@ import World.Fluid.Lake.Types
     ( WorldLakes(..), LakeChunkEntry(..), lakesInChunk )
 import qualified World.Fluid.Lake.Types as WL
 import World.Fluid.River.Types
-    ( RiverChunkEntry(..), riversInChunk )
+    ( WorldRivers(..), RiverChunkEntry(..), riversInChunk )
 import World.Fluid.OceanMask (oceanBitInChunk)
+
+-- * The per-tile fluid-surface fold
+--
+-- Every per-tile surface map below is the same fold: start from a
+-- chunk-area vector of 'minBound', walk the chunk's entries in one
+-- global fluid table, and on each tile an entry's bitmask claims,
+-- keep the LOWEST surface seen so far. Lowest-wins keeps water within
+-- terrain where two bodies would otherwise both claim a tile; the
+-- global floods give one label per tile, so that overlap shouldn't
+-- happen and the rule is defensive.
+--
+-- 'minBound' is the ABSENT sentinel, not a candidate value — and it is
+-- also the smallest 'Int', so the merge is written against the
+-- sentinel rather than as a plain 'min'. Combining two sources on one
+-- tile:
+--
+--   * absent   + absent   → 'minBound' (nothing claims the tile)
+--   * absent   + real @s@ → @s@
+--   * real @a@ + real @b@ → @min a b@
+--
+-- Two shapes exist because the two tables carry their surfaces
+-- differently: a lake-keyed entry has ONE surface for the whole body
+-- ('WL.lkSurface'), a river-keyed entry a per-tile surface vector
+-- ('rcePerTileSurfZ'). Both fold into the same accumulator, which is
+-- what lets 'chunkWaterSurfMap' merge lakes and rivers without a
+-- second copy of the rule.
+
+-- | Tiles in one chunk — the length of every surface map here.
+chunkArea ∷ Int
+chunkArea = chunkSize * chunkSize
+
+-- | A fresh fold accumulator: chunk-area long, every tile unclaimed.
+newSurfaceAccum ∷ ST s (VUM.MVector s Int)
+newSurfaceAccum = VUM.replicate chunkArea minBound
+
+-- | Claim tile @i@ at surface @s@, keeping the lower value when the
+--   tile is already claimed. The explicit sentinel test is what stops
+--   'minBound' from winning as if it were a real surface.
+claimSurface ∷ VUM.MVector s Int → Int → Int → ST s ()
+claimSurface v i s = do
+    cur ← VUM.read v i
+    when (cur ≡ minBound ∨ s < cur) $ VUM.write v i s
+
+-- | Fold a lake-keyed table's entries for one chunk into @v@.
+foldLakeSurfaces ∷ WorldLakes → ChunkCoord → VUM.MVector s Int
+                 → ST s ()
+foldLakeSurfaces table coord v =
+    V.forM_ (lakesInChunk table coord) $ \lce → do
+        let bm   = lceBitmask lce
+            surf = WL.lkSurface (wlLakes table V.! lceLakeId lce)
+        forM_ [0 .. chunkArea - 1] $ \i →
+            when (bm VU.! i) $ claimSurface v i surf
+
+-- | Fold the river table's entries for one chunk into @v@.
+foldRiverSurfaces ∷ WorldRivers → ChunkCoord → VUM.MVector s Int
+                  → ST s ()
+foldRiverSurfaces table coord v =
+    V.forM_ (riversInChunk table coord) $ \rce → do
+        let bm    = rceBitmask rce
+            surfs = rcePerTileSurfZ rce
+        forM_ [0 .. chunkArea - 1] $ \i →
+            when (bm VU.! i) $ claimSurface v i (surfs VU.! i)
+
+-- | The lake-keyed fold on its own. Serves real lakes and lava pools
+--   alike — pools are carried in the same 'WorldLakes' shape.
+lakeSurfaceMap ∷ WorldLakes → ChunkCoord → VU.Vector Int
+lakeSurfaceMap table coord = VU.create $ do
+    v ← newSurfaceAccum
+    foldLakeSurfaces table coord v
+    pure v
+
+-- | The river-keyed fold on its own.
+riverSurfaceMap ∷ WorldRivers → ChunkCoord → VU.Vector Int
+riverSurfaceMap table coord = VU.create $ do
+    v ← newSurfaceAccum
+    foldRiverSurfaces table coord v
+    pure v
 
 -- * Fluid composition — global lake table (Phase 2)
 --
@@ -58,7 +137,6 @@ composeFluidMap ∷ WorldGenParams → ChunkCoord → VU.Vector Int
                 → V.Vector (Maybe FluidCell)
 composeFluidMap params coord terrainMap =
     let timeline    = wgpGeoTimeline params
-        chunkArea   = chunkSize * chunkSize
         worldLakes  = gtWorldLakes timeline
         worldRivers = gtWorldRivers timeline
 
@@ -72,65 +150,29 @@ composeFluidMap params coord terrainMap =
         chunkIsOceanic = chunkOrNeighborOceanic params coord
         worldOceanBit  = oceanBitInChunk (gtWorldOcean timeline) coord
 
-        -- Per-tile lake surface lookup. We pre-fold the chunk's
-        -- 'LakeChunkEntry' vector into a single per-tile lake surface
-        -- (or 'minBound' for no-lake). With at most a handful of
-        -- lakes per chunk (typically 1–2), the fold is cheap.
+        -- Per-tile lake surface lookup: the chunk's 'LakeChunkEntry'
+        -- vector pre-folded into a single per-tile lake surface (or
+        -- 'minBound' for no-lake) by the shared fold above. With at
+        -- most a handful of lakes per chunk (typically 1–2), it is
+        -- cheap.
         lakeSurfMap ∷ VU.Vector Int
-        lakeSurfMap = VU.create $ do
-            v ← VUM.replicate chunkArea minBound
-            V.forM_ (lakesInChunk worldLakes coord) $ \lce → do
-                let lid  = lceLakeId lce
-                    bm   = lceBitmask lce
-                    surf = WL.lkSurface (wlLakes worldLakes V.! lid)
-                forM_ [0 .. chunkArea - 1] $ \i →
-                    when (bm VU.! i) $ do
-                        cur ← VUM.read v i
-                        -- If multiple lakes claim a tile (shouldn't
-                        -- happen — global flood gives one label per
-                        -- tile — but defensive): take the LOWER
-                        -- surface to keep water within terrain.
-                        when (cur ≡ minBound ∨ surf < cur) $
-                            VUM.write v i surf
-            pure v
+        lakeSurfMap = lakeSurfaceMap worldLakes coord
 
-        -- Per-tile river surface lookup. Same shape as 'lakeSurfMap'
-        -- but reads each river entry's per-tile quantised surface z
-        -- instead of a single lake-wide value. Defensive lowest-wins
-        -- merge mirrors the lake path.
+        -- Per-tile river surface lookup: the same fold over the river
+        -- table, which carries a per-tile quantised surface z instead
+        -- of one lake-wide value.
         riverSurfMap ∷ VU.Vector Int
-        riverSurfMap = VU.create $ do
-            v ← VUM.replicate chunkArea minBound
-            V.forM_ (riversInChunk worldRivers coord) $ \rce → do
-                let bm   = rceBitmask rce
-                    surfs = rcePerTileSurfZ rce
-                forM_ [0 .. chunkArea - 1] $ \i →
-                    when (bm VU.! i) $ do
-                        cur ← VUM.read v i
-                        let s = surfs VU.! i
-                        when (cur ≡ minBound ∨ s < cur) $
-                            VUM.write v i s
-            pure v
+        riverSurfMap = riverSurfaceMap worldRivers coord
 
-        -- Per-tile lava-pool surface, same shape as 'lakeSurfMap'.
-        -- Pools come from the global 'gtWorldLavaPools' table
+        -- Per-tile lava-pool surface. Pools come from the global
+        -- 'gtWorldLavaPools' table
         -- ('World.Magma.Pool.identifyLavaPools') — flat lava lakes
         -- pooled in depressions at the breach cluster's lowest
-        -- opening. Highest fluid priority: lava beats water.
+        -- opening — and are carried in the lake table's shape, so
+        -- they take the lake-keyed fold. Highest fluid priority:
+        -- lava beats water.
         lavaSurfMap ∷ VU.Vector Int
-        lavaSurfMap = VU.create $ do
-            v ← VUM.replicate chunkArea minBound
-            V.forM_ (lakesInChunk (gtWorldLavaPools timeline) coord) $ \lce → do
-                let lid  = lceLakeId lce
-                    bm   = lceBitmask lce
-                    surf = WL.lkSurface
-                        (wlLakes (gtWorldLavaPools timeline) V.! lid)
-                forM_ [0 .. chunkArea - 1] $ \i →
-                    when (bm VU.! i) $ do
-                        cur ← VUM.read v i
-                        when (cur ≡ minBound ∨ surf < cur) $
-                            VUM.write v i surf
-            pure v
+        lavaSurfMap = lakeSurfaceMap (gtWorldLavaPools timeline) coord
 
         waterFluid = V.generate chunkArea $ \idx →
             let terrZ   = terrainMap VU.! idx
@@ -173,36 +215,24 @@ composeFluidMap params coord terrainMap =
     in waterFluid
 
 -- | Per-tile water surface from the global lake + river tables,
---   independent of terrain ('minBound' = no water claims the tile;
---   lower-wins merge mirrors 'composeFluidMap'). Used by
---   'discoverChunkLava' for the water-body-aware basalt-cap rule:
---   a chamber breaching below a LAKE or RIVER surface gets capped
---   the same way sub-sea breaches always have, instead of emitting
---   lava into the water column.
+--   independent of terrain ('minBound' = no water claims the tile).
+--   Both sources fold into ONE accumulator through the same helpers
+--   'composeFluidMap' uses, so the two can no longer disagree about
+--   where water is. The cross-source merge is lowest-real-surface —
+--   deliberately NOT 'composeFluidMap's River-over-Lake
+--   classification, because this map answers how HIGH the water is,
+--   not which fluid class the tile renders as.
+--
+--   Used by 'discoverChunkLava' for the water-body-aware basalt-cap
+--   rule: a chamber breaching below a LAKE or RIVER surface gets
+--   capped the same way sub-sea breaches always have, instead of
+--   emitting lava into the water column.
 chunkWaterSurfMap ∷ WorldGenParams → ChunkCoord → VU.Vector Int
 chunkWaterSurfMap params coord = VU.create $ do
-    let timeline   = wgpGeoTimeline params
-        worldLakes = gtWorldLakes timeline
-        chunkArea  = chunkSize * chunkSize
-    v ← VUM.replicate chunkArea minBound
-    V.forM_ (lakesInChunk worldLakes coord) $ \lce → do
-        let surf = WL.lkSurface
-                (wlLakes worldLakes V.! lceLakeId lce)
-            bm = lceBitmask lce
-        forM_ [0 .. chunkArea - 1] $ \i →
-            when (bm VU.! i) $ do
-                cur ← VUM.read v i
-                when (cur ≡ minBound ∨ surf < cur) $
-                    VUM.write v i surf
-    V.forM_ (riversInChunk (gtWorldRivers timeline) coord) $ \rce → do
-        let bm    = rceBitmask rce
-            surfs = rcePerTileSurfZ rce
-        forM_ [0 .. chunkArea - 1] $ \i →
-            when (bm VU.! i) $ do
-                cur ← VUM.read v i
-                let s = surfs VU.! i
-                when (cur ≡ minBound ∨ s < cur) $
-                    VUM.write v i s
+    let timeline = wgpGeoTimeline params
+    v ← newSurfaceAccum
+    foldLakeSurfaces (gtWorldLakes timeline) coord v
+    foldRiverSurfaces (gtWorldRivers timeline) coord v
     pure v
 
 -- | Raise the per-tile terrain surface where 'discoverChunkLava'

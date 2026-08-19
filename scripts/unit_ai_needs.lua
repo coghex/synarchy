@@ -138,7 +138,26 @@ end
 -- max_hunger AND inventory has at least one item with a `food` block.
 -- The drink anim is reused for v1 (see acolyte.yaml standing-eat).
 -----------------------------------------------------------
-local function findFoodInInventory(uid)
+
+-- Discrete vs bulk, keyed exactly the way unit.feed keys it
+-- (Survival.hs unitFeedFn): a positive calories_per_kg means BULK —
+-- consumed by drawing kg of fill — and anything else with food data is
+-- DISCRETE, consumed whole.
+local function isDiscreteFood(nut)
+    return (nut.caloriesPerKg or 0) <= 0
+end
+
+-- Pick the most calorific food the unit is carrying.
+--
+-- `room`/`minRoomFraction` are the stop-before-waste filter (#1219) and
+-- are supplied ONLY by the meal loop, and only for its marginal items.
+-- With `room` nil this is the plain "is there anything edible?" query
+-- the eat and forage gates ask, so entry conditions are untouched.
+--
+-- The filter SKIPS a too-marginal discrete item rather than ending the
+-- search: withholding a ration must not hide a part-full quinoa sack
+-- sitting behind it in the largest-available ordering.
+local function findFoodInInventory(uid, room, minRoomFraction)
     local inv = unit.getInventory(uid)
     if not inv then return nil end
     local best, bestN = nil, -math.huge
@@ -151,7 +170,12 @@ local function findFoodInInventory(uid)
         local cal = nut and nut.calories or 0
         local bulk = (nut and nut.caloriesPerKg or 0) * (it.currentFill or 0)
         local avail = math.max(cal, bulk)
-        if avail > 0 and avail > bestN then
+        -- Mostly-wasted discrete item: leave it in the pack. Bulk food
+        -- wastes nothing (unit.feed draws only the deficit), so it is
+        -- never withheld.
+        local wasteful = room and nut and isDiscreteFood(nut)
+                         and room < minRoomFraction * cal
+        if avail > 0 and not wasteful and avail > bestN then
             best, bestN = it, avail
         end
     end
@@ -176,12 +200,25 @@ local function eatExecute(uid, s, params)
     -- full or the inventory runs out of food. Bounded — each unit.feed
     -- consumes something real, but the cap keeps a pathological item
     -- list finite (never lock the AI into an unbounded loop).
+    --
+    -- Stop before waste (#1219): a discrete item is withheld once the
+    -- stomach can no longer hold most of it. Only ever the MARGINAL
+    -- item — the threshold arms after the first successful feed of this
+    -- meal, so the first item is always opened and a starving unit
+    -- carrying nothing but rations still eats. eatExecute's synchronous
+    -- loop is the meal boundary.
+    local fedOnce = false
+
     for _ = 1, 10 do
         local hun    = unit.getStat(uid, "hunger")
         local maxHun = unit.getStat(uid, "max_hunger")
         if hun and maxHun and hun >= maxHun * 0.99 then break end
 
-        local food = findFoodInInventory(uid)
+        local room = nil
+        if fedOnce and hun and maxHun then room = maxHun - hun end
+
+        local food = findFoodInInventory(uid, room,
+                                         params.eat_discrete_min_room_fraction)
         if not food then break end
 
         -- unit.feed is the authoritative consume-and-credit primitive:
@@ -190,6 +227,7 @@ local function eatExecute(uid, s, params)
         -- enough fill to top the stomach up. Plays the eat anim. Returns
         -- the kcal credited, or nil if the item couldn't be consumed.
         if not unit.feed(uid, food.defName) then break end
+        fedOnce = true
 
         -- Food carries salt — the only way to recover from sweat-driven
         -- hyponatremia (the kidneys can't make sodium). See scripts/salts.lua.
