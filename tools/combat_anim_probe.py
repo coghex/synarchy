@@ -70,7 +70,8 @@ from pathlib import Path
 
 import yaml
 
-from probelib import quit_engine, boot, init_arena, send, spawn_acolyte
+from probelib import (quit_engine, boot, init_arena, poll_until, send,
+                      spawn_acolyte)
 
 UNITS_ROOT = Path("assets/textures/units")
 DATA_UNITS = Path("data/units")
@@ -512,22 +513,72 @@ def await_engagement(port: int, attacker_uid: int, target_uid: int,
         time.sleep(0.25)
 
 
+def spawn_rejection_cause(uid: int, unit_name: str, gx: int,
+                          gy: int) -> str | None:
+    """None when `unit.spawn` returned a real uid; else the named cause.
+
+    `unit.spawn` rejects NUMERICALLY: a missing name argument, an unknown
+    unit def, and "no world to spawn into" each push **-1**
+    (`Engine.Scripting.Lua.API.Units.Spawn`). That parses cleanly as a
+    uid, so `spawn_acolyte` hands it straight back — its `sys.exit` paths
+    only cover an unparseable reply and a never-arriving AI state. With
+    `clear_water=False` (the target) nothing downstream would notice
+    either, and the first thing to touch the bogus uid would be a
+    live-frame check: a FIXTURE problem reported as a graded failure,
+    which is exactly what #1396 exists to stop.
+
+    Every allocator but ground items starts at 1, so anything below that
+    is a rejection rather than a unit.
+    """
+    if uid < 1:
+        return (f"unit.spawn refused {unit_name!r} at ({gx},{gy}) and "
+                f"returned {uid} — an unknown unit def, or no world to "
+                f"spawn into")
+    return None
+
+
 def spawn_combatant(port: int, unit_name: str, gx: int, gy: int,
                     clear_water: bool) -> int:
     """`probelib.spawn_acolyte`, with its failures reclassified as SETUP.
 
-    The shared helper reports a failed spawn or a never-arriving AI state
-    with `sys.exit(<message>)`, which exits 1 — indistinguishable from a
-    missing swing. Changing that helper is out of scope (#1396), so the
-    translation happens here.
+    The shared helper reports an unparseable spawn reply or a
+    never-arriving AI state with `sys.exit(<message>)`, which exits 1 —
+    indistinguishable from a missing swing. Changing that helper is out
+    of scope (#1396), so both that translation and the numeric-rejection
+    check it does not make happen here, before any caller can read the
+    uid.
     """
     try:
-        return spawn_acolyte(port, gx, gy, unit=unit_name,
-                             clear_water=clear_water)
+        uid = spawn_acolyte(port, gx, gy, unit=unit_name,
+                            clear_water=clear_water)
     except SystemExit as exc:
         raise SetupFailure(
             f"{unit_name} at ({gx},{gy}) never reached a usable state: "
             f"{exc}") from exc
+    cause = spawn_rejection_cause(uid, unit_name, gx, gy)
+    if cause:
+        raise SetupFailure(cause)
+    return uid
+
+
+def require_spawned(port: int, combatants: list[tuple[int, str]],
+                    seconds: float = 15.0) -> None:
+    """Both combatants really exist before anything reads them.
+
+    `unit.spawn` only ENQUEUES the spawn (`UnitSpawn` onto the unit
+    queue) and returns the uid it allocated, so a plausible uid can name
+    a unit that never arrives. This is the settle the fight already
+    waited out, turned into a check — and it runs before the live-frame
+    samples, so a missing combatant is a named setup cause rather than a
+    frame sample that "failed".
+    """
+    for uid, tag in combatants:
+        landed = poll_until(seconds, lambda u=uid: send(
+            port, f"return unit.exists({u})") == "true")
+        if landed is None:
+            raise SetupFailure(
+                f"{tag} #{uid} never materialized within {seconds:g}s — "
+                f"unit.spawn allocated the id but the unit never arrived")
 
 
 def anim_of(port: int, uid: int) -> str:
@@ -588,6 +639,18 @@ def self_test() -> int:
                  "did not return a table")
     expect_named("a non-table scan", terrain_cause("nil", 0),
                  "returned no table")
+
+    # --- spawn rejection: numeric, so it parses as a uid --------------
+    # The target spawns with clear_water=False, so `spawn_acolyte` runs
+    # no AI-state check on it either; without this, a -1 would reach the
+    # live-frame check and be reported as a graded failure (exit 1).
+    expect("a real uid", spawn_rejection_cause(7, "acolyte", 0, 0), None)
+    expect_named("unit.spawn rejected the def",
+                 spawn_rejection_cause(-1, "no_such_unit", 2, 0), "refused")
+    expect_named("a zero uid is not a unit",
+                 spawn_rejection_cause(0, "acolyte", 0, 0), "refused")
+    expect("the first allocated uid is usable",
+           spawn_rejection_cause(1, "acolyte", 0, 0), None)
 
     # --- traversal: verified footprint AND verified elevation ---------
     inside = {"ax": 1.0, "ay": 2.0, "bx": 2.0, "by": 2.0,
@@ -706,6 +769,7 @@ def run_fight(port: int, args) -> tuple[bool, bool, list[str], list[str]]:
     b = spawn_combatant(port, args.target, *TARGET_TILE, clear_water=False)
     print(f"spawned {args.attacker}=#{a} at {ATTACKER_TILE}  "
           f"{args.target}=#{b} at {TARGET_TILE}")
+    require_spawned(port, [(a, args.attacker), (b, args.target)])
     time.sleep(1.5)  # let them settle onto the ground before fighting
 
     # A LIVE frame off each spawned unit, before the fight perturbs
