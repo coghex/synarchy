@@ -3,7 +3,6 @@ module Engine.Scene.Types.Manager
   ( Scene(..)
   , SceneManager(..)
   , createSceneManager
-  , createEmptyScene
   ) where
 
 import UPrelude
@@ -11,7 +10,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Engine.Scene.Types.Graph (SceneGraph)
 import Engine.Scene.Types.Batch (BatchManager, createBatchManager)
-import Engine.Graphics.Camera (Camera2D, defaultCamera)
+import Engine.Graphics.Camera (Camera2D)
 
 data Scene = Scene
     { sceneId     ∷ Text
@@ -36,9 +35,3 @@ createSceneManager = SceneManager
     , smDirtyScenes = Set.empty
     }
 
-createEmptyScene ∷ Text → Scene
-createEmptyScene sid = Scene
-    { sceneId = sid
-    , sceneCamera = defaultCamera
-    , sceneActive = True
-    }

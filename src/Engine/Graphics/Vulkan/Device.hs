@@ -4,10 +4,8 @@ module Engine.Graphics.Vulkan.Device
     QueueFamilyIndices(..)
     -- * Device Creation
   , createVulkanDevice
-  , destroyVulkanDevice
     -- * Device Selection
   , pickPhysicalDevice
-  , findQueueFamilies
   , scoreDevice
   , bindlessCapableBonus
   ) where
@@ -132,9 +130,6 @@ createVulkanDevice _inst physicalDevice mSurface = do
         }
   
   return (device, queues)
-
-destroyVulkanDevice ∷ Device → EngineM σ ()
-destroyVulkanDevice device = liftIO $ destroyDevice device Nothing
 
 -- | Pick a suitable physical device (GPU). The surface is 'Nothing'
 --   offscreen (#650): devices are then rated on graphics capability

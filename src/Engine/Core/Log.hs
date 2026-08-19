@@ -8,9 +8,6 @@ module Engine.Core.Log
   , shutdownLogger
 
   -- * Category management
-  , enableCategory
-  , disableCategory
-  , isEnabled
   , parseCategory
 
   -- * Core logging functions
@@ -41,7 +38,7 @@ module Engine.Core.Log
 import UPrelude
 import qualified Data.Map.Strict as Map
 import qualified Data.Time.Clock as Clock
-import Data.IORef (newIORef, readIORef, atomicModifyIORef')
+import Data.IORef (newIORef, readIORef)
 import Control.Concurrent (myThreadId)
 import Control.Monad.IO.Class (MonadIO(..))
 import Control.Monad.Error.Class (MonadError(..))
@@ -83,16 +80,6 @@ shutdownLogger LoggerState{..} =
   case lsBackend of
     LogToHandle h → hFlush h
     LogToCallback _ → return ()
-
-enableCategory ∷ LoggerState → LogCategory → IO ()
-enableCategory LoggerState{..} cat =
-  atomicModifyIORef' lsDebugEnabled $ \cats →
-    (Map.insert cat True cats, ())
-
-disableCategory ∷ LoggerState → LogCategory → IO ()
-disableCategory LoggerState{..} cat =
-  atomicModifyIORef' lsDebugEnabled $ \cats →
-    (Map.delete cat cats, ())
 
 isEnabled ∷ LoggerState → LogCategory → LogLevel → IO Bool
 isEnabled LoggerState{..} cat level = do

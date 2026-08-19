@@ -51,7 +51,6 @@ module Engine.Preview.Unit
   , resolveAnimDirections
   , frameIndexAt
   , loadUnitAnimMeta
-  , loadUnitAnimMetaIn
   , buildPreviewAnims
   , buildPreviewUnit
   , buildPreviewUnitIn

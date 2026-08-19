@@ -7,8 +7,6 @@
 --   'Engine.Input.Thread.Dispatch.dispatchInput'.
 module Engine.Input.Thread.Keyboard
   ( dispatchKeyEvent
-  , recordKeyOutcome
-  , gameplayKeyHandler
   ) where
 
 import UPrelude
@@ -356,7 +354,7 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
         -- openShell — highest priority, set via markMatched above) or
         -- a bound keybind-registry action. A key with neither is
         -- passed through as genuine 'Nothing', letting
-        -- 'recordKeyOutcome' emit its ignored/noop record (domain
+        -- @recordKeyOutcome@ emit its ignored/noop record (domain
         -- "gameplay_key", descriptive reason) instead of a false
         -- "accepted".
         when shouldRecord $ do

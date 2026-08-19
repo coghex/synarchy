@@ -28,13 +28,10 @@ module Engine.Preview.Building
   ( BuildingPreviewMeta(..)
   , emptyBuildingPreviewMeta
   , buildingsCategoryRoot
-  , buildingDataPath
   , buildingDefaultFps
   , buildingDefaultLoop
   , isFrameFileName
-  , animFramePaths
   , matchAnimForDir
-  , sortBuildingEntries
   , defaultBuildingEntry
   , loadBuildingPreviewMeta
   , discoverBuildingEntries
@@ -207,7 +204,7 @@ sortBuildingEntries = sortBy (comparing pbeLabel)
 --   2. the building's own @sprite@, when it names a discovered static
 --      entry of this folder;
 --   3. a top-level @default.png@;
---   4. the first entry in 'sortBuildingEntries' order.
+--   4. the first entry in @sortBuildingEntries@ order.
 --
 --   Empty only when the folder holds no browsable texture at all.
 --   @dungeon_1@ (no YAML, no @default.png@) lands on rule 4.
@@ -236,7 +233,7 @@ defaultBuildingEntry meta entries = fromMaybe "" $
 -- * Filesystem discovery
 
 -- | Every browsable entry of a building's asset folder, in
---   'sortBuildingEntries' order.
+--   @sortBuildingEntries@ order.
 --
 --   Walked recursively, classifying at EVERY directory level: a
 --   directory recognized as an animation (see 'matchAnimForDir' /

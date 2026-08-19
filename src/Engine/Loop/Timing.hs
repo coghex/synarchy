@@ -1,6 +1,5 @@
 module Engine.Loop.Timing
   ( updateFrameTiming
-  , getCurTime
   ) where
 
 import UPrelude

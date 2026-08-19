@@ -21,7 +21,6 @@ module Engine.Graphics.Vulkan.Texture.Bindless
   , unregisterTexture
   , releaseTextureHandles
   , setTextureFilter
-  , getTextureSlotIndex
   , handleSlotTableSize
   , writeHandleSlotEntry
   ) where
@@ -48,7 +47,7 @@ import Engine.Graphics.Vulkan.Texture.Rebind
   (FilterRebindPlan(..), SlotRebind(..), planFilterRebind)
 import Engine.Graphics.Vulkan.Texture.Release
   (TextureReleasePlan(..), planTextureRelease, dropReleasedHandles
-  , freeReleasedSlots, resolveHandleSlot)
+  , freeReleasedSlots)
 import Engine.Graphics.Vulkan.Texture.Requirements
   (bindlessTextureBindingFlags)
 import Engine.Graphics.Vulkan.Texture.Undefined (createUndefinedTexture)
@@ -493,16 +492,3 @@ setTextureFilter dev flt system = do
     liftIO $ releaseSampler dev ref oldKind
     pure system { btsTextureSampler = newSampler, btsTextureKind = newKind }
 
--- | Get the slot index for a texture handle.
---
---   An unregistered handle returns @0@, which is not a sentinel the
---   caller has to test for — slot 0 is the undefined-texture slot
---   ('undefinedSlot'), so the value is directly usable. What the shader
---   then does depends on which
---   binding it feeds: a BASE texture resolving to slot 0 is sampled as
---   the undefined texture like any other slot, while only the FACE-MAP
---   path treats slot 0 specially and substitutes the default face map
---   ("Engine.Graphics.Vulkan.ShaderCode").
-getTextureSlotIndex ∷ TextureHandle → BindlessTextureSystem → Word32
-getTextureSlotIndex texHandle system =
-  resolveHandleSlot texHandle (btsHandleMap system)

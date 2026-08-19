@@ -5,7 +5,6 @@ module Engine.Graphics.Vulkan.Capability
   , TextureSystemCapability(..)
   , queryBindlessSupport
   , determineTextureCapability
-  , describeCapability
   , isBindlessSupported
   , bindlessShortfalls
   , unsupportedBindlessMessage
