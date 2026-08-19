@@ -175,7 +175,7 @@ an entry's current status.
 - [x] CH-132. Minor `tools/` defects for one cleanup issue — [no-issue]
 - [x] CH-133. `player_events.md` (786 lines) is marked "ready to implement" for a system that shipped — [#1161]
 - [x] CH-134. `blood_decals.md` (445 lines) is marked "design draft" for a shipped subsystem — [no-issue]
-- [ ] CH-135. Status markers are inconsistent, and two of the six that exist are wrong
+- [x] CH-135. Status markers are inconsistent, and two of the six that exist are wrong — [no-issue]
 - [ ] CH-136. Minor doc defects for one cleanup issue
 - [ ] CH-137. Verified: four docs are accurate and worth using as the pattern
 - [ ] CH-138. Every GitHub Actions dependency is pinned by mutable tag, not by SHA
@@ -3816,7 +3816,36 @@ shipped, so the design was implemented as designed. Only the status line lies.
 (One reference to check while editing: `Blood.Types.BloodStore` does not
 resolve against the current `Blood/Types.hs`.)
 
-### CH-135. Status markers are inconsistent, and two of the six that exist are wrong
+### [no-issue] CH-135. Status markers are inconsistent, and two of the six that exist are wrong
+> **Disposition:** No issue — both wrong markers are fixed and the proposal's
+> premise no longer describes `docs/`. `blood_decals.md:3` has read `Status:
+> implemented` since `c8884cb4` (2026-08-01, CH-134's evidence) and
+> `player_events.md:7` was archived with a `**Status:** Historical design
+> record` marker by #1161 (2026-08-09), so of the six markers this entry
+> counted, **zero are now wrong**: the four surviving document-level ones
+> (`persistence_contract.md`, `persistence_state_inventory.md`,
+> `engineenv_capability_inventory.md`, `blood_decals.md`) each verify against
+> the tree. Three further table rows are stale, including the model the
+> proposal copies: `texture_infrastructure.md`'s `**Status:**
+> Pre-implementation, written 2026-05-24` was demoted to `**Legacy status:**`
+> at `:840` when the doc was rewritten as a design-epic document, and it and
+> `expedition_gameplay_loop.md` now both carry `Design state:` at the top.
+> The population changed 9× too — 9 live docs / 4,381 lines at sweep time,
+> **82 live docs / 30,408 lines** now — and partitions into three families
+> that each already run a maintained convention: **9** design docs
+> (`Design state:` + the per-slice ledger `/process-design-doc` advances),
+> **62** findings reports and project reviews (`Status legend:` + a per-entry
+> checklist, agreement-audited in CI by `tools/findings_report_audit.py`,
+> #1196), and **11** others of which 4 carry an accurate `**Status:**` line.
+> So "one status line on every `docs/*.md`, checked in CI" would today either
+> bind 62 generated files whose status is per-entry rather than per-document,
+> or ship the exemption list that is this same inconsistency rewritten in
+> Python. The residue — 7 unmarked docs — is not discarded: `asset_generation.md`
+> and `player_manual.md` are the only two that existed at sweep time and
+> **CH-136 itemizes both by name**; `hydrology_pipeline.md` (2026-08-09) and
+> `engine_contracts.md` (2026-08-18) postdate this entry, and the remaining
+> three are transient working notes.
+
 | Doc | Marker |
 |---|---|
 | `persistence_contract.md` | **Status:** Authoritative ✓ |
