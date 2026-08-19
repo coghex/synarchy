@@ -2,7 +2,6 @@
 module Engine.Graphics.Vulkan.Swapchain
   ( createVulkanSwapchain
   , createSwapchainImageViews
-  , querySwapchainSupport
   , swapchainImageUsage
   ) where
 

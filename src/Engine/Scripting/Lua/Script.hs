@@ -2,7 +2,6 @@ module Engine.Scripting.Lua.Script
   ( loadModuleRef
   , callModuleFunction
   , callModuleFunctionReportingError
-  , callLuaFunction
   ) where
 
 import UPrelude
@@ -89,16 +88,6 @@ callModuleFunctionReportingError ls modRef funcName args = do
             logger ← readIORef (lbsLoggerRef ls)
             logWarn logger CatLua $ "Lua error in " <> funcName <> "(): " <> msg
     pure mErr
-
--- | Call a global Lua function
-callLuaFunction ∷ T.Text → [ScriptValue] → Lua.LuaE Lua.Exception Lua.Status
-callLuaFunction funcName args = do
-  let name = Lua.Name (TE.encodeUtf8 funcName)
-  _ ← Lua.getglobal name
-  forM_ args pushScriptValue
-  let numArgs = fromIntegral (length args)
-  -- pcall so a Lua error returns a non-OK Status instead of throwing.
-  Lua.pcall numArgs Lua.multret Nothing
 
 -- | Push one 'ScriptValue' onto the Lua stack. 'ScriptTable' pushes
 --   a real Lua table built from the key/value list — without this,

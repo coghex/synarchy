@@ -3,8 +3,6 @@
 module Engine.Graphics.Vulkan.Init
   ( initializeVulkan
   , initializeVulkanOffscreen
-  , initializeVulkanCommon
-  , createUniformBuffersForFrames
   ) where
 
 import UPrelude

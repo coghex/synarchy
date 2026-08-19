@@ -14,10 +14,14 @@ a unique port (#531). Probes canNOT share a single engine — 8 neutralise
 the global `unit_ai.update`, 37 load defs engine-wide, many reuse the same
 world/page names, and 16 restart the engine, so there is no clean per-
 scenario isolation on one long-lived engine; running independent engines in
-parallel gets the speed without the isolation problem. A full sequential
-run is low tens of minutes; `--jobs` cuts wall-time to ~total/N (bounded by
-the slowest single probe). This is NOT part of any default test tier (see
-CLAUDE.md Testing Tiers) — run it deliberately, and prefer `--only`.
+parallel gets the speed without that problem. Separate processes and
+separate ports are ALL that isolates — every probe still drives the same
+checkout — so the few probes that mutate a shared repository-relative
+resource declare it in `EXCLUSIVE_RESOURCES` below and are never scheduled
+together (#1322). A full sequential run is low tens of minutes; `--jobs`
+cuts wall-time to ~total/N (bounded by the slowest single probe). This is
+NOT part of any default test tier (see CLAUDE.md Testing Tiers) — run it
+deliberately, and prefer `--only`.
 
 Usage:
   python3 tools/run_probes.py                  # run everything, sequentially
@@ -308,6 +312,41 @@ PROBES = [
     ("wire", "wire_probe.py",
      "wire autotile shape derivation + path-builder UX + construct_job wire AI (#359)"),
 ]
+
+# Probes that MUTATE a shared repository-relative resource, and therefore
+# cannot run at the same time as each other (#1322). Probe key -> the
+# resource name(s) that probe needs EXCLUSIVELY; two probes conflict when
+# their declarations intersect. A probe absent from here declares nothing
+# and is never serialized against anything.
+#
+# This is the whole conflict model: the scheduler below reads it and knows
+# nothing about any particular probe, so a third probe touching the same
+# files is handled by adding a row here.
+#
+# `repo-config` is the tracked `config/` directory of THIS checkout.
+# `config_migration_probe.py` and `config_state_probe.py` each move the
+# same three tracked legacy files (`config/{video,keybinds,notifications}
+# .yaml`) aside into their OWN fixed /tmp backup directory and each delete
+# the same three `config/*.local.yaml` paths before restoring — so run
+# together, one probe's cleanup deletes or overwrites state the other owns
+# and can leave a tracked file missing or holding fixture content in the
+# primary checkout. (`config_state_probe.py` additionally owns
+# `config/save.local.yaml`, which `config_migration_probe.py` does not
+# touch; the three legacy paths and the other three local paths are
+# shared.) Isolating them behind `--resource-root` is deliberately NOT the
+# fix: `config_state_probe.py` asserts against the real tracked tree
+# because proving the engine never dirties it is that probe's whole
+# purpose (#638), and under an isolated root those assertions go vacuous.
+EXCLUSIVE_RESOURCES: dict[str, tuple[str, ...]] = {
+    "config_migration": ("repo-config",),
+    "config_state": ("repo-config",),
+}
+
+
+def exclusive_resources(key: str) -> set[str]:
+    """The resources probe ``key`` needs exclusively; empty when it declares none."""
+    return set(EXCLUSIVE_RESOURCES.get(key, ()))
+
 
 # farm_ai_probe.py's O(n^2) TCP tile scan over natural terrain (#336) is the
 # slowest registered probe at ~11.5 min solo on a warm dev machine (#721) —
@@ -763,8 +802,18 @@ def main() -> int:
                 results[key] = (script, status, elapsed, out)
         else:
             # Parallel (#531) — one independent engine per probe, up to --jobs at
-            # once, each on a unique port. No isolation issue: separate processes,
-            # separate ports, unique save names. Retries run SOLO afterward,
+            # once, each on a unique port. That isolates exactly two dimensions
+            # and claims nothing further: separate processes cannot corrupt each
+            # other's memory, and unique ports cannot collide on a bind. Every
+            # probe still drives the SAME checkout, the same build directory and
+            # the same repository-relative files, so a probe declaring an
+            # EXCLUSIVE_RESOURCES entry is serialized against any probe whose
+            # declaration intersects it (#1322) — the scheduling below holds it
+            # back rather than letting a worker discover the conflict. Anything
+            # NOT declared there is unguarded: `tools/probelib.py` still launches
+            # shared-tree `cabal run` processes, and
+            # `docs/project_review_534-518.md:16-30` records a separate
+            # unresolved shared-build-directory race. Retries run SOLO afterward,
             # since parallel contention is exactly what a retry needs to escape.
             jobs = args.jobs
             print(f"Running {n} probe(s), up to {jobs} concurrently "
@@ -785,13 +834,54 @@ def main() -> int:
                 # the interrupt. `futs` is grown as we go so the handler
                 # sees exactly what has been submitted.
                 futs: list[concurrent.futures.Future] = []
+                # Submission is INTERLEAVED with completion rather than done
+                # up front, because a probe waiting on a busy exclusive
+                # resource must not occupy a worker slot that an unrelated
+                # ready probe could use. Holding it back here — rather than
+                # taking a lock inside the worker — is what keeps `--jobs`
+                # worth of real work in flight while a conflict is pending.
+                pending = list(enumerate(chosen))
+                running: dict[concurrent.futures.Future, set[str]] = {}
+                held: set[str] = set()
+                done = 0
                 try:
-                    for i, probe in enumerate(chosen):
-                        futs.append(ex.submit(work, i, probe))
-                    for done, fut in enumerate(concurrent.futures.as_completed(futs), 1):
-                        key, script, status, elapsed, out = fut.result()
-                        print(f"[{done}/{n}] {script} ... {status} ({elapsed:.1f}s)")
-                        results[key] = (script, status, elapsed, out)
+                    while pending or running:
+                        # Dispatch in registry order every probe that fits and
+                        # whose resources are free; a BLOCKED probe is skipped,
+                        # never waited on, so later disjoint probes still start.
+                        for item in list(pending):
+                            if len(running) >= jobs:
+                                break
+                            i, probe = item
+                            need = exclusive_resources(probe[0])
+                            if need & held:
+                                continue
+                            held |= need
+                            fut = ex.submit(work, i, probe)
+                            running[fut] = need
+                            futs.append(fut)
+                            pending.remove(item)
+                        if not running:
+                            # Unreachable: with nothing running nothing is
+                            # held, so the first pending probe always
+                            # dispatches. Say so rather than spin forever.
+                            raise RuntimeError(
+                                "probe scheduler stalled with work pending: "
+                                f"{[p[0] for _, p in pending]}")
+                        done_futs, _ = concurrent.futures.wait(
+                            running, return_when=concurrent.futures.FIRST_COMPLETED)
+                        for fut in done_futs:
+                            # Released on EVERY outcome — PASS, FAIL and
+                            # TIMEOUT alike — and only once `run_one` has
+                            # returned, which is after it reaped the probe's
+                            # whole process group. A probe waiting on this
+                            # resource therefore never starts while the
+                            # previous holder's engine is still up.
+                            held -= running.pop(fut)
+                            done += 1
+                            key, script, status, elapsed, out = fut.result()
+                            print(f"[{done}/{n}] {script} ... {status} ({elapsed:.1f}s)")
+                            results[key] = (script, status, elapsed, out)
                 except BaseException:
                     # Ctrl-C, or any orchestration failure. cancel() alone
                     # cannot stop a work item a free worker already picked

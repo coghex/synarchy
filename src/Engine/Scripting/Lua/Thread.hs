@@ -10,7 +10,6 @@
 --   Both are re-exported here so the public API is unchanged.
 module Engine.Scripting.Lua.Thread
   ( startLuaThread
-  , runLuaLoop
   , createLuaBackendState
   , processLuaMsg
   , processLuaMsgs
@@ -154,7 +153,7 @@ startLuaThread env = do
                     -- registered, and scripts/init.lua run) before the
                     -- listener was ever attempted, so it is live here
                     -- and nothing else will ever close it: no loop was
-                    -- forked, so 'runLuaLoop's own teardown close can
+                    -- forked, so @runLuaLoop@s own teardown close can
                     -- never run.
                     Lua.close (lbsLuaState backendState)
                     reportBootCleanup

@@ -265,7 +265,7 @@ processLuaMsg env ls stateRef msg = case msg of
     -- any command that arrived is still sitting there, queued for a
     -- session that no longer exists once this handler runs (this is
     -- the FIRST point on the Lua thread reached after publish — see
-    -- 'Engine.Scripting.Lua.Thread.runLuaLoop's own comment on why
+    -- @Engine.Scripting.Lua.Thread.runLuaLoop@s own comment on why
     -- 'processLuaMsgs' drains 'LuaSaveLoaded' before 'processDebugCommands'
     -- ever gets a chance to run again). Left alone, that later
     -- 'processDebugCommands' call would execute every one of them
@@ -400,7 +400,7 @@ handleLoadStaged env ls requestId = do
     -- (i.e. running a debug console that can accept 'engine.loadSave')
     -- runs one of the three main loops, and all three acknowledge
     -- SaveRender through the single shared handshake in
-    -- 'Engine.Loop.Mode.runGatedByCaptureLock' — headless included: it
+    -- @Engine.Loop.Mode.runGatedByCaptureLock@ — headless included: it
     -- runs no 'Engine.Loop.mainLoop'/'mainLoopOffscreen', but it DOES
     -- run 'Engine.Loop.Headless.headlessLoop', which drains the exact
     -- same 'luaToEngineQueue' via the same 'processLuaMessages'.
@@ -408,7 +408,7 @@ handleLoadStaged env ls requestId = do
     -- console/Lua thread to ever call this in the first place. WHY that
     -- acknowledgement has to be a genuine owner handshake rather than a
     -- point-in-time 'captureLocked' pre-check is explained once, at
-    -- 'Engine.Loop.Mode.runGatedByCaptureLock'; a plain save omits
+    -- @Engine.Loop.Mode.runGatedByCaptureLock@; a plain save omits
     -- SaveRender ('Engine.Scripting.Lua.API.Save.saveOwnerSet').
     inputActive ← readIORef (inputThreadActiveRef env)
     let baseOwners = Set.fromList

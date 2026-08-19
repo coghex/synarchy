@@ -4,7 +4,6 @@ module Engine.Scene.Batch.Update
   , updateTextBatches
   , createBatch
   , getSortedBatches
-  , groupByTextureAndLayer
   ) where
 
 import UPrelude

@@ -7,6 +7,7 @@ module Engine.Scripting.Lua.API.Core
   , pauseScriptFn
   , resumeScriptFn
   , listFilesFn
+  , listFilesRecursiveFn
   , setPausedFn
   , isPausedFn
   , getBootProfileFn
@@ -33,6 +34,7 @@ import Engine.Core.Types
     , PreviewBuilding(..), PreviewBuildingEntry(..))
 import Engine.Core.Log (logInfo, logWarn, logDebug, LogCategory(..))
 import Engine.Load.Status (loadInProgress)
+import Engine.Asset.Discovery (walkFilesWithExtension)
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text as T
@@ -503,6 +505,49 @@ listFilesFn = do
                     Lua.newtable
                     forM_ (zip [1 ∷ Int ..] matching) $ \(i, filename) → do
                         Lua.pushstring (TE.encodeUtf8 (T.pack filename))
+                        Lua.rawseti (-2) (fromIntegral i)
+                    return 1
+        _ → do
+            Lua.pushnil
+            return 1
+
+-- | List every file with a matching extension under a directory TREE,
+--   recursively (#1232). Returns a Lua array of paths RELATIVE to the
+--   requested directory, @/@-separated at every depth, or nil if the
+--   directory doesn't exist.
+--
+--   The recursive counterpart of 'listFilesFn', deliberately kept
+--   beside it rather than folded into it: @engine.listFiles@ must stay
+--   flat for its own callers (see its note above).
+--
+--   NB: like 'listFilesFn', order is OS-dependent — a caller that needs
+--   determinism applies its own total order to the result. That is not
+--   an oversight: @scripts/startup_loader.lua@'s canonical item-file
+--   order is a pure transformation over this list, which is what lets a
+--   test drive it with two different enumeration orders.
+--
+--   A symlink at any depth is skipped, so the walk always terminates
+--   and never escapes the requested directory
+--   ('Engine.Asset.Discovery.walkFilesWithExtension').
+listFilesRecursiveFn ∷ Lua.LuaE Lua.Exception Lua.NumResults
+listFilesRecursiveFn = do
+    dirArg ← Lua.tostring 1
+    extArg ← Lua.tostring 2
+    case (dirArg, extArg) of
+        (Just dirBS, Just extBS) → do
+            let dirPath = T.unpack (TE.decodeUtf8Lenient dirBS)
+                ext     = T.unpack (TE.decodeUtf8Lenient extBS)
+            exists ← Lua.liftIO $ doesDirectoryExist dirPath
+            if not exists
+                then do
+                    Lua.pushnil
+                    return 1
+                else do
+                    matching ← Lua.liftIO $
+                        walkFilesWithExtension dirPath ext
+                    Lua.newtable
+                    forM_ (zip [1 ∷ Int ..] matching) $ \(i, relPath) → do
+                        Lua.pushstring (TE.encodeUtf8 (T.pack relPath))
                         Lua.rawseti (-2) (fromIntegral i)
                     return 1
         _ → do

@@ -6,14 +6,14 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## Status
 
-- [ ] PRR-1. Fall regressions call sub-minute survival “well over a minute”
-- [ ] PRR-2. Definition-free landless worlds lose the explicit `NoLand` outcome
-- [ ] PRR-3. The envelope framing fingerprint changes on non-wire pragma edits
-- [ ] PRR-4. The tutorial toggle caption remains clipped at the right edge
+- [x] PRR-1. Fall regressions call sub-minute survival “well over a minute” — [#1412]
+- [x] PRR-2. Definition-free landless worlds lose the explicit `NoLand` outcome — [#1414]
+- [x] PRR-3. The envelope framing fingerprint changes on non-wire pragma edits — [#1416]
+- [x] PRR-4. The tutorial toggle caption remains clipped at the right edge — [#1419]
 
 ## 1. Shallow-fall calibration
 
-### PRR-1. Fall regressions call sub-minute survival “well over a minute”
+### [#1412] PRR-1. Fall regressions call sub-minute survival “well over a minute”
 
 > **Captured note:** Make the shallow-fall regression's description and threshold agree. PR #1018's average and extreme profiles currently survive about 36.7 and 45.7 seconds by the test's own naive exsanguination measure, while their examples claim “well over a minute.”
 
@@ -36,7 +36,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## 2. Location-placement outcomes
 
-### PRR-2. Definition-free landless worlds lose the explicit `NoLand` outcome
+### [#1414] PRR-2. Definition-free landless worlds lose the explicit `NoLand` outcome
 
 > **Captured note:** Define which placement outcome wins when a world has no land and also has no placeable location definitions. `computeLocationPlacement` currently short-circuits to `NoPlaceableDefinitions`, even though `NoLand` is documented as the explicit result whenever the world holds no land at all.
 
@@ -60,7 +60,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## 3. Save-compatibility audit precision
 
-### PRR-3. The envelope framing fingerprint changes on non-wire pragma edits
+### [#1416] PRR-3. The envelope framing fingerprint changes on non-wire pragma edits
 
 > **Captured note:** Restrict the envelope framing fingerprint to wire-relevant code. PR #1001 removed a redundant `UnicodeSyntax` pragma from `Codec.hs` and had to update the compatibility manifest even though the PR changed no executable behavior or on-disk bytes.
 
@@ -84,7 +84,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## 4. Tutorial HUD layout
 
-### PRR-4. The tutorial toggle caption remains clipped at the right edge
+### [#1419] PRR-4. The tutorial toggle caption remains clipped at the right edge
 
 > **Captured note:** Fit the tutorial toggle caption inside its right-anchored box. PR #991's own graphical verification measured `> Objectives` through the framebuffer edge as `> Objecti`, reported it out of scope, and no later change repaired or tracked it.
 

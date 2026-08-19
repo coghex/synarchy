@@ -2,7 +2,6 @@
 {-# LANGUAGE Strict #-}
 module Engine.Graphics.Vulkan.Command.Record
   ( recordSceneCommandBuffer
-  , renderLayerItems
   , uiLayerThreshold
   ) where
 

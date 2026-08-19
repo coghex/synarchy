@@ -109,7 +109,7 @@ the affected fields as unclassified.
 | `saveBarrierRef` | global | Exclude | — | Runtime-only coordinated-save request/owner acknowledgement diagnostics; never serialized. | save-barrier hspec + headless probe |
 | `gameTimeRef` | global | Persist exactly | — | `sdGameTime` | `tools/save_pause_probe.py` |
 | `lastSaveTimeRef` | global | Exclude | — | wall-clock bookkeeping, session-only | none yet |
-| `itemManagerRef` | global | Rebuild | `data/items/*.yaml` | see §9 | none yet |
+| `itemManagerRef` | global | Rebuild | the `data/items/` tree, recursively (#1232) | see §9 | none yet |
 | `equipmentClassManagerRef` | global | Rebuild | `data/*.yaml` equipment content | see §9 | none yet |
 | `substanceManagerRef` | global | Rebuild | `data/*.yaml` substance content | see §9 | none yet |
 | `infectionManagerRef` | global | Rebuild | `data/*.yaml` infection content | see §9 | `tools/infection_probe.py` |

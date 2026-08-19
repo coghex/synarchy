@@ -15,8 +15,6 @@ module Engine.Asset.YamlUnits
     , UnitYamlNaturalResistance(..)
     , UnitYamlFile(..)
     , UnitYamlAssetDef(..)
-    , defaultUnitYamlBody
-    , defaultUnitYamlNaturalResistance
     , loadUnitYaml
     , loadUnitYamlAssets
     , unitYamlBodyPartToBodyPart

@@ -31,8 +31,9 @@ import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
 import System.Directory
     ( getTemporaryDirectory, createDirectoryIfMissing
-    , removeDirectoryRecursive, listDirectory )
-import System.FilePath ((</>), takeExtension)
+    , removeDirectoryRecursive )
+import System.FilePath ((</>))
+import Engine.Asset.Discovery (walkFilesWithExtension)
 import Engine.Core.Log
     ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
     , LogCategory(..), LogLevel(..), LogEntry(..), LoggerState )
@@ -504,13 +505,14 @@ lookupDef n ds = case filter ((≡ n) ∘ iydName) ds of
     (d : _) → Just d
     []      → Nothing
 
--- | Every @*.yaml@ directly under @data/items@, discovered rather than
---   listed, so a file added and never registered still shows up here.
+-- | Every @*.yaml@ under @data/items@ AT ANY DEPTH, discovered through
+--   the same walk startup discovery uses (#1232) rather than listed, so
+--   a file added — including one added in a subdirectory — and never
+--   registered still shows up here.
 shippedItemFiles ∷ IO [FilePath]
 shippedItemFiles = do
-    entries ← listDirectory shippedItemDir
-    pure (sort [ shippedItemDir </> e
-               | e ← entries, takeExtension e ≡ ".yaml" ])
+    rels ← walkFilesWithExtension shippedItemDir ".yaml"
+    pure (sort [ shippedItemDir </> rel | rel ← rels ])
 
 shippedItemDefs ∷ IO [ItemYamlDef]
 shippedItemDefs = do

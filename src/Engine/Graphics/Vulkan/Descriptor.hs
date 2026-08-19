@@ -1,11 +1,6 @@
 {-# LANGUAGE Strict #-}
 module Engine.Graphics.Vulkan.Descriptor
-  ( -- * Creation and Destruction
-    createVulkanDescriptorManager
-  , destroyVulkanDescriptorManager
-    -- * Pool Management
-  , createVulkanDescriptorPool
-    -- * Set Management
+  ( createVulkanDescriptorManager
   , allocateVulkanDescriptorSets
   ) where
 
@@ -87,8 +82,3 @@ allocateVulkanDescriptorSets device manager count = do
   
   allocateDescriptorSets device allocInfo
 
-destroyVulkanDescriptorManager ∷ Device → DescriptorManager → EngineM σ ()
-destroyVulkanDescriptorManager device manager = do
-  destroyDescriptorSetLayout device (dmUniformLayout manager) Nothing
-  -- Pool destruction implicitly frees all allocated sets
-  destroyDescriptorPool device (dmPool manager) Nothing

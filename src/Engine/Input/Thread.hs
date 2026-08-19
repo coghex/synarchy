@@ -12,11 +12,10 @@
 --       'Engine.Input.Thread.Scroll', reached only through 'Dispatch'
 --       — none of those modules are re-exported.
 --
---   'startInputThread' and 'runInputLoop' are defined in this facade
+--   'startInputThread' and @runInputLoop@ are defined in this facade
 --   itself, not re-exported from elsewhere.
 module Engine.Input.Thread
   ( startInputThread
-  , runInputLoop
   , processInputs
   , processInput
   ) where
@@ -34,7 +33,7 @@ import Engine.Core.Log (logDebug, logError, logInfo, LogCategory(..))
 -- narrow value — the SS7.3 cross-capability read into
 -- `save-load-coordination`, which has no record of its own (SS7.8's
 -- own row is empty; its modules are permanent SS6.1 exceptions). The
--- opaque `EngineEnv` is still threaded into 'runInputLoop'/
+-- opaque `EngineEnv` is still threaded into @runInputLoop@/
 -- 'processInputs', which hand it on to not-yet-narrowed callees.
 import Engine.Core.State (EngineEnv, EngineLifecycle(..), saveBarrierRef)
 import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)

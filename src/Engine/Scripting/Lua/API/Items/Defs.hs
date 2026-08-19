@@ -10,12 +10,14 @@
 --   'ContentRegistriesCapability' and the logger only through
 --   'CoreCapability'. 'loadItemYamlFn' still takes an 'EngineEnv', but
 --   purely as the opaque token the not-yet-narrowed @render-gpu-asset@
---   texture helpers ('resolveTexturePath', 'loadAndRegister',
+--   texture helpers ('resolveTexturePath', 'loadAndRegisterWithPool',
 --   'isTextureNameRegistered') demand — this module dereferences no
 --   'EngineEnv' field itself, and that parameter goes away when
 --   @render-gpu-asset@ migrates (SS7.2).
 module Engine.Scripting.Lua.API.Items.Defs
     ( loadItemYamlFn
+    , registerItemDefs
+    , itemDuplicateMessage
     , itemListDefsFn
     ) where
 
@@ -26,17 +28,20 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Control.Monad (foldM)
-import Data.IORef (readIORef, atomicModifyIORef')
+import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.Core (CoreCapability)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..))
-import Engine.Core.Log (LogCategory(..), logInfo)
+import Engine.Core.Log (LogCategory(..), LoggerState, logInfo, logWarn)
 import Engine.Core.Log.Monad (getLoggerFor)
-import Engine.Scripting.Lua.Types (LuaBackendState(..))
-import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister,
+import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg)
+import Engine.Scripting.Lua.API.YamlTextures (loadAndRegisterWithPool,
                                               isTextureNameRegistered,
                                               resolveTexturePath)
+import Engine.Asset.Handle (TextureHandle)
+import Engine.Asset.Types (AssetPool)
+import qualified Engine.Core.Queue as Q
 import Engine.Asset.YamlItems
 import Item.Types
 
@@ -63,7 +68,13 @@ resolveSpritePath env = resolveTexturePath env "Item sprite" missingEquipmentTex
 -- | item.loadYaml(path) — parses a YAML file of item defs, loads each
 --   item's sprite, and registers the defs into the ItemManager.
 --   Returns the number of defs loaded. Callable repeatedly; each call
---   inserts/replaces by def name.
+--   inserts/replaces by def name (#1232 requirement 8: a repeat load of
+--   a valid file stays a legal no-op-shaped reload, never a
+--   duplicate-id failure).
+--
+--   Argument marshalling only: every effect lives in 'registerItemDefs',
+--   so a test can drive the identical registration path without a Lua
+--   state.
 loadItemYamlFn ∷ CoreCapability → ContentRegistriesCapability → EngineEnv
                → LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
 loadItemYamlFn core regs env backendState = do
@@ -74,126 +85,13 @@ loadItemYamlFn core regs env backendState = do
             return 1
         Just pathBS → do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
+                (lteq, _) = lbsMsgQueues backendState
             count ← Lua.liftIO $ do
                 logger ← getLoggerFor core
                 defs ← loadItemYaml logger filePath
-                let (lteq, _) = lbsMsgQueues backendState
-
-                -- Register the broken-weapon overlay once (same flow as
-                -- item sprites). The ground-item renderer fetches it by
-                -- name from the texture-name registry.
-                alreadyRegistered ← isTextureNameRegistered env
-                                        brokenEquipmentTexName
-                unless alreadyRegistered $
-                    void $ loadAndRegister env backendState lteq
-                               brokenEquipmentTexName brokenEquipmentTexture
-
-                total ← foldM (\acc def → do
-                    -- Load the sprite texture so it's ready for any
-                    -- future inventory grid UI. Register under
-                    -- "item_<defName>" so other systems can fetch it.
-                    let regName = "item_" <> iydName def
-                    spritePath ← resolveSpritePath env (T.unpack (iydSprite def))
-                    handle ← loadAndRegister env backendState lteq
-                                regName spritePath
-
-                    let container = fmap
-                            (\c → ItemContainer
-                                { icCapacity    = iycCapacity c
-                                , icHolds       = iycHolds c
-                                , icFillWeight  = iycFillWeight c
-                                , icDefaultFill = iycDefaultFill c
-                                })
-                            (iydContainer def)
-                        -- #1233: the optional portable ITEM-storage
-                        -- capacities, carried across independently of
-                        -- `container` above — neither block supplies the
-                        -- other's values (D-12).
-                        storage = fmap
-                            (\s → ItemStorage
-                                { isWeightCapacity = iysWeightCapacity s
-                                , isBulkCapacity   = iysBulkCapacity s
-                                })
-                            (iydStorage def)
-                        food = fmap
-                            (\f → ItemFood
-                                { ifCalories      = iyfCalories f
-                                , ifCaloriesPerKg = iyfCaloriesPerKg f
-                                })
-                            (iydFood def)
-                        weapon = fmap
-                            (\w → ItemWeapon
-                                { iwBladeLength    = iywBladeLength w
-                                , iwBaseSharpness  = iywBaseSharpness w
-                                , iwStabEff        = iywStabEff w
-                                , iwSlashEff       = iywSlashEff w
-                                , iwBluntEff       = iywBluntEff w
-                                , iwWeaponClass    = iywWeaponClass w
-                                , iwAttackCooldown = iywAttackCooldown w
-                                , iwLength         = if iywLength w > 0
-                                                     then iywLength w
-                                                     else iywBladeLength w
-                                , iwCenterOfMass   = iywCenterOfMass w
-                                })
-                            (iydWeapon def)
-                        armor = fmap
-                            (\a → ItemArmor
-                                { iaThickness = iyaThickness a
-                                , iaCovers    = iyaCovers a
-                                })
-                            (iydArmor def)
-                        (wMean, wSpec) = case iydWeight def of
-                            WeightFixed w   → (w, Nothing)
-                            WeightSpec m r  → (m, Just (m, r))
-                        itemDef = ItemDef
-                            { idName        = iydName def
-                            , idDisplayName = if T.null (iydDisplayName def)
-                                              then iydName def
-                                              else iydDisplayName def
-                            , idTexture     = handle
-                            , idWeight      = wMean
-                            , idWeightSpec  = wSpec
-                            , idBulk        = iydBulk def
-                            , idKind        = iydKind def
-                            , idCategory    = iydCategory def
-                            , idMake        = iydMake def
-                            , idMaterial    = iydMaterial def
-                            , idQualitySpec   = (\r → (iyrsMin r, iyrsMax r))
-                                              <$> iydQuality def
-                            , idConditionSpec = (\r → (iyrsMin r, iyrsMax r))
-                                              <$> iydCondition def
-                            , idQualityTiers = map
-                                (\t → QualityTier (iyqtMin t) (iyqtLabel t))
-                                (iydQualityTiers def)
-                            , idContainer   = container
-                            , idDefaultContents =
-                                [ (iycoItem c, iycoCount c, iycoFill c)
-                                | c ← iydContents def ]
-                            , idStorage     = storage
-                            , idFood        = food
-                            , idWeapon      = weapon
-                            , idArmor       = armor
-                            , idUnequippable = iydUnequippable def
-                            , idBuffs       = map
-                                (\b → ItemBuff
-                                    { ibStat = iybStat b
-                                    , ibAmount = iybAmount b
-                                    , ibPercent = iybPercent b
-                                    , ibScalesWithCondition =
-                                        iybScalesWithCondition b
-                                    })
-                                (iydBuffs def)
-                            , idInsulation  = iydInsulation def
-                            }
-
-                    atomicModifyIORef' (crItemManagerRef regs) $ \im →
-                        (ItemManager
-                            { imDefs = HM.insert (iydName def) itemDef
-                                                (imDefs im) }, ())
-
-                    return (acc + 1)
-                    ) (0 ∷ Int) defs
-
+                total ← registerItemDefs env logger
+                            (lbsAssetPool backendState) lteq
+                            (crItemManagerRef regs) filePath defs
                 logInfo logger CatAsset $
                     "loadItemYaml: loaded " <> T.pack (show total)
                     <> " item definitions from " <> T.pack filePath
@@ -201,6 +99,156 @@ loadItemYamlFn core regs env backendState = do
 
             Lua.pushnumber (Lua.Number (fromIntegral count))
             return 1
+
+-- | #1232 requirement 7's collision diagnostic, in one place so both
+--   the emitter and its gate spell it the same way.
+--
+--   Informational by contract: it neither fails the load, reduces the
+--   count 'loadItemYamlFn' returns, nor prevents the replacement. The
+--   two paths are legitimately EQUAL twice over — an intra-file
+--   duplicate, and a repeated load of the same valid file — so the
+--   message reads correctly when they are.
+itemDuplicateMessage ∷ Text → Text → Text → Text
+itemDuplicateMessage itemId replacedPath replacingPath =
+    "duplicate item definition id \"" <> itemId <> "\": the definition \
+    \from " <> replacedPath <> " is replaced by the one from "
+    <> replacingPath <> " (last write wins)"
+
+-- | Register every item definition a parsed YAML file declared,
+--   returning how many were published.
+--
+--   Registration is last-write-wins in the caller's order (#1232
+--   requirement 6): within this list, the later authored entry wins;
+--   across files, whichever file the caller loads later wins. Every
+--   replacement emits 'itemDuplicateMessage'.
+registerItemDefs
+    ∷ EngineEnv                    -- ^ opaque token for the not-yet-narrowed
+                                   --   @render-gpu-asset@ texture helpers
+    → LoggerState
+    → IORef AssetPool
+    → Q.Queue LuaToEngineMsg
+    → IORef ItemManager
+    → FilePath                     -- ^ the YAML's own path (provenance)
+    → [ItemYamlDef]
+    → IO Int
+registerItemDefs env logger poolRef lteq managerRef filePath defs = do
+    -- Register the broken-weapon overlay once (same flow as item
+    -- sprites). The ground-item renderer fetches it by name from the
+    -- texture-name registry.
+    alreadyRegistered ← isTextureNameRegistered env brokenEquipmentTexName
+    unless alreadyRegistered $
+        void $ loadAndRegisterWithPool env poolRef lteq
+                   brokenEquipmentTexName brokenEquipmentTexture
+
+    foldM (\acc def → do
+        -- Load the sprite texture so it's ready for any future
+        -- inventory grid UI. Register under "item_<defName>" so other
+        -- systems can fetch it.
+        let regName = "item_" <> iydName def
+        spritePath ← resolveSpritePath env (T.unpack (iydSprite def))
+        handle ← loadAndRegisterWithPool env poolRef lteq regName spritePath
+
+        let itemDef = itemDefFromYaml filePath handle def
+        replaced ← atomicModifyIORef' managerRef $ \im →
+            ( ItemManager { imDefs = HM.insert (idName itemDef) itemDef
+                                               (imDefs im) }
+            , HM.lookup (idName itemDef) (imDefs im) )
+        forM_ replaced $ \old →
+            logWarn logger CatAsset $
+                itemDuplicateMessage (idName itemDef) (idSourcePath old)
+                                     (idSourcePath itemDef)
+
+        return (acc + 1)
+        ) (0 ∷ Int) defs
+
+-- | The authored YAML definition, as the registry holds it. Pure: the
+--   only things it cannot derive are the already-loaded sprite handle
+--   and the file the definition came from, both passed in.
+itemDefFromYaml ∷ FilePath → TextureHandle → ItemYamlDef → ItemDef
+itemDefFromYaml filePath handle def = ItemDef
+    { idName        = iydName def
+    , idDisplayName = if T.null (iydDisplayName def)
+                      then iydName def
+                      else iydDisplayName def
+    , idTexture     = handle
+    , idWeight      = wMean
+    , idWeightSpec  = wSpec
+    , idBulk        = iydBulk def
+    , idKind        = iydKind def
+    , idCategory    = iydCategory def
+    , idMake        = iydMake def
+    , idMaterial    = iydMaterial def
+    , idQualitySpec   = (\r → (iyrsMin r, iyrsMax r)) <$> iydQuality def
+    , idConditionSpec = (\r → (iyrsMin r, iyrsMax r)) <$> iydCondition def
+    , idQualityTiers = map (\t → QualityTier (iyqtMin t) (iyqtLabel t))
+                           (iydQualityTiers def)
+    , idContainer   = container
+    , idDefaultContents =
+        [ (iycoItem c, iycoCount c, iycoFill c) | c ← iydContents def ]
+    , idStorage     = storage
+    , idFood        = food
+    , idWeapon      = weapon
+    , idArmor       = armor
+    , idUnequippable = iydUnequippable def
+    , idBuffs       = map
+        (\b → ItemBuff
+            { ibStat = iybStat b
+            , ibAmount = iybAmount b
+            , ibPercent = iybPercent b
+            , ibScalesWithCondition = iybScalesWithCondition b
+            })
+        (iydBuffs def)
+    , idInsulation  = iydInsulation def
+    , idSourcePath  = T.pack filePath
+    }
+  where
+    container = fmap
+        (\c → ItemContainer
+            { icCapacity    = iycCapacity c
+            , icHolds       = iycHolds c
+            , icFillWeight  = iycFillWeight c
+            , icDefaultFill = iycDefaultFill c
+            })
+        (iydContainer def)
+    -- #1233: the optional portable ITEM-storage capacities, carried
+    -- across independently of `container` above — neither block
+    -- supplies the other's values (D-12).
+    storage = fmap
+        (\s → ItemStorage
+            { isWeightCapacity = iysWeightCapacity s
+            , isBulkCapacity   = iysBulkCapacity s
+            })
+        (iydStorage def)
+    food = fmap
+        (\f → ItemFood
+            { ifCalories      = iyfCalories f
+            , ifCaloriesPerKg = iyfCaloriesPerKg f
+            })
+        (iydFood def)
+    weapon = fmap
+        (\w → ItemWeapon
+            { iwBladeLength    = iywBladeLength w
+            , iwBaseSharpness  = iywBaseSharpness w
+            , iwStabEff        = iywStabEff w
+            , iwSlashEff       = iywSlashEff w
+            , iwBluntEff       = iywBluntEff w
+            , iwWeaponClass    = iywWeaponClass w
+            , iwAttackCooldown = iywAttackCooldown w
+            , iwLength         = if iywLength w > 0
+                                 then iywLength w
+                                 else iywBladeLength w
+            , iwCenterOfMass   = iywCenterOfMass w
+            })
+        (iydWeapon def)
+    armor = fmap
+        (\a → ItemArmor
+            { iaThickness = iyaThickness a
+            , iaCovers    = iyaCovers a
+            })
+        (iydArmor def)
+    (wMean, wSpec) = case iydWeight def of
+        WeightFixed w   → (w, Nothing)
+        WeightSpec m r  → (m, Just (m, r))
 
 -- | item.listDefs() → array of {name, displayName, category, weight}
 --   Sorted by name for a stable debug-overlay listing.
