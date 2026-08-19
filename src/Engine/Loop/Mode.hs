@@ -14,7 +14,6 @@ module Engine.Loop.Mode
   ( LoopMode(..)
   , runLoopMode
   , runStartupHandshake
-  , runGatedByCaptureLock
   , frameBudgetMicros
   ) where
 
@@ -34,7 +33,7 @@ import Engine.Scripting.Lua.Message (processLuaMessages, discardLuaMessagesForAc
 -- | Everything that genuinely differs between the three main loops.
 --   Everything ELSE — the lifecycle dispatch, the startup handshake
 --   ('runStartupHandshake') and the save-barrier-gated Lua drain
---   ('runGatedByCaptureLock') — is identical in all three and lives in
+--   (@runGatedByCaptureLock@) — is identical in all three and lives in
 --   this module only.
 --
 --   The surviving differences, in tick order:
@@ -77,7 +76,7 @@ data LoopMode σ = LoopMode
     --   receive input solely through the injection verbs (#644).
   , lmCameraUpdates ∷ EngineM σ ()
     -- ^ Per-tick camera integration, run only on an UNLOCKED tick (see
-    --   'runGatedByCaptureLock'). Windowed and offscreen; headless has
+    --   @runGatedByCaptureLock@). Windowed and offscreen; headless has
     --   no camera to integrate and never ran these even before #763.
   , lmExitRequested ∷ EngineM σ Bool
     -- ^ A mode-specific reason to shut down, checked alongside the

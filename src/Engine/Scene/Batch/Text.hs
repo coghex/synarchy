@@ -1,8 +1,6 @@
 {-# LANGUAGE Strict #-}
 module Engine.Scene.Batch.Text
   ( collectTextBatches
-  , groupByFontAndLayer
-  , convertToTextBatches
   ) where
 
 import UPrelude
@@ -14,7 +12,7 @@ import Data.IORef (readIORef)
 import Engine.Scene.Base (NodeType(..), LayerId(..), Transform2D(..))
 import Engine.Scene.Types.Node (SceneNode(..))
 import Engine.Scene.Types.Graph (SceneGraph(..))
-import Engine.Scene.Types.Batch (TextRenderBatch(..), TextBatch(..))
+import Engine.Scene.Types.Batch (TextRenderBatch(..))
 import Engine.Scene.Batch.Visibility (isUILayer)
 import Engine.Asset.Handle (FontHandle)
 import Engine.Graphics.Font.Data (FontCache(..), fcFonts)
@@ -102,8 +100,3 @@ groupByFontAndLayer nodes =
                                 Just f → ((f, nodeLayer n), grp)) grouped
   in keyed
 
-convertToTextBatches ∷ V.Vector TextRenderBatch → V.Vector TextBatch
-convertToTextBatches = V.map $ \trb → TextBatch
-    { tbFontHandle = trbFont trb
-    , tbInstances = trbInstances trb
-    , tbLayer = trbLayer trb }

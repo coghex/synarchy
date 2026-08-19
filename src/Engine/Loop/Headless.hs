@@ -15,7 +15,7 @@ import Engine.Loop.Mode (LoopMode(..), runLoopMode, frameBudgetMicros)
 --   drift out of sync with the graphical one. For the same reason this
 --   loop is a full 'Engine.Save.Barrier.SaveRender' owner: it drains
 --   the same queue, so a headless load's publish must wait for it too
---   — see 'Engine.Loop.Mode.runGatedByCaptureLock', which is the one
+--   — see @Engine.Loop.Mode.runGatedByCaptureLock@, which is the one
 --   place that handshake is defined and explained.
 headlessLoop ∷ EngineM σ ()
 headlessLoop = runLoopMode headlessMode

@@ -123,7 +123,7 @@ unloadAsset aid = do
     Just atlas → do
       let refCount = taRefCount atlas - 1
       if refCount ≤ 0 then do
-          -- Free GPU resources safely, mirroring 'disposeTransientTexture':
+          -- Free GPU resources safely, mirroring @disposeTransientTexture@:
           -- idle the device (the atlas may still be sampled by an in-flight
           -- frame), invalidate the bindless slot (repoints it at the
           -- undefined texture AND frees the slot for reuse), THEN destroy

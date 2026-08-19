@@ -7,8 +7,6 @@ module Engine.Graphics.Vulkan.Texture.Slot
   , createSlotAllocator
   , allocateSlot
   , freeSlot
-  , isValidSlot
-  , undefinedSlot
   ) where
 
 import UPrelude
@@ -23,10 +21,6 @@ data TextureSlot = TextureSlot
   { tsIndex      ∷ !Word32        -- ^ Index in the descriptor array
   , tsGeneration ∷ !SlotGeneration -- ^ Generation (increments on reuse)
   } deriving (Show, Eq, Ord)
-
--- | The undefined texture always lives at slot 0, generation 0
-undefinedSlot ∷ TextureSlot
-undefinedSlot = TextureSlot 0 0
 
 -- | Manages texture slot allocation
 data TextureSlotAllocator = TextureSlotAllocator

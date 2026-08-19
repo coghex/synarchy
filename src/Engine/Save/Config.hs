@@ -34,13 +34,9 @@
 module Engine.Save.Config
     ( SaveConfig(..)
     , defaultSaveConfig
-    , intervalMinutesMin
-    , intervalMinutesMax
     , rotationDepthMin
     , rotationDepthMax
     , clampSaveConfig
-    , validIntervalMinutes
-    , validRotationDepth
     , saveConfigDefaultPath
     , saveConfigLocalPath
     , loadSaveConfig
@@ -65,7 +61,7 @@ data SaveConfig = SaveConfig
       --   must not accumulate saves.
     , scIntervalMinutes ∷ !Int
       -- ^ Whole minutes between eligible autosave attempts,
-      --   'intervalMinutesMin'..'intervalMinutesMax' inclusive.
+      --   @intervalMinutesMin@..@intervalMinutesMax@ inclusive.
     , scRotationDepth   ∷ !Int
       -- ^ How many @autosave-\<n\>@ generations the rotation keeps,
       --   'rotationDepthMin'..'rotationDepthMax' inclusive.

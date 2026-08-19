@@ -3,10 +3,8 @@ module Engine.Graphics.Font.Draw
     ( createFontPipeline
     , createFontUIPipeline
     , createFontQuadBuffer
-    , createFontTextureLayout
     , layoutText
     , layoutTextUI
-    , cleanupPendingInstanceBuffers
     ) where
 
 import UPrelude
@@ -29,7 +27,7 @@ import Foreign.Marshal.Utils (copyBytes)
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
-import Engine.Core.State (EngineState(..), GraphicsState(..))
+import Engine.Core.State (GraphicsState(..))
 
 -- * Text Rendering API
 
@@ -81,23 +79,6 @@ layoutText atlas desiredSize startX startY screenW screenH text color =
                     
                     nextX = currentX + scaledAdvance
                 in (nextX, instance' : acc)
-
--- * Instance Buffer Management
-
--- | Cleanup instance buffers from the previous frame
-cleanupPendingInstanceBuffers ∷ EngineM σ ()
-cleanupPendingInstanceBuffers = do
-    state ← gets graphicsState
-    case vulkanDevice state of
-        Nothing → pure ()
-        Just device → do
-            let pending = pendingInstanceBuffers state
-            V.forM_ pending $ \(buffer, memory) → liftIO $ do
-                destroyBuffer device buffer Nothing
-                freeMemory device memory Nothing
-            modifyGraphicsState $ \gs → gs
-                { pendingInstanceBuffers = V.empty
-                }
 
 -- * Pipeline Creation
 

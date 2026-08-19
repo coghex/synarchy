@@ -5,8 +5,7 @@
 --   uploads (raw pixel bytes, not file loads) live in
 --   'Engine.Scripting.Lua.Message.WorldTexture' instead.
 module Engine.Scripting.Lua.Message.Texture
-    ( invalidateAllWorldRenderCaches
-    , handleLoadTextureBatch
+    ( handleLoadTextureBatch
     , handleLoadAtlasTextureBatch
     , UploadSampler(..)
     , cacheEntryReusable

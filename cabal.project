@@ -1,5 +1,47 @@
 packages: .
 
+-- Pin the solver's VIEW of the Hackage index (#1354). Without this the
+-- resolved build plan is a function of WHEN a build ran rather than of
+-- what this repository contains: outside `base >=4.20 && <5` not one
+-- build-depends entry carries a version bound, so any upload to Hackage
+-- can move a dependency with no commit here. That is what lets a green
+-- master turn red from an unrelated diff, stops a bisect from
+-- reproducing a historical build, and quietly invalidates any
+-- measurement taken across two worktrees built a week apart.
+--
+-- Pinning the view lets the solver run normally, so a .cabal edit still
+-- resolves without regenerating anything. That is why there is
+-- deliberately no cabal.project.freeze: a freeze file pins exact
+-- versions and flags and must be regenerated on every dependency
+-- change.
+--
+-- This timestamp must stay AT OR BEFORE the index snapshot baked into
+-- the CI image. .github/ci/Dockerfile runs `cabal update` while the
+-- image is built, and the image tag is the hash of that file plus
+-- .github/workflows/ci-image.yml, so the baked snapshot only advances
+-- when one of those two files changes (#784). A pin NEWER than the
+-- baked snapshot would make every CI run depend on its per-run `cabal
+-- update` succeeding — the exact coupling this pin exists to remove.
+-- ci.yml's "Resolve dependency plan" step therefore resolves ONCE
+-- before that update, so a pin that outruns the image fails the build
+-- instead of hiding behind the refresh.
+--
+-- Locally, your own index must COVER this timestamp; the pin bounds
+-- what the solver may see, it cannot complete an index that stops
+-- earlier. An older index makes cabal stop and tell you to run `cabal
+-- update`, which is the whole remedy and is expected rather than
+-- something to engineer around.
+--
+-- To bump it: `cabal update`, then set the timestamp cabal reports (or
+-- any earlier one) and re-resolve — `cabal build all --dry-run` writes
+-- dist-newstyle/cache/plan.json, whose package/version set is what to
+-- compare before and after. Moving the pin PAST the image's baked
+-- snapshot means editing .github/ci/Dockerfile (or ci-image.yml) in the
+-- same change so a new image, carrying a newer baked index, is built
+-- and published for it; without that the pre-update resolve above
+-- fails, which is the point.
+index-state: 2026-08-14T00:00:00Z
+
 -- Parallel builds (#443, reworked for #471). The library is one
 -- 360+-module package, so package-level `jobs` alone can't parallelize
 -- it; the per-package `ghc-options: -j` below makes each ghc --make
