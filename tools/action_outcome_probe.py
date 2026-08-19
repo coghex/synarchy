@@ -29,8 +29,18 @@ headless engine and checks:
      buildTool.commitPlacement/"accepted" with no reason and exactly one
      new building id.
 
+The chop fixture is located with the authoritative loaded-world query
+world.findHarvestableFlora(..., 'wood') from origins covering the whole
+loaded region (#1398), so "no tree found" is a statement about the
+region rather than about a sample grid.
+
 Usage: python3 tools/action_outcome_probe.py [--port 9179] [--seed 42]
        [--size 64] [--plates 3]
+Exit:  0 = every check passed
+       1 = a check failed (including a missing till fixture or an
+           unusable portal fixture)
+       2 = the CHOP fixture could not be established at all, so that
+           contract went unverified; takes precedence over 1
 """
 import argparse
 import glob
@@ -100,31 +110,181 @@ def find_mixed_box(port, span=6):
     return None
 
 
-def find_chop_mixed_box(port, span=8):
-    """Scan for a tile carrying flora, then confirm designating a 5x5 box
-    around it reports a genuine partial (>=1 tree designated, >=1 tile
-    dropped) — proves chop's requested/applied/dropped is based on the
-    full swept-TILE count, not the flora-INSTANCE count (the exact
-    5x5-one-tree miscount review round 1 found: a naive count of flora
-    instances reported 1/1/0 accepted instead of 25/1/24 partial)."""
-    for sx in range(-span * 8, span * 8 + 1, 4):
-        for sy in range(-span * 8, span * 8 + 1, 4):
-            flora = jget(port, f"return world.getFloraAt({sx},{sy})")
-            if not isinstance(flora, dict):
+# --------------------------------------------------------------------
+# Chop fixture (#1398)
+# --------------------------------------------------------------------
+# The probe's loaded region, and the coverage argument that keeps
+# fixture discovery from silently searching only part of it.
+#
+# main() loads chunk region -8..8 inclusive, and a chunk is
+# chunkSize = 16 tiles on a side (src/World/Chunk/Types.hs), so the
+# loaded tiles run LOADED_TILE_MIN..LOADED_TILE_MAX on each axis.
+# world.findHarvestableFlora scans only LOADED chunks and clamps its
+# radius to 64 tiles, measured EUCLIDEAN
+# (src/Engine/Scripting/Lua/API/Forage/Query.hs) — so one call at the
+# origin leaves most of that region unsearched. Sampling query ORIGINS
+# on a lattice of spacing FIND_RADIUS puts every tile in the region
+# within FIND_RADIUS * sqrt(2) / 2 ~= 45.3 tiles of some origin, well
+# inside one disc, so a covered search finding nothing really does mean
+# the region holds no wood-bearing flora.
+LOADED_CHUNK_MIN = -8
+LOADED_CHUNK_MAX = 8
+CHUNK_SIZE = 16
+LOADED_TILE_MIN = LOADED_CHUNK_MIN * CHUNK_SIZE
+LOADED_TILE_MAX = LOADED_CHUNK_MAX * CHUNK_SIZE + (CHUNK_SIZE - 1)
+FIND_RADIUS = 64
+
+# run_chop_stage classifications. Only CHOP_SETUP_FAILURE carries its own
+# process exit status (2); a behavior failure is an ordinary exit-1 probe
+# failure like any other check's.
+CHOP_OK = "ok"
+CHOP_SETUP_FAILURE = "setup"
+CHOP_BEHAVIOR_FAILURE = "behavior"
+
+
+def chop_search_origins():
+    """Query origins whose radius-FIND_RADIUS discs COVER the loaded
+    region (see the coverage note above).
+
+    Both endpoints are origins, and no gap between consecutive origins
+    exceeds FIND_RADIUS, so the worst-case distance from any tile in the
+    region to the nearest origin is sqrt(2) * FIND_RADIUS / 2 — inside
+    the radius with margin. The whole point is that "found nothing" is a
+    statement about the REGION, not about a sample grid: the defect this
+    replaces was a step-4 point-sample grid that could miss every tree
+    in a fully wooded region."""
+    origins = list(range(LOADED_TILE_MIN, LOADED_TILE_MAX + 1, FIND_RADIUS))
+    if origins[-1] != LOADED_TILE_MAX:
+        origins.append(LOADED_TILE_MAX)
+    return origins
+
+
+def find_chop_fixture(port):
+    """Locate a wood-bearing tile with the AUTHORITATIVE loaded-world
+    query; returns (gx, gy, species) or None.
+
+    world.findHarvestableFlora(..., 'wood') is what tools/chop_probe.py
+    already uses for tree discovery, and it filters on exactly the
+    predicate the chop designation itself applies — the species' harvest
+    tags contain "wood" and no live regrowth timer — so a coordinate it
+    returns is one chop.designate will really designate. The point query
+    it replaces (world.getFloraAt) reports ANY flora instance, grass and
+    wildflowers included, so the old loop spent designate-and-drain round
+    trips on candidates that could only ever record "rejected".
+
+    Runs while the generated 'probe' page is the ACTIVE world:
+    findHarvestableFlora resolves through the active page and takes no
+    page argument, whereas chop.designate takes an explicit page id — so
+    called after the portal stage's world.show('portal_probe') this would
+    silently search the empty arena while designating on 'probe'."""
+    origins = chop_search_origins()
+    for sx in origins:
+        for sy in origins:
+            r = jget(port, f"return world.findHarvestableFlora("
+                           f"{sx},{sy},{FIND_RADIUS},'wood')")
+            if not isinstance(r, dict):
                 continue
-            send(port, "return debug.drainActionOutcomes()")  # clear noise
-            send(port, f"chop.designate('probe',{sx-2},{sy-2},{sx+2},{sy+2},"
-                       f"'wood'); return 'ok'")
-            drained = jget(port, "return debug.drainActionOutcomes()")
-            rec = drained[0] if isinstance(drained, list) and drained else {}
-            if (rec.get("kind") == "chop.designate"
-                    and rec.get("outcome") == "partial"
-                    and isinstance(rec.get("applied"), (int, float))
-                    and rec["applied"] >= 1
-                    and isinstance(rec.get("dropped"), (int, float))
-                    and rec["dropped"] > 0):
-                return sx, sy, rec
+            gx, gy = r.get("gx"), r.get("gy")
+            if (isinstance(gx, (int, float)) and not isinstance(gx, bool)
+                    and isinstance(gy, (int, float))
+                    and not isinstance(gy, bool)):
+                return int(gx), int(gy), r.get("id")
     return None
+
+
+def evaluate_chop_designation(port, cx, cy):
+    """Designate the REAL public 5x5 chop request centred on a discovered
+    tile and evaluate the drained record; returns (ok, drained).
+
+    The contract, unchanged from before the fixture repair: a
+    chop.designate record, outcome "partial", at least one applied and
+    one dropped tile, requested == 25 (the full swept-TILE count, not the
+    flora-INSTANCE count — the exact miscount that reported 1/1/0
+    accepted instead of 25/1/24 partial), and requested == applied +
+    dropped. Nothing here substitutes a synthetic record for the real
+    designation and the real destructive drain."""
+    send(port, "return debug.drainActionOutcomes()")  # clear noise
+    send(port, f"chop.designate('probe',{cx - 2},{cy - 2},{cx + 2},{cy + 2},"
+               f"'wood'); return 'ok'")
+    drained = jget(port, "return debug.drainActionOutcomes()")
+    records = drained if isinstance(drained, list) else []
+    rec = records[0] if records and isinstance(records[0], dict) else {}
+    requested = rec.get("requested")
+    applied = rec.get("applied")
+    dropped = rec.get("dropped")
+
+    def count(v):
+        return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+    ok = bool(rec.get("kind") == "chop.designate"
+              and rec.get("outcome") == "partial"
+              and count(applied) and applied >= 1
+              and count(dropped) and dropped >= 1
+              and count(requested) and requested == 25
+              and requested == applied + dropped)
+    return ok, drained
+
+
+def run_chop_stage(port):
+    """Discover the chop fixture, then evaluate the real designation
+    against it; returns (classification, detail).
+
+    The two failures are DIFFERENT claims and must not be conflated —
+    which is what the old single `return None` did. "The loaded region
+    holds no wood-bearing flora" says the contract went unverified and
+    nothing about whether chop.designate works; "the record is absent,
+    malformed, the wrong kind, not partial or miscounted" says the
+    contract is broken. detail is None for a setup failure and
+    (gx, gy, species, drained) otherwise."""
+    fixture = find_chop_fixture(port)
+    if fixture is None:
+        return CHOP_SETUP_FAILURE, None
+    cx, cy, species = fixture
+    ok, drained = evaluate_chop_designation(port, cx, cy)
+    return ((CHOP_OK if ok else CHOP_BEHAVIOR_FAILURE),
+            (cx, cy, species, drained))
+
+
+def run_and_report_chop_stage(port):
+    """Run the chop stage and print its single result line; returns
+    (ok, setup_failed) for main()'s accumulator and exit status.
+
+    Split out from main() so tools/test_action_outcome_probe.py can
+    drive the real branch — diagnostic text included — against a fake
+    console, without booting an engine, opening a TCP console or
+    generating a world."""
+    chop_class, chop_detail = run_chop_stage(port)
+    if chop_class == CHOP_SETUP_FAILURE:
+        # #1398: the ONE condition that earns exit 2. Not a claim about
+        # chop.designate — the covered search simply found no
+        # wood-bearing flora in the loaded region, so the contract went
+        # unverified.
+        print(f"  [FAIL] (fixture setup) world.findHarvestableFlora found "
+              f"no wood-bearing flora anywhere in the loaded region (tiles "
+              f"{LOADED_TILE_MIN}..{LOADED_TILE_MAX} per axis, searched "
+              f"from {len(chop_search_origins())} origins at radius "
+              f"{FIND_RADIUS}) — chop partial path UNVERIFIED; try another "
+              f"--seed")
+        return False, True
+    cx, cy, species, drained = chop_detail
+    ok = chop_class == CHOP_OK
+    print(f"  [{'PASS' if ok else 'FAIL'}] mixed chop sweep at ({cx},{cy}) "
+          f"[{species}] reports the full 5x5=25 tile count as requested: "
+          f"{drained}")
+    return ok, False
+
+
+def probe_exit_status(passed, chop_setup_failed):
+    """#1398's exit-status contract, stated once and testable without an
+    engine: 2 for a CHOP-fixture discovery failure, which takes
+    precedence over any concurrent ordinary failure; 1 for any other
+    failure (a missing till box, an unusable portal fixture, a violated
+    contract); 0 for a clean run. tools/run_probes.py treats every
+    nonzero status as failure, so the split is observable with no
+    harness change."""
+    if chop_setup_failed:
+        return 2
+    return 0 if passed else 1
 
 
 def fail_setup(message):
@@ -188,6 +348,7 @@ def main():
     args = ap.parse_args()
     port = args.port
     passed = True
+    chop_setup_failed = False
 
     proc = boot(port, f"{SPROOT}/action_outcome_probe_engine.log")
     try:
@@ -338,23 +499,11 @@ def main():
         # The exact 5x5-one-tree regression review round 1 flagged: chop's
         # requested must be the full swept-tile count (25), not the
         # flora-instance count (1) — a naive count previously reported
-        # 1/1/0 accepted instead of 25/1/24 partial.
-        chop_box = find_chop_mixed_box(port)
-        if not chop_box:
-            passed = False
-            print("  [FAIL] no tree found in the loaded region to designate "
-                  "a mixed chop box against (try another seed) — chop "
-                  "partial path unverified")
-        else:
-            cx, cy, chop_rec = chop_box
-            requested = chop_rec.get("requested")
-            applied = chop_rec.get("applied")
-            dropped = chop_rec.get("dropped")
-            ok5b = bool(requested == 25 and requested == applied + dropped)
-            passed &= ok5b
-            print(f"  [{'PASS' if ok5b else 'FAIL'}] mixed chop sweep at "
-                  f"({cx},{cy}) reports the full 5x5=25 tile count as "
-                  f"requested: {chop_rec}")
+        # 1/1/0 accepted instead of 25/1/24 partial. Runs HERE, while the
+        # generated 'probe' page is still the active world, for the
+        # reason find_chop_fixture documents.
+        chop_ok, chop_setup_failed = run_and_report_chop_stage(port)
+        passed &= chop_ok
 
         send(port, "return debug.drainActionOutcomes()")  # clear noise
         send(port, "till.designate('probe',5000000,5000000,5000005,5000005); "
@@ -619,8 +768,12 @@ def main():
               f"(200,100) at a 2x window-to-framebuffer scale: "
               f"{drained_lua_scale}")
 
-        print("\n" + ("ALL ACTION-OUTCOME CHECKS PASSED" if passed else "SOME FAILED"))
-        return 0 if passed else 1
+        if chop_setup_failed:
+            print("\nCHOP FIXTURE NOT ESTABLISHED")
+        else:
+            print("\n" + ("ALL ACTION-OUTCOME CHECKS PASSED"
+                          if passed else "SOME FAILED"))
+        return probe_exit_status(passed, chop_setup_failed)
     finally:
         quit_engine(port, proc)
 
