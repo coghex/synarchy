@@ -610,7 +610,9 @@ Ports come from an atomic cross-process lease over 8009-8999 (8008 — the GUI
 port — is always forbidden), held until `run_one` has reaped the probe's whole
 process group, so concurrent harnesses never collide. The lease is an advisory
 `flock`, not a file anyone deletes, so a harness that dies releases it with no
-staleness heuristic; its namespace is anchored at a fixed per-user `/tmp` path
+staleness heuristic — and the live-invocation registry behind the reported peak
+concurrency is held the same way, so an abandoned entry can never look live
+because the operating system recycled its pid; its namespace is anchored at a fixed per-user `/tmp` path
 that neither `--artifact-root` nor `TMPDIR` can move, since either splitting it
 would let two harnesses lock different files and land on one port. Artifacts,
 by contrast, DO follow the platform temp dir —

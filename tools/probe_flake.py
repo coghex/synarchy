@@ -117,13 +117,6 @@ def _machine_wide_scratch() -> Path:
 
 LEASE_ROOT = _machine_wide_scratch()
 
-# How long a live-invocation registration whose owner is gone is left
-# alone before it is treated as stale. Short, because the owning process
-# is already proven dead; nonzero so a registration a starting harness
-# is still publishing is never mistaken for garbage. Port leases do NOT
-# use this: an `flock` needs no staleness heuristic (see `PortLease`).
-STALE_AFTER = 30.0
-
 EXIT_OK = 0
 EXIT_REJECTED = 2
 EXIT_NO_PORT = 3
@@ -223,18 +216,6 @@ def fetch_descriptor(key: str, script: str,
 # --------------------------------------------------------------------------
 # Ports: atomic cross-process leasing
 # --------------------------------------------------------------------------
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return True
-    return True
-
-
 def _ensure_owned_dir(path: Path) -> Path:
     """Create `path` privately, refusing one another user owns.
 
@@ -362,6 +343,44 @@ def acquire_port(cursor: int) -> tuple[PortLease, int]:
 # --------------------------------------------------------------------------
 # Live-invocation registry (the concurrency figure)
 # --------------------------------------------------------------------------
+def _registration_is_live(path: Path) -> bool:
+    """True while a harness still holds this registration.
+
+    Liveness is the LOCK, never the pid the entry records. A pid is not
+    an identity: after an abnormal termination the operating system is
+    free to hand that number to an unrelated process, and a
+    pid-and-age test would then read the abandoned entry as live
+    forever, inflating the peak concurrency of every later measurement
+    on the machine. An `flock` cannot be inherited that way — the
+    kernel released it when its owner died — so if the lock can be
+    taken, the owner is gone. The entry is reaped right there, while
+    the lock is held, which is what makes recovery safe rather than
+    timed: registration paths are unique per invocation and never
+    reused, so nothing can be creating the file we just locked.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        # Already gone: its owner departed between the scan and here.
+        return False
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            # Still held — by another process, or by another registry
+            # object in this one, since flock conflicts between open
+            # file descriptions rather than between processes.
+            return True
+        with contextlib.suppress(OSError):
+            path.unlink()
+        with contextlib.suppress(OSError):
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    finally:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+
+
 class LiveRegistry:
     """Registers this invocation machine-wide and samples peak concurrency.
 
@@ -376,23 +395,33 @@ class LiveRegistry:
                      f"{os.getpid()}-{uuid.uuid4().hex[:8]}.json")
         self.peak = 0
         self._registered = False
+        self._fd: int | None = None
 
     def __enter__(self) -> "LiveRegistry":
         _ensure_owned_dir(LEASE_ROOT)
         _ensure_owned_dir(self.path.parent)
-        # PUBLISHED ATOMICALLY. Writing straight to the final path would
-        # leave a window in which a concurrently starting harness reads
-        # an empty file, classifies it as corrupt, and unlinks it — and
-        # this harness then vanishes from every later concurrency
-        # sample while still running. `os.replace` within the same
-        # directory means the final name either does not exist or holds
-        # complete content, and the staging name never ends in `.json`
-        # so a concurrent scan skips it.
+        # The registration is LOCKED before it is named, and published
+        # atomically. Locking first closes the window in which a
+        # concurrently starting harness could see an unlocked entry and
+        # reap it; `os.replace` within one directory means the final
+        # name either does not exist or holds complete, already-locked
+        # content. The staging name never ends in `.json`, so a
+        # concurrent scan skips it, and the lock follows the inode
+        # through the rename.
         staging = self.path.with_suffix(".staging")
-        staging.write_text(
-            json.dumps({"pid": os.getpid(), "started": time.time()}),
-            encoding="utf-8")
-        os.replace(staging, self.path)
+        fd = os.open(staging, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.write(fd, json.dumps(
+                {"pid": os.getpid(), "started": time.time()}).encode("utf-8"))
+            os.replace(staging, self.path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+            with contextlib.suppress(OSError):
+                staging.unlink()
+            raise
+        self._fd = fd
         self._registered = True
         self.sample()
         return self
@@ -401,44 +430,33 @@ class LiveRegistry:
         if self._registered:
             with contextlib.suppress(OSError):
                 self.path.unlink()
+            if self._fd is not None:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(self._fd, fcntl.LOCK_UN)
+                with contextlib.suppress(OSError):
+                    os.close(self._fd)
+                self._fd = None
             self._registered = False
         return None
 
     def live_count(self) -> int:
-        """Live registrations, reaping any whose owning process is gone."""
+        """Live registrations, reaping any whose owner has gone.
+
+        Our own entry is counted directly — we know we are live — and
+        every other one is decided by `_registration_is_live`, never by
+        the pid it records.
+        """
         directory = self.path.parent
-        count = 0
+        count = 1 if self._registered else 0
         try:
             entries = list(directory.iterdir())
         except OSError:
             return max(self.peak, 1)
         for entry in entries:
-            if entry.suffix != ".json":
+            if entry.suffix != ".json" or entry == self.path:
                 continue
-            try:
-                age = time.time() - entry.stat().st_mtime
-            except OSError:
-                # It went away underneath us — its owner departed.
-                continue
-            try:
-                pid = int(json.loads(entry.read_text(encoding="utf-8"))["pid"])
-            except (OSError, KeyError, TypeError, ValueError):
-                # Corrupt. Old enough to be nobody's, so reap it;
-                # otherwise leave it alone and COUNT it. Nothing young
-                # is ever deleted here — over-counting concurrency by
-                # one is harmless, while deleting a registration a live
-                # harness owns loses it permanently.
-                if age >= STALE_AFTER:
-                    with contextlib.suppress(OSError):
-                        entry.unlink()
-                    continue
+            if _registration_is_live(entry):
                 count += 1
-                continue
-            if not _pid_alive(pid) and age >= STALE_AFTER:
-                with contextlib.suppress(OSError):
-                    entry.unlink()
-                continue
-            count += 1
         return max(count, 1)
 
     def sample(self) -> int:

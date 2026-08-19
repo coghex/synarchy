@@ -929,6 +929,22 @@ def test_concurrent_leasing() -> None:
             recovered.release()
 
 
+# Source for a child harness that publishes a live registration and
+# holds it until killed — the only way to exercise "another PROCESS
+# owns this entry" and, after a SIGKILL, "its owner is gone" without
+# consulting a pid.
+REGISTRY_HOLDER_SRC = """\
+import sys, time
+sys.path.insert(0, {tools!r})
+import probe_flake
+from pathlib import Path
+probe_flake.LEASE_ROOT = Path({root!r})
+with probe_flake.LiveRegistry() as registry:
+    print(registry.path, flush=True)
+    time.sleep(120)
+"""
+
+
 # A port deliberately OUTSIDE 8009-8999, so the cross-TMPDIR test below
 # contends in the REAL machine-wide lease namespace — which is the only
 # place the defect it covers can be observed — without ever touching a
@@ -1078,34 +1094,78 @@ def test_concurrency_accounting() -> None:
         expect(leftovers == [],
                f"every departed harness cleans its registration up ({leftovers})")
 
-        # A registration that looks corrupt but is YOUNG is another
-        # harness mid-startup, not garbage: leave it, and count it.
         live_dir = probe_flake.LEASE_ROOT / "live"
         live_dir.mkdir(parents=True, exist_ok=True)
-        young = live_dir / "12345-partial.json"
-        young.write_text("", encoding="utf-8")
-        with probe_flake.LiveRegistry() as registry:
-            expect(registry.sample() == 2,
-                   "a young unreadable registration is counted, not discarded")
-        expect(young.exists(),
-               "a young unreadable registration is never unlinked")
-        young.unlink()
 
-        # Stale registration from an abnormally terminated harness.
-        live_dir = probe_flake.LEASE_ROOT / "live"
-        live_dir.mkdir(parents=True, exist_ok=True)
+        # THE PID-REUSE CASE. An abandoned registration naming a pid the
+        # operating system has since handed to an unrelated live
+        # process — modelled exactly, and most sharply, by naming THIS
+        # process's own pid. A pid-and-age test reads it as a second
+        # live harness forever and inflates every later measurement;
+        # the lock test sees an unheld file and reaps it.
+        recycled = live_dir / f"{os.getpid()}-recycled.json"
+        recycled.write_text(
+            json.dumps({"pid": os.getpid(), "started": 0.0}), encoding="utf-8")
+        os.utime(recycled, (0, 0))
+        with probe_flake.LiveRegistry() as registry:
+            expect(registry.sample() == 1,
+                   "a registration naming a REUSED (live) pid is not counted")
+        expect(not recycled.exists(),
+               "a registration naming a reused pid is reaped, not trusted")
+
+        # The same, with a pid that is merely gone, and with a corrupt
+        # entry: neither needs an age heuristic any more.
         stale = live_dir / "999999-deadbeef.json"
         stale.write_text(json.dumps({"pid": _dead_pid(), "started": 0.0}),
                          encoding="utf-8")
-        os.utime(stale, (0, 0))
         garbage = live_dir / "garbage.json"
         garbage.write_text("not json", encoding="utf-8")
-        os.utime(garbage, (0, 0))          # old enough to be nobody's
+        fresh = live_dir / "77777-justwritten.json"
+        fresh.write_text("", encoding="utf-8")          # current mtime
         with probe_flake.LiveRegistry() as registry:
             expect(registry.sample() == 1,
-                   "a stale registration is recovered, not counted")
-        expect(not stale.exists() and not garbage.exists(),
-               "stale and OLD unreadable registrations are removed")
+                   "abandoned registrations are not counted whatever they say")
+        expect(not stale.exists() and not garbage.exists()
+               and not fresh.exists(),
+               "an unheld registration is reaped immediately — being recent "
+               "no longer protects it, because a live one is always locked")
+
+        # And the converse: a registration a LIVE process holds is
+        # counted even though this process could never verify its pid,
+        # and killing that process outright makes it reapable with no
+        # staleness window at all.
+        holder_src = tree.root / "registry_holder.py"
+        holder_src.write_text(
+            REGISTRY_HOLDER_SRC.format(tools=TOOLS_DIR,
+                                       root=str(probe_flake.LEASE_ROOT)),
+            encoding="utf-8")
+        holder = subprocess.Popen([sys.executable, str(holder_src)],
+                                  stdout=subprocess.PIPE, text=True)
+        held_path = None
+        try:
+            held_path = Path(holder.stdout.readline().strip())
+            expect(held_path.exists(),
+                   f"another process published its registration ({held_path})")
+            with probe_flake.LiveRegistry() as registry:
+                expect(registry.sample() == 2,
+                       "a registration held by a live PROCESS is counted")
+            expect(held_path.exists(),
+                   "and is never reaped while its owner runs")
+        finally:
+            holder.kill()
+            holder.wait(timeout=30)
+        counted = None
+        for _ in range(50):
+            with probe_flake.LiveRegistry() as registry:
+                counted = registry.sample()
+            if counted == 1:
+                break
+            time.sleep(0.1)
+        expect(counted == 1,
+               "killing the owner outright drops its registration with no "
+               "staleness heuristic at all")
+        expect(held_path is not None and not held_path.exists(),
+               "and the abandoned file is reaped")
 
         m = run_synthetic(tree, "pass", runs=1)
         expect(m.peak_concurrency >= 1,
