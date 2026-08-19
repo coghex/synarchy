@@ -28,7 +28,7 @@ concrete precondition
 - [x] EPIC. Add portable, data-driven loot containers — [#1231]
 - [x] PLC-1. Load item definitions from logical subdirectories — [#1232]
 - [x] PLC-2. Add physical bulk and portable-storage capacity data — [#1233]
-- [ ] PLC-3. Converge every item-creation path on one materializer
+- [x] PLC-3. Converge every item-creation path on one materializer — [#1418]
 - [ ] PLC-4. Enforce capacity-safe, acyclic nested ownership moves
 - [ ] PLC-5. Enumerate nested item trees in the save integrity graph
 - [ ] PLC-6. Add lazy, deterministic loot-profile realization
