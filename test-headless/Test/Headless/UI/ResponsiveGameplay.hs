@@ -2067,6 +2067,62 @@ spec = aroundAll withSharedFixture $ do
                     rwtfTitleX p `shouldSatisfy` (≥ rwtfPanelX p)
                     rwtfTitleRight p `shouldSatisfy` (≤ rwtfPanelRight p)
 
+        it "the title/message glyph bands sit inside the panel's content area with the authored rhythm at an ordinary 1920x1080 @ 1x (#1394)" $ \(env, ls) → do
+            resetFixture env ls
+            -- #1394: a text element's uePosition is its BASELINE, with
+            -- the glyph mass ABOVE it (scripts/ui/label.lua's own
+            -- convention comment), while panel.place's "top-center"
+            -- origin carries origin.y = 0 and therefore lays the y it is
+            -- handed down AS that baseline. Placing the title at y = 0
+            -- put its whole band a font size ABOVE contentY — in the top
+            -- padding, across the panel's drawn 9-slice top border strip
+            -- — and placed the message in the slot the title was
+            -- allotted, collapsing the stack to one line height.
+            --
+            -- This case is the UNFITTED half of the contract: at
+            -- 1920x1080 @ 1x the stubbed widths still fit the panel, so
+            -- responsive.fitScale returns the panel uiscale unchanged
+            -- and each label renders at exactly its panel-scaled slot
+            -- size. That isolates the band math from the fitted-height
+            -- rule the 4x case below exercises.
+            r ← evalJSON ls (remoteWarningVerticalLua "1.0" "1920" "1080" "100")
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe RemoteWarningVerticalProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    -- Independently restated from baseSizes: floor(26 *
+                    -- 1.0) / floor(18 * 1.0), i.e. no shrink here.
+                    rwvTitleFontSize p `shouldBe` 26
+                    rwvMsgFontSize p `shouldBe` 18
+                    assertRemoteWarningBands 14 28 p
+
+        it "the same containment and rhythm hold at 800x2160 @ 4x, where responsive.fitScale renders both labels well below their panel-scaled slot (#1394)" $ \(env, ls) → do
+            resetFixture env ls
+            -- The narrow, high-scale, still-C2-supported combination
+            -- this whole describe block exists for — and the one that
+            -- separates a fitted label's REAL rendered font size from
+            -- the panel-scaled titleH/msgH the panel height was budgeted
+            -- from. engine.getTextWidth measures 0 headless (this
+            -- module's header comment), and responsive.fitScale returns
+            -- the scale UNCHANGED for a zero natural width, so the
+            -- deterministic width stub is what forces a real shrink here
+            -- rather than a vacuous pass; the size assertions below
+            -- prove the shrink actually happened.
+            r ← evalJSON ls (remoteWarningVerticalLua "4.0" "800" "2160" "987654321")
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe RemoteWarningVerticalProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    -- Panel-scaled slots, restated from baseSizes:
+                    -- floor(26 * 4.0) = 104 and floor(18 * 4.0) = 72.
+                    -- Placement math reading those instead of the real
+                    -- rendered sizes would blow the rhythm assertions
+                    -- below by the difference.
+                    rwvTitleFontSize p `shouldSatisfy` (< 104)
+                    rwvMsgFontSize p `shouldSatisfy` (< 72)
+                    rwvTitleFontSize p `shouldSatisfy` (> 0)
+                    rwvMsgFontSize p `shouldSatisfy` (> 0)
+                    -- floor(14 * 4.0) / floor(28 * 4.0).
+                    assertRemoteWarningBands 56 112 p
+
     describe "cargo_inventory_panel.lua / item_contents_panel.lua stay in-frame at a narrow, high-scale, still-C2-supported combination (round-7 review)" $ do
         it "cargo_inventory_panel: the panel width is capped instead of only repositioning an oversized panel" $ \(env, ls) → do
             resetFixture env ls
@@ -4662,6 +4718,28 @@ instance FromJSON RemoteWarningTextFitProbe where
                                     <*> o .: "msgX" <*> o .: "msgRight"
                                     <*> o .: "titleX" <*> o .: "titleRight"
 
+-- | #1394: the remote-settlement modal's vertical label geometry, all
+--   in screen coordinates. See 'remoteWarningVerticalLua' for how each
+--   field is measured and 'assertRemoteWarningBands' for the contract.
+data RemoteWarningVerticalProbe = RemoteWarningVerticalProbe
+    { rwvContentTop ∷ Double, rwvContentBottom ∷ Double, rwvContentMid ∷ Double
+    , rwvTitleFontSize ∷ Int, rwvMsgFontSize ∷ Int
+    , rwvTitleBandTop ∷ Double, rwvTitleBandBottom ∷ Double
+    , rwvMsgBandTop ∷ Double, rwvMsgBandBottom ∷ Double
+    , rwvTitleMid ∷ Double, rwvMsgMid ∷ Double
+    , rwvButtonTop ∷ Double, rwvButtonBottom ∷ Double
+    , rwvButtonCount ∷ Int } deriving Show
+instance FromJSON RemoteWarningVerticalProbe where
+    parseJSON = withObject "RemoteWarningVerticalProbe" $ \o →
+        RemoteWarningVerticalProbe
+            <$> o .: "contentTop" <*> o .: "contentBottom" <*> o .: "contentMid"
+            <*> o .: "titleFontSize" <*> o .: "msgFontSize"
+            <*> o .: "titleBandTop" <*> o .: "titleBandBottom"
+            <*> o .: "msgBandTop" <*> o .: "msgBandBottom"
+            <*> o .: "titleMid" <*> o .: "msgMid"
+            <*> o .: "buttonTop" <*> o .: "buttonBottom"
+            <*> o .: "buttonCount"
+
 data PopupLineOverflowProbe = PopupLineOverflowProbe
     { plopLineCount ∷ Int, plopPanelInFrame ∷ Bool, plopLastLineBottom ∷ Double
     , plopOkY ∷ Double, plopOkBottom ∷ Double, plopPanelBottom ∷ Double } deriving Show
@@ -5038,6 +5116,105 @@ evalInt ls code = do
 
 evalJSON ∷ LuaBackendState → Text → IO Text
 evalJSON = evalOk
+
+-- | #1394 vertical-geometry probe for the remote-settlement modal's two
+--   labels, shared by the ordinary and the narrow high-scale case so
+--   both measure the identical thing.
+--
+--   Everything returned is a SCREEN coordinate. panel.getContentBounds
+--   answers in panel-local coordinates while UI.getElementInfo answers
+--   in screen ones, so the content rect is translated by
+--   panel.getPosition before it can be compared against a label or a
+--   button — the same treatment the round-20 fit case above already
+--   gives UI element positions.
+--
+--   The width stub is this suite's established idiom (round-20 above):
+--   synthetic font handles make engine.getTextWidth measure 0, which
+--   would make responsive.fitScale a no-op and leave requirement 5
+--   untested. It is restored immediately after createUI() has consumed
+--   it, so nothing downstream in the shared fixture sees it.
+--
+--   A label's glyph band is its reported baseline minus its RENDERED
+--   font size, through that baseline — the canonical authored line-band
+--   convention this modal's own button text already uses, not
+--   label.dump's floor(fontSize * 1.25) visual rectangle.
+--   label.getFontSize is label.lua's own cached rendered size (the
+--   fitted one it actually drew with); UI.getElementInfo reports a
+--   zero-sized bounding box for a text element and so cannot supply it.
+remoteWarningVerticalLua ∷ Text → Text → Text → Text → Text
+remoteWarningVerticalLua uiscale fbW fbH distance = luaLines
+    [ "local origGTW = engine.getTextWidth;"
+    , "engine.getTextWidth = function(font, text, size) return #text * size end;"
+    , "engine.setUIScale(" <> uiscale <> ");"
+    , "local w = require('scripts.build_tool_remote_warning');"
+    , "w.init(1,2,3," <> fbW <> "," <> fbH <> ");"
+    , "w.open('acolyte_portal', 5, 5, " <> distance <> ", 30);"
+    , "engine.getTextWidth = origGTW;"
+    , "local label = require('scripts.ui.label');"
+    , "local panelMod = require('scripts.ui.panel');"
+    , "local px, py = panelMod.getPosition(w.panelId);"
+    , "local cb = panelMod.getContentBounds(w.panelId);"
+    , "local contentTop = py + cb.y;"
+    , "local contentLeft = px + cb.x;"
+    , "local titleId, msgId = w.ownedLabels[1], w.ownedLabels[2];"
+    , "local titleFS = label.getFontSize(titleId);"
+    , "local msgFS = label.getFontSize(msgId);"
+    , "local titleW = label.getSize(titleId);"
+    , "local msgW = label.getSize(msgId);"
+    , "local ti = UI.getElementInfo(label.getElementHandle(titleId));"
+    , "local mi = UI.getElementInfo(label.getElementHandle(msgId));"
+    , "local buttonTop, buttonBottom, buttonCount = nil, nil, 0;"
+    , "for h, _ in pairs(w.clickHandlers) do"
+    , "    local bi = UI.getElementInfo(h);"
+    , "    buttonCount = buttonCount + 1;"
+    , "    if buttonTop == nil or bi.y < buttonTop then buttonTop = bi.y end;"
+    , "    if buttonBottom == nil or (bi.y + bi.height) > buttonBottom then"
+    , "        buttonBottom = bi.y + bi.height end"
+    , "end;"
+    , "return {contentTop = contentTop, contentBottom = contentTop + cb.height,"
+    , "        contentMid = contentLeft + cb.width / 2,"
+    , "        titleFontSize = titleFS, msgFontSize = msgFS,"
+    , "        titleBandTop = ti.y - titleFS, titleBandBottom = ti.y,"
+    , "        msgBandTop = mi.y - msgFS, msgBandBottom = mi.y,"
+    , "        titleMid = ti.x + titleW / 2, msgMid = mi.x + msgW / 2,"
+    , "        buttonTop = buttonTop, buttonBottom = buttonBottom,"
+    , "        buttonCount = buttonCount}"
+    ]
+
+-- | The #1394 contract itself, asserted identically at both envelope
+--   points. The two gap arguments are the SCALED authored gaps
+--   (floor(titleGap * uiscale), floor(messageGap * uiscale)), restated
+--   by each caller from scripts/build_tool_remote_warning.lua's own
+--   baseSizes rather than read back out of the module — an edit to
+--   either side has to fail.
+assertRemoteWarningBands
+    ∷ Double → Double → RemoteWarningVerticalProbe → Expectation
+assertRemoteWarningBands titleGap messageGap p = do
+    rwvButtonCount p `shouldBe` 2
+    -- Requirements 1 and 2: each label's visible glyph band lies inside
+    -- the content area, never in the padding or the drawn top border.
+    rwvTitleBandTop p `shouldSatisfy` (≥ rwvContentTop p)
+    rwvTitleBandBottom p `shouldSatisfy` (≤ rwvContentBottom p)
+    rwvMsgBandTop p `shouldSatisfy` (≥ rwvContentTop p)
+    rwvMsgBandBottom p `shouldSatisfy` (≤ rwvContentBottom p)
+    -- The title's band starts exactly AT the content top — its authored
+    -- y = 0 realized as a band edge. The bug put it a full rendered font
+    -- size above this, which is the negative the containment check above
+    -- would otherwise have to catch on its own.
+    rwvTitleBandTop p `shouldBe` rwvContentTop p
+    -- Requirement 4: the authored rhythm separates VISIBLE edges, so
+    -- both gaps are exact. Placement reading a panel-scaled slot height
+    -- instead of the rendered one shows up here as an off-by-the-shrink.
+    (rwvMsgBandTop p - rwvTitleBandBottom p) `shouldBe` titleGap
+    (rwvButtonTop p - rwvMsgBandBottom p) `shouldBe` messageGap
+    -- Requirement 7: the button row still lands inside the content area
+    -- (the labels moving down must not push it out of the panel).
+    rwvButtonBottom p `shouldSatisfy` (≤ rwvContentBottom p)
+    -- Requirement 3: both labels stay centered on the content area. A
+    -- half-pixel of slack for an odd content width; the round-20
+    -- regression this guards against misses by half a label width.
+    abs (rwvTitleMid p - rwvContentMid p) `shouldSatisfy` (< 0.51)
+    abs (rwvMsgMid p - rwvContentMid p) `shouldSatisfy` (< 0.51)
 
 -- | Live element/page counts straight off the shared 'UIPageManager'.
 countUI ∷ EngineEnv → IO (Int, Int)
