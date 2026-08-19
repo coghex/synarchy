@@ -20,7 +20,10 @@ module App.Cli
   , parseArg
   , lookupFlagValue
   , parseStrArg
+  , ChunkRegion(..)
+  , defaultChunkRegion
   , parseRegion
+  , chunkRegionCoords
   , parseSize
   , parsePreview
   , PreviewCategoryKind(..)
@@ -191,15 +194,64 @@ parseArg flag args = lookupFlagValue flag args ⌦ \case
 parseStrArg ∷ String → [String] → Maybe String
 parseStrArg flag = either (const Nothing) id ∘ lookupFlagValue flag
 
--- | Parse --region cx1,cy1,cx2,cy2 from args
-parseRegion ∷ [String] → (Int, Int, Int, Int)
-parseRegion [] = (-8, -8, 8, 8)
+-- | The chunk region a dump covers: @--region@'s four coordinates,
+--   each named, in the order the flag writes them. It replaces the
+--   bare four-'Int' tuple this used to be (#1081), in which
+--   @(cx1, cy1, cx2, cy2)@ and @(cx1, cx2, cy1, cy2)@ were the same
+--   type and the corner convention lived only in whichever
+--   destructuring pattern happened to be read.
+--
+--   The two corners are kept exactly as parsed and are NOT sorted,
+--   normalized, or reinterpreted: 'chunkRegionCoords' walks the
+--   DIRECTED inclusive ranges @[x1..x2]@ and @[y1..y2]@, so a region
+--   whose second corner precedes its first covers no chunks at all.
+--   That is the behaviour a reversed @--region@ has always had, and
+--   changing it here would silently redefine what such a command line
+--   dumps.
+data ChunkRegion = ChunkRegion
+    { crX1 ∷ !Int
+    , crY1 ∷ !Int
+    , crX2 ∷ !Int
+    , crY2 ∷ !Int
+    } deriving (Eq, Show)
+
+-- | The region a dump covers when @--region@ is absent — and, today,
+--   when it is present but malformed (see 'parseRegion').
+defaultChunkRegion ∷ ChunkRegion
+defaultChunkRegion = ChunkRegion
+    { crX1 = -8
+    , crY1 = -8
+    , crX2 = 8
+    , crY2 = 8
+    }
+
+-- | Parse @--region cx1,cy1,cx2,cy2@ from args.
+--
+--   Deliberately still collapses absence and malformed presence onto
+--   'defaultChunkRegion' — that is @docs\/code_health_findings.md@
+--   CH-67, sequenced after this type and explicitly out of scope for
+--   #1081. Separating the two is a change of the RESULT type
+--   ('Either' 'CliError' ('Maybe' 'ChunkRegion'), as every #1191
+--   parser above already returns) around the same 'ChunkRegion', with
+--   'defaultChunkRegion' moving to the caller.
+parseRegion ∷ [String] → ChunkRegion
+parseRegion [] = defaultChunkRegion
 parseRegion ("--region":s:_) =
     case map reads (splitOn ',' s) of
         [[(cx1,"")],[(cy1,"")],[(cx2,"")],[(cy2,"")]] →
-            (cx1, cy1, cx2, cy2)
-        _ → (-8, -8, 8, 8)
+            ChunkRegion { crX1 = cx1, crY1 = cy1, crX2 = cx2, crY2 = cy2 }
+        _ → defaultChunkRegion
 parseRegion (_:rest) = parseRegion rest
+
+-- | Every chunk coordinate a region covers, as @(x, y)@ pairs, in the
+--   order the dump emits them: x outer, y inner, both ranges directed
+--   and inclusive. The one place that enumeration lives — the dump
+--   walks it twice (queueing chunks, then encoding them), and the two
+--   walks must agree tile for tile or the JSON stops matching the
+--   chunks that were loaded for it.
+chunkRegionCoords ∷ ChunkRegion → [(Int, Int)]
+chunkRegionCoords r =
+    [ (x, y) | x ← [crX1 r .. crX2 r], y ← [crY1 r .. crY2 r] ]
 
 -- | Parse @--size WxH@ from args (offscreen render size, #650).
 --   'Right' 'Nothing' ONLY on absence — the caller still falls back to
