@@ -12,6 +12,10 @@ For each seed:
      - Fluid stats must stay within the baseline envelope (with a
        tile-count-scaled tolerance for racy shuffling)
      - Issue summary:
+         * every category must be classified in world_audit.py, and every
+           QUALITY category must have an explicit threshold — an
+           unclassified category or a missing threshold FAILS the seed by
+           name, at any count including zero
          * BUG categories must be zero (always)
          * QUALITY categories must stay under their threshold (always),
            and for a deterministic seed must additionally MATCH the
@@ -38,7 +42,7 @@ from typing import Any
 # Reuse utilities
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from world_audit import (  # type: ignore
-    audit_dump, severity_of, QUALITY_THRESHOLDS, BUG_CATEGORIES,
+    audit_dump, classify_category, QUALITY_THRESHOLDS, BUG_CATEGORIES,
 )
 from world_determinism import canonical_dump, hash_dump, run_dump  # type: ignore
 from world_baseline import baseline_path, BASELINE_DIR, SEEDS_FILE  # type: ignore
@@ -144,12 +148,19 @@ def check_issue_summary(current_summaries: list[dict[str, int]],
 
     Severity rules (see world_audit.py::BUG_CATEGORIES / QUALITY_CATEGORIES):
 
+      UNCLASSIFIED — a category in neither set fails outright, naming the
+                category. This is the fail-closed gate: a category added to
+                a check function but classified nowhere must not slip
+                through as a quality metric under an implicit default.
+
       BUG     — any non-zero count fails, always. A baseline cannot bless
                 corruption, so this overrides the match/threshold logic
                 regardless of determinism.
 
-      QUALITY — first, an absolute threshold cap (QUALITY_THRESHOLDS) that
-                fails unconditionally. Under the cap:
+      QUALITY — first, an absolute threshold cap (QUALITY_THRESHOLDS),
+                which must be declared explicitly: a QUALITY category with
+                no entry fails, naming it. The cap itself fails
+                unconditionally. Under the cap:
                   strict (deterministic baseline AND deterministic current)
                     → the count must MATCH the baseline summary exactly.
                       A count above baseline is a regression (FAIL); below
@@ -161,6 +172,11 @@ def check_issue_summary(current_summaries: list[dict[str, int]],
     `strict` should be `deterministic_baseline and deterministic_now`. In
     that case every current summary is identical, so the max over runs is
     the single deterministic value.
+
+    The classification and threshold checks run over the union of the
+    current summaries, the baseline summary and the audit envelope, so a
+    category that is only present in the baseline or the envelope is
+    rejected too, even though its current count is zero.
     """
     all_categories: set[str] = set(issue_env.keys()) | set(baseline_summary.keys())
     for cs in current_summaries:
@@ -169,7 +185,17 @@ def check_issue_summary(current_summaries: list[dict[str, int]],
     for cat in sorted(all_categories):
         current_values = [cs.get(cat, 0) for cs in current_summaries]
         cur_max = max(current_values)
-        sev = severity_of(cat)
+        sev = classify_category(cat)
+        if sev is None:
+            result.status = FAIL
+            result.failures.append(
+                f"UNCLASSIFIED issue.{cat}: category is in neither "
+                f"BUG_CATEGORIES nor QUALITY_CATEGORIES in world_audit.py "
+                f"({cur_max} occurrence(s)) — classify it before it can be "
+                f"checked"
+            )
+            continue
+
         if sev == "BUG":
             if cur_max > 0:
                 result.status = FAIL
@@ -178,7 +204,16 @@ def check_issue_summary(current_summaries: list[dict[str, int]],
                 )
             continue
 
-        threshold = QUALITY_THRESHOLDS.get(cat, 1000)
+        if cat not in QUALITY_THRESHOLDS:
+            result.status = FAIL
+            result.failures.append(
+                f"QUALITY issue.{cat}: no explicit threshold in "
+                f"QUALITY_THRESHOLDS in world_audit.py ({cur_max} "
+                f"occurrence(s)) — add one; there is no implicit default"
+            )
+            continue
+
+        threshold = QUALITY_THRESHOLDS[cat]
         if cur_max > threshold:
             result.status = FAIL
             result.failures.append(

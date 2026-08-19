@@ -21,9 +21,26 @@ headless engine and checks:
      requested == applied + dropped.
   5. A designation anchored on an unloaded tile reports "rejected" with
      applied == 0 and a reason.
+  6. Starting-portal placement through the real player-facing path
+     (#779/#1399): on a location-less arena the click is structurally
+     remote, so it must record buildTool.remoteWarning/"presented" and
+     spawn nothing while placement stays armed, and only the modal's own
+     establishHere() may then record "confirmed" followed by
+     buildTool.commitPlacement/"accepted" with no reason and exactly one
+     new building id.
+
+The chop fixture is located with the authoritative loaded-world query
+world.findHarvestableFlora(..., 'wood') from origins covering the whole
+loaded region (#1398), so "no tree found" is a statement about the
+region rather than about a sample grid.
 
 Usage: python3 tools/action_outcome_probe.py [--port 9179] [--seed 42]
        [--size 64] [--plates 3]
+Exit:  0 = every check passed
+       1 = a check failed (including a missing till fixture or an
+           unusable portal fixture)
+       2 = the CHOP fixture could not be established at all, so that
+           contract went unverified; takes precedence over 1
 """
 import argparse
 import glob
@@ -93,31 +110,233 @@ def find_mixed_box(port, span=6):
     return None
 
 
-def find_chop_mixed_box(port, span=8):
-    """Scan for a tile carrying flora, then confirm designating a 5x5 box
-    around it reports a genuine partial (>=1 tree designated, >=1 tile
-    dropped) — proves chop's requested/applied/dropped is based on the
-    full swept-TILE count, not the flora-INSTANCE count (the exact
-    5x5-one-tree miscount review round 1 found: a naive count of flora
-    instances reported 1/1/0 accepted instead of 25/1/24 partial)."""
-    for sx in range(-span * 8, span * 8 + 1, 4):
-        for sy in range(-span * 8, span * 8 + 1, 4):
-            flora = jget(port, f"return world.getFloraAt({sx},{sy})")
-            if not isinstance(flora, dict):
+# --------------------------------------------------------------------
+# Chop fixture (#1398)
+# --------------------------------------------------------------------
+# The probe's loaded region, and the coverage argument that keeps
+# fixture discovery from silently searching only part of it.
+#
+# main() loads chunk region -8..8 inclusive, and a chunk is
+# chunkSize = 16 tiles on a side (src/World/Chunk/Types.hs), so the
+# loaded tiles run LOADED_TILE_MIN..LOADED_TILE_MAX on each axis.
+# world.findHarvestableFlora scans only LOADED chunks and clamps its
+# radius to 64 tiles, measured EUCLIDEAN
+# (src/Engine/Scripting/Lua/API/Forage/Query.hs) — so one call at the
+# origin leaves most of that region unsearched. Sampling query ORIGINS
+# on a lattice of spacing FIND_RADIUS puts every tile in the region
+# within FIND_RADIUS * sqrt(2) / 2 ~= 45.3 tiles of some origin, well
+# inside one disc, so a covered search finding nothing really does mean
+# the region holds no wood-bearing flora.
+LOADED_CHUNK_MIN = -8
+LOADED_CHUNK_MAX = 8
+CHUNK_SIZE = 16
+LOADED_TILE_MIN = LOADED_CHUNK_MIN * CHUNK_SIZE
+LOADED_TILE_MAX = LOADED_CHUNK_MAX * CHUNK_SIZE + (CHUNK_SIZE - 1)
+FIND_RADIUS = 64
+
+# run_chop_stage classifications. Only CHOP_SETUP_FAILURE carries its own
+# process exit status (2); a behavior failure is an ordinary exit-1 probe
+# failure like any other check's.
+CHOP_OK = "ok"
+CHOP_SETUP_FAILURE = "setup"
+CHOP_BEHAVIOR_FAILURE = "behavior"
+
+
+def chop_search_origins():
+    """Query origins whose radius-FIND_RADIUS discs COVER the loaded
+    region (see the coverage note above).
+
+    Both endpoints are origins, and no gap between consecutive origins
+    exceeds FIND_RADIUS, so the worst-case distance from any tile in the
+    region to the nearest origin is sqrt(2) * FIND_RADIUS / 2 — inside
+    the radius with margin. The whole point is that "found nothing" is a
+    statement about the REGION, not about a sample grid: the defect this
+    replaces was a step-4 point-sample grid that could miss every tree
+    in a fully wooded region."""
+    origins = list(range(LOADED_TILE_MIN, LOADED_TILE_MAX + 1, FIND_RADIUS))
+    if origins[-1] != LOADED_TILE_MAX:
+        origins.append(LOADED_TILE_MAX)
+    return origins
+
+
+def find_chop_fixture(port):
+    """Locate a wood-bearing tile with the AUTHORITATIVE loaded-world
+    query; returns (gx, gy, species) or None.
+
+    world.findHarvestableFlora(..., 'wood') is what tools/chop_probe.py
+    already uses for tree discovery, and it filters on exactly the
+    predicate the chop designation itself applies — the species' harvest
+    tags contain "wood" and no live regrowth timer — so a coordinate it
+    returns is one chop.designate will really designate. The point query
+    it replaces (world.getFloraAt) reports ANY flora instance, grass and
+    wildflowers included, so the old loop spent designate-and-drain round
+    trips on candidates that could only ever record "rejected".
+
+    Runs while the generated 'probe' page is the ACTIVE world:
+    findHarvestableFlora resolves through the active page and takes no
+    page argument, whereas chop.designate takes an explicit page id — so
+    called after the portal stage's world.show('portal_probe') this would
+    silently search the empty arena while designating on 'probe'."""
+    origins = chop_search_origins()
+    for sx in origins:
+        for sy in origins:
+            r = jget(port, f"return world.findHarvestableFlora("
+                           f"{sx},{sy},{FIND_RADIUS},'wood')")
+            if not isinstance(r, dict):
                 continue
-            send(port, "return debug.drainActionOutcomes()")  # clear noise
-            send(port, f"chop.designate('probe',{sx-2},{sy-2},{sx+2},{sy+2},"
-                       f"'wood'); return 'ok'")
-            drained = jget(port, "return debug.drainActionOutcomes()")
-            rec = drained[0] if isinstance(drained, list) and drained else {}
-            if (rec.get("kind") == "chop.designate"
-                    and rec.get("outcome") == "partial"
-                    and isinstance(rec.get("applied"), (int, float))
-                    and rec["applied"] >= 1
-                    and isinstance(rec.get("dropped"), (int, float))
-                    and rec["dropped"] > 0):
-                return sx, sy, rec
+            gx, gy = r.get("gx"), r.get("gy")
+            if (isinstance(gx, (int, float)) and not isinstance(gx, bool)
+                    and isinstance(gy, (int, float))
+                    and not isinstance(gy, bool)):
+                return int(gx), int(gy), r.get("id")
     return None
+
+
+def evaluate_chop_designation(port, cx, cy):
+    """Designate the REAL public 5x5 chop request centred on a discovered
+    tile and evaluate the drained record; returns (ok, drained).
+
+    The contract, unchanged from before the fixture repair: a
+    chop.designate record, outcome "partial", at least one applied and
+    one dropped tile, requested == 25 (the full swept-TILE count, not the
+    flora-INSTANCE count — the exact miscount that reported 1/1/0
+    accepted instead of 25/1/24 partial), and requested == applied +
+    dropped. Nothing here substitutes a synthetic record for the real
+    designation and the real destructive drain."""
+    send(port, "return debug.drainActionOutcomes()")  # clear noise
+    send(port, f"chop.designate('probe',{cx - 2},{cy - 2},{cx + 2},{cy + 2},"
+               f"'wood'); return 'ok'")
+    drained = jget(port, "return debug.drainActionOutcomes()")
+    records = drained if isinstance(drained, list) else []
+    rec = records[0] if records and isinstance(records[0], dict) else {}
+    requested = rec.get("requested")
+    applied = rec.get("applied")
+    dropped = rec.get("dropped")
+
+    def count(v):
+        return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+    ok = bool(rec.get("kind") == "chop.designate"
+              and rec.get("outcome") == "partial"
+              and count(applied) and applied >= 1
+              and count(dropped) and dropped >= 1
+              and count(requested) and requested == 25
+              and requested == applied + dropped)
+    return ok, drained
+
+
+def run_chop_stage(port):
+    """Discover the chop fixture, then evaluate the real designation
+    against it; returns (classification, detail).
+
+    The two failures are DIFFERENT claims and must not be conflated —
+    which is what the old single `return None` did. "The loaded region
+    holds no wood-bearing flora" says the contract went unverified and
+    nothing about whether chop.designate works; "the record is absent,
+    malformed, the wrong kind, not partial or miscounted" says the
+    contract is broken. detail is None for a setup failure and
+    (gx, gy, species, drained) otherwise."""
+    fixture = find_chop_fixture(port)
+    if fixture is None:
+        return CHOP_SETUP_FAILURE, None
+    cx, cy, species = fixture
+    ok, drained = evaluate_chop_designation(port, cx, cy)
+    return ((CHOP_OK if ok else CHOP_BEHAVIOR_FAILURE),
+            (cx, cy, species, drained))
+
+
+def run_and_report_chop_stage(port):
+    """Run the chop stage and print its single result line; returns
+    (ok, setup_failed) for main()'s accumulator and exit status.
+
+    Split out from main() so tools/test_action_outcome_probe.py can
+    drive the real branch — diagnostic text included — against a fake
+    console, without booting an engine, opening a TCP console or
+    generating a world."""
+    chop_class, chop_detail = run_chop_stage(port)
+    if chop_class == CHOP_SETUP_FAILURE:
+        # #1398: the ONE condition that earns exit 2. Not a claim about
+        # chop.designate — the covered search simply found no
+        # wood-bearing flora in the loaded region, so the contract went
+        # unverified.
+        print(f"  [FAIL] (fixture setup) world.findHarvestableFlora found "
+              f"no wood-bearing flora anywhere in the loaded region (tiles "
+              f"{LOADED_TILE_MIN}..{LOADED_TILE_MAX} per axis, searched "
+              f"from {len(chop_search_origins())} origins at radius "
+              f"{FIND_RADIUS}) — chop partial path UNVERIFIED; try another "
+              f"--seed")
+        return False, True
+    cx, cy, species, drained = chop_detail
+    ok = chop_class == CHOP_OK
+    print(f"  [{'PASS' if ok else 'FAIL'}] mixed chop sweep at ({cx},{cy}) "
+          f"[{species}] reports the full 5x5=25 tile count as requested: "
+          f"{drained}")
+    return ok, False
+
+
+def probe_exit_status(passed, chop_setup_failed):
+    """#1398's exit-status contract, stated once and testable without an
+    engine: 2 for a CHOP-fixture discovery failure, which takes
+    precedence over any concurrent ordinary failure; 1 for any other
+    failure (a missing till box, an unusable portal fixture, a violated
+    contract); 0 for a clean run. tools/run_probes.py treats every
+    nonzero status as failure, so the split is observable with no
+    harness change."""
+    if chop_setup_failed:
+        return 2
+    return 0 if passed else 1
+
+
+def fail_setup(message):
+    """Report a PORTAL-FIXTURE setup failure (#1399 requirement 6).
+
+    A fixture that could not be established leaves the placement
+    contract UNVERIFIED, which is a different claim from the contract
+    being violated — the distinct prefix is what lets a reader tell
+    "the arena/tile/modal was never usable" apart from "the real
+    confirmation path misbehaved". Both still fail the run; only the
+    chop fixture has its own exit status (#1398)."""
+    print(f"  [FAIL] (fixture setup) {message} — portal placement "
+          f"contract UNVERIFIED")
+
+
+def active_building_ids(port):
+    """The ACTIVE page's live building ids as a SET.
+
+    The confirmation contract is "exactly one building that did not
+    exist before", which a count alone cannot state: a simultaneous
+    retire and spawn leaves the count unchanged, and a count also
+    can't say WHICH id is new."""
+    ids = jget(port, "return building.getActiveIds()")
+    if not isinstance(ids, list):
+        return set()
+    return {int(i) for i in ids
+            if isinstance(i, (int, float)) and not isinstance(i, bool)}
+
+
+def wait_for_one_new_building(port, before_ids, timeout=30.0, interval=0.25):
+    """Poll until the active id set is exactly `before_ids` plus one new
+    id; returns (new_ids, after_ids) as observed at the deadline.
+
+    building.spawn only QUEUES a BuildingSpawn message
+    (src/Engine/Scripting/Lua/API/Buildings/Spawn.hs), while
+    building.getActiveIds reads the manager state published afterwards
+    (Buildings/Query.hs) — so the spawn is asynchronous. Observed live
+    while verifying #1399: 0 buildings immediately after establishHere
+    returned, 1 roughly two seconds later. Sampling once would flake,
+    and a fixed sleep would only relocate the flake, so this returns as
+    soon as the set settles and otherwise spends its whole bounded
+    budget."""
+    deadline = time.time() + timeout
+    after_ids = active_building_ids(port)
+    while True:
+        new_ids = after_ids - before_ids
+        if len(new_ids) == 1 and after_ids == before_ids | new_ids:
+            return new_ids, after_ids
+        if time.time() >= deadline:
+            return new_ids, after_ids
+        time.sleep(interval)
+        after_ids = active_building_ids(port)
 
 
 def main():
@@ -129,6 +348,7 @@ def main():
     args = ap.parse_args()
     port = args.port
     passed = True
+    chop_setup_failed = False
 
     proc = boot(port, f"{SPROOT}/action_outcome_probe_engine.log")
     try:
@@ -279,23 +499,11 @@ def main():
         # The exact 5x5-one-tree regression review round 1 flagged: chop's
         # requested must be the full swept-tile count (25), not the
         # flora-instance count (1) — a naive count previously reported
-        # 1/1/0 accepted instead of 25/1/24 partial.
-        chop_box = find_chop_mixed_box(port)
-        if not chop_box:
-            passed = False
-            print("  [FAIL] no tree found in the loaded region to designate "
-                  "a mixed chop box against (try another seed) — chop "
-                  "partial path unverified")
-        else:
-            cx, cy, chop_rec = chop_box
-            requested = chop_rec.get("requested")
-            applied = chop_rec.get("applied")
-            dropped = chop_rec.get("dropped")
-            ok5b = bool(requested == 25 and requested == applied + dropped)
-            passed &= ok5b
-            print(f"  [{'PASS' if ok5b else 'FAIL'}] mixed chop sweep at "
-                  f"({cx},{cy}) reports the full 5x5=25 tile count as "
-                  f"requested: {chop_rec}")
+        # 1/1/0 accepted instead of 25/1/24 partial. Runs HERE, while the
+        # generated 'probe' page is still the active world, for the
+        # reason find_chop_fixture documents.
+        chop_ok, chop_setup_failed = run_and_report_chop_stage(port)
+        passed &= chop_ok
 
         send(port, "return debug.drainActionOutcomes()")  # clear noise
         send(port, "till.designate('probe',5000000,5000000,5000005,5000005); "
@@ -324,17 +532,41 @@ def main():
         print(f"  [{'PASS' if ok7 else 'FAIL'}] till.designate against a "
               f"missing world page reports rejected: {drained4}")
 
-        # Portal placement: buildTool.handleMouseDown's "isStarting"
-        # branch (building.spawn), driven through the REAL player-facing
-        # path — world.pickTile resolves the click, exactly like
-        # wire_probe.py's path-builder phase — rather than the lower-
-        # level buildTool.commitPlacement verb (which only handles power
-        # items; the portal isn't one). Review round 10: no runtime
-        # assertion existed that a real accepted portal placement
-        # carries no reason. Uses its own flat arena rather than the
-        # generated 'probe' world above — pickTile needs a guaranteed-
-        # flat, guaranteed-loaded tile under the click, which generated
-        # terrain doesn't promise.
+        # Portal placement through the REMOTE-SETTLEMENT CONFIRMATION
+        # (#779), driven end to end on the real player-facing path:
+        # world.pickTile resolves the click exactly like wire_probe.py's
+        # path-builder phase, buildTool.handleMouseDown routes it, and
+        # the modal's own establishHere() completes it. Uses its own
+        # flat arena rather than the generated 'probe' world above —
+        # pickTile needs a guaranteed-flat, guaranteed-loaded tile under
+        # the click, which generated terrain doesn't promise.
+        #
+        # An arena has no placed locations, and Building.Placement's
+        # `isRemote (RemoteDistance Nothing) = True`
+        # (src/Building/Placement.hs) makes that STRUCTURALLY remote, so
+        # this click deterministically opens the warning instead of
+        # spawning. Not seed-dependent — which is why the pre-#779
+        # single-click assertion this block used to carry failed on a
+        # correct build (#1399): scripts/build_tool.lua's isStarting
+        # branch opens the warning, spawns nothing, and deliberately
+        # leaves placement armed.
+        #
+        # The modal is prepared for headless use the same way bt.hud is
+        # below. buildToolRemoteWarning.init is only ever called from
+        # ui_manager_boot.lua, which never runs headless; without it
+        # UI.newBox returns nil against a nil texture set, so open()
+        # raises on `clickHandlers[nil] = onClick` BEFORE reaching its
+        # own recordOutcome — no record at all, an empty drain, and a
+        # "presented" assertion that could never pass. init(1,2,3,...)
+        # is the same synthetic-handle technique the headless UI suite
+        # already uses (test-headless/Test/Headless/UI/
+        # ResponsiveGameplay.hs's build_tool_remote_warning cases).
+        #
+        # The warning is never bypassed, suppressed, or short-circuited
+        # here: the accepted placement is reached only through the real
+        # establishHere() handler, never by calling
+        # commitStartingPlacement directly and never by making the arena
+        # non-remote.
         send(port, "engine.loadScript('scripts/build_tool.lua', 0.0); return 'ok'")
         send(port, "world.initArena('portal_probe'); return 'ok'")
         send(port, "world.show('portal_probe'); return 'ok'")
@@ -346,14 +578,15 @@ def main():
             time.sleep(0.2)
         if not arena_active:
             passed = False
-            print("  [FAIL] portal_probe arena never became active — "
-                  "portal placement unverified")
+            fail_setup("portal_probe arena never became active")
         else:
             send(port, "return world.loadChunksInRegion(-1, -1, 1, 1)")
             send(port, "return world.waitForChunks(30)", timeout=35)
             send(port, "camera.setPosition(0, 0); return 'ok'")
             fb = jget(port, "return {engine.getFramebufferSize()}")
             fb_w, fb_h = (fb if isinstance(fb, list) and len(fb) == 2
+                          and all(isinstance(v, (int, float)) and v > 0
+                                  for v in fb)
                           else (1920, 1080))
             cx, cy = fb_w / 2, fb_h / 2
             picked = jget(port, f"return {{world.pickTile({cx}, {cy})}}")
@@ -362,30 +595,126 @@ def main():
             # (same technique as wire_probe.py's path-builder phase).
             send(port, "local bt = require('scripts.build_tool'); "
                        "bt.hud = { worldId = 'portal_probe' }; return 'ok'")
-            send(port, "local bt = require('scripts.build_tool'); "
-                       "bt.enterPlacement{kind='building', def='acolyte_portal', "
-                       "isStarting=true, displayName='Portal'}; return 'ok'")
-            before_ids = jget(port, "return building.getActiveIds()")
-            before_count = len(before_ids) if isinstance(before_ids, list) else 0
-            send(port, "return debug.drainActionOutcomes()")  # clear noise
-            consumed = jget(port, "local bt = require('scripts.build_tool'); "
-                                   f"return bt.handleMouseDown(1, {cx}, {cy})")
-            drained5 = jget(port, "return debug.drainActionOutcomes()")
-            portal_rec = (drained5[0]
-                          if isinstance(drained5, list) and drained5 else {})
-            after_ids = jget(port, "return building.getActiveIds()")
-            after_count = len(after_ids) if isinstance(after_ids, list) else 0
-            ok8 = bool(consumed is True
-                       and isinstance(picked, list) and len(picked) >= 2
-                       and portal_rec.get("kind") == "buildTool.commitPlacement"
-                       and portal_rec.get("outcome") == "accepted"
-                       and portal_rec.get("reason") is None
-                       and after_count == before_count + 1)
-            passed &= ok8
-            print(f"  [{'PASS' if ok8 else 'FAIL'}] portal placement via the "
-                  f"real buildTool.handleMouseDown path reports accepted "
-                  f"with no reason and actually spawns the building: "
-                  f"{drained5}, buildings {before_count}->{after_count}")
+            warn_ready = jget(port,
+                              "local ok, err = pcall(function() "
+                              "require('scripts.build_tool_remote_warning')"
+                              f".init(1, 2, 3, {fb_w}, {fb_h}) end); "
+                              "return {ok = ok, err = tostring(err)}")
+            tile_ok = (isinstance(picked, list) and len(picked) >= 2
+                       and all(isinstance(v, (int, float))
+                               and not isinstance(v, bool)
+                               for v in picked[:2]))
+            modal_ok = (isinstance(warn_ready, dict)
+                        and warn_ready.get("ok") is True)
+            # Precondition classification (#1399 requirement 6) happens
+            # BEFORE any placement assertion: an unusable arena, an
+            # unpickable tile or an unpreparable modal means the
+            # contract went unverified, not that it was violated.
+            if not tile_ok:
+                passed = False
+                fail_setup(f"world.pickTile({cx}, {cy}) returned no usable "
+                           f"tile coordinates: {picked}")
+            elif not modal_ok:
+                passed = False
+                fail_setup("build_tool_remote_warning could not be "
+                           f"initialised headless: {warn_ready}")
+            else:
+                send(port, "local bt = require('scripts.build_tool'); "
+                           "bt.enterPlacement{kind='building', def='acolyte_portal', "
+                           "isStarting=true, displayName='Portal'}; return 'ok'")
+                before_ids = active_building_ids(port)
+
+                # --- stage 1: the click PRESENTS the warning and spawns
+                # nothing. Drained independently of stage 2, so "this
+                # stage recorded presented and no commitPlacement" is a
+                # claim about the click's own records alone.
+                send(port, "return debug.drainActionOutcomes()")  # clear noise
+                click = jget(port,
+                             "local bt = require('scripts.build_tool'); "
+                             f"local ok, res = pcall(bt.handleMouseDown, 1, {cx}, {cy}); "
+                             "return {ok = ok, consumed = (res == true), "
+                             "err = (ok and '' or tostring(res))}")
+                drained_click = jget(port, "return debug.drainActionOutcomes()")
+                click_records = (drained_click
+                                 if isinstance(drained_click, list) else [])
+                armed = jget(port,
+                             "local bt = require('scripts.build_tool'); "
+                             "local w = require('scripts.build_tool_remote_warning'); "
+                             "return {mode = bt.state.mode, "
+                             "def = (bt.state.target and bt.state.target.def) or '', "
+                             "warningOpen = w.isOpen()}")
+                mid_ids = active_building_ids(port)
+
+                if not (isinstance(click, dict) and click.get("ok") is True):
+                    # A raise here is the pre-#1399 failure mode itself
+                    # (open() dying on a nil box handle), so it is a
+                    # fixture problem rather than a contract violation.
+                    passed = False
+                    fail_setup("buildTool.handleMouseDown raised on the "
+                               f"warning-open path: {click}")
+                else:
+                    presented = [r for r in click_records
+                                 if isinstance(r, dict)
+                                 and r.get("kind") == "buildTool.remoteWarning"
+                                 and r.get("outcome") == "presented"]
+                    committed_early = [r for r in click_records
+                                       if isinstance(r, dict)
+                                       and r.get("kind") == "buildTool.commitPlacement"]
+                    ok8a = bool(click.get("consumed") is True
+                                and len(presented) == 1
+                                and not committed_early
+                                and mid_ids == before_ids
+                                and isinstance(armed, dict)
+                                and armed.get("mode") == "placement"
+                                and armed.get("def") == "acolyte_portal"
+                                and armed.get("warningOpen") is True)
+                    passed &= ok8a
+                    print(f"  [{'PASS' if ok8a else 'FAIL'}] the portal click "
+                          f"is consumed, records remoteWarning/presented with "
+                          f"no commitPlacement, spawns nothing and leaves "
+                          f"placement armed: consumed="
+                          f"{click.get('consumed')}, {drained_click}, "
+                          f"{armed}, buildings {len(before_ids)}->"
+                          f"{len(mid_ids)}")
+
+                    # --- stage 2: the REAL confirmation handler. Its own
+                    # drain again, so the required ordering (confirmed
+                    # immediately followed by commitPlacement/accepted)
+                    # is read off this stage's records rather than a
+                    # buffer still holding stage 1's.
+                    send(port, "return debug.drainActionOutcomes()")  # isolate
+                    confirm = jget(port,
+                                   "local w = require('scripts.build_tool_remote_warning'); "
+                                   "local ok, err = pcall(w.establishHere); "
+                                   "return {ok = ok, err = (ok and '' or tostring(err))}")
+                    drained_confirm = jget(port, "return debug.drainActionOutcomes()")
+                    confirm_records = (drained_confirm
+                                       if isinstance(drained_confirm, list)
+                                       else [])
+                    first = (confirm_records[0]
+                             if len(confirm_records) > 0
+                             and isinstance(confirm_records[0], dict) else {})
+                    second = (confirm_records[1]
+                              if len(confirm_records) > 1
+                              and isinstance(confirm_records[1], dict) else {})
+                    new_ids, after_ids = wait_for_one_new_building(
+                        port, before_ids)
+                    ok8b = bool(isinstance(confirm, dict)
+                                and confirm.get("ok") is True
+                                and first.get("kind") == "buildTool.remoteWarning"
+                                and first.get("outcome") == "confirmed"
+                                and second.get("kind") == "buildTool.commitPlacement"
+                                and second.get("outcome") == "accepted"
+                                and second.get("reason") is None
+                                and len(new_ids) == 1
+                                and after_ids == before_ids | new_ids)
+                    passed &= ok8b
+                    print(f"  [{'PASS' if ok8b else 'FAIL'}] establishHere() "
+                          f"records remoteWarning/confirmed then "
+                          f"commitPlacement/accepted with no reason, and "
+                          f"exactly one new building appears: "
+                          f"{drained_confirm}, new ids {sorted(new_ids)} "
+                          f"(buildings {len(before_ids)}->{len(after_ids)})")
 
         # --- 9: the Lua-recorded game-world F4 producer shares F1/F2/F3's
         # framebuffer-pixel oracle space (#774) ---
@@ -439,8 +768,12 @@ def main():
               f"(200,100) at a 2x window-to-framebuffer scale: "
               f"{drained_lua_scale}")
 
-        print("\n" + ("ALL ACTION-OUTCOME CHECKS PASSED" if passed else "SOME FAILED"))
-        return 0 if passed else 1
+        if chop_setup_failed:
+            print("\nCHOP FIXTURE NOT ESTABLISHED")
+        else:
+            print("\n" + ("ALL ACTION-OUTCOME CHECKS PASSED"
+                          if passed else "SOME FAILED"))
+        return probe_exit_status(passed, chop_setup_failed)
     finally:
         quit_engine(port, proc)
 

@@ -940,7 +940,10 @@ ALL_CHECKS = {
 
 # ----- Severity classification --------------------------------------------
 #
-# Every category produced by ALL_CHECKS belongs to one of two buckets:
+# Every category the audit emits — the `category` argument of every
+# `Issue(...)` construction, NOT the ALL_CHECKS keys, which are check-function
+# labels and disagree with the categories in both directions — belongs to one
+# of two buckets:
 #
 #   BUG     — any occurrence is a real bug. Must be 0 in a healthy world.
 #             world_check.py enforces this with a hard envelope of 0.
@@ -950,6 +953,11 @@ ALL_CHECKS = {
 #             drying up before the coast). Tracked as a quality score
 #             against a threshold; failure means the metric drifted far
 #             enough to indicate broken worldgen, not zero tolerance.
+#
+# The classification is CLOSED for the world_check.py gate: a category in
+# neither set, or a QUALITY category with no QUALITY_THRESHOLDS entry, fails
+# that seed's check by name rather than being tolerated under an implicit
+# default (see classify_category below and world_check.py::check_issue_summary).
 #
 # See `feedback_testing_philosophy` in memory for the rationale.
 
@@ -1079,12 +1087,33 @@ QUALITY_THRESHOLDS = {
 def severity_of(category: str) -> str:
     """Return 'BUG' or 'QUALITY' for an issue category.
 
-    Unknown categories default to QUALITY (safe — they'll be
-    threshold-checked rather than treated as hard fails).
+    This is the COARSE bucketing used for reporting: an unknown category
+    falls back to 'QUALITY' so a caller that only partitions counts into
+    two piles keeps working. world_stress.py relies on that total function.
+
+    It is deliberately NOT the gate's classifier. Anything that must fail
+    closed on an unclassified category — world_check.py — uses
+    classify_category() instead, which reports the absence rather than
+    hiding it behind this fallback.
     """
     if category in BUG_CATEGORIES:
         return "BUG"
     return "QUALITY"
+
+
+def classify_category(category: str) -> str | None:
+    """Return 'BUG', 'QUALITY', or None when the category is unclassified.
+
+    Unlike severity_of(), this never guesses: a category declared in
+    neither BUG_CATEGORIES nor QUALITY_CATEGORIES yields None, so callers
+    that gate on the audit can reject it by name instead of silently
+    treating a brand-new corruption class as a tolerated quality metric.
+    """
+    if category in BUG_CATEGORIES:
+        return "BUG"
+    if category in QUALITY_CATEGORIES:
+        return "QUALITY"
+    return None
 
 
 def compute_stats(data: list[dict[str, Any]]) -> tuple[dict[str, int], dict[str, Any]]:
