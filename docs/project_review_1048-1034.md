@@ -6,13 +6,13 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## Status
 
-- [ ] PRR-1. Shutdown comments still claim every worker stops after Vulkan teardown
+- [x] PRR-1. Shutdown comments still claim every worker stops after Vulkan teardown — [#1408]
 - [ ] PRR-2. `logEntryWith` documents a logging skip list that no longer exists
 - [ ] PRR-3. Shared YAML loading collapses every asset loader's source attribution
 
 ## 1. Shutdown lifecycle documentation
 
-### PRR-1. Shutdown comments still claim every worker stops after Vulkan teardown
+### [#1408] PRR-1. Shutdown comments still claim every worker stops after Vulkan teardown
 
 > **Captured note:** Make the Vulkan-safety comment describe the two-phase worker shutdown that now surrounds teardown. PR #1045 moved combat and simulation shutdown ahead of Vulkan while leaving an inherited statement that Vulkan teardown runs before the worker threads stop.
 
