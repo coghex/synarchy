@@ -10,7 +10,7 @@ The startup-handshake race visible in PR #1026's shared loop remains real, but i
 
 - [x] PRR-1. Autosave staging slots leak into the public save list — [#1413]
 - [x] PRR-2. The reusable transfer-session entry point trusts an already-validated source — [#1415]
-- [ ] PRR-3. Building preview accepts directories as animation frame files
+- [x] PRR-3. Building preview accepts directories as animation frame files — [#1417]
 
 ## 1. Autosave presentation
 
@@ -66,7 +66,7 @@ The startup-handshake race visible in PR #1026's shared loop remains real, but i
 
 ## 3. Preview filesystem discovery
 
-### PRR-3. Building preview accepts directories as animation frame files
+### [#1417] PRR-3. Building preview accepts directories as animation frame files
 
 > **Captured note:** Make building animation discovery require regular texture files. PR #1028's helper named `isPlainFile` only rejects symlinks, so child directories whose names end in `.png` satisfy the numbered-frame convention and are returned as frame paths.
 
