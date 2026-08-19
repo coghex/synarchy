@@ -41,6 +41,7 @@ package.loaded["scripts.tutorial_hud"] = tutorialHud
 
 local scale           = require("scripts.ui.scale")
 local reservedRegions = require("scripts.ui.reserved_regions")
+local responsive      = require("scripts.ui.responsive")
 
 -- Presentation state. Survives a rebuild, a resize, a UI-scale change,
 -- a HUD hide/show and a zoom-band change; reset only by the two
@@ -71,9 +72,17 @@ tutorialHud._assetsReady  = tutorialHud._assetsReady  or false
 local TOGGLE_CALLBACK = "onTutorialHudToggle"
 
 -- Unscaled layout constants. Every runtime size is one of these times
--- the live UI scale -- never a measured text width: `engine.getTextWidth`
--- reports 0 in the bare-Lua headless UI fixture, so a measurement-driven
--- row height or scroll range would be untestable there.
+-- the live UI scale, with ONE deliberate exception: the toggle box is
+-- also fitted to its own measured caption (#1419 -- `toggleW` alone is
+-- narrower than "> Objectives" renders at the shipped font, so the last
+-- characters painted past the box AND past the right edge of a
+-- 1280x720 frame). `engine.getTextWidth` reports 0 in the bare-Lua
+-- headless UI fixture, so that measurement is treated as OPTIONAL: a 0
+-- (or absent font) leaves the box at exactly its historical constant
+-- width, which is what keeps row height, scroll range and every
+-- existing geometry assertion measurement-free there. A test that wants
+-- the fitted path stubs `engine.getTextWidth`, the idiom
+-- Test.Headless.UI.ResponsiveGameplay already uses.
 local BASE = {
     panelW   = 240,
     rowH     = 20,
@@ -93,6 +102,20 @@ local function hudModule()
     return package.loaded["scripts.hud"]
 end
 
+-- The shared font and 9-slice box textures this surface draws with.
+-- Both are owned by scripts/hud.lua and only exist once ui_manager has
+-- run hud.init -- which happens well AFTER this module is
+-- engine.loadScript'd (scripts/init_loader.lua loads it at ~line 164,
+-- ui_manager at ~line 246, and hud.init is further gated on fontsReady,
+-- i.e. a real GPU font atlas). So the very first rebuild legitimately
+-- has neither, and produces an unlabelled, textureless toggle and no
+-- row text.
+local function hudAssets()
+    local hudMod = hudModule()
+    if hudMod == nil then return nil, nil end
+    return hudMod.menuFont, hudMod.boxTexSet
+end
+
 -- Toolbar clusters currently on screen. hud.getToolbarRects() is the
 -- authoritative list (log / map / tool); an empty result simply means
 -- the toolbar does not exist yet, which is not an error here.
@@ -106,18 +129,122 @@ local function toolbarRects()
 end
 
 -----------------------------------------------------------
+-- Caption measurement
+--
+-- The toggle draws one of exactly two captions, and #1419's defect was
+-- that neither fits the constant box: at 1280x720 @1x the shipped font
+-- painted both of them across glyph columns x=1147..1279 inside a box
+-- whose exclusive right edge was x=1272, so the control read
+-- "> Objecti" (PR #991 recorded the same overrun from x=1143). The box
+-- is therefore fitted to the caption rather than the other way round.
+--
+-- BOTH variants are measured and the WIDER one reserved, because the
+-- toggle rect is contractually identical open and closed (the "small
+-- reachable right-edge toggle" guarantee, gated in the "Tutorial HUD"
+-- suite): a box that tracked only the live caption would jump sideways
+-- on every toggle.
+--
+-- Measurement is OPTIONAL by design. `engine.getTextWidth` needs a real
+-- GPU font atlas and answers 0 in the bare-Lua headless UI fixture; a 0
+-- (or a missing font, or a missing API) yields 0 here and leaves the
+-- box at its historical constant width, so nothing in that fixture
+-- becomes measurement-dependent. Non-finite and negative answers are
+-- discarded the same way rather than propagated into geometry.
+-----------------------------------------------------------
+
+local function captionText(open)
+    return (open and "v " or "> ") .. "Objectives"
+end
+
+local CAPTIONS = { captionText(false), captionText(true) }
+
+-- Pad reserved on EACH side of the caption inside the box. Glyph ink is
+-- placed at the pen position plus the glyph's bearing and is bounded by
+-- its bitmap, not by the advance sum engine.getTextWidth returns
+-- (Engine.Graphics.Font.Draw.layoutTextUI vs
+-- Engine.Graphics.Font.Util.calculateTextWidthScaled), so both ends need
+-- slack. This is the same expression the caption's own x offset already
+-- used, now reserved on the right as well.
+local function captionPadFor(indent)
+    return math.max(2, math.floor(math.max(0, indent) / 2))
+end
+
+-- Widest rendered caption at `fontSize`, in whole pixels; 0 when
+-- nothing can measure.
+local function captionWidth(font, fontSize)
+    if font == nil then return 0 end
+    if type(engine) ~= "table" or type(engine.getTextWidth) ~= "function" then
+        return 0
+    end
+    local widest = 0
+    for _, text in ipairs(CAPTIONS) do
+        local ok, w = pcall(engine.getTextWidth, font, text, fontSize)
+        -- `w ~= w` rejects NaN; the upper bound rejects inf.
+        if ok and type(w) == "number" and w == w and w < math.huge
+           and w > widest then
+            widest = w
+        end
+    end
+    return math.ceil(widest)
+end
+
+-- How many times the box/font fit below may be re-derived. One
+-- responsive.fitScale pass would suffice with exact arithmetic, but
+-- scale.applyAllWith FLOORS every scaled size and the font size has its
+-- own floor, so the re-derived natural width can land a pixel over
+-- budget. Bounded regardless: the loop also stops as soon as a pass
+-- stops making progress.
+local TOGGLE_FIT_PASSES = 4
+
+-- Everything the toggle box draws with, fitted as ONE unit: the box's
+-- width and height and the caption's font size and pad all come from a
+-- single local effective scale, per CLAUDE.md's "shrink a box's font
+-- together with its box, never separately". The caption is never shrunk
+-- on its own, and the stored/configured UI scale is never touched --
+-- only this one control's layout.
+--
+-- `availW`/`availH` are the space the right edge can actually give the
+-- control. When the natural width already fits, `uiscale` is returned
+-- unchanged and the result is byte-identical to the pre-#1419 geometry
+-- for an unmeasurable caption.
+local function fitToggle(uiscale, availW, availH, font)
+    local eff, fit = uiscale, nil
+    for _ = 1, TOGGLE_FIT_PASSES do
+        local s        = scale.applyAllWith(BASE, eff)
+        local fontSize = math.max(6, s.fontSize)
+        local pad      = captionPadFor(s.indent)
+        local capW     = captionWidth(font, fontSize)
+        local natural  = math.max(s.toggleW, pad * 2 + capW)
+        fit = { w = natural, h = math.max(1, math.min(s.toggleH, availH)),
+                fontSize = fontSize, pad = pad, capW = capW }
+        if natural <= availW then break end
+        -- fitScale clamps at its own floor, so a pass that cannot
+        -- shrink any further reports the same scale back; stop there
+        -- instead of spinning. Below the formal minimum framebuffer the
+        -- caption simply cannot fit, and the caller's clamp keeps the
+        -- geometry valid (degrade, never crash -- responsive.lua).
+        local nextEff = responsive.fitScale(natural, availW, eff)
+        if not (nextEff < eff) then break end
+        eff = nextEff
+    end
+    return fit
+end
+
+-----------------------------------------------------------
 -- Geometry
 -----------------------------------------------------------
 
 -- Right-anchored geometry for a given framebuffer and active-row count.
 --
--- The toggle rect depends ONLY on the framebuffer, the UI scale, and
--- the toolbar clusters -- never on the open/closed state and never on
--- the row count. That is what makes "small reachable right-edge
--- toggle" verifiable: its bounds are assertably identical open and
--- closed, and the list is laid out so its BOTTOM edge meets the
--- toggle's top edge (rows stack upward from the toggle) instead of the
--- toggle sliding around underneath a growing list.
+-- The toggle rect depends ONLY on the framebuffer, the UI scale, the
+-- toolbar clusters and the font's own caption metrics (#1419, which
+-- measures BOTH caption variants precisely so this stays true) -- never
+-- on the open/closed state and never on the row count. That is what
+-- makes "small reachable right-edge toggle" verifiable: its bounds are
+-- assertably identical open and closed, and the list is laid out so its
+-- BOTTOM edge meets the toggle's top edge (rows stack upward from the
+-- toggle) instead of the toggle sliding around underneath a growing
+-- list.
 --
 -- Out-of-envelope combinations degrade best-effort per
 -- scripts/ui/responsive.lua: floors and clamps keep every rect
@@ -128,7 +255,6 @@ local function computeLayout(fbW, fbH, rowCount)
     local rowH    = math.max(1, s.rowH)
     local margin  = math.max(0, s.margin)
     local gap     = math.max(0, s.gap)
-    local toggleH = math.max(1, math.min(s.toggleH, math.max(1, fbH)))
 
     -- Width: capped to the framebuffer and, like unit_info_v2's
     -- flush-right column, to the space remaining right of every
@@ -167,8 +293,16 @@ local function computeLayout(fbW, fbH, rowCount)
         reservedRegions.maxRightAnchoredWidth(0, fbH, sideClusters, fbW))
     panelW = math.max(minWidth, panelW)
 
+    -- The toggle's own fit, against the width the right edge can give
+    -- it (panelW already carries the framebuffer cap and the reserved
+    -- toolbar clusters). Its natural width is whatever holds the wider
+    -- caption; only when that exceeds panelW does the effective scale
+    -- shrink the box and its font together.
+    local font   = hudAssets()
+    local fit    = fitToggle(scale.get(), panelW, math.max(1, fbH), font)
+    local toggleH = fit.h
     local toggleW = math.max(math.min(minWidth, panelW),
-                              math.min(s.toggleW, panelW))
+                              math.min(fit.w, panelW))
     local panelX  = math.max(0, fbW - panelW - margin)
     local toggleX = math.max(0, fbW - toggleW - margin)
 
@@ -203,6 +337,11 @@ local function computeLayout(fbW, fbH, rowCount)
         fontSize    = math.max(6, s.fontSize),
         indent      = math.max(0, s.indent),
         toggle      = { x = toggleX, y = toggleY, w = toggleW, h = toggleH },
+        -- Caption metrics travel with the rect they were fitted to, so
+        -- the build path and dump() can never disagree about them.
+        toggleFontSize = fit.fontSize,
+        captionPad     = fit.pad,
+        captionWidth   = fit.capW,
         listBottom  = listBottom,
         listTop     = listBottom - listH,
         listH       = listH,
@@ -246,20 +385,6 @@ local function markerFor(row)
         return row.checked and "(x)" or "( )"
     end
     return row.completed and "[x]" or "[ ]"
-end
-
--- The shared font and 9-slice box textures this surface draws with.
--- Both are owned by scripts/hud.lua and only exist once ui_manager has
--- run hud.init -- which happens well AFTER this module is
--- engine.loadScript'd (scripts/init_loader.lua loads it at ~line 164,
--- ui_manager at ~line 246, and hud.init is further gated on fontsReady,
--- i.e. a real GPU font atlas). So the very first rebuild legitimately
--- has neither, and produces an unlabelled, textureless toggle and no
--- row text.
-local function hudAssets()
-    local hudMod = hudModule()
-    if hudMod == nil then return nil, nil end
-    return hudMod.menuFont, hudMod.boxTexSet
 end
 
 local function contentSignature(rows)
@@ -362,13 +487,16 @@ function tutorialHud.rebuild()
         track(toggleH)
         tutorialHud._toggle = toggleH
         if font then
-            local caption = (tutorialHud.open and "v " or "> ") .. "Objectives"
+            -- Font size and pad come from the FIT, not from the list's
+            -- own scaled sizes: the box and its caption shrink together
+            -- or not at all.
+            local caption = captionText(tutorialHud.open)
             local capH = UI.newText("tutorial_hud_toggle_label", caption, font,
-                lay.fontSize, 1.0, 1.0, 1.0, 1.0, tutorialHud.page)
+                lay.toggleFontSize, 1.0, 1.0, 1.0, 1.0, tutorialHud.page)
             if capH then
                 UI.addToPage(tutorialHud.page, capH,
-                    t.x + math.max(2, math.floor(lay.indent / 2)),
-                    t.y + math.floor((t.h + lay.fontSize) / 2))
+                    t.x + lay.captionPad,
+                    t.y + math.floor((t.h + lay.toggleFontSize) / 2))
                 UI.setZIndex(capH, 11)
                 track(capH)
                 tutorialHud._toggleLabel = capH
@@ -665,6 +793,16 @@ function tutorialHud.dump()
             w = lay.toggle.w, h = lay.toggle.h,
             handle = tutorialHud._toggle,
             label  = tutorialHud._toggleLabel,
+            -- #1419: the caption the box was FITTED to. `captionWidth`
+            -- is the measured width of the WIDER of the two variants
+            -- (0 where nothing can measure), so `captionX + captionWidth`
+            -- is the right edge the caption is reserved out to in EITHER
+            -- state -- half-open, like the in-frame checks.
+            caption      = captionText(tutorialHud.open),
+            captionX     = lay.toggle.x + lay.captionPad,
+            captionPad   = lay.captionPad,
+            captionWidth = lay.captionWidth,
+            fontSize     = lay.toggleFontSize,
         },
         panelX  = lay.panelX,
         panelW  = lay.panelW,
