@@ -50,7 +50,7 @@ implementation file, test, tracker item, or remote state was changed.
 ## Status
 
 - [x] PT-1. Survival interruptions consume a commanded move’s stall budget — [#1291]
-- [ ] PT-2. The remote-settlement title renders across the modal’s top border
+- [x] PT-2. The remote-settlement title renders across the modal’s top border — [#1394]
 - [ ] PT-3. Final bleeding-pool cases spawn outside the loaded arena
 - [ ] PT-4. Combat-animation setup does not reliably establish combat
 - [ ] PT-5. The combat-animation probe does not gate its death-animation contract
@@ -131,7 +131,7 @@ interval.
 
 ## Modal layout and visual coverage
 
-### PT-2. The remote-settlement title renders across the modal’s top border
+### [#1394] PT-2. The remote-settlement title renders across the modal’s top border
 
 The supplied offscreen screenshot shows most of “Establish Colony Remotely?”
 behind or above the modal’s top border while the message and both actions remain
