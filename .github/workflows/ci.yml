@@ -204,6 +204,20 @@ jobs:
 
       - name: Resolve dependency plan
         run: |
+          # Resolve ONCE against the image's own baked index, before the
+          # update below can hide a problem with it (#1354). cabal.project
+          # pins `index-state`, and that pin is only load-bearing while it
+          # stays at or before the snapshot `cabal update` baked into this
+          # image at build time; a pin newer than that resolves here only
+          # because of the per-run delta fetch, which puts every CI run
+          # back at the mercy of a live index — the coupling the pin
+          # exists to remove. Cabal fails hard ("Latest known index-state
+          # ... is older than the requested index-state") rather than
+          # quietly resolving something else, so this line is the whole
+          # check. Fixing a failure here means moving the pin back, or
+          # editing .github/ci/Dockerfile so a new image with a newer
+          # baked index is published — never deleting this resolve.
+          cabal build all --dry-run
           # Incremental against the index snapshot baked into the image —
           # a delta fetch of seconds, not a full index download.
           cabal update
