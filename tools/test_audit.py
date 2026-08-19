@@ -114,28 +114,29 @@ def _target_names(target: ast.expr) -> list[str]:
     return []
 
 
-def _scope_nodes(scope: ast.AST, *, enter_nested: bool) -> list[ast.AST]:
-    """Nodes under `scope`, optionally stopping at nested scopes.
+def _scope_nodes(scope: ast.AST) -> list[ast.AST]:
+    """Nodes belonging to `scope`'s OWN lexical scope.
 
-    Module scope must NOT descend into a function, class or lambda body:
-    their bindings are local, and adopting them would let one function's
-    local literal resolve another function's unbound name.
+    Traversal stops at every nested function, class and lambda: their
+    bindings are local to them. Adopting a nested scope's bindings would
+    let an inner `cat = "ISOLATED_FLUID"` resolve an outer name whose real
+    value is dynamic, and let one function's local resolve another's.
+    A nested definition still contributes its own NAME, which IS bound
+    here; the analysed scope's parameters arrive as its `arguments` child.
     """
     out: list[ast.AST] = []
     stack = list(ast.iter_child_nodes(scope))
     while stack:
         node = stack.pop()
         out.append(node)
-        if not enter_nested and isinstance(
-                node, (ast.FunctionDef, ast.AsyncFunctionDef,
-                       ast.ClassDef, ast.Lambda)):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef, ast.Lambda)):
             continue
         stack.extend(ast.iter_child_nodes(node))
     return out
 
 
-def _assignments_in(scope: ast.AST, *, module_scope: bool = False
-                    ) -> dict[str, list[ast.expr] | None]:
+def _assignments_in(scope: ast.AST) -> dict[str, list[ast.expr] | None]:
     """Map each name BOUND in `scope` to every value bound to it.
 
     A name bound anywhere by a form whose value cannot be read as an
@@ -146,7 +147,7 @@ def _assignments_in(scope: ast.AST, *, module_scope: bool = False
     as nothing at all, which is exactly the silent acceptance this
     derivation exists to prevent.
     """
-    nodes = _scope_nodes(scope, enter_nested=not module_scope)
+    nodes = _scope_nodes(scope)
     values: dict[str, list[ast.expr]] = {}
     opaque: set[str] = set()
 
@@ -193,13 +194,13 @@ def _assignments_in(scope: ast.AST, *, module_scope: bool = False
         elif isinstance(node, ast.Delete):
             for target in node.targets:
                 hide(_target_names(target))
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            hide([node.name])
-            hide_arguments(node.args)
-        elif isinstance(node, ast.Lambda):
-            hide_arguments(node.args)
-        elif isinstance(node, ast.ClassDef):
-            hide([node.name])
+        elif isinstance(node, ast.arguments):
+            # Only ever the analysed scope's own parameters: traversal stops
+            # before a nested definition's argument list.
+            hide_arguments(node)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                               ast.ClassDef)):
+            hide([node.name])          # the definition's name, not its body
         elif isinstance(node, (ast.MatchAs, ast.MatchStar)):
             if node.name:
                 hide([node.name])
@@ -229,21 +230,40 @@ def extract_issue_categories(source: str, filename: str
         for child in ast.iter_child_nodes(parent):
             parents[id(child)] = parent
 
-    module_names = _assignments_in(tree, module_scope=True)
     scope_cache: dict[int, dict[str, list[ast.expr] | None]] = {}
 
+    def bindings_of(scope: ast.AST) -> dict[str, list[ast.expr] | None]:
+        cached = scope_cache.get(id(scope))
+        if cached is None:
+            cached = _assignments_in(scope)
+            scope_cache[id(scope)] = cached
+        return cached
+
     def names_visible_at(node: ast.AST) -> dict[str, list[ast.expr] | None]:
-        current: ast.AST | None = node
+        """The enclosing scope chain, innermost binding winning.
+
+        Module, then each enclosing function from outermost inwards — the
+        scopes a name here can actually be read from. A class body is a
+        scope only for code directly inside it: a method never sees it.
+        """
+        chain: list[ast.AST] = []
+        innermost = True
+        current: ast.AST | None = parents.get(id(node))
         while current is not None:
-            if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                cached = scope_cache.get(id(current))
-                if cached is None:
-                    cached = dict(module_names)
-                    cached.update(_assignments_in(current))
-                    scope_cache[id(current)] = cached
-                return cached
+            if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                    ast.Lambda)):
+                chain.append(current)
+                innermost = False
+            elif isinstance(current, ast.ClassDef):
+                if innermost:
+                    chain.append(current)
+                innermost = False
             current = parents.get(id(current))
-        return module_names
+
+        visible = dict(bindings_of(tree))
+        for scope in reversed(chain):
+            visible.update(bindings_of(scope))
+        return visible
 
     categories: set[str] = set()
     unresolved: list[str] = []
@@ -873,6 +893,59 @@ def test_category_extraction_resolves_and_fails_loudly() -> None:
     expect(cats == {"MODULE_LEVEL"} and not unresolved,
            f"a module-level category constant should resolve, got "
            f"{cats} / {unresolved}")
+
+    # A NESTED scope's local must not resolve a name whose real binding is
+    # dynamic: an inner literal is invisible at an enclosing call site.
+    nested = {
+        "an inner function":
+            'def check(grid, issues):\n'
+            '    def helper():\n'
+            '        cat = "ISOLATED_FLUID"\n'
+            '        return cat\n'
+            '    issues.append(Issue(cat, 0, 0, ""))\n',
+        "a sibling function":
+            'def helper():\n'
+            '    cat = "ISOLATED_FLUID"\n'
+            'def check(grid, issues):\n'
+            '    issues.append(Issue(cat, 0, 0, ""))\n',
+        "a class body":
+            'class Holder:\n'
+            '    cat = "ISOLATED_FLUID"\n'
+            'def check(grid, issues):\n'
+            '    issues.append(Issue(cat, 0, 0, ""))\n',
+        "a lambda":
+            'def check(grid, issues):\n'
+            '    make = lambda cat: cat\n'
+            '    issues.append(Issue(cat, 0, 0, ""))\n',
+    }
+    for label, body in nested.items():
+        cats, unresolved = extract_issue_categories(
+            'cat = compute_category()\n' + body, "<synthetic>")
+        expect(not cats and len(unresolved) == 1,
+               f"a local in {label} must not resolve an enclosing dynamic "
+               f"name, got {cats} / {unresolved}")
+
+    # A real closure read is legitimate Python and must still resolve: the
+    # enclosing function IS in scope, unlike a nested or sibling one.
+    cats, unresolved = extract_issue_categories(
+        'def outer():\n'
+        '    cat = "CLOSURE_CAT"\n'
+        '    def inner(issues):\n'
+        '        issues.append(Issue(cat, 0, 0, ""))\n', "<synthetic>")
+    expect(cats == {"CLOSURE_CAT"} and not unresolved,
+           f"a closure read of an enclosing local should resolve, got "
+           f"{cats} / {unresolved}")
+
+    # A nested definition still binds its NAME in the enclosing scope.
+    cats, unresolved = extract_issue_categories(
+        'cat = "SHADOWED"\n'
+        'def check(grid, issues):\n'
+        '    def cat():\n'
+        '        pass\n'
+        '    issues.append(Issue(cat, 0, 0, ""))\n', "<synthetic>")
+    expect(not cats and len(unresolved) == 1,
+           f"a nested def shadowing the name must be reported unresolved, "
+           f"got {cats} / {unresolved}")
 
 
 def test_wetland_on_slope() -> None:
