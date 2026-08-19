@@ -244,6 +244,13 @@ defaultBuildingEntry meta entries = fromMaybe "" $
 --   than being played as one clip or silently lost — exactly what
 --   @dungeon_1\/damaged\/@ needs. Symlinks are skipped at every level,
 --   matching 'Engine.Preview.Discovery.walkFiles'.
+--
+--   A frame is always a REGULAR FILE. A supported extension is a
+--   NAME test, so a directory called @frame_001.png@ is only ever a
+--   container here: it never becomes a frame, and a directory whose
+--   only @.png@ children are themselves directories is therefore not
+--   an animation — it is descended into like any other, and whatever
+--   lies beneath is classified by these same rules.
 discoverBuildingEntries ∷ Map.Map Text BuildingYamlAnim → FilePath
                         → IO [PreviewBuildingEntry]
 discoverBuildingEntries anims root = do
@@ -271,7 +278,8 @@ discoverBuildingEntries anims root = do
     -- 'Just' when this directory is a recognized animation.
     classifyDir segs dir = do
         names ← listDirectory dir
-        pngs  ← filterM (isPlainFile dir) (filter isSupportedTextureFile names)
+        pngs  ← filterM (isRegularFileChild dir)
+                        (filter isSupportedTextureFile names)
         if null pngs
             then pure Nothing
             else do
@@ -290,7 +298,18 @@ discoverBuildingEntries anims root = do
                           entry buildingDefaultFps buildingDefaultLoop
                       | otherwise → Nothing
 
-    isPlainFile dir f = not ⊚ pathIsSymbolicLink (dir </> f)
+    -- A frame candidate must be a REGULAR FILE, not merely a name
+    -- carrying a supported extension: a DIRECTORY named
+    -- @frame_001.png@ otherwise entered 'pngs' and became a frame path
+    -- nothing can load. The symlink test comes FIRST and stays
+    -- independent of the existence test, because 'doesFileExist'
+    -- FOLLOWS links — a symlink to a real file would pass it, and
+    -- symlinks are skipped at every level here (the outer walk does
+    -- the same).
+    isRegularFileChild dir f = do
+        let full = dir </> f
+        isLink ← pathIsSymbolicLink full
+        if isLink then pure False else doesFileExist full
 
     staticEntry segs full = PreviewBuildingEntry
         { pbeLabel    = label segs
