@@ -11,17 +11,18 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (IORef, readIORef, writeIORef, newIORef)
 import Data.Maybe (mapMaybe)
-import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, takeMVar)
-import Control.Exception (SomeException, catch, finally)
-import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
+import Engine.Core.Thread
+    (ThreadState, WorkerFailLevel(..), WorkerSpec(..), noRefusal
+    , startWorkerThread)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.Capability.Core
     (CoreCapability(..), toCoreCapability)
 import Engine.Core.State (EngineEnv, EngineLifecycle(..), saveBarrierRef)
 import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
-import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..), LoggerState)
+import Engine.Core.Log (logDebug, logError, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Page.Types (WorldPageId(..))
@@ -56,23 +57,24 @@ maxFastSettleIterations ∷ Int
 maxFastSettleIterations = 500
 
 startSimThread ∷ EngineEnv → IO ThreadState
-startSimThread env = do
-    logger ← readIORef (ccLoggerRef (toCoreCapability env))
-    stateRef ← newIORef ThreadRunning
-    doneVar ← newEmptyMVar
-    threadId ← catch
-        (do
-            logInfo logger CatWorld "Starting simulation thread..."
-            simStateRef ← newIORef emptySimState
-            tid ← forkIO $ simLoop env stateRef simStateRef `finally` putMVar doneVar ()
-            logInfo logger CatWorld "Simulation thread started"
-            return tid
-        )
-        (\(e ∷ SomeException) → do
-            logError logger CatWorld $ "Failed starting sim thread: " <> T.pack (show e)
-            error "Sim thread start failure."
-        )
-    return $ ThreadState stateRef threadId doneVar
+startSimThread env = startWorkerThread WorkerSpec
+    { wsLoggerRef   = ccLoggerRef (toCoreCapability env)
+    , wsCategory    = CatWorld
+    , wsStartingMsg = "Starting simulation thread..."
+    , wsStartedMsg  = Just "Simulation thread started"
+    , wsFailMsg     = "Failed starting sim thread: "
+    , wsFailLevel   = WorkerFailError
+    , wsFailFatal   = "Sim thread start failure."
+    , wsStartup     = \_ → noRefusal (newIORef emptySimState)
+    , wsTick        = simTick env
+    , wsOnStop      = \_ → do
+        logger ← readIORef (ccLoggerRef (toCoreCapability env))
+        logDebug logger CatWorld "Sim thread stopping..."
+    , wsOnCrash     = \_ e → do
+        logger ← readIORef (ccLoggerRef (toCoreCapability env))
+        logError logger CatWorld $ "Sim thread crashed: " <> T.pack (show e)
+        writeIORef (ccLifecycleRef (toCoreCapability env)) CleaningUp
+    }
 
 -- | True when at least one world is active and holds chunks — i.e. there
 --   is simulation work to do this tick.
@@ -80,80 +82,59 @@ anyLiveWorld ∷ SimState → Bool
 anyLiveWorld ss = any (\sws → swsActive sws ∧ not (HM.null (swsChunks sws)))
                       (HM.elems (ssWorlds ss))
 
-simLoop ∷ EngineEnv → IORef ThreadControl → IORef SimState → IO ()
-simLoop env stateRef simStateRef = do
-    control ← readIORef stateRef
+simTick ∷ EngineEnv → IORef SimState → IO (Maybe (IORef SimState))
+simTick env simStateRef = do
     logger ← readIORef (ccLoggerRef (toCoreCapability env))
-    case control of
-        ThreadStopped → do
-            logDebug logger CatWorld "Sim thread stopping..."
-            pure ()
-        ThreadPaused → do
-            threadDelay 100000
-            simLoop env stateRef simStateRef
-        ThreadRunning → do
-            -- One guarded tick per iteration; the recursive call lives
-            -- OUTSIDE the catch — inside it, each tick pushes a catch
-            -- frame that never pops (unbounded stack growth).
-            ok ← catch
-              (do
-                -- Process all pending commands
-                locked ← captureLocked (saveBarrierRef env)
-                unless locked $ processSimCommands env logger simStateRef
+    -- Process all pending commands
+    locked ← captureLocked (saveBarrierRef env)
+    unless locked $ processSimCommands env logger simStateRef
 
-                ss ← readIORef simStateRef
-                -- 'ssPaused' is set ONLY by 'SimFastSettleAll' (dump
-                -- mode's own synchronous settle path) --
-                -- engine.setPaused (Engine.Scripting
-                -- .Lua.API.Core.setPausedFn) writes ONLY
-                -- 'enginePausedRef' and has never dispatched a SimPause
-                -- command, so 'ssPaused' alone never reflected ordinary
-                -- gameplay pause at all. Concretely for #763: a load
-                -- publish sets 'enginePausedRef' True but never touches
-                -- 'ssPaused', so fluid simulation kept ticking against
-                -- the freshly-published, "supposedly paused" session.
-                -- Reading 'enginePausedRef' directly (the single
-                -- authoritative flag every other paused-gate in the
-                -- engine already reads) fixes both: the general
-                -- gameplay-pause gap and this issue's post-publish one.
-                enginePaused ← readIORef (wsEnginePausedRef (toWorldSimCapability env))
-                -- Acknowledging BEFORE this tick's own work (the
-                -- tick/emitWorldDirtyFluids branch below, which queues
-                -- WorldApplyFluids writebacks to the world thread) let
-                -- this ack be the FINAL one a quiescence
-                -- pass needed while a writeback was still about to be
-                -- produced -- the world thread could already have
-                -- processed WorldLoadPublish and released the barrier
-                -- by the time that late writeback arrived, letting it
-                -- mutate a freshly-published page that reused the same
-                -- id. Moved to fire only once BOTH branches below have
-                -- fully finished producing (or skipping) that work.
-                if locked ∨ ssPaused ss ∨ enginePaused ∨ not (anyLiveWorld ss)
-                    then do
-                        acknowledgeCurrent (saveBarrierRef env) SaveSimulation
-                        threadDelay (ssTickRate ss)
-                        pure True
-                    else do
-                        -- Tick every active world independently, emit each
-                        -- world's dirty fluids tagged with its page id, then
-                        -- clear the per-world dirty sets.
-                        let ticked = HM.map tickWorld (ssWorlds ss)
-                        forM_ (HM.toList ticked) $ \(pid, sws) →
-                            when (swsActive sws) $
-                                emitWorldDirtyFluids env pid sws Nothing
-                        let cleared = HM.map clearDirty ticked
-                        writeIORef simStateRef ss { ssWorlds = cleared }
+    ss ← readIORef simStateRef
+    -- 'ssPaused' is set ONLY by 'SimFastSettleAll' (dump
+    -- mode's own synchronous settle path) --
+    -- engine.setPaused (Engine.Scripting
+    -- .Lua.API.Core.setPausedFn) writes ONLY
+    -- 'enginePausedRef' and has never dispatched a SimPause
+    -- command, so 'ssPaused' alone never reflected ordinary
+    -- gameplay pause at all. Concretely for #763: a load
+    -- publish sets 'enginePausedRef' True but never touches
+    -- 'ssPaused', so fluid simulation kept ticking against
+    -- the freshly-published, "supposedly paused" session.
+    -- Reading 'enginePausedRef' directly (the single
+    -- authoritative flag every other paused-gate in the
+    -- engine already reads) fixes both: the general
+    -- gameplay-pause gap and this issue's post-publish one.
+    enginePaused ← readIORef (wsEnginePausedRef (toWorldSimCapability env))
+    -- Acknowledging BEFORE this tick's own work (the
+    -- tick/emitWorldDirtyFluids branch below, which queues
+    -- WorldApplyFluids writebacks to the world thread) let
+    -- this ack be the FINAL one a quiescence
+    -- pass needed while a writeback was still about to be
+    -- produced -- the world thread could already have
+    -- processed WorldLoadPublish and released the barrier
+    -- by the time that late writeback arrived, letting it
+    -- mutate a freshly-published page that reused the same
+    -- id. Moved to fire only once BOTH branches below have
+    -- fully finished producing (or skipping) that work.
+    if locked ∨ ssPaused ss ∨ enginePaused ∨ not (anyLiveWorld ss)
+        then do
+            acknowledgeCurrent (saveBarrierRef env) SaveSimulation
+            threadDelay (ssTickRate ss)
+            pure (Just simStateRef)
+        else do
+            -- Tick every active world independently, emit each
+            -- world's dirty fluids tagged with its page id, then
+            -- clear the per-world dirty sets.
+            let ticked = HM.map tickWorld (ssWorlds ss)
+            forM_ (HM.toList ticked) $ \(pid, sws) →
+                when (swsActive sws) $
+                    emitWorldDirtyFluids env pid sws Nothing
+            let cleared = HM.map clearDirty ticked
+            writeIORef simStateRef ss { ssWorlds = cleared }
 
-                        acknowledgeCurrent (saveBarrierRef env) SaveSimulation
-                        threadDelay (ssTickRate ss)
-                        pure True
-              )
-              (\(e ∷ SomeException) → do
-                logError logger CatWorld $ "Sim thread crashed: " <> T.pack (show e)
-                writeIORef (ccLifecycleRef (toCoreCapability env)) CleaningUp
-                pure False
-              )
-            when ok $ simLoop env stateRef simStateRef
+            acknowledgeCurrent (saveBarrierRef env) SaveSimulation
+            threadDelay (ssTickRate ss)
+            pure (Just simStateRef)
 
 -- | Settle + simulate one world's chunks (a no-op for an inactive world).
 tickWorld ∷ SimWorldState → SimWorldState

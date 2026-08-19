@@ -68,12 +68,23 @@ Pooling checks (#883, lettered per that issue's acceptance list):
  12. (#883 requirement 7) pool density is invariant to
      `world.setTimeScale`, for the same reason the trail's is.
 
+Every case spawns inside the flat arena's loaded footprint (global
+tiles -32..47 on each axis, from World.Generate.Arena's radius-2 chunk
+square at chunkSize 16), and each spawn tile is checked for a resolvable
+surface first. Outside that footprint `unit.spawn` cannot resolve a
+height, warns, and substitutes Z=0 — which on this arena silently
+COINCIDES with the real surface, so a case placed outside it would keep
+passing while no longer standing on arena terrain at all. The run also
+refuses to report success if the engine logged that fallback even once
+(#1395).
+
 PASS  = all checks hold.
 FAIL  = any check violated (bug in the emitters or their wiring).
 """
 from __future__ import annotations
 import argparse
 import glob
+import math
 import sys
 import time
 from probelib import (quit_engine, boot, init_arena, send, send_json,
@@ -95,6 +106,15 @@ POOL_MIN_CADENCE = 1.5       # real seconds between layers
 POOL_MIN_VOLUME = 0.015      # litres of external loss per layer
 POOL_JITTER_RADIUS = 0.35    # tiles — layers land within this of the anchor
 POOL_STYLES = ("pool", "drops")
+
+# The warning `unit.spawn` logs when it cannot resolve a spawn height
+# (Engine.Scripting.Lua.API.Units.Spawn) — it substitutes Z=0 and
+# continues, which on this flat arena silently COINCIDES with the real
+# surface (World.Generate.Arena's arenaZ is seaLevel = 0). Every case
+# here is supposed to stand on resolvable arena terrain, so the run
+# refuses to report success if the engine took that path even once
+# (#1395).
+UNLOADED_SPAWN_WARNING = "unit.spawn: chunk not loaded"
 
 # Float slop for comparing positions the engine reports back as JSON
 # numbers (they round-trip through a Lua double and a text encoding).
@@ -142,6 +162,72 @@ def reset_blood() -> None:
         sys.exit(2)
 
 
+def require_loaded_surface(x: float, y: float) -> int:
+    """The spawn tile's surface Z, or a SETUP failure if it has none.
+
+    Every case here is written against the flat arena, whose footprint is
+    `(2 * arenaRadius + 1)^2` chunks centred on the origin
+    (World.Generate.Arena) — global tiles -32..47 on each axis at
+    chunkSize 16. Outside it `unit.spawn` resolves no height, warns, and
+    substitutes Z=0 (Engine.Scripting.Lua.API.Units.Spawn), which on this
+    arena happens to equal the real surface — so a case placed outside
+    the footprint keeps passing while no longer standing on resolvable
+    arena terrain at all (#1395).
+
+    The tile tested is the one `unit.spawn` itself resolves: it floors
+    both coordinates before calling `surfaceZInWorld`, and
+    `world.getSurfaceAt` takes integers and returns nil for an unloaded
+    chunk (Engine.Scripting.Lua.API.WorldQuery.Fluid), so flooring here
+    asks exactly the question the spawn will ask. `getSurfaceAt` returns
+    several values (the console tab-joins them); the parens keep the
+    first.
+
+    An unresolvable surface is a SETUP failure (exit 2), not an
+    assertion failure: nothing about blood emission has been tested yet.
+    """
+    gxi, gyi = math.floor(x), math.floor(y)
+    raw = send(PORT,
+               f"local z = (world.getSurfaceAt({gxi}, {gyi})); "
+               f"return z == nil and 'unloaded' or tostring(z)")
+    if raw == "unloaded":
+        print(f"FAIL (setup): no resolvable surface at tile ({gxi}, {gyi}) — "
+              f"that tile is outside the arena's loaded footprint, so "
+              f"unit.spawn would fall back to Z=0 instead of standing the "
+              f"unit on arena terrain")
+        sys.exit(2)
+    try:
+        return int(float(raw))
+    except (TypeError, ValueError):
+        print(f"FAIL (setup): world.getSurfaceAt({gxi}, {gyi}) -> {raw!r}")
+        sys.exit(2)
+
+
+def assert_no_unloaded_spawns(log: str = LOG) -> None:
+    """Refuse to report success if any spawn took the unloaded-chunk
+    fallback during this run.
+
+    The precondition above guards this probe's own `spawn_fresh` sites;
+    this reads the engine's own log so a spawn placed outside the
+    footprint by any other route fails the run instead of passing
+    quietly (#1395 requirement 3). Also a SETUP failure — it says the
+    scenario was not set up on arena terrain, not that the emitters
+    misbehaved.
+    """
+    try:
+        with open(log, errors="replace") as fh:
+            hits = [ln.rstrip() for ln in fh if UNLOADED_SPAWN_WARNING in ln]
+    except OSError as exc:
+        print(f"FAIL (setup): could not read the engine log {log} to check "
+              f"for {UNLOADED_SPAWN_WARNING!r} ({exc})")
+        sys.exit(2)
+    if hits:
+        print(f"FAIL (setup): {len(hits)} spawn(s) fell back to Z=0 on an "
+              f"unloaded chunk — every case must spawn inside the arena's "
+              f"loaded footprint (tiles -32..47 on each axis). First: "
+              f"{hits[0]}")
+        sys.exit(2)
+
+
 def spawn_fresh(x: float = 10, y: float = 10) -> int:
     """A brand-new unit per case — never reused — so one case's trail
     state/decals can't leak into the next (isolation, per issue #882's
@@ -155,7 +241,12 @@ def spawn_fresh(x: float = 10, y: float = 10) -> int:
     moderate wound (sev 0.6) in as little as ~3 real seconds — well
     before the route completes — making mark counts flaky across runs
     for reasons unrelated to the trail emitter itself.
+
+    Requires the requested tile to have a resolvable surface BEFORE
+    spawning, so a case can never quietly run on the unloaded-chunk Z=0
+    fallback (see `require_loaded_surface`).
     """
+    require_loaded_surface(x, y)
     uid = spawn_acolyte(PORT, x, y, clear_water=False)
     send(PORT, f"unit.setStat({uid}, 'constitution', 2.0); return 'ok'")
     send(PORT, f"unit.setStat({uid}, 'body_mass', 70.0); return 'ok'")
@@ -806,7 +897,7 @@ def main() -> int:
 
         # --- 10(e). a collapsed unit pools; death drops the cluster --------
         reset_blood()
-        uid = spawn_fresh(30, 50)
+        uid = spawn_fresh(30, 40)
         send(PORT, f"unit.collapse({uid}); return 'ok'", expect_result=False)
         if poll_until(10.0,
                        lambda: send(PORT, f"return unit.getPose({uid})") == "collapsed",
@@ -863,8 +954,8 @@ def main() -> int:
 
         # --- 11(f). two adjacent bleeders, two independent bounded clusters -
         reset_blood()
-        uid_a = spawn_fresh(20, 60)
-        uid_b = spawn_fresh(22, 60)   # > POOL_CLUSTER_RADIUS apart
+        uid_a = spawn_fresh(20, 44)
+        uid_b = spawn_fresh(22, 44)   # > POOL_CLUSTER_RADIUS apart
         injure(uid_a, "slash", 0.2)
         injure(uid_b, "slash", 0.2)
         impact_ids = impact_decal_ids()
@@ -882,9 +973,17 @@ def main() -> int:
         if anchor_a is None or anchor_b is None:
             print("FAIL: one of the two bleeders reports no cluster anchor")
             return 1
-        if dist(*anchor_a, *anchor_b) <= POOL_JITTER_RADIUS:
-            print(f"FAIL: the two clusters share an anchor "
-                  f"({anchor_a} vs {anchor_b}) — they must be independent")
+        # Farther apart than the CLUSTER radius, not merely the jitter
+        # radius: two anchors closer than POOL_CLUSTER_RADIUS are within
+        # the distance at which a single accumulator would still be
+        # layering into one cluster, so only this separation actually
+        # demonstrates two independent clusters.
+        anchor_gap = dist(*anchor_a, *anchor_b)
+        if anchor_gap <= POOL_CLUSTER_RADIUS + EPS:
+            print(f"FAIL: the two clusters anchored {anchor_gap:.3f} tiles "
+                  f"apart ({anchor_a} vs {anchor_b}), within the "
+                  f"{POOL_CLUSTER_RADIUS}-tile cluster radius — they must be "
+                  f"independent")
             return 1
         marks_a = pool_marks(anchor_a, impact_ids, uid_a)
         marks_b = pool_marks(anchor_b, impact_ids, uid_b)
@@ -899,7 +998,8 @@ def main() -> int:
             return 1
         print(f"PASS: two adjacent bleeders grew two independent bounded "
               f"clusters (A: {len(marks_a)} marks at {anchor_a}, "
-              f"B: {len(marks_b)} marks at {anchor_b})")
+              f"B: {len(marks_b)} marks at {anchor_b}, anchors "
+              f"{anchor_gap:.2f} tiles apart > {POOL_CLUSTER_RADIUS})")
         destroy(uid_a)
         destroy(uid_b)
 
@@ -912,7 +1012,7 @@ def main() -> int:
         for scale in (1.0, 5.0):
             set_time_scale(scale)
             reset_blood()
-            uid = spawn_fresh(40, 60)
+            uid = spawn_fresh(40, 44)   # same tile for BOTH iterations
             injure(uid, "slash", 0.2)
             impact_ids = impact_decal_ids()
             if poll_until(15.0, lambda: cluster_anchor(uid) is not None,
@@ -938,6 +1038,10 @@ def main() -> int:
         print(f"PASS: pool density is time-scale invariant "
               f"({counts[1.0]} layers at 1x vs {counts[5.0]} at 5x over "
               f"{dwell_secs}s real, expected {expected}+/-1)")
+
+        # Nothing above can report success until the engine's own log
+        # agrees every spawn landed on loaded arena terrain (#1395).
+        assert_no_unloaded_spawns()
 
         print("\nPASS: all bleeding-trail and pooling checks held")
         return 0

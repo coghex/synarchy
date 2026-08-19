@@ -336,7 +336,7 @@ data EngineEnv = EngineEnv
     --   only when `enginePausedRef` is False. All gameplay timestamps
     --   that need to freeze on pause (uiAnimStart, biSpawnedAt,
     --   usReviveUntil) reference this clock instead of POSIX wall-time.
-    --   Updated by Unit.Thread.unitLoop once per tick.
+    --   Updated by Unit.Thread.unitTick once per tick.
   , saveBarrierRef     ∷ SaveBarrier
     -- ^ Runtime-only coordinated-save transaction state.  It is diagnostic
     -- and synchronization state, never part of 'SaveData'.
