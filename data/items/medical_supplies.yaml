@@ -64,15 +64,9 @@ items:
     weight: 0.02
     bulk: 0.03        # litres of external bulk
     category: Medical
-    condition:
-      min: 70
-      max: 100
   - name: "scissors"
     display_name: "Scissors"
     sprite: "assets/textures/items/medical/scissors.png"
     weight: 0.06
     bulk: 0.1        # litres of external bulk
     category: Medical
-    condition:
-      min: 70
-      max: 100

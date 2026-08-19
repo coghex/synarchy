@@ -8,20 +8,27 @@
 --   sprite / default.png / first-entry default-selection ladder, the
 --   exact building metadata defaults (@fps=8@, @loop=false@ — NOT the
 --   units viewer's @loop=true@), a building with no YAML at all
---   (@dungeon_1@), and its non-animation @damaged\/@ subtree. No engine
---   needed — everything here is pure or filesystem-only.
+--   (@dungeon_1@), and its non-animation @damaged\/@ subtree, plus
+--   (#1417) the non-FILES a supported extension can name — a
+--   @.png@-suffixed directory, through both the YAML-matched and the
+--   numbered-name branches, a symlink pointing at a real frame, and a
+--   FIFO, the special file @doesFileExist@ accepts.
+--   No engine needed — everything here is pure or filesystem-only.
 module Test.Headless.Preview.Building (spec) where
 
 import UPrelude
 import Test.Hspec
 import Control.Exception (finally)
+import Control.Monad (filterM)
 import Data.List (isPrefixOf, sort)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import System.Directory
     ( getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive
-    , createDirectoryLink, removeDirectoryLink )
+    , createDirectoryLink, removeDirectoryLink, createFileLink
+    , doesDirectoryExist )
 import System.FilePath ((</>))
+import System.Posix.Files (createNamedPipe, stdFileMode)
 import Engine.Asset.YamlBuildings (BuildingYamlAnim(..))
 import Engine.Core.Types (PreviewBuilding(..), PreviewBuildingEntry(..))
 import Engine.Preview.Building
@@ -112,6 +119,51 @@ withSymlinkFixture action = do
             removeDirectoryRecursive root
             removeDirectoryRecursive outside
     (`finally` cleanup) (action root)
+
+-- A tree of NON-FILES carrying a supported extension (#1417). A
+-- @.png@ suffix is a NAME test, so every one of these children looks
+-- like a frame to the extension filter while none of them is loadable:
+--
+--   <root>/dir_only/frame_001.png/wall.png
+--                     -- the candidate animation directory's ONLY
+--                        .png-named child is a DIRECTORY: dir_only is
+--                        not an animation, and the genuine texture
+--                        buried inside still surfaces
+--   <root>/yaml_matched/{frame_001.png (a real file),
+--                        frame_002.png/ (a directory)}
+--                     -- matched to an animation BY YAML, which skips
+--                        the numbered-name guard entirely
+--   <root>/symlinked/{frame_001.png (a real file),
+--                     frame_002.png -> frame_001.png}
+--                     -- a symlink to a REGULAR FILE, which passes
+--                        doesFileExist and must still be excluded
+--   <root>/special/{frame_001.png (a real file),
+--                   frame_002.png (a FIFO)}
+--                     -- a special file is not a directory, so
+--                        doesFileExist ACCEPTS it; only a real type
+--                        check rejects it
+withNonFileFixture ∷ (FilePath → IO ()) → IO ()
+withNonFileFixture action = do
+    tmp ← getTemporaryDirectory
+    let root = tmp </> "synarchy-preview-building-nonfile-spec"
+        item = root </> "fixture_building"
+        dir sub = createDirectoryIfMissing True (item </> sub)
+        file sub = writeFile (item </> sub) ""
+    createDirectoryIfMissing True item
+    dir  ("dir_only" </> "frame_001.png")
+    file ("dir_only" </> "frame_001.png" </> "wall.png")
+    dir  "yaml_matched"
+    file ("yaml_matched" </> "frame_001.png")
+    dir  ("yaml_matched" </> "frame_002.png")
+    dir  "symlinked"
+    file ("symlinked" </> "frame_001.png")
+    -- Relative, and inside the fixture, so the recursive cleanup
+    -- unlinks it without ever resolving outside the temp tree.
+    createFileLink "frame_001.png" (item </> "symlinked" </> "frame_002.png")
+    dir  "special"
+    file ("special" </> "frame_001.png")
+    createNamedPipe (item </> "special" </> "frame_002.png") stdFileMode
+    (`finally` removeDirectoryRecursive root) (action root)
 
 spec ∷ Spec
 spec = do
@@ -227,7 +279,7 @@ spec = do
                 , "damaged/wall_sw.png" ]
             labelsOf entries `shouldBe` sort (labelsOf entries)
 
-    describe "discoverBuildingEntries (synthetic edges)" $
+    describe "discoverBuildingEntries (synthetic edges)" $ do
         it "orders unpadded frames numerically and keeps a mixed \
            \directory's textures as statics" $
             withBuildingFixture $ \root → do
@@ -241,6 +293,67 @@ spec = do
                     (maybe [] pbeFrames (entryNamed "unpadded" entries))
                     `shouldBe` [ "unpadded/frame_1.png", "unpadded/frame_2.png"
                                , "unpadded/frame_10.png" ]
+
+        -- #1417: a supported extension is a NAME test, so nothing but a
+        -- regular file may become a frame.
+        it "never makes a frame of a DIRECTORY carrying a supported \
+           \extension, and descends into it instead" $
+            withNonFileFixture $ \root → do
+                let item = root </> "fixture_building"
+                entries ← discoverBuildingEntries Map.empty item
+                -- dir_only's only .png-named child is a directory, so
+                -- dir_only is no animation; neither it nor its .png-named
+                -- container is an entry of any kind, while the genuine
+                -- texture beneath both still surfaces as a static.
+                entryNamed "dir_only" entries `shouldBe` Nothing
+                entryNamed "dir_only/frame_001.png" entries `shouldBe` Nothing
+                let nested = entryNamed "dir_only/frame_001.png/wall.png" entries
+                fmap pbeAnimated nested `shouldBe` Just False
+                fmap pbeFrames nested `shouldBe`
+                    Just [T.pack (item </> "dir_only" </> "frame_001.png"
+                                       </> "wall.png")]
+                -- And no entry anywhere claims a directory as a frame.
+                dirFrames ← filterM (doesDirectoryExist ∘ T.unpack)
+                                    (concatMap pbeFrames entries)
+                dirFrames `shouldBe` []
+
+        it "keeps a YAML-matched animation, with only its regular file as a \
+           \frame" $
+            withNonFileFixture $ \root → do
+                let item  = root </> "fixture_building"
+                    frame = T.pack (item </> "yaml_matched" </> "frame_001.png")
+                    anims = Map.singleton "matched" (anim 3 True [frame])
+                entries ← discoverBuildingEntries anims item
+                let matched = entryNamed "yaml_matched" entries
+                -- The YAML branch bypasses the numbered-name guard, so it
+                -- is where a .png-named directory would slip in.
+                fmap pbeAnimated matched `shouldBe` Just True
+                fmap pbeFps matched `shouldBe` Just 3
+                fmap pbeLoop matched `shouldBe` Just True
+                fmap pbeFrames matched `shouldBe` Just [frame]
+
+        it "keeps excluding a symlink that points at a real frame file" $
+            withNonFileFixture $ \root → do
+                let item = root </> "fixture_building"
+                entries ← discoverBuildingEntries Map.empty item
+                let linked = entryNamed "symlinked" entries
+                -- doesFileExist FOLLOWS links, so the symlink test has to
+                -- stay independent of it.
+                fmap pbeAnimated linked `shouldBe` Just True
+                fmap pbeFrames linked `shouldBe`
+                    Just [T.pack (item </> "symlinked" </> "frame_001.png")]
+
+        it "never makes a frame of a SPECIAL file carrying a supported \
+           \extension" $
+            withNonFileFixture $ \root → do
+                let item = root </> "fixture_building"
+                entries ← discoverBuildingEntries Map.empty item
+                let special = entryNamed "special" entries
+                -- A FIFO is not a directory, so "exists and is not a
+                -- directory" accepts it; only a real type check does not.
+                fmap pbeAnimated special `shouldBe` Just True
+                fmap pbeFrames special `shouldBe`
+                    Just [T.pack (item </> "special" </> "frame_001.png")]
 
     describe "defaultBuildingEntry (the selection ladder)" $ do
         it "prefers state_animations.built, resolved through the animation's \

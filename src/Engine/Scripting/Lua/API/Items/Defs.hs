@@ -179,7 +179,6 @@ itemDefFromYaml filePath handle def = ItemDef
     , idMake        = iydMake def
     , idMaterial    = iydMaterial def
     , idQualitySpec   = (\r → (iyrsMin r, iyrsMax r)) <$> iydQuality def
-    , idConditionSpec = (\r → (iyrsMin r, iyrsMax r)) <$> iydCondition def
     , idQualityTiers = map (\t → QualityTier (iyqtMin t) (iyqtLabel t))
                            (iydQualityTiers def)
     , idContainer   = container

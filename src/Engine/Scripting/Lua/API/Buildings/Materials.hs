@@ -110,9 +110,9 @@ buildingAreMaterialsSatisfiedFn env = do
 
 -- | building.getStorage(bid) → array of item-instance tables (same
 --   shape as unit.getInventory entries: defName, displayName, weight,
---   quality / condition when applicable, iconTex, category, …). nil
---   if the bid is unknown. Empty array for buildings with storage
---   capacity but nothing deposited yet.
+--   condition always, quality when the def declares a spec, iconTex,
+--   category, …). nil if the bid is unknown. Empty array for buildings
+--   with storage capacity but nothing deposited yet.
 buildingGetStorageFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingGetStorageFn env = do
     idArg ← Lua.tointeger 1
