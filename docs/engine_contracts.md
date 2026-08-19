@@ -431,7 +431,9 @@ instance ids, and a path that stops resolving closes that level AND every
 level below it rather than retargeting a same-def sibling. An
 item-container level is RENDER-ONLY (D-5): no transfer endpoint, no
 transfer operation — only inspection (scroll, close, open a child), so a
-building row keeps its Withdraw entry and merely GAINS "Contents".
+building row keeps its Retrieve gestures and merely GAINS "Contents".
+(That sentence named a "Withdraw with <unit>" entry until #1249 retired
+it; the row's transfer entries are Mode B's Retrieve 1 / Retrieve all.)
 
 `scripts/item_contents_panel.lua` no longer owns a window lifecycle
 (D-13): it supplies the two item-level kinds and nothing else — no page,

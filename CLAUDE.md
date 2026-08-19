@@ -58,7 +58,7 @@ seconds and the expensive gates at the end.
    `SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless` (+~25 s),
    then re-capture baselines `python3 tools/world_baseline.py` (~7 min)
    and re-run world_check. Remember the save-version bump.
-4. **Behavior probes — opt-in, not a default gate.** ~84 headless
+4. **Behavior probes — opt-in, not a default gate.** ~85 headless
    `tools/*_probe.py` scripts each boot a real engine and gate one
    system — see `tools/README.md` and **Subsystem probes & domain
    contracts** below. Run the ones relevant to what you touched, or
@@ -414,7 +414,9 @@ write) and `escort` (#1250's Mode A pair). The two item kinds descend by
 EXACT INSTANCE IDENTITY, and a path that stops resolving closes that
 level AND every level below it rather than retargeting a same-def
 sibling. An item-container level is RENDER-ONLY (D-5): inspection only,
-so a building row keeps its Withdraw entry and merely GAINS "Contents".
+so a building row keeps its Retrieve gestures and merely GAINS "Contents"
+(the "Withdraw with <unit>" entry this sentence used to name was retired
+by #1249 — see the transfer-system entry below).
 `scripts/item_contents_panel.lua` and
 `scripts/transfer_session_panels.lua` supply level kinds and own no
 window lifecycle at all — no page, no panel, no singleton, no
@@ -889,7 +891,7 @@ echo 'engine.quit()' | nc -w 2 localhost 9008                     # shutdown
 ### Subsystem probes & domain contracts
 
 Each area below has a turnkey `tools/*_probe.py` gate (real headless
-engine, pass/fail checks). `tools/README.md` lists all ~84;
+engine, pass/fail checks). `tools/README.md` lists all ~85;
 `ci_probes.py --status` gives CI eligibility. Durable contracts to know
 before touching each area:
 
@@ -960,7 +962,7 @@ before touching each area:
   effectiveness (±10), so quality assertions must pin the
   neutral-effectiveness precondition (#878). Gates: `craft_probe.py`,
   `craft_bill_probe.py`.
-- **Player transfers + orders (#1000/#1085/#1246-#1251)** — design
+- **Player transfers + orders (#1000/#1085/#1246-#1255)** — design
   authority: [`docs/unified_item_transfers.md`](docs/unified_item_transfers.md).
   ONE pure policy (`src/Unit/Transfer.hs`) decides whether exact item
   instances may move between two endpoints (a unit inventory or a built
@@ -973,6 +975,31 @@ before touching each area:
   fetch/repair/medic ladders depend on — never route AI work through the
   strict one, and never delete them.
 
+  **TWO player modes, ONE commit policy.** Mode B queues a durable order
+  and Mode A commits on the spot, but both build the IDENTICAL request
+  and both reach `checkTransfer`/`commitTransfer` — so an exact-instance
+  identity, a partial batch and a capacity or proximity refusal mean the
+  same thing in either. The player-facing IMMEDIATE paths retired with
+  #1249 and must not come back: the adjacent-cargo "Store in <cargo>"
+  enumeration (`unit.depositToCargo`) and the container window's
+  "Withdraw with <unit>" (`unit.withdrawFromCargo`, plus its disabled
+  "select an adjacent unit first" placeholder) are now the Store /
+  Retrieve gestures, and NEITHER requires adjacency. Only the PLAYER
+  paths retired; the verbs themselves stay registered for the AI (D-7).
+
+  **Contents are REMEMBERED, never live (D-2).** A container window
+  renders the player's last observation, so refreshing it is a RULE, not
+  a read. Exactly four things reveal (`Building.Knowledge.Live`): a
+  completed transfer commit into or out of the container, the lax AI
+  cargo verbs, a Mode A session OPENING on it
+  (`building.refreshContainerKnowledge` — that transition is its only
+  caller in the game), and the first completion of a storage-capable
+  building, which seeds KNOWN-EMPTY because the player watched it go up.
+  Walking past, selecting, right-clicking and opening the window reveal
+  NOTHING, and every unit-driven reveal is gated on
+  `isPlayerCommandable`, so a non-player unit's withdrawal leaves the
+  record stale on purpose. Knowledge is player-global, never per-unit.
+
   The three player-facing modes — durable ORDERS (#1246/#1247/#1253, where
   arrival is the commit and every ending surfaces once then prunes), Mode
   B queued GESTURES (#1249, Store/Retrieve 1-and-all, neither requiring
@@ -984,10 +1011,17 @@ before touching each area:
   `escort_hold` is auto-prepended to every species are all load-bearing.
 
   Gates: hspec `--match "Unit transfer"` / `"Transfer context menu"` /
-  `"durable transfer orders survive"`; `tools/transfer_order_probe.py`
-  and `tools/item_list_widget_probe.py` (manual-only; the latter owns the
-  real-AI proof that a MOVING target is preempted and then stays put for
-  the whole approach).
+  `"durable transfer orders survive"` / `"Container knowledge"`;
+  `tools/transfer_order_probe.py` and `tools/item_list_widget_probe.py`
+  (manual-only; the latter owns the real-AI proof that a MOVING target
+  is preempted and then stays put for the whole approach), and — the
+  arc's INTEGRATED gate — `tools/unified_transfer_probe.py` (#1255,
+  manual-only `needs-gpu`): one fixed-seed session with independently
+  reported stages proving an exact instance moves both ways between all
+  three endpoint classes through BOTH modes, plus the partial batch, the
+  reveal rule, one widget rendering every container view, and a Mode B
+  order surviving a fresh-process reload while a Mode A session does
+  not.
 - **Power (#358-#361, #590/#591, #1206)** — solar/battery nodes are
   item-consuming placements (`power.placeNode` via
   `buildTool.commitPlacement`); networks (wire 4-adjacency +
