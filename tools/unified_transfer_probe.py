@@ -667,32 +667,56 @@ def outcome_ids(result) -> list:
 
 
 def assert_structured_move(chk: Checks, port: int, label: str, src, dst,
-                           def_name: str, ids, before) -> None:
+                           def_name: str, ids, before,
+                           deferred_reach: bool) -> None:
     """The two halves of the structured-result assertion for one leg.
 
-    `before` is the check taken while the items were still at the source
-    (accepted, one outcome per requested item, naming exactly those
-    instances). This adds the AFTER half: the identical request must no
-    longer be satisfiable, because those instances are not at the source
-    any more — a refusal, or per-item failures, never a second
-    acceptance."""
+    The BEFORE half differs by mode, and the difference is the arc's own
+    reach split rather than a convenience: `checkTransfer` and
+    `commitTransfer` still REQUIRE adjacency, and only
+    `createTransferOrder` defers it (`ReachPolicy`).
+
+      * Mode A commits on the spot, with the escort standing there, so
+        the contract must ACCEPT: completion "all", one outcome per
+        requested instance in request order, no failures.
+      * Mode B fires from across the map, so the contract must refuse —
+        and refuse for RANGE alone. `out_of_range` on the exact
+        requested ids, with the request itself structurally accepted, is
+        the sharpest statement of Mode B's whole promotion: the policy
+        would not move these items now, and the ORDER may still be
+        created.
+
+    The AFTER half is shared and is what proves the move: the identical
+    request, asked once the carrier is adjacent, must fail on IDENTITY
+    (`instance_missing`) rather than on range. End-state ownership
+    cannot tell those two apart; this can."""
     ids = [int(i) for i in ids]
-    chk.ok(isinstance(before, dict) and before.get("accepted") is True
-           and before.get("completion") == "all"
-           and outcome_ids(before) == ids
-           and all(not st.startswith("failed") for st in outcome_states(before)),
-           f"{label}: the contract ACCEPTS the exact request before the "
-           f"gesture — completion 'all', one outcome per requested instance "
-           f"in request order, none of them a failure", f"got {before!r}")
+    before_states = outcome_states(before)
+    if deferred_reach:
+        chk.ok(isinstance(before, dict) and outcome_ids(before) == ids
+               and before_states
+               and all(st == "failed:out_of_range" for st in before_states),
+               f"{label}: before the gesture the contract refuses this exact "
+               f"request for RANGE alone (`out_of_range` on every requested "
+               f"instance) — which is precisely what Mode B's order defers",
+               f"got {before!r}")
+    else:
+        chk.ok(isinstance(before, dict) and before.get("accepted") is True
+               and before.get("completion") == "all"
+               and outcome_ids(before) == ids
+               and all(not st.startswith("failed") for st in before_states),
+               f"{label}: the contract ACCEPTS the exact request before the "
+               f"gesture — completion 'all', one outcome per requested "
+               f"instance in request order, none of them a failure",
+               f"got {before!r}")
     after = check_transfer(port, src, dst, def_name, ids)
-    moved = (isinstance(after, dict)
-             and (after.get("accepted") is False
-                  or all(st.startswith("failed")
-                         for st in outcome_states(after))))
-    chk.ok(moved,
-           f"{label}: and REFUSES the identical request afterwards — the "
-           f"structured result says those instances are no longer the "
-           f"source's to move, which end-state ownership alone cannot",
+    after_states = outcome_states(after)
+    chk.ok(isinstance(after, dict) and outcome_ids(after) == ids
+           and after_states
+           and all(st == "failed:instance_missing" for st in after_states),
+           f"{label}: and afterwards it refuses the identical request on "
+           f"IDENTITY, not on range — `instance_missing` per instance is the "
+           f"contract saying those exact items left the source",
            f"got {after!r}")
 
 
@@ -1493,7 +1517,7 @@ def mode_b_leg(chk: Checks, port: int, ledger: ViewLedger, fp: dict, key: str,
            f"reported a failure state — observed {seen_states!r}",
            f"got {seen_states!r}")
     assert_structured_move(chk, port, label, src, dst, def_name, [iid],
-                           before_check)
+                           before_check, deferred_reach=True)
     fp.setdefault("legs", {})[f"modeB:{key}"] = iid
     return True
 
@@ -1666,7 +1690,7 @@ def mode_a_leg(chk: Checks, port: int, fp: dict, key: str, src, dst,
            f"{label}: the session stays open and repeatable after a commit",
            f"phase {session_phase(port)!r}")
     assert_structured_move(chk, port, label, src, dst, def_name, [iid],
-                           before_check)
+                           before_check, deferred_reach=False)
     fp.setdefault("legs", {})[f"modeA:{key}"] = iid
     return True
 
@@ -2149,11 +2173,12 @@ def stage_batch(chk: Checks, port: int, ids: dict, fp: dict, vp: dict) -> None:
     after_stored = check_transfer(port, U_A, B_P, DEF_BATCH, stored)
     after_kept = check_transfer(port, U_A, B_P, DEF_BATCH, kept)
     chk.ok(isinstance(after_stored, dict)
-           and (after_stored.get("accepted") is False
-                or all(st.startswith("failed")
-                       for st in outcome_states(after_stored))),
-           f"{label}: afterwards the contract refuses the eight that moved — "
-           f"they are no longer the acolyte's", f"got {after_stored!r}")
+           and outcome_ids(after_stored) == [int(i) for i in stored]
+           and all(st == "failed:instance_missing"
+                   for st in outcome_states(after_stored)),
+           f"{label}: afterwards the contract refuses the eight that moved on "
+           f"IDENTITY — they are no longer the acolyte's to offer",
+           f"got {after_stored!r}")
     chk.ok(isinstance(after_kept, dict)
            and outcome_ids(after_kept) == [int(i) for i in kept],
            f"{label}: and still names the four that stayed, so the partial "
