@@ -243,6 +243,12 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
                          "located via ui.dumpWidgets() against a real "
                          "Vulkan-rendered HUD — no GPU on the CI runner "
                          "(#1088)"),
+    "unified_transfer": (NEEDS_GPU, "offscreen boot: the unified transfer "
+                         "system's end-to-end gate (#1255) - two real "
+                         "Vulkan-rendered engine boots driving Mode A's "
+                         "flanking panes and Mode B's row menus through "
+                         "ui.dumpWidgets(), plus a real generated world and a "
+                         "fresh-process save/load - no GPU on the CI runner"),
     "transfer_context_menu": (NEEDS_GPU, "offscreen boot: real right-click -> "
                               "\"Transfer\" context-menu row located via "
                               "ui.dumpWidgets() against a real Vulkan-rendered "
