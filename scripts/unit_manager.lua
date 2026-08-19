@@ -2,7 +2,6 @@
 -- Loaded as an engine script from init_loader.lua with its own tick interval.
 local unitLoader = require("scripts.unit_loader")
 local buildingLoader = require("scripts.building_loader")
-local itemLoader = require("scripts.item_loader")
 local equipmentLoader = require("scripts.equipment_loader")
 local substanceLoader = require("scripts.substance_loader")
 

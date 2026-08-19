@@ -1,5 +1,5 @@
 -- Equipment Loader — enumerates data/equipment/*.yaml and loads each.
--- Mirrors scripts/item_loader / scripts/unit_loader. One class per file
+-- Mirrors scripts/unit_loader. One class per file
 -- is the expected shape, but a single YAML can contain many classes.
 local equipmentLoader = {}
 

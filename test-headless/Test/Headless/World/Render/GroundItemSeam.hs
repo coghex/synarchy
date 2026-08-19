@@ -106,6 +106,7 @@ bareItemDef = ItemDef
     , idContainer = Nothing, idDefaultContents = [], idFood = Nothing
     , idWeapon = Nothing, idArmor = Nothing, idUnequippable = False
     , idBuffs = [], idInsulation = 0
+    , idSourcePath = "test-fixture"
     }
 
 items ∷ ItemManager

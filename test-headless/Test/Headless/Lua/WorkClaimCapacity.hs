@@ -52,8 +52,8 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
 import qualified Data.Yaml as Y
 import Data.List (sort)
-import System.Directory (listDirectory)
-import System.FilePath ((</>), takeExtension)
+import System.FilePath ((</>))
+import Engine.Asset.Discovery (walkFilesWithExtension)
 
 runsOk ∷ Text → Expectation
 runsOk chunkText = do
@@ -103,7 +103,8 @@ luaNumber = T.pack ∘ show ∘ Sci.toRealFloat @Double
 
 -- | The pieces of shipped data these cases are built from.
 data Shipped = Shipped
-    { shItemDefs ∷ Value            -- ^ every @data/items/*.yaml@ entry
+    { shItemDefs ∷ Value            -- ^ every definition under @data/items@,
+                                    --   at any depth (#1232)
     , shRecipes  ∷ Value            -- ^ smelting recipes keyed by id
     , shPack     ∷ Value            -- ^ the whole @dungeon_1@ pack
     , shWeight   ∷ Text → Double    -- ^ item def weight, 0 when unknown
@@ -132,8 +133,7 @@ asDouble _                 = Nothing
 --   item catalogue would weigh every job at 0 kg and pass every case.
 shippedFixture ∷ IO Shipped
 shippedFixture = do
-    itemFiles ← sort ∘ filter ((≡ ".yaml") ∘ takeExtension)
-            ⊚ listDirectory "data/items"
+    itemFiles ← sort ⊚ walkFilesWithExtension "data/items" ".yaml"
     itemDocs ← mapM (Y.decodeFileThrow @IO @Value ∘ ("data/items" </>)) itemFiles
     let defs = concatMap (asArray ∘ objectLookup "items") itemDocs
         weightOf name = case

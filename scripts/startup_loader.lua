@@ -29,6 +29,53 @@ local function addYamlDir(dir, label, loaderFn)
     end
 end
 
+-- Order two `/`-separated relative paths by the UTF-8 BYTES of the
+-- path itself (#1232 requirement 2). Written out rather than left to
+-- `a < b`, which Lua answers with strcoll: that agrees with byte order
+-- under the "C" locale but is not guaranteed to under another, and the
+-- load order of a data tree must not depend on the host's locale.
+local function pathLess(a, b)
+    local shorter = #a < #b and #a or #b
+    for i = 1, shorter do
+        local ca, cb = a:byte(i), b:byte(i)
+        if ca ~= cb then return ca < cb end
+    end
+    return #a < #b
+end
+
+-- The canonical total order over a tree's discovered files: ascending
+-- `pathLess` on each path relative to the tree root.
+--
+-- A PURE transformation over an already-enumerated list, deliberately:
+-- it is what makes the load order testable against two different
+-- underlying enumeration orders (#1232 requirement 11), which is
+-- impossible when a walk sorts opaquely inside itself. Returns a new
+-- array; the caller's list is left alone.
+function startupLoader.canonicalFileOrder(relPaths)
+    local ordered = {}
+    for i, rel in ipairs(relPaths) do ordered[i] = rel end
+    table.sort(ordered, pathLess)
+    return ordered
+end
+
+-- Recursive counterpart of addYamlDir: enqueues every YAML under `dir`
+-- at ANY depth, ONE queue entry per file (so `loaderFn` still sees each
+-- file exactly once and the loading screen keeps its per-file progress
+-- granularity), in canonicalFileOrder.
+--
+-- Only trees whose contents may be organized into subdirectories use
+-- this. Everything else stays on addYamlDir's flat, OS-ordered
+-- engine.listFiles: flora IDs are allocated in load order and salt
+-- worldgen placement.
+local function addYamlTree(dir, label, loaderFn)
+    local rels = engine.listFilesRecursive(dir, ".yaml")
+    if not rels then return end
+    for _, rel in ipairs(startupLoader.canonicalFileOrder(rels)) do
+        local path = dir .. "/" .. rel
+        addItem(label, function() loaderFn(path) end)
+    end
+end
+
 local function addTextureList(label, paths)
     for _, p in ipairs(paths) do
         addItem(label, function() engine.loadTexture(p) end)
@@ -145,7 +192,10 @@ local function queueNormalProfile()
     addYamlDir("data/substances", "Loading substances...", engine.loadSubstanceYaml)
     addYamlDir("data/infections", "Loading infections...", engine.loadInfectionYaml)
     addYamlDir("data/recipes",    "Loading recipes...",    engine.loadRecipeYaml)
-    addYamlDir("data/items",      "Loading items...",      engine.loadItemYaml)
+    -- Items are the one data family whose definitions may be organized
+    -- into logical subdirectories (#1232); their ids come from each
+    -- definition's own `name:`, never from its path.
+    addYamlTree("data/items",     "Loading items...",      engine.loadItemYaml)
     addYamlDir("data/equipment",  "Loading equipment...",  engine.loadEquipmentYaml)
     addYamlDir("data/buildings",  "Loading buildings...",  engine.loadBuildingYaml)
     addYamlDir("data/units",      "Loading units...",      engine.loadUnitYaml)
@@ -186,7 +236,7 @@ local function queueArenaProfile()
     addYamlDir("data/substances", "Loading substances...", engine.loadSubstanceYaml)
     addYamlDir("data/infections", "Loading infections...", engine.loadInfectionYaml)
     addYamlDir("data/recipes",    "Loading recipes...",    engine.loadRecipeYaml)
-    addYamlDir("data/items",      "Loading items...",      engine.loadItemYaml)
+    addYamlTree("data/items",     "Loading items...",      engine.loadItemYaml)
     addYamlDir("data/equipment",  "Loading equipment...",  engine.loadEquipmentYaml)
     addYamlDir("data/buildings",  "Loading buildings...",  engine.loadBuildingYaml)
     addYamlDir("data/units",      "Loading units...",      engine.loadUnitYaml)

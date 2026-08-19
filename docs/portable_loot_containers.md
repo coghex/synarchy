@@ -74,8 +74,15 @@ concrete precondition
   capacity (`capacity`, `holds`, `fill_weight`, and `default_fill`). There is no
   authored physical bulk, internal item-storage weight limit, or internal item-
   storage bulk limit.
-- `scripts/startup_loader.lua` calls flat `engine.listFiles` enumeration for
-  `data/items`; logical item subdirectories are not loaded.
+- `scripts/startup_loader.lua` walks the whole `data/items` tree recursively
+  (`engine.listFilesRecursive`) and loads every file it finds, one
+  `engine.loadItemYaml` call each, in one canonical order: ascending UTF-8
+  bytes of the `/`-normalized path relative to `data/items`. Logical item
+  subdirectories therefore load, at any depth, and a definition's id still
+  comes from its own `name:` and never from its path. A symlink at any depth
+  is skipped, so the walk terminates on any tree shape and never reaches a
+  file outside `data/items`. Every other data family keeps flat, OS-ordered
+  `engine.listFiles` enumeration (PLC-1, #1232).
 - Location content supports independent `item` and `loot_table` entries. It
   cannot author a container-definition/loot-profile pair or persist a pending,
   unrealized profile descriptor. Closed #948 supplies seed-stable per-location
