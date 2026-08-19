@@ -19,7 +19,7 @@ blankDef tiers = ItemDef
     , idTexture = TextureHandle 0, idWeight = 0, idWeightSpec = Nothing
     , idBulk = 1.0, idStorage = Nothing
     , idKind = "misc", idCategory = "Misc", idMake = "", idMaterial = ""
-    , idQualitySpec = Just (0, 100), idConditionSpec = Nothing
+    , idQualitySpec = Just (0, 100)
     , idQualityTiers = tiers
     , idContainer = Nothing, idDefaultContents = []
     , idFood = Nothing, idWeapon = Nothing, idArmor = Nothing

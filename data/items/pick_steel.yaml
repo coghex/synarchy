@@ -12,9 +12,6 @@ items:
     quality:
       min: 50
       max: 75
-    condition:
-      min: 80
-      max: 100
 
     # Heaviest of the three tools. A spike on a haft — vicious at
     # puncturing armor, almost no cutting edge, mass gives it some

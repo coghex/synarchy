@@ -5,6 +5,14 @@ module Unit.Thread.Command.Spawn
     , spawnEffectiveCapacity
     , shedPlan
     , ShedEvent(..)
+      -- * The three starting-loadout materialisers
+      --
+      -- Exported so the fresh-item contract (#1421) can be checked
+      -- against the real builders rather than a restatement of them;
+      -- 'handleUnitSpawnCommand' is their only production caller.
+    , buildStartingInventory
+    , buildStartingEquipment
+    , buildStartingAccessories
     ) where
 
 import UPrelude
@@ -309,8 +317,8 @@ shedToCapacity logger uid itemW cap fixedW tagged = do
 --   list, each tagged with its capacity-shed drop priority. Unknown
 --   item names log a warning and are dropped. Fill is clamped to the
 --   container's capacity; non-container items ignore the fill arg and
---   get 0. Quality + condition are rolled from the def's spec
---   (defaults to 100 when unset).
+--   get 0. Quality is rolled from the def's spec (defaults to 100 when
+--   unset); condition always starts at 100 (#1421).
 buildStartingInventory ∷ EngineEnv → LoggerState → ItemManager
                        → [(Text, Maybe Float, Int)]
                        → IO [(ItemInstance, Int)]
@@ -328,8 +336,9 @@ buildStartingInventory env logger itemMgr entries = do
                 return Nothing
             Just inst → return (Just (inst, prio))
 
--- | Build one rolled ItemInstance from a def name (quality / condition /
---   weight rolled from the def's specs, fill clamped to capacity), and
+-- | Build one rolled ItemInstance from a def name (quality / weight
+--   rolled from the def's specs, condition always full — #1421 — and
+--   fill clamped to capacity), and
 --   RECURSIVELY materialise its default contents — so a first-aid kit /
 --   toolbox spawns already holding its bandages, tools, etc. Returns
 --   Nothing for an unknown item name.
@@ -346,8 +355,7 @@ rollInstance env itemMgr name mFill =
                     Just c  → max 0 (min (icCapacity c)
                                 (fromMaybe (icDefaultFill c) mFill))
                     Nothing → 0
-            qual ← rollItemSpec (idQualitySpec def)   (ucStatRNGRef (toUnitCombatCapability env))
-            cond ← rollItemSpec (idConditionSpec def) (ucStatRNGRef (toUnitCombatCapability env))
+            qual ← rollItemSpec (idQualitySpec def) (ucStatRNGRef (toUnitCombatCapability env))
             wght ← rollItemWeight def (ucStatRNGRef (toUnitCombatCapability env))
             -- Expand each (name, count, fill) content entry into `count`
             -- rolled instances, then drop unknown names.
@@ -361,7 +369,10 @@ rollInstance env itemMgr name mFill =
                 { iiDefName     = name
                 , iiCurrentFill = fill
                 , iiQuality     = qual
-                , iiCondition   = cond
+                  -- Fresh item: full condition (#1421). Every content
+                  -- instance below is materialised through this same
+                  -- function, so they start pristine too.
+                , iiCondition   = 100.0
                 , iiWeight      = wght
                 , iiSharpness   = 100.0
                 , iiContents    = contents
@@ -378,8 +389,9 @@ rollInstance env itemMgr name mFill =
 --   map, validating each item's `idKind` against the slot's accepted
 --   `esKind`. Unknown items / kind mismatches / unknown slots log a
 --   warning and are dropped. Containers in equipment slots get fill=0
---   (Phase 2 doesn't bother seeding canteens-as-equipment). Quality +
---   condition rolled from the def's spec like starting_inventory.
+--   (Phase 2 doesn't bother seeding canteens-as-equipment). Quality
+--   rolls from the def's spec and condition starts full, like
+--   starting_inventory.
 buildStartingEquipment ∷ EngineEnv → LoggerState → ItemManager
                        → Maybe EquipmentClass
                        → HM.HashMap Text Text
@@ -427,9 +439,6 @@ buildStartingEquipment env logger itemMgr mClass entries =
                                     qual ← rollItemSpec
                                              (idQualitySpec iDef)
                                              (ucStatRNGRef (toUnitCombatCapability env))
-                                    cond ← rollItemSpec
-                                             (idConditionSpec iDef)
-                                             (ucStatRNGRef (toUnitCombatCapability env))
                                     wght ← rollItemWeight iDef
                                              (ucStatRNGRef (toUnitCombatCapability env))
                                     iid ← freshItemInstanceId env
@@ -438,7 +447,9 @@ buildStartingEquipment env logger itemMgr mClass entries =
                                           { iiDefName     = itemName
                                           , iiCurrentFill = 0
                                           , iiQuality     = qual
-                                          , iiCondition   = cond
+                                            -- Fresh item: full
+                                            -- condition (#1421).
+                                          , iiCondition   = 100.0
                                           , iiWeight      = wght
                                           , iiSharpness   = 100.0
                                           , iiContents    = []
@@ -487,10 +498,10 @@ applyAccessoryBuffs itemMgr mods inst =
                                    (idBuffs iDef) mods
 
 -- | Resolve a unit def's starting_accessories into ItemInstances.
---   Unknown items log a warning and are dropped. Quality + condition
---   roll from the def's spec; defaults to 100 when absent (matches
---   "no roll" — robes / habits etc. typically don't have a quality
---   distribution at all).
+--   Unknown items log a warning and are dropped. Quality rolls from
+--   the def's spec, defaulting to 100 when absent (matches "no roll" —
+--   robes / habits etc. typically don't have a quality distribution at
+--   all); condition always starts at 100 (#1421).
 buildStartingAccessories ∷ EngineEnv → LoggerState → ItemManager
                          → [Text] → IO [ItemInstance]
 buildStartingAccessories env logger itemMgr names = do
@@ -504,15 +515,15 @@ buildStartingAccessories env logger itemMgr names = do
                 <> "' — skipping"
             return Nothing
         Just def → do
-            qual ← rollItemSpec (idQualitySpec def)   (ucStatRNGRef (toUnitCombatCapability env))
-            cond ← rollItemSpec (idConditionSpec def) (ucStatRNGRef (toUnitCombatCapability env))
+            qual ← rollItemSpec (idQualitySpec def) (ucStatRNGRef (toUnitCombatCapability env))
             wght ← rollItemWeight def (ucStatRNGRef (toUnitCombatCapability env))
             iid ← freshItemInstanceId env
             return $ Just ItemInstance
                 { iiDefName     = name
                 , iiCurrentFill = 0
                 , iiQuality     = qual
-                , iiCondition   = cond
+                  -- Fresh item: full condition (#1421).
+                , iiCondition   = 100.0
                 , iiWeight      = wght
                 , iiSharpness   = 100.0
                 , iiContents    = []

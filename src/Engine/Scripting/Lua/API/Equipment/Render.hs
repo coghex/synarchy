@@ -93,9 +93,10 @@ equipmentGetLoadoutFn env = do
                                 Lua.pushnumber (Lua.Number (realToFrac t))
                                 Lua.setfield (-2) "temp"
                             Nothing → pure ()
-                        -- Gate quality / condition on def specs so
-                        -- canteens / rations don't show "100%" they
-                        -- never had.
+                        -- Gate QUALITY on the def's spec so canteens
+                        -- / rations don't show "100%" they never had.
+                        -- Condition is universal (#1421) and always
+                        -- pushed below.
                         let mDef = lookupItemDef (iiDefName inst) itemMgr
                         case mDef of
                             Just d | Just _ ← idQualitySpec d → do
@@ -109,12 +110,9 @@ equipmentGetLoadoutFn env = do
                                         Lua.setfield (-2) "qualityTier"
                                     Nothing → pure ()
                             _ → pure ()
-                        case mDef ⌦ idConditionSpec of
-                            Just _ → do
-                                Lua.pushnumber
-                                    (Lua.Number (realToFrac (iiCondition inst)))
-                                Lua.setfield (-2) "condition"
-                            Nothing → pure ()
+                        Lua.pushnumber
+                            (Lua.Number (realToFrac (iiCondition inst)))
+                        Lua.setfield (-2) "condition"
                         case mDef of
                             Nothing → pure ()
                             Just iDef → do
@@ -181,9 +179,10 @@ equipmentGetLoadoutFn env = do
 --   table is built inline above and carries a SUBSET of these fields.
 --   The two nevertheless agree on every field they share, name for name
 --   and convention for convention (instance sharpness rather than the
---   def's base, quality/condition gated on def specs, tracked
---   temperature absent at ambient), which is what lets the Lua side's
---   hint-builder read either shape without branching.
+--   def's base, quality gated on the def's spec, condition always
+--   present (#1421), tracked temperature absent at ambient), which is
+--   what lets the Lua side's hint-builder read either shape without
+--   branching.
 pushItemInstance ∷ ItemInstance → ItemManager → Lua.LuaE Lua.Exception ()
 pushItemInstance inst itemMgr = do
     Lua.pushstring (TE.encodeUtf8 (iiDefName inst))
@@ -221,9 +220,12 @@ pushItemInstance inst itemMgr = do
             Lua.pushnumber (Lua.Number (realToFrac t))
             Lua.setfield (-2) "temp"
         Nothing → pure ()
-    -- Quality / condition only surface when the def declares them —
-    -- items like canteens / rations don't have these qualities and
-    -- shouldn't show "100%" in tooltips.
+    -- Quality only surfaces when the def declares a spec — items like
+    -- canteens / rations don't have workmanship and shouldn't show
+    -- "100%" in tooltips. Condition is different: it is universal
+    -- runtime wear state (#1421), so it is pushed for every item as the
+    -- instance's current 0..100 value and the DISPLAY decision keys on
+    -- that value rather than on presence.
     let mDef = lookupItemDef (iiDefName inst) itemMgr
     case mDef of
         Just d | Just _ ← idQualitySpec d → do
@@ -236,11 +238,8 @@ pushItemInstance inst itemMgr = do
                     Lua.setfield (-2) "qualityTier"
                 Nothing → pure ()
         _ → pure ()
-    case mDef ⌦ idConditionSpec of
-        Just _ → do
-            Lua.pushnumber (Lua.Number (realToFrac (iiCondition inst)))
-            Lua.setfield (-2) "condition"
-        Nothing → pure ()
+    Lua.pushnumber (Lua.Number (realToFrac (iiCondition inst)))
+    Lua.setfield (-2) "condition"
     case mDef of
         Nothing → pure ()
         Just iDef → do
