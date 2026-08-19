@@ -8,13 +8,13 @@ The startup-handshake race visible in PR #1026's shared loop remains real, but i
 
 ## Status
 
-- [ ] PRR-1. Autosave staging slots leak into the public save list
+- [x] PRR-1. Autosave staging slots leak into the public save list — [#1413]
 - [ ] PRR-2. The reusable transfer-session entry point trusts an already-validated source
 - [ ] PRR-3. Building preview accepts directories as animation frame files
 
 ## 1. Autosave presentation
 
-### PRR-1. Autosave staging slots leak into the public save list
+### [#1413] PRR-1. Autosave staging slots leak into the public save list
 
 > **Captured note:** Keep the autosave transaction's `autosave-incoming` and `autosave-retired` staging namespaces out of Continue and the save browser. PR #1029 deliberately made them internal rotation machinery, but the public listing path enumerates every valid slot directory without filtering them.
 
