@@ -147,6 +147,13 @@ local function createUI(distance, thresholdTiles)
     local contentWidth = math.max(buttonsRowWidth, msgW, titleW)
     local panelWidth = math.max(PANEL_W_BASE, contentWidth + s.panelPaddingX * 2)
 
+    -- The panel's own height BUDGET, reserved at the panel's uiscale
+    -- before either label's fit is known (the fit depends on the width
+    -- capped just below). #1394: these are slot heights, never a
+    -- placement coordinate — a label whose responsive.fitScale shrank it
+    -- renders SHORTER than its slot, so the vertical band math below
+    -- reads each label's real rendered font size instead and simply
+    -- leaves the unused remainder above the panel's bottom padding.
     local titleH = s.titleFontSize
     local msgH   = s.bodyFontSize
     local panelHeight = s.panelPaddingY * 2 + titleH + s.titleGap + msgH
@@ -172,10 +179,37 @@ local function createUI(distance, thresholdTiles)
     local availableContentW = panelWidth - 2 * s.panelPaddingX
     local titleUiscale = responsive.fitScale(titleW, availableContentW, uiscale)
     local msgUiscale = responsive.fitScale(msgW, availableContentW, uiscale)
+    -- The size label.new() will actually render each label at (it
+    -- applies the same floor to the same base size and its own
+    -- uiscale). #1394: this — not the panel-scaled titleH/msgH slot
+    -- above — is the only height any placement below may use; the two
+    -- differ by exactly however much responsive.fitScale just shrank
+    -- the label.
+    local titleFontSize = math.floor(baseSizes.titleFontSize * titleUiscale)
+    local msgFontSize = math.floor(baseSizes.bodyFontSize * msgUiscale)
     local titleScaledW = engine.getTextWidth(buildToolRemoteWarning.titleFont,
-        titleText, math.floor(baseSizes.titleFontSize * titleUiscale))
+        titleText, titleFontSize)
     local msgScaledW = engine.getTextWidth(buildToolRemoteWarning.bodyFont,
-        message, math.floor(baseSizes.bodyFontSize * msgUiscale))
+        message, msgFontSize)
+
+    -- #1394: a text element's uePosition is its BASELINE, with the
+    -- visible glyph mass sitting ABOVE it (scripts/ui/label.lua's own
+    -- convention comment; makeButton's inner text below already
+    -- compensates for it). panel.place's "top-center" origin carries
+    -- origin.y = 0, so it lays whatever y it is handed down AS the
+    -- baseline: placing the title at y = 0 put its glyph band at
+    -- [contentY - titleFontSize, contentY], entirely inside the top
+    -- padding and across the panel's drawn 9-slice top border strip,
+    -- and placing the message at y = titleH + titleGap dropped its band
+    -- into the slot the title was allotted. Address each label by its
+    -- band TOP instead and add the band's own rendered height, so the
+    -- authored rhythm separates VISIBLE edges: titleGap the title's
+    -- glyph bottom from the message's glyph top, messageGap the
+    -- message's glyph bottom from the button row's top.
+    local titleBandTop = 0
+    local titleBaselineY = titleBandTop + titleFontSize
+    local msgBandTop = titleBaselineY + s.titleGap
+    local msgBaselineY = msgBandTop + msgFontSize
 
     -- #750 round-7 review: capping the PANEL alone isn't enough — the
     -- Establish/Cancel button row's own width (establishW/cancelW,
@@ -232,8 +266,8 @@ local function createUI(distance, thresholdTiles)
     -- (possibly fitted) rendered size lets the origin math center it
     -- properly and keeps it inside the available content width.
     panel.place(buildToolRemoteWarning.panelId, label.getElementHandle(titleId), {
-        x = "50%", y = 0, origin = "top-center",
-        width = titleScaledW, height = titleH,
+        x = "50%", y = titleBaselineY, origin = "top-center",
+        width = titleScaledW, height = titleFontSize,
     })
 
     local msgId = label.new({
@@ -247,11 +281,11 @@ local function createUI(distance, thresholdTiles)
     })
     table.insert(buildToolRemoteWarning.ownedLabels, msgId)
     panel.place(buildToolRemoteWarning.panelId, label.getElementHandle(msgId), {
-        x = "50%", y = titleH + s.titleGap, origin = "top-center",
-        width = msgScaledW, height = msgH,
+        x = "50%", y = msgBaselineY, origin = "top-center",
+        width = msgScaledW, height = msgFontSize,
     })
 
-    local buttonsY = titleH + s.titleGap + msgH + s.messageGap
+    local buttonsY = msgBaselineY + s.messageGap
     local baseZ = panel.getZIndex(buildToolRemoteWarning.panelId)
 
     -- #750 round-13 review: shrinking the button BOX alone left its
