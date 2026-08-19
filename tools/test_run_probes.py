@@ -28,7 +28,11 @@ the port a SIGKILLed engine had held. Also covers `select`/`main`'s
 `--exact` unknown-key rejection (issue #1321): a mixed valid/invalid
 request, the pre-existing all-invalid empty-selection diagnostic, a
 wholly valid request's registry-order and duplicate-collapse behavior,
-and substring selection's unchanged permissiveness.
+and substring selection's unchanged permissiveness. And the parallel
+scheduler's `EXCLUSIVE_RESOURCES` serialization (issue #1322): probes stamp
+their own occupancy windows, so the two config declarations are proved never
+to overlap while an undeclared probe still overlaps one of them, across a
+conflicting probe that passes, one that fails, and one that times out.
 
 Usage:
   python3 tools/test_run_probes.py
@@ -136,6 +140,7 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
               tail_lines: int = 0, hang: bool = False,
               ignore_term: bool = False, engine_ignores_term: bool = False,
               descendant: bool = True, hold_port: int = 0,
+              dwell: float = 0.0,
               handshake_delay: float = 0.0) -> str:
     """A synthetic probe that boots a synthetic 'engine' the way probelib does.
 
@@ -143,10 +148,17 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
     an engine that survives SIGTERM while its probe exits NORMALLY is the
     only thing that reaches `reap_group`'s own SIGKILL escalation, which
     the timeout path's separate escalation would otherwise mask.
+
+    ``dwell`` holds the probe alive for that many seconds, and every probe
+    stamps ``start``/``end`` wall-clock times into ``<name>.interval`` — a
+    measurable occupancy window, which is what lets the scheduler tests
+    (#1322) prove which probes overlapped rather than merely that each ran.
+    A probe killed before it finishes records only its ``start``.
     """
     pidfile = root / f"{name}.enginepid"
     startedfile = root / f"{name}.started"
     logfile = root / f"{name}.enginelog"
+    interval = root / f"{name}.interval"
     term_policy = "ignore-term" if engine_ignores_term else "obey-term"
     lines = [
         "import argparse, os, signal, subprocess, sys, time",
@@ -156,6 +168,14 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
         "ap.add_argument('--port', type=int, default=0)",
         "ap.parse_args()",
         f"open({str(startedfile)!r}, 'w').write('1')",
+        # Appended, not truncated: --retries reuses these paths, so an
+        # attempt count is readable from the file too.
+        f"_iv = open({str(interval)!r}, 'a')",
+        "def _stamp(kind):",
+        "    print(kind, repr(time.time()), file=_iv)",
+        "    _iv.flush()",
+        "    os.fsync(_iv.fileno())",
+        "_stamp('start')",
     ]
     if ignore_term:
         lines.append("signal.signal(signal.SIGTERM, signal.SIG_IGN)")
@@ -188,8 +208,11 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
     for i in range(tail_lines):
         lines.append(f"print('diagnostic line {i}')")
     lines.append("sys.stdout.flush()")
+    if dwell:
+        lines.append(f"time.sleep({dwell!r})")
     if hang:
         lines.append("time.sleep(600)")
+    lines.append("_stamp('end')")
     lines.append(f"sys.exit({exit_code})")
     return "\n".join(lines) + "\n"
 
@@ -227,6 +250,35 @@ class Tree:
         except OSError:
             return []
         return [int(tok) for tok in raw.split() if tok.isdigit()]
+
+    def intervals(self, name: str) -> list[tuple[float, float | None]]:
+        """This probe's occupancy windows, one per attempt, in start order.
+
+        The end is None for an attempt killed before it could stamp one
+        (a timeout, or an interrupt) — the window is still open-ended, not
+        absent, so a caller can still order it against another probe.
+        """
+        try:
+            raw = (self.root / f"{name}.interval").read_text()
+        except OSError:
+            return []
+        windows: list[list[float | None]] = []
+        for line in raw.splitlines():
+            parts = line.split()
+            if len(parts) != 2:
+                continue
+            kind, stamp = parts[0], float(parts[1])
+            if kind == "start":
+                windows.append([stamp, None])
+            elif kind == "end" and windows:
+                windows[-1][1] = stamp
+        return [(w[0], w[1]) for w in windows]
+
+    def window(self, name: str) -> tuple[float, float | None]:
+        """This probe's single occupancy window; raises if it did not run once."""
+        got = self.intervals(name)
+        assert len(got) == 1, f"{name} recorded {len(got)} window(s), expected 1"
+        return got[0]
 
     def binds(self, name: str) -> list[str]:
         """One entry per attempt: "bound" or "inuse"."""
@@ -522,6 +574,150 @@ def test_aggregate_exit_codes_unchanged() -> None:
                "and still prints the failing probe's output tail")
     finally:
         tree.cleanup()
+
+
+# --------------------------------------------------------------------------
+# Parallel scheduling honours the EXCLUSIVE_RESOURCES declaration (#1322)
+#
+# These drive the SHIPPED `run_probes.EXCLUSIVE_RESOURCES` -- only `PROBES`
+# and `REPO_ROOT` are redirected at the synthetic tree, and the synthetic
+# probes are deliberately named `config_migration` and `config_state` so the
+# real declaration is what decides. A test-local conflict table would prove
+# the mechanism while leaving the two probes the issue is about unguarded.
+# --------------------------------------------------------------------------
+def overlaps(a: tuple[float, float | None],
+             b: tuple[float, float | None]) -> bool:
+    """True when two occupancy windows share any instant.
+
+    An open-ended window (a probe killed before it stamped its end) is
+    treated as running until now, which is the conservative reading: it
+    can only make a missed overlap MORE likely to be reported, never less.
+    """
+    a_end = a[1] if a[1] is not None else time.time()
+    b_end = b[1] if b[1] is not None else time.time()
+    return a[0] < b_end and b[0] < a_end
+
+
+def progress_lines(out: str, script: str) -> int:
+    """How many times the runner announced a verdict for `script`."""
+    return sum(1 for line in out.splitlines()
+               if line.lstrip().startswith("[") and f" {script} ... " in line)
+
+
+def test_declared_conflicts_never_overlap() -> None:
+    print("\n-- --jobs never overlaps the two config probes, and does not "
+          "serialize anything else")
+    tree = Tree()
+    try:
+        # No descendant: this is about SCHEDULING, and an extra process per
+        # probe only adds teardown jitter to the windows being compared.
+        #
+        # Three probes into TWO jobs, with the conflicting pair adjacent, is
+        # the discriminating shape. A scheduler that submitted everything and
+        # took a lock INSIDE the worker would park `config_state` in the
+        # second slot for the whole of `config_migration`, and `unrelated`
+        # could not start until one of them finished -- so the overlap
+        # asserted at the end fails for it exactly as it does for a runner
+        # with no conflict handling at all.
+        tree.add("config_migration", dwell=1.0, descendant=False)
+        tree.add("config_state", dwell=1.0, descendant=False)
+        tree.add("unrelated", dwell=2.5, descendant=False)
+        rc, out = _main_with(tree, ["--jobs", "2"])
+        expect(rc == 0, f"every probe still passes (exit {rc})")
+        expect("3/3 passed" in out, "and the aggregate summary counts all three")
+
+        # Exactly once each: a naive lock inside the worker would still run
+        # them all, so this is the floor the overlap checks build on.
+        for name in ("config_migration", "config_state", "unrelated"):
+            got = tree.intervals(name)
+            expect(len(got) == 1 and got[0][1] is not None,
+                   f"{name} ran exactly once and to completion "
+                   f"(windows: {got})")
+            expect(progress_lines(out, f"{name}_probe.py") == 1,
+                   f"and the runner reported its verdict exactly once")
+
+        migration = tree.window("config_migration")
+        state = tree.window("config_state")
+        other = tree.window("unrelated")
+        expect(not overlaps(migration, state),
+               f"the two declared-conflicting probes never overlap "
+               f"(migration {migration}, state {state})")
+        # Requirement 3: the declaration must not cost unrelated probes
+        # their concurrency, and a blocked probe must not hold a worker
+        # slot. `unrelated` is third in a two-job run, so it can only
+        # overlap `config_migration` if `config_state` was held back
+        # WITHOUT being submitted.
+        expect(overlaps(other, migration),
+               f"a blocked probe yields its slot: the undeclared probe runs "
+               f"concurrently with the first (unrelated {other}, "
+               f"migration {migration})")
+    finally:
+        tree.cleanup()
+
+
+def test_conflict_is_released_after_a_failure() -> None:
+    print("\n-- a FAILING conflicting probe still releases its resource")
+    tree = Tree()
+    try:
+        tree.add("config_migration", exit_code=1, tail_lines=3,
+                 dwell=0.6, descendant=False)
+        tree.add("config_state", dwell=0.6, descendant=False)
+        rc, out = _main_with(tree, ["--jobs", "2"])
+        expect(rc == 1, f"the failing selection still exits 1 (got {rc})")
+        expect("FAIL" in out and "PASS" in out,
+               "and both probes report their own verdict")
+        migration = tree.window("config_migration")
+        state = tree.window("config_state")
+        expect(state[0] >= migration[0],
+               "the second probe waited for the first")
+        expect(not overlaps(migration, state),
+               f"and never overlapped it (migration {migration}, "
+               f"state {state})")
+    finally:
+        tree.cleanup()
+
+
+def test_conflict_is_released_after_a_timeout() -> None:
+    print("\n-- a TIMED-OUT conflicting probe still releases its resource")
+    tree = Tree()
+    try:
+        # Hangs until the runner's own --timeout kills it; the second probe
+        # can only start after that, which is what the gap below measures.
+        tree.add("config_migration", hang=True, descendant=False)
+        tree.add("config_state", dwell=0.3, descendant=False)
+        rc, out = _main_with(tree, ["--jobs", "2", "--timeout", "2"])
+        expect(rc == 1, f"the timed-out selection exits 1 (got {rc})")
+        expect("TIMEOUT" in out, "the hanging probe is reported as a TIMEOUT")
+        expect(progress_lines(out, "config_state_probe.py") == 1
+               and "PASS" in out,
+               "and the conflicting probe still ran and reported PASS")
+        migration = tree.window("config_migration")
+        state = tree.window("config_state")
+        expect(state[0] - migration[0] >= 1.5,
+               f"it started only after the timeout fired, not alongside it "
+               f"(gap {state[0] - migration[0]:.2f}s of a 2s timeout)")
+        expect(migration[1] is None,
+               "and the hanging probe never completed on its own")
+    finally:
+        tree.cleanup()
+
+
+def test_exclusive_resource_declaration_is_data_about_real_probes() -> None:
+    print("\n-- the shipped EXCLUSIVE_RESOURCES table names registered probes")
+    known = {p[0] for p in run_probes.PROBES}
+    unknown = sorted(k for k in run_probes.EXCLUSIVE_RESOURCES if k not in known)
+    expect(not unknown,
+           f"every declared key names a registered probe (unknown: {unknown})")
+    empty = sorted(k for k, v in run_probes.EXCLUSIVE_RESOURCES.items() if not v)
+    expect(not empty,
+           f"and every declaration names at least one resource (empty: {empty})")
+    both = (run_probes.exclusive_resources("config_migration")
+            & run_probes.exclusive_resources("config_state"))
+    expect(bool(both),
+           f"the two config probes still declare an intersecting resource "
+           f"(shared: {sorted(both)})")
+    expect(not run_probes.exclusive_resources("combat_anim"),
+           "an undeclared probe needs nothing exclusively")
 
 
 # --------------------------------------------------------------------------
@@ -1029,6 +1225,7 @@ def test_the_synthetic_fixtures_are_valid_python() -> None:
             "stubborn engine": {"engine_ignores_term": True},
             "no engine": {"descendant": False},
             "port holder": {"hold_port": 9999},
+            "dwelling": {"dwell": 0.25, "descendant": False},
         }
         for label, kw in variants.items():
             try:
@@ -1093,6 +1290,10 @@ def main() -> int:
     test_a_stopping_runner_launches_no_further_probe()
     test_reap_group_on_a_dead_group_is_a_noop()
     test_aggregate_exit_codes_unchanged()
+    test_exclusive_resource_declaration_is_data_about_real_probes()
+    test_declared_conflicts_never_overlap()
+    test_conflict_is_released_after_a_failure()
+    test_conflict_is_released_after_a_timeout()
     test_exact_mixed_selection_is_rejected_before_listing()
     test_exact_mixed_selection_never_runs_the_valid_probe()
     test_exact_all_invalid_selection_keeps_existing_diagnostic()
