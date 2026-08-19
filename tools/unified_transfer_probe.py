@@ -620,9 +620,102 @@ def footprint_gap(port: int, a, b):
     return max(dx, dy)
 
 
+def request_lua(src, dst, def_name: str, ids) -> str:
+    """The contract's own request table for these exact instances."""
+    items = ", ".join("{ instanceId = %d, defName = '%s' }" % (int(i), def_name)
+                      for i in ids)
+    return ("{ source = %s, destination = %s, items = { %s } }"
+            % (ep_lua(src), ep_lua(dst), items))
+
+
+def check_transfer(port: int, src, dst, def_name: str, ids):
+    """`unit.checkTransfer` on that request — the STRUCTURED result:
+    `{ accepted, completion, outcomes }`, one outcome per requested item
+    in request order.
+
+    This is the contract's own answer rather than a consequence of it.
+    Bracketing a gesture with it is what distinguishes "the policy
+    accepted this exact instance and then moved it" from "the item ended
+    up somewhere plausible": a mis-encoded or refused outcome cannot
+    produce an accepted check beforehand AND a refusal afterwards.
+    Read-only by construction — `checkTransfer` validates and mutates
+    nothing, which is exactly why it can be asked twice around a real
+    commit."""
+    got = send_json(port, "return unit.checkTransfer(%s)"
+                    % request_lua(src, dst, def_name, ids))
+    return got if isinstance(got, dict) else None
+
+
+def outcome_states(result) -> list:
+    """`state[:reason[/cause]]` per outcome, in request order."""
+    out = []
+    for o in (result or {}).get("outcomes") or []:
+        if not isinstance(o, dict):
+            continue
+        text = str(o.get("state"))
+        if o.get("reason"):
+            text += ":" + str(o["reason"])
+        if o.get("cause"):
+            text += "/" + str(o["cause"])
+        out.append(text)
+    return out
+
+
+def outcome_ids(result) -> list:
+    return [o.get("instanceId") for o in (result or {}).get("outcomes") or []
+            if isinstance(o, dict)]
+
+
+def assert_structured_move(chk: Checks, port: int, label: str, src, dst,
+                           def_name: str, ids, before) -> None:
+    """The two halves of the structured-result assertion for one leg.
+
+    `before` is the check taken while the items were still at the source
+    (accepted, one outcome per requested item, naming exactly those
+    instances). This adds the AFTER half: the identical request must no
+    longer be satisfiable, because those instances are not at the source
+    any more — a refusal, or per-item failures, never a second
+    acceptance."""
+    ids = [int(i) for i in ids]
+    chk.ok(isinstance(before, dict) and before.get("accepted") is True
+           and before.get("completion") == "all"
+           and outcome_ids(before) == ids
+           and all(not st.startswith("failed") for st in outcome_states(before)),
+           f"{label}: the contract ACCEPTS the exact request before the "
+           f"gesture — completion 'all', one outcome per requested instance "
+           f"in request order, none of them a failure", f"got {before!r}")
+    after = check_transfer(port, src, dst, def_name, ids)
+    moved = (isinstance(after, dict)
+             and (after.get("accepted") is False
+                  or all(st.startswith("failed")
+                         for st in outcome_states(after))))
+    chk.ok(moved,
+           f"{label}: and REFUSES the identical request afterwards — the "
+           f"structured result says those instances are no longer the "
+           f"source's to move, which end-state ownership alone cannot",
+           f"got {after!r}")
+
+
 def orders(port: int, uid: int) -> list:
     data = send_json(port, f"return unit.getTransferOrders({uid})")
     return data if isinstance(data, list) else []
+
+
+def entry_states(order: dict) -> list:
+    """One stored order's per-item states, in entry order, each as
+    `state[:reason[/cause]]` — the durable structured record #1246 keeps
+    for a queued transfer."""
+    out = []
+    for e in order.get("entries") or []:
+        if not isinstance(e, dict):
+            continue
+        text = str(e.get("state"))
+        if e.get("reason"):
+            text += ":" + str(e["reason"])
+        if e.get("cause"):
+            text += "/" + str(e["cause"])
+        out.append(text)
+    return out
 
 
 def order_identity(order: dict) -> dict:
@@ -653,6 +746,17 @@ def event_total(port: int, uid: int, category: str, needle: str) -> int:
                 and needle in (e.get("text") or "")):
             total += int(e.get("count", 1) or 1)
     return total
+
+
+def warning_texts(port: int, uid: int) -> list:
+    """Every `unit_warning` text currently in the log for `uid`, one entry
+    per coalesced row repeated by its own `count` — so a re-emission is a
+    new element rather than an invisible counter bump."""
+    out = []
+    for e in event_log(port):
+        if e.get("category") == "unit_warning" and e.get("uid") == uid:
+            out.extend([e.get("text") or ""] * int(e.get("count", 1) or 1))
+    return out
 
 
 def knowledge(port: int, bid: int) -> dict:
@@ -1305,6 +1409,7 @@ def mode_b_leg(chk: Checks, port: int, ledger: ViewLedger, fp: dict, key: str,
 
     before_ids = {o.get("id") for o in orders(port, executor)}
     before_ev = event_total(port, executor, "unit_event", display)
+    before_check = check_transfer(port, src, dst, def_name, [iid])
     right_click_widget_center(port, row)
     time.sleep(0.5)
     labels = menu_labels(port)
@@ -1342,10 +1447,23 @@ def mode_b_leg(chk: Checks, port: int, ledger: ViewLedger, fp: dict, key: str,
     close_window(port)
 
     # -- the walk, and the commit that arrival IS.
+    # The order's own ENTRY states are the structured record of a Mode B
+    # commit, and #1253 PRUNES a terminal order on the tick that ends it
+    # — so the last states observed while it still existed are the only
+    # place that record can be read, and the poll captures them as it
+    # goes rather than looking after the fact.
+    seen_states: list = []
+
+    def landed_and_recorded():
+        for o in orders(port, executor):
+            if o.get("id") == ident["id"]:
+                states = entry_states(o)
+                if states and (not seen_states or seen_states[-1] != states):
+                    seen_states.append(states)
+        return iid in ep_ids(port, dst, def_name)
+
     set_paused(port, False)
-    landed = poll_until(300.0,
-                        lambda: iid in ep_ids(port, dst, def_name),
-                        interval=1.0)
+    landed = poll_until(300.0, landed_and_recorded, interval=1.0)
     set_paused(port, True)
     time.sleep(0.4)
     if not chk.ok(bool(landed),
@@ -1366,6 +1484,16 @@ def mode_b_leg(chk: Checks, port: int, ledger: ViewLedger, fp: dict, key: str,
     chk.ok(event_total(port, executor, "unit_event", display) - before_ev == 1,
            f"{label}: the completion reached the player exactly once",
            f"delta {event_total(port, executor, 'unit_event', display) - before_ev}")
+    chk.ok(bool(seen_states) and all(st == ["queued"] or st == ["in_transit"]
+                                     or st == ["ready_to_commit"]
+                                     or st == ["completed"]
+                                     for st in seen_states)
+           and seen_states[0] in (["queued"], ["in_transit"]),
+           f"{label}: the order's own entry ran the lifecycle and never "
+           f"reported a failure state — observed {seen_states!r}",
+           f"got {seen_states!r}")
+    assert_structured_move(chk, port, label, src, dst, def_name, [iid],
+                           before_check)
     fp.setdefault("legs", {})[f"modeB:{key}"] = iid
     return True
 
@@ -1508,6 +1636,7 @@ def mode_a_leg(chk: Checks, port: int, fp: dict, key: str, src, dst,
            f"got {row.get('instanceIds')!r}")
 
     before_ev = event_total(port, held_uid, "unit_event", display)
+    before_check = check_transfer(port, src, dst, def_name, [iid])
     right_click_widget_center(port, row)
     time.sleep(0.5)
     labels = menu_labels(port)
@@ -1536,6 +1665,8 @@ def mode_a_leg(chk: Checks, port: int, fp: dict, key: str, src, dst,
     chk.ok(session_phase(port) == "open",
            f"{label}: the session stays open and repeatable after a commit",
            f"phase {session_phase(port)!r}")
+    assert_structured_move(chk, port, label, src, dst, def_name, [iid],
+                           before_check)
     fp.setdefault("legs", {})[f"modeA:{key}"] = iid
     return True
 
@@ -1954,7 +2085,8 @@ def stage_batch(chk: Checks, port: int, ids: dict, fp: dict, vp: dict) -> None:
     chk.ok(sorted(row.get("instanceIds") or []) == sorted(minted),
            f"{label}: the merged row stands for all twelve exact instances",
            f"got {row.get('instanceIds')!r}")
-    before_warn = event_total(port, acolyte, "unit_warning", "couldn't Store")
+    before_warns = warning_texts(port, acolyte)
+    before_check = check_transfer(port, U_A, B_P, DEF_BATCH, minted)
     right_click_widget_center(port, row)
     time.sleep(0.5)
     labels = menu_labels(port)
@@ -1982,10 +2114,51 @@ def stage_batch(chk: Checks, port: int, ids: dict, fp: dict, vp: dict) -> None:
            f"{label}: every one of the twelve is in EXACTLY ONE endpoint — "
            f"nothing half-moved, nothing was lost and nothing was duplicated",
            f"stored={stored!r} kept={kept!r} minted={sorted(minted)!r}")
-    chk.ok(event_total(port, acolyte, "unit_warning", "couldn't Store")
-           - before_warn == 1,
-           f"{label}: the remainder is REPORTED, once, by count and by the "
-           f"contract's own reason")
+    # The remainder is reported by COUNT and by the contract's OWN reason,
+    # so read the warning TEXT rather than counting rows that merely
+    # mention the verb: "couldn't Store 4 x <item> -- receiver_full" is
+    # the whole claim, and a message that reported some other count, or
+    # invented a reason, would satisfy a substring count.
+    new_warns = [w for w in warning_texts(port, acolyte)
+                 if w not in before_warns]
+    want = "couldn't Store %d x %s -- receiver_full" % (
+        len(minted) - 8, f"Probe UT {DEF_BATCH}")
+    chk.ok(len(new_warns) == 1 and want in new_warns[0],
+           f"{label}: the remainder is REPORTED exactly once, naming the four "
+           f"that did not fit and the contract's own 'receiver_full' reason",
+           f"got {new_warns!r}, wanted a single warning containing {want!r}")
+    # ...and the contract itself agrees, per instance: the eight that
+    # moved are no longer the acolyte's to move, while the four that
+    # stayed still are.
+    # `completion` is DERIVED from the outcomes here rather than
+    # hardcoded, so this asserts the contract is internally consistent
+    # about its own summary as well as splitting where D-1 says.
+    states = outcome_states(before_check)
+    fails = sum(1 for st in states if st.startswith("failed"))
+    want_completion = ("all" if fails == 0
+                       else "none" if fails == len(states) else "partial")
+    chk.ok(isinstance(before_check, dict)
+           and before_check.get("accepted") is True
+           and outcome_ids(before_check) == [int(i) for i in minted]
+           and fails == len(minted) - 8
+           and before_check.get("completion") == want_completion,
+           f"{label}: the contract's own structured answer already splits "
+           f"twelve into eight and four before anything moves, with a "
+           f"`completion` that agrees with its own outcomes",
+           f"got {before_check!r} (states {states!r})")
+    after_stored = check_transfer(port, U_A, B_P, DEF_BATCH, stored)
+    after_kept = check_transfer(port, U_A, B_P, DEF_BATCH, kept)
+    chk.ok(isinstance(after_stored, dict)
+           and (after_stored.get("accepted") is False
+                or all(st.startswith("failed")
+                       for st in outcome_states(after_stored))),
+           f"{label}: afterwards the contract refuses the eight that moved — "
+           f"they are no longer the acolyte's", f"got {after_stored!r}")
+    chk.ok(isinstance(after_kept, dict)
+           and outcome_ids(after_kept) == [int(i) for i in kept],
+           f"{label}: and still names the four that stayed, so the partial "
+           f"batch split exactly where the report said it did",
+           f"got {after_kept!r}")
     fp["batch"] = {"minted": sorted(minted), "stored": stored, "kept": kept}
     close_session(chk, port, [acolyte], label)
 
