@@ -65,11 +65,15 @@ ENV_RTS_CAPS = "SYNARCHY_PROBE_RTS_CAPS"
 PROTOCOL_ENV_VARS = (ENV_EVENTS, ENV_ARTIFACT_DIR, ENV_ENGINE_LOG_DIR,
                      ENV_RTS_CAPS)
 
-# A stable check identifier: lowercase, word-like, and deliberately
-# unable to spell a runtime value that a caller might interpolate (no
-# digits-only components, no punctuation beyond `_`). Dynamic values
-# belong in an event's `detail`, never in its identity.
-CHECK_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+# A stable check identifier: lowercase words joined by single
+# underscores, and NO DIGITS AT ALL. That last part is the rule, not
+# tidiness — a digit is the only way a runtime value can reach an
+# identifier, and `role_miner_60` or `unit_4711` would make two runs of
+# one check two different checks, which is exactly what a reliability
+# harness cannot survive. A check that genuinely wants a number in its
+# name spells it (`phase_two`); an observed value rides in the event's
+# `detail`.
+CHECK_ID_RE = re.compile(r"^[a-z]+(_[a-z]+)*$")
 
 PASS = "PASS"
 FAIL = "FAIL"
@@ -147,8 +151,9 @@ def build_descriptor(probe: str, checks) -> Descriptor:
         if not isinstance(cid, str) or not CHECK_ID_RE.match(cid):
             raise ProtocolError(
                 f"descriptor for {probe!r}: {cid!r} is not a stable check "
-                f"identifier (expected {CHECK_ID_RE.pattern}); runtime "
-                f"values belong in event detail, not in identity")
+                f"identifier (expected {CHECK_ID_RE.pattern} — lowercase "
+                f"words joined by single underscores, no digits); a runtime "
+                f"value belongs in event detail, not in identity")
         if not isinstance(label, str) or not label.strip():
             raise ProtocolError(
                 f"descriptor for {probe!r}: check {cid!r} has no label")

@@ -352,9 +352,19 @@ class LiveRegistry:
 
     def __enter__(self) -> "LiveRegistry":
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
+        # PUBLISHED ATOMICALLY. Writing straight to the final path would
+        # leave a window in which a concurrently starting harness reads
+        # an empty file, classifies it as corrupt, and unlinks it — and
+        # this harness then vanishes from every later concurrency
+        # sample while still running. `os.replace` within the same
+        # directory means the final name either does not exist or holds
+        # complete content, and the staging name never ends in `.json`
+        # so a concurrent scan skips it.
+        staging = self.path.with_suffix(".staging")
+        staging.write_text(
             json.dumps({"pid": os.getpid(), "started": time.time()}),
             encoding="utf-8")
+        os.replace(staging, self.path)
         self._registered = True
         self.sample()
         return self
@@ -378,13 +388,23 @@ class LiveRegistry:
             if entry.suffix != ".json":
                 continue
             try:
-                pid = int(json.loads(entry.read_text(encoding="utf-8"))["pid"])
                 age = time.time() - entry.stat().st_mtime
+            except OSError:
+                # It went away underneath us — its owner departed.
+                continue
+            try:
+                pid = int(json.loads(entry.read_text(encoding="utf-8"))["pid"])
             except (OSError, KeyError, TypeError, ValueError):
-                # Unreadable registrations are stale by definition: a
-                # live harness always leaves a well-formed one.
-                with contextlib.suppress(OSError):
-                    entry.unlink()
+                # Corrupt. Old enough to be nobody's, so reap it;
+                # otherwise leave it alone and COUNT it. Nothing young
+                # is ever deleted here — over-counting concurrency by
+                # one is harmless, while deleting a registration a live
+                # harness owns loses it permanently.
+                if age >= STALE_AFTER:
+                    with contextlib.suppress(OSError):
+                        entry.unlink()
+                    continue
+                count += 1
                 continue
             if not _pid_alive(pid) and age >= STALE_AFTER:
                 with contextlib.suppress(OSError):

@@ -39,6 +39,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 from pathlib import Path
 
@@ -328,17 +329,22 @@ def test_descriptor() -> None:
                       {"id": "alpha", "label": ""}])),
                   "a check with an empty label is rejected", "no label")
 
-    # Stable identifiers may not carry runtime values.
-    for bad in ("Alpha", "unit-4711", "alpha 1", "9alpha", "alpha.beta", ""):
+    # Stable identifiers may not carry runtime values. A DIGIT is the
+    # only way one can get in, so the protocol's own prohibited
+    # examples must be refused rather than merely discouraged.
+    unstable = ("role_miner_60", "unit_4711", "unit4711", "alpha_1", "beta2",
+                "Alpha", "unit-4711", "alpha 1", "9alpha", "alpha.beta", "",
+                "_alpha", "alpha_", "alpha__beta")
+    for bad in unstable:
         expect_raises(probe_protocol.ProtocolError,
                       lambda bad=bad: probe_protocol.build_descriptor(
                           "synthetic", [(bad, "label")]),
                       f"identifier {bad!r} is refused as unstable",
                       "stable check identifier")
     ok = probe_protocol.build_descriptor(
-        "synthetic", [("alpha_1", "l"), ("beta2", "l")])
-    expect(ok.ids == ("alpha_1", "beta2"),
-           "word-like lowercase identifiers with digits are accepted")
+        "synthetic", [("alpha", "l"), ("phase_two", "l"), ("a_b_c", "l")])
+    expect(ok.ids == ("alpha", "phase_two", "a_b_c"),
+           "lowercase words joined by single underscores are accepted")
 
 
 # ==========================================================================
@@ -796,6 +802,60 @@ def test_concurrency_accounting() -> None:
             expect(solo.sample() == 1,
                    "a departed invocation stops being counted")
 
+        # A concurrent startup must never lose a live registration: a
+        # harness publishing its own entry while others scan the same
+        # directory used to be readable as an empty, "corrupt" file and
+        # be unlinked, erasing a still-running harness from every later
+        # sample.
+        harnesses = 8
+        ready = threading.Barrier(harnesses)
+        observed: list[int] = []
+        errors: list[str] = []
+        lock = threading.Lock()
+
+        def start_one() -> None:
+            try:
+                with probe_flake.LiveRegistry() as registry:
+                    ready.wait(timeout=30)
+                    for _ in range(20):
+                        registry.sample()
+                    with lock:
+                        observed.append(registry.peak)
+                        if not registry.path.exists():
+                            errors.append(f"{registry.path} was unlinked while "
+                                          f"its owner was still live")
+            except Exception as error:  # noqa: BLE001
+                with lock:
+                    errors.append(f"{type(error).__name__}: {error}")
+
+        threads = [threading.Thread(target=start_one) for _ in range(harnesses)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=60)
+        expect(not errors, f"concurrent startups keep every registration "
+                           f"({errors[:3]})")
+        expect(len(observed) == harnesses and all(v == harnesses
+                                                  for v in observed),
+               f"every concurrent harness sees all {harnesses} of them "
+               f"(observed {sorted(observed)})")
+        leftovers = [e for e in (probe_flake.LEASE_ROOT / "live").iterdir()]
+        expect(leftovers == [],
+               f"every departed harness cleans its registration up ({leftovers})")
+
+        # A registration that looks corrupt but is YOUNG is another
+        # harness mid-startup, not garbage: leave it, and count it.
+        live_dir = probe_flake.LEASE_ROOT / "live"
+        live_dir.mkdir(parents=True, exist_ok=True)
+        young = live_dir / "12345-partial.json"
+        young.write_text("", encoding="utf-8")
+        with probe_flake.LiveRegistry() as registry:
+            expect(registry.sample() == 2,
+                   "a young unreadable registration is counted, not discarded")
+        expect(young.exists(),
+               "a young unreadable registration is never unlinked")
+        young.unlink()
+
         # Stale registration from an abnormally terminated harness.
         live_dir = probe_flake.LEASE_ROOT / "live"
         live_dir.mkdir(parents=True, exist_ok=True)
@@ -805,11 +865,12 @@ def test_concurrency_accounting() -> None:
         os.utime(stale, (0, 0))
         garbage = live_dir / "garbage.json"
         garbage.write_text("not json", encoding="utf-8")
+        os.utime(garbage, (0, 0))          # old enough to be nobody's
         with probe_flake.LiveRegistry() as registry:
             expect(registry.sample() == 1,
                    "a stale registration is recovered, not counted")
         expect(not stale.exists() and not garbage.exists(),
-               "stale and unreadable registrations are removed")
+               "stale and OLD unreadable registrations are removed")
 
         m = run_synthetic(tree, "pass", runs=1)
         expect(m.peak_concurrency >= 1,
