@@ -54,7 +54,7 @@ implementation file, test, tracker item, or remote state was changed.
 - [x] PT-3. Final bleeding-pool cases spawn outside the loaded arena — [#1395]
 - [x] PT-4. Combat-animation setup does not reliably establish combat — [#1396]
 - [x] PT-5. The combat-animation probe does not gate its death-animation contract — [#1397]
-- [ ] PT-6. The default chop fixture cannot reach the promised partial-result oracle
+- [x] PT-6. The default chop fixture cannot reach the promised partial-result oracle — [#1398]
 - [ ] PT-7. The portal outcome check still asserts the pre-confirmation contract
 
 ---
@@ -350,7 +350,7 @@ are accepted for display without changing the result.
 
 ## Action-outcome behavior coverage
 
-### PT-6. The default chop fixture cannot reach the promised partial-result oracle
+### [#1398] PT-6. The default chop fixture cannot reach the promised partial-result oracle
 
 The action-outcome probe’s default seed-42 run spends approximately eight
 minutes exercising its broader contract but cannot find a tree at the sparse
