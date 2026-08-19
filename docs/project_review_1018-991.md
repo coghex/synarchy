@@ -8,7 +8,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 - [x] PRR-1. Fall regressions call sub-minute survival “well over a minute” — [#1412]
 - [x] PRR-2. Definition-free landless worlds lose the explicit `NoLand` outcome — [#1414]
-- [ ] PRR-3. The envelope framing fingerprint changes on non-wire pragma edits
+- [x] PRR-3. The envelope framing fingerprint changes on non-wire pragma edits — [#1416]
 - [ ] PRR-4. The tutorial toggle caption remains clipped at the right edge
 
 ## 1. Shallow-fall calibration
@@ -60,7 +60,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## 3. Save-compatibility audit precision
 
-### PRR-3. The envelope framing fingerprint changes on non-wire pragma edits
+### [#1416] PRR-3. The envelope framing fingerprint changes on non-wire pragma edits
 
 > **Captured note:** Restrict the envelope framing fingerprint to wire-relevant code. PR #1001 removed a redundant `UnicodeSyntax` pragma from `Codec.hs` and had to update the compatibility manifest even though the PR changed no executable behavior or on-disk bytes.
 
