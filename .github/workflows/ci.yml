@@ -483,13 +483,21 @@ jobs:
       # test_persistence_contract_sweep covers the companion registry-
       # drift guard that keeps persistence_contract_sweep.py's own
       # cross-probe key list from going stale against that registry
-      # (#1321), which nothing else exercises.
+      # (#1321), which nothing else exercises;
+      # test_action_outcome_probe covers action_outcome_probe.py's
+      # chop-fixture classification (#1398) — setup-vs-behavior failure
+      # and the 0/1/2 exit contract — against a fake console, so the
+      # branches are checked without the probe's own ~8-minute real
+      # engine and 64-world generation. That probe itself stays
+      # manual-only and out of the path-selective gate; only this
+      # engine-free companion runs here.
       - name: probe runner self-tests
         run: |
           python3 tools/ci_probes.py --self-test
           python3 tools/ci_expensive_gates.py --self-test
           python3 tools/test_run_probes.py
           python3 tools/test_persistence_contract_sweep.py
+          python3 tools/test_action_outcome_probe.py
 
       # Path-selective, BLOCKING behavior-probe gate (#530). Only on PRs:
       # diff against the base, pick the CI-eligible probes relevant to the

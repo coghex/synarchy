@@ -85,6 +85,11 @@ DESCENDANT_SRC = textwrap.dedent("""\
     pidfile, term_policy = sys.argv[1], sys.argv[2]
     port = int(sys.argv[3]) if len(sys.argv) > 3 else 0
     bindlog = sys.argv[4] if len(sys.argv) > 4 else None
+    # Seconds to spend between the ledger write and the handshake write.
+    # Zero for every ordinary probe; a test that wants the ORDER above
+    # proven rather than asserted sets it (see
+    # test_engine_ledger_is_durable_before_the_handshake).
+    handshake_delay = float(sys.argv[5]) if len(sys.argv) > 5 else 0.0
     if term_policy == "ignore-term":
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
     held = None
@@ -101,12 +106,30 @@ DESCENDANT_SRC = textwrap.dedent("""\
                 print(outcome, file=fh)
                 fh.flush()
                 os.fsync(fh.fileno())
-    with open(pidfile, "w") as fh:
-        fh.write(str(os.getpid()))
-        fh.flush()
-        os.fsync(fh.fileno())
+    # ORDER IS LOAD-BEARING: every record this engine leaves must be
+    # durable BEFORE the handshake file, because the handshake is what
+    # releases the probe -- and the probe exiting is what fires
+    # `run_one`'s `finally: reap_group(pgid)`, which SIGTERMs this
+    # process. `.all` (the per-attempt ledger `engine_pids` counts) is
+    # therefore written first, and `pidfile` (the single-slot handshake
+    # `probe_src` polls) last. Written the other way round the probe can
+    # observe pidfile's CONTENT as soon as the write is flushed -- the
+    # fsync that follows is not what makes it readable -- and reap this
+    # process before it ever reaches `.all`, losing that attempt's line
+    # and failing `test_retry_reaps_between_attempts` with one pid where
+    # the retry really did boot two. That is not hypothetical: it is a
+    # real Linux CI failure, and it stayed invisible on a fast local
+    # filesystem where the window is microseconds. The bind log above is
+    # already on the safe side of the handshake for the same reason --
+    # which is why it stayed intact in that failure while `.all` did not.
     with open(pidfile + ".all", "a") as fh:
         print(os.getpid(), file=fh)
+        fh.flush()
+        os.fsync(fh.fileno())
+    if handshake_delay:
+        time.sleep(handshake_delay)
+    with open(pidfile, "w") as fh:
+        fh.write(str(os.getpid()))
         fh.flush()
         os.fsync(fh.fileno())
     time.sleep(600)
@@ -117,7 +140,8 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
               tail_lines: int = 0, hang: bool = False,
               ignore_term: bool = False, engine_ignores_term: bool = False,
               descendant: bool = True, hold_port: int = 0,
-              dwell: float = 0.0) -> str:
+              dwell: float = 0.0,
+              handshake_delay: float = 0.0) -> str:
     """A synthetic probe that boots a synthetic 'engine' the way probelib does.
 
     ``ignore_term`` and ``engine_ignores_term`` are independent on purpose:
@@ -168,8 +192,8 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
             f"log = open({str(logfile)!r}, 'w')",
             f"subprocess.Popen([sys.executable, {str(root / '_descendant.py')!r},"
             f" {str(pidfile)!r}, {term_policy!r}, {str(hold_port)!r},"
-            f" {str(root / (name + '.binds'))!r}], stdout=log,"
-            " stderr=subprocess.STDOUT)",
+            f" {str(root / (name + '.binds'))!r}, {str(handshake_delay)!r}],"
+            " stdout=log, stderr=subprocess.STDOUT)",
             # Do not exit before the descendant has recorded its pid, or
             # the test would have nothing to look for.
             "deadline = time.time() + 30",
@@ -863,6 +887,35 @@ def _run_driver(tree: Tree, argv: list[str], wait_for: list[str],
     return ready, rc, out
 
 
+def test_engine_ledger_is_durable_before_the_handshake() -> None:
+    print("\n-- an engine's ledger line is durable before it releases its probe")
+    tree = Tree()
+    try:
+        # The reap fires the instant the probe exits, and the probe exits
+        # the instant the handshake file has content -- so anything the
+        # engine writes AFTER the handshake races a SIGTERM. This spends
+        # three quarters of a second on the safe side of that handshake:
+        # with the ledger written first it changes nothing, and if the two
+        # writes are ever swapped back the reap lands squarely in this
+        # sleep and the ledger loses the line. That is the real Linux CI
+        # failure, made deterministic instead of left to a filesystem
+        # whose fsync happens to be slow that day.
+        tree.add("ledger", exit_code=0, handshake_delay=0.75)
+        rc, _ = _main_with(tree, ["--only", "ledger", "--exact"])
+        pids = tree.engine_pids("ledger")
+        expect(rc == 0, f"the probe still passes (got {rc})")
+        expect(len(pids) == 1,
+               f"its engine recorded itself despite the delayed handshake "
+               f"(got {pids})")
+        expect(pids == [tree.engine_pid("ledger")],
+               f"and the ledger names the same engine the handshake did "
+               f"(ledger {pids}, handshake {tree.engine_pid('ledger')})")
+        expect(all(wait_pid_gone(pid) for pid in pids),
+               "and that engine is still gone once run_one returns")
+    finally:
+        tree.cleanup()
+
+
 def test_ctrl_c_leaves_no_engine_behind() -> None:
     print("\n-- Ctrl-C mid-run terminates the running probe AND its engine")
     tree = Tree()
@@ -1248,6 +1301,7 @@ def main() -> int:
     test_exact_duplicate_valid_keys_still_collapse()
     test_substring_selection_stays_permissive()
     test_retry_reaps_between_attempts()
+    test_engine_ledger_is_durable_before_the_handshake()
     test_ctrl_c_leaves_no_engine_behind()
     test_ctrl_c_cancels_queued_parallel_work()
     test_ctrl_c_during_submission_starts_nothing_more()
