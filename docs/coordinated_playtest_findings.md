@@ -53,7 +53,7 @@ implementation file, test, tracker item, or remote state was changed.
 - [x] PT-2. The remote-settlement title renders across the modal’s top border — [#1394]
 - [x] PT-3. Final bleeding-pool cases spawn outside the loaded arena — [#1395]
 - [x] PT-4. Combat-animation setup does not reliably establish combat — [#1396]
-- [ ] PT-5. The combat-animation probe does not gate its death-animation contract
+- [x] PT-5. The combat-animation probe does not gate its death-animation contract — [#1397]
 - [ ] PT-6. The default chop fixture cannot reach the promised partial-result oracle
 - [ ] PT-7. The portal outcome check still asserts the pre-confirmation contract
 
@@ -300,7 +300,7 @@ classifies this exact approach-and-fall outcome as a recurring probe flake.
 
 ## Probe oracle integrity
 
-### PT-5. The combat-animation probe does not gate its death-animation contract
+### [#1397] PT-5. The combat-animation probe does not gate its death-animation contract
 
 The probe advertises two checks: a recognizable swing and, if a combatant dies,
 a settled death animation. Only the swing affects its exit result.
