@@ -11,7 +11,8 @@
 --   (@dungeon_1@), and its non-animation @damaged\/@ subtree, plus
 --   (#1417) the non-FILES a supported extension can name — a
 --   @.png@-suffixed directory, through both the YAML-matched and the
---   numbered-name branches, and a symlink pointing at a real frame.
+--   numbered-name branches, a symlink pointing at a real frame, and a
+--   FIFO, the special file @doesFileExist@ accepts.
 --   No engine needed — everything here is pure or filesystem-only.
 module Test.Headless.Preview.Building (spec) where
 
@@ -27,6 +28,7 @@ import System.Directory
     , createDirectoryLink, removeDirectoryLink, createFileLink
     , doesDirectoryExist )
 import System.FilePath ((</>))
+import System.Posix.Files (createNamedPipe, stdFileMode)
 import Engine.Asset.YamlBuildings (BuildingYamlAnim(..))
 import Engine.Core.Types (PreviewBuilding(..), PreviewBuildingEntry(..))
 import Engine.Preview.Building
@@ -135,6 +137,11 @@ withSymlinkFixture action = do
 --                     frame_002.png -> frame_001.png}
 --                     -- a symlink to a REGULAR FILE, which passes
 --                        doesFileExist and must still be excluded
+--   <root>/special/{frame_001.png (a real file),
+--                   frame_002.png (a FIFO)}
+--                     -- a special file is not a directory, so
+--                        doesFileExist ACCEPTS it; only a real type
+--                        check rejects it
 withNonFileFixture ∷ (FilePath → IO ()) → IO ()
 withNonFileFixture action = do
     tmp ← getTemporaryDirectory
@@ -153,6 +160,9 @@ withNonFileFixture action = do
     -- Relative, and inside the fixture, so the recursive cleanup
     -- unlinks it without ever resolving outside the temp tree.
     createFileLink "frame_001.png" (item </> "symlinked" </> "frame_002.png")
+    dir  "special"
+    file ("special" </> "frame_001.png")
+    createNamedPipe (item </> "special" </> "frame_002.png") stdFileMode
     (`finally` removeDirectoryRecursive root) (action root)
 
 spec ∷ Spec
@@ -332,6 +342,18 @@ spec = do
                 fmap pbeAnimated linked `shouldBe` Just True
                 fmap pbeFrames linked `shouldBe`
                     Just [T.pack (item </> "symlinked" </> "frame_001.png")]
+
+        it "never makes a frame of a SPECIAL file carrying a supported \
+           \extension" $
+            withNonFileFixture $ \root → do
+                let item = root </> "fixture_building"
+                entries ← discoverBuildingEntries Map.empty item
+                let special = entryNamed "special" entries
+                -- A FIFO is not a directory, so "exists and is not a
+                -- directory" accepts it; only a real type check does not.
+                fmap pbeAnimated special `shouldBe` Just True
+                fmap pbeFrames special `shouldBe`
+                    Just [T.pack (item </> "special" </> "frame_001.png")]
 
     describe "defaultBuildingEntry (the selection ladder)" $ do
         it "prefers state_animations.built, resolved through the animation's \

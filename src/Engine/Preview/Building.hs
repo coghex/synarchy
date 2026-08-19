@@ -50,6 +50,7 @@ import Data.List (sortBy, sort, find, stripPrefix)
 import Data.Ord (comparing)
 import System.Directory
     ( doesDirectoryExist, doesFileExist, listDirectory, pathIsSymbolicLink )
+import System.Posix.Files (getSymbolicLinkStatus, isRegularFile)
 import System.FilePath
     ( (</>), (<.>), dropExtension, takeDirectory, takeFileName, pathSeparator )
 import Engine.Asset.YamlBuildings (BuildingYamlAnim(..))
@@ -245,12 +246,13 @@ defaultBuildingEntry meta entries = fromMaybe "" $
 --   @dungeon_1\/damaged\/@ needs. Symlinks are skipped at every level,
 --   matching 'Engine.Preview.Discovery.walkFiles'.
 --
---   A frame is always a REGULAR FILE. A supported extension is a
---   NAME test, so a directory called @frame_001.png@ is only ever a
---   container here: it never becomes a frame, and a directory whose
---   only @.png@ children are themselves directories is therefore not
---   an animation — it is descended into like any other, and whatever
---   lies beneath is classified by these same rules.
+--   A frame is always a REGULAR FILE, established by @lstat@ rather
+--   than by either existence predicate. A supported extension is a
+--   NAME test, so a directory called @frame_001.png@ — or a FIFO, or
+--   any other special file — is never a frame: a directory is only
+--   ever a container, descended into like any other when its only
+--   @.png@ children are themselves directories, and whatever lies
+--   beneath is classified by these same rules.
 discoverBuildingEntries ∷ Map.Map Text BuildingYamlAnim → FilePath
                         → IO [PreviewBuildingEntry]
 discoverBuildingEntries anims root = do
@@ -301,15 +303,23 @@ discoverBuildingEntries anims root = do
     -- A frame candidate must be a REGULAR FILE, not merely a name
     -- carrying a supported extension: a DIRECTORY named
     -- @frame_001.png@ otherwise entered 'pngs' and became a frame path
-    -- nothing can load. The symlink test comes FIRST and stays
-    -- independent of the existence test, because 'doesFileExist'
-    -- FOLLOWS links — a symlink to a real file would pass it, and
-    -- symlinks are skipped at every level here (the outer walk does
-    -- the same).
+    -- nothing can load. Neither existence predicate answers this —
+    -- 'doesDirectoryExist' misses a FIFO, socket or device node, and
+    -- 'doesFileExist' means "exists and is NOT a directory", so it
+    -- ACCEPTS every one of them. The type therefore comes from a real
+    -- @lstat@.
+    --
+    -- The symlink test stays, first and independent: 'lstat' not
+    -- following links is what makes a symlink a non-regular file here,
+    -- but "symlinks are skipped at every level" (the outer walk does
+    -- the same) is this module's own stated rule and must not survive
+    -- only as a side effect of how the type is read.
     isRegularFileChild dir f = do
         let full = dir </> f
         isLink ← pathIsSymbolicLink full
-        if isLink then pure False else doesFileExist full
+        if isLink
+            then pure False
+            else isRegularFile ⊚ getSymbolicLinkStatus full
 
     staticEntry segs full = PreviewBuildingEntry
         { pbeLabel    = label segs
