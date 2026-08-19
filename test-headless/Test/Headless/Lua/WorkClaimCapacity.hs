@@ -28,7 +28,8 @@
 --   (a role-less state weighs 1.0).
 --
 --   The scenario NUMBERS are not written here: 'shippedFixture' reads
---   @data\/items\/*.yaml@, @data\/recipes\/smelting.yaml@ and
+--   every item YAML under @data\/items@ (recursively, #1232),
+--   @data\/recipes\/smelting.yaml@ and
 --   @data\/structure_packs\/dungeon_1.yaml@ and renders them into the
 --   Lua fixture verbatim, so the recipes, pack costs and item weights
 --   under test are the ones the game ships. The capacities are DERIVED
