@@ -95,24 +95,122 @@ def _resolve_category_expr(node: ast.expr) -> set[str] | None:
     return None
 
 
-def _assignments_in(scope: ast.AST, *, shallow: bool = False
-                    ) -> dict[str, list[ast.expr]]:
-    """Map each name assigned in `scope` to every value assigned to it."""
-    nodes = getattr(scope, "body", []) if shallow else list(ast.walk(scope))
-    out: dict[str, list[ast.expr]] = {}
+def _target_names(target: ast.expr) -> list[str]:
+    """Every bare name an assignment target actually binds.
+
+    `a`, `a, b`, `*rest` and their nestings bind names; `obj.attr` and
+    `obj[key]` bind an attribute or item, and the names they mention are
+    read, not bound — reporting those would hide unrelated names.
+    """
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, ast.Starred):
+        return _target_names(target.value)
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names: list[str] = []
+        for element in target.elts:
+            names.extend(_target_names(element))
+        return names
+    return []
+
+
+def _scope_nodes(scope: ast.AST, *, enter_nested: bool) -> list[ast.AST]:
+    """Nodes under `scope`, optionally stopping at nested scopes.
+
+    Module scope must NOT descend into a function, class or lambda body:
+    their bindings are local, and adopting them would let one function's
+    local literal resolve another function's unbound name.
+    """
+    out: list[ast.AST] = []
+    stack = list(ast.iter_child_nodes(scope))
+    while stack:
+        node = stack.pop()
+        out.append(node)
+        if not enter_nested and isinstance(
+                node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                       ast.ClassDef, ast.Lambda)):
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+    return out
+
+
+def _assignments_in(scope: ast.AST, *, module_scope: bool = False
+                    ) -> dict[str, list[ast.expr] | None]:
+    """Map each name BOUND in `scope` to every value bound to it.
+
+    A name bound anywhere by a form whose value cannot be read as an
+    expression maps to None — "opaque" — instead of being described by
+    whatever plain assignments happen to sit beside it. Recording only
+    Assign/AnnAssign would read `cat = "ISOLATED_FLUID"` followed by
+    `cat += suffix` as the bare literal, and a `for cat in ...` rebinding
+    as nothing at all, which is exactly the silent acceptance this
+    derivation exists to prevent.
+    """
+    nodes = _scope_nodes(scope, enter_nested=not module_scope)
+    values: dict[str, list[ast.expr]] = {}
+    opaque: set[str] = set()
+
+    def hide(names: list[str]) -> None:
+        opaque.update(names)
+
+    def hide_arguments(args: ast.arguments) -> None:
+        every = [*args.posonlyargs, *args.args, *args.kwonlyargs]
+        if args.vararg is not None:
+            every.append(args.vararg)
+        if args.kwarg is not None:
+            every.append(args.kwarg)
+        hide([a.arg for a in every])
+
     for node in nodes:
         if isinstance(node, ast.Assign):
-            targets: list[ast.expr] = list(node.targets)
-            value = node.value
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            targets = [node.target]
-            value = node.value
-        else:
-            continue
-        for target in targets:
-            if isinstance(target, ast.Name):
-                out.setdefault(target.id, []).append(value)
-    return out
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    values.setdefault(target.id, []).append(node.value)
+                else:
+                    hide(_target_names(target))
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)):
+            if node.value is None:
+                continue          # a bare annotation binds nothing
+            if isinstance(node.target, ast.Name):
+                values.setdefault(node.target.id, []).append(node.value)
+            else:
+                hide(_target_names(node.target))
+        elif isinstance(node, ast.AugAssign):
+            hide(_target_names(node.target))
+        elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+            hide(_target_names(node.target))
+        elif isinstance(node, ast.withitem):
+            if node.optional_vars is not None:
+                hide(_target_names(node.optional_vars))
+        elif isinstance(node, ast.ExceptHandler):
+            if node.name:
+                hide([node.name])
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            hide([alias.asname or alias.name.split(".")[0]
+                  for alias in node.names])
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            hide(node.names)
+        elif isinstance(node, ast.Delete):
+            for target in node.targets:
+                hide(_target_names(target))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            hide([node.name])
+            hide_arguments(node.args)
+        elif isinstance(node, ast.Lambda):
+            hide_arguments(node.args)
+        elif isinstance(node, ast.ClassDef):
+            hide([node.name])
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)):
+            if node.name:
+                hide([node.name])
+        elif isinstance(node, ast.MatchMapping):
+            if node.rest:
+                hide([node.rest])
+
+    bindings: dict[str, list[ast.expr] | None] = dict(values)
+    for name in opaque:
+        bindings[name] = None
+    return bindings
 
 
 def extract_issue_categories(source: str, filename: str
@@ -131,10 +229,10 @@ def extract_issue_categories(source: str, filename: str
         for child in ast.iter_child_nodes(parent):
             parents[id(child)] = parent
 
-    module_names = _assignments_in(tree, shallow=True)
-    scope_cache: dict[int, dict[str, list[ast.expr]]] = {}
+    module_names = _assignments_in(tree, module_scope=True)
+    scope_cache: dict[int, dict[str, list[ast.expr] | None]] = {}
 
-    def names_visible_at(node: ast.AST) -> dict[str, list[ast.expr]]:
+    def names_visible_at(node: ast.AST) -> dict[str, list[ast.expr] | None]:
         current: ast.AST | None = node
         while current is not None:
             if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -171,10 +269,20 @@ def extract_issue_categories(source: str, filename: str
             )
             continue
 
+        detail = ""
         resolved = _resolve_category_expr(arg)
         if resolved is None and isinstance(arg, ast.Name):
-            bound = names_visible_at(node).get(arg.id)
-            if bound:
+            names = names_visible_at(node)
+            bound = names.get(arg.id)
+            if bound is None:
+                detail = (
+                    f": `{arg.id}` is bound by a form that cannot be read as "
+                    f"a value (augmented assignment, a loop/with/except "
+                    f"target, a parameter, an import alias or a match capture)"
+                    if arg.id in names else
+                    f": `{arg.id}` is never bound in this scope"
+                )
+            else:
                 accumulated: set[str] = set()
                 for value in bound:
                     one = _resolve_category_expr(value)
@@ -187,7 +295,7 @@ def extract_issue_categories(source: str, filename: str
         if resolved is None:
             unresolved.append(
                 f"{filename}:{node.lineno}: cannot statically resolve the "
-                f"category of Issue({ast.unparse(arg)})"
+                f"category of Issue({ast.unparse(arg)}){detail}"
             )
             continue
         categories |= resolved
@@ -700,6 +808,71 @@ def test_category_extraction_resolves_and_fails_loudly() -> None:
     expect(not cats and len(unresolved) == 1,
            f"a half-resolvable category must be reported unresolved rather "
            f"than contributing its readable arm, got {cats} / {unresolved}")
+
+    # A name REBOUND by a form the derivation cannot read as a value must not
+    # be described by whatever plain assignment sits beside it — the emitted
+    # category is dynamic and may be unclassified.
+    rebindings = {
+        "augmented assignment":
+            '    cat = "ISOLATED_FLUID"\n'
+            '    cat += suffix\n',
+        "loop target":
+            '    cat = "ISOLATED_FLUID"\n'
+            '    for cat in CATEGORIES:\n'
+            '        pass\n',
+        "tuple unpacking":
+            '    cat = "ISOLATED_FLUID"\n'
+            '    cat, extra = compute(ft)\n',
+        "with target":
+            '    cat = "ISOLATED_FLUID"\n'
+            '    with opened(ft) as cat:\n'
+            '        pass\n',
+        "except target":
+            '    cat = "ISOLATED_FLUID"\n'
+            '    try:\n'
+            '        pass\n'
+            '    except ValueError as cat:\n'
+            '        pass\n',
+    }
+    for label, prelude in rebindings.items():
+        cats, unresolved = extract(
+            prelude + '    issues.append(Issue(cat, 0, 0, ""))\n')
+        expect(not cats and len(unresolved) == 1,
+               f"a category name rebound by {label} must be reported "
+               f"unresolved, got {cats} / {unresolved}")
+        expect(unresolved and "ISOLATED_FLUID" not in unresolved[0],
+               f"the {label} rebinding must not be read as the literal it "
+               f"shadows, got {unresolved}")
+
+    # A parameter is a binding whose value is a caller's choice.
+    cats, unresolved = extract_issue_categories(
+        'def check(grid, issues, cat):\n'
+        '    issues.append(Issue(cat, 0, 0, ""))\n', "<synthetic>")
+    expect(not cats and len(unresolved) == 1,
+           f"a category taken as a parameter must be reported unresolved, "
+           f"got {cats} / {unresolved}")
+
+    # A module-level literal must not resolve another function's local name:
+    # a function body is its own scope, so the module map never adopts it.
+    cats, unresolved = extract_issue_categories(
+        'def other(grid, issues):\n'
+        '    cat = "ISOLATED_FLUID"\n'
+        '    return cat\n'
+        '\n'
+        'def check(grid, issues):\n'
+        '    issues.append(Issue(cat, 0, 0, ""))\n', "<synthetic>")
+    expect(not cats and len(unresolved) == 1,
+           f"another function's local must not resolve an unbound name, got "
+           f"{cats} / {unresolved}")
+
+    # A genuine module-level constant still resolves.
+    cats, unresolved = extract_issue_categories(
+        'CAT = "MODULE_LEVEL"\n'
+        'def check(grid, issues):\n'
+        '    issues.append(Issue(CAT, 0, 0, ""))\n', "<synthetic>")
+    expect(cats == {"MODULE_LEVEL"} and not unresolved,
+           f"a module-level category constant should resolve, got "
+           f"{cats} / {unresolved}")
 
 
 def test_wetland_on_slope() -> None:
