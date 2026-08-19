@@ -573,6 +573,70 @@ python3 tools/ci_probes.py --self-test
 python3 tools/ci_probes.py --status
 ```
 
+### `probe_flake.py` — repeat-run flakiness measurement (#1425)
+
+Nine manual-only probes are classified `flaky` and several more have known
+flakes recorded under other reasons, but none of that is measured. This runs
+ONE registered probe N times in a row under a fixed `+RTS -N4 -RTS` setting
+and reports a per-check `PASS`/`FAIL`/`MISSING` table plus an aggregate
+failure rate (timeouts in the numerator, and separately visible).
+
+```bash
+python3 tools/probe_flake.py --probe role --runs 10
+python3 tools/probe_flake.py --probe role --runs 10 --result /tmp/role.json
+python3 tools/test_probe_flake.py     # the focused self-test (no engine)
+```
+
+Only probes that implement the shared `probe-result/v1` protocol
+(`tools/probe_protocol.py`) can be measured; everything else is `legacy` and
+is rejected BY NAME before execution, without running the probe at all —
+heuristically parsing free-form stdout is the guesswork a reliability harness
+must not do, and invoking a legacy probe to find out would boot a real engine.
+`role` is the only migrated probe today; later issues migrate one at a time.
+
+A migrated probe prints its ordered, stable check declaration with
+`--describe` (no engine) and, when the harness supplies an event path, writes
+one flushed JSON event per line instead of bracketed stdout markers. Run by
+hand it is unchanged: `python3 tools/role_probe.py --port N` still prints its
+`[PASS]`/`[FAIL]` lines and exits 0/1, and `run_probes.py --only role` behaves
+exactly as before.
+
+`run_probes.run_one` still owns process launch, output capture, elapsed
+timing, deferred SIGINT, timeout escalation and process-group cleanup; the
+harness reuses it through four keyword-only parameters (event path, artifact
+dir, engine-log dir, RTS capabilities) that default to today's behavior.
+
+Ports come from an atomic cross-process lease over 8009-8999 (8008 — the GUI
+port — is always forbidden), held until `run_one` has reaped the probe's whole
+process group, so concurrent harnesses never collide. Artifacts land under
+`<platform temp dir>/synarchy-probe-flake`, never inside a worktree;
+successful runs are deleted and `FAIL`/`TIMEOUT`/harness-error runs keep their
+stdout, protocol events and every engine log.
+
+A valid measurement exits 0 whatever rate it observed. Nonzero is reserved for
+pre-execution rejections (2), port exhaustion (3) and harness errors (4) — a
+malformed, truncated, duplicate, out-of-order or unclassifiable protocol
+event, which is never reported as a probe pass.
+
+### `probe_census.py` — the probe migration inventory (#1425)
+
+Builds and validates `docs/probe_census.json`: every registered probe exactly
+once, with its script, its CI-eligible/manual-only classification and its
+protocol status (`legacy` or `probe-result/v1`). The manifest lives in the
+worktree whose branch is `docs-wip`, resolved BY BRANCH the way
+`tools/docs_land.sh` does — never a hard-coded path and never the primary
+checkout.
+
+```bash
+python3 tools/probe_census.py --print       # what the live registry implies
+python3 tools/probe_census.py --seed        # write it into the docs worktree
+python3 tools/probe_census.py --validate    # check the seeded copy
+```
+
+Nothing at runtime reads it: `probe_flake.py` takes protocol status from its
+own in-repo `PROTOCOL_PROBES` and check identity from each probe's descriptor,
+so a checkout with no docs worktree behaves identically.
+
 ### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets selection
 
 Selects the three expensive CI gates that are conditional on pull requests:
