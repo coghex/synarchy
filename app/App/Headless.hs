@@ -25,9 +25,6 @@ import App.Boot (FatalStream(..), bootConfig, handleBootResult
                 , luaThreadOrAbort)
 import App.Exception (guardNativeExceptions)
 
--- | Run engine in headless mode (no window, no GPU)
---   Starts Lua, world, and unit threads. Debug console on configurable port.
---   Useful for automated testing, CI, and scripted world generation.
 runHeadless ∷ BootProfile → Maybe Int → IO ()
 runHeadless bootProfile mPort = do
   EngineInitResult env ← initializeEngineHeadless

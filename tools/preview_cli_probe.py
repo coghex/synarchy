@@ -50,6 +50,19 @@ Checks:
      both the flag and the selected mode in stderr — one case per row
      of the table, including the distinct --plates/--ages spellings and
      the --language-report/--seeds pairing.
+ 9b. Boot-mode precedence (#1086): argv naming TWO competing mode
+     selectors resolves to the higher-precedence one, asserted through
+     the incompatible-flag rejection's exact stderr line and exit code
+     — one case per boundary of
+     language-report > dump > preview > offscreen > headless. Since
+     app/Main.hs now derives ONE boot-mode value and feeds it to both
+     the rejection and the dispatch, the mode these lines name is the
+     mode that would have booted; before, the two encodings could
+     disagree and only this text would have said so. (The last
+     boundary, headless > graphical, has no mixed-selector form —
+     graphical is what argv naming no selector resolves to — and is
+     covered by check 9's own --headless rows plus hspec
+     `--match "App.Cli"`.)
  10. Present-but-malformed values (#1191): every affected spelling
      (--seed/--worldSize/--plates/--ages/--port), an empty and an
      unknown --dump= layer selection plus empty segments, and a
@@ -66,6 +79,11 @@ Checks:
      headless mode, not as malformed). Omitting a flag entirely still
      keeps its documented default. The pure four-outcome parser
      coverage is hspec `--match "App.Cli"`.
+ 10d. An explicit --dump= selection really emits those layers and no
+     others (#1086): the prefix strip is stripPrefix now rather than a
+     separately-maintained length, and a real dump is what proves the
+     selected set is unchanged — a strip one character too long would
+     still have parsed SOME selection.
 
 Usage:
   python3 tools/preview_cli_probe.py
@@ -303,6 +321,50 @@ INCOMPATIBLE_FLAG_CASES = [
 ]
 
 
+# (argv, rejected flag, the mode precedence must select, the honoured
+# list that mode is missing from) — one row per precedence boundary
+# (#1086). Every argv here names TWO mode selectors, so the mode in the
+# rejection is evidence of which one won; each rejects pre-boot.
+PRECEDENCE_FLAG_CASES = [
+    # language-report > dump: --seed is honoured only in dump.
+    (["--language-report", "--dump", "--seed", "42"],
+     "--seed", "language-report", "dump"),
+    # dump > preview: --port is honoured in preview, not in dump.
+    (["--dump", "--preview", "icons", "--port", "9099"],
+     "--port", "dump", "headless, graphical, offscreen, preview"),
+    # preview > offscreen: --size is honoured only in offscreen.
+    (["--preview", "icons", "--offscreen", "--size", "100x100"],
+     "--size", "preview", "offscreen"),
+    # offscreen > headless: --seed is honoured only in dump, and the
+    # mode named is what tells those two apart.
+    (["--offscreen", "--headless", "--seed", "42"],
+     "--seed", "offscreen", "dump"),
+]
+
+
+def check_boot_mode_precedence() -> bool:
+    print("9b. boot-mode precedence with two competing selectors "
+          "(#1086): the rejection names the mode that would have booted")
+    results = []
+    for extra_args, flag, mode, honoured in PRECEDENCE_FLAG_CASES:
+        expected = (f"{flag} is not supported in {mode} mode "
+                    f"(only honoured in {honoured})")
+        try:
+            r = run_cli(*extra_args, timeout=15.0)
+        except subprocess.TimeoutExpired:
+            results.append(check(f"precedence: {' '.join(extra_args)}", False,
+                                 "process did not exit within 15s — a mode "
+                                 "selector reached a real boot"))
+            continue
+        ok = (r.returncode == 1
+              and "READY" not in r.stdout
+              and expected in r.stderr)
+        results.append(check(f"precedence: {' '.join(extra_args)} -> {mode}",
+                             ok, f"rc={r.returncode} want={expected!r} "
+                                 f"stderr={r.stderr.strip()!r}"))
+    return all(results)
+
+
 def check_incompatible_flags() -> bool:
     print("9. mode-specific flags rejected in modes that ignore them "
           "(CH-58): exit 1, pre-boot")
@@ -452,6 +514,60 @@ def check_omission_still_defaults() -> bool:
                  f"rc={r.returncode} " + "; ".join(problems))
 
 
+# Layer name -> the tile keys it (and only it) contributes, from
+# App.Dump.tileToJSON. A layer left out of the selection must contribute
+# NONE of its keys.
+DUMP_LAYER_KEYS = {
+    "terrain": ["terrainZ", "surfaceZ", "waterTableZ", "waterTableSummer",
+                "waterTableWinter"],
+    "material": ["matId"],
+    "fluid": ["fluidType", "fluidSurf"],
+    "ice": ["iceSurf", "iceMode"],
+    "ore": ["oreId", "oreTopZ", "oreCount"],
+    "slope": ["slope", "hardness"],
+}
+
+
+def check_dump_layer_selection() -> bool:
+    """#1086: --dump=<selection> still selects exactly those layers.
+
+    Deliberately a REAL dump rather than a parse check: the prefix strip
+    changed, and only the emitted tile records prove the selection that
+    survived it is the one the user typed. The suffix is mixed-case on
+    purpose — matching stays case-insensitive, and 'elevation' stays an
+    alias for 'terrain'.
+    """
+    print("10d. an explicit --dump= selection emits exactly those layers")
+    selected = ["terrain", "ice"]
+    try:
+        r = run_cli("--dump=Elevation,ICE", "--worldSize", "16",
+                    "--region", "0,0,0,0", timeout=180.0)
+    except subprocess.TimeoutExpired:
+        return check("dump layer selection", False,
+                     "dump did not finish in 180s")
+    problems = []
+    if r.returncode != 0:
+        problems.append(f"exit status {r.returncode} (want 0)")
+    try:
+        tiles = json.loads(r.stdout)
+    except (json.JSONDecodeError, ValueError) as e:
+        return check("dump layer selection", False,
+                     f"stdout is not valid JSON: {e}")
+    if not tiles:
+        return check("dump layer selection", False, "dump produced no tiles")
+    keys = set(tiles[0].keys())
+    for layer, layer_keys in DUMP_LAYER_KEYS.items():
+        missing = [k for k in layer_keys if k not in keys]
+        present = [k for k in layer_keys if k in keys]
+        if layer in selected and missing:
+            problems.append(f"selected layer {layer} is missing {missing}")
+        if layer not in selected and present:
+            problems.append(f"unselected layer {layer} emitted {present}")
+    return check("dump layer selection", not problems,
+                 f"rc={r.returncode} " + ("; ".join(problems) if problems
+                                          else f"{len(tiles)} tiles"))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     # Every registered probe accepts --port (#723) so tools/run_probes.py
@@ -474,9 +590,11 @@ def main() -> int:
     results.append(check_unit_targets())
     results.append(check_grouped_item_targets())
     results.append(check_incompatible_flags())
+    results.append(check_boot_mode_precedence())
     results.append(check_malformed_values())
     results.append(check_mode_priority_over_value())
     results.append(check_omission_still_defaults())
+    results.append(check_dump_layer_selection())
 
     passed = all(results)
     print(f"\n  {'PASS' if passed else 'FAIL'}: no-boot CLI contract"
