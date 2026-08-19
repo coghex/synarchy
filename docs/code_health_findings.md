@@ -175,10 +175,10 @@ an entry's current status.
 - [x] CH-132. Minor `tools/` defects for one cleanup issue — [no-issue]
 - [x] CH-133. `player_events.md` (786 lines) is marked "ready to implement" for a system that shipped — [#1161]
 - [x] CH-134. `blood_decals.md` (445 lines) is marked "design draft" for a shipped subsystem — [no-issue]
-- [ ] CH-135. Status markers are inconsistent, and two of the six that exist are wrong
-- [ ] CH-136. Minor doc defects for one cleanup issue
-- [ ] CH-137. Verified: four docs are accurate and worth using as the pattern
-- [ ] CH-138. Every GitHub Actions dependency is pinned by mutable tag, not by SHA
+- [x] CH-135. Status markers are inconsistent, and two of the six that exist are wrong — [no-issue]
+- [x] CH-136. Minor doc defects for one cleanup issue — [no-issue]
+- [x] CH-137. Verified: four docs are accurate and worth using as the pattern — [no-issue]
+- [ ] CH-138. Every GitHub Actions dependency is pinned by mutable tag, not by SHA — [deferred]: #1356 must merge first
 
 ---
 
@@ -3816,7 +3816,36 @@ shipped, so the design was implemented as designed. Only the status line lies.
 (One reference to check while editing: `Blood.Types.BloodStore` does not
 resolve against the current `Blood/Types.hs`.)
 
-### CH-135. Status markers are inconsistent, and two of the six that exist are wrong
+### [no-issue] CH-135. Status markers are inconsistent, and two of the six that exist are wrong
+> **Disposition:** No issue — both wrong markers are fixed and the proposal's
+> premise no longer describes `docs/`. `blood_decals.md:3` has read `Status:
+> implemented` since `c8884cb4` (2026-08-01, CH-134's evidence) and
+> `player_events.md:7` was archived with a `**Status:** Historical design
+> record` marker by #1161 (2026-08-09), so of the six markers this entry
+> counted, **zero are now wrong**: the four surviving document-level ones
+> (`persistence_contract.md`, `persistence_state_inventory.md`,
+> `engineenv_capability_inventory.md`, `blood_decals.md`) each verify against
+> the tree. Three further table rows are stale, including the model the
+> proposal copies: `texture_infrastructure.md`'s `**Status:**
+> Pre-implementation, written 2026-05-24` was demoted to `**Legacy status:**`
+> at `:840` when the doc was rewritten as a design-epic document, and it and
+> `expedition_gameplay_loop.md` now both carry `Design state:` at the top.
+> The population changed 9× too — 9 live docs / 4,381 lines at sweep time,
+> **82 live docs / 30,408 lines** now — and partitions into three families
+> that each already run a maintained convention: **9** design docs
+> (`Design state:` + the per-slice ledger `/process-design-doc` advances),
+> **62** findings reports and project reviews (`Status legend:` + a per-entry
+> checklist, agreement-audited in CI by `tools/findings_report_audit.py`,
+> #1196), and **11** others of which 4 carry an accurate `**Status:**` line.
+> So "one status line on every `docs/*.md`, checked in CI" would today either
+> bind 62 generated files whose status is per-entry rather than per-document,
+> or ship the exemption list that is this same inconsistency rewritten in
+> Python. The residue — 7 unmarked docs — is not discarded: `asset_generation.md`
+> and `player_manual.md` are the only two that existed at sweep time and
+> **CH-136 itemizes both by name**; `hydrology_pipeline.md` (2026-08-09) and
+> `engine_contracts.md` (2026-08-18) postdate this entry, and the remaining
+> three are transient working notes.
+
 | Doc | Marker |
 |---|---|
 | `persistence_contract.md` | **Status:** Authoritative ✓ |
@@ -3841,7 +3870,33 @@ Proposal: require one status line on every `docs/*.md` — one of
 with a date, and check it in the same CI step that already validates the
 persistence and capability inventories.
 
-### CH-136. Minor doc defects for one cleanup issue
+### [no-issue] CH-136. Minor doc defects for one cleanup issue
+> **Disposition:** No issue — three of the five bullets are fixed and the two
+> survivors have shrunk below the bar this report files at. (1) The
+> `test/Test/Headless/Harness.hs` citation is gone:
+> `engineenv_capability_inventory.md:957` reads
+> `test-headless/Test/Headless/Harness.hs`, and no bare `test/` citation
+> remains in that document. (2) `texture_infrastructure.md`'s "still the plan,
+> or move to `docs/history/`?" is answered — neither: it became the design
+> authority for epic #1256, with TEX-1/2/3/4/6/7 shipped (#1257–#1262) and
+> TEX-5 deliberately deferred, and `animations.yaml` is recorded at `:169` and
+> `:389` as a **rejected** alternative rather than a pending plan (the
+> "pre-implementation" label this bullet cites survives only as
+> `**Legacy status:**` at `:840`). (5) The blood subsystem now has full
+> CLAUDE.md coverage at `:1202-1215` — architecture-record link, five hspec
+> groups, four probes, the transience contract. The two survivors both
+> weakened on inspection: `asset_generation.md`'s account state has not gone
+> stale and is not silent — checked live, `Tier 2: Pixel Artisan` /
+> `generations_total: 5000` matches the doc, whose same sentence already says
+> "Check with `get_balance`", and whose header self-dates its recipes to
+> 2026-06; and `player_manual.md` is demonstrably maintained rather than
+> drifting (`6d337004` #782, `4e8d2d08` #923, `8e17960d` #913 in six weeks,
+> plus #776's correctness fix), so a "which build" marker on a document that
+> feature PRs already update is itself a thing that goes stale. What is left is
+> one optional date stamp, below the bar of the filed siblings (#1011, #1086,
+> #1154, #1156) and in line with the closed ones (CH-27, CH-132). This is also
+> the answer to the residue CH-135 routed here.
+
 - **`engineenv_capability_inventory.md:709`** cites
   `test/Test/Headless/Harness.hs`; the file is at
   **`test-headless/`**`/Test/Headless/Harness.hs`. This is the same `test/` vs
@@ -3863,7 +3918,27 @@ persistence and capability inventories.
   CLAUDE.md's subsystem contracts. Noted for completeness only; CLAUDE.md was
   excluded from this pass at the owner's request.
 
-### CH-137. Verified: four docs are accurate and worth using as the pattern
+### [no-issue] CH-137. Verified: four docs are accurate and worth using as the pattern
+> **Disposition:** No issue — this entry records a verification rather than a
+> defect, and re-verification confirms all four still hold.
+> `expedition_gameplay_loop.md`'s `### 9. Gate the full slice` still resolves
+> (moved `:327` → `:1308`) and `## Implementation status` is still at `:390`;
+> CLAUDE.md `:1185`'s claim that step 9's combat encounter and progression
+> reward are deferred to #916/#917 matches the tracker (both **OPEN**) and the
+> doc's own EXP-5 precondition. `persistence_contract.md` (`:87`, `:739`,
+> `:743`) and `persistence_state_inventory.md` (`:152`, `:727`) still cite
+> `LoadWorld.hs` and still mark it deleted, and the file is genuinely gone —
+> `src/World/Thread/Command/Save/` holds only `WriteWorld.hs`. `README.md`
+> spot-checks accurate on prerequisites, build commands, headless mode, the
+> resource-root precedence, and testing. Only the framing moved: CLAUDE.md's
+> 2026-08-18 trim dropped the "all discretionary work gates on step 9"
+> sentence this entry quoted. **The closing lesson has since been
+> implemented** — design docs now carry the lifecycle step it said they
+> lacked, a `Design state:` line plus a per-slice ledger advanced by
+> `/design-epic` → `/process-design-doc`, which `expedition_gameplay_loop.md`
+> itself gained at `:8` and `:37` (EPIC #1229, EXP-1…EXP-5). That is the same
+> convention CH-135's disposition rests on.
+
 Recorded because the reference sweep was expected to find widespread rot and
 did not:
 
@@ -3885,7 +3960,28 @@ The lesson for CH-133/CH-134: the failure is not that docs drift from code —
 these four don't — it is that *design* docs have no lifecycle step that marks
 them implemented.
 
-### CH-138. Every GitHub Actions dependency is pinned by mutable tag, not by SHA
+### [deferred] CH-138. Every GitHub Actions dependency is pinned by mutable tag, not by SHA
+> **Deferred:** The SHAs must be taken from the versions the pending major bump
+> selects, so filing now would produce an issue that cannot be worked and whose
+> substance is not yet determined — **#1356** ("Move the four deprecated GitHub
+> Actions off their Node 20 majors", OPEN, `reviewed:approve`) already scopes
+> SHA pinning out and names this entry: *"bump first, pin second."* The
+> precondition that clears this: **#1356 is closed by a merged PR.**
+>
+> Verified 2026-08-18, with three corrections. (1) **`secrets.NTFY_URL` is NOT
+> exposed** — `ntfy-notify.yml` has zero `uses:` entries (pure `run:` + `curl`)
+> and secrets do not cross workflows, so no third-party action here can reach
+> it; drop that consequence. The real exposure stands on its own:
+> `packages: write` (`ci-image.yml:36-38`, `:64-66`; `ci.yml:153-155`),
+> `secrets.GITHUB_TOKEN` handed to `docker/login-action` at `ci-image.yml:79`,
+> and `pull-requests: write` (`review-gate.yml:52-54`) in the job running
+> `actions/checkout@v4` at `:57`. (2) It is seven DISTINCT actions across **ten**
+> call sites, not seven references. (3) **All seven are a major behind, not
+> four** — the `docker/*` entries escape the Node 20 warning but not currency:
+> `setup-buildx-action` v3 → **v4.2.0**, `login-action` v3 → **v4.6.0**,
+> `build-push-action` v6 → **v7.3.0**, beside `checkout` v4 → **v7.0.1** and
+> `cache` v4 → **v6.1.0**. A complete pinning pass therefore touches all ten
+> sites, which reinforces the bump-first ordering rather than changing it.
 
 All seven third-party `uses:` references across the four workflows are pinned to
 a floating major tag rather than a commit SHA:

@@ -26,7 +26,7 @@ import App.ResourceRoot (applyResourceRoot)
 import App.Graphical (runGraphical)
 import App.Headless (runHeadless)
 import App.Offscreen (runOffscreen)
-import App.Dump (runDump)
+import App.Dump (runDump, DumpGenParams(..))
 import App.Preview (runPreview)
 import App.LanguageReport (runLanguageReport)
 
@@ -112,8 +112,15 @@ main = do
               ⧺ "(an inclusive range within 0.." ⧺ show (maxBound ∷ Word64) ⧺ ")"
           exitWith (ExitFailure 1)
     else case mDump of
-      Just layers → runDump layers (fromMaybe 42 seed) worldSize
-                                   plateCount region
+      -- Field syntax, not three positional 'Int's: #1081. The seed's
+      -- own default lives here because 'parseArg' answers absence with
+      -- 'Nothing' and a malformed value with a 'Left' that already
+      -- exited above.
+      Just layers → runDump layers
+          DumpGenParams { dgpSeed       = fromMaybe 42 seed
+                        , dgpWorldSize  = worldSize
+                        , dgpPlateCount = plateCount }
+          region
       Nothing → case mPreview of
         -- --preview wins over headless/graphical dispatch, same as --dump
         -- above: a bare `--preview ...` shouldn't also stand up the normal
