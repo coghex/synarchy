@@ -5,7 +5,6 @@ module Engine.Scripting.Lua.API.YamlTextures
     , loadFloraYamlFn
     , loadAndRegister
     , loadAndRegisterWithPool
-    , loadAndRegisterAtlas
     , loadAndRegisterAtlasWithPool
     , isTextureNameRegistered
     , resolveTexturePath
@@ -203,22 +202,16 @@ loadAndRegisterWithPool env poolRef lteq name path = do
     Q.writeQueue lteq (LuaLoadTextureRequest handle path)
     return handle
 
--- | 'loadAndRegister' for a compiled unit-animation atlas (#1259).
+-- | 'loadAndRegisterWithPool' for a compiled unit-animation atlas
+--   (#1259).
 --
 --   Identical bookkeeping — ONE handle, ONE name, ONE queued upload per
---   animation (D-2/D-10) — but the request carries the atlas policy, so
+--   animation (D-2\/D-10) — but the request carries the atlas policy, so
 --   the engine registers the slot PINNED to the nearest sampler with a
 --   single mip level (D-6). Unit art must stay nearest-neighbour even
 --   after a runtime @setTextureFilter@ toggle repaints every ordinary
 --   slot to the new global sampler; a whole sheet resampled bilinearly
 --   would also bleed neighbouring cells across every frame edge.
-loadAndRegisterAtlas ∷ EngineEnv → LuaBackendState → Q.Queue LuaToEngineMsg
-                     → Text → FilePath → IO TextureHandle
-loadAndRegisterAtlas env backendState =
-    loadAndRegisterAtlasWithPool env (lbsAssetPool backendState)
-
--- | 'loadAndRegisterAtlas' against an asset pool directly — see
---   'loadAndRegisterWithPool'.
 loadAndRegisterAtlasWithPool ∷ EngineEnv → IORef AssetPool
                              → Q.Queue LuaToEngineMsg
                              → Text → FilePath → IO TextureHandle

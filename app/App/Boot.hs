@@ -87,7 +87,7 @@ data FatalStream = FatalToStdout | FatalToStderr
 -- | The shared tail of every boot mode's 'Engine.Core.Monad.runEngineM'
 --   result. On success, nothing happens. On failure: report the error
 --   on the mode's stream, tear down every worker it started (in
---   'Engine.Core.Workers.allWorkers' order), flush the logger, and exit
+--   @Engine.Core.Workers.allWorkers@ order), flush the logger, and exit
 --   non-zero.
 handleBootResult ∷ FatalStream → EngineEnv → EngineWorkers
                  → Either EngineException () → IO ()
@@ -119,7 +119,7 @@ handleBootResult stream env workers result = case result of
 --   called 'Engine.Scripting.Lua.Thread.startLuaThread' — empty for
 --   headless and dump (Lua is their first worker), the input thread for
 --   the three modes that start it first — in
---   'Engine.Core.Workers.allWorkers' teardown order. Passing the real
+--   @Engine.Core.Workers.allWorkers@ teardown order. Passing the real
 --   partial set (rather than the full record the mode would have built
 --   on success) is what makes the teardown honest: there is no
 --   half-constructed 'EngineWorkers' to stop threads that were never

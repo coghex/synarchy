@@ -3,7 +3,6 @@ module Engine.Scripting.Lua.Util
   , broadcastToModules
   , broadcastToModulesReportingErrors
   , nowSeconds
-  , tableEntryCount
   , isDenseArray
   ) where
 

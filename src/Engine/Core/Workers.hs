@@ -15,7 +15,6 @@ module Engine.Core.Workers
   , WorkerSlot
   , preRenderWorkers
   , postRenderWorkers
-  , allWorkers
   , stopWorkers
   , shutdownEngineWorkers
   ) where
@@ -84,7 +83,7 @@ stopWorkers announce = mapM_ $ \(name, mThread) → do
     announce name
     liftIO $ forM_ mThread shutdownThread
 
--- | Stop every worker the mode started, in 'allWorkers' order, without
+-- | Stop every worker the mode started, in @allWorkers@ order, without
 --   announcing them — the paths that use this either have no engine
 --   log left to write to or are already reporting a fatal error.
 shutdownEngineWorkers ∷ EngineWorkers → IO ()

@@ -1,8 +1,6 @@
 {-# LANGUAGE CPP #-}
 module Engine.Loop.Frame
   ( drawFrame
-  , updateUniformBufferForFrame
-  , submitFrame
   , computeAmbientLight
   , activeWorldCircumferenceTiles
   ) where

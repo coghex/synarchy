@@ -9,7 +9,6 @@
 --   frame-in-flight index instead of acquiring.
 module Engine.Graphics.Vulkan.Offscreen
   ( createOffscreenTarget
-  , offscreenFormat
   ) where
 
 import UPrelude

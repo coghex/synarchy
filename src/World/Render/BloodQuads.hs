@@ -71,7 +71,7 @@ import World.Types
 
 -- | Sync every loaded world's blood-texture FIFO to the GPU. Windows
 --   'wmWorlds' rather than just 'wmVisible' — mirrors
---   'Engine.Scripting.Lua.Message.Texture.invalidateAllWorldRenderCaches' — so a
+--   @Engine.Scripting.Lua.Message.Texture.invalidateAllWorldRenderCaches@ — so a
 --   hidden world's decals are already uploaded the moment it becomes
 --   visible instead of popping in a frame late.
 uploadBloodTextures ∷ EngineM σ ()

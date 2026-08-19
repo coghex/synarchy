@@ -30,7 +30,7 @@
 --   since a single 'IORef' read/write is never torn.
 module Engine.Load.Status
     ( LoadPhase(..), LoadOutcome(..), LoadStatus(..)
-    , ReconciliationFailure(..), renderReconciliationFailures
+    , ReconciliationFailure(..)
     , LoadStatusRef, newLoadStatusRef
     , beginLoad, advanceLoad, failLoad, finishLoad, failReconciliation
     , readLoadStatus, loadInProgress
