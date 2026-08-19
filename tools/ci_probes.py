@@ -174,6 +174,8 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "lua_strict_msg": (TARGETED, "narrow #622 LuaToEngineMsg/LuaMsg strictness crash regression"),
     "machine_shop": (TARGETED, "electric furnace + machine_shop content regression, narrower "
                                "than the generic #590 power-draw mechanism probe"),
+    "meal_waste": (TARGETED, "narrow #1219 stop-before-waste meal-policy regression; "
+                             "foraging remains the generic #94 food-ladder gate"),
     "mental_efficiency": (TARGETED, "narrow #353 mental-effectiveness combat/craft tie-in "
                                     "regression: getMentalEffectiveness, craft-bill progress "
                                     "rate, craft-quality delta, damage-energy invariance"),
