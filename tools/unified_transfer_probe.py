@@ -53,12 +53,19 @@ exist would be asserting a feature this arc did not ship.
 ENVIRONMENT, and why each choice is load-bearing rather than incidental.
 Every one of them was a live failure first:
 
-  * the fixtures are sited on ONE FLAT SHELF with a flat corridor
-    between them (`allocate_flat_anchors`). Seed 42's origin sits on a
-    ridge between z 9 and z 45, and a carrier crossing it plays
-    `climb` / `climb_pullup` engine animations during which its AI does
-    not re-decide at all — a twelve-tile leg then outlives any sane
-    budget;
+  * the fixtures are sited on ONE LEVEL SHELF with a level corridor
+    between them (`allocate_flat_anchors`), and LEVEL is meant
+    literally. Seed 42's origin sits on a ridge between z 9 and z 45,
+    and a carrier crossing it plays `climb` / `climb_pullup` engine
+    animations during which its AI does not re-decide at all, so a
+    twelve-tile leg outlives any sane budget. Worse, a drop of more than
+    one z level is a FALL, and every fall is a KNOCKDOWN
+    (`Unit.Thread.Movement.Timers`: Collapsed pose plus a self-timed
+    get-up) — and an incapacitated endpoint ENDS a Mode A session by
+    rule. That is transient enough to be invisible to any poll and
+    biased toward long approaches, so it presents as an intermittent
+    Mode A bug; it cost two full runs before the pose was caught in the
+    act;
   * no unit is ever spawned ON a building's own tile. One that is
     accumulates wounds and is playing `injured_death` a minute later,
     which ends a Mode A session through the incapacitated-source rule
@@ -953,7 +960,7 @@ _ANCHOR_SCAN_LUA = (
     "   local x = math.floor(a.x + (b.x - a.x) * t + 0.5);"
     "   local y = math.floor(a.y + (b.y - a.y) * t + 0.5);"
     "   local z = surf(x, y);"
-    "   if not z or math.abs(z - z0) > BAND + 1 then return false end"
+    "   if not z or math.abs(z - z0) > BAND then return false end"
     "  end; return true end;"
     " for h = 1, math.min(#cand, HUBS) do"
     "  local hub = cand[h]; local picked = { hub };"
@@ -975,10 +982,21 @@ _ANCHOR_SCAN_LUA = (
 
 
 def allocate_flat_anchors(port: int, n: int, min_sep: int = 6,
-                          radius: int = 48, band: int = 2, hubs: int = 40,
+                          radius: int = 48, bands=(0, 1), hubs: int = 40,
                           cluster: int = 16):
-    """`n` separated dry tiles on ONE flat shelf, with a flat corridor
+    """`n` separated dry tiles on ONE LEVEL shelf, with a level corridor
     from each to the hub, searched outward from the origin.
+
+    `bands` is tried in order and 0 — every site and every sampled
+    corridor tile at the SAME z — is what this really wants. A drop of
+    more than one z level is a FALL, every fall is a knockdown
+    (`Unit.Thread.Movement.Timers`: the unit enters the Collapsed pose
+    with a self-timed get-up), and an incapacitated endpoint ends a Mode
+    A session by rule. That is transient enough to be invisible to any
+    poll and long-walk-biased enough to look like an intermittent Mode A
+    bug: it cost two full runs before the pose was caught in the act. A
+    ±1 band is offered as a fallback so a world with no perfectly level
+    shelf still runs rather than failing setup outright.
 
     `cluster` is what keeps the shelf a NEIGHBOURHOOD rather than a
     scatter: without it the corridor rule alone is happy to place the
@@ -993,22 +1011,24 @@ def allocate_flat_anchors(port: int, n: int, min_sep: int = 6,
     nowhere near the contract's Chebyshev <= 1 reach when the gesture
     fires."""
     span = radius // CHUNK_TILES + 1
-    for ox, oy in _search_centres(rings=2, spacing=2 * radius):
-        ccx, ccy = ox // CHUNK_TILES, oy // CHUNK_TILES
-        send(port, f"return world.loadChunksInRegion({ccx - span}, "
-                   f"{ccy - span}, {ccx + span}, {ccy + span})")
-        send(port, "return world.waitForChunks(120)", timeout=125.0)
-        raw = send(port,
-                   _ANCHOR_SCAN_LUA % (ox, oy, radius, 4, n, min_sep, band,
-                                       hubs, cluster),
-                   timeout=180.0).strip().strip('"')
-        if raw and raw != "none" and "," in raw:
-            out = []
-            for pair in raw.split(";"):
-                gx, gy = pair.split(",")
-                out.append((int(gx), int(gy)))
-            if len(out) == n:
-                return out
+    for band in bands:
+        for ox, oy in _search_centres(rings=2, spacing=2 * radius):
+            ccx, ccy = ox // CHUNK_TILES, oy // CHUNK_TILES
+            send(port, f"return world.loadChunksInRegion({ccx - span}, "
+                       f"{ccy - span}, {ccx + span}, {ccy + span})")
+            send(port, "return world.waitForChunks(120)", timeout=125.0)
+            raw = send(port,
+                       _ANCHOR_SCAN_LUA % (ox, oy, radius, 4, n, min_sep,
+                                           band, hubs, cluster),
+                       timeout=180.0).strip().strip('"')
+            if raw and raw != "none" and "," in raw:
+                out = []
+                for pair in raw.split(";"):
+                    gx, gy = pair.split(",")
+                    out.append((int(gx), int(gy)))
+                if len(out) == n:
+                    print(f"  (shelf found at z-band {band})", flush=True)
+                    return out
     return None
 
 
@@ -1430,6 +1450,7 @@ def await_session_open(chk: Checks, port: int, src_uid: int, label: str,
     session that was refused."""
     seen: list = []
     stale: list = []
+    poses: list = []
 
     def look():
         # `staleReason` is PUBLIC precisely so a gate can ask the same
@@ -1439,9 +1460,13 @@ def await_session_open(chk: Checks, port: int, src_uid: int, label: str,
         got = send(port, "local ts = require('scripts.transfer_session');"
                          " local s = ts.get();"
                          " return (s and s.phase or 'none') .. '/' .."
-                         " tostring(s and ts.staleReason() or 'n/a')"
+                         " tostring(s and ts.staleReason() or 'n/a') .. '/'"
+                         f" .. tostring(unit.getPose({src_uid}))"
                    ).strip().strip('"')
-        phase, _, reason = got.partition("/")
+        phase, _, rest = got.partition("/")
+        reason, _, pose = rest.partition("/")
+        if pose and pose not in poses:
+            poses.append(pose)
         if not seen or seen[-1] != phase:
             seen.append(phase)
         if reason not in ("nil", "n/a", "") and reason not in stale:
@@ -1456,7 +1481,9 @@ def await_session_open(chk: Checks, port: int, src_uid: int, label: str,
                   f"{label}: the REAL unit AI walks the escort and opens the "
                   f"pair on arrival",
                   f"phases seen {seen!r}, stale reasons seen {stale!r}, "
-                  f"escort running {ai_action(port, src_uid)!r}, stack depth "
+                  f"escort poses seen {poses!r} (a Collapsed one is a FALL "
+                  f"knockdown, which ends the session by rule), escort "
+                  f"running {ai_action(port, src_uid)!r}, stack depth "
                   f"{stack_dump(port).get('depth')!r}, camera "
                   f"{camera_state(port)!r}")
 
