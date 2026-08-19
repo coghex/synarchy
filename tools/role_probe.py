@@ -22,13 +22,47 @@ needs a choppable tree, and the arena has no flora), then checks:
      floor grows construction (construct_xp_per_piece) — including the
      lazy seeding path for units that lack the key.
 
+This is the first probe migrated to the shared `probe-result/v1`
+protocol (#1425): `--describe` prints its ordered, stable check
+declaration without booting anything, and when a harness supplies an
+event-stream path it reports through structured events instead of the
+bracketed stdout markers below. Run by hand it behaves exactly as it
+always has.
+
 Usage: python3 tools/role_probe.py [--port 9265] [--seed 42]
        [--size 64] [--plates 3]
+       python3 tools/role_probe.py --describe   # no engine
 """
 import argparse, glob, json, socket, subprocess, sys, time
+
+import probe_protocol
 from probelib import clear_find_water, quit_engine, boot, send
 
 SPROOT = "/tmp"
+
+PROBE_KEY = "role"
+
+# The ordered `probe-result/v1` check sequence. Identifiers are STABLE
+# and carry no runtime value: the observed role, skill numbers and unit
+# ids that used to be interpolated into these labels now ride in each
+# event's `detail` instead, so two runs of `derive_miner` are the same
+# check whatever they observed.
+CHECKS = [
+    ("derive_initial",
+     "fresh acolyte derives a role from spawn skill rolls"),
+    ("derive_miner", "mining 60 -> miner"),
+    ("hysteresis_hold",
+     "woodcutting 63 vs mining 60 stays miner (hysteresis)"),
+    ("hysteresis_flip", "woodcutting 70 -> woodcutter"),
+    ("demote_laborer", "all skills 10 -> laborer"),
+    ("technomule_no_role", "technomule has no role"),
+    ("steer_woodcutter", "woodcutter picks the chop job first"),
+    ("steer_miner", "miner picks the dig job first (same geometry)"),
+    ("xp_woodcutting", "felling grants woodcutting XP"),
+    ("xp_construction", "placing a floor grants construction XP"),
+]
+
+DESCRIPTOR = probe_protocol.build_descriptor(PROBE_KEY, CHECKS)
 
 
 def jget(port, lua, timeout=10.0):
@@ -132,11 +166,25 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--size", type=int, default=64)
     ap.add_argument("--plates", type=int, default=3)
+    ap.add_argument("--describe", action="store_true",
+                    help="print this probe's probe-result/v1 check "
+                         "declaration and exit; boots no engine (#1425)")
     args = ap.parse_args()
-    port = args.port
-    passed = True
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args, args.port, rep)
+    finally:
+        rep.close()
 
-    proc = boot(port, f"{SPROOT}/role_probe_engine.log")
+
+def _run(args, port, rep):
+    passed = True
+    proc = boot(port, rep.engine_log_path("role_probe_engine.log",
+                                          f"{SPROOT}/role_probe_engine.log"),
+                args=rep.engine_args())
     try:
         bootstrap(port)
         send(port, f"world.init('probe', {args.seed}, {args.size}, "
@@ -154,15 +202,17 @@ def main():
 
         found = find_wood(port)
         if not found:
-            print("  [FAIL] no wood-harvestable flora in the loaded region "
-                  "(try another seed)")
+            rep.abort("no wood-harvestable flora in the loaded region "
+                      "(try another seed)")
             return 1
         tx, ty, species = found
+        rep.info("wood-harvestable flora located",
+                 {"gx": tx, "gy": ty, "species": species})
 
         # --- 1. Derivation + hysteresis (unit a, near the tree) ---
         ua = spawn_worker(port, tx + 3, ty)
         if ua < 0:
-            print("  [FAIL] could not spawn derivation unit")
+            rep.abort("could not spawn derivation unit")
             return 1
 
         deadline = time.time() + 8.0
@@ -170,38 +220,36 @@ def main():
         while role0 == "none" and time.time() < deadline:
             time.sleep(1.0)
             role0 = get_role(port, ua)
-        ok = role0 != "none"
-        passed &= ok
-        print(f"  [{'PASS' if ok else 'FAIL'}] fresh acolyte derives a "
-              f"role from spawn skill rolls: {role0}")
+        passed &= rep.check(
+            "derive_initial", role0 != "none",
+            f"fresh acolyte derives a role from spawn skill rolls: {role0}",
+            {"role": role0})
 
         set_work_skills(port, ua, 60, 10, 10, 10)
         r = wait_role(port, ua, "miner")
-        passed &= r == "miner"
-        print(f"  [{'PASS' if r == 'miner' else 'FAIL'}] mining 60 → miner: "
-              f"{r}")
+        passed &= rep.check("derive_miner", r == "miner",
+                            f"mining 60 → miner: {r}", {"role": r})
 
         # Challenger inside the switch margin (63 < 60 + 5): stays miner.
         send(port, f"unit.setSkill({ua},'woodcutting',63); return 'ok'")
         time.sleep(4.0)
         r = get_role(port, ua)
-        passed &= r == "miner"
-        print(f"  [{'PASS' if r == 'miner' else 'FAIL'}] woodcutting 63 vs "
-              f"mining 60 stays miner (hysteresis): {r}")
+        passed &= rep.check(
+            "hysteresis_hold", r == "miner",
+            f"woodcutting 63 vs mining 60 stays miner (hysteresis): {r}",
+            {"role": r})
 
         # Challenger past the margin (70 ≥ 65): flips.
         send(port, f"unit.setSkill({ua},'woodcutting',70); return 'ok'")
         r = wait_role(port, ua, "woodcutter")
-        passed &= r == "woodcutter"
-        print(f"  [{'PASS' if r == 'woodcutter' else 'FAIL'}] woodcutting 70 "
-              f"→ woodcutter: {r}")
+        passed &= rep.check("hysteresis_flip", r == "woodcutter",
+                            f"woodcutting 70 → woodcutter: {r}", {"role": r})
 
         # Everything below threshold: generalist.
         set_work_skills(port, ua, 10, 10, 10, 10)
         r = wait_role(port, ua, "laborer")
-        passed &= r == "laborer"
-        print(f"  [{'PASS' if r == 'laborer' else 'FAIL'}] all skills 10 → "
-              f"laborer: {r}")
+        passed &= rep.check("demote_laborer", r == "laborer",
+                            f"all skills 10 → laborer: {r}", {"role": r})
 
         send(port, f"unit.destroy({ua}); return 'ok'")
 
@@ -214,9 +262,8 @@ def main():
             um = -1
         time.sleep(4.0)
         r = get_role(port, um) if um >= 0 else "spawnfail"
-        passed &= r == "none"
-        print(f"  [{'PASS' if r == 'none' else 'FAIL'}] technomule has no "
-              f"role: {r}")
+        passed &= rep.check("technomule_no_role", r == "none",
+                            f"technomule has no role: {r}", {"role": r})
         if um >= 0:
             send(port, f"unit.destroy({um}); return 'ok'")
 
@@ -231,7 +278,7 @@ def main():
                     f"return x..','..y end end end end; return 'none'"
                     ).strip('"')
         if spot == "none":
-            print("  [FAIL] no flat diggable tile near the tree")
+            rep.abort("no flat diggable tile near the tree")
             return 1
         dx, dy = (int(v) for v in spot.split(","))
         send(port, f"chop.designate('probe',{tx},{ty},{tx},{ty}); "
@@ -246,26 +293,26 @@ def main():
                               ("miner",      (60, 10, 10, 10))]:
             u = spawn_worker(port, mx + 1, my + 1)
             if u < 0:
-                print(f"  [FAIL] could not spawn {label} steering unit")
+                rep.abort(f"could not spawn {label} steering unit")
                 return 1
             set_work_skills(port, u, *skills)
             picks[label] = first_work_action(port, u)
             send(port, f"unit.destroy({u}); return 'ok'")
             time.sleep(1.0)
 
-        ok = picks["woodcutter"] == "chop_designation"
-        passed &= ok
-        print(f"  [{'PASS' if ok else 'FAIL'}] woodcutter picks the chop "
-              f"job first: {picks['woodcutter']}")
-        ok = picks["miner"] == "dig_designation"
-        passed &= ok
-        print(f"  [{'PASS' if ok else 'FAIL'}] miner picks the dig job "
-              f"first (same geometry): {picks['miner']}")
+        passed &= rep.check(
+            "steer_woodcutter", picks["woodcutter"] == "chop_designation",
+            f"woodcutter picks the chop job first: {picks['woodcutter']}",
+            {"action": picks["woodcutter"]})
+        passed &= rep.check(
+            "steer_miner", picks["miner"] == "dig_designation",
+            f"miner picks the dig job first (same geometry): {picks['miner']}",
+            {"action": picks["miner"]})
 
         # --- 3. XP growth (unit c fells the tree, then lays a floor) ---
         uc = spawn_worker(port, tx + 2, ty)
         if uc < 0:
-            print("  [FAIL] could not spawn XP unit")
+            rep.abort("could not spawn XP unit")
             return 1
         set_work_skills(port, uc, 5, 55, 40, 10)
         wc_before = get_skill(port, uc, "woodcutting")
@@ -279,10 +326,11 @@ def main():
                 felled = True
                 break
         wc_after = get_skill(port, uc, "woodcutting")
-        ok = felled and wc_after > wc_before
-        passed &= ok
-        print(f"  [{'PASS' if ok else 'FAIL'}] felling grants woodcutting "
-              f"XP: felled={felled} {wc_before} → {wc_after}")
+        passed &= rep.check(
+            "xp_woodcutting", felled and wc_after > wc_before,
+            f"felling grants woodcutting XP: felled={felled} "
+            f"{wc_before} → {wc_after}",
+            {"felled": felled, "before": wc_before, "after": wc_after})
 
         # Floor build: material from inventory, then construction XP.
         # Re-skill the feller into a builder first (construction 60 →
@@ -299,7 +347,7 @@ def main():
                      f"return x..','..y end end end end; return 'none'"
                      ).strip('"')
         if fspot == "none":
-            print("  [FAIL] no flat buildable tile for the floor")
+            rep.abort("no flat buildable tile for the floor")
             return 1
         px, py = (int(v) for v in fspot.split(","))
         send(port, f"unit.addItem({uc},'steel_plate',0); return 'ok'")
@@ -314,12 +362,13 @@ def main():
                 floored = True
                 break
         con_after = get_skill(port, uc, "construction")
-        ok = floored and con_after > con_before
-        passed &= ok
-        print(f"  [{'PASS' if ok else 'FAIL'}] placing a floor grants "
-              f"construction XP: built={floored} {con_before} → {con_after}")
+        passed &= rep.check(
+            "xp_construction", floored and con_after > con_before,
+            f"placing a floor grants construction XP: built={floored} "
+            f"{con_before} → {con_after}",
+            {"built": floored, "before": con_before, "after": con_after})
 
-        print("\n" + ("ALL ROLE CHECKS PASSED" if passed else "SOME FAILED"))
+        rep.note("\n" + ("ALL ROLE CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1
     finally:
         quit_engine(port, proc)
