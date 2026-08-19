@@ -22,7 +22,7 @@ approval.
 
 - [x] NCT-1. Graphical GLFW “set time” test does not test setting time — [#1400]
 - [x] NCT-2. Graphical Vulkan lifecycle tests never destroy their raw instances — [#1401]
-- [ ] NCT-3. Vulkan extension tests require optional, platform-specific capabilities
+- [x] NCT-3. Vulkan extension tests require optional, platform-specific capabilities — [#1402]
 - [ ] NCT-4. Most graphical GLFW tests validate the upstream binding, not game behavior
 - [ ] NCT-5. Graphical device test bypasses the engine's GPU-selection contract
 - [ ] NCT-6. Injury-log probe accepts a `unit.injure` event for the wrong unit
@@ -129,7 +129,7 @@ production wraps that operation at its owner.
 - **Remaining uncertainty:** None material; the resource ownership contract is
   explicit in the current implementation.
 
-### NCT-3. Vulkan extension tests require optional, platform-specific capabilities
+### [#1402] NCT-3. Vulkan extension tests require optional, platform-specific capabilities
 
 The graphical instance suite declares two portability-related extensions to be
 required and fails when the local Vulkan driver does not advertise them.  The
