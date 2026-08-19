@@ -51,7 +51,7 @@ implementation file, test, tracker item, or remote state was changed.
 
 - [x] PT-1. Survival interruptions consume a commanded move’s stall budget — [#1291]
 - [x] PT-2. The remote-settlement title renders across the modal’s top border — [#1394]
-- [ ] PT-3. Final bleeding-pool cases spawn outside the loaded arena
+- [x] PT-3. Final bleeding-pool cases spawn outside the loaded arena — [#1395]
 - [ ] PT-4. Combat-animation setup does not reliably establish combat
 - [ ] PT-5. The combat-animation probe does not gate its death-animation contract
 - [ ] PT-6. The default chop fixture cannot reach the promised partial-result oracle
@@ -186,7 +186,7 @@ vertically as though its coordinate described the top of its visible bounds.
 
 ## Probe fixture integrity
 
-### PT-3. Final bleeding-pool cases spawn outside the loaded arena
+### [#1395] PT-3. Final bleeding-pool cases spawn outside the loaded arena
 
 The bleeding-trail probe reports success even though its final collapsed-unit,
 adjacent-bleeder, and time-scale pooling cases spawn units outside the flat
