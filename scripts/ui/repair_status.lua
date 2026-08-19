@@ -7,15 +7,15 @@
 -- repairPriority, #302/#303) through its public accessors, so this is
 -- the one place that turns that into UI — mirrors quality_tier.lua.
 --
--- Only items the repair AI can ever consider (own inventory / equipped
--- / accessories, or the nearest technomule's inventory — see the
--- repair_job comment in unit_ai_repair.lua) carry both an instanceId and a
--- condition field; that is also exactly the set eligible for a
--- priority flag. Ground items and generic cargo-building storage are
--- deliberately excluded (#302: item.listGround() exposes neither
--- instanceId nor sharpness, and repair only ever scans a unit's own
--- held items or a technomule's — never a cargo building's storage —
--- so flagging an item there would be silently inert).
+-- Since #1421 EVERY item reports a condition, so instanceId is what
+-- this eligibility check actually turns on. The items the repair AI can
+-- ever consider (own inventory / equipped / accessories, or the nearest
+-- technomule's inventory — see the repair_job comment in
+-- unit_ai_repair.lua) all carry one. Ground items are deliberately
+-- excluded (#302: item.listGround() exposes neither instanceId nor
+-- sharpness), and repair only ever scans a unit's own held items or a
+-- technomule's — never a cargo building's storage — so flagging an item
+-- there would be silently inert.
 --
 -- Eligibility alone isn't enough to offer/show "priority", though: an
 -- item at, say, 80% condition structurally COULD be flagged, but the AI

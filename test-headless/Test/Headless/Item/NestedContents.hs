@@ -87,7 +87,7 @@ bareItemDef name kind = ItemDef
     , idWeight = 0.5, idWeightSpec = Nothing, idBulk = 1.0
     , idStorage = Nothing, idKind = kind
     , idCategory = "Misc", idMake = "", idMaterial = ""
-    , idQualitySpec = Nothing, idQualityTiers = [], idConditionSpec = Nothing
+    , idQualitySpec = Nothing, idQualityTiers = []
     , idContainer = if kind ≡ "container"
         then Just ItemContainer { icCapacity = 10, icHolds = "supplies"
                                 , icFillWeight = 0.5, icDefaultFill = 0 }

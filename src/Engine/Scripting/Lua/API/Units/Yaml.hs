@@ -205,10 +205,10 @@ registerUnitDefs env poolRef lteq resolveAtlases filePath defs = do
                     ]
 
             -- Expand each entry by its count. Each repetition
-            -- becomes a distinct ItemInstance (quality /
-            -- condition rolls fire per copy); the drop
-            -- priority rides along for the spawn-time
-            -- capacity check.
+            -- becomes a distinct ItemInstance (the quality and
+            -- weight rolls fire per copy; condition starts full
+            -- on every one, #1421); the drop priority rides
+            -- along for the spawn-time capacity check.
             let startingInv =
                     [ (uyieItem e, uyieFill e, uyieDropPriority e)
                     | e ← uydStartingInventory def

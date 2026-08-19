@@ -226,8 +226,9 @@ handleWorldDigTileCommand env rngRef unitQ logger pageId rawGX rawGY rawUX rawUY
 -- | Spawn @n@ yield items (chunks, gems) as ground items scattered
 --   on the dig tile. Each gets a random sub-tile position, retried a
 --   few times to keep ≥ 0.15 tiles from existing ground items so
---   finds lay out as a scatter instead of a stack. Quality/condition
---   roll from the item def's spec like any other instance.
+--   finds lay out as a scatter instead of a stack. Quality rolls from
+--   the item def's spec like any other instance; condition starts full
+--   (#1421).
 spawnYieldItems ∷ EngineEnv → IORef StdGen → LoggerState → WorldState → Text
                 → (Int, Int) → Int → IO ()
 spawnYieldItems env rngRef logger ws defName (gx, gy) n = do
@@ -241,15 +242,15 @@ spawnYieldItems env rngRef logger ws defName (gx, gy) n = do
                 "Dig yield: unknown item def '" <> defName
                   <> "' — dropping " <> T.pack (show n)
         Just iDef → forM_ [1 .. n] $ \_ → do
-            qual ← rollItemSpec (idQualitySpec iDef)   rngRef
-            cond ← rollItemSpec (idConditionSpec iDef) rngRef
+            qual ← rollItemSpec (idQualitySpec iDef) rngRef
             wght ← rollItemWeight iDef rngRef
             iid ← freshItemInstanceId env
             let inst = ItemInstance
                     { iiDefName     = defName
                     , iiCurrentFill = 0
                     , iiQuality     = qual
-                    , iiCondition   = cond
+                      -- Fresh item: full condition (#1421).
+                    , iiCondition   = 100.0
                     , iiWeight      = wght
                     , iiSharpness   = 100.0
                     , iiContents    = []

@@ -60,7 +60,12 @@ local function pushItemInfo(gid)
     -- show their real mass — not the static definition weight (d.weight).
     table.insert(lines, "Weight: " .. fmt1(g.weight) .. " kg")
     table.insert(lines, "Quality: " .. fmt1(g.quality))
-    table.insert(lines, "Condition: " .. fmt1(g.condition))
+    -- Condition by VALUE, not presence (#1421): every item reports one,
+    -- so the line is shown only for an item that has taken wear. A
+    -- broken item is still marked broken on the name line above.
+    if g.condition and g.condition < 100 then
+        table.insert(lines, "Condition: " .. fmt1(g.condition))
+    end
     if g.fill and g.fill > 0 then
         table.insert(lines, "Fill: " .. fmt1(g.fill) .. " L")
     end

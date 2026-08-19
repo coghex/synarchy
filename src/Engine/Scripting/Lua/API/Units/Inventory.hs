@@ -73,15 +73,14 @@ unitAddItemFn env = do
                                 Nothing → 0
                         qual ← rollItemSpec (idQualitySpec def)
                                             (ucStatRNGRef (toUnitCombatCapability env))
-                        cond ← rollItemSpec (idConditionSpec def)
-                                            (ucStatRNGRef (toUnitCombatCapability env))
                         wght ← rollItemWeight def (ucStatRNGRef (toUnitCombatCapability env))
                         iid ← freshItemInstanceId env
                         let inst' = ItemInstance
                                 { iiDefName     = defName
                                 , iiCurrentFill = clampedFill
                                 , iiQuality     = qual
-                                , iiCondition   = cond
+                                  -- Fresh item: full condition (#1421).
+                                , iiCondition   = 100.0
                                 , iiWeight      = wght
                                 , iiSharpness   = 100.0
                                 , iiContents    = []
@@ -617,11 +616,11 @@ unitGetInventoryFn env = do
                         -- (kits) split by internal state in the row key (#67A).
                         Lua.pushstring (TE.encodeUtf8 (itemContentsSig inst))
                         Lua.setfield (-2) "contentsKey"
-                        -- Only surface quality / condition when the def
-                        -- actually declares a spec for them — otherwise
-                        -- callers (e.g. inventory tooltip) would show
-                        -- "100%" for items like canteens / rations that
-                        -- conceptually don't have these qualities.
+                        -- Only surface QUALITY when the def actually
+                        -- declares a spec for it — otherwise callers
+                        -- (e.g. inventory tooltip) would show "100%" for
+                        -- items like canteens / rations that
+                        -- conceptually don't have workmanship.
                         case mDef of
                             Just d | Just _ ← idQualitySpec d → do
                                 Lua.pushnumber
@@ -635,12 +634,15 @@ unitGetInventoryFn env = do
                                         Lua.setfield (-2) "qualityTier"
                                     Nothing → pure ()
                             _ → pure ()
-                        case mDef ⌦ idConditionSpec of
-                            Just _ → do
-                                Lua.pushnumber
-                                    (Lua.Number (realToFrac (iiCondition inst)))
-                                Lua.setfield (-2) "condition"
-                            Nothing → pure ()
+                        -- Condition is UNIVERSAL runtime wear state
+                        -- (#1421), so it is pushed for every item as
+                        -- the instance's current 0..100 value. Deciding
+                        -- whether to DISPLAY it is the caller's job and
+                        -- keys on that value (a pristine item shows no
+                        -- condition line), never on presence.
+                        Lua.pushnumber
+                            (Lua.Number (realToFrac (iiCondition inst)))
+                        Lua.setfield (-2) "condition"
                         -- Display-side fields the inventory UI needs.
                         -- Defaulted when the def is missing so the
                         -- renderer always sees a complete row.

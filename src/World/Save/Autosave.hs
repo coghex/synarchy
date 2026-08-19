@@ -96,6 +96,9 @@ module World.Save.Autosave
     , autosaveSlotName
     , autosaveIncomingSlotName
     , autosaveRetiredSlotName
+    , autosaveStagingSlotNames
+    , isAutosaveStagingSlot
+    , publicSaveListings
     , prepareAutosaveCycle
     , finalizeAutosaveRotation
     ) where
@@ -139,6 +142,63 @@ autosaveIncomingSlotName = autosaveSlotPrefix <> "incoming"
 --   its LAST one. Same namespacing argument as the staging slot above.
 autosaveRetiredSlotName ∷ Text
 autosaveRetiredSlotName = autosaveSlotPrefix <> "retired"
+
+-- | Both reserved staging names, in no meaningful order. Rotation is the
+--   only thing that ever writes them, and a generation only ever rests
+--   in one while a cycle is between steps (or was interrupted between
+--   them).
+autosaveStagingSlotNames ∷ [Text]
+autosaveStagingSlotNames =
+    [autosaveIncomingSlotName, autosaveRetiredSlotName]
+
+-- | #1413: whether this listed slot is rotation machinery that the
+--   PUBLIC save listing must hide.
+--
+--   A staged generation is an ordinary complete slot — it lists and
+--   loads exactly like any other — so nothing stopped it from becoming a
+--   save-browser row, and (being the newest) the main menu's Continue
+--   target. That is not a narrow in-flight window either: a rotation
+--   that refuses deliberately leaves the staged generation in place for
+--   the NEXT cycle to rotate in, so a quit or crash in between leaves it
+--   public across a restart.
+--
+--   The predicate is deliberately two-part, and NEITHER half alone is
+--   correct:
+--
+--   * The NAME alone is not enough, because a player may type
+--     @autosave-incoming@ into the manual save box —
+--     'World.Save.Serialize.sanitizeSaveName' accepts it — and
+--     'ownershipProblem' then refuses the cycle with a message asking
+--     them to rename or delete that very save. Hiding it by name would
+--     conceal exactly the save the player is being told to act on.
+--     #913 decided autosave ownership by the durable classification
+--     rather than the name for the same reason.
+--
+--   * The CLASSIFICATION alone is not enough, because the numbered
+--     @autosave-\<n\>@ family carries it too and must stay listed.
+--
+--   The name half reads the slot's own identity ('slName' — the
+--   directory under @saves\/@), never the generation's embedded
+--   'World.Save.Types.smName'. A rotated generation still remembers
+--   being WRITTEN as @autosave-incoming@ (see the module header), so
+--   matching on the embedded name would hide the entire numbered family.
+isAutosaveStagingSlot ∷ SaveListing → Bool
+isAutosaveStagingSlot listing =
+    smAutosave (slMetadata listing)
+        ∧ (slName listing `elem` autosaveStagingSlotNames)
+
+-- | The listing as a PLAYER may see it. Applied once, at the Lua
+--   boundary @engine.listSaves()@ — never inside
+--   'World.Save.Serialize.listSaves', which 'readSlotStates' below
+--   depends on reporting both staging slots so a cycle can classify
+--   them, refuse over them, and rotate one in.
+--
+--   Order is preserved (so the caller's newest-first sort survives) and
+--   nothing but the two staging rows is removed, so re-indexing the
+--   survivors yields the same dense sequence a consumer's @#@, @[1]@
+--   and @ipairs@ already assume.
+publicSaveListings ∷ [SaveListing] → [SaveListing]
+publicSaveListings = filter (not . isAutosaveStagingSlot)
 
 -- | One slot's pre-cycle facts.
 data SlotState = SlotState
