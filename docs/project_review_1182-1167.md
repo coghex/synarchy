@@ -8,7 +8,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 - [x] PRR-1. Item stacks collapse temperature-distinct instances — [#1268]
 - [x] PRR-2. Item-list invalidation omits callback-visible row data — [#1269]
-- [ ] PRR-3. Exact-container popup titles discard the instance identity — [deferred]: #1238 folds the panel in first
+- [x] PRR-3. Exact-container popup titles discard the instance identity — [no-issue]
 - [x] PRR-4. Enum audit cannot see same-arity payload changes — [#1270]
 - [x] PRR-5. World-name suggestion accepts unbounded linear work — [#1272]
 
@@ -56,9 +56,9 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 - **Scope and constraints:** Surfaced while reviewing PR #1169 / issue #1088 requirement 11. Preserve the no-churn path and keep callback-derived state explicit; do not require the shared widget to know host-specific tooltip semantics.
 - **Remaining uncertainty:** The listed fields currently come from item definitions and are generally stable during one panel lifetime. The processor should identify whether another callback-visible live field provides a present production repro or disposition this as an API-contract hardening gap.
 
-### [deferred] PRR-3. Exact-container popup titles discard the instance identity
+### [no-issue] PRR-3. Exact-container popup titles discard the instance identity
 
-> **Deferred:** The fix targets `scripts/item_contents_panel.lua`, which open, approved #1238 (nested container-window stack, D-13) folds into the container-window manager — filing now specifies a file scheduled for rewrite. Precondition: #1238 merges; then file the exact-instance title contract (title resolves via the stored `instanceId` when set, first-by-defName only for the nil compatibility path) against the surviving container-window surface. No current data reproduces the mismatch (only authored container `first_aid_kit` has no condition spec), so waiting costs nothing observable.
+> **Disposition:** No issue — fixed by #1238. `buildTitle`'s first-by-defName scan is gone; `containerTitle` (`scripts/item_contents_panel.lua:105`) takes the caller-supplied exact-row `displayName` first, and all four construction sites supply it (`unit_info_v2_context_menu.lua:175`, `cargo_inventory_panel.lua:330`/`:353`, `item_contents_panel.lua:218`/`:247`), each descending by exact `instanceId`. The defName scan survives only as the documented fallback for the nil-`instanceId` compatibility path the finding asked to preserve.
 
 > **Captured note:** Carry exact container identity through the item-contents popup title as well as its contents query. `openFor` deliberately targets `instanceId`, but `buildTitle` searches inventory by `defName` and uses the first same-definition item's display name.
 
