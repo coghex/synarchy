@@ -370,7 +370,18 @@ class Checks:
 def make_isolated_root(base: str) -> str:
     """A throwaway resource root: the read-only content families
     symlinked, `config/` COPIED (the real UI flow writes settings and
-    must never touch the developer's own), and its OWN empty saves/."""
+    must never touch the developer's own), and its OWN empty saves/.
+
+    The copy deliberately EXCLUDES `*.local.yaml`, so the run starts from
+    the tracked defaults a fresh checkout has rather than from whatever
+    this developer's settings happen to be. That is not tidiness: the
+    partial-batch stage asserts on the `unit_warning` text in the EVENT
+    LOG, and a category reaches the log only when its notifications YAML
+    says `log: true` — so a personal override could otherwise decide
+    whether this gate passes. Excluding them also makes the run
+    reproducible between two checkouts of the same commit, which is what
+    the FINGERPRINT comparison is worth anything for.
+    """
     root = os.path.join(base, "root")
     os.makedirs(root, exist_ok=True)
     for family in ("scripts", "assets", "data"):
@@ -379,7 +390,8 @@ def make_isolated_root(base: str) -> str:
             os.symlink(os.path.join(REPO, family), target)
     config_dst = os.path.join(root, "config")
     if not os.path.exists(config_dst):
-        shutil.copytree(os.path.join(REPO, "config"), config_dst)
+        shutil.copytree(os.path.join(REPO, "config"), config_dst,
+                        ignore=shutil.ignore_patterns("*.local.yaml"))
     os.makedirs(os.path.join(root, "saves"), exist_ok=True)
     return root
 
@@ -1362,6 +1374,32 @@ def send_home(port: int, uid: int, home, away_from, gap: int = 3,
     time.sleep(0.4)
 
 
+def retire_leg_item(port: int, dst, def_name: str) -> None:
+    """Take a finished leg's item back out of a UNIT destination.
+
+    Twelve legs deliver into three endpoints, and the acolyte is the
+    destination of four of them. Left in place the deliveries ACCUMULATE,
+    so a later leg's headroom depends on how many earlier Mode B orders
+    have already completed — which is a timing question, not a contract
+    one. That is not hypothetical: an unretired run refused
+    `modeA storage->acolyte` with the contract's own `receiver_full`, and
+    the two `Retrieve 1` gestures into the same full acolyte then queued
+    no order at all, so the run failed while the contract was behaving
+    exactly as specified.
+
+    Retiring makes every leg start from the same load. Each leg mints its
+    OWN throwaway def, so removing BY DEF NAME cannot touch another leg's
+    item or the fixtures. Building destinations are deliberately left
+    alone: those hold 200 kg against twelve sub-kilogram items, and the
+    lax cargo verbs are the AI's path, not something a gate for the
+    strict policy should be routing its own cleanup through.
+    """
+    kind, ident = dst
+    if kind != "unit":
+        return
+    send(port, "return unit.removeItem(%d, '%s')" % (int(ident), def_name))
+
+
 def mode_b_leg(chk: Checks, port: int, ledger: ViewLedger, fp: dict, key: str,
                src, dst, def_name: str, verb: str, stager: int,
                home=None) -> bool:
@@ -1519,6 +1557,7 @@ def mode_b_leg(chk: Checks, port: int, ledger: ViewLedger, fp: dict, key: str,
     assert_structured_move(chk, port, label, src, dst, def_name, [iid],
                            before_check, deferred_reach=True)
     fp.setdefault("legs", {})[f"modeB:{key}"] = iid
+    retire_leg_item(port, dst, def_name)
     return True
 
 
@@ -1692,6 +1731,7 @@ def mode_a_leg(chk: Checks, port: int, fp: dict, key: str, src, dst,
     assert_structured_move(chk, port, label, src, dst, def_name, [iid],
                            before_check, deferred_reach=False)
     fp.setdefault("legs", {})[f"modeA:{key}"] = iid
+    retire_leg_item(port, dst, def_name)
     return True
 
 
