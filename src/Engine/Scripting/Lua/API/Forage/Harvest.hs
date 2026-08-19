@@ -167,7 +167,6 @@ spawnYields env ws gx gy yields = do
                     let (v, g') = randomR (lo, hi) g in (g', v)
                 forM [1 .. max 0 count] $ \_ → do
                     qual ← rollItemSpec (idQualitySpec def) (ucStatRNGRef (toUnitCombatCapability env))
-                    cond ← rollItemSpec (idConditionSpec def) (ucStatRNGRef (toUnitCombatCapability env))
                     wght ← rollItemWeight def (ucStatRNGRef (toUnitCombatCapability env))
                     iid ← freshItemInstanceId env
                     (ju, jv) ← atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \g →
@@ -181,7 +180,8 @@ spawnYields env ws gx gy yields = do
                             { iiDefName     = name
                             , iiCurrentFill = fill
                             , iiQuality     = qual
-                            , iiCondition   = cond
+                              -- Fresh item: full condition (#1421).
+                            , iiCondition   = 100.0
                             , iiWeight      = wght
                             , iiSharpness   = 100.0
                             , iiContents    = []

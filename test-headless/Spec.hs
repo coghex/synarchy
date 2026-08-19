@@ -40,6 +40,7 @@ import qualified Test.Headless.Item.GroundPageOwnership as GroundPageOwnership
 import qualified Test.Headless.Item.Temperature as ItemTemp
 import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Item.QualityTier as ItemQualityTier
+import qualified Test.Headless.Item.Condition as ItemCondition
 import qualified Test.Headless.Item.BulkStorage as ItemBulkStorage
 import qualified Test.Headless.Item.Discovery as ItemDiscovery
 import qualified Test.Headless.Asset.TextureFallback as TextureFallback
@@ -353,6 +354,7 @@ main = hspec $ do
     aroundAll withHeadlessEngine UnitAtlasLoader.spec
 
     aroundAll withHeadlessEngine ItemDiscovery.spec
+    aroundAll withHeadlessEngineNoWorld ItemCondition.spec
     describe "Unit.Anim" AnimTest.spec
     describe "Unit.Injury" InjuryTest.spec
     describe "Unit.InjurySpeed" InjurySpeedTest.spec

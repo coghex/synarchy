@@ -12,9 +12,6 @@ items:
     quality:
       min: 50
       max: 75
-    condition:
-      min: 80
-      max: 100
 
     # Second heaviest. Broad blade with a dull edge — the corner can
     # be thrust into a soft target, the flat is a serviceable cudgel,
