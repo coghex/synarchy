@@ -20,7 +20,7 @@ approval.
 
 ## Status
 
-- [ ] NCT-1. Graphical GLFW “set time” test does not test setting time
+- [x] NCT-1. Graphical GLFW “set time” test does not test setting time — [#1400]
 - [ ] NCT-2. Graphical Vulkan lifecycle tests never destroy their raw instances
 - [ ] NCT-3. Vulkan extension tests require optional, platform-specific capabilities
 - [ ] NCT-4. Most graphical GLFW tests validate the upstream binding, not game behavior
@@ -47,7 +47,7 @@ approval.
 
 ## Graphical Hspec suite
 
-### NCT-1. Graphical GLFW “set time” test does not test setting time
+### [#1400] NCT-1. Graphical GLFW “set time” test does not test setting time
 
 The graphical GLFW test calls `GLFW.setTime 0`, then checks only that
 `GLFW.getTime` returns a nonnegative value. Time is naturally nonnegative, so
