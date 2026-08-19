@@ -51,6 +51,9 @@ import sys
 import threading
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import probe_protocol  # noqa: E402
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Base for the unique per-probe ports handed out in parallel mode (--jobs).
@@ -635,11 +638,58 @@ def unknown_exact_keys(only: str | None) -> list[str]:
     return [n for n in _only_tokens(only) if n not in known]
 
 
+def probe_protocol_env(event_path: str | None = None,
+                       artifact_dir: str | None = None,
+                       engine_log_dir: str | None = None,
+                       rts_caps: int | None = None) -> dict[str, str]:
+    """The `probe-result/v1` environment for one harnessed run (#1425).
+
+    A migrated probe reads these to decide where its event stream,
+    artifacts and engine logs go, and how many RTS capabilities every
+    engine it boots gets. All four are optional and an empty result
+    means "no protocol wiring", which is what an ordinary
+    `run_probes.py` run passes.
+    """
+    env: dict[str, str] = {}
+    if event_path is not None:
+        env[probe_protocol.ENV_EVENTS] = str(event_path)
+    if artifact_dir is not None:
+        env[probe_protocol.ENV_ARTIFACT_DIR] = str(artifact_dir)
+    if engine_log_dir is not None:
+        env[probe_protocol.ENV_ENGINE_LOG_DIR] = str(engine_log_dir)
+    if rts_caps is not None:
+        env[probe_protocol.ENV_RTS_CAPS] = str(rts_caps)
+    return env
+
+
 def run_one(script: str, port: int | None, timeout: float,
-            groups: ProbeGroups | None = None):
+            groups: ProbeGroups | None = None, *,
+            event_path: str | None = None,
+            artifact_dir: str | None = None,
+            engine_log_dir: str | None = None,
+            rts_caps: int | None = None):
+    """Launch one probe, capture it, and reap its whole process group.
+
+    The four keyword-only parameters are the `probe-result/v1` wiring
+    (#1425), handed to the child through the environment so a migrated
+    probe needs no new command-line flags. Every one defaults to None,
+    which passes no environment override at all — so every pre-existing
+    positional caller behaves exactly as it did.
+    """
     cmd = ["python3", os.path.join("tools", script)]
     if port is not None:
         cmd += ["--port", str(port)]
+    # `run_one` is the ONE authority on a child's protocol wiring: the
+    # inherited environment's own SYNARCHY_PROBE_* variables are dropped
+    # first, so a stale export in the operator's shell cannot silently
+    # push an ordinary `run_probes.py` run into protocol mode (where a
+    # probe would stop printing the human output the runner's failure
+    # tail exists to show).
+    protocol_env = probe_protocol_env(event_path, artifact_dir,
+                                      engine_log_dir, rts_caps)
+    child_env = {k: v for k, v in os.environ.items()
+                 if k not in probe_protocol.PROTOCOL_ENV_VARS}
+    child_env.update(protocol_env)
     if groups is not None and groups.stopping.is_set():
         # The runner is tearing down; a queued worker must not boot one
         # more engine on its way out.
@@ -658,7 +708,7 @@ def run_one(script: str, port: int | None, timeout: float,
             proc = subprocess.Popen(
                 cmd, cwd=REPO_ROOT,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, start_new_session=True,
+                text=True, start_new_session=True, env=child_env,
             )
             # `start_new_session=True` makes the child a session AND
             # process-group leader, so its pgid IS its pid. Capture it here

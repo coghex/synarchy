@@ -1093,6 +1093,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Item.Temperature
                    Test.Headless.Item.BuffYaml
                    Test.Headless.Item.QualityTier
+                   Test.Headless.Item.Condition
         Test.Headless.Item.BulkStorage
                    Test.Headless.Item.Discovery
                    Test.Headless.Asset.TextureFallback
@@ -1112,6 +1113,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Storage
                    Test.Headless.World.Save.Contract
                    Test.Headless.Save.AutosaveGuards
+                   Test.Headless.Save.AutosaveListing
                    Test.Headless.Save.Barrier
                    Test.Headless.Load.Status
                    Test.Headless.Save.Snapshot

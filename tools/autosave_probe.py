@@ -41,13 +41,22 @@ What it proves, in order:
      sitting on an `autosave-<n>` name fails the attempt with a
      `save_load` failure, overwrites nothing, and rotates nothing --
      both as a modern slot directory AND as a pre-#762 legacy flat file,
-     which a published directory would otherwise silently shadow.
+     which a published directory would otherwise silently shadow. A
+     manual save on either RESERVED staging name blocks the cycle the
+     same way and stays LISTED (#1413), since the refusal asks the
+     player to rename or delete that very save.
  10. ROTATION IS ORDERED AND OWNED, AND ONLY EVER FOLLOWS A REAL
      PUBLISH. Repeated autosaves keep `autosave-1` newest, only
      classified-autosave slots are ever replaced, a failed write against
      a FULL family discards and renumbers nothing, a rotation that fails
      part-way leaves every generation on disk, and one interrupted AFTER
      a partial shift resumes without ageing out a second generation.
+     Throughout, a generation resting in either staging slot is absent
+     from the PUBLIC listing (#1413) -- checked while one is staged,
+     after a refused rotation deliberately leaves it there, and with an
+     interrupted rotation holding both slots at once -- while the
+     numbered family and the manual save beside it list unchanged, as a
+     dense sequence.
  11. RETENTION. Reducing `rotation_depth` and disabling autosave both
      RETAIN existing higher-numbered generations untouched.
 
@@ -145,8 +154,70 @@ def autosave_slots(root: str) -> list[str]:
     return [n for _, n in sorted(numbered)]
 
 
+# The two slots rotation stages a generation through. Both are internal
+# machinery, and #1413 keeps an autosave-classified generation resting in
+# either one out of the PUBLIC listing.
+RESERVED_SLOTS = ("autosave-incoming", "autosave-retired")
+
+
 def staged_slot_exists(root: str) -> bool:
     return os.path.isdir(os.path.join(root, "saves", "autosave-incoming"))
+
+
+def reserved_slots_on_disk(root: str) -> list[str]:
+    return [n for n in RESERVED_SLOTS if n in slot_dirs(root)]
+
+
+def listing_shape(port: int) -> dict:
+    """What the Lua table engine.listSaves() hands a consumer actually
+    looks like -- read through `#`, `ipairs` and `pairs` at once.
+
+    `listing()` above keys rows by name, which cannot see a HOLE: a
+    filter that removed a row after indexing would leave `[2]` nil, and
+    `#`, `ipairs` and the main menu's row-1 Continue target would each
+    disagree with the browser's `pairs` view. Equal counts prove the
+    survivors are a dense, contiguous 1-based sequence."""
+    return send_json(port,
+                     "local s = engine.listSaves() or {}; "
+                     "local seq = 0; for _ in ipairs(s) do seq = seq + 1 end; "
+                     "local all = 0; for _ in pairs(s) do all = all + 1 end; "
+                     "return {len = #s, seq = seq, all = all, "
+                     "first = s[1] and s[1].name or ''}") or {}
+
+
+def check_staging_hidden(chk, port: int, root: str, when: str) -> None:
+    """#1413: while a generation really rests in a reserved staging slot,
+    the public listing must not show it -- and must show everything else
+    exactly as before, as a dense sequence."""
+    on_disk = reserved_slots_on_disk(root)
+    chk.ok(bool(on_disk),
+           f"a staging slot really exists on disk {when}",
+           str(slot_dirs(root)))
+    # These generations are autosave-classified by construction: every
+    # one was published by the scheduler's own `performSave`, and the
+    # rotation that later accepts each of them would refuse a MANUAL slot
+    # outright (phase 9). The public listing is the only surface that
+    # reports the classification, so it cannot also be the evidence for
+    # it -- the control that this is a classification rule and not a name
+    # match is phase 9's manual save under these same two names, which
+    # stays listed.
+    rows = listing(port)
+    chk.ok(not [n for n in on_disk if n in rows],
+           f"the public listing hides {'/'.join(on_disk)} {when}",
+           str(sorted(rows)))
+    numbered = sorted(n for n in rows if re.fullmatch(r"autosave-\d+", n))
+    chk.ok(numbered == sorted(autosave_slots(root)),
+           "and the numbered family lists exactly as it sits on disk",
+           f"listed {numbered} vs on-disk {sorted(autosave_slots(root))}")
+    chk.ok("manual_slot" in rows,
+           "with the unrelated manual save still listed beside it",
+           str(sorted(rows)))
+    shape = listing_shape(port)
+    chk.ok(shape.get("len") == shape.get("seq") == shape.get("all")
+           == len(rows),
+           "and the survivors are a dense 1-based sequence, not a table "
+           "with a hole where the staged row was",
+           json.dumps(shape))
 
 
 def dump(port: int) -> dict:
@@ -567,6 +638,36 @@ def main() -> int:
                f"{before_slots} -> {autosave_slots(root)}")
         os.remove(legacy_flat)
 
+        # #1413: a MANUAL save occupying a RESERVED name is the case the
+        # hiding rule must not swallow. The cycle refuses over it and
+        # tells the player to rename or delete that save -- so hiding it
+        # by name would conceal exactly the save they are being asked to
+        # act on. Both reserved names, since the predicate covers both.
+        for reserved in RESERVED_SLOTS:
+            send(args.port,
+                 f"engine.saveWorld('{PAGE}', '{reserved}'); return 'ok'")
+            chk.ok(save_settled(args.port),
+                   f"the manual save on {reserved} settled")
+            rows = listing(args.port)
+            chk.ok(rows.get(reserved, {}).get("autosave") is False,
+                   f"a MANUAL save named {reserved} is LISTED, classified "
+                   "manual", json.dumps(rows.get(reserved)))
+            before = dump(args.port)
+            before_log = event_log_text(args.port)
+            force_deadline(args.port)
+            chk.ok(poll_until(30, lambda: dump(args.port)["stats"]["failures"]
+                              > before["stats"]["failures"]) or False,
+                   "and it blocks the cycle, which is why it must stay "
+                   f"visible ({reserved})")
+            new_events = event_log_text(args.port)[len(before_log):]
+            chk.ok(reserved in new_events,
+                   "the refusal names the save the player has to act on",
+                   new_events.strip()[:200])
+            chk.ok(listing(args.port).get(reserved, {}).get("autosave")
+                   is False,
+                   f"{reserved} is still listed after the refusal")
+            shutil.rmtree(os.path.join(saves_dir, reserved))
+
         # ---------------------------------------------------------
         # 10. Normal rotation: autosave-1 stays newest, owned slots only.
         # ---------------------------------------------------------
@@ -625,6 +726,8 @@ def main() -> int:
              timeout=30.0)
         chk.ok(poll_until(90, lambda: staged_slot_exists(root)) or False,
                "a generation is staged, with its rotation deliberately held")
+        check_staging_hidden(chk, args.port, root,
+                             "while a generation is staged")
         os.chmod(saves_dir, stat.S_IRUSR | stat.S_IXUSR)
         try:
             r = send(args.port,
@@ -640,6 +743,12 @@ def main() -> int:
                f"{full_before} -> {autosave_slots(root)}")
         chk.ok(staged_slot_exists(root),
                "and the staged generation is still there to retry from")
+        # The durable half of the exposure: a refused rotation leaves the
+        # staged generation in place for the NEXT cycle, so a quit here
+        # would carry it across a restart as the newest public row -- and
+        # the main menu's Continue target.
+        check_staging_hidden(chk, args.port, root,
+                             "after a rotation failure left it in place")
         # Retrying now succeeds, and the family ends up correctly aged.
         r = send(args.port, "return tostring(engine.finalizeAutosaveRotation(3))")
         chk.ok(r == "true", "the retry rotates it in", r)
@@ -674,6 +783,15 @@ def main() -> int:
                   os.path.join(saves_dir, "autosave-retired"))
         os.rename(os.path.join(saves_dir, "autosave-2"),
                   os.path.join(saves_dir, "autosave-3"))
+        # The only deterministic state in which a real, autosave-classified
+        # `autosave-retired` exists: an aged-out generation moved aside by
+        # a rotation that never got to delete it. Both reserved slots are
+        # occupied here at once.
+        chk.ok(reserved_slots_on_disk(root) == list(RESERVED_SLOTS),
+               "both staging slots hold a generation mid-rotation",
+               str(slot_dirs(root)))
+        check_staging_hidden(chk, args.port, root,
+                             "with a rotation interrupted part-way")
         r = send(args.port, "return tostring(engine.finalizeAutosaveRotation(3))")
         chk.ok(r == "true", "the next rotation resumes from the partial state", r)
         rows = listing(args.port)

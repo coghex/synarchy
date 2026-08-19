@@ -102,7 +102,7 @@ bareItemDef = ItemDef
     , idWeight = 1.0, idWeightSpec = Nothing, idBulk = 1.0
     , idStorage = Nothing, idKind = "misc"
     , idCategory = "Misc", idMake = "", idMaterial = ""
-    , idQualitySpec = Nothing, idQualityTiers = [], idConditionSpec = Nothing
+    , idQualitySpec = Nothing, idQualityTiers = []
     , idContainer = Nothing, idDefaultContents = [], idFood = Nothing
     , idWeapon = Nothing, idArmor = Nothing, idUnequippable = False
     , idBuffs = [], idInsulation = 0

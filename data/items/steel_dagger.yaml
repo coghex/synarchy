@@ -16,9 +16,6 @@ items:
     quality:
       min: 50
       max: 75
-    condition:
-      min: 80
-      max: 100
 
     # Weapon block — geometry + per-attack-type effectiveness. The
     # weapon's substance lives at the top-level `material` field (so

@@ -7,10 +7,8 @@ items:
     kind: accessory
     category: Armor
     # No quality — these are factory-tuned, not crafted with variance.
-    # Condition degrades with wear; starts in good-to-mint range.
-    condition:
-      min: 80
-      max: 100
+    # Condition degrades with wear; a fresh pair starts at 100 like
+    # every other freshly made item (#1421).
     # +1 perception, scaled by current condition. A 100%-condition
     # pair gives +1.00; a 50% pair gives +0.50. Source name shown in
     # the stat tooltip = item display_name ("Technogoggles").

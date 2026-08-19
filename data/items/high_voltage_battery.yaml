@@ -9,6 +9,3 @@ items:
     bulk: 6.00        # litres of external bulk
     category: Materials
     make: factory
-    condition:
-      min: 100
-      max: 100

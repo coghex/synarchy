@@ -30,7 +30,7 @@ import Engine.Core.State (EngineEnv, activeWorldStateFrom, freshItemInstanceId)
 import Engine.Scripting.Lua.API.Units.Page (unitOwningWorldState)
 import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem
                    , removeGroundItem)
-import Item.Roll (rollItemWeight)
+import Item.Roll (rollGroundCondition, rollGroundQuality, rollItemWeight)
 import Item.Temperature (effectiveItemTemp)
 import Item.Types
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
@@ -53,14 +53,30 @@ resolveItemPage env Nothing = activeWorldStateFrom (wsWorldManagerRef (toWorldSi
 
 -- | item.spawnGround(defName, x, y [, props] [, pageId]) → gid | nil
 --   Spawns an item into the world at float tile coords. Optional
---   props table: fill, quality, condition (defaults 0/100/100) and
---   temp (°C — spawns the item hot/cold; omitted = at ambient, #344).
+--   props table: fill, quality, condition and temp (°C — spawns the
+--   item hot/cold; omitted = at ambient, #344).
 --   Resting height derives from terrain at render time, so items on
 --   slopes sit on the incline and items over dug tiles drop with
 --   the terrain. An explicit pageId (slot 5) pins the spawn to that
 --   live page (even hidden) instead of the active world — location
 --   content-spawning (#90) passes its own page so an item lands on
 --   the page its location is on.
+--
+--   This is the SALVAGE path (#1421) — the one creation site that does
+--   not produce a pristine item, because something found lying in the
+--   world is pre-owned, not new — and it resolves quality and condition
+--   by two DELIBERATELY DIFFERENT rules:
+--
+--   * @quality@ — an explicit prop REPLACES the roll (the caller is
+--     naming the item's workmanship outright), else the definition's
+--     own spec, else 'groundQualityFallbackRange'.
+--   * @condition@ — TWO independent draws, arithmetically combined:
+--     @base − rand(0,20)@ clamped to [0,100], where @base@ is the
+--     caller's explicit prop or a @rand(80,100)@ draw. An explicit prop
+--     names what the item STARTED at, so it never suppresses the
+--     penalty.
+--
+--   Both live in "Item.Roll" beside the rest of the roll logic.
 itemSpawnGroundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 itemSpawnGroundFn env = do
     nameArg ← Lua.tostring 1
@@ -78,11 +94,9 @@ itemSpawnGroundFn env = do
                     Just (Lua.Number n) → Just (realToFrac n)
                     _ → Nothing
             _ → pure Nothing
-        getProp ∷ Lua.Name → Float → Lua.LuaE Lua.Exception Float
-        getProp key def = fromMaybe def ⊚ getMaybeProp key
     mFill ← getMaybeProp "fill"
-    quality ← getProp "quality" 100.0
-    condition ← getProp "condition" 100.0
+    mQuality ← getMaybeProp "quality"
+    mCondition ← getMaybeProp "condition"
     mTemp ← getMaybeProp "temp"
     case (nameArg, xArg, yArg) of
         (Just nameBS, Just x, Just y) → do
@@ -91,8 +105,10 @@ itemSpawnGroundFn env = do
             mWs ← Lua.liftIO $ resolveItemPage env (TE.decodeUtf8Lenient <$> pageArg)
             case (HM.lookup name (imDefs im), mWs) of
                 (Just iDef, Just ws) → do
-                    wght ← Lua.liftIO $
-                        rollItemWeight iDef (ucStatRNGRef (toUnitCombatCapability env))
+                    let rng = ucStatRNGRef (toUnitCombatCapability env)
+                    quality ← Lua.liftIO $ rollGroundQuality iDef mQuality rng
+                    condition ← Lua.liftIO $ rollGroundCondition mCondition rng
+                    wght ← Lua.liftIO $ rollItemWeight iDef rng
                     iid ← Lua.liftIO $ freshItemInstanceId env
                     -- No explicit fill from the caller → the def's
                     -- default_fill (so a loot-rolled quinoa sack spawns
@@ -281,8 +297,8 @@ itemSetGroundTempFn env = do
 
 -- | item.pickupGround(uid, gid) → true | false — atomically move a
 --   ground item into a unit's inventory, PRESERVING the instance
---   (fill / quality / condition), unlike unit.addItem which rolls
---   fresh values. Remove-first ordering means two racing pickups
+--   (fill / quality / condition), unlike unit.addItem which builds a
+--   fresh instance. Remove-first ordering means two racing pickups
 --   can't duplicate the item: the loser's remove returns Nothing.
 --   If the unit vanished between remove and insert, the item is
 --   re-spawned at its old position (new id) on that same page.
