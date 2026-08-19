@@ -272,6 +272,35 @@ def _ensure_shared_dir(path: Path) -> Path:
     return path
 
 
+def _open_shared_lock_file(path: Path, flags: int) -> int | None:
+    """Open a lock file in the shared directory, or None if it is unsafe.
+
+    `O_NOFOLLOW` is load-bearing, not hygiene. The directory is
+    world-writable by design, so any local user can plant a symlink at
+    an unused port's lease name pointing at a file a harness user can
+    write; without it the very next steps — `fchmod`, `ftruncate`,
+    `write` — would land on that target instead. The regular-file and
+    link-count checks close the same hole for a planted hard link, and
+    every one of these failures means "this lease is not available to
+    us", never an error: the port scan simply moves on.
+    """
+    try:
+        fd = os.open(path, flags | os.O_NOFOLLOW, SHARED_FILE_MODE)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(fd)
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        return None
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        return None
+    return fd
+
+
 def _share_file(fd: int) -> None:
     """Let any local user open this lock file; ignore it if we cannot.
 
@@ -328,14 +357,12 @@ class PortLease:
                 f"port {FORBIDDEN_PORT} is the user's graphical instance and "
                 f"is always forbidden")
         path = _lease_dir() / f"{port}.lease"
-        try:
-            fd = os.open(path, os.O_CREAT | os.O_RDWR, SHARED_FILE_MODE)
-        except OSError:
-            # Another account owns this lease file and did not leave it
-            # openable. We cannot coordinate on it, so the port is not
-            # ours to take — the scan moves on to the next one.
+        # Unopenable, a symlink, a hard link, or not a regular file: we
+        # cannot safely coordinate on it, so the port is not ours to
+        # take and the scan moves on to the next one.
+        fd = _open_shared_lock_file(path, os.O_CREAT | os.O_RDWR)
+        if fd is None:
             return None
-        _share_file(fd)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -347,6 +374,7 @@ class PortLease:
         except BaseException:
             os.close(fd)
             raise
+        _share_file(fd)
         try:
             os.ftruncate(fd, 0)
             os.write(fd, json.dumps(
@@ -410,10 +438,10 @@ def _registration_is_live(path: Path) -> bool:
     timed: registration paths are unique per invocation and never
     reused, so nothing can be creating the file we just locked.
     """
-    try:
-        fd = os.open(path, os.O_RDONLY)
-    except OSError:
-        # Already gone: its owner departed between the scan and here.
+    fd = _open_shared_lock_file(path, os.O_RDONLY)
+    if fd is None:
+        # Gone between the scan and here, or not a plain file we may
+        # safely touch — either way nothing here is a live harness.
         return False
     try:
         try:
@@ -461,7 +489,18 @@ class LiveRegistry:
         # concurrent scan skips it, and the lock follows the inode
         # through the rename.
         staging = self.path.with_suffix(".staging")
-        fd = os.open(staging, os.O_CREAT | os.O_RDWR, SHARED_FILE_MODE)
+        # O_EXCL, not merely O_NOFOLLOW: the name carries a uuid, so this
+        # process is the only thing that can legitimately create it, and
+        # insisting on creating it ourselves rules out a planted symlink
+        # or file outright rather than inspecting one.
+        try:
+            fd = os.open(staging,
+                         os.O_CREAT | os.O_EXCL | os.O_RDWR | os.O_NOFOLLOW,
+                         SHARED_FILE_MODE)
+        except OSError as error:
+            raise Rejection(
+                f"could not create the live-invocation registration "
+                f"{staging} ({error})") from None
         _share_file(fd)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

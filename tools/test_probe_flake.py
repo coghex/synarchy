@@ -1070,6 +1070,56 @@ def test_lease_root_is_tmpdir_independent() -> None:
                f"repaired to a shared one (mode "
                f"{stat.S_IMODE(private.lstat().st_mode):04o})")
 
+        # THE SYMLINK OVERWRITE. The lease directory is world-writable,
+        # so a local user can plant a symlink at an unused port's lease
+        # name pointing at a file a harness user can write. Following it
+        # would fchmod, truncate and overwrite that target.
+        probe_flake.LEASE_ROOT = shared.root / "shared-leases"
+        victim = shared.root / "victim.txt"
+        victim.write_text("precious", encoding="utf-8")
+        victim.chmod(0o600)
+        planted = probe_flake._lease_dir() / "8100.lease"
+        planted.symlink_to(victim)
+        expect(probe_flake.PortLease.try_acquire(8100) is None,
+               "a symlinked lease name makes the port unavailable, never "
+               "an overwrite")
+        expect(victim.read_text(encoding="utf-8") == "precious"
+               and stat.S_IMODE(victim.lstat().st_mode) == 0o600,
+               f"the symlink's target is untouched — not truncated, not "
+               f"chmodded (mode "
+               f"{stat.S_IMODE(victim.lstat().st_mode):04o}, "
+               f"{victim.read_text(encoding='utf-8')!r})")
+        planted.unlink()
+
+        # A planted HARD link is the same attack without a symlink.
+        hardlinked = probe_flake._lease_dir() / "8101.lease"
+        os.link(victim, hardlinked)
+        expect(probe_flake.PortLease.try_acquire(8101) is None,
+               "a hard-linked lease name makes the port unavailable too")
+        expect(victim.read_text(encoding="utf-8") == "precious",
+               "and its target survives as well")
+        hardlinked.unlink()
+
+        # So is a non-regular file (a fifo stands in for any of them).
+        fifo = probe_flake._lease_dir() / "8102.lease"
+        os.mkfifo(fifo)
+        expect(probe_flake.PortLease.try_acquire(8102) is None,
+               "a non-regular lease entry makes the port unavailable")
+        fifo.unlink()
+
+        # And a planted symlink in the registry is never counted live
+        # nor followed.
+        live_dir = probe_flake._ensure_shared_dir(
+            probe_flake.LEASE_ROOT / "live")
+        decoy = live_dir / "1-decoy.json"
+        decoy.symlink_to(victim)
+        expect(probe_flake._registration_is_live(decoy) is False,
+               "a symlinked registration is never counted as a live harness")
+        expect(victim.exists() and victim.read_text(encoding="utf-8")
+               == "precious",
+               "and its target is neither read as a registration nor removed")
+        decoy.unlink()
+
         # A regular file where the directory belongs is refused outright.
         notadir = shared.root / "not-a-dir"
         notadir.write_text("", encoding="utf-8")
