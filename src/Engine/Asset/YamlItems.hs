@@ -278,7 +278,6 @@ data ItemYamlDef = ItemYamlDef
     , iydMaterial    ∷ !Text                       -- ^ substance name;
                                                    --   defaults to ""
     , iydQuality     ∷ !(Maybe ItemYamlRollSpec)   -- ^ quality roll range
-    , iydCondition   ∷ !(Maybe ItemYamlRollSpec)   -- ^ condition roll range
     , iydQualityTiers ∷ ![ItemYamlQualityTier]     -- ^ quality→label
                                                    --   overrides (#345);
                                                    --   [] ⇒ default set
@@ -317,6 +316,14 @@ data ItemYamlDef = ItemYamlDef
 --   half-authored block and fails like any other invalid one
 --   (requirement 3), while a truly missing key stays the legitimate
 --   optional case. Same trap CLAUDE.md records for @asset_units:@.
+--
+--   @condition:@ is REJECTED outright for every value, @null@ included
+--   (#1421). Condition stopped being authorable when it became pure
+--   runtime wear state, and merely dropping the field would let aeson
+--   ignore a retired key that an author still believed was doing
+--   something — a definition asking for 70--100 would silently spawn at
+--   100 instead. An explicit lookup is the only way to see the key at
+--   all, for the same reason @storage:@ needs one.
 instance FromJSON ItemYamlDef where
     parseJSON = withObject "ItemYamlDef" $ \v → do
         name    ← v .: "name"
@@ -330,6 +337,14 @@ instance FromJSON ItemYamlDef where
                 \(litres); omit the key entirely for an item that is not \
                 \portable storage"
             Just val        → Just <$> parseItemYamlStorage name val
+        case KM.lookup "condition" v of
+            Nothing → pure ()
+            Just _  → fail ∘ T.unpack $
+                "item definition '" <> name <> "': condition is no longer \
+                \an item property (#1421) — condition is runtime wear \
+                \state, every freshly made item starts at 100, and only \
+                \the ground-salvage path (item.spawnGround) starts one \
+                \worn. Delete the condition: block."
         ItemYamlDef name
             ⊚ v .:? "display_name" .!= ""
             ⊛ v .:  "sprite"
@@ -340,7 +355,6 @@ instance FromJSON ItemYamlDef where
             ⊛ v .:? "make"         .!= ""
             ⊛ v .:? "material"     .!= ""
             ⊛ v .:? "quality"
-            ⊛ v .:? "condition"
             ⊛ v .:? "quality_tiers" .!= []
             ⊛ v .:? "container"
             ⊛ v .:? "contents"     .!= []

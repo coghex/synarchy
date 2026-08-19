@@ -172,8 +172,8 @@ def main() -> int:
 
         print("\n== INVENTORY: degrade then repair ==")
         # Bring both axes to a known mid value so the deltas are exact.
-        # Fresh adds start at sharpness 100; condition is rolled, so first
-        # floor it to 0 then raise both to 50 for a clean baseline.
+        # Fresh adds start at sharpness AND condition 100 (#1421), so
+        # floor both to 0 then raise both to 50 for a clean baseline.
         repair(args.port, uid, iid, -1000, -1000)  # floor both
         base = repair(args.port, uid, iid, 50, 50)
         check("set baseline 50/50", base is not None
