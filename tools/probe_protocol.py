@@ -282,8 +282,105 @@ def _event_detail(payload: dict, number: int) -> dict:
     return detail
 
 
+def scan_event_stream(text: str, descriptor: Descriptor):
+    """Parse `text` against `descriptor`, returning rather than raising.
+
+    Returns `(events, outcomes, error)`: everything accepted from the
+    TRUSTED PREFIX, plus the first `ProtocolError` if there was one.
+    Stopping at the first bad line and keeping what came before it is
+    what lets a harness error still report the valid partial data it
+    did read — an `alpha` PASS followed by a malformed line is a
+    harness error whose `alpha` outcome is nonetheless real.
+
+    `parse_event_stream` is the strict façade over this.
+    """
+    events: list[CheckEvent | DiagnosticEvent] = []
+    outcomes: dict[str, str] = {cid: MISSING for cid in descriptor.ids}
+    lines = text.splitlines(keepends=True)
+    truncation: ProtocolError | None = None
+    if lines and not lines[-1].endswith("\n"):
+        truncation = ProtocolError(
+            "protocol event stream ends mid-line (truncated): "
+            f"{lines[-1][:120]!r}")
+        lines = lines[:-1]
+    next_index = 0
+    for number, raw in enumerate(lines, start=1):
+        line = raw.rstrip("\n")
+        if not line.strip():
+            continue
+        try:
+            next_index = _consume_event_line(line, number, descriptor,
+                                             outcomes, events, next_index)
+        except ProtocolError as error:
+            # A line-level fault is both earlier and more specific than
+            # a truncated tail, so it is the error worth reporting.
+            return events, outcomes, error
+    return events, outcomes, truncation
+
+
+def _consume_event_line(line: str, number: int, descriptor: Descriptor,
+                        outcomes: dict[str, str], events: list,
+                        next_index: int) -> int:
+    """Apply one event line, returning the next expected check index."""
+    try:
+        payload = json.loads(line)
+    except (TypeError, ValueError) as error:
+        raise ProtocolError(
+            f"protocol event line {number} is malformed JSON "
+            f"({error}): {line[:120]!r}") from None
+    if not isinstance(payload, dict):
+        raise ProtocolError(
+            f"protocol event line {number} is not a JSON object: "
+            f"{line[:120]!r}")
+    kind = payload.get("event")
+    if kind == EVENT_CHECK:
+        check_id = payload.get("id")
+        outcome = payload.get("outcome")
+        if check_id not in outcomes:
+            raise ProtocolError(
+                f"protocol event line {number}: check identifier "
+                f"{check_id!r} is not declared by probe "
+                f"{descriptor.probe!r}")
+        if outcome not in CHECK_OUTCOMES:
+            raise ProtocolError(
+                f"protocol event line {number}: check {check_id!r} "
+                f"reported outcome {outcome!r}, expected one of "
+                f"{CHECK_OUTCOMES}")
+        index = descriptor.index(check_id)
+        if index < next_index:
+            raise ProtocolError(
+                f"protocol event line {number}: check {check_id!r} was "
+                f"already reported (duplicate check event)")
+        if index > next_index:
+            missed = descriptor.ids[next_index]
+            raise ProtocolError(
+                f"protocol event line {number}: check {check_id!r} "
+                f"arrived before the declared check {missed!r}; the "
+                f"probe deviated from the sequence it declared")
+        detail = _event_detail(payload, number)
+        outcomes[check_id] = outcome
+        events.append(CheckEvent(check_id, outcome, detail))
+        return index + 1
+    if kind == EVENT_DIAGNOSTIC:
+        level = payload.get("level")
+        message = payload.get("message")
+        if level not in DIAGNOSTIC_LEVELS:
+            raise ProtocolError(
+                f"protocol event line {number}: diagnostic level "
+                f"{level!r} is not one of {DIAGNOSTIC_LEVELS}")
+        if not isinstance(message, str):
+            raise ProtocolError(
+                f"protocol event line {number}: diagnostic has no "
+                f"string `message`")
+        detail = _event_detail(payload, number)
+        events.append(DiagnosticEvent(level, message, detail))
+        return next_index
+    raise ProtocolError(
+        f"protocol event line {number}: unclassifiable event kind {kind!r}")
+
+
 def parse_event_stream(text: str, descriptor: Descriptor):
-    """Parse a run's event stream against `descriptor`.
+    """Parse a run's event stream against `descriptor`, strictly.
 
     Returns `(events, outcomes)` where `outcomes` maps every declared
     check identifier to PASS, FAIL, or MISSING — MISSING being every
@@ -297,73 +394,13 @@ def parse_event_stream(text: str, descriptor: Descriptor):
     A check event arriving while an earlier declared check has not been
     emitted means the probe deviated from the sequence it declared,
     which a reliability harness must surface rather than reconcile away.
+
+    Use `scan_event_stream` when the caller needs the trusted prefix of
+    a stream that turned out to be broken.
     """
-    events: list[CheckEvent | DiagnosticEvent] = []
-    outcomes: dict[str, str] = {cid: MISSING for cid in descriptor.ids}
-    if text and not text.endswith("\n"):
-        raise ProtocolError(
-            "protocol event stream ends mid-line (truncated): "
-            f"{text.splitlines()[-1][:120]!r}")
-    next_index = 0
-    for number, line in enumerate(text.splitlines(), start=1):
-        if not line.strip():
-            continue
-        try:
-            payload = json.loads(line)
-        except (TypeError, ValueError) as error:
-            raise ProtocolError(
-                f"protocol event line {number} is malformed JSON "
-                f"({error}): {line[:120]!r}") from None
-        if not isinstance(payload, dict):
-            raise ProtocolError(
-                f"protocol event line {number} is not a JSON object: "
-                f"{line[:120]!r}")
-        kind = payload.get("event")
-        if kind == EVENT_CHECK:
-            check_id = payload.get("id")
-            outcome = payload.get("outcome")
-            if check_id not in outcomes:
-                raise ProtocolError(
-                    f"protocol event line {number}: check identifier "
-                    f"{check_id!r} is not declared by probe "
-                    f"{descriptor.probe!r}")
-            if outcome not in CHECK_OUTCOMES:
-                raise ProtocolError(
-                    f"protocol event line {number}: check {check_id!r} "
-                    f"reported outcome {outcome!r}, expected one of "
-                    f"{CHECK_OUTCOMES}")
-            index = descriptor.index(check_id)
-            if index < next_index:
-                raise ProtocolError(
-                    f"protocol event line {number}: check {check_id!r} was "
-                    f"already reported (duplicate check event)")
-            if index > next_index:
-                missed = descriptor.ids[next_index]
-                raise ProtocolError(
-                    f"protocol event line {number}: check {check_id!r} "
-                    f"arrived before the declared check {missed!r}; the "
-                    f"probe deviated from the sequence it declared")
-            detail = _event_detail(payload, number)
-            outcomes[check_id] = outcome
-            next_index = index + 1
-            events.append(CheckEvent(check_id, outcome, detail))
-        elif kind == EVENT_DIAGNOSTIC:
-            level = payload.get("level")
-            message = payload.get("message")
-            if level not in DIAGNOSTIC_LEVELS:
-                raise ProtocolError(
-                    f"protocol event line {number}: diagnostic level "
-                    f"{level!r} is not one of {DIAGNOSTIC_LEVELS}")
-            if not isinstance(message, str):
-                raise ProtocolError(
-                    f"protocol event line {number}: diagnostic has no "
-                    f"string `message`")
-            detail = _event_detail(payload, number)
-            events.append(DiagnosticEvent(level, message, detail))
-        else:
-            raise ProtocolError(
-                f"protocol event line {number}: unclassifiable event kind "
-                f"{kind!r}")
+    events, outcomes, error = scan_event_stream(text, descriptor)
+    if error is not None:
+        raise error
     return events, outcomes
 
 

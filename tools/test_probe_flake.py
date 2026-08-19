@@ -463,6 +463,38 @@ def test_event_stream() -> None:
            "an explicitly empty detail object is accepted")
 
 
+def test_trusted_prefix() -> None:
+    print("\n-- trusted prefix of a broken stream --")
+    d = _descriptor()
+    good = _line(event="check", id="alpha", outcome="PASS")
+    for name, tail in (("malformed", "not json\n"),
+                       ("truncated", '{"event": "che'),
+                       ("duplicate", _line(event="check", id="alpha",
+                                           outcome="PASS")),
+                       ("unknown id", _line(event="check", id="delta",
+                                            outcome="PASS")),
+                       ("bad level", _line(event="diagnostic", level="DEBUG",
+                                           message="x"))):
+        events, outcomes, error = probe_protocol.scan_event_stream(good + tail, d)
+        expect(error is not None,
+               f"a {name} tail is still an error")
+        expect(outcomes == {"alpha": "PASS", "beta": "MISSING",
+                            "gamma": "MISSING"},
+               f"the valid prefix before a {name} tail is preserved "
+               f"(got {outcomes})")
+        expect(len(events) == 1,
+               f"only the trusted prefix's events survive a {name} tail")
+    # A clean stream scans with no error at all.
+    _events, outcomes, error = probe_protocol.scan_event_stream(good, d)
+    expect(error is None and outcomes["alpha"] == "PASS",
+           "a clean stream scans without an error")
+    # An out-of-order FIRST line has no valid prefix to keep.
+    _events, outcomes, error = probe_protocol.scan_event_stream(
+        _line(event="check", id="gamma", outcome="PASS"), d)
+    expect(error is not None and set(outcomes.values()) == {"MISSING"},
+           "a fault on the first line leaves nothing salvageable")
+
+
 def test_forbidden_markers() -> None:
     print("\n-- forbidden stdout markers --")
     caught = ["[PASS] a check", "[FAIL] a check", "[pass] lowercase",
@@ -675,6 +707,12 @@ def test_harness_errors() -> None:
         raws = {
             "truncated": '{"event": "check", "id": "alpha"',
             "malformed": "this is not json\n",
+            "prefix_then_malformed": (
+                _line(event="check", id="alpha", outcome="PASS") +
+                "this is not json\n"),
+            "prefix_then_truncated": (
+                _line(event="check", id="alpha", outcome="PASS") +
+                '{"event": "check", "id": "be'),
             "duplicate": (_line(event="check", id="alpha", outcome="PASS") +
                           _line(event="check", id="alpha", outcome="PASS")),
             "unexpected": _line(event="check", id="delta", outcome="PASS"),
@@ -707,6 +745,12 @@ def test_harness_errors() -> None:
                    f"a {name} run is not counted as a probe outcome")
             expect("every run succeeded" not in probe_flake.render(m),
                    f"the {name} table never claims every run succeeded")
+            if name.startswith("prefix_then_"):
+                expect(m.error_run is not None
+                       and m.error_run.checks.get("alpha") == "PASS"
+                       and m.error_run.checks.get("beta") == "MISSING",
+                       f"a {name} stream still reports the trusted prefix it "
+                       f"parsed before the fault")
 
 
 # ==========================================================================
@@ -759,24 +803,100 @@ def test_ports() -> None:
         finally:
             probe_flake.PORT_MIN, probe_flake.PORT_MAX = saved
 
-        # Stale recovery: a lease whose owner is gone and which is old
-        # enough is reclaimed rather than retiring the port forever.
-        stale = probe_flake._lease_dir() / "8009.lease"
-        stale.write_text(json.dumps({"pid": _dead_pid(), "port": 8009}),
-                         encoding="utf-8")
-        os.utime(stale, (time.time() - probe_flake.STALE_AFTER - 10,
-                         time.time() - probe_flake.STALE_AFTER - 10))
+        # A leftover lease FILE is not a lease: the lock is, and a dead
+        # owner holds none. No age heuristic, nothing to unlink.
+        leftover = probe_flake._lease_dir() / "8009.lease"
+        leftover.write_text(json.dumps({"pid": _dead_pid(), "port": 8009}),
+                            encoding="utf-8")
         lease = probe_flake.PortLease.try_acquire(8009)
-        expect(lease is not None, "a stale port lease is recovered")
+        expect(lease is not None,
+               "a leftover lease file from a dead harness is immediately "
+               "acquirable")
         if lease:
             lease.release()
 
-        # A fresh lease held by a live process is NOT stolen.
+        # A held lease is never stolen, however old its file looks.
         held = probe_flake.PortLease.try_acquire(8009)
+        os.utime(leftover, (0, 0))
         expect(probe_flake.PortLease.try_acquire(8009) is None,
-               "a live lease is never treated as stale")
+               "a held lease is never treated as stale, whatever its mtime")
         if held:
             held.release()
+        expect(leftover.exists(),
+               "releasing a lease leaves its diagnostic file in place — "
+               "unlinking it is what would reintroduce the recovery race")
+
+
+def test_concurrent_leasing() -> None:
+    print("\n-- concurrent lease acquisition --")
+    with SyntheticTree() as tree:
+        port = 8042
+        path = probe_flake._lease_dir() / f"{port}.lease"
+        # A leftover file from an abnormally terminated harness: the
+        # exact state in which two racing harnesses used to be able to
+        # both "recover" it and both end up on this port.
+        path.write_text(json.dumps({"pid": _dead_pid(), "port": port}),
+                        encoding="utf-8")
+
+        racers = 12
+        ready = threading.Barrier(racers)
+        winners: list[object] = []
+        lock = threading.Lock()
+
+        def race() -> None:
+            ready.wait(timeout=30)
+            lease = probe_flake.PortLease.try_acquire(port)
+            if lease is not None:
+                with lock:
+                    winners.append(lease)
+
+        threads = [threading.Thread(target=race) for _ in range(racers)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=60)
+        expect(len(winners) == 1,
+               f"exactly one of {racers} racers recovers and holds the port "
+               f"(got {len(winners)})")
+        for lease in winners:
+            lease.release()
+
+        # Cross-PROCESS exclusion, and recovery when the holder is
+        # killed outright — which is what an `flock` gives for free and
+        # a create-then-delete protocol has to guess at.
+        holder_src = tree.root / "holder.py"
+        holder_src.write_text(textwrap.dedent(f'''\
+            import sys, time
+            sys.path.insert(0, {TOOLS_DIR!r})
+            import probe_flake
+            from pathlib import Path
+            probe_flake.LEASE_ROOT = Path({str(probe_flake.LEASE_ROOT)!r})
+            lease = probe_flake.PortLease.try_acquire({port})
+            print("held" if lease else "missed", flush=True)
+            time.sleep(300)
+        '''), encoding="utf-8")
+        holder = subprocess.Popen([sys.executable, str(holder_src)],
+                                  stdout=subprocess.PIPE, text=True)
+        try:
+            first = holder.stdout.readline().strip()
+            expect(first == "held",
+                   f"another process acquires the port first (said {first!r})")
+            expect(probe_flake.PortLease.try_acquire(port) is None,
+                   "a lease held by another PROCESS blocks this one")
+        finally:
+            holder.kill()
+            holder.wait(timeout=30)
+        recovered = None
+        for _ in range(50):
+            recovered = probe_flake.PortLease.try_acquire(port)
+            if recovered is not None:
+                break
+            time.sleep(0.1)
+        expect(recovered is not None,
+               "killing the holder outright releases the lease with no "
+               "staleness heuristic at all")
+        if recovered:
+            recovered.release()
 
 
 def _dead_pid() -> int:
@@ -1344,9 +1464,11 @@ def test_run_one_defaults() -> None:
 
 # ==========================================================================
 def main() -> int:
-    for test in (test_descriptor, test_event_stream, test_forbidden_markers,
+    for test in (test_descriptor, test_event_stream, test_trusted_prefix,
+                 test_forbidden_markers,
                  test_eligibility, test_descriptor_mismatch_rejection,
                  test_reconciliation, test_harness_errors, test_ports,
+                 test_concurrent_leasing,
                  test_concurrency_accounting, test_artifacts,
                  test_no_tmpdir_default, test_result_document,
                  test_exit_codes, test_render, test_manifest_fixture,

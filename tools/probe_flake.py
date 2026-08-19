@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import errno
+import fcntl
 import json
 import os
 import shutil
@@ -102,10 +102,11 @@ LEASE_DIR_NAME = "synarchy-probe-flake-leases"
 # may redirect it, by rebinding this attribute explicitly.
 LEASE_ROOT = Path(tempfile.gettempdir()) / LEASE_DIR_NAME
 
-# How long a lease file whose owner is gone is left alone before it is
-# treated as stale. Short, because the owning process is already proven
-# dead; nonzero so a lease created microseconds ago by a process whose
-# pid we cannot yet see is not stolen.
+# How long a live-invocation registration whose owner is gone is left
+# alone before it is treated as stale. Short, because the owning process
+# is already proven dead; nonzero so a registration a starting harness
+# is still publishing is never mistaken for garbage. Port leases do NOT
+# use this: an `flock` needs no staleness heuristic (see `PortLease`).
 STALE_AFTER = 30.0
 
 EXIT_OK = 0
@@ -233,13 +234,21 @@ def port_is_clear(port: int, host: str = "127.0.0.1") -> bool:
 
 
 class PortLease:
-    """An `O_EXCL` lease file: whoever creates it owns the port.
+    """An advisory `flock` on a per-port file: the holder owns the port.
 
-    `O_CREAT | O_EXCL` is the atomic part — two harnesses racing for the
-    same port cannot both win, whatever the clear check said a moment
-    earlier. A lease whose owning process is gone and which is older
-    than `STALE_AFTER` is recovered, so an abnormally terminated harness
-    does not retire a port permanently.
+    The lock, NOT the file, is the lease. That distinction is the whole
+    design: a create-then-delete protocol has to decide when an
+    abandoned lease has gone stale, and that decision is unavoidably
+    racy — two harnesses can both judge one lease stale, and the second
+    then deletes the FRESH lease the first just made, putting two
+    engines on one port. `flock(LOCK_EX | LOCK_NB)` has no such window.
+    Only one open file description can hold it at a time, across
+    processes and within one, and the kernel drops it when its owner
+    exits however abruptly. Stale recovery is therefore not implemented
+    here at all: there is nothing to recover, because a dead harness
+    holds nothing. The lease FILE is never unlinked — it is a few bytes
+    of diagnostics naming the current holder, and unlinking it is
+    exactly the operation that would reintroduce the race.
     """
 
     def __init__(self, port: int, path: Path, fd: int):
@@ -256,52 +265,33 @@ class PortLease:
                 f"port {FORBIDDEN_PORT} is the user's graphical instance and "
                 f"is always forbidden")
         path = _lease_dir() / f"{port}.lease"
-        for _ in range(2):
-            try:
-                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-            except FileExistsError:
-                if cls._recover_stale(path):
-                    continue
-                return None
-            except OSError as error:
-                if error.errno == errno.EEXIST:
-                    if cls._recover_stale(path):
-                        continue
-                    return None
-                raise
+        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            # Held by someone else — including another lease object in
+            # this same process, since flock conflicts between open file
+            # descriptions rather than between processes.
+            os.close(fd)
+            return None
+        except BaseException:
+            os.close(fd)
+            raise
+        try:
+            os.ftruncate(fd, 0)
             os.write(fd, json.dumps(
                 {"pid": os.getpid(), "port": port, "acquired": time.time()}
             ).encode("utf-8"))
-            return cls(port, path, fd)
-        return None
-
-    @staticmethod
-    def _recover_stale(path: Path) -> bool:
-        """Remove a lease whose owner is provably gone; True if removed."""
-        try:
-            raw = path.read_text(encoding="utf-8")
-            age = time.time() - path.stat().st_mtime
         except OSError:
-            return False
-        if age < STALE_AFTER:
-            return False
-        try:
-            pid = int(json.loads(raw).get("pid", -1))
-        except (TypeError, ValueError):
-            pid = -1
-        if pid > 0 and _pid_alive(pid):
-            return False
-        try:
-            path.unlink()
-        except OSError:
-            return False
-        return True
+            # Diagnostics only; the lock is what matters and we hold it.
+            pass
+        return cls(port, path, fd)
 
     def release(self) -> None:
         with contextlib.suppress(OSError):
-            os.close(self._fd)
+            fcntl.flock(self._fd, fcntl.LOCK_UN)
         with contextlib.suppress(OSError):
-            self.path.unlink()
+            os.close(self._fd)
 
 
 def acquire_port(cursor: int) -> tuple[PortLease, int]:
@@ -639,19 +629,15 @@ def _commit_sha() -> str:
 
 def salvage_checks(descriptor: probe_protocol.Descriptor,
                    events_text: str) -> dict[str, str]:
-    """Whatever a broken run's event stream still says, or nothing.
+    """The valid partial data a broken run's event stream still holds.
 
-    Best effort by design: an untrustworthy stream yields no per-check
-    data at all rather than a half-parsed guess, but a stream that
-    parses fine and failed for another reason (a forbidden stdout
-    marker) keeps its outcomes as the "valid partial data" a harness
-    error must still report.
+    Everything up to the first bad line is TRUSTED — it parsed under the
+    same rules a clean stream does — so an `alpha` PASS followed by a
+    malformed line still reports that PASS. Only what follows the fault
+    is discarded, and every check that never arrived stays MISSING.
     """
-    try:
-        _events, outcomes = probe_protocol.parse_event_stream(
-            events_text, descriptor)
-    except probe_protocol.ProtocolError:
-        return {}
+    _events, outcomes, _error = probe_protocol.scan_event_stream(
+        events_text, descriptor)
     return outcomes
 
 
@@ -817,8 +803,7 @@ def render(measurement: Measurement) -> str:
         broken = measurement.error_run
         if broken is not None:
             reported = ", ".join(f"{cid}={result}"
-                                 for cid, result in broken.checks.items()) \
-                or "(nothing parsed)"
+                                 for cid, result in broken.checks.items())
             lines.append(
                 f"  run {broken.index} on port {broken.port} was discarded "
                 f"after {broken.elapsed:.1f}s: {reported}")
