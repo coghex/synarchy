@@ -360,9 +360,10 @@ data EngineEnv = EngineEnv
     --   (#98). Seeded to the POSIX epoch so the first save always uses
     --   the real wall clock.
   , itemManagerRef     ∷ IORef ItemManager
-    -- ^ Registry of all item defs loaded from data/items/*.yaml.
-    --   Lua's item.loadYaml writes into this; unit spawn reads from
-    --   it to materialise starting_inventory entries.
+    -- ^ Registry of all item defs loaded from the data/items/ tree —
+    --   recursively, at any depth, since #1232. Lua's item.loadYaml
+    --   writes into this; unit spawn reads from it to materialise
+    --   starting_inventory entries.
   , equipmentClassManagerRef ∷ IORef EquipmentClassManager
     -- ^ Registry of equipment classes loaded from data/equipment/*.yaml.
     --   Lua's equipment.loadYaml writes into this; the unit-info v2

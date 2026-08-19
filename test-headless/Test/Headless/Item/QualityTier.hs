@@ -24,6 +24,7 @@ blankDef tiers = ItemDef
     , idContainer = Nothing, idDefaultContents = []
     , idFood = Nothing, idWeapon = Nothing, idArmor = Nothing
     , idUnequippable = False, idBuffs = [], idInsulation = 0
+    , idSourcePath = "test-fixture"
     }
 
 decode ∷ BS.ByteString → Either String ItemYamlQualityTier

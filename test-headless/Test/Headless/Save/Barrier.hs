@@ -122,7 +122,7 @@ spec = describe "save snapshot barrier" $ do
     -- this thread. Registering it as a genuine SaveOwner closes that
     -- window structurally: the boundary is unreachable until this
     -- thread's own acknowledgement lands, mirroring
-    -- 'Engine.Loop.runGatedByCaptureLock's "check locked, do unlocked
+    -- @Engine.Loop.runGatedByCaptureLock@s "check locked, do unlocked
     -- work if not locked, always ack" shape.
     it "a registered SaveRender owner gates the snapshot boundary exactly like a real state-owner thread" $ do
         b ← newSaveBarrier

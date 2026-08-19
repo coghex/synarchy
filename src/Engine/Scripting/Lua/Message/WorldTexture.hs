@@ -5,8 +5,7 @@
 --   — see 'Engine.Scripting.Lua.Message.Texture' for that) and share
 --   the same superseded-generation disposal path.
 module Engine.Scripting.Lua.Message.WorldTexture
-    ( disposeTransientTexture
-    , handleWorldPreview
+    ( handleWorldPreview
     , handleZoomAtlasUpload
     ) where
 

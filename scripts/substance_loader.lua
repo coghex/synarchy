@@ -1,5 +1,5 @@
 -- Substance Loader — enumerates data/substances/*.yaml and registers
--- each. Mirrors equipment_loader / item_loader.
+-- each. Mirrors equipment_loader.
 local substanceLoader = {}
 
 function substanceLoader.loadAll(folder)

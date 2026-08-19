@@ -9,7 +9,6 @@
 --   'Engine.Input.Thread.Dispatch.processInput'.
 module Engine.Input.Thread.Char
   ( dispatchCharEvent
-  , accumulateCharOutcome
   , flushPendingCharBatch
   ) where
 
@@ -110,7 +109,7 @@ dispatchCharEvent env inpSt c =
     -- char through would type a '`' into the shell or textbox the
     -- press just toggled/defocused. F4 (#730): each branch folds
     -- its routing outcome into the pending char-aggregate batch
-    -- (see 'accumulateCharOutcome') rather than pushing its own
+    -- (see @accumulateCharOutcome@) rather than pushing its own
     -- record — 'flushPendingCharBatch' collapses a whole run of
     -- these (a synthetic multi-character @input.type@, or one
     -- real keystroke's char) into a single truthful record.

@@ -28,7 +28,7 @@ concrete precondition
 - [x] EPIC. Add portable, data-driven loot containers — [#1231]
 - [x] PLC-1. Load item definitions from logical subdirectories — [#1232]
 - [x] PLC-2. Add physical bulk and portable-storage capacity data — [#1233]
-- [ ] PLC-3. Converge every item-creation path on one materializer
+- [x] PLC-3. Converge every item-creation path on one materializer — [#1418]
 - [ ] PLC-4. Enforce capacity-safe, acyclic nested ownership moves
 - [ ] PLC-5. Enumerate nested item trees in the save integrity graph
 - [ ] PLC-6. Add lazy, deterministic loot-profile realization
@@ -74,8 +74,15 @@ concrete precondition
   capacity (`capacity`, `holds`, `fill_weight`, and `default_fill`). There is no
   authored physical bulk, internal item-storage weight limit, or internal item-
   storage bulk limit.
-- `scripts/startup_loader.lua` calls flat `engine.listFiles` enumeration for
-  `data/items`; logical item subdirectories are not loaded.
+- `scripts/startup_loader.lua` walks the whole `data/items` tree recursively
+  (`engine.listFilesRecursive`) and loads every file it finds, one
+  `engine.loadItemYaml` call each, in one canonical order: ascending UTF-8
+  bytes of the `/`-normalized path relative to `data/items`. Logical item
+  subdirectories therefore load, at any depth, and a definition's id still
+  comes from its own `name:` and never from its path. A symlink at any depth
+  is skipped, so the walk terminates on any tree shape and never reaches a
+  file outside `data/items`. Every other data family keeps flat, OS-ordered
+  `engine.listFiles` enumeration (PLC-1, #1232).
 - Location content supports independent `item` and `loot_table` entries. It
   cannot author a container-definition/loot-profile pair or persist a pending,
   unrealized profile descriptor. Closed #948 supplies seed-stable per-location
@@ -888,12 +895,14 @@ organizational only:
   the canonical item definition ID; and
 - no code may infer gameplay semantics from the definition file's directory.
 
-The current startup loader enumerates only flat `data/items/*.yaml`. The first
-slice must extend item YAML discovery to include logical subdirectories while
-still routing every discovered file through `engine.loadItemYaml`. Discovery
-must have an explicit deterministic ordering, and duplicate item IDs across
-directories must follow the item loader's normal validation policy rather
-than becoming directory-scoped definitions.
+Item YAML discovery is recursive (PLC-1, #1232): `scripts/startup_loader.lua`
+walks the whole `data/items` tree at any depth and routes every discovered file
+through `engine.loadItemYaml`, one call per file, in one explicit deterministic
+order — ascending UTF-8 bytes of the `/`-normalized path relative to
+`data/items`. Duplicate item IDs across directories follow the item loader's
+normal last-write-wins policy, the later definition in that order winning, with
+a diagnostic naming the ID and both files; they never become directory-scoped
+definitions.
 
 A container definition does not hardcode one contextual loot distribution.
 The same crate may hold industrial salvage in a ruin, food in a storehouse, or
@@ -1530,6 +1539,9 @@ No merged system needs to be discarded. Relevant foundations already exist:
   open command can follow that established cancellation contract.
 - Stable item-instance IDs and persisted game-time provide identities and
   timestamps for durable container observations.
+- Item startup loading already discovers logical item subdirectories: it walks
+  the whole `data/items` tree recursively, in one canonical order, without
+  changing item identity semantics (PLC-1, #1232).
 
 The slice must extend or correct these boundaries:
 
@@ -1561,9 +1573,6 @@ The slice must extend or correct these boundaries:
   persisted compatibly.
 - The current flat `loot_table` location content kind does not express the
   container-definition/loot-profile pair.
-- Item startup loading currently enumerates only the flat `data/items`
-  directory and must learn to discover logical item subdirectories without
-  changing item identity semantics.
 
 ## Explicitly outside this slice
 

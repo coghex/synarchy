@@ -21,7 +21,6 @@ module Engine.Asset.YamlTutorials
   , TutorialLoadError(..)
   , describeTutorialLoadError
   , validateTutorialDoc
-  , loadTutorialYaml
   , loadTutorialDir
   ) where
 

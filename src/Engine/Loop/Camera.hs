@@ -6,11 +6,7 @@ module Engine.Loop.Camera
     , stepCameraZoom
     , scrollZoomImpulse
     , zoomMin
-    , zoomMax
-    , applyLimits
-    , applyLimitsChunks
     , applyGotoLimits
-    , cameraYLimit
     , cameraYLimitChunks
     , cameraGotoBufferChunks
     , gotoTileZoomSafe
@@ -50,12 +46,6 @@ cameraYLimitChunks bufferChunks worldSizeChunks =
         glacierBuffer = chunkSize * effBuffer
         maxRow = halfTiles - glacierBuffer
     in fromIntegral maxRow * tileHalfDiamondHeight
-
--- | The camera Y limit used by the pan/drag paths: glaciers sit at the
---   top/bottom edges, so we stop the camera two chunks inward so you can't
---   pan past the ice.
-cameraYLimit ∷ Int → Float
-cameraYLimit = cameraYLimitChunks 2
 
 -- | The full world width in screen-space X.
 --   Wrapping grid-X by worldSize chunks (= worldSize * chunkSize tiles)
@@ -101,7 +91,7 @@ wrapCoord w x =
 applyLimits ∷ Int → CameraFacing → Float → Float → (Float, Float)
 applyLimits = applyLimitsChunks 2
 
--- | As 'applyLimits', but with a caller-chosen glacier buffer (in chunks).
+-- | As @applyLimits@, but with a caller-chosen glacier buffer (in chunks).
 --   Teleports (camera.gotoTile) use a larger buffer than the pan path —
 --   see Engine.Scripting.Lua.API.Camera (#297).
 applyLimitsChunks ∷ Int → Int → CameraFacing → Float → Float → (Float, Float)

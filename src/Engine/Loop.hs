@@ -67,7 +67,7 @@ offscreenMode = LoopMode
   }
 
 -- | The per-tick camera integration both rendering modes run, on an
---   unlocked tick only (see 'Engine.Loop.Mode.runGatedByCaptureLock').
+--   unlocked tick only (see @Engine.Loop.Mode.runGatedByCaptureLock@).
 cameraUpdates ∷ EngineM σ ()
 cameraUpdates = do
     updateCameraPanning

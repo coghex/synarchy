@@ -8,7 +8,8 @@ import Engine.Scripting.Lua.API.Internal (registerLuaFunction)
 import Engine.Scripting.Lua.API.Core (loadScriptFn, killScriptFn,
                                       setTickIntervalFn, pauseScriptFn,
                                       resumeScriptFn, quitFn, getFPSFn,
-                                      listFilesFn, setPausedFn, isPausedFn,
+                                      listFilesFn, listFilesRecursiveFn,
+                                      setPausedFn, isPausedFn,
                                       getBootProfileFn, getPreviewTargetFn,
                                       getPreviewBrowseFn,
                                       realTimeFn, gameTimeFn)
@@ -114,6 +115,7 @@ registerEngineAPI env backendState = do
   registerLuaFunction "resumeScript"      (resumeScriptFn backendState)
   registerLuaFunction "setTickInterval"   (setTickIntervalFn env backendState)
   registerLuaFunction "listFiles"         (listFilesFn)
+  registerLuaFunction "listFilesRecursive" (listFilesRecursiveFn)
   registerLuaFunction "loadYaml"          loadYamlFn
 
   registerLuaFunction "getVideoConfig"    (getVideoConfigFn env)
