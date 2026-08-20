@@ -9,6 +9,7 @@ module Unit.Thread.Movement.PathAdvance
     , TerrainSnapshot(..)
     , MoveWorld(..)
     , moveWorldFor
+    , maxProtectedStep
     ) where
 
 import UPrelude
@@ -200,7 +201,19 @@ stepTowardSubGoal pc reg now dt mw stats us mt (gx, gy) =
         -- uncapped speed.
         step = case mtHazard mt of
             FallPermitted  → rawStep
-            FallProhibited → min maxProtectedStep rawStep
+            -- Bound the MAGNITUDE, not just the upper end: nothing
+            -- rejects a negative speed at the `unit.moveTo` boundary, and
+            -- a large negative step spans just as many tiles (backwards)
+            -- as a large positive one. A non-finite step refuses to move
+            -- at all, the fail-closed posture the rest of the policy
+            -- takes — with the isNaN test FIRST, because every comparison
+            -- against NaN is False and a bare clamp chain would launder it
+            -- straight through (the same reasoning as
+            -- `Unit.Pathing.Cost.clampStepCost`).
+            FallProhibited
+                | isNaN rawStep → 0
+                | otherwise     → max (negate maxProtectedStep)
+                                      (min maxProtectedStep rawStep)
         -- Arrival SNAPS x/y and re-grounds z at the sub-goal without
         -- consulting the cost function at all, so a sub-goal within
         -- `max step arrivalEpsilon` on the far side of a tile boundary

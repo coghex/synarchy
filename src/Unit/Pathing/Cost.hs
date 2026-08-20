@@ -124,18 +124,29 @@ stepCostUnder policy pc reg wtd (sgx, sgy) (dgx, dgy) = do
         -- classification the `fall` term below uses, so the policy and
         -- the cost model can never disagree about what a real fall is.
         fallBlocked = policy ≡ FallProhibited ∧ isDamagingDrop pc srcZ dstZ
-        -- A DIAGONAL step's continuous path really does pass through one
+        -- A DIAGONAL step's continuous path really does pass through ONE
         -- of the two axis-neighbours it grazes, even though the mover's
-        -- z only ever moves from src to dst. The no-corner-cutting rule
-        -- above already requires both to be PASSABLE; for a protected
-        -- request they must additionally not be a damaging drop from the
-        -- source, so the policy can't be slipped past on the diagonal
-        -- (#1217, review round 2). An unloaded neighbour needs no case
-        -- here — `cornerBlocked` has already rejected the step.
-        grazedIsDamaging (gx, gy) =
-            maybe False (isDamagingDrop pc srcZ) (lookupTerrainZ wtd gx gy)
+        -- z only ever moves from src to dst — and WHICH one depends on
+        -- the mover's sub-tile position and heading, which this function
+        -- does not have. So a protected diagonal is allowed only when
+        -- BOTH two-step routes through those neighbours are clean, on
+        -- BOTH of their edges: the descent ONTO the graze tile and the
+        -- descent OFF it onto the destination.
+        --
+        -- Checking only the first edge (#1217, review round 3) misses
+        -- src z=10 → graze z=11 → dst z=9 at trigger 2: the direct
+        -- descent is 1, the descent onto the graze tile is an ascent, and
+        -- the real 2-z drop happens on the edge nobody looked at.
+        -- Requiring BOTH routes is conservative by construction — it can
+        -- only ever refuse a diagonal, never admit a fall — and it costs
+        -- nothing outside 'FallProhibited'. The no-corner-cutting rule
+        -- above has already rejected an UNLOADED neighbour, so a missing
+        -- z here needs no case of its own.
+        grazeIsDamaging (gx, gy) = case lookupTerrainZ wtd gx gy of
+            Nothing → False
+            Just gz → isDamagingDrop pc srcZ gz ∨ isDamagingDrop pc gz dstZ
         diagonalDropBlocked = isDiagonal ∧ policy ≡ FallProhibited
-                            ∧ any grazedIsDamaging [(dgx, sgy), (sgx, dgy)]
+                            ∧ any grazeIsDamaging [(dgx, sgy), (sgx, dgy)]
     if cornerBlocked ∨ fallBlocked ∨ diagonalDropBlocked
       then Nothing
       else

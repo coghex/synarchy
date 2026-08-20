@@ -34,7 +34,8 @@ import Unit.Pathing.Cost
 import Unit.Pathing.AStar (localAStar, localAStarUnder, defaultMaxRadius)
 import Unit.Sim.Types
 import Unit.Thread.Movement.PathAdvance
-    (tickUnit, moveWorldFor, TerrainSnapshot(..), MoveWorld(..))
+    (tickUnit, moveWorldFor, TerrainSnapshot(..), MoveWorld(..)
+    , maxProtectedStep)
 import Unit.Thread.Movement.Types (UnitMoveStats(..), defaultMoveStats)
 
 -- ---------------------------------------------------------------------
@@ -86,13 +87,16 @@ shelfWorld = worldWith $ zChunk $ \(lx, _) → case compare lx 8 of
     EQ → 8
     GT → 9
 
--- | A ledge that a DIAGONAL step grazes the corner of: (8, 3) is a 4-z
---   drop from the plateau, while the diagonal's own destination (8, 4)
---   is only 1 z down — below the trigger, and so invisible to a check
---   that looks at the diagonal's endpoints alone.
-cornerWorld ∷ WorldTileData
-cornerWorld = worldWith $ zChunk $ \(lx, ly) →
-    if lx ≤ 7 then 10 else if ly ≤ 3 then 6 else 9
+-- | A diagonal-corner fixture. The plateau (x ≤ 7) is at z = 10, the
+--   graze tile (8, 3) is at @via@, and the diagonal's own destination
+--   (8, 4) is at 9 — only 1 z down, below the trigger, and so invisible
+--   to any check that looks at the diagonal's ENDPOINTS alone.
+--
+--   Only @via@ varies, so each case below isolates exactly one edge of
+--   the two-step route the diagonal's continuous path really takes.
+cornerWorldVia ∷ Int → WorldTileData
+cornerWorldVia via = worldWith $ zChunk $ \(lx, ly) →
+    if lx ≤ 7 then 10 else if ly ≤ 3 then via else 9
 
 -- | Uniformly flat ground at z = 10: no drop anywhere, so both policies
 --   must agree on every route across it.
@@ -214,16 +218,30 @@ spec = do
             stepCostUnder FallProhibited pc reg (ridgeWorld 10 6) (8, 3) (7, 3)
                 `shouldSatisfy` isJust
 
-        it "rejects a protected DIAGONAL that grazes a damaging drop" $ do
+        it "rejects a protected DIAGONAL whose graze tile is a drop ONTO" $ do
             -- (7,3) → (8,4) descends only 1 z, but the step's continuous
-            -- path clips (8,3), which is 4 z down. Endpoint-only checking
-            -- lets this through.
-            stepCostUnder FallProhibited pc reg cornerWorld (7, 3) (8, 4)
+            -- path clips (8,3), which is 4 z DOWN from the source.
+            stepCostUnder FallProhibited pc reg (cornerWorldVia 6) (7, 3) (8, 4)
                 `shouldBe` Nothing
             -- The same diagonal stays priced, not forbidden, by default.
-            stepCostUnder FallPermitted pc reg cornerWorld (7, 3) (8, 4)
+            stepCostUnder FallPermitted pc reg (cornerWorldVia 6) (7, 3) (8, 4)
                 `shouldSatisfy` isJust
-            -- And a protected diagonal grazing nothing damaging is fine.
+
+        it "rejects a protected DIAGONAL whose graze tile is a drop OFF" $ do
+            -- The edge the first-edge-only rule missed: the graze tile is
+            -- 1 z ABOVE the source, so both the direct descent (10 → 9)
+            -- and the descent onto it (10 → 11) look harmless — while the
+            -- real 2-z drop is 11 → 9, on the way OFF it.
+            stepCostUnder FallProhibited pc reg (cornerWorldVia 11) (7, 3) (8, 4)
+                `shouldBe` Nothing
+            stepCostUnder FallPermitted pc reg (cornerWorldVia 11) (7, 3) (8, 4)
+                `shouldSatisfy` isJust
+
+        it "allows a protected DIAGONAL whose graze tiles are both clean" $ do
+            -- Both two-step routes descend 1 z at most, so the diagonal is
+            -- ordinary movement — the rule refuses hazards, not diagonals.
+            stepCostUnder FallProhibited pc reg (cornerWorldVia 10) (7, 3) (8, 4)
+                `shouldSatisfy` isJust
             stepCostUnder FallProhibited pc reg flatWorld (2, 2) (3, 3)
                 `shouldSatisfy` isJust
 
@@ -365,6 +383,36 @@ spec = do
             -- tick land at x ≈ 13.5 on z = 9.
             map usRealX states `shouldSatisfy` all (< 8.0)
             states `shouldSatisfy` not . any isFalling
+
+        it "bounds a protected tick's displacement in BOTH directions" $ do
+            -- The cap has to bound the MAGNITUDE: nothing rejects a
+            -- negative speed at the `unit.moveTo` boundary, and a large
+            -- negative step spans just as many tiles backwards.
+            --
+            -- The assertion is the invariant the single-boundary argument
+            -- actually rests on — a displacement STRICTLY under one tile
+            -- moves `floor` by at most 1 — rather than the cap's own
+            -- value, which the accumulate-then-subtract below reproduces
+            -- only to within Float rounding (0.9000001). That headroom
+            -- under 1.0 is why `maxProtectedStep` is 0.9 and not 0.99.
+            let far sp = moverAt (5.5, 3.5) 10 (MoveTarget 13.5 3.5 sp FallProhibited)
+                movedWith sp =
+                    abs (usRealX (last (runTicksAt pc shelf 2.0 1 (far sp))) - 5.5)
+            -- 3 tiles/s over a 2-second tick is 6 tiles of raw travel.
+            movedWith 3.0    `shouldSatisfy` (< 1.0)
+            movedWith (-3.0) `shouldSatisfy` (< 1.0)
+            -- ...and the cap itself is what does the bounding.
+            maxProtectedStep `shouldSatisfy` (< 1.0)
+
+        it "refuses to move a protected request on a non-finite step" $ do
+            -- NaN compares False against everything, so a bare clamp chain
+            -- would launder it through into `floor` on the far side.
+            let nanSpeed = 0 / 0 ∷ Float
+                us' = tickUnit pc reg 0.1 0.1 shelf stats
+                        (moverAt (5.5, 3.5) 10
+                            (MoveTarget 13.5 3.5 nanSpeed FallProhibited))
+            usRealX us' `shouldBe` 5.5
+            usGridZ us' `shouldBe` 10
 
         it "leaves a fall-permitted high-speed tick uncapped" $ do
             -- The contrast that makes the cap a POLICY rather than a
