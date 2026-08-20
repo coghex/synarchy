@@ -88,6 +88,7 @@ cited lines.
 - [ ] EXPL-38. Three references outlived the deleted `World.Fluids` facade, one of them a CI path-selector self-test case
 - [ ] EXPL-39. `World.Geology.Ore` says its caller is `World.Geology.Timeline.buildAge`; that module exports only `buildTimeline`
 - [ ] EXPL-40. `World.Save.Component.Types` says concrete components live in three modules; five define them, and the two omitted are the optional pair
+- [ ] EXPL-41. `World.Save.Component.Entities`' header omits the `core-session` dependency from two of its five components
 
 ---
 
@@ -3124,3 +3125,76 @@ hardest and longest-reaching part:
 - The frozen-wire-contract rule (`:14-22`): a shipped DTO is never edited in
   place, the old type is frozen and moved to `csOlderVersions` via `atVersion`,
   and the new one becomes `csVersion` / `csEncode` / `csDecode`.
+
+### EXPL-41. `World.Save.Component.Entities`' header omits the `core-session` dependency from two of its five components
+
+`src/World/Save/Component/Entities.hs:6-11` lists the module's five components
+with their dependencies. Three are exact; two are incomplete:
+
+```haskell
+--   - @"buildings"@ (required) — per page: the building instances +
+--     their delivered materials / storage / build progress. Owner:
+--     'Building.Types.BuildingManager'. Depends on @"world-pages"@.
+--   - @"units"@ (required) — per page: the unit instances (stats, skills,
+--     modifiers, equipment, inventory, wounds, scars, immunity, blood).
+--     Owner: 'Unit.Types.UnitManager'. Depends on @"world-pages"@.
+```
+
+Both declare TWO dependencies:
+
+| Component | Header says | `csDeps` declares |
+|---|---|---|
+| `"buildings"` (`:355`) | `world-pages` | `[worldPagesComponentId, coreSessionComponentId]` |
+| `"units"` (`:715`) | `world-pages` | `[worldPagesComponentId, coreSessionComponentId]` |
+| `"unit-sim"` (`:1078`) | `world-pages` AND `units` | `[worldPagesComponentId, unitsComponentId]` |
+| `"craft-bills"` (`:1328`) | `world-pages` + `buildings` | `[worldPagesComponentId, buildingsComponentId]` |
+| `"power-nodes"` (`:1506`) | `world-pages` + `buildings` | `[worldPagesComponentId, buildingsComponentId]` |
+
+The last three match exactly, and all five really are `csRequired = True` as the
+header claims.
+
+**The declaration sites document the missing dependency, in a wording that
+gives the header away.** `src/World/Save/Component/Entities.hs:343-345`:
+
+```haskell
+-- Depends on @"core-session"@ too: assembly refills each page's
+-- @bsnNextId@ from the GLOBAL building-id allocator that @"core-session"@
+-- installs, so it must fold first (requirement 9).
+```
+
+and `:704-705`:
+
+```haskell
+-- Depends on @"core-session"@ too, for the global unit-id allocator
+-- (@usnNextId@), same reasoning as @"buildings"@ above.
+```
+
+The word "**too**" at both sites reads as an addendum to a list stated
+elsewhere — the dependency was supplemented locally rather than corrected in the
+header, and the header's own bullets still read as complete.
+
+**Why this is more than a missing word.** `csDeps` is load-bearing:
+`registryStaticErrors` (`World.Save.Component`) checks that every declared
+dependency names a registered component and that the graph is acyclic, and the
+graph is what orders the fold. The reason given at the declaration site is a
+real ordering constraint — `core-session` installs the global building- and
+unit-id allocators and "must fold first (requirement 9)". A contributor adding a
+sixth component, or reasoning about why a component folds when it does, reads
+the header's per-component list as the dependency map, and for two of five
+entries it is missing the dependency that pins their position.
+
+**Severity: low-medium** — the same tier as EXPL-40, in the same subsystem and
+plausibly the same fixing pass. No behaviour is affected: `csDeps` is correct in
+code, so the fold order and the registry's static checks are right.
+
+Verified exact in the same header, so a fix does not disturb it: the
+requirement-4 freeze narrative (`:27-56`) correctly states that the
+`"buildings"`/`"units"` components carry `BuildingInstanceDTO` /
+`UnitInstanceDTO` rather than `World.Save.Types`' positional
+`BuildingInstanceSnapshot` / `UnitInstanceSnapshot`, and correctly explains why
+those snapshots cannot be reused — they directly carry mutable `ItemInstance`
+values and, on units, live `StatModifier` / `Wound` / `Scar` records. The
+runtime-state mirror list (`UnitSimStateDTO`, `CraftBillDTO`/`BillQueueDTO`,
+`PowerNodeDTO`/`NodeRegistryDTO`) is accurate, as is the note that a demolished
+station's lingering craft bill is tolerated so its dependency is for ordering
+rather than a hard orphan reject.
