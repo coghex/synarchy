@@ -34,8 +34,8 @@ import Unit.Stats (rollStat, pickName, applyItemBuffs, effectiveStat)
 import Unit.Thread.Command.Body (seedBodyComposition, bloodSeedFromStats)
 import Equipment.Types (EquipmentClass(..), EquipmentSlot(..),
                         lookupEquipmentClass)
-import Item.Roll (rollItemSpec, rollItemWeight)
-import Item.Types (ItemDef(..), ItemContainer(..), ItemInstance(..)
+import Item.Materialize (materializeItem, pristineItem, filledItem)
+import Item.Types (ItemDef(..), ItemInstance(..)
                   , ItemManager(..), lookupItemDef
                   , itemTotalWeight)
 import World.Types (WorldManager(..))
@@ -315,10 +315,8 @@ shedToCapacity logger uid itemW cap fixedW tagged = do
 
 -- | Resolve a unit def's starting_inventory into concrete ItemInstance
 --   list, each tagged with its capacity-shed drop priority. Unknown
---   item names log a warning and are dropped. Fill is clamped to the
---   container's capacity; non-container items ignore the fill arg and
---   get 0. Quality is rolled from the def's spec (defaults to 100 when
---   unset); condition always starts at 100 (#1421).
+--   item names log a warning and are dropped. Every value below the
+--   entry's own fill is "Item.Materialize"'s to decide (#1418).
 buildStartingInventory ∷ EngineEnv → LoggerState → ItemManager
                        → [(Text, Maybe Float, Int)]
                        → IO [(ItemInstance, Int)]
@@ -336,62 +334,31 @@ buildStartingInventory env logger itemMgr entries = do
                 return Nothing
             Just inst → return (Just (inst, prio))
 
--- | Build one rolled ItemInstance from a def name (quality / weight
---   rolled from the def's specs, condition always full — #1421 — and
---   fill clamped to capacity), and
---   RECURSIVELY materialise its default contents — so a first-aid kit /
---   toolbox spawns already holding its bandages, tools, etc. Returns
---   Nothing for an unknown item name.
+-- | Build one rolled ItemInstance from a def name, its authored default
+--   contents included — so a first-aid kit / toolbox spawns already
+--   holding its bandages, tools, etc. Returns Nothing for an unknown
+--   item name.
+--
+--   Since #1418 this is a thin adapter over "Item.Materialize", the ONE
+--   mint boundary; the caller's explicit fill is the single root-scoped
+--   override starting inventory contributes.
 rollInstance ∷ EngineEnv → ItemManager → Text → Maybe Float
              → IO (Maybe ItemInstance)
 rollInstance env itemMgr name mFill =
-    case lookupItemDef name itemMgr of
-        Nothing → return Nothing
-        Just def → do
-            -- Explicit fill wins; otherwise the def's default_fill (a
-            -- quinoa sack spawns full, a canteen defaults empty). Both
-            -- clamp to capacity; non-containers always 0.
-            let fill = case idContainer def of
-                    Just c  → max 0 (min (icCapacity c)
-                                (fromMaybe (icDefaultFill c) mFill))
-                    Nothing → 0
-            qual ← rollItemSpec (idQualitySpec def) (ucStatRNGRef (toUnitCombatCapability env))
-            wght ← rollItemWeight def (ucStatRNGRef (toUnitCombatCapability env))
-            -- Expand each (name, count, fill) content entry into `count`
-            -- rolled instances, then drop unknown names.
-            let reqs = [ (cName, cFill)
-                       | (cName, cCount, cFill) ← idDefaultContents def
-                       , _ ← [1 .. max 0 cCount] ]
-            contentMaybes ← mapM (\(cn, cf) → rollInstance env itemMgr cn cf) reqs
-            let contents = [ c | Just c ← contentMaybes ]
-            iid ← freshItemInstanceId env
-            return $ Just ItemInstance
-                { iiDefName     = name
-                , iiCurrentFill = fill
-                , iiQuality     = qual
-                  -- Fresh item: full condition (#1421). Every content
-                  -- instance below is materialised through this same
-                  -- function, so they start pristine too.
-                , iiCondition   = 100.0
-                , iiWeight      = wght
-                , iiSharpness   = 100.0
-                , iiContents    = contents
-                , iiInstanceId  = iid
-                , iiTemp        = Nothing
-                  -- #1233: the physical values are SNAPSHOTTED from the
-                  -- def here, exactly like iiWeight above, so a later
-                  -- content edit never re-values this instance.
-                , iiBulk        = Just (idBulk def)
-                , iiStorage     = idStorage def
-                }
+    materializeItem itemMgr
+                    (ucStatRNGRef (toUnitCombatCapability env))
+                    (freshItemInstanceId env)
+                    (filledItem mFill)
+                    name
 
 -- | Resolve a unit def's starting_equipment into a slot→ItemInstance
 --   map, validating each item's `idKind` against the slot's accepted
 --   `esKind`. Unknown items / kind mismatches / unknown slots log a
---   warning and are dropped. Containers in equipment slots get fill=0
---   (Phase 2 doesn't bother seeding canteens-as-equipment). Quality
---   rolls from the def's spec and condition starts full, like
---   starting_inventory.
+--   warning and are dropped. Every instance value is
+--   "Item.Materialize"'s to decide (#1418) — this path contributes no
+--   override at all, so an equipped container now takes its
+--   definition's own default_fill and default contents instead of the
+--   hardcoded empty it used to get.
 buildStartingEquipment ∷ EngineEnv → LoggerState → ItemManager
                        → Maybe EquipmentClass
                        → HM.HashMap Text Text
@@ -436,29 +403,14 @@ buildStartingEquipment env logger itemMgr mClass entries =
                                         <> esKind slot <> ") — skipping"
                                     return m
                                 | otherwise → do
-                                    qual ← rollItemSpec
-                                             (idQualitySpec iDef)
-                                             (ucStatRNGRef (toUnitCombatCapability env))
-                                    wght ← rollItemWeight iDef
-                                             (ucStatRNGRef (toUnitCombatCapability env))
-                                    iid ← freshItemInstanceId env
-                                    return $ HM.insert slotId
-                                        ItemInstance
-                                          { iiDefName     = itemName
-                                          , iiCurrentFill = 0
-                                          , iiQuality     = qual
-                                            -- Fresh item: full
-                                            -- condition (#1421).
-                                          , iiCondition   = 100.0
-                                          , iiWeight      = wght
-                                          , iiSharpness   = 100.0
-                                          , iiContents    = []
-                                          , iiInstanceId  = iid
-                                          , iiTemp        = Nothing
-                                          , iiBulk        = Just (idBulk iDef)
-                                          , iiStorage     = idStorage iDef
-                                          }
-                                        m
+                                    mInst ← materializeItem itemMgr
+                                              (ucStatRNGRef
+                                                 (toUnitCombatCapability env))
+                                              (freshItemInstanceId env)
+                                              pristineItem itemName
+                                    return $ case mInst of
+                                        Nothing   → m
+                                        Just inst → HM.insert slotId inst m
                 ) (return HM.empty) entries
 
 -- | The one spawn-time modifier map (#1213): the def's innate
@@ -498,10 +450,9 @@ applyAccessoryBuffs itemMgr mods inst =
                                    (idBuffs iDef) mods
 
 -- | Resolve a unit def's starting_accessories into ItemInstances.
---   Unknown items log a warning and are dropped. Quality rolls from
---   the def's spec, defaulting to 100 when absent (matches "no roll" —
---   robes / habits etc. typically don't have a quality distribution at
---   all); condition always starts at 100 (#1421).
+--   Unknown items log a warning and are dropped. Like starting
+--   equipment, this path contributes no override: every value is
+--   "Item.Materialize"'s (#1418).
 buildStartingAccessories ∷ EngineEnv → LoggerState → ItemManager
                          → [Text] → IO [ItemInstance]
 buildStartingAccessories env logger itemMgr names = do
@@ -514,21 +465,7 @@ buildStartingAccessories env logger itemMgr names = do
                 "starting_accessories: unknown item '" <> name
                 <> "' — skipping"
             return Nothing
-        Just def → do
-            qual ← rollItemSpec (idQualitySpec def) (ucStatRNGRef (toUnitCombatCapability env))
-            wght ← rollItemWeight def (ucStatRNGRef (toUnitCombatCapability env))
-            iid ← freshItemInstanceId env
-            return $ Just ItemInstance
-                { iiDefName     = name
-                , iiCurrentFill = 0
-                , iiQuality     = qual
-                  -- Fresh item: full condition (#1421).
-                , iiCondition   = 100.0
-                , iiWeight      = wght
-                , iiSharpness   = 100.0
-                , iiContents    = []
-                , iiInstanceId  = iid
-                , iiTemp        = Nothing
-                , iiBulk        = Just (idBulk def)
-                , iiStorage     = idStorage def
-                }
+        Just _ → materializeItem itemMgr
+                                 (ucStatRNGRef (toUnitCombatCapability env))
+                                 (freshItemInstanceId env)
+                                 pristineItem name
