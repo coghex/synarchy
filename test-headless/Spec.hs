@@ -42,6 +42,7 @@ import qualified Test.Headless.Item.Temperature as ItemTemp
 import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Item.QualityTier as ItemQualityTier
 import qualified Test.Headless.Item.Condition as ItemCondition
+import qualified Test.Headless.Item.Materialize as ItemMaterialize
 import qualified Test.Headless.Item.BulkStorage as ItemBulkStorage
 import qualified Test.Headless.Item.Discovery as ItemDiscovery
 import qualified Test.Headless.Asset.TextureFallback as TextureFallback
@@ -373,6 +374,7 @@ main = hspec $ do
     describe "Item.BuffYaml" ItemBuffYaml.spec
     describe "Item.QualityTier" ItemQualityTier.spec
     describe "Item.BulkStorage" ItemBulkStorage.spec
+    describe "Item.Materialize" ItemMaterialize.spec
     describe "World.Save.Sanitize" SaveSanitize.spec
     describe "World.Save.Serialize" SaveSerialize.spec
     describe "save envelope" SaveEnvelope.spec

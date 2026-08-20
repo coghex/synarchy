@@ -514,6 +514,7 @@ library
                      Engine.Scripting.Lua.API.Combat
                      Item.Types
                      Item.Roll
+                     Item.Materialize
                      Item.Temperature
                      Engine.Asset.YamlItems
                      Engine.Scripting.Lua.API.Items
@@ -1092,6 +1093,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.NightPerception
                    Test.Headless.Unit.LineOfSight
                    Test.Headless.Item.GroundPageOwnership
+                   Test.Headless.Item.Materialize
                    Test.Headless.Item.Temperature
                    Test.Headless.Item.BuffYaml
                    Test.Headless.Item.QualityTier

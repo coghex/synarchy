@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 module Item.Types
     ( ItemDef(..)
+    , ItemContentEntry(..)
     , ItemContainer(..)
     , ItemStorage(..)
     , ItemFood(..)
@@ -51,6 +52,37 @@ data ItemContainer = ItemContainer
                               --   sets this to its capacity so loot is
                               --   never an empty bag.
     } deriving (Show, Eq, Generic, Serialize)
+
+-- | One authored default-content entry of an ITEM-container (#1418):
+--   which item, how many, an optional fill, and — recursively — what
+--   THAT child spawns holding.
+--
+--   'iceContents' is the whole reason this is a record rather than the
+--   flat tuple it replaced, and its three states are DISTINCT:
+--
+--   * @Nothing@ (the key omitted, or authored as an explicit @null@ —
+--     aeson reads both the same way) delegates to the referenced child
+--     definition's own 'idDefaultContents'. A kit inside a crate still
+--     arrives stocked.
+--   * @Just []@ deliberately materialises that child EMPTY, overriding
+--     the child definition's defaults. An empty kit is a thing a
+--     designer can author.
+--   * @Just entries@ REPLACES the child definition's defaults with
+--     exactly these, in authored order.
+--
+--   Every positive 'iceCount' occurrence gets its own independently
+--   materialised subtree — two kits in a crate are two distinct trees of
+--   distinct instances, never one tree shared twice.
+data ItemContentEntry = ItemContentEntry
+    { iceItem     ∷ !Text          -- ^ referenced item definition name
+    , iceCount    ∷ !Int           -- ^ how many; ≤ 0 materialises none
+    , iceFill     ∷ !(Maybe Float) -- ^ explicit fill for a fillable child
+                                   --   (a pill bottle's count, a fluid
+                                   --   bottle's litres); Nothing takes the
+                                   --   child definition's own default_fill
+    , iceContents ∷ !(Maybe [ItemContentEntry])
+                                   -- ^ see above: omitted / empty / replaced
+    } deriving (Show, Eq)
 
 -- | Portable ITEM-storage capacity (#1233, epic #1231) — the optional
 --   @storage:@ component. Deliberately SEPARATE from 'ItemContainer'
@@ -236,12 +268,13 @@ data ItemDef = ItemDef
       --   "coffee (excellent)". Empty ⇒ fall back to
       --   'defaultQualityTiers'.
     , idContainer   ∷ !(Maybe ItemContainer)
-    , idDefaultContents ∷ ![(Text, Int, Maybe Float)]
+    , idDefaultContents ∷ ![ItemContentEntry]
       -- ^ For ITEM-containers (a first-aid kit, a toolbox): the contents a
-      --   fresh instance spawns holding — (item def name, count, optional
-      --   fill for fillable contents like a pill/fluid bottle). Each entry
-      --   is materialised into `iiContents` (rolled like any item) at
-      --   creation. Empty for everything that doesn't hold items.
+      --   fresh instance spawns holding. Every entry is materialised into
+      --   `iiContents` by "Item.Materialize" — the ONE mint boundary
+      --   (#1418) — at creation, so EVERY creation path spawns a kit
+      --   stocked, not just unit spawning. Empty for everything that
+      --   doesn't hold items. Authored recursively: see 'ItemContentEntry'.
     , idStorage     ∷ !(Maybe ItemStorage)
       -- ^ Optional portable ITEM-storage capacity (#1233): the internal
       --   weight + bulk limits this item offers its contents. Nothing for
