@@ -77,7 +77,8 @@ import subprocess
 import sys
 import time
 import uuid
-from probelib import quit_engine, boot, send, send_json, wait_load_published
+from probelib import (quit_engine, boot, send, send_json, poll_until,
+                      wait_load_published)
 
 SAVE_PREFIX = "mw_probe_"  # save dirs this probe owns (cleanup is scoped to it)
 
@@ -125,6 +126,68 @@ def wait_active(port: int, page: str, secs: float = 10.0) -> bool:
             return True
         time.sleep(0.2)
     return False
+
+
+# Setup budgets for a page this probe has just ASKED for. They are
+# deliberately not wait_active's default: that 10 s is the right budget
+# for activating a page that already exists (the post-load checks below),
+# and the wrong one for a page still being generated (#1447).
+#
+# world.init and world.show are FIFO world-thread commands drained
+# synchronously by processAllCommands (src/World/Thread.hs:107-115), so a
+# queued show cannot run until the preceding generation returns:
+# ACTIVATION is what has to sit out the whole world generation, and it
+# gets the same budget the probe already allowed generation elsewhere.
+# REGISTRATION is cheap by comparison — handleWorldInitCommand puts the
+# page into wmWorlds before generating ("register early so lua can read
+# the loading phase", src/World/Thread/Command/Init.hs:112-118), as does
+# the arena path (Init.hs:420-426).
+PAGE_READY_SECS = 60.0
+PAGE_ACTIVE_SECS = 180.0
+
+
+def page_registered(port: int, page: str) -> bool:
+    """True once `page` is registered in wmWorlds.
+
+    world.getDate(pageId) returns nil until the lookup in wmWorlds
+    succeeds (src/Engine/Scripting/Lua/API/World/Clock.hs:116-145), which
+    makes it the one per-page observable that exists BEFORE the page is
+    active — there is no per-page load-phase accessor in the Lua API, and
+    #1447 is a probe repair, so none may be added.
+    """
+    return send(port, f"return world.getDate('{page}')").strip() not in (
+        "nil", "null", "")
+
+
+def wait_page_setup(port: int, page: str,
+                    ready_secs: float = PAGE_READY_SECS,
+                    active_secs: float = PAGE_ACTIVE_SECS) -> None:
+    """Block until the REQUESTED page is registered and then active (#1447).
+
+    Both waits are tied to `page` itself, so an already-complete,
+    already-active OTHER page cannot satisfy either one — which is the
+    bug this replaced: `world.waitForInit` polls only the active world
+    (src/Engine/Scripting/Lua/Thread/Console.hs:88-101), so a finished
+    main_world satisfied second_world's wait and left the 10 s activation
+    window as the real generation budget.
+
+    Exits the probe on a timeout, naming the page AND which of the two
+    boundaries stalled: never-registered means the world thread never ran
+    the init command, whereas registered-but-never-active means the
+    generation queued ahead of the show did not finish in budget.
+    """
+    if not poll_until(ready_secs, lambda: page_registered(port, page)):
+        sys.exit(f"FAIL: setup for page '{page}' stalled at READY: it was "
+                 f"never registered (world.getDate('{page}') stayed nil) "
+                 f"within {ready_secs:.0f}s of world.init — the world thread "
+                 f"never ran the init command for this page")
+    if not poll_until(active_secs, lambda: send(
+            port, "return world.getActiveWorldId()") == page):
+        active = send(port, "return world.getActiveWorldId()")
+        sys.exit(f"FAIL: setup for page '{page}' stalled at ACTIVE: it "
+                 f"registered but never became the active world within "
+                 f"{active_secs:.0f}s of world.show (active is {active!r}) — "
+                 f"the generation queued ahead of that show did not finish")
 
 
 def find_flat_strip(port: int) -> tuple[int, int, int] | None:
@@ -195,14 +258,24 @@ def populate_world(port: int, page: str, seed: int, size: int, plates: int,
         if gloss is not None:
             init_args += f", '{gloss}'"
     send(port, f"world.init({init_args}); return 'ok'")
-    send(port, "return world.waitForInit(180)", timeout=190)
     # Must SHOW (not just init): building.spawn/canPlaceAt read
     # snapshotVisibleWorldTiles, which needs the page in wmVisible.
     # getActiveWorldId() falls back to the wmWorlds head, so it can report a
     # page "active" before any page is actually visible.
     send(port, f"world.show('{page}'); return 'ok'")
-    if not wait_active(port, page):
-        sys.exit(f"FAIL: {page} never became active")
+    wait_page_setup(port, page)
+    # ONLY NOW is waitForInit meaningful for this page: it polls the ACTIVE
+    # world's load phase, so before the show landed it could only ever
+    # observe the previously active page (#1447). Activation does not imply
+    # generation finished — handleWorldInitCommand returns at LoadPhase2 and
+    # the initial chunks drain on later world-thread ticks — so this is the
+    # real completion wait, and for the FIRST page (activated the instant it
+    # registers, via the wmWorlds-head fallback above) it is the only one.
+    # It is also what makes the spawns below safe on that first page: they
+    # need wmVisible, and reaching LoadDone here proves the show queued
+    # above already drained, since it sits ahead of the chunk work in the
+    # world thread's FIFO.
+    send(port, "return world.waitForInit(180)", timeout=190)
     send(port, "return world.loadChunksInRegion(-2,-2,2,2)")
     send(port, "return world.waitForChunks(120)", timeout=125)
 
@@ -231,8 +304,10 @@ def populate_arena(port: int, page: str) -> tuple[int, int, int]:
     is exercised. Returns (unitId, buildingId, editedTileZ)."""
     send(port, f"world.initArena('{page}'); return 'ok'")
     send(port, f"world.show('{page}'); return 'ok'")
-    if not wait_active(port, page):
-        sys.exit(f"FAIL: {page} never became active")
+    # Same page-scoped, boundary-naming setup wait as populate_world: the
+    # arena registers early too (Init.hs:420-426) and writes LoadDone before
+    # its command returns, so activation already implies a finished arena.
+    wait_page_setup(port, page)
 
     gx, gy = 2, 2
     # No explicit z: unit.spawn resolves the surface of the page it lands
@@ -470,12 +545,9 @@ def main() -> int:
         # world; poll registration via getDate (nil until the page
         # exists) rather than waitForInit, which tracks the ACTIVE page.
         send(args.port, "world.init('unnamed_w8', 5, 8, 3); return 'ok'")
-        for _ in range(150):
-            if send(args.port,
-                    "return world.getDate('unnamed_w8')") not in ("nil", "null", ""):
-                break
-            time.sleep(0.2)
-        else:
+        if not poll_until(30.0,
+                          lambda: page_registered(args.port, 'unnamed_w8'),
+                          interval=0.2):
             sys.exit("FAIL: unnamed_w8 page never registered")
         chk.ok(get_identity(args.port, "unnamed_w8") is None,
                "4-argument world.init page is unnamed (getIdentity nil)")
