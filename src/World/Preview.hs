@@ -11,8 +11,8 @@ import Control.DeepSeq (NFData)
 import qualified Data.Vector as V
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Internal as BSI
-import World.Types (ZoomChunkEntry(..), WorldGenParams(..))
-import World.Render.Zoom.Types (zoomTileSize)
+import World.Types (WorldGenParams(..))
+import World.ZoomMap.Types (ZoomChunkEntry(..), zoomTileSize)
 
 -- * Preview Image
 

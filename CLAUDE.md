@@ -245,7 +245,12 @@ Procedural world with geological simulation in `World/`:
   (`docs/hydrology_pipeline.md` §5). Not runtime simulation: fluid only
   moves in `Sim.Thread` / `Sim.Fluid.Active`
 - `World.Flora` — vegetation placement
-- Chunk-based with zoom-level LOD system (`World.Render.Zoom.*`, `World.ZoomMap`)
+- Chunk-based with zoom-level LOD system: `World.ZoomMap.*` builds the
+  zoom cache/atlas at world-init time (`World.ZoomMap.Cache.*`,
+  `ChunkTexture`, `ColorPalette`, and the cache's own output types in
+  `World.ZoomMap.Types`); `World.Render.Zoom.*` renders from it. The
+  dependency runs one way — nothing under `World/ZoomMap/` imports
+  `World.Render`.
 
 [`docs/hydrology_pipeline.md`](docs/hydrology_pipeline.md) is the
 namespace-ownership map for water: the five pipeline stages in order, which

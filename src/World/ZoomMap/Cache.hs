@@ -11,6 +11,12 @@
 --
 --   This module re-exports the public API unchanged. Pure
 --   world-generation logic – no rendering imports.
+--
+--   Tree roles: "World.ZoomMap.*" BUILDS the zoom cache (entries,
+--   per-chunk pixels, atlas tiles, palette) at world-init time and owns
+--   its output types in "World.ZoomMap.Types";
+--   "World.Render.Zoom.*" RENDERS from that cache and owns the
+--   render-side types. The dependency runs one way, cache to renderer.
 module World.ZoomMap.Cache
     ( buildZoomCache
     , buildZoomCacheWithPixels

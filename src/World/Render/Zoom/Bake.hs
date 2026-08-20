@@ -16,6 +16,7 @@ import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld
                                            , packUV)
 import World.Types
+import World.Render.Zoom.Types (BakedZoomEntry(..), ZoomAtlasInfo(..))
 import World.Grid (gridToWorld, applyFacing, unapplyFacing)
 
 -- | Per-corner packed world (u,v) for a baked chunk quad's four

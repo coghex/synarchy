@@ -23,6 +23,7 @@ import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
 import World.Types
+import World.Render.Zoom.Types (BakedZoomEntry(..), ZoomMapMode(..))
 import World.Grid (zoomMapLayer, zoomFadeStart, zoomFadeEnd)
 import World.Weather.Types (ClimateGrid(..), ClimateState(..), OceanGrid(..))
 
