@@ -280,6 +280,14 @@ def validate_manifest(manifest) -> list[str]:
 # artifact boundary exists to keep out of a worktree.
 MAX_REFERENCE_CHARS = 4096
 
+# Free TEXT the census stores is a summary too, so it is bounded and
+# single-line for the same reason a reference is: an unbounded,
+# newline-carrying string is where a whole log gets in. A diagnostic is
+# generous because it is a real sentence; a name is short because it is
+# a name.
+MAX_DIAGNOSTIC_CHARS = 2000
+MAX_NAME_CHARS = 255
+
 _WORKTREE_ROOTS: dict[str, tuple[Path, ...]] = {}
 
 
@@ -351,6 +359,20 @@ def _reference_problem(value, where: str) -> str | None:
     if inside is not None:
         return (f"{where} points inside the worktree {inside}: probe "
                 f"artifacts stay outside every checkout")
+    return None
+
+
+def _text_problem(value, where: str, limit: int) -> str | None:
+    """Why `value` is not a bounded single-line summary, or None."""
+    if not isinstance(value, str) or not value:
+        return f"{where} must be a non-empty string"
+    if len(value) > limit:
+        return (f"{where} is {len(value)} characters long, over the {limit} a "
+                f"summary may use: the census records a summary, never the "
+                f"artifact it summarizes")
+    if any(character < " " or character == "\x7f" for character in value):
+        return (f"{where} contains control characters: the census records a "
+                f"summary, never raw artifact content")
     return None
 
 
@@ -573,6 +595,14 @@ def _validate_sample(sample, where: str) -> list[str]:
         problems.append(f"{where} `check_counts` must be a non-empty object")
     else:
         for cid, tally in counts.items():
+            if not isinstance(cid, str) or not probe_protocol.CHECK_ID_RE.match(cid):
+                # The protocol's own stable-identifier rule, reused rather
+                # than restated — and the reason a payload cannot become
+                # a persisted `check_counts` key.
+                problems.append(
+                    f"{where} check key {cid[:80]!r} is not a stable check "
+                    f"identifier ({probe_protocol.CHECK_ID_RE.pattern})")
+                continue
             if not isinstance(tally, dict):
                 problems.append(f"{where} check {cid!r} tally is not an object")
                 continue
@@ -657,8 +687,10 @@ def _validate_attempt(attempt, where: str) -> list[str]:
         problems.append(f"{where} completed {completed} of {requested} "
                         f"requested runs")
     error = attempt.get("error")
-    if error is not None and not isinstance(error, str):
-        problems.append(f"{where} `error` must be a string or null")
+    if error is not None:
+        problem = _text_problem(error, f"{where} `error`", MAX_DIAGNOSTIC_CHARS)
+        if problem:
+            problems.append(problem)
     # `accepted` is DERIVED from the status at ingestion, so the two can
     # only disagree in a record somebody edited.
     status = attempt.get("status")
@@ -695,11 +727,14 @@ def _validate_census(census, where: str) -> list[str]:
             f"{where} `acceptable_failures` must be null or a non-negative "
             f"integer, got {x!r}")
     justification = census.get("acceptable_failures_justification")
-    if justification is not None and (not isinstance(justification, str)
-                                      or not justification.strip()):
-        problems.append(
-            f"{where} `acceptable_failures_justification` must be null or a "
-            f"non-empty string")
+    if justification is not None:
+        problem = _text_problem(justification,
+                                f"{where} `acceptable_failures_justification`",
+                                MAX_DIAGNOSTIC_CHARS)
+        if problem or not justification.strip():
+            problems.append(problem or
+                            f"{where} `acceptable_failures_justification` must "
+                            f"be null or a non-empty string")
     estimate = census.get("estimated_worst_case_seconds")
     if estimate is not None and (not _is_number(estimate) or estimate < 0):
         problems.append(
@@ -760,8 +795,12 @@ def validate_structure(document, *, include_promotion: bool = True) -> list[str]
             continue
         seen.add(key)
         problems += _closed(entry, ENTRY_FIELDS, f"probe {key!r}")
-        if not isinstance(entry.get("script"), str) or not entry["script"]:
-            problems.append(f"probe {key!r} has no string `script`")
+        for field, limit in (("key", MAX_NAME_CHARS),
+                             ("script", MAX_NAME_CHARS)):
+            problem = _text_problem(entry.get(field), f"probe {key[:80]!r} "
+                                    f"`{field}`", limit)
+            if problem:
+                problems.append(problem)
         if entry.get("protocol") not in KNOWN_PROTOCOLS:
             problems.append(
                 f"probe {key!r} protocol {entry.get('protocol')!r} is not one "
@@ -971,14 +1010,24 @@ def validate_result(result, document: dict) -> list[str]:
                         "{id, label} objects")
     else:
         for position, check in enumerate(declared_checks):
-            if not isinstance(check, dict) or not isinstance(check.get("id"), str) \
-                    or not check["id"] or not isinstance(check.get("label"), str):
+            if not isinstance(check, dict) or set(check) != {"id", "label"}:
                 problems.append(f"declared check {position} is not an "
-                                f"{{id, label}} object: {check!r}")
+                                f"{{id, label}} object: {str(check)[:120]!r}")
                 continue
-            if check["id"] in declared:
-                problems.append(f"declared check {check['id']!r} appears twice")
-            declared.add(check["id"])
+            cid = check["id"]
+            if not isinstance(cid, str) or not probe_protocol.CHECK_ID_RE.match(cid):
+                problems.append(
+                    f"declared check {position} identifier {str(cid)[:80]!r} is "
+                    f"not stable ({probe_protocol.CHECK_ID_RE.pattern})")
+                continue
+            label_problem = _text_problem(check.get("label"),
+                                          f"declared check {cid!r} label",
+                                          MAX_NAME_CHARS)
+            if label_problem:
+                problems.append(label_problem)
+            if cid in declared:
+                problems.append(f"declared check {cid!r} appears twice")
+            declared.add(cid)
     # The run series, its indices and the aggregates over it are checked
     # by the SAME helpers a stored sample goes through, so a document
     # this validator accepts cannot become a sample the reader rejects.
@@ -1059,9 +1108,11 @@ def validate_result(result, document: dict) -> list[str]:
                 f"result reports failure_rate={rate} but {failures}/{requested} "
                 f"is {round(failures / requested, 6)}")
     elif status == "harness-error":
-        if not isinstance(result.get("error"), str) or not result["error"]:
-            problems.append("a harness-error result must carry a non-empty "
-                            "`error`")
+        problem = _text_problem(result.get("error"), "result `error`",
+                                MAX_DIAGNOSTIC_CHARS)
+        if problem:
+            problems.append(f"a harness-error result must carry a diagnostic: "
+                            f"{problem}")
         if rate is not None:
             problems.append("a harness-error result must carry no "
                             "`failure_rate` — no trustworthy rate exists")

@@ -782,6 +782,79 @@ def test_artifact_boundary() -> None:
             "retained_artifacts": [f"{link}/inv/run-001"]}),
             "a reference symlinked into a worktree", "inside the worktree")
 
+        # Free TEXT is the other way raw content gets in. The harness
+        # error diagnostic, the descriptor's identifiers and labels, and
+        # the inventory row's own strings are all bounded and
+        # single-line.
+        broken = build_result(harness_error=True, requested=5, marker="run-099")
+        expect(probe_census.validate_result(broken, document) == [],
+               "a real harness-error diagnostic is accepted")
+        for label, mutate, substring in (
+                ("a multiline diagnostic",
+                 lambda d: d.update({"error": raw_stdout}),
+                 "control characters"),
+                ("an engine log as the diagnostic",
+                 lambda d: d.update({"error": "x" * 2001}),
+                 "characters long")):
+            doc = json.loads(json.dumps(broken))
+            mutate(doc)
+            problems = probe_census.validate_result(doc, document)
+            expect(any(substring in p for p in problems),
+                   f"{label} is refused (got {problems[:1]})")
+            before_bytes = reg.census.read_bytes()
+            expect_raises(probe_census.CensusError,
+                          lambda: probe_census.record_result(reg.census, doc),
+                          f"{label} is never logged")
+            expect(reg.census.read_bytes() == before_bytes,
+                   f"{label} left the census unchanged")
+
+        rejected(lambda d: (
+            d["checks"].__setitem__(0, {"id": raw_stdout, "label": "x"}),
+            d["runs"][0]["checks"].__setitem__(raw_stdout,
+                                               d["runs"][0]["checks"].pop("alpha")),
+            d["runs"][1]["checks"].__setitem__(raw_stdout,
+                                               d["runs"][1]["checks"].pop("alpha")),
+            d["check_counts"].__setitem__(raw_stdout,
+                                          d["check_counts"].pop("alpha"))),
+            "a raw payload used as a check identifier", "is not stable")
+        rejected(lambda d: d["checks"][0].__setitem__("label", raw_stdout),
+                 "an engine log used as a check label", "characters long")
+        rejected(lambda d: d["checks"][0].__setitem__("label", "two\nlines"),
+                 "a multiline check label", "control characters")
+
+        # The same closure binds a PERSISTED identifier and the policy
+        # justification a person types. Each corruption above was written
+        # to disk and refused, so put the healthy census back first.
+        reg.census.write_text(json.dumps(healthy, indent=2) + "\n",
+                              encoding="utf-8")
+        probe_census.record_result(reg.census, build_result(marker="run-012"))
+        base = json.loads(reg.census.read_text())
+        for label, mutate, substring in (
+                ("a raw payload as a stored check key",
+                 lambda c: c["current"]["samples"][0]["check_counts"].__setitem__(
+                     raw_stdout,
+                     c["current"]["samples"][0]["check_counts"].pop("alpha")),
+                 "is not a stable check identifier"),
+                ("a raw payload as a stored justification",
+                 lambda c: c.update(
+                     {"acceptable_failures_justification": raw_stdout}),
+                 "control characters")):
+            corrupted = json.loads(json.dumps(base))
+            mutate(probe_census.find_entry(corrupted, PROBE)["census"])
+            reg.census.write_text(json.dumps(corrupted, indent=2) + "\n",
+                                  encoding="utf-8")
+            snapshot = reg.census.read_bytes()
+            expect(any(substring in p for p in
+                       probe_census.validate_structure(corrupted)),
+                   f"validation reports {label}")
+            expect_raises(probe_census.CensusError,
+                          lambda: probe_census.ensure_document(reg.census),
+                          f"--seed refuses a census with {label}")
+            expect(reg.census.read_bytes() == snapshot,
+                   f"nothing rewrote the census carrying {label}")
+        reg.census.write_text(json.dumps(base, indent=2) + "\n",
+                              encoding="utf-8")
+
         expect(Path(run_probes.REPO_ROOT).resolve() in
                probe_census.worktree_roots(),
                "the repository root is one of the checkouts artifacts avoid")
