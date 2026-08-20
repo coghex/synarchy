@@ -591,14 +591,13 @@ gate, and it is ENGINE-FREE by design — the probe itself boots a real
 headless engine and generates a 64-world, roughly eight minutes, which is
 exactly the cost this coverage exists to stop depending on. It imports the
 real probe and swaps its `send`/`send_json` for a fake console, so the
-shipped
-`find_chop_fixture` / `evaluate_chop_designation` / `run_chop_stage` /
-`probe_exit_status` paths run rather than a copy. It also pins the
-property that makes "found nothing" trustworthy: the query origins'
-radius-64 Euclidean discs COVER the probe's loaded region, so discovery
-cannot regress into a sparse sample grid that misses trees. Blocking CI
-step alongside `test_run_probes.py`; `action_outcome` itself stays
-`manual-only`.
+shipped `find_chop_fixture` / `evaluate_chop_designation` /
+`run_chop_stage` / `probe_exit_status` paths run rather than a copy. It
+also pins the property that makes "found nothing" trustworthy: the query
+origins' radius-64 Euclidean discs COVER the probe's loaded region, so
+discovery cannot regress into a sparse sample grid that misses trees.
+Blocking CI step alongside `test_run_probes.py`; `action_outcome` itself
+stays `manual-only`.
 
 ### `test_probelib.py` — `send_json`'s result contract (#1160)
 
@@ -619,15 +618,18 @@ Lua `nil`, arriving as the JSON literal `null`, still reads as `None`) —
 plus `idle` being reachable, the knob the copies hid.
 
 Its source guard is structural, not a name check: a `tools/` function
-qualifies as a copy when it RETURNS `json.loads` of a `send` result AND
-hands `send` one of its own PARAMETERS as the Lua. That parameter clause
-is the scope line. A helper that decodes ONE fixed query it builds itself
-(`snap`, `measure`, `msummary`, `get_identity`) is a different, out-of-
-scope duplication — see `docs/code_health_findings.md` CH-129. Both
-directions are mutation-tested against synthetic trees, so the guard is
-proven to fire on a reintroduced copy and to stay quiet on a fixed-query
-helper rather than merely agreeing that today's tree is clean. ~5 s;
-blocking CI step alongside `test_run_probes.py`.
+qualifies as a copy when it `json.loads` a `send` result AND hands `send`
+one of its own PARAMETERS as the Lua. It is deliberately not keyed on
+`return`, so a copy that guards the decode or buries it in a branch
+counts the same. That parameter clause is the scope line: a helper
+decoding ONE fixed query it builds itself (`snap`, `measure`, `msummary`,
+`get_identity`) is a different, deliberately out-of-scope duplication —
+see `docs/code_health_findings.md` CH-129. Both directions are
+mutation-tested against synthetic trees, so the guard is proven to fire
+on a reintroduced copy — under its old name, a new one, or a guarded
+decode — and to stay quiet on a fixed-query helper, rather than merely
+agreeing that today's tree is clean. ~5 s; blocking CI step alongside
+`test_run_probes.py`.
 
 ### `ci_probes.py` — CI probe selection + eligibility (#530, #540)
 
