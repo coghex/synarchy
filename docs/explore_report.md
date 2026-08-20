@@ -83,6 +83,7 @@ cited lines.
 - [ ] EXPL-33. CLAUDE.md's `text_wrap.lua` summary names two functions and four consumers; there are three functions and ten
 - [ ] EXPL-34. `flattenItemInstances` says "all three now go through this one definition" and enumerates three; there are four
 - [ ] EXPL-35. `loadVegetationYamlFn`'s body says it parses "the single vegetation YAML file"; both Lua callers loop over five
+- [ ] EXPL-36. `computeAmbientLight`'s inline labels name noon and midnight; its input convention puts those values at dawn and dusk
 
 ---
 
@@ -2562,3 +2563,109 @@ because it corroborates EXPL-28 rather than duplicating it.
 - `src/Building/Thread/Command.hs:7`'s "its only caller — `Unit.Thread`" holds:
   `processAllBuildingCommands` is invoked once, from
   `src/Unit/Thread.hs:99`, inside that thread's `unless locked` block.
+
+---
+
+## Sun angle: three curves, one input
+
+### EXPL-36. `computeAmbientLight`'s inline labels name noon and midnight; its input convention puts those values at dawn and dusk
+
+**This is a comment defect, not a behavioural one.** That conclusion is load
+bearing and was reached only after the phase difference below turned out to be
+documented elsewhere as deliberate — see "Why this is not a bug".
+
+`src/Engine/Loop/Frame.hs:50-56`:
+
+```haskell
+computeAmbientLight ∷ Float → Float
+computeAmbientLight sunAngle =
+    let angle = sunAngle * 2.0 * π
+        sunHeight = sin angle
+    in if sunHeight ≥ 0
+       then 0.5 + 0.2 * sunHeight   -- day: 0.5 at horizon, 0.7 at noon
+       else 0.15 + 0.35 * (1.0 + sunHeight)  -- night: 0.15 at midnight, 0.5 at horizon
+```
+
+**The input convention is fixed, documented, and not what those labels assume.**
+`src/World/Time/Types.hs:42-47`:
+
+```haskell
+-- | Convert world time to sun angle (0.0 .. 1.0)
+--   Mapping: midnight (0:00) = 0.0, 6am = 0.25, noon = 0.5, 6pm = 0.75
+worldTimeToSunAngle (WorldTime h m) =
+    let totalMinutes = fromIntegral h * 60.0 + fromIntegral m ∷ Float
+    in totalMinutes / 1440.0   -- 1440 = 24 * 60
+```
+
+and that is exactly the value reaching the function:
+`src/World/Thread/Time.hs:113-115` writes `worldTimeToSunAngle wt` into
+`wsSunAngleRef` each tick, `src/Engine/Loop/Frame.hs:352` reads `sunAngleRef`,
+and `:356` passes it straight in.
+
+`sin(2π·a)` peaks at `a = 0.25` and troughs at `a = 0.75`, so the labels land a
+quarter-day away from the times they name:
+
+| Clock | `sunAngle` | `computeAmbientLight` | The label at that value |
+|---|---|---|---|
+| midnight | 0.00 | 0.50 | comment calls 0.50 "horizon" |
+| 6am | 0.25 | **0.70** | comment calls 0.70 "noon" |
+| noon | 0.50 | 0.50 | comment calls 0.70 "noon" |
+| 6pm | 0.75 | **0.15** | comment calls 0.15 "midnight" |
+
+So "0.7 at noon" is really 0.7 at dawn, and "0.15 at midnight" is really 0.15 at
+dusk. Both extreme labels name the wrong time of day.
+
+**Why this is not a bug.** Two sibling curves read the SAME `sunAngle` and are
+clock-correct, each saying so explicitly:
+
+- `Power.Network.solarIntensity` (`src/Power/Network.hs:112-113`) is
+  `max 0 (negate (cos (2 * pi * sunAngle)))` — `+1` at `a = 0.5`, i.e. noon,
+  matching its haddock's "0 = midnight, 0.25 = dawn, 0.5 = noon, 0.75 = dusk …
+  1 at noon, 0 at dawn/dusk".
+- `Unit.LineOfSight.nightPerceptionFactor` (`src/Unit/LineOfSight.hs:227-231`)
+  is keyed on `cos ((sunAngle - 0.5) * 2 * π)` — peak at noon.
+
+and that second one names the discrepancy outright
+(`src/Unit/LineOfSight.hs:221-225`):
+
+> A cosine keyed to `'sunAngle'` peaking at 0.5 (noon) and troughing at 0.0/1.0
+> (midnight) — the mapping `'WorldTime'` documents (`@World.Time.Types@`) —
+> rather than reusing `'computeAmbientLight'` (`@Engine.Loop.Frame@`), **whose
+> own phase is tuned for the lighting shader, not gameplay, and shouldn't be
+> coupled to this.**
+
+So the tree already knows the ambient curve's phase differs, treats it as an
+intentional artistic choice for lighting, and deliberately declines to share it.
+The curve should be left alone; only its two labels are wrong.
+
+**A second site encodes the same mislabelling.** `src/Engine/Core/Init.hs:206`:
+
+```haskell
+  sunAngleRef ← newIORef 0.25       -- start at noon
+```
+
+By `worldTimeToSunAngle`'s mapping, 0.25 is 6am, not noon. The seed is
+overwritten by the world thread on its first tick — and `defaultWorldTime` is
+10:00, i.e. 0.4167 — so nothing observable follows from it, but the comment
+carries the same quarter-day error and would be fixed by the same pass.
+
+**The GLSL twin is a faithful port and needs no change.**
+`src/Engine/Graphics/Vulkan/ShaderCode.hs:174-181` reproduces the Haskell curve
+line for line (`sin(sunAngle * 6.28318530718)`, same two branches), correctly
+described at `:168-173` as a "GLSL port of Engine.Loop.Frame's
+computeAmbientLight". It carries no clock labels, so it states nothing false.
+
+**Severity: low-medium**, and higher than a typical label slip for two reasons.
+First, three functions in this tree consume one `sunAngle` value with two
+different phases, which is exactly the situation where a reader needs the
+comments to be precise — and the one that is imprecise is the odd one out.
+Second, a maintainer has ALREADY had to work this out and write it down in a
+third module; had `computeAmbientLight`'s own labels been right (or had they
+said "phase deliberately offset for lighting"), that paragraph in
+`Unit.LineOfSight` would not have needed to exist to warn the next person off.
+
+Recorded scope note: this entry claims no behavioural defect and proposes no
+change to any curve. The suggested repair is to relabel the two inline comments
+in terms the input convention supports, note the deliberate offset that
+`Unit.LineOfSight` already documents, and correct `Init.hs:206`'s "start at
+noon".
