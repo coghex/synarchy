@@ -405,8 +405,12 @@ drainer pass until a human resolves it (it happened four times in
 you write into the repo but do not commit belongs in the docs worktree,
 never the primary checkout** — report annotation (`/process-report`),
 findings documents, design-doc drafts, anything a workflow leaves
-sitting for review. Resolve it by BRANCH — never hard-code the path,
-never assume the current directory is right:
+sitting for review. The same rule covers EDITS to tracked documents
+(`CLAUDE.md`, anything under `docs/`): unless the work is a PR running
+in its own separate worktree, make the edit in the docs worktree and
+land it with `tools/docs_land.sh` — never write to a markdown doc in
+the primary checkout. Resolve the worktree by BRANCH — never hard-code
+the path, never assume the current directory is right:
 
 ```bash
 DOCS_WT="$(git worktree list --porcelain \

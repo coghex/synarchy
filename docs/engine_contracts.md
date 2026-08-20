@@ -1127,7 +1127,58 @@ stays `isPlayerCommandable` of the live faction, never a def allowlist.
   being a target is player-commandability and nothing else, so
   `escort_hold` is auto-prepended to EVERY species by
   `registerActions`. Every teardown path is the same coupled,
-  idempotent one, extended to the pair; only a resize is exempt.
+  idempotent one, extended to the pair; only a resize is exempt — the
+  full trigger list is the next subsection.
+
+### Mode A session failures (#1254, UIT-5B)
+
+Every way a session can be interrupted ends it through that ONE coupled
+teardown, and the module's job is to NOTICE each of them. The noticing
+splits by phase: while the pair is open the container window's own
+per-tick `stillThere` hook closes the level (and with it the session) on
+an endpoint that vanished, but a session spends its whole APPROACH with
+no window at all, so `transfer_session.update` — a real 0.2 s script
+tick, the cadence the container window already runs at — is the
+canonical liveness check and covers BOTH phases. Its rule is
+`staleReason`: either endpoint gone, the contract's own `eligible` gone
+(a demolished building, a unit that left the player's factions), or a
+UNIT endpoint whose pose is `dead` or `collapsed`. That last one cannot
+come from the contract — `Unit.Transfer.endpointEligible` is
+`uevCommandable` alone, so a corpse is a perfectly eligible endpoint by
+its lights — so it is tested here rather than widened there, and the
+RECOVERABLE poses (crawling, sleeping) are deliberately excluded: a
+session sits those out.
+
+A **new player order to a held unit** ends the session and then
+proceeds (signed off 2026-08-11 — player intent wins), through the one
+shared `notePlayerOrder` boundary called from the player's own ingress
+sites and NOWHERE else (`init_mouse.lua`'s right-click move order,
+`init_context_menu.lua`'s Attack / Pick up / Move here) — never from
+inside `unitAi.commandMove`/`commandAttack`/`commandPickup`, which
+`building_spawn.lua` and `unit_ai_combat.lua` also call for scripted and
+autonomous behaviour, and never from the escort's own approach. It runs
+BEFORE the command, since the teardown stops every unit it held.
+
+A zoom-band change or a HUD hide reaches the session through
+`scripts/ui/view_teardown.lua` (#156) rather than a one-off call —
+which is what covers the approach, where the container window's own
+entry has no window to close — while `"resize"` stays exempt. Exit to
+Menu keeps calling `clear` BEFORE `world.destroyAll`, so the release
+still reaches live entities. The SUCCESSFUL-load reset is the one path
+that stops neither unit, because its recorded uids no longer name those
+units — a durable Mode B order the unit is carrying survives every
+release untouched, since stopping is all a release does to either end.
+The teardown itself is step-isolated: the panels close first and each
+held unit is released independently, so a missing FIRST endpoint costs
+neither the other endpoint its release nor either panel its close.
+#1254's requirement 7 is per-REQUEST atomicity and nothing wider: a
+session owns no transaction, so ending one never rolls back a commit
+that already succeeded and can only ever land between two whole
+requests. Deliberately NOT added: a stall timer, and any handling of an
+endpoint that is merely unreachable or drifted — both are live and
+commandable, so neither is a session failure. Gate coverage: hspec
+`--match "Transfer context menu"` includes the escort session with the
+two-sided hold and every failure trigger above.
 
 ---
 

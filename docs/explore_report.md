@@ -59,6 +59,10 @@ cited lines.
 - [ ] EXPL-14. `migrateLegacyConfig` reports a destination write failure as a malformed legacy file, in a user-facing warning
 - [ ] EXPL-15. `Unit.Atlas.Digest`'s description of the digest stream omits the tag's length prefix and the label field entirely
 - [ ] EXPL-16. `pickFrame`'s "used by the render path and the hit-tester" omits both Lua API consumers
+- [ ] EXPL-17. `unitToQuad`'s climb-occlusion branch is justified by a `spriteRowSpan` push the same function says it does not apply
+- [ ] EXPL-18. `Building.Render`'s sort comment says units add a `spriteRowSpan` term "as units do"; they no longer do
+- [ ] EXPL-19. `Unit.HitTest` claims to mirror a tile hit-test that no longer holds the math, and to use the "same math" the engine documents as different
+- [ ] EXPL-20. `resolveTexture`'s haddock credits itself with animation mirroring; animations never reach it and it cannot honour `flip: false`
 
 ---
 
@@ -988,3 +992,280 @@ right (`strided = raw * stride` shows frames 0, 2, 4, … at stride 2, halving a
 9-frame transition); and the reverse path really does hold frame 0 when a
 non-looping clip runs out, since `fwdIdx` clamps to `n - 1` and
 `idx = (n - 1) - fwdIdx`.
+
+---
+
+## Quad sorting: a removed mechanism still cited as live
+
+`spriteRowSpan` does not exist anywhere in this tree. A grep across `src`,
+`app`, `scripts`, `test-headless`, `cbits`, `tools` and `shaders` returns
+exactly three hits, all inside comments and none in code:
+
+```
+src/Unit/Render.hs:273:            -- spriteRowSpan forward-push would otherwise draw the climber
+src/Building/Render.hs:205:            -- top. Adding spriteRowSpan (the sprite's vertical extent)
+src/Building/Render.hs:207:            -- a 96×96 cargo hold has spriteRowSpan ≈ 2.0 — outrank
+```
+
+`src/Unit/Render.hs:254-262` records why it went, and is the one CURRENT
+statement of the rule:
+
+```haskell
+            -- It deliberately does NOT add a "sprite row span" forward
+            -- push. A tall sprite spans more than one screen row, so a
+            -- push sized to its height (~1.33 rows for a 1:1 sprite, more
+            -- for taller units) exceeded a full row and let an elevated /
+            -- climbing unit out-sort — and draw OVER — a cliff a full row
+            -- in FRONT of it. The screen row (faF+fbF) already orders the
+            -- unit correctly against tiles ahead of and behind it; [...]
+```
+
+The two findings below are the comments left behind, recorded separately
+because they are in different files, make different claims, and would be fixed
+by different edits.
+
+### EXPL-17. `unitToQuad`'s climb-occlusion branch is justified by a `spriteRowSpan` push the same function says it does not apply
+
+`src/Unit/Render.hs:269-278`, nineteen lines below the passage above:
+
+```haskell
+            -- Far-side climb occlusion: while climbing onto a cliff
+            -- column whose face is between the unit and the camera (its
+            -- screen-row is in FRONT of the unit's frozen base), sort the
+            -- unit just BEHIND that column so the cliff hides it. The
+            -- spriteRowSpan forward-push would otherwise draw the climber
+            -- OVER the column it's climbing. [...]
+```
+
+That sentence is the stated REASON the branch exists, and it names a push the
+same function has already said it deliberately does not apply. The two comments
+describe mutually exclusive versions of `normalSort`; only one of them can
+describe the code as it stands, and `:254` is the one that does.
+
+**This finding does NOT claim the branch is dead**, and a fix must not assume
+so. The branch still changes the outcome: `sortKey = destRow - 0.5` moves the
+climber ahead of every intermediate screen row while keeping it behind the
+destination column, which `normalSort = baseRow + 0.0006` would not do. The
+defect is that the justification given cannot be the operative one, so a reader
+deciding whether the branch is still needed — the exact question this comment
+exists to answer — reasons from a mechanism that was removed.
+
+The rest of the branch's comment is accurate: "Only applies while the unit is
+still on the base side (its tile ≠ the dest column)" matches the
+`baseTile ≢ dest` guard, and the fallback to `normalSort` once the pullup
+carries the unit onto the top tile is real.
+
+### EXPL-18. `Building.Render`'s sort comment says units add a `spriteRowSpan` term "as units do"; they no longer do
+
+`src/Building/Render.hs:203-212`:
+
+```haskell
+            -- Sort by the iso depth of the GROUND TILE, not the sprite
+            -- top. Adding spriteRowSpan (the sprite's vertical extent)
+            -- to the sort key as units do made tall buildings — e.g.
+            -- a 96×96 cargo hold has spriteRowSpan ≈ 2.0 — outrank
+            -- units at the same tile, drawing the building on top of
+            -- a unit standing in front of it. Keeping just the iso
+            -- bottom plus the +0.0005 tiebreaker means a unit at the
+            -- same row sorts in front (their key has +0.0006), and
+            -- units north of the building still get obscured because
+            -- their key is lower (north = smaller faF + fbF).
+```
+
+**"as units do" is false.** Units did once; `src/Unit/Render.hs:254` states
+they deliberately no longer do. This is the more misleading of the pair,
+because it presents a deliberate DIFFERENCE between building and unit sorting
+on the one point where the two now agree: both key off the iso bottom of the
+ground tile with no sprite-height term, differing only in their constant
+tiebreaker.
+
+The remaining arithmetic in the same block is correct, and I checked it:
+`unitSortNudge = 0.0003` (`src/Unit/Render.hs:39`) and `normalSort` adds
+`2 * unitSortNudge` (`:264-267`), so a unit's key really does carry `+0.0006`
+against the building's `+0.0005`, and a unit at the same row really does sort
+in front.
+
+**Severity for both: low** — no behaviour is wrong, and the sort keys are
+correct as written. Recorded because these are load-bearing rendering-order
+comments, both are the first thing a reader consults before touching a sort
+key, and both describe a mechanism that no longer exists.
+
+---
+
+## Unit hit testing
+
+### EXPL-19. `Unit.HitTest` claims to mirror a tile hit-test that no longer holds the math, and to use the "same math" the engine documents as different
+
+Two claims, one in the module haddock and one inside `hitTestUnitAt`.
+
+`src/Unit/HitTest.hs:4-7`:
+
+```haskell
+-- Given mouse coordinates in framebuffer pixels, find which (if any)
+-- spawned unit is under the cursor. Mirrors the screen→world projection
+-- in `World/Render/CursorQuads.hs::renderWorldCursorQuads::hitTest` and
+-- the per-unit sprite math in `Unit/Render.hs::unitToQuad`.
+```
+
+`src/Unit/HitTest.hs:81-83`:
+
+```haskell
+                -- Screen pixel → world coord. Same math as the tile
+                -- hit-test in `renderWorldCursorQuads::hitTest`:
+                --   normX/Y in [0..1]
+```
+
+**(a) The named target no longer contains the cited math.**
+`renderWorldCursorQuads::hitTest` is now a delegation
+(`src/World/Render/CursorQuads.hs:74-76`):
+
+```haskell
+    let hitTest pixX pixY =
+            pickWorldTile facing zoom zSlice camX camY fbW fbH winW winH
+                          worldSize effectiveDepth vb tileData pixX pixY
+```
+
+The projection moved into `World.Render.HitTest.pickWorldTile`. A reader
+following either pointer lands on a call site, not on a projection to compare
+against.
+
+**(b) "Same math" is false, and the engine's own documentation classifies it as
+false.** The two derive the aspect ratio from DIFFERENT sources:
+
+| | aspect | pixel→norm | degeneracy guard |
+|---|---|---|---|
+| `pickWorldTile` (`src/World/Render/HitTest.hs:101-104`) | `fbW / fbH` — **framebuffer** | `winW` / `winH` | `viewportDegenerate winW winH fbW fbH` |
+| `hitTestUnitAt` (`src/Unit/HitTest.hs:87-91`) | `winW / winH` — **window** | `winW` / `winH` | `windowDegenerate winW winH` |
+
+`src/Engine/Graphics/Viewport.hs:26-43` names these as two families and states
+the split outright — `windowDegenerate` is
+
+> Used by the hit-test paths, which derive their aspect ratio from the window
+> size.
+
+while `viewportDegenerate` is for
+
+> the paths that normalize by the window size AND derive their aspect ratio
+> from the framebuffer (the world tile pick and the zoom-map chunk pick).
+
+So the difference is intentional, documented, and carries a distinct guard on
+each side — which is exactly what makes the flat "Same math as the tile
+hit-test" claim wrong by the codebase's own taxonomy.
+
+**No behaviour is wrong today.** Under uniform DPI scaling
+`fbW / fbH == winW / winH`, so both projections produce identical world
+coordinates; that is presumably why the divergence has been tolerable. This
+finding is about the claim, not about the projection.
+
+**The "cannot drift" guarantee does not extend here**, which is the part most
+likely to mislead. `src/World/Render/CursorQuads.hs:65-67` says of
+`pickWorldTile`:
+
+> Shared with the synchronous Lua pick (@world.pickTile@) so the two can't
+> drift — see 'World.Render.HitTest'.
+
+Unit hit-testing is a THIRD consumer of the same projection that keeps its own
+copy rather than calling the shared function, so it sits outside that
+guarantee — the opposite of what "Mirrors the screen→world projection in …"
+leads a reader to assume. A maintainer changing `pickWorldTile` would read
+`Unit.HitTest` as a mirror of it and reasonably conclude nothing needed
+updating.
+
+`hitTestUnitsInRect` carries the same copy at `src/Unit/HitTest.hs:156`; its own
+comment there ("Mirrors the math in hitTestUnitAt", `:159-160`) is accurate and
+should be left alone.
+
+**Severity: low-medium** — above the pure-nit tier because the misdirection is
+about which code two implementations must be kept in step with, and no shipping
+configuration currently exposes it.
+
+Verified truthful in the same module, so a fix does not disturb any of it:
+
+- `unitHitRect`'s claim that "the ONE deliberate difference from the renderer is
+  the height offset, which uses the INTEGER `uiGridZ` here against the
+  renderer's continuous `uiRealZ`" survives a line-by-line diff against
+  `unitToQuad`: every other term — `applyFacingF`, `rawX`, `rawY`,
+  `baseRadius`, `frameDimensions`, both scales, both quad dimensions, `drawX`
+  and `drawY` — is identical, including the correct ABSENCE of a
+  `tileHalfDiamondHeight` term.
+- `frameSampleOf` really does delegate to `Unit.Render.pickFrame` and really
+  does keep the directional T-pose fallback for a unit whose def is missing,
+  matching `unitToQuad`.
+- The `effDepth` expression matches the renderer's. (It is the same expression
+  in ten places across nine files — duplication, but with no drift, and not a
+  comment defect.)
+
+### EXPL-20. `resolveTexture`'s haddock credits itself with animation mirroring; animations never reach it and it cannot honour `flip: false`
+
+`src/Unit/Sprite.hs:49-56`:
+
+```haskell
+-- | Pick the correct directional sprite for a unit given its world-space
+--   facing and the current camera rotation.
+--
+--   Lookup order: requested screen direction → its `mirrorDir` (returned
+--   with `flipX = True` so the renderer flips UVs) → fallback default
+--   (no flip). The mirror step lets animations ship 5 directional
+--   sprites (S/SE/E/NE/N) instead of 8 — SW/W/NW are produced by
+--   horizontal mirror at draw time.
+```
+
+The lookup order is exactly right. The last sentence is wrong about this
+function on two counts, and the module's OWN header contradicts it twelve lines
+earlier (`src/Unit/Sprite.hs:12-16`):
+
+```haskell
+--   Since #1259 this is reached only when there is no animation frame
+--   to show: an ANIMATED unit is both drawn and hit-tested from
+--   'Unit.Render.pickFrame''s sample, which is the same shared-resolution
+--   principle applied one level up (a frame's size is its atlas CELL,
+--   which no texture-handle lookup can report).
+```
+
+**(1) Animations never reach `resolveTexture`.** Its
+`Map.Map Direction TextureHandle` argument is `uiDirSprites`, which traces back
+through `udDirSprites` (`src/Unit/Thread/Command/Spawn.hs:165`,
+`src/World/Save/Types.hs:691`) to the unit YAML's `directional_sprites` key
+(`src/Engine/Asset/YamlUnits.hs:417`) — the T-POSE sprite set, which
+`docs/engine_contracts.md` and the asset inventory both classify as a
+non-animation unit texture. All three call sites
+(`src/Unit/Render.hs:119`, `src/Unit/Render.hs:213`,
+`src/Unit/HitTest.hs:251`) are the T-pose fallback. Since #1261 an ANIMATION's
+five-versus-eight economy is implemented in `Unit.Render.pickFrame`'s
+`lookupFlip`, against the authored rows the atlas index records.
+
+**(2) The two mirroring paths differ in a way the sentence conceals.**
+`resolveTexture` mirrors UNCONDITIONALLY: when the direct direction is absent it
+always tries `mirrorDir`, and there is no opt-out anywhere in the function. The
+animation path gates on the per-animation `aFlip` flag, and
+`src/Unit/Render.hs:117-122` states why the gate is load-bearing:
+
+> `flipOK` from the animation's `aFlip` flag gates the mirror fallback. When
+> False we deliberately do NOT mirror — an anim with an asymmetric held prop
+> (weapon in right hand) would otherwise have the prop visually swap sides on
+> western directions. Author sets `flip: false` (or omits) to opt out.
+
+So a reader taking `resolveTexture`'s haddock at face value concludes that this
+is the mechanism behind animation mirroring, and therefore that it honours
+`flip: false`. Neither holds. The asymmetric-weapon case is one the asset
+pipeline explicitly supports — the approved `<lowercase>_RH_<lowercase>`
+animation-identifier form exists for exactly it — so the distinction is not
+hypothetical.
+
+Worth distinguishing, so a fix does not over-correct: `src/Unit/Direction.hs:40-45`
+uses the same "lets bilaterally-symmetric animations ship 5 directional sprites
+instead of 8" framing for `mirrorDir` itself, and there it is CORRECT —
+`mirrorDir` genuinely serves both paths, `pickFrame`'s and `resolveTexture`'s.
+The defect is confined to `resolveTexture`, whose domain is the T-pose only.
+
+**Severity: low.** No behaviour is wrong. Recorded because it is a same-file
+contradiction in which the function-level comment survived the correction its
+own module header applies, and because it hides the
+unconditional-versus-`aFlip` difference between the two mirroring paths.
+
+Verified truthful in the same module, so a fix does not disturb it:
+`cameraRotSteps`' "each 90 deg CW rotation = 2 steps" is right (S 180° → W 270°
+→ N 0° → E 90° is clockwise, and eight directions over four quarter-turns is
+two steps each); `screenDirOf` subtracts the camera's steps in the correct
+sense and its `mod` is non-negative; and `resolveTexture`'s stated lookup order
+matches the code exactly, `flipX` included.

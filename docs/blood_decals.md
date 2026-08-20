@@ -437,8 +437,8 @@ capability this doc is merely under-explaining.
 
 ## Testing
 
-See CLAUDE.md's "Testing blood decals headless" section (under
-"Subsystem probes & domain contracts") for the turnkey probes, hspec
+See the **Blood decals (#603 epic)** entry under CLAUDE.md's
+"Subsystem probes & domain contracts" for the turnkey probes, hspec
 `--match` targets, and the transience contract restated for anyone
 writing a new blood test.
 
