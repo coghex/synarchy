@@ -600,6 +600,61 @@ def test_envelope_framing_fingerprint_keeps_pragma_shaped_source() -> None:
                "that follows an OPTIONS_GHC pragma")
 
 
+def test_envelope_framing_fingerprint_resolves_conflicting_flags() -> None:
+    print("issue #1416 review round 2: repeated LANGUAGE flags are resolved "
+          "IN ORDER the way GHC applies them (last mention wins), so a "
+          "conflicting pair is not judged token-by-token against the "
+          "inherited state and collapsed onto a module that compiles "
+          "differently")
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        # Inherited NoImplicitPrelude. Ending on ImplicitPrelude REVERSES
+        # it; ending on NoImplicitPrelude restates it.
+        reverses = _framing_fp(
+            d, "{-# LANGUAGE Strict, ImplicitPrelude #-}\n" + _CODEC_BODY)
+        restates = _framing_fp(
+            d, "{-# LANGUAGE Strict, ImplicitPrelude, NoImplicitPrelude #-}\n"
+            + _CODEC_BODY)
+        plain = _framing_fp(d, "{-# LANGUAGE Strict #-}\n" + _CODEC_BODY)
+        expect(reverses != restates,
+               "expected a conflicting flag list ENDING on ImplicitPrelude to "
+               "differ from one ending on NoImplicitPrelude -- GHC applies "
+               "the last mention, so these two modules compile differently")
+        expect(restates == plain,
+               "expected a conflict whose FINAL state matches the inherited "
+               "default to be fully redundant, matching a header that never "
+               "mentioned it")
+        expect(reverses != plain,
+               "expected a conflict whose FINAL state reverses the inherited "
+               "default to stay fingerprinted")
+        # The same resolution has to work ACROSS pragmas, not just within
+        # one -- GHC does not care how they are split up.
+        split_restates = _framing_fp(
+            d, "{-# LANGUAGE Strict, ImplicitPrelude #-}\n"
+            "{-# LANGUAGE NoImplicitPrelude #-}\n" + _CODEC_BODY)
+        expect(split_restates == restates,
+               "expected conflicting flags SPLIT across two header pragmas to "
+               "resolve exactly as they do within one")
+        # An extension the module does not inherit at all is kept in the
+        # state it ends up in -- this tool knows the cabal stanza, not
+        # GHC's own defaults, so `NoStrict` must not collapse onto
+        # `Strict` or onto silence.
+        no_strict = _framing_fp(d, "{-# LANGUAGE NoStrict #-}\n" + _CODEC_BODY)
+        silent = _framing_fp(d, _CODEC_BODY)
+        expect(no_strict != plain and no_strict != silent,
+               "expected a NEGATIVE form of a non-inherited extension to stay "
+               "distinct from both its positive form and no declaration")
+        # A token that is not a bare extension name leaves the header
+        # exactly as written rather than being guessed at.
+        odd_a = _framing_fp(
+            d, "{-# LANGUAGE Strict, UnicodeSyntax, -Wall #-}\n" + _CODEC_BODY)
+        odd_b = _framing_fp(
+            d, "{-# LANGUAGE Strict, -Wall #-}\n" + _CODEC_BODY)
+        expect(odd_a != odd_b,
+               "expected an unparseable LANGUAGE token to leave the header "
+               "verbatim, so nothing beside it is normalized away either")
+
+
 def test_inherited_extension_set_is_read_live_and_fails_loudly() -> None:
     print("issue #1416: the inherited extension set is derived from "
           "synarchy.cabal's `common lang`, and a stanza that cannot be read "
@@ -1896,6 +1951,7 @@ def main() -> int:
         test_envelope_framing_fingerprint_changes_on_import_edit,
         test_envelope_framing_fingerprint_changes_on_options_ghc_edit,
         test_envelope_framing_fingerprint_keeps_pragma_shaped_source,
+        test_envelope_framing_fingerprint_resolves_conflicting_flags,
         test_inherited_extension_set_is_read_live_and_fails_loudly,
         test_frozen_dto_fingerprint_unaffected_by_pragma_normalization,
         test_detects_envelope_framing_fingerprint_mismatch,

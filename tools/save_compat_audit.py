@@ -684,24 +684,36 @@ def inherited_default_extensions(
 
 def _drop_redundant_language_pragmas(
         text: str, inherited: dict[str, bool]) -> str:
-    """Remove ONLY those locally declared LANGUAGE extensions whose
-    effective state Codec.hs already inherits, so an edit that adds or
-    removes such a declaration leaves the module's effective extension
-    set -- and therefore its behavior, and therefore the bytes it
-    writes -- unchanged (issue #1416; PR #1001's removal of the
-    already-inherited `UnicodeSyntax` is the representative case).
+    """Reduce the module header's locally declared LANGUAGE extensions to
+    the DELTA they actually make against what Codec.hs already inherits
+    from synarchy.cabal's `common lang` stanza, so an edit that adds or
+    removes a declaration the module was getting anyway leaves the
+    module's effective extension set -- and therefore its behavior, and
+    therefore the bytes it writes -- unchanged (issue #1416; PR #1001's
+    removal of the already-inherited `UnicodeSyntax` is the
+    representative case).
 
-    Everything else survives verbatim into the hash. An extension NOT
-    in the inherited set is effective and is kept (`Strict`); one whose
-    state REVERSES an inherited default is effective and is kept
-    (`ImplicitPrelude` against an inherited `NoImplicitPrelude`); a
-    token that doesn't parse as a bare extension name matches nothing
-    and is kept. Only `LANGUAGE` is in scope -- `OPTIONS_GHC` and every
-    other block pragma is untouched. Extensions implied by
+    Declarations are resolved IN ORDER, across every header pragma, the
+    way GHC applies them: the LAST mention of an extension wins. Judging
+    each token independently against the inherited state instead would
+    collide `Strict, ImplicitPrelude, NoImplicitPrelude` (whose final
+    `ImplicitPrelude` state matches the inherited default, so the whole
+    conflict is redundant) with `Strict, ImplicitPrelude` (whose final
+    state REVERSES it) -- two modules that compile differently.
+
+    An extension whose final state matches the inherited one is dropped.
+    Everything else is kept, spelled in the state it ends up in: an
+    extension the module does not inherit at all (its `Strict`) is kept
+    regardless, since this tool knows the cabal stanza but not GHC's own
+    per-extension defaults, and over-keeping is the fail-safe direction.
+    Only `LANGUAGE` is in scope -- `OPTIONS_GHC` and every other block
+    pragma passes through verbatim. Extensions implied by
     `default-language: GHC2024` are deliberately NOT treated as
-    inherited: over-keeping is the fail-safe direction.
+    inherited, for the same fail-safe reason. If any token is not a bare
+    extension name, the header is left exactly as written rather than
+    guessed at.
 
-    Only the module HEADER is rewritten -- the leading run of block
+    Only the module HEADER is touched -- the leading run of block
     pragmas, which is the only place GHC accepts a `LANGUAGE`
     declaration. Scanning the whole file instead would match
     pragma-SHAPED ordinary source: a string literal (or quasiquote, or
@@ -711,33 +723,62 @@ def _drop_redundant_language_pragmas(
     of what the codec writes. The walk stops at the first token that is
     not whitespace or a block pragma, so anything past the header --
     including a stray mid-file `LANGUAGE` pragma GHC would reject
-    anyway -- stays fingerprinted verbatim, which is the fail-safe
-    direction."""
-    def is_redundant(name: str) -> bool:
-        base, enabled = _extension_state(name)
-        return base in inherited and inherited[base] == enabled
-
-    def rewrite(pragma: str) -> str:
-        m = LANGUAGE_PRAGMA_RE.fullmatch(pragma)
-        if m is None:
-            return pragma
-        names = [tok.strip() for tok in m.group(1).split(",")]
-        kept = [n for n in names if n and not is_redundant(n)]
-        if not kept:
-            return ""
-        return "{-# LANGUAGE " + ", ".join(kept) + " #-}"
-
-    out: list[str] = []
+    anyway -- stays fingerprinted verbatim."""
+    # Split the header's leading pragma run off from the rest of the
+    # module, keeping the gaps so non-LANGUAGE pragmas survive in place.
+    gaps: list[str] = []
+    pragmas: list[str] = []
     pos = 0
     while True:
         gap_end = pos + len(text[pos:]) - len(text[pos:].lstrip())
-        pragma = BLOCK_PRAGMA_RE.match(text, gap_end)
-        if pragma is None:
+        match = BLOCK_PRAGMA_RE.match(text, gap_end)
+        if match is None:
             break
-        out.append(text[pos:gap_end])
-        out.append(rewrite(pragma.group(0)))
-        pos = pragma.end()
-    out.append(text[pos:])
+        gaps.append(text[pos:gap_end])
+        pragmas.append(match.group(0))
+        pos = match.end()
+    rest = text[pos:]
+
+    declared: list[str] = []
+    is_language = []
+    for pragma in pragmas:
+        m = LANGUAGE_PRAGMA_RE.fullmatch(pragma)
+        is_language.append(m is not None)
+        if m is None:
+            continue
+        for token in m.group(1).split(","):
+            token = token.strip()
+            if not token:
+                continue
+            if not EXTENSION_NAME_RE.match(token):
+                # Unparseable: leave the whole header alone rather than
+                # normalize away something not understood.
+                return text
+            declared.append(token)
+
+    # GHC applies these left to right, so the last mention of an
+    # extension is the one that holds.
+    final: dict[str, bool] = {}
+    for name in declared:
+        base, enabled = _extension_state(name)
+        final[base] = enabled
+    delta = sorted(base if enabled else "No" + base
+                   for base, enabled in final.items()
+                   if inherited.get(base) != enabled)
+    canonical = "{-# LANGUAGE " + ", ".join(delta) + " #-}" if delta else ""
+
+    out: list[str] = []
+    emitted = False
+    for gap, pragma, language in zip(gaps, pragmas, is_language):
+        out.append(gap)
+        if not language:
+            out.append(pragma)
+        elif not emitted:
+            # The first LANGUAGE pragma carries the whole resolved delta;
+            # any later one has already been folded into it.
+            out.append(canonical)
+            emitted = True
+    out.append(rest)
     return "".join(out)
 
 
