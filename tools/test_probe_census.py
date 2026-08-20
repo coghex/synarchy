@@ -125,7 +125,8 @@ class SyntheticRegistry:
 
 def build_result(probe: str = PROBE, *, commit: str = COMMIT_A,
                  outcomes=("PASS", "FAIL"), harness_error: bool = False,
-                 requested: int | None = None, marker: str | None = None) -> dict:
+                 requested: int | None = None, marker: str | None = None,
+                 elapsed=None) -> dict:
     """One `probe-flake-result/v1` document, built by the real harness types.
 
     `probe_flake.Measurement.to_document` is the producer the census has
@@ -145,7 +146,8 @@ def build_result(probe: str = PROBE, *, commit: str = COMMIT_A,
                   else probe_protocol.FAIL}
         keep = outcome in ("FAIL", "TIMEOUT")
         measurement.runs.append(probe_flake.RunRecord(
-            index, 8100 + index, outcome, 1.5 * index, checks,
+            index, 8100 + index, outcome,
+            1.5 * index if elapsed is None else elapsed, checks,
             Path(f"/tmp/artifacts/inv/run-{index:03d}") if keep else None))
     if harness_error:
         measurement.status = "harness-error"
@@ -444,6 +446,86 @@ def test_result_validation() -> None:
                "a non-object result is rejected")
 
 
+def test_long_run_rounding() -> None:
+    print("\n-- a long measurement's independent rounding is not corruption --")
+    with SyntheticRegistry() as reg:
+        document = seeded(reg)
+        runs = 40
+        # `Measurement.to_document` rounds each run to three decimals and
+        # the TOTAL from the unrounded values, so 40 runs of 1.00049 s
+        # serialize as forty 1.0 values against a 40.02 total. That is a
+        # genuine harness result, and `--runs` has no upper bound.
+        result = build_result(outcomes=("PASS",) * runs, elapsed=1.00049)
+        drift = abs(result["total_elapsed_seconds"]
+                    - sum(r["elapsed_seconds"] for r in result["runs"]))
+        expect(drift > 0.01,
+               f"the fixture really does drift past a fixed tolerance "
+               f"({drift:.4f}s over {runs} runs)")
+        expect(probe_census.validate_result(result, document) == [],
+               "the long measurement is accepted despite the rounding drift")
+        probe_census.record_result(reg.census, result)
+        stored = probe_census.find_entry(
+            probe_census.read_for_update(reg.census), PROBE)["census"]
+        expect(len(stored["current"]["samples"][0]["runs"]) == runs,
+               "it round-trips into the census and reads back")
+        # The tolerance still scales with the run count rather than
+        # waving through an arbitrary total.
+        wrong = json.loads(json.dumps(result))
+        wrong["total_elapsed_seconds"] = 99.0
+        expect(any("total_elapsed_seconds" in p for p in
+                   probe_census.validate_result(wrong, document)),
+               "a total that is simply wrong is still rejected")
+
+
+def test_corrupt_stored_records() -> None:
+    print("\n-- a corrupted stored sample or attempt fails to read --")
+    with SyntheticRegistry() as reg:
+        seeded(reg)
+        probe_census.record_result(reg.census, build_result(marker="kept"))
+        healthy = json.loads(reg.census.read_text())
+
+        def corrupt(fn, label, substring):
+            document = json.loads(json.dumps(healthy))
+            fn(probe_census.find_entry(document, PROBE)["census"])
+            reg.census.write_text(json.dumps(document, indent=2) + "\n",
+                                  encoding="utf-8")
+            snapshot = reg.census.read_bytes()
+            expect(any(substring in p for p in
+                       probe_census.validate_structure(document)),
+                   f"validation reports {label}")
+            expect_raises(probe_census.CensusError,
+                          lambda: probe_census.read_for_update(reg.census),
+                          f"reading a census with {label} is a clean stop")
+            for op, name in (
+                    (lambda: probe_census.record_policy(
+                        reg.census, PROBE, estimate=1.0), "record_policy"),
+                    (lambda: probe_census.ensure_document(reg.census), "--seed"),
+                    (lambda: probe_census.record_result(
+                        reg.census, build_result()), "--record")):
+                expect_raises(probe_census.CensusError, op,
+                              f"{name} refuses a census with {label}")
+            expect(reg.census.read_bytes() == snapshot,
+                   f"nothing rewrote the census carrying {label}")
+
+        corrupt(lambda c: c["current"]["samples"][0].update(
+            {"timestamp_utc": "not-a-time"}),
+            "a malformed stored timestamp", "timestamp_utc")
+        corrupt(lambda c: c["current"]["samples"][0].update(
+            {"commit_sha": "abc123"}),
+            "an abbreviated stored commit hash", "commit hash")
+        corrupt(lambda c: c["current"]["samples"][0].update(
+            {"failure_count": 9}),
+            "a stored aggregate the runs contradict", "failure_count")
+        corrupt(lambda c: c["current"]["samples"][0]["check_counts"]["alpha"]
+                .update({"PASS": 9}),
+            "a stored check tally that outnumbers the runs", "tallies")
+        corrupt(lambda c: c["current"]["samples"][0]["runs"][0].update(
+            {"index": 7}),
+            "a stored run index gap", "contiguous")
+        corrupt(lambda c: c["attempts"][0].update({"commit_sha": "nope"}),
+            "a malformed stored attempt hash", "commit hash")
+
+
 def test_malformed_state_and_recovery() -> None:
     print("\n-- malformed state, interrupted write, stale staging --")
     with SyntheticRegistry() as reg:
@@ -671,6 +753,7 @@ def main() -> int:
     for test in (test_migration, test_inventory_preservation,
                  test_measurement_update, test_cohorts,
                  test_ci_eligible_entries, test_result_validation,
+                 test_long_run_rounding, test_corrupt_stored_records,
                  test_malformed_state_and_recovery,
                  test_missing_docs_worktree, test_concurrent_writers,
                  test_write_path_refuses_data_loss,

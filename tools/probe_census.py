@@ -256,66 +256,179 @@ def _is_count(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
-def _validate_sample(sample, where: str) -> list[str]:
+def _elapsed_tolerance(count: int) -> float:
+    """How far a serialized total may sit from the serialized runs' sum.
+
+    `probe_flake.Measurement.to_document` rounds each run's elapsed time
+    to three decimals INDEPENDENTLY of `total_elapsed_seconds`, which it
+    rounds from the UNROUNDED values. Each run therefore contributes up
+    to 0.0005 of drift, and the total another 0.0005. `--runs` has no
+    upper bound, so a fixed tolerance would reject a perfectly genuine
+    long measurement: 30 runs of 1.00049 s serialize as thirty 1.0 values
+    against a 30.015 total.
+    """
+    return 0.0005 * count + 0.0015
+
+
+def _check_run_series(runs, where: str) -> tuple[list[str], list[str], list[float]]:
+    """Per-run outcomes and elapsed times, plus every structural problem.
+
+    Shared by the incoming-result validator and the stored-sample one:
+    a sample that was accepted yesterday has to satisfy today the same
+    rules an arriving result does, or a hand-corrupted census would be
+    readable and rewritable.
+    """
     problems: list[str] = []
+    outcomes: list[str] = []
+    elapsed: list[float] = []
+    indices: list[int] = []
+    for position, record in enumerate(runs):
+        if not isinstance(record, dict):
+            problems.append(f"{where} run {position} is not an object")
+            continue
+        index = record.get("index")
+        if not _is_count(index):
+            problems.append(f"{where} run {position} has no integer `index`")
+        else:
+            indices.append(index)
+        outcome = record.get("outcome")
+        if outcome not in RUN_OUTCOMES:
+            problems.append(f"{where} run {position} outcome {outcome!r} is "
+                            f"not one of {RUN_OUTCOMES}")
+        else:
+            outcomes.append(outcome)
+        value = record.get("elapsed_seconds")
+        if not _is_number(value) or value < 0:
+            problems.append(f"{where} run {position} `elapsed_seconds` must be "
+                            f"a finite non-negative number")
+        else:
+            elapsed.append(float(value))
+        artifact = record.get("artifact_dir")
+        if artifact is not None and not isinstance(artifact, str):
+            problems.append(f"{where} run {position} `artifact_dir` must be a "
+                            f"string or null")
+    if indices and len(indices) == len(runs) \
+            and indices != list(range(1, len(indices) + 1)):
+        # `probe_flake.measure` numbers runs from 1 and stops at the
+        # first untrustworthy stream, so the valid runs are always a
+        # contiguous 1..completed prefix.
+        problems.append(f"{where} run indices {indices[:6]} are not the "
+                        f"contiguous 1..{len(indices)} sequence")
+    return problems, outcomes, elapsed
+
+
+def _check_aggregates(record, where: str, outcomes: list[str],
+                      elapsed: list[float], complete: bool) -> list[str]:
+    """The failure/timeout/rate/duration aggregates against the runs."""
+    problems: list[str] = []
+    failures = sum(1 for o in outcomes
+                   if o in (probe_flake.RUN_FAIL, probe_flake.RUN_TIMEOUT))
+    timeouts = sum(1 for o in outcomes if o == probe_flake.RUN_TIMEOUT)
+    if record.get("failure_count") != failures:
+        problems.append(f"{where} reports failure_count="
+                        f"{record.get('failure_count')!r} but the runs show "
+                        f"{failures}")
+    if record.get("timeout_count") != timeouts:
+        problems.append(f"{where} reports timeout_count="
+                        f"{record.get('timeout_count')!r} but the runs show "
+                        f"{timeouts}")
+    tolerance = _elapsed_tolerance(len(elapsed))
+    for field, expected, slack in (
+            ("worst_elapsed_seconds", max(elapsed, default=0.0), 0.0015),
+            ("total_elapsed_seconds", sum(elapsed), tolerance)):
+        value = record.get(field)
+        if not _is_number(value) or value < 0:
+            problems.append(f"{where} `{field}` must be a finite non-negative "
+                            f"number")
+        elif complete and abs(value - expected) > slack:
+            problems.append(f"{where} reports {field}={value} but the runs "
+                            f"give {round(expected, 3)}")
+    return problems
+
+
+def _validate_sample(sample, where: str) -> list[str]:
+    """A STORED sample, held to the rules its result document met.
+
+    Nothing here is weaker than `validate_result`: a sample whose
+    timestamp, commit hash, run series or aggregates were corrupted
+    after the fact must fail to READ, so no later write can carry it
+    forward or rewrite the file around it.
+    """
     if not isinstance(sample, dict):
         return [f"{where} is not an object: {sample!r}"]
-    for field in ("timestamp_utc", "commit_sha"):
-        if not isinstance(sample.get(field), str) or not sample[field]:
-            problems.append(f"{where} has no string `{field}`")
+    problems: list[str] = []
+    commit = sample.get("commit_sha")
+    if not isinstance(commit, str) or not COMMIT_RE.match(commit):
+        problems.append(f"{where} `commit_sha` is not a full commit hash: "
+                        f"{commit!r}")
+    stamp = sample.get("timestamp_utc")
+    if not isinstance(stamp, str):
+        problems.append(f"{where} has no string `timestamp_utc`")
+    else:
+        try:
+            datetime.strptime(stamp, TIMESTAMP_FORMAT)
+        except ValueError:
+            problems.append(f"{where} `timestamp_utc` {stamp!r} is not "
+                            f"{TIMESTAMP_FORMAT}")
     for field in ("requested_runs", "completed_runs", "failure_count",
                   "timeout_count"):
         if not _is_count(sample.get(field)):
             problems.append(f"{where} `{field}` must be a non-negative integer")
-    for field in ("worst_elapsed_seconds", "total_elapsed_seconds"):
-        value = sample.get(field)
-        if not _is_number(value) or value < 0:
-            problems.append(
-                f"{where} `{field}` must be a finite non-negative number")
+    requested = sample.get("requested_runs")
+    completed = sample.get("completed_runs")
+    if _is_count(requested) and requested < 1:
+        problems.append(f"{where} `requested_runs` must be positive")
+    if _is_count(requested) and _is_count(completed) and completed > requested:
+        problems.append(f"{where} completed {completed} of {requested} "
+                        f"requested runs")
     for field in ("rts_capabilities", "peak_concurrency"):
         value = sample.get(field)
         if not _is_count(value) or value < 1:
             problems.append(f"{where} `{field}` must be a positive integer")
-    rate = sample.get("failure_rate")
-    if not (_is_number(rate) and 0.0 <= rate <= 1.0):
-        problems.append(f"{where} `failure_rate` must be a number in [0, 1]")
     runs = sample.get("runs")
     if not isinstance(runs, list):
         problems.append(f"{where} `runs` must be a list")
-    else:
-        for position, record in enumerate(runs):
-            if not isinstance(record, dict):
-                problems.append(f"{where} run {position} is not an object")
-                continue
-            if not _is_count(record.get("index")):
-                problems.append(f"{where} run {position} has no integer `index`")
-            if record.get("outcome") not in RUN_OUTCOMES:
-                problems.append(
-                    f"{where} run {position} outcome {record.get('outcome')!r} "
-                    f"is not one of {RUN_OUTCOMES}")
-            elapsed = record.get("elapsed_seconds")
-            if not _is_number(elapsed) or elapsed < 0:
-                problems.append(
-                    f"{where} run {position} `elapsed_seconds` must be a "
-                    f"finite non-negative number")
-            artifact = record.get("artifact_dir")
-            if artifact is not None and not isinstance(artifact, str):
-                problems.append(
-                    f"{where} run {position} `artifact_dir` must be a string "
-                    f"or null")
+        runs = []
+    elif _is_count(completed) and len(runs) != completed:
+        problems.append(f"{where} lists {len(runs)} runs but reports "
+                        f"completed_runs={completed}")
+    series, outcomes, elapsed = _check_run_series(runs, where)
+    problems += series
+    problems += _check_aggregates(sample, where, outcomes, elapsed,
+                                  complete=len(elapsed) == len(runs))
+    rate = sample.get("failure_rate")
+    if not (_is_number(rate) and 0.0 <= rate <= 1.0):
+        problems.append(f"{where} `failure_rate` must be a number in [0, 1]")
+    elif _is_count(requested) and requested and len(outcomes) == len(runs):
+        failures = sum(1 for o in outcomes
+                       if o in (probe_flake.RUN_FAIL, probe_flake.RUN_TIMEOUT))
+        if abs(rate - failures / requested) > 1e-6:
+            problems.append(f"{where} reports failure_rate={rate} but "
+                            f"{failures}/{requested} is "
+                            f"{round(failures / requested, 6)}")
     counts = sample.get("check_counts")
-    if not isinstance(counts, dict):
-        problems.append(f"{where} `check_counts` must be an object")
+    if not isinstance(counts, dict) or not counts:
+        problems.append(f"{where} `check_counts` must be a non-empty object")
     else:
         for cid, tally in counts.items():
             if not isinstance(tally, dict):
                 problems.append(f"{where} check {cid!r} tally is not an object")
                 continue
+            total = 0
+            usable = True
             for outcome in CHECK_OUTCOMES:
                 if not _is_count(tally.get(outcome)):
-                    problems.append(
-                        f"{where} check {cid!r} has no non-negative "
-                        f"`{outcome}` count")
+                    problems.append(f"{where} check {cid!r} has no "
+                                    f"non-negative `{outcome}` count")
+                    usable = False
+                else:
+                    total += tally[outcome]
+            # A stored sample keeps no per-run check results, so this is
+            # the surviving cross-check: every declared check was
+            # resolved exactly once per completed run.
+            if usable and _is_count(completed) and total != completed:
+                problems.append(f"{where} check {cid!r} tallies {total} "
+                                f"outcomes across {completed} completed runs")
     artifacts = sample.get("retained_artifacts")
     if not isinstance(artifacts, list) or any(
             not isinstance(a, str) for a in artifacts):
@@ -348,9 +461,21 @@ def _validate_attempt(attempt, where: str) -> list[str]:
     if not isinstance(attempt, dict):
         return [f"{where} is not an object: {attempt!r}"]
     problems: list[str] = []
-    for field in ("timestamp_utc", "commit_sha", "status"):
-        if not isinstance(attempt.get(field), str) or not attempt[field]:
-            problems.append(f"{where} has no string `{field}`")
+    if not isinstance(attempt.get("status"), str) or not attempt["status"]:
+        problems.append(f"{where} has no string `status`")
+    commit = attempt.get("commit_sha")
+    if not isinstance(commit, str) or not COMMIT_RE.match(commit):
+        problems.append(f"{where} `commit_sha` is not a full commit hash: "
+                        f"{commit!r}")
+    stamp = attempt.get("timestamp_utc")
+    if not isinstance(stamp, str):
+        problems.append(f"{where} has no string `timestamp_utc`")
+    else:
+        try:
+            datetime.strptime(stamp, TIMESTAMP_FORMAT)
+        except ValueError:
+            problems.append(f"{where} `timestamp_utc` {stamp!r} is not "
+                            f"{TIMESTAMP_FORMAT}")
     if attempt.get("status") not in RESULT_STATUSES and isinstance(
             attempt.get("status"), str):
         problems.append(f"{where} status {attempt['status']!r} is not one of "
@@ -360,6 +485,10 @@ def _validate_attempt(attempt, where: str) -> list[str]:
     for field in ("requested_runs", "completed_runs"):
         if not _is_count(attempt.get(field)):
             problems.append(f"{where} `{field}` must be a non-negative integer")
+    requested, completed = attempt.get("requested_runs"), attempt.get("completed_runs")
+    if _is_count(requested) and _is_count(completed) and completed > requested:
+        problems.append(f"{where} completed {completed} of {requested} "
+                        f"requested runs")
     error = attempt.get("error")
     if error is not None and not isinstance(error, str):
         problems.append(f"{where} `error` must be a string or null")
@@ -641,9 +770,6 @@ def validate_result(result, document: dict) -> list[str]:
     elif _is_count(completed) and len(runs) != completed:
         problems.append(f"result lists {len(runs)} runs but reports "
                         f"completed_runs={completed}")
-    indices: list[int] = []
-    outcomes: list[str] = []
-    elapsed_values: list[float] = []
     declared: set = set()
     declared_checks = result.get("checks")
     if not isinstance(declared_checks, list) or not declared_checks:
@@ -659,47 +785,27 @@ def validate_result(result, document: dict) -> list[str]:
             if check["id"] in declared:
                 problems.append(f"declared check {check['id']!r} appears twice")
             declared.add(check["id"])
+    # The run series, its indices and the aggregates over it are checked
+    # by the SAME helpers a stored sample goes through, so a document
+    # this validator accepts cannot become a sample the reader rejects.
+    series, outcomes, elapsed_values = _check_run_series(runs, "result")
+    problems += series
     for position, record in enumerate(runs):
         if not isinstance(record, dict):
-            problems.append(f"run {position} is not an object")
             continue
-        index = record.get("index")
-        if not _is_count(index):
-            problems.append(f"run {position} has no integer `index`")
-        else:
-            indices.append(index)
-        outcome = record.get("outcome")
-        if outcome not in RUN_OUTCOMES:
-            problems.append(f"run {position} outcome {outcome!r} is not one of "
-                            f"{RUN_OUTCOMES}")
-        else:
-            outcomes.append(outcome)
-        value = record.get("elapsed_seconds")
-        if not _is_number(value) or value < 0:
-            problems.append(f"run {position} `elapsed_seconds` must be a finite "
-                            f"non-negative number")
-        else:
-            elapsed_values.append(float(value))
         checks = record.get("checks")
         if not isinstance(checks, dict):
             problems.append(f"run {position} `checks` must be an object")
-        else:
-            if declared and set(checks) != declared:
+            continue
+        if declared and set(checks) != declared:
+            problems.append(
+                f"run {position} reports checks {sorted(checks)} but the "
+                f"descriptor declares {sorted(declared)}")
+        for cid, value in checks.items():
+            if value not in CHECK_OUTCOMES:
                 problems.append(
-                    f"run {position} reports checks {sorted(checks)} but the "
-                    f"descriptor declares {sorted(declared)}")
-            for cid, value in checks.items():
-                if value not in CHECK_OUTCOMES:
-                    problems.append(
-                        f"run {position} check {cid!r} result {value!r} is not "
-                        f"one of {CHECK_OUTCOMES}")
-    if indices and len(indices) == len(runs):
-        # `probe_flake.measure` numbers runs from 1 and stops at the
-        # first untrustworthy stream, so the valid runs are always a
-        # contiguous 1..completed prefix.
-        if indices != list(range(1, len(indices) + 1)):
-            problems.append(f"run indices {indices} are not the contiguous "
-                            f"1..{len(indices)} sequence")
+                    f"run {position} check {cid!r} result {value!r} is not "
+                    f"one of {CHECK_OUTCOMES}")
 
     counts = result.get("check_counts")
     if not isinstance(counts, dict):
@@ -729,27 +835,10 @@ def validate_result(result, document: dict) -> list[str]:
                         f"check {cid!r} reports {tally[outcome]} {outcome} but "
                         f"the runs show {observed[cid][outcome]}")
 
+    problems += _check_aggregates(result, "result", outcomes, elapsed_values,
+                                  complete=len(elapsed_values) == len(runs))
     failures = sum(1 for o in outcomes
                    if o in (probe_flake.RUN_FAIL, probe_flake.RUN_TIMEOUT))
-    timeouts = sum(1 for o in outcomes if o == probe_flake.RUN_TIMEOUT)
-    if result.get("failure_count") != failures:
-        problems.append(f"result reports failure_count="
-                        f"{result.get('failure_count')!r} but the runs show "
-                        f"{failures}")
-    if result.get("timeout_count") != timeouts:
-        problems.append(f"result reports timeout_count="
-                        f"{result.get('timeout_count')!r} but the runs show "
-                        f"{timeouts}")
-    for field, expected in (("worst_elapsed_seconds",
-                             max(elapsed_values, default=0.0)),
-                            ("total_elapsed_seconds", sum(elapsed_values))):
-        value = result.get(field)
-        if not _is_number(value) or value < 0:
-            problems.append(f"result `{field}` must be a finite non-negative "
-                            f"number")
-        elif len(elapsed_values) == len(runs) and abs(value - expected) > 0.01:
-            problems.append(f"result reports {field}={value} but the runs sum "
-                            f"to {round(expected, 3)}")
 
     rate = result.get("failure_rate")
     if status == "ok":
