@@ -70,6 +70,7 @@ cited lines.
 - [ ] EXPL-20. `resolveTexture`'s haddock credits itself with animation mirroring; animations never reach it and it cannot honour `flip: false`
 - [ ] EXPL-21. 98 production call sites spell inequality `≠` instead of `≢`; neither the operator audit nor CLAUDE.md's table can see it
 - [ ] EXPL-22. The capability inventory says four of the five capability splits are §3.1 thread-privacy splits; two are, and the doc contradicts itself
+- [ ] EXPL-23. `inputBoundaryPage` explains the modal-boundary tie-break by `PageHandle` and show-recency; the sort key is `(upLayer, upZIndex)`
 
 ---
 
@@ -1505,3 +1506,92 @@ Scope note: an earlier revision of `CLAUDE.md` restated this count directly
 CLAUDE.md trim landed on master as `78ca07ec` / `b84c2dd7` removed that
 sentence, so no `CLAUDE.md` edit is required — the defect now lives only in the
 authoritative document.
+
+---
+
+## UI input ownership
+
+### EXPL-23. `inputBoundaryPage` explains the modal-boundary tie-break by `PageHandle` and show-recency; the sort key is `(upLayer, upZIndex)`
+
+`src/UI/InputOwnership.hs:125-134`:
+
+```haskell
+-- | The topmost visible input-exclusive page — the modal boundary
+--   pointer input cannot cross. 'getVisiblePages' paints bottom to
+--   top, so the boundary is the LAST exclusive page in that order
+--   (when two modals are visible, the more recently shown one — the
+--   higher 'PageHandle' — paints on top and owns the boundary).
+inputBoundaryPage ∷ UIPageManager → Maybe UIPage
+inputBoundaryPage mgr = case filter upInputExclusive (getVisiblePages mgr) of
+    [] → Nothing
+    xs → Just (last xs)
+```
+
+The first sentence is correct: `getVisiblePages` does return bottom-to-top, and
+taking `last` of the exclusive pages does select the topmost one. The
+parenthetical that explains WHICH page that is, when two are visible, is wrong
+in three separate ways.
+
+**(1) The sort key contains no `PageHandle`.**
+`src/UI/Manager/Page.hs:128-132`:
+
+```haskell
+getVisiblePages ∷ UIPageManager → [UIPage]
+getVisiblePages mgr =
+    let visibleList = mapMaybe (`Map.lookup` upmPages mgr)
+                              (Set.toList $ upmVisiblePages mgr)
+    in sortOn (\p → (upLayer p, upZIndex p)) visibleList
+```
+
+**(2) `upZIndex` — the actual within-layer tie-break — is never mentioned.**
+Two exclusive pages on the same layer are ordered by their zIndex, and the
+comment offers a handle rule in its place.
+
+**(3) "The more recently shown one" is not "the higher `PageHandle`".** A
+handle is allocated at CREATION (`src/UI/Manager/Page.hs:22-43`):
+
+```haskell
+createPage name layer mgr =
+    let handle = PageHandle (upmNextPageId mgr)
+```
+
+with `upmNextPageId` incremented on the same construction. `showPage`
+(`:67-75`) sets `upVisible` and inserts into `upmVisiblePages`; it records
+nothing about ordering, and touches neither the handle nor `upZIndex`. So show
+order is not stored anywhere in the manager.
+
+A concrete falsification, on the ordinary lifecycle for modal pages — created
+once when the HUD is built, then shown and hidden repeatedly:
+
+> Page A is created first (handle 3), page B later (handle 7). Both are
+> `LayerModal`, so both default `upInputExclusive = True`. Show B, then show A.
+> Both are visible. `Set.toList` yields `[3, 7]`; the sort is stable on
+> `(LayerModal, 0)`; `last` selects **B** — created later, shown EARLIER. The
+> comment predicts A.
+
+**Why the stated conclusion nevertheless holds today**, which is the part most
+worth recording, because it is what makes this invisible: `upZIndex` has NO
+SETTER anywhere in the tree. A grep finds the initializer
+(`src/UI/Manager/Page.hs:29`, `upZIndex = 0`) and four readers
+(`src/UI/Render.hs:135`, `src/UI/Manager/Query.hs:193` and `:321`,
+`src/UI/Manager/Page.hs:132`) — nothing writes it. Every page therefore carries
+zIndex 0, `sortOn` is stable, and its input is already in ascending-handle order
+because `upmVisiblePages` is a `Set PageHandle`. So ties really do fall to the
+higher handle — by sort stability over a set's ordering, a property the comment
+does not state, resting on a field it never names being permanently zero.
+
+**Severity: low-medium.** No behaviour is wrong today. Above the nit tier
+because this comment exists to explain WHICH page owns the modal boundary — a
+routing decision that determines whether a click reaches the world — and it
+supplies two rules that are both false (handle ordering, show recency) while
+omitting the one the code uses. Should `upZIndex` ever gain a setter, the
+comment becomes wrong in outcome as well as in reasoning, and nothing in the
+gate set would catch it.
+
+Verified truthful in the same module, so a fix does not disturb it:
+`pagesInScope`'s `dropWhile` really does keep the boundary page itself in scope
+along with everything above it; `isGameplayBlocked` really is
+`isJust ∘ inputBoundaryPage`; and `createPage`'s "a modal-layer page is a real
+input boundary by default; every other layer defaults pass-through"
+(`src/UI/Manager/Page.hs:34-38`) matches `upInputExclusive = layer ≡ LayerModal`
+exactly.
