@@ -195,8 +195,35 @@ stepTowardSubGoal pc reg now dt mw stats us mt (gx, gy) =
             _ → 0
         step = (effSpeed * slopeSpeedFactor pc grade / matSlow)
              * realToFrac dt
+        -- Arrival SNAPS x/y and re-grounds z at the sub-goal without
+        -- consulting the cost function at all, so a sub-goal within
+        -- `max step arrivalEpsilon` on the far side of a tile boundary
+        -- is crossed by the snap rather than by a step. For a protected
+        -- request that is a third way over a damaging drop, past both
+        -- the greedy stepper and A* (#1217, review round 1): a wander
+        -- target sampled just over a ledge is reached at 7.95 → 8.04 and
+        -- the unit lands at the bottom with no fall and no check.
+        --
+        -- So the snap is validated by the SAME function every other
+        -- crossing goes through — and ONLY when the request is
+        -- protected, because a fall-permitted arrival has never consulted
+        -- it and must stay byte-for-byte what it was. Missing or
+        -- unreadable terrain fails closed here for the same reason it
+        -- does everywhere else a protected request touches it.
+        srcTile = (floor (usRealX us), floor (usRealY us))
+        goalTile = (floor gx, floor gy) ∷ (Int, Int)
+        snapBlocked = mtHazard mt ≡ FallProhibited
+                    ∧ srcTile ≢ goalTile
+                    ∧ isNothing (do wtd ← mWtd
+                                    stepCostUnder FallProhibited pc reg wtd
+                                                  srcTile goalTile)
     in if dist ≤ max step arrivalEpsilon
-       then arriveAtSubGoal stats us mt (gx, gy) mWtd
+       then if snapBlocked
+            -- No safe way onto the sub-goal's tile. Replan from here;
+            -- if A* can't make safe progress either, it terminates the
+            -- request (see `replan`) so the ambient AI resamples.
+            then replan pc reg (us { usMoveGrade = grade }) mt mw srcTile
+            else arriveAtSubGoal stats us mt (gx, gy) mWtd
        else moveToward pc reg now stats (us { usMoveGrade = grade })
                        mt mw dx dy dist step
 

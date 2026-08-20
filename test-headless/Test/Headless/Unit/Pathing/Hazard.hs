@@ -271,6 +271,42 @@ spec = do
             states `shouldSatisfy` not . any isFalling
             usRealX (last states) `shouldSatisfy` (> 8.0)
 
+        -- Review round 1: the arrival branch snaps x/y AND re-grounds z
+        -- without consulting the cost function, so a sub-goal within
+        -- `max step arrivalEpsilon` across a tile boundary used to be
+        -- crossed by the snap rather than by a step — a third route over
+        -- a damaging drop, past both the greedy stepper and A*.
+        let atEdge p = moverAt (7.95, 3.5) 10 (MoveTarget 8.04 3.5 1.0 p)
+
+        it "never SNAPS a protected request across a damaging drop" $ do
+            -- 0.09 tiles from its target, so this tick takes the arrival
+            -- branch, not the stepping one.
+            let us' = tickUnit pc reg 0.1 0.1 mw stats (atEdge FallProhibited)
+            usRealX us' `shouldSatisfy` (< 8.0)
+            usGridZ us' `shouldBe` 10
+            -- Nowhere safe to go from here, so the request terminates
+            -- rather than retrying the same blocked snap every tick.
+            usTarget us' `shouldBe` Nothing
+
+        it "still snaps a fall-permitted arrival exactly as it always did" $ do
+            -- The pre-#1217 arrival behavior, deliberately untouched: the
+            -- snap ignores the cost function entirely for a permitted
+            -- request, which is what makes the case above a policy
+            -- decision rather than a general repair.
+            let us' = tickUnit pc reg 0.1 0.1 mw stats (atEdge FallPermitted)
+            usRealX us' `shouldSatisfy` (> 8.0)
+            usGridZ us' `shouldBe` 6
+
+        it "snaps a protected arrival over a BELOW-trigger drop" $ do
+            -- Requirement 4 on the arrival path too: the guard keys on
+            -- the same damaging-drop classification, so an ordinary
+            -- walk-off still arrives.
+            let shallow = ownPageWorld (ridgeWorld 10 9)
+                us' = tickUnit pc reg 0.1 0.1 shallow stats
+                                (atEdge FallProhibited)
+            usRealX us' `shouldSatisfy` (> 8.0)
+            usGridZ us' `shouldBe` 9
+
         it "abandons a protected request when the terrain is another page" $ do
             let wrongPage = moveWorldFor (Just (TerrainSnapshot pageB ridge))
                                          (Just pageA)
