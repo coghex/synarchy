@@ -19,23 +19,18 @@ import Engine.Core.Monad
 import Engine.Graphics.Base
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Foreign.Marshal.Utils (with)
+import Engine.Graphics.Vulkan.Instance.Plan
+  (InstancePlan(..), InstancePlanError(..), InstanceSurfaceUse(..)
+  ,planVulkanInstance)
 import Vulkan.Core10
 import Vulkan.Core12
 import Vulkan.CStruct.Extends
 import Vulkan.Extensions.VK_EXT_debug_utils
 import Vulkan.Extensions.VK_EXT_layer_settings
 import Vulkan.Extensions.VK_KHR_portability_enumeration
-import Vulkan.Extensions.VK_KHR_get_physical_device_properties2
+  (pattern KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)
 import Vulkan.Utils.Debug (debugCallbackPtr)
 import Vulkan.Zero
-
--- | Whether the instance must be able to present to a window surface.
---   Windowed modes carry the GLFW surface extensions as hard
---   requirements; the offscreen mode (#650) renders to plain images —
---   no surface support, and GLFW may not even be initialized, so it
---   must not be asked for extensions.
-data InstanceSurfaceUse = InstanceForWindow | InstanceOffscreen
-  deriving (Eq, Show)
 
 -- | Create and initialize Vulkan instance with optional debug messenger.
 --   Optional extensions (portability enumeration, layer settings, debug
@@ -49,6 +44,9 @@ createVulkanInstance ∷ GraphicsConfig → InstanceSurfaceUse
 createVulkanInstance config surfaceUse = do
   logDebugM CatVulkan "Initializing Vulkan instance"
 
+  -- InstanceOffscreen must not ASK GLFW for extensions at all: in that
+  -- mode GLFW may never have been initialized. 'planVulkanInstance'
+  -- separately ignores the list for that mode, so the two agree.
   glfwExts ← case surfaceUse of
     InstanceForWindow → GLFW.getRequiredInstanceExtensions
     InstanceOffscreen → pure []
@@ -57,42 +55,31 @@ createVulkanInstance config surfaceUse = do
   (_, layers) ← liftIO enumerateInstanceLayerProperties
   let availableLayers = map (\LayerProperties{layerName = ln} → ln) $ V.toList layers
 
-  let missingExts = filter (not ∘ (`elem` availableExts)) glfwExts
-  unless (null missingExts) $
-    logAndThrowM CatInit (ExInit ExtensionNotSupported) $
-      "Required extensions not available: " <> T.pack (show missingExts)
+  -- Everything from here is decided purely (#1402); this function only
+  -- reports the decision and executes it.
+  plan ← case planVulkanInstance config surfaceUse glfwExts
+                                 availableExts availableLayers of
+    Left (MissingRequiredExtensions missingExts) →
+      logAndThrowM CatInit (ExInit ExtensionNotSupported) $
+        "Required extensions not available: " <> T.pack (show missingExts)
+    Right plan → pure plan
 
-  let hasPortability   = KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME `elem` availableExts
-      hasLayerSettings = EXT_LAYER_SETTINGS_EXTENSION_NAME `elem` availableExts
-      hasProps2        = KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME `elem` availableExts
-      hasDebugUtils    = EXT_DEBUG_UTILS_EXTENSION_NAME `elem` availableExts
-      debugEnabled     = gcDebugMode config ∧ hasDebugUtils
+  let debugEnabled     = ipDebugMessenger plan
+      hasLayerSettings = ipLayerSettings plan
+      hasPortability   = KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
+                           `elem` ipEnabledExtensions plan
 
-      validationLayer  = "VK_LAYER_KHRONOS_validation"
-      validationEnabled = gcDebugMode config ∧ validationLayer `elem` availableLayers
-      layers' = if validationEnabled then V.singleton validationLayer else V.empty
-
-      allExtensions = glfwExts
-        <> [EXT_DEBUG_UTILS_EXTENSION_NAME            | debugEnabled]
-        <> [KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME | hasPortability]
-        <> [KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME | hasProps2]
-        <> [EXT_LAYER_SETTINGS_EXTENSION_NAME          | hasLayerSettings]
-
-      flags = if hasPortability
-              then INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
-              else zero
-
-  when (gcDebugMode config ∧ not validationEnabled) $
+  when (gcDebugMode config ∧ not (ipValidationLayer plan)) $
     logWarnM CatVulkan
       "Debug mode: VK_LAYER_KHRONOS_validation not installed, validation disabled"
-  when (gcDebugMode config ∧ not hasDebugUtils) $
+  when (gcDebugMode config ∧ not debugEnabled) $
     logWarnM CatVulkan
       "Debug mode: VK_EXT_debug_utils not available, debug messenger disabled"
 
   logDebugSM CatVulkan "Instance configuration"
     [("glfw_extensions", T.pack $ show $ map BSU.toString glfwExts)
     ,("debug_mode", T.pack $ show $ gcDebugMode config)
-    ,("validation", T.pack $ show validationEnabled)
+    ,("validation", T.pack $ show $ ipValidationLayer plan)
     ,("portability", T.pack $ show hasPortability)
     ,("layer_settings", T.pack $ show hasLayerSettings)]
 
@@ -115,9 +102,9 @@ createVulkanInstance config surfaceUse = do
               , engineName     = Just "Synarchy Engine"
               , apiVersion     = API_VERSION_1_2
               }
-          , enabledLayerNames     = layers'
-          , enabledExtensionNames = V.fromList allExtensions
-          , flags = flags
+          , enabledLayerNames     = V.fromList $ ipEnabledLayers plan
+          , enabledExtensionNames = V.fromList $ ipEnabledExtensions plan
+          , flags = ipCreateFlags plan
           } ∷ InstanceCreateInfo '[]
 
     -- The pNext chain is type-indexed, so each shape is its own branch.

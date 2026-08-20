@@ -5,15 +5,14 @@ module Test.Engine.Graphics.Vulkan.Instance (spec) where
 
 import UPrelude
 import Test.Hspec
-import qualified Data.ByteString as BS
 import Engine.Core.State
 import Engine.Core.Monad
 import Data.IORef (newIORef)
 import Engine.Graphics.Base
 import Engine.Graphics.Vulkan.Instance
 import Vulkan.Core10
-import Vulkan.Extensions.VK_KHR_portability_enumeration
-import Vulkan.Extensions.VK_KHR_get_physical_device_properties2
+import Vulkan.Extensions.VK_EXT_debug_utils
+  (pattern EXT_DEBUG_UTILS_EXTENSION_NAME)
 import qualified Control.Concurrent.STM as STM
 
 -- | Main test specification for Vulkan Instance functionality
@@ -23,9 +22,7 @@ spec env state = do
         it "can enumerate available extensions" $ do
             runEngineTest env state $ do
                 exts <- getAvailableExtensions
-                liftIO $ do
-                    exts `shouldSatisfy` not . null
-                    exts `shouldSatisfy` hasRequiredExtensions
+                liftIO $ exts `shouldSatisfy` not . null
 
         it "can create instance with debug mode disabled" $ do
             runEngineTest env state $ do
@@ -37,24 +34,22 @@ spec env state = do
                     instanceHandle inst `shouldNotBe` nullPtr
                     dbgMessenger `shouldBe` Nothing
 
-        it "can create instance with debug mode enabled" $ do
+        -- Production enables VK_EXT_debug_utils only when the driver
+        -- offers it (#1402), so the messenger tracks observed
+        -- availability rather than debug mode alone. Which extensions
+        -- that decision enables from which availability is pinned
+        -- without a driver in Test.Headless.Graphics.InstancePlan.
+        it "creates a debug messenger in debug mode iff debug utils exist" $ do
             runEngineTest env state $ do
                 let config = defaultGraphicsConfig 
                         { gcDebugMode = True
                         , gcAppName = "VulkanTest" }
+                exts <- getAvailableExtensions
                 (inst, dbgMessenger) <- createVulkanInstance config InstanceForWindow
                 liftIO $ do
                     instanceHandle inst `shouldNotBe` nullPtr
-                    dbgMessenger `shouldSatisfy` isJust
-
-        it "includes required macOS extensions" $ do
-            runEngineTest env state $ do
-                exts <- getAvailableExtensions
-                liftIO $ do
-                    exts `shouldSatisfy` 
-                        hasExtension KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
-                    exts `shouldSatisfy` 
-                        hasExtension KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME
+                    isJust dbgMessenger `shouldBe`
+                        (EXT_DEBUG_UTILS_EXTENSION_NAME `elem` exts)
 
         it "can create and destroy instance multiple times" $ do
             runEngineTest env state $ do
@@ -88,14 +83,6 @@ spec env state = do
             case result of
                 Just v → pure v
                 Nothing → error "No result produced"
-
-        hasRequiredExtensions ∷ [BS.ByteString] → Bool
-        hasRequiredExtensions exts = all (`elem` exts)
-            [ KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
-            , KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME ]
-
-        hasExtension ∷ BS.ByteString → [BS.ByteString] → Bool
-        hasExtension ext = elem ext
 
 -- | Default graphics configuration for testing
 defaultGraphicsConfig ∷ GraphicsConfig
