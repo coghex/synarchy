@@ -79,6 +79,7 @@ cited lines.
 - [ ] EXPL-29. `engine_contracts.md`'s enum-audit coverage counts are each off by one, in the paragraph that says not to hand-count them
 - [ ] EXPL-30. CLAUDE.md says `tools/README.md` "lists all ~85" probes; there are 89 and README names 83
 - [ ] EXPL-31. `Unit.Transfer`'s header calls its serializable set "the six types" and then names seven
+- [ ] EXPL-32. `runGatedByCaptureLock` cites "the same shape every other owner uses" and names Combat, which acks only while paused
 
 ---
 
@@ -2206,3 +2207,104 @@ results are on file:
   `tools/lua_module_budget.py:31` globs `scripts/unit_ai.lua` plus
   `scripts/unit_ai_*.lua` — and both report every budgeted module within its
   limit.
+
+---
+
+## Main loop and the save barrier
+
+### EXPL-32. `runGatedByCaptureLock` cites "the same shape every other owner uses" and names Combat, which acks only while paused
+
+`src/Engine/Loop/Mode.hs:205-213`:
+
+```haskell
+--   the transaction moves on to the snapshot boundary and the publish
+--   only after it returns. That is why the
+--   'acknowledgeCurrent' below is UNCONDITIONAL — it is this thread's
+--   half of that handshake — and why the function has the same "check
+--   locked, do unlocked work if not locked, always ack" shape every
+--   other owner uses (Unit/Building/Combat/Simulation, see e.g.
+--   'Unit.Thread').
+```
+
+Checking each owner the sentence names against its real tick:
+
+| Owner | Actual shape | Matches the quoted shape? |
+|---|---|---|
+| `SaveUnit` / `SaveBuilding` (`src/Unit/Thread.hs:88-105`) | `unless locked $ …` for every side-effecting step, then TWO unconditional acks | yes, exactly |
+| `SaveSimulation` (`src/Sim/Thread.hs:119-136`) | branches on `locked ∨ ssPaused ∨ enginePaused ∨ not (anyLiveWorld ss)`; BOTH branches ack | yes, effectively |
+| `SaveCombat` (`src/Combat/Thread.hs:88-105`) | branches on **`paused`**; acks in the paused branch ONLY | **no** |
+
+Combat's tick:
+
+```haskell
+    paused ← readIORef (wsEnginePausedRef (toWorldSimCapability env))
+    next ← if paused
+        then do
+            -- A save boundary drains accepted combat commands
+            -- before acknowledging; ordinary pause retains the
+            -- historical no-work behaviour.
+            locked ← captureLocked (saveBarrierRef env)
+            saving ← saveInProgress (saveBarrierRef env)
+            when (saving ∧ not locked) $ processAllCommands env
+            acknowledgeCurrent (saveBarrierRef env) SaveCombat
+            pure tick
+        else do
+            processAllCommands env
+            ...                       -- no acknowledgeCurrent on this path
+```
+
+`acknowledgeCurrent` appears exactly once in that file and the not-paused
+branch never reaches it. So combat is not "always ack", and its outer
+discriminator is the PAUSE FLAG rather than the capture lock — a different
+shape on both axes of the quoted description.
+
+**"Every other owner" is a wider claim than the parenthetical, and it fails
+twice more.** Of the seven `SaveOwner` constructors, the per-tick ackers divide
+like this:
+
+- `World/Thread.hs:93` acks inside a branch its own neighbouring comment
+  describes as "this whole branch only runs when locked is False" — world
+  acknowledges only on an UNLOCKED tick, the opposite of unconditional.
+- `SaveLua` has no per-tick acknowledgement at all, deliberately.
+  `src/Engine/Scripting/Lua/Thread.hs:278-285` says so outright: "SaveLua's own
+  self-ack (in saveWorldFn/handleLoadStaged) persists across every later
+  quiescence pass by design […] so this loop never needed a per-tick
+  `acknowledgeCurrent` the way Unit/Combat/Simulation/Input do".
+- `SaveInput` (`src/Engine/Input/Thread.hs:90-97`) DOES match — `unless locked`
+  around the work, then an unconditional ack.
+
+So the shape is genuinely shared by Unit, Building, Simulation and Input, and
+not by Combat, World or Lua. The sentence names Combat among the four it holds
+for.
+
+**No bug.** A save transaction pauses before it waits on owners, so combat is
+already in its paused branch by the time the barrier needs its acknowledgement;
+the handshake completes and the protocol works as designed.
+
+**Severity: low-medium**, above the nit tier because of what this module exists
+to be. Its own header (`src/Engine/Loop/Mode.hs:1-12`) says the three loops were
+unified precisely because "the save-barrier handshake below were duplicated
+between them, so a change to the barrier protocol had to find and correctly
+update two copies of the same code and only one copy of the reasoning behind
+it." This sentence IS that single copy of the reasoning. It tells a maintainer
+auditing the barrier that four named owners all acknowledge unconditionally,
+when one of them acknowledges only while paused — so a generalisation drawn
+from it (for instance, that combat is safe to gate on the capture lock alone)
+would be wrong.
+
+Worth noting for whoever fixes it: `src/Engine/Scripting/Lua/Thread.hs:284`
+names a DIFFERENT four — "Unit/Combat/Simulation/Input" — and also includes
+Combat, so the same misattribution exists in two places and both deserve the
+same correction.
+
+Verified truthful in the same module, so a fix does not disturb any of it:
+
+- The three-mode difference table (`:39-46`) matches all three `LoopMode`
+  values field for field — `lmPollEvents`, `lmCameraUpdates`, `lmExitRequested`
+  and `lmEndOfTick` differ exactly as tabulated.
+- `frameBudgetMicros = 16666` really is ~60 fps, and really is slept by exactly
+  the two non-windowed modes (`Engine/Loop.hs:65`, `Engine/Loop/Headless.hs:37`)
+  and by neither windowed one.
+- `promoteToRunning`'s documented four-row transition table matches its
+  `atomicModifyIORef'` exactly, and the stated requirement that the read and
+  the write be ONE atomic step is honoured.
