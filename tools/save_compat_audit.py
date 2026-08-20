@@ -171,6 +171,15 @@ ENVELOPE_TYPES_SOURCE_PATH = (
 ENVELOPE_CODEC_SOURCE_PATH = (
     REPO_ROOT / "src" / "World" / "Save" / "Envelope" / "Codec.hs")
 
+# The cabal file whose `common lang` stanza supplies every extension the
+# library's modules -- Codec.hs among them -- already get without
+# declaring anything locally (issue #1416). Deliberately NOT a
+# hard-coded copy of that list: a hard-coded one that outlived a stanza
+# edit would keep treating a now-EFFECTIVE local declaration as
+# redundant, which is exactly the false negative
+# envelope_framing_fingerprint must not have.
+CABAL_PATH = REPO_ROOT / "synarchy.cabal"
+
 # The ONE authoritative list of Haskell-owned gameplay components (round-
 # 16 review): World.Save.Component.saveComponentRegistry itself, not a
 # hand-maintained guess at which files declare them.
@@ -542,13 +551,164 @@ def load_manifest(path: Path = MANIFEST_PATH) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _strip_line_comments(block: str) -> str:
+    """Drop every `--` line comment, leaving the lines themselves in
+    place. Split out of _normalize_haskell_block so the envelope
+    framing fingerprint can strip comments BEFORE its own pragma pass
+    (issue #1416) without a commented-out pragma being mistaken for a
+    live one; _normalize_haskell_block still calls it, unchanged."""
+    return "\n".join(
+        re.sub(r"--.*$", "", line) for line in block.splitlines())
+
+
 def _normalize_haskell_block(block: str) -> str:
     """Strip line comments and collapse whitespace, so a documentation-
     only edit never moves a fingerprint but a REAL structural change
     (field added/removed/reordered, logic changed) always does."""
-    no_comments = "\n".join(
-        re.sub(r"--.*$", "", line) for line in block.splitlines())
-    return re.sub(r"\s+", " ", no_comments).strip()
+    return re.sub(r"\s+", " ", _strip_line_comments(block)).strip()
+
+
+# One `{-# LANGUAGE ... #-}` pragma, possibly spread over several lines.
+LANGUAGE_PRAGMA_RE = re.compile(r"\{-#\s*LANGUAGE\s(.*?)#-\}", re.DOTALL)
+EXTENSION_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_']*$")
+
+
+def _extension_state(name: str) -> tuple[str, bool]:
+    """An extension's EFFECTIVE state as a (base name, enabled) pair.
+    `NoImplicitPrelude` and `ImplicitPrelude` name the same extension in
+    opposite states, so comparing bare names would call a local
+    `{-# LANGUAGE ImplicitPrelude #-}` redundant against an inherited
+    `NoImplicitPrelude` when it in fact REVERSES it (issue #1416)."""
+    if name.startswith("No") and len(name) > 2 and name[2].isupper():
+        return (name[2:], False)
+    return (name, True)
+
+
+def _cabal_stanza_body(text: str, header_re: str, cabal_path: Path) -> list:
+    """Every line of one top-level cabal stanza's body (the lines after
+    its column-0 header, up to the next column-0 non-blank line)."""
+    lines = text.splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        if re.match(header_re, line):
+            start = i + 1
+            break
+    if start is None:
+        raise ValueError(
+            f"could not find a stanza matching {header_re!r} in "
+            f"{cabal_path} -- did the cabal file get restructured? "
+            f"envelope_framing_fingerprint derives Codec.hs's inherited "
+            f"extension set from it and must not guess")
+    body = []
+    for line in lines[start:]:
+        if line.strip() and not line[:1].isspace():
+            break
+        body.append(line)
+    return body
+
+
+def _cabal_field(body: list, field: str, cabal_path: Path) -> str:
+    """One cabal field's complete value from a stanza body, following
+    cabal's continuation rule: a continuation line is indented strictly
+    more than the field name itself. Cabal `--` comments are dropped, so
+    an explanatory line inside a continuation is not mistaken for part
+    of the value."""
+    def uncommented(line: str) -> str:
+        return re.sub(r"--.*$", "", line)
+
+    for i, line in enumerate(body):
+        m = re.match(rf"^(\s*){re.escape(field)}\s*:(.*)$", line)
+        if not m:
+            continue
+        indent = len(m.group(1))
+        parts = [uncommented(m.group(2))]
+        for cont in body[i + 1:]:
+            if not cont.strip():
+                break
+            if len(cont) - len(cont.lstrip()) <= indent:
+                break
+            parts.append(uncommented(cont))
+        return " ".join(parts)
+    raise ValueError(
+        f"could not find a `{field}:` field in the stanza read from "
+        f"{cabal_path} -- envelope_framing_fingerprint derives Codec.hs's "
+        f"inherited extension set from it and must not guess")
+
+
+def inherited_default_extensions(
+        cabal_path: Path = CABAL_PATH) -> dict[str, bool]:
+    """The EFFECTIVE extension state Codec.hs gets for free, derived
+    live from synarchy.cabal's `common lang` stanza (issue #1416) --
+    never a hard-coded copy, which would silently widen the redundancy
+    exception the first time that stanza changed.
+
+    Also checks that the `library` stanza (the component Codec.hs
+    belongs to) actually imports `lang`: if it stopped doing so, every
+    one of these extensions would become EFFECTIVE when declared
+    locally, and treating such a declaration as redundant would be
+    precisely the false negative this fingerprint forbids. A missing or
+    unparseable stanza/field is a hard error, never a silently empty
+    inherited set (which would degrade to "nothing is redundant" --
+    safe, but invisibly so)."""
+    text = cabal_path.read_text(encoding="utf-8")
+    lang_body = _cabal_stanza_body(text, r"^common\s+lang\s*$", cabal_path)
+    library_body = _cabal_stanza_body(text, r"^library\s*$", cabal_path)
+    imported = {part.strip() for part in
+                _cabal_field(library_body, "import", cabal_path).split(",")}
+    if "lang" not in imported:
+        raise ValueError(
+            f"{cabal_path}'s `library` stanza no longer imports `lang` "
+            f"(imports: {sorted(imported)}) -- Codec.hs therefore inherits "
+            f"nothing from `common lang`, so envelope_framing_fingerprint "
+            f"must not treat any local LANGUAGE declaration as redundant")
+    raw = _cabal_field(lang_body, "default-extensions", cabal_path)
+    names = [tok.strip() for tok in raw.split(",")]
+    names = [n for n in names if n]
+    if not names:
+        raise ValueError(
+            f"{cabal_path}'s `common lang` declares no default-extensions "
+            f"-- refusing to proceed with an empty inherited set")
+    inherited: dict[str, bool] = {}
+    for name in names:
+        if not EXTENSION_NAME_RE.match(name):
+            raise ValueError(
+                f"{cabal_path}'s `common lang` default-extensions contains "
+                f"{name!r}, which is not a bare extension name -- refusing "
+                f"to guess Codec.hs's inherited extension set")
+        base, enabled = _extension_state(name)
+        inherited[base] = enabled
+    return inherited
+
+
+def _drop_redundant_language_pragmas(
+        text: str, inherited: dict[str, bool]) -> str:
+    """Remove ONLY those locally declared LANGUAGE extensions whose
+    effective state Codec.hs already inherits, so an edit that adds or
+    removes such a declaration leaves the module's effective extension
+    set -- and therefore its behavior, and therefore the bytes it
+    writes -- unchanged (issue #1416; PR #1001's removal of the
+    already-inherited `UnicodeSyntax` is the representative case).
+
+    Everything else survives verbatim into the hash. An extension NOT
+    in the inherited set is effective and is kept (`Strict`); one whose
+    state REVERSES an inherited default is effective and is kept
+    (`ImplicitPrelude` against an inherited `NoImplicitPrelude`); a
+    token that doesn't parse as a bare extension name matches nothing
+    and is kept. Only `LANGUAGE` is in scope -- `OPTIONS_GHC` and every
+    other block pragma is untouched. Extensions implied by
+    `default-language: GHC2024` are deliberately NOT treated as
+    inherited: over-keeping is the fail-safe direction."""
+    def is_redundant(name: str) -> bool:
+        base, enabled = _extension_state(name)
+        return base in inherited and inherited[base] == enabled
+
+    def rewrite(match: "re.Match[str]") -> str:
+        names = [tok.strip() for tok in match.group(1).split(",")]
+        kept = [n for n in names if n and not is_redundant(n)]
+        if not kept:
+            return ""
+        return "{-# LANGUAGE " + ", ".join(kept) + " #-}"
+    return LANGUAGE_PRAGMA_RE.sub(rewrite, text)
 
 
 DTO_TYPE_NAME_RE = re.compile(r"\b(\w+DTO(?:v\d+)?)\b")
@@ -663,7 +823,8 @@ def _extract_toplevel_block(text: str, name: str) -> str:
 
 def envelope_framing_fingerprint(
         types_path: Path = ENVELOPE_TYPES_SOURCE_PATH,
-        codec_path: Path = ENVELOPE_CODEC_SOURCE_PATH) -> str:
+        codec_path: Path = ENVELOPE_CODEC_SOURCE_PATH,
+        cabal_path: Path = CABAL_PATH) -> str:
     """Round-15 review: envelopeFramingVersion alone is just an integer
     someone has to remember to bump -- it says nothing about whether the
     ACTUAL on-disk byte layout (header/manifest/checksum framing) still
@@ -680,12 +841,41 @@ def envelope_framing_fingerprint(
     frozen DTO. Covers every wire-relevant Types.hs binding
     (ENVELOPE_FRAMING_WIRE_BINDINGS) plus the ENTIRE Codec.hs module --
     every line of that file IS the framing contract (its own module
-    docstring: "the pure, side-effect-free tagged-envelope codec"), so
-    there is no non-wire-relevant content there to exclude."""
+    docstring: "the pure, side-effect-free tagged-envelope codec").
+
+    ONE narrow exception (issue #1416), on top of the shared
+    comment-and-whitespace normalization: a locally declared LANGUAGE
+    extension whose effective state Codec.hs ALREADY INHERITS from
+    synarchy.cabal's `common lang` stanza is dropped before hashing, so
+    adding or removing such a declaration -- PR #1001 deleted an
+    already-inherited `UnicodeSyntax` -- does not move this fingerprint.
+    That edit cannot change the module's effective extension set, its
+    behavior, or the bytes it writes, so a moved fingerprint there was
+    pure noise.
+
+    The exception is exactly that narrow, because a false NEGATIVE here
+    is the expensive direction. It is not a blanket exclusion of
+    LANGUAGE pragmas: an extension the module does NOT inherit (its
+    `Strict`), and one whose local declaration REVERSES an inherited
+    default (`ImplicitPrelude` against `common lang`'s
+    `NoImplicitPrelude`), are both effective and both still fingerprinted
+    -- extensions like those can change what unchanged source MEANS while
+    every version still compiles. The inherited set is read live from the
+    cabal stanza rather than hard-coded, so it cannot drift into covering
+    an extension that has since become effective. Nothing else is
+    excluded: imports, the module header and export list, `OPTIONS_GHC`
+    and every other block pragma, and of course all the code, still move
+    this fingerprint."""
     types_text = types_path.read_text(encoding="utf-8")
     blocks = [_extract_toplevel_block(types_text, name)
               for name in ENVELOPE_FRAMING_WIRE_BINDINGS]
-    codec_text = codec_path.read_text(encoding="utf-8")
+    # Only the CODEC text gets the pragma pass: _normalize_haskell_block
+    # is shared with frozen_dto_fingerprint, whose recorded value must
+    # not move. Comments come off first so a commented-out pragma can
+    # never be read as a live declaration.
+    codec_text = _drop_redundant_language_pragmas(
+        _strip_line_comments(codec_path.read_text(encoding="utf-8")),
+        inherited_default_extensions(cabal_path))
     normalized = "\n---\n".join(
         _normalize_haskell_block(b) for b in blocks + [codec_text])
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
@@ -1239,9 +1429,16 @@ def audit(manifest: dict, fixture_dir: Path = FIXTURE_DATA_DIR) -> list[str]:
             f"change (ComponentDescriptor's fields, the magic bytes, the "
             f"checksum algorithm, encodeEnvelope/decodeEnvelope's header "
             f"construction) shipping with envelopeFramingVersion left "
-            f"untouched -- a new wire format with no format epoch. Bump "
-            f"envelopeFramingVersion (a deliberate, reviewed format epoch) and "
-            f"update this fingerprint together, or revert the framing change")
+            f"untouched -- a new wire format with no format epoch. A moved "
+            f"fingerprint is NOT by itself proof the wire format changed: it "
+            f"reacts to any structural edit surviving normalization, and "
+            f"plenty of those (a renamed local binding, a refactored helper) "
+            f"leave the bytes identical. So decide first which happened. If "
+            f"the on-disk layout really did change, bump "
+            f"envelopeFramingVersion -- a deliberate, reviewed format epoch -- "
+            f"and update this fingerprint together, or revert the change. If "
+            f"the bytes are unchanged, record the new fingerprint alone and "
+            f"leave envelopeFramingVersion exactly where it is")
 
     real_registry = real_component_registry()
     verified_tracked, descriptor_violations = verify_fixture_descriptors(manifest)

@@ -416,6 +416,226 @@ def test_envelope_framing_fingerprint_changes_on_layout_change() -> None:
                "ComponentDescriptor's field order changes")
 
 
+# Issue #1416: the envelope framing fingerprint's ONE narrow pragma
+# exception. `common lang` is where synarchy.cabal actually declares the
+# extensions Codec.hs inherits; these fixtures reproduce the shape the
+# real parser must read, including the negative form that makes bare-name
+# comparison wrong.
+def _synthetic_cabal_text(
+        extensions: str = ("UnicodeSyntax\n"
+                           "                      , NoImplicitPrelude\n"
+                           "                      , OverloadedStrings"),
+        library_imports: str = "warnings, lang, build-policy") -> str:
+    return (
+        "common warnings\n"
+        "    ghc-options: -Wall\n"
+        "\n"
+        "common lang\n"
+        "    default-language: GHC2024\n"
+        f"    default-extensions: {extensions}\n"
+        "\n"
+        "common build-policy\n"
+        "    ghc-options: -threaded\n"
+        "\n"
+        "library\n"
+        f"    import: {library_imports}\n"
+        "    exposed-modules: World.Save.Envelope.Codec\n"
+        "    hs-source-dirs: src\n"
+        "\n")
+
+
+def _framing_fp(d: Path, codec_text: str, cabal_text: str | None = None) -> str:
+    """envelope_framing_fingerprint over one scratch Codec.hs, holding
+    Types.hs and the cabal file fixed unless a case varies them."""
+    types_p = d / "Types.hs"
+    codec_p = d / "Codec.hs"
+    cabal_p = d / "synarchy.cabal"
+    types_p.write_text(_synthetic_envelope_types_text())
+    codec_p.write_text(codec_text)
+    cabal_p.write_text(_synthetic_cabal_text()
+                       if cabal_text is None else cabal_text)
+    return sca.envelope_framing_fingerprint(types_p, codec_p, cabal_p)
+
+
+_CODEC_BODY = (
+    "module World.Save.Envelope.Codec (encodeEnvelope) where\n"
+    "import qualified Data.ByteString as BS\n"
+    "encodeEnvelope x = x\n")
+
+
+def test_envelope_framing_fingerprint_ignores_inherited_language_pragma() -> None:
+    print("issue #1416: removing a LANGUAGE declaration Codec.hs already "
+          "inherits from synarchy.cabal's `common lang` leaves the envelope "
+          "framing fingerprint unchanged -- PR #1001's UnicodeSyntax removal "
+          "could not change the module's effective extension set, so it "
+          "should never have moved this value")
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        before = _framing_fp(
+            d, "{-# LANGUAGE Strict, UnicodeSyntax #-}\n" + _CODEC_BODY)
+        after = _framing_fp(d, "{-# LANGUAGE Strict #-}\n" + _CODEC_BODY)
+        expect(before == after,
+               "expected removing an already-inherited UnicodeSyntax "
+               "declaration to leave the envelope framing fingerprint "
+               "unchanged")
+        separate = _framing_fp(
+            d, "{-# LANGUAGE Strict #-}\n{-# LANGUAGE UnicodeSyntax #-}\n"
+            + _CODEC_BODY)
+        expect(separate == after,
+               "expected an inherited extension declared on its OWN pragma "
+               "line to be just as redundant as one sharing a pragma")
+        negative = _framing_fp(
+            d, "{-# LANGUAGE Strict, NoImplicitPrelude #-}\n" + _CODEC_BODY)
+        expect(negative == after,
+               "expected re-declaring the inherited NEGATIVE form "
+               "NoImplicitPrelude to be redundant too")
+
+
+def test_envelope_framing_fingerprint_changes_on_effective_language_change() -> None:
+    print("issue #1416: a LANGUAGE edit that changes Codec.hs's EFFECTIVE "
+          "extension set still moves the fingerprint -- the exception is "
+          "redundant declarations only, never LANGUAGE pragmas as a class")
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        base = _framing_fp(d, "{-# LANGUAGE Strict #-}\n" + _CODEC_BODY)
+        not_inherited = _framing_fp(
+            d, "{-# LANGUAGE Strict, RebindableSyntax #-}\n" + _CODEC_BODY)
+        expect(base != not_inherited,
+               "expected adding a NON-inherited extension (RebindableSyntax "
+               "can change do/numeric-literal desugaring while both versions "
+               "compile) to move the envelope framing fingerprint")
+        dropped_effective = _framing_fp(d, _CODEC_BODY)
+        expect(base != dropped_effective,
+               "expected removing the module's own effective `Strict` "
+               "declaration to move the envelope framing fingerprint")
+        # The bare-name trap: `ImplicitPrelude` appears inside the
+        # inherited `NoImplicitPrelude`, but declaring it REVERSES that
+        # default, so its effective state differs and it must be kept.
+        reversed_default = _framing_fp(
+            d, "{-# LANGUAGE Strict, ImplicitPrelude #-}\n" + _CODEC_BODY)
+        expect(base != reversed_default,
+               "expected a local ImplicitPrelude -- which REVERSES the "
+               "inherited NoImplicitPrelude rather than restating it -- to "
+               "move the envelope framing fingerprint")
+
+
+def test_envelope_framing_fingerprint_changes_on_import_edit() -> None:
+    print("issue #1416: an import-only Codec.hs edit still moves the envelope "
+          "framing fingerprint -- an import can change which encoder the "
+          "framing actually calls")
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        base = _framing_fp(d, "{-# LANGUAGE Strict #-}\n" + _CODEC_BODY)
+        extra_import = _framing_fp(
+            d, "{-# LANGUAGE Strict #-}\n"
+            + _CODEC_BODY.replace(
+                "import qualified Data.ByteString as BS\n",
+                "import qualified Data.ByteString as BS\n"
+                "import qualified Data.ByteString.Lazy as BSL\n"))
+        expect(base != extra_import,
+               "expected an import-only Codec.hs edit to move the envelope "
+               "framing fingerprint")
+
+
+def test_envelope_framing_fingerprint_changes_on_options_ghc_edit() -> None:
+    print("issue #1416: an OPTIONS_GHC pragma edit still moves the envelope "
+          "framing fingerprint -- only LANGUAGE is in the exception's scope")
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        base = _framing_fp(d, "{-# LANGUAGE Strict #-}\n" + _CODEC_BODY)
+        with_options = _framing_fp(
+            d, "{-# LANGUAGE Strict #-}\n"
+            "{-# OPTIONS_GHC -fno-strictness #-}\n" + _CODEC_BODY)
+        expect(base != with_options,
+               "expected an OPTIONS_GHC pragma edit to move the envelope "
+               "framing fingerprint")
+
+
+def test_inherited_extension_set_is_read_live_and_fails_loudly() -> None:
+    print("issue #1416: the inherited extension set is derived from "
+          "synarchy.cabal's `common lang`, and a stanza that cannot be read "
+          "fails loudly rather than degrading to an empty/stale set")
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        cabal_p = d / "synarchy.cabal"
+
+        cabal_p.write_text(_synthetic_cabal_text())
+        inherited = sca.inherited_default_extensions(cabal_p)
+        expect(inherited == {"UnicodeSyntax": True, "ImplicitPrelude": False,
+                             "OverloadedStrings": True},
+               "expected the inherited set to be parsed from `common lang` "
+               "as effective (name, enabled) states, negative forms included")
+
+        commented = _synthetic_cabal_text(
+            extensions=("UnicodeSyntax\n"
+                        "                      -- a note about the next one\n"
+                        "                      , NoImplicitPrelude\n"
+                        "                      , OverloadedStrings"))
+        cabal_p.write_text(commented)
+        expect(sca.inherited_default_extensions(cabal_p) == inherited,
+               "expected a cabal `--` comment inside the default-extensions "
+               "continuation to be ignored, not read as an extension name")
+
+        real = sca.inherited_default_extensions()
+        expect(real.get("UnicodeSyntax") is True
+               and real.get("ImplicitPrelude") is False
+               and "Strict" not in real,
+               "expected the REAL synarchy.cabal to parse, supplying "
+               "UnicodeSyntax and NoImplicitPrelude but never Strict")
+
+        for label, text in [
+                ("no `common lang` stanza",
+                 _synthetic_cabal_text().replace(
+                     "common lang\n", "common langx\n", 1)),
+                ("no default-extensions field",
+                 re.sub(r"    default-extensions:.*?\n\n",
+                        "\n", _synthetic_cabal_text(), flags=re.DOTALL)),
+                ("a default-extensions entry that is not a bare name",
+                 _synthetic_cabal_text(extensions="UnicodeSyntax, -Wall")),
+                ("the library stanza no longer importing `lang`",
+                 _synthetic_cabal_text(
+                     library_imports="warnings, build-policy"))]:
+            cabal_p.write_text(text)
+            raised = False
+            try:
+                sca.inherited_default_extensions(cabal_p)
+            except ValueError:
+                raised = True
+            expect(raised,
+                   f"expected inherited_default_extensions to fail loudly on "
+                   f"{label}")
+
+        # A stanza edit must reach the fingerprint, not a hard-coded copy:
+        # once `common lang` stops supplying UnicodeSyntax, a local
+        # declaration of it becomes EFFECTIVE and must be fingerprinted.
+        with_it = _framing_fp(d, "{-# LANGUAGE UnicodeSyntax #-}\n"
+                              + _CODEC_BODY,
+                              _synthetic_cabal_text(
+                                  extensions="NoImplicitPrelude"))
+        without_it = _framing_fp(d, _CODEC_BODY,
+                                 _synthetic_cabal_text(
+                                     extensions="NoImplicitPrelude"))
+        expect(with_it != without_it,
+               "expected a LANGUAGE declaration to become fingerprinted again "
+               "once `common lang` stops supplying it -- the inherited set "
+               "must track the cabal stanza, never a hard-coded list")
+
+
+def test_frozen_dto_fingerprint_unaffected_by_pragma_normalization() -> None:
+    print("issue #1416: the pragma step is scoped to the envelope framing "
+          "fingerprint's codec text -- frozen_dto_fingerprint shares "
+          "_normalize_haskell_block and its recorded manifest value must not "
+          "move")
+    manifest = sca.load_manifest()
+    expect(sca.frozen_dto_fingerprint() == manifest["frozenDtoFingerprint"],
+           "expected the real frozenDtoFingerprint to still match the "
+           "manifest after the envelope pragma normalization was added")
+    expect(sca.envelope_framing_fingerprint()
+           == manifest["envelopeFramingFingerprint"],
+           "expected the real envelopeFramingFingerprint to still match the "
+           "manifest after the envelope pragma normalization was added")
+
+
 def test_detects_envelope_framing_fingerprint_mismatch() -> None:
     print("manifest envelopeFramingFingerprint disagrees with the real source")
     with tempfile.TemporaryDirectory(dir=sca.REPO_ROOT) as d:
@@ -1622,6 +1842,12 @@ def main() -> int:
         test_frozen_dto_fingerprint_covers_save_metadata_v90,
         test_envelope_framing_fingerprint_is_comment_insensitive,
         test_envelope_framing_fingerprint_changes_on_layout_change,
+        test_envelope_framing_fingerprint_ignores_inherited_language_pragma,
+        test_envelope_framing_fingerprint_changes_on_effective_language_change,
+        test_envelope_framing_fingerprint_changes_on_import_edit,
+        test_envelope_framing_fingerprint_changes_on_options_ghc_edit,
+        test_inherited_extension_set_is_read_live_and_fails_loudly,
+        test_frozen_dto_fingerprint_unaffected_by_pragma_normalization,
         test_detects_envelope_framing_fingerprint_mismatch,
         test_add_baseline_creates_a_new_baseline_and_fixture_atomically,
         test_add_baseline_refuses_new_baseline_missing_required_fields,
