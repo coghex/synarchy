@@ -1,12 +1,12 @@
 {
   "$comment": "Save-compatibility manifest (issue #766, save-overhaul C4). Tracks every save-format baseline this build is declared to keep loadable through explicit migrations, plus the tracked fixtures proving it. Never hand-edit a fixture's sha256 after it has been recorded here -- see tools/save_compat_audit.py (--add-baseline registers a fixture's checksum/summary together).",
   "envelopeFramingVersion": 1,
-  "frozenDtoFingerprint": "3ba82bdaeb0506a33a6a91b0323b05213fac774590e5350270f7c6e46cd48973",
+  "frozenDtoFingerprint": "c89ef3ce67c6aa9f45808d3fc81eeac7164afbf4dbd110138b31725b03e844ed",
   "frozenDtoFingerprintOf": "src/World/Save/Compat/SessionV90.hs, plus every leaf DTO its frozen types embed, transitively resolved wherever actually defined (World.Save.Component.Page/.Entities/.Session/.WorldGen)",
-  "frozenDtoFingerprintComment": "sha256 over every frozen `data ... deriving (...)` block's field list (whitespace-normalized) in SessionV90.hs, PLUS (round-16 review) every leaf DTO type those blocks embed (WorldGenParamsDTO and its whole nested worldgen config/state tree, WorldEditDTO, GroundItemsDTO/ItemInstanceDTO, BuildingInstanceDTO, UnitInstanceDTO, etc.), transitively resolved wherever each is actually defined -- SessionV90.hs's own blocks alone said nothing about a field reordered on one of those EMBEDDED types, even though the real B1 wire bytes for it would silently change. See tools/save_compat_audit.py's frozen_dto_fingerprint()/_transitive_dto_blocks(). Changes only when a field is added/removed/reordered anywhere in this transitive closure, never on a comment-only edit. Recompute with: python3 -c \"import sys; sys.path.insert(0,'tools'); from save_compat_audit import frozen_dto_fingerprint; print(frozen_dto_fingerprint())\". Last updated deliberately by issue #1092: WorldPageSaveV90.wp90Identity was repointed from WorldIdentityDTO to the newly-frozen WorldIdentityDTOv1, which carries the IDENTICAL two fields (name, optional gloss) the old type did -- a rename of the frozen shape, not a field added/removed/reordered, so every tracked v90 fixture's bytes are unchanged (the unsuffixed name now belongs to the current world-pages v3 identity, which additionally carries language provenance). Same pattern #911 used when it froze WorldGenParamsDTOv1. Last updated deliberately by issue #1233: BuildingSnapshotV90.bsn90Instances, UnitSnapshotV90.usn90Instances and WorldPageSaveV90.wp90GroundItems were repointed from BuildingInstanceDTO/UnitInstanceDTO/GroundItemsDTO to the newly-frozen BuildingInstanceDTOv1/UnitInstanceDTOv1/GroundItemsDTOv1, which carry the IDENTICAL fields those types carried before #1233 appended ItemInstance's external bulk and optional internal storage capacities -- a rename of the frozen shapes, not a field added/removed/reordered within them, so every tracked v90 fixture's bytes are unchanged (the unsuffixed names now belong to the current buildings v2 / units v2 / world-activity v3 shapes, which additionally carry those physical values). Exactly the #1092 pattern one row up.",
+  "frozenDtoFingerprintComment": "sha256 over every frozen `data ... deriving (...)` block's field list (whitespace-normalized) in SessionV90.hs, PLUS (round-16 review) every leaf DTO type those blocks embed (WorldGenParamsDTO and its whole nested worldgen config/state tree, WorldEditDTO, GroundItemsDTO/ItemInstanceDTO, BuildingInstanceDTO, UnitInstanceDTO, etc.), transitively resolved wherever each is actually defined -- SessionV90.hs's own blocks alone said nothing about a field reordered on one of those EMBEDDED types, even though the real B1 wire bytes for it would silently change. See tools/save_compat_audit.py's frozen_dto_fingerprint()/_transitive_dto_blocks(). Changes only when a field is added/removed/reordered anywhere in this transitive closure, never on a comment-only edit. Recompute with: python3 -c \"import sys; sys.path.insert(0,'tools'); from save_compat_audit import frozen_dto_fingerprint; print(frozen_dto_fingerprint())\". Last updated deliberately by issue #1092: WorldPageSaveV90.wp90Identity was repointed from WorldIdentityDTO to the newly-frozen WorldIdentityDTOv1, which carries the IDENTICAL two fields (name, optional gloss) the old type did -- a rename of the frozen shape, not a field added/removed/reordered, so every tracked v90 fixture's bytes are unchanged (the unsuffixed name now belongs to the current world-pages v3 identity, which additionally carries language provenance). Same pattern #911 used when it froze WorldGenParamsDTOv1. Last updated deliberately by issue #1233: BuildingSnapshotV90.bsn90Instances, UnitSnapshotV90.usn90Instances and WorldPageSaveV90.wp90GroundItems were repointed from BuildingInstanceDTO/UnitInstanceDTO/GroundItemsDTO to the newly-frozen BuildingInstanceDTOv1/UnitInstanceDTOv1/GroundItemsDTOv1, which carry the IDENTICAL fields those types carried before #1233 appended ItemInstance's external bulk and optional internal storage capacities -- a rename of the frozen shapes, not a field added/removed/reordered within them, so every tracked v90 fixture's bytes are unchanged (the unsuffixed names now belong to the current buildings v2 / units v2 / world-activity v3 shapes, which additionally carry those physical values). Exactly the #1092 pattern one row up. Last updated deliberately by issue #1217: WorldPageSaveV90.wp90UnitSimStates was repointed from UnitSimStateDTO to the newly-frozen UnitSimStateDTOv1, which carries the IDENTICAL fields that type carried before #1217 added the per-request hazard policy to its embedded move target -- a rename of the frozen shape, not a field added/removed/reordered within it, so every tracked v90 fixture's bytes are unchanged (the unsuffixed name now belongs to the current unit-sim v3 shape, whose MoveTargetDTO additionally carries MoveHazardPolicy). Exactly the #1092 / #1233 pattern above.",
   "envelopeFramingFingerprint": "b1b43fcecce096bb902440b11f92de904b2c9762cdac02dfe2c6d9db1c3fa05f",
   "envelopeFramingFingerprintOf": "src/World/Save/Envelope/Codec.hs + the wire-relevant bindings in src/World/Save/Envelope/Types.hs (ComponentId/ComponentDescriptor/EnvelopeManifest/envelopeMagic/fnv1a64/encodeW32/decodeW32/encodeW64/decodeW64)",
-  "envelopeFramingFingerprintComment": "round-15 review: envelopeFramingVersion alone is just an integer someone has to remember to bump -- this sha256 (whitespace-normalized, comment-insensitive, same technique as frozenDtoFingerprint) catches an ACTUAL byte-layout change (header/manifest/checksum framing) shipping with envelopeFramingVersion left untouched, which would otherwise be a new wire format with no format epoch. See tools/save_compat_audit.py's envelope_framing_fingerprint(). Recompute with: python3 -c \"import sys; sys.path.insert(0,'tools'); from save_compat_audit import envelope_framing_fingerprint; print(envelope_framing_fingerprint())\"",
+  "envelopeFramingFingerprintComment": "round-15 review: envelopeFramingVersion alone is just an integer someone has to remember to bump -- this sha256 (whitespace-normalized, comment-insensitive, same technique as frozenDtoFingerprint) catches an ACTUAL byte-layout change (header/manifest/checksum framing) shipping with envelopeFramingVersion left untouched, which would otherwise be a new wire format with no format epoch. See tools/save_compat_audit.py's envelope_framing_fingerprint(). Issue #1416 added ONE narrow further exception on top of that comment/whitespace normalization: a locally declared LANGUAGE extension whose effective state Codec.hs ALREADY INHERITS from synarchy.cabal's `common lang` stanza is dropped before hashing, so adding or removing such a declaration -- PR #1001 deleted an already-inherited UnicodeSyntax -- no longer moves this value; that edit cannot change the module's effective extension set, its behavior, or the bytes it writes. Only the module HEADER's pragma run is normalized, and only as far as can be established WITHOUT modelling GHC's extension-implication graph. A leading INERT PREFIX drops declarations of either polarity while the state is provably still the inherited one (which is what makes a lone {-# LANGUAGE NoImplicitPrelude #-} a no-op); past it, every remaining declaration must be in POSITIVE form with no extension named twice. Such a header is a plain set of enables layered on a state that already contains each inherited extension's implied closure. The moment a header turns something off -- directly, or by re-enabling after a disable (NoTypeFamilies, TypeFamilyDependencies, where the second reinstates the TypeFamilies the first removed) -- it is kept verbatim instead, as is pragma-SHAPED ordinary source such as a string literal the codec itself writes. One case is knowingly given up to that boundary as a decided trade-off (owner, 2026-08-19): an inherited NEGATIVE re-declared PAST the prefix (Strict, NoImplicitPrelude) leaves the effective set unchanged and is still retained, because proving that needs the same implication table. The cost is one explicable fingerprint move; the other direction hides a real change. It is NOT a blanket exclusion of LANGUAGE pragmas, because a false negative here is the expensive direction: an extension the module does not inherit (its own Strict) and one whose local declaration REVERSES an inherited default (ImplicitPrelude against common lang's NoImplicitPrelude) are both effective and both still move it, and the inherited set is read live from the cabal stanza rather than hard-coded so it cannot drift into covering an extension that has since become effective. Nothing else is excluded -- imports, the module header and export list, OPTIONS_GHC and every other block pragma, and all the code itself still move this fingerprint. A moved fingerprint is not by itself proof the wire format changed, so it does not by itself call for an envelopeFramingVersion bump. Recompute with: python3 -c \"import sys; sys.path.insert(0,'tools'); from save_compat_audit import envelope_framing_fingerprint; print(envelope_framing_fingerprint())\"",
   "baselines": [
     {
       "id": "b1-initial-session",
@@ -1437,13 +1437,13 @@
       ]
     },
     {
-      "id": "o1-position-hold",
-      "description": "Position hold after a completed player move order (issue #1216, SURV-4): lua.unit_ai became v6, adding aiState[uid].holdAnchor -- the destination a COMPLETED player move order leaves the unit standing on (scripts/unit_ai_hold.lua's hold_position candidate, scored at unit_ai_combat.lua's own FOLLOW_COMMAND_UTILITY so the #306 interrupt ladder is reused rather than restated). This baseline tracks a REAL current-format session written by the live engine at lua.unit_ai v6, whose acolyte was given a real player move order through unitAi.commandMove and is HOLDING the commanded tile at save time -- the anchor was written by the live maintainTask arrival branch, not staged, so the new shape has its own compatibility coverage rather than a version number with nothing behind it. The order names the tile the unit already stands on, which is the shortest completion the real verb has: a longer leg is not what a persistence fixture measures, and seed 42 / size 16 puts open lake around the spawn (the terrain the b3..n1 baselines all share), so a distant target would only ever have stall-timed-out. Proving a real walk holds its destination -- and returns to the anchor after a survival interrupt -- is tools/position_hold_probe.py's job. v1-v5 payloads stay tracked by the b3/c3/d1/e1/f1/g1/h1/i1/j1/k1/l1/m1/n1 baselines above and decode with holdAnchor absent, which is exactly right: those sessions had no hold to record.",
+      "id": "o1-wander-hazard-policy",
+      "description": "Per-request movement hazard policy (issue #1217): ambient wander may no longer route over a damaging drop, so a move REQUEST now states whether its route may traverse one. unit-sim became v3 -- MoveTargetDTO carries MoveHazardPolicy. This baseline tracks a REAL current-format session written by the live engine at unit-sim v3, whose acolyte holds an in-flight FallProhibited move target, so the new shape is exercised by the fixture registered to cover its version rather than merely carrying the version number. The pre-#1217 v2 shape (typed SamePageRef keys, no policy) stays tracked by every earlier baseline and migrates to the fall-permitted default; v1 by b2/b3/c3.",
       "declaredAt": "2026-08-19",
-      "declaredByIssue": 1216,
+      "declaredByIssue": 1217,
       "supportStatus": "supported",
       "migrationTarget": "current",
-      "migratedBy": "scripts/unit_ai_save.lua's decode (v1 -> wrapAiState, v2 -> addOwnerToAiState, v3/v4/v5 -> identity: a pre-#1216 payload carries no holdAnchor at all, and its ABSENCE is already the correct v6 value -- a hold is never inferred at decode time from an order that has already been cleared, because the payload cannot say whether that order was the player's or scripts/building_spawn.lua's internal walk-out)",
+      "migratedBy": "World.Save.Component.Entities.migrateUnitSimDTOv2 (v2 -> v3: every frozen UnitSimStateDTOv1 carries across unchanged and an in-flight move target gains the fall-permitted policy its bytes were written under), migrateUnitSimDTOv1 (v1 -> v3: the same forward step, plus v1's bare-UnitId sim-state keys becoming typed SamePageRefs)",
       "components": [
         {
           "id": "metadata",
@@ -1451,13 +1451,28 @@
           "required": true
         },
         {
-          "id": "core-session",
-          "version": 1,
+          "id": "buildings",
+          "version": 2,
           "required": true
         },
         {
-          "id": "texture-palette",
-          "version": 1,
+          "id": "units",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
           "required": true
         },
         {
@@ -1476,50 +1491,35 @@
           "required": true
         },
         {
-          "id": "buildings",
-          "version": 2,
+          "id": "core-session",
+          "version": 1,
           "required": true
         },
         {
-          "id": "units",
-          "version": 2,
-          "required": true
-        },
-        {
-          "id": "unit-sim",
-          "version": 2,
-          "required": true
-        },
-        {
-          "id": "craft-bills",
-          "version": 2,
-          "required": true
-        },
-        {
-          "id": "power-nodes",
-          "version": 2,
-          "required": true
-        },
-        {
-          "id": "lua.unit_ai",
-          "version": 6,
+          "id": "texture-palette",
+          "version": 1,
           "required": true
         },
         {
           "id": "lua.building_spawn",
           "version": 3,
           "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 5,
+          "required": true
         }
       ],
       "fixtures": [
         {
-          "id": "o1-position-hold-session",
-          "path": "test-headless/data/save-compat/o1-position-hold.bin",
+          "id": "o1-wander-hazard-policy",
+          "path": "test-headless/data/save-compat/o1-wander-hazard-policy.bin",
           "kind": "complete-session",
-          "sha256": "f444f8bc66378378b932698698dbecbf5bea48de2aa85ce235af0d169f2949e0",
-          "sizeBytes": 908595,
-          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then return require('scripts.unit_ai').commandMove({uid}, 0, 0), settled 10.0s and held until `(function() local h = require('scripts.unit_ai').getHold(1); return h ~= nil and h.x == 0 and h.y == 0 end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/o1-position-hold.expected.json"
+          "sha256": "e47c729fbb513af9d32a40329489aa4b8e30040cc93cda6c30c8fdcbb579cbeb",
+          "sizeBytes": 908646,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then unit.moveTo({uid}, 20, 20, 0.05, 'avoid_falls'), settled 6.0s and held until `(function() local i = unit.getInfo(1); return i ~= nil and i.moveHazard == 'avoid_falls' end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/o1-wander-hazard-policy.expected.json"
         }
       ]
     }

@@ -61,8 +61,8 @@ handleUnitCommand env utsRef (UnitTeleport uid gx gy mGz)
   = handleUnitTeleportCommand env utsRef uid gx gy mGz
 handleUnitCommand env utsRef (UnitReGround gx gy)
   = handleUnitReGroundCommand env utsRef gx gy
-handleUnitCommand env utsRef (UnitMoveTo uid tx ty speed)
-  = handleUnitMoveToCommand env utsRef uid tx ty speed
+handleUnitCommand env utsRef (UnitMoveTo uid tx ty speed hazard)
+  = handleUnitMoveToCommand env utsRef uid tx ty speed hazard
 handleUnitCommand env utsRef (UnitSetMoveSpeed uid speed)
   = handleUnitSetMoveSpeedCommand env utsRef uid speed
 handleUnitCommand env utsRef (UnitJump uid tgx tgy)

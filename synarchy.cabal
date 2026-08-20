@@ -200,6 +200,7 @@ library
                      Engine.Graphics.Vulkan.Image
                      Engine.Graphics.Vulkan.Init
                      Engine.Graphics.Vulkan.Instance
+                     Engine.Graphics.Vulkan.Instance.Plan
                      Engine.Graphics.Vulkan.MSAA
                      Engine.Graphics.Vulkan.Pipeline
                      Engine.Graphics.Vulkan.Offscreen
@@ -462,6 +463,7 @@ library
                      Unit.HitTest
                      Unit.LineOfSight
                      Unit.Pathing.Config
+                     Unit.Pathing.Hazard
                      Unit.Pathing.Cost
                      Unit.Pathing.AStar
                      Unit.Fall
@@ -1073,6 +1075,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.BedDepth
                    Test.Headless.WorldGen.FluidSurfaceFold
                    Test.Headless.Unit.Pathing.Cost
+                   Test.Headless.Unit.Pathing.Hazard
                    Test.Headless.Unit.Pathing.AStar
                    Test.Headless.Unit.Pathing.Config
                    Test.Headless.Unit.Render.PickFrame
@@ -1146,6 +1149,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Graphics.VideoConfig
                    Test.Headless.Graphics.VulkanAppIdentity
                    Test.Headless.Graphics.BindlessFeatures
+                   Test.Headless.Graphics.InstancePlan
                    Test.Headless.Graphics.WindowMode
                    Test.Headless.Graphics.AmbientLight
                    Test.Headless.Graphics.Screenshot

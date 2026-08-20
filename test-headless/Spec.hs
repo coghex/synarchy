@@ -19,6 +19,7 @@ import qualified Test.Headless.WorldGen.CoastBreach as CoastBreach
 import qualified Test.Headless.WorldGen.BedDepth as BedDepth
 import qualified Test.Headless.WorldGen.FluidSurfaceFold as FluidSurfaceFold
 import qualified Test.Headless.Unit.Pathing.Cost as PathingCost
+import qualified Test.Headless.Unit.Pathing.Hazard as PathingHazard
 import qualified Test.Headless.Unit.Pathing.AStar as PathingAStar
 import qualified Test.Headless.Unit.Pathing.Config as PathingConfig
 import qualified Test.Headless.Unit.Render.PickFrame as PickFrame
@@ -92,6 +93,7 @@ import qualified Test.Headless.Input.WheelPolicy as InputWheelPolicy
 import qualified Test.Headless.Graphics.VideoConfig as VideoConfig
 import qualified Test.Headless.Graphics.VulkanAppIdentity as VulkanAppIdentity
 import qualified Test.Headless.Graphics.BindlessFeatures as BindlessFeatures
+import qualified Test.Headless.Graphics.InstancePlan as GraphicsInstancePlan
 import qualified Test.Headless.Graphics.WindowMode as GraphicsWindowMode
 import qualified Test.Headless.Graphics.AmbientLight as AmbientLight
 import qualified Test.Headless.Graphics.Screenshot as GraphicsScreenshot
@@ -350,6 +352,7 @@ main = hspec $ do
     describe "Bindless texture filter rebinding" BindlessRebind.spec
     describe "Bindless texture release" BindlessRelease.spec
     describe "Unit.Pathing.Cost" PathingCost.spec
+    PathingHazard.spec
     describe "Unit.Pathing.AStar" PathingAStar.spec
     describe "Unit.Pathing.Config" PathingConfig.spec
     describe "Unit.Render.pickFrame" PickFrame.spec
@@ -419,6 +422,7 @@ main = hspec $ do
     describe "Graphics.VideoConfig" VideoConfig.spec
     describe "Graphics.VulkanAppIdentity" VulkanAppIdentity.spec
     BindlessFeatures.spec
+    GraphicsInstancePlan.spec
     describe "Graphics.WindowMode" GraphicsWindowMode.spec
     describe "Graphics.computeAmbientLight" AmbientLight.spec
     describe "Graphics.Screenshot" GraphicsScreenshot.spec

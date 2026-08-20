@@ -499,6 +499,18 @@ jobs:
           python3 tools/test_persistence_contract_sweep.py
           python3 tools/test_action_outcome_probe.py
 
+      # Cheap, no-engine guard (#1355): fails if a `python3 tools/*.py`
+      # check runs in this job and not in tools/ci-local.sh, or the other
+      # way round, outside the audit's hard-coded exemption list (CI's
+      # path selectors, which `make ci` has nothing to select for, and the
+      # engine-booting probe sweep). CLAUDE.md promises `make ci` predicts
+      # this job's result; nothing enforced that and it had already
+      # drifted -- the five probe-runner self-tests above ran only here.
+      - name: CI/local gate parity audit
+        run: |
+          python3 tools/ci_parity_audit.py --self-test
+          python3 tools/ci_parity_audit.py
+
       # Path-selective, BLOCKING behavior-probe gate (#530). Only on PRs:
       # diff against the base, pick the CI-eligible probes relevant to the
       # changed files (full curated smoke set for core/unclassified changes,

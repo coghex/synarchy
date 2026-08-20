@@ -324,6 +324,11 @@ PROBES = [
      "the technomule, located via ui.dumpWidgets(), creates a session with "
      "the exact source/receiver identities and never falls through to a "
      "move order (#1014)"),
+    ("wander_hazard", "wander_hazard_probe.py",
+     "ambient wander never routes over a damaging drop: a sustained AI-live "
+     "wander window on a 3-high ledge, setMoveSpeed retaining an in-flight "
+     "request's policy, a protected command over the same edge, and an "
+     "ordinary command that still falls (#1217)"),
     ("wire", "wire_probe.py",
      "wire autotile shape derivation + path-builder UX + construct_job wire AI (#359)"),
 ]

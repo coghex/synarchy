@@ -1050,14 +1050,80 @@ def test_stats() -> None:
     expect(d["elevationStats"]["max"] == 10, f"max: {d['elevationStats']}")
 
 
-def test_determinism_of_audit() -> None:
-    """Same input must produce byte-identical audit output."""
-    print("test_determinism_of_audit")
-    tiles = flat_grid(10, 10, -5, -5, terrainZ=-5, fluidType="ocean", fluidSurf=0)
-    a = json.dumps(audit_dump(tiles).to_dict(), sort_keys=True)
-    b = json.dumps(audit_dump(tiles).to_dict(), sort_keys=True)
-    c = json.dumps(audit_dump(tiles).to_dict(), sort_keys=True)
-    expect(a == b and b == c, "audit output not deterministic")
+def test_issue_ordering_is_canonical() -> None:
+    """Serialized audit output is canonical in its ISSUE ORDER.
+
+    `AuditResult.to_dict` sorts issues by (category, x, y) before grouping
+    them. That sort is what makes an audit's issue arrays comparable
+    between runs and keeps a re-captured baseline file's diff stable;
+    `json.dumps(sort_keys=True)` cannot stand in for it, because it orders
+    an object's KEYS and leaves its arrays exactly as built. Nothing else
+    in this suite pins it: every per-category fixture asserts through
+    `count_category`, which counts issues without looking at their order.
+
+    Feeding ONE fixture through `audit_dump` in two different input orders
+    and requiring byte-identical serializations tests exactly that. A
+    same-input comparison cannot: `audit_dump` builds fresh state from its
+    argument and reads no clock, randomness, or retained cross-call state,
+    so two identical calls are equal however the sort is written — or
+    whether it is written at all.
+
+    LIMITATION, and why this fixture is built the way it is: the
+    (category, x, y) key is not total. Two issues sharing all three and
+    differing only in `details` keep their append order under Python's
+    stable `sorted`, and append order follows the input list, so such a
+    pair would make this test fail legitimately rather than reveal a
+    regression. The fixture below therefore uses coordinates that are
+    DISTINCT within each category, which the guards ahead of the
+    comparison assert rather than assume; any fixture substituted here
+    must hold the same property.
+    """
+    print("test_issue_ordering_is_canonical")
+    # Two coordinate-disjoint clusters, each flagging four issues in one
+    # category: wetland soil (matId 64) around a +5 spike in chunk 0, and
+    # sand / salt flat (matId 55 / 67) around a second spike in chunk 1.
+    wetland = [tile(x, y, terrainZ=10, matId=64)
+               for y in range(1, 6) for x in range(1, 6)]
+    wetland.append(tile(3, 3, terrainZ=15, matId=56))
+    desert = [tile(x, y, terrainZ=10, matId=55)
+              for y in range(1, 6) for x in range(17, 22)]
+    desert.append(tile(19, 3, terrainZ=15, matId=56))
+    desert.append(tile(18, 3, terrainZ=10, matId=67))
+
+    # Normalize BEFORE permuting. `audit_dump` builds its grid with
+    # last-write-wins duplicate-coordinate semantics, so reversing a list
+    # still holding unresolved duplicates would change the INPUT, not just
+    # its order, and the two runs would no longer be permutations.
+    forward = make_tiles(wetland + desert)
+    reverse = list(reversed(forward))
+
+    result = audit_dump(forward)
+    triples = [(i.category, i.x, i.y) for i in result.issues]
+    per_category: dict[str, int] = {}
+    for category, _x, _y in triples:
+        per_category[category] = per_category.get(category, 0) + 1
+
+    # Guards: without them a fixture that drifted to one issue, or to one
+    # issue per category, would keep passing while pinning nothing —
+    # sorting a singleton array is a no-op, so removing the sort would
+    # stay invisible.
+    expect(len(per_category) >= 2,
+           f"fixture must produce at least two categories, got "
+           f"{sorted(per_category)}")
+    expect(any(n > 1 for n in per_category.values()),
+           f"fixture must produce a category holding several issues, got "
+           f"{per_category}")
+    expect(len(triples) == len(set(triples)),
+           f"fixture must not repeat a (category, x, y) triple — the sort "
+           f"key is not total, so duplicates would order by append: "
+           f"{sorted(triples)}")
+
+    forward_json = json.dumps(result.to_dict(), sort_keys=True)
+    reverse_json = json.dumps(audit_dump(reverse).to_dict(), sort_keys=True)
+    expect(forward_json == reverse_json,
+           "audit output is not canonical under input reordering: the same "
+           "tiles fed in reverse serialized differently, so to_dict's "
+           "(category, x, y) issue sort is missing or weakened")
 
 
 # ----- world_check logic tests ---------------------------------------------
@@ -1454,7 +1520,7 @@ def main() -> int:
     tests = [
         test_clean_grid,
         test_stats,
-        test_determinism_of_audit,
+        test_issue_ordering_is_canonical,
         test_dry_below_sea,
         test_ocean_on_land,
         test_river_under_terrain,
