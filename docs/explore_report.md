@@ -30,6 +30,11 @@ comment states an invariant the code does not enforce, or when a claim is
 imprecise in a way that would mislead a reader who takes it literally. Stylistic
 disagreements and wording preferences are not findings.
 
+The prose in question is usually a comment or haddock, but the same standard
+applies to repository documentation that describes the code — `CLAUDE.md`, an
+audit tool's docstring, a contract document — and to the code itself where a
+walk turns up a stated convention the tree does not follow (EXPL-21).
+
 **Calibration (owner, 2026-08-20): small findings are the point.** A comment
 that is correct in spirit, or correct on a quick read, but imprecise in its
 literal claim still counts — the standard for this report is precise and correct
@@ -63,6 +68,7 @@ cited lines.
 - [ ] EXPL-18. `Building.Render`'s sort comment says units add a `spriteRowSpan` term "as units do"; they no longer do
 - [ ] EXPL-19. `Unit.HitTest` claims to mirror a tile hit-test that no longer holds the math, and to use the "same math" the engine documents as different
 - [ ] EXPL-20. `resolveTexture`'s haddock credits itself with animation mirroring; animations never reach it and it cannot honour `flip: false`
+- [ ] EXPL-21. 98 production call sites spell inequality `≠` instead of `≢`; neither the operator audit nor CLAUDE.md's table can see it
 
 ---
 
@@ -1269,3 +1275,129 @@ Verified truthful in the same module, so a fix does not disturb it:
 two steps each); `screenDirOf` subtracts the camera's steps in the correct
 sense and its `mod` is non-negative; and `resolveTexture`'s stated lookup order
 matches the code exactly, `flipX` included.
+
+---
+
+## Unicode operator convention
+
+### EXPL-21. 98 production call sites spell inequality `≠` instead of `≢`; neither the operator audit nor CLAUDE.md's table can see it
+
+**The rule, from the project owner (2026-08-20):** in actual Haskell code
+inequality is always `≢`. `≠` is acceptable only in PROSE — a comment writing
+pseudocode or a maths formula. It must not appear as an operator.
+
+The tree does not currently obey that rule, and nothing in the gate set can
+tell.
+
+**Measurement.** Counting occurrences of `≠` in `.hs` files, separating code
+positions from comment positions:
+
+| Scope | Occurrences | Files |
+|---|---|---|
+| `src/` + `app/` — code | **98** | 43 |
+| `test-headless/` — code | 12 | 8 |
+| anywhere — inside comments | 8 | 8 |
+
+For comparison, the correct spelling `≢` appears 175 times in `src/` + `app/`.
+**Ten files use both spellings**, including `src/Unit/Render.hs`,
+`src/Engine/Core/State.hs`, `src/World/Render/Quads.hs` and
+`src/Engine/Input/Thread/Keyboard.hs` — so the divergence is not a
+module-by-module habit that could be explained as one author's style; it is
+mixed within single files.
+
+Representative sites (`src/World/Mine/Types.hs:151,159-160`, a file with no
+`≢` at all):
+
+```haskell
+    in if mask ≠ 15
+...
+        in maskOf (dugNW ∧ imax ≠ 0) (dugNE ∧ imax ≠ 1)
+                  (dugSE ∧ imax ≠ 2) (dugSW ∧ imax ≠ 3)
+```
+
+and `src/World/Render/HitTest.hs:146`, where this was first noticed:
+
+```haskell
+                   else if ctMats col VU.! i ≠ 0
+```
+
+**Both spellings are `/=`, and neither is locally defined.** Nothing in `src/`
+or `app/` defines `(≠)`. It arrives through `import Prelude.Unicode`
+(`src/UPrelude.hs:27`, re-exported at `:8`) from the `base-unicode-symbols`
+dependency, whose `Data.Eq.Unicode` exports `≡`, `≢` AND `≠`, the latter two
+both being `/=`. So the 98 sites are correct code with the wrong spelling — this
+is a convention violation, not a bug, and every fix is a pure textual
+substitution with identical fixity.
+
+**Why the enforcement gate cannot catch it.**
+`tools/unicode_operator_audit.py` is built to find ASCII operators that should
+have been converted. Its lexer is:
+
+```python
+_SYMBOL_RUN = re.compile(r"[!#$%&*+./<=>?@\\^|~:-]+")
+```
+
+an ASCII-only character class, and its forbidden set is
+`TOKEN_REPLACEMENTS = {".&.", ".|.", ">>=", "==", "/="}` (`:32-40`). `≠` is
+already non-ASCII, so it is never even lexed as a candidate. The audit is
+structurally incapable of seeing it: it hunts the un-converted ASCII spelling,
+and this is a converted-but-wrong Unicode one. A file could be 100% `≠` and the
+audit would report a clean tree.
+
+Its own docstring maps the intended conversion one way only (`:12`):
+
+```
+  /=  -> ≢   inequality,   infix 4
+```
+
+and cites `base-unicode-symbols Data/Eq/Unicode.hs` at `:5` — the very module
+that also exports `≠`.
+
+**Why the documentation does not say so either.** CLAUDE.md's "Unicode
+operators defined in UPrelude" table lists one inequality:
+
+| `≢` | inequality (from Prelude.Unicode) | `/=` |
+
+with no row for `≠` and no statement that `≠` is disallowed. That silence is
+notable because the same file explicitly handles the one OTHER two-spelling
+situation it has: "`fmap`'s two spellings, `<$>` and `⊚`, are a deliberate
+exception: **both are kept**, picked per call site by readability, not enforced
+either way." A reader who has internalised that sentence and then meets `≠` in
+98 places has every reason to infer a second such exception, because nothing
+tells them otherwise.
+
+**The eight prose occurrences are correct and must be left alone.** They are
+exactly the exemption the owner's rule allows — pseudocode and maths inside
+comments:
+
+```
+src/Unit/Render.hs:275          -- is still on the base side (its tile ≠ the dest column); once
+src/Combat/Resolution.hs:142    -- "uiPose ≠ dead" lets stale CombatAttacks land on
+src/Language/Suggest.hs:210     --   the previous one — so @headIndexAt base n k ≠ headIndexAt base n
+src/Engine/Core/State.hs:516    --   per-image semaphore (image count ≠ frames in flight).
+src/World/Edit/Apply.hs:292     --   (≠ 0) cell, or -1 if the column is entirely air. Top-level (not a
+src/World/Generate/Timeline.hs:244  -- (so some tile's @ru0@ ≠ the chunk-centre's), the per-
+src/Combat/Wounds/Tick.hs:427   -- UnconsciousNow gating, which already checks uiPose ≠
+test-headless/Test/Headless/WorldGen/Exposure.hs:17  --   > ctMats c ! (z - ctStartZ) ≠ matAir    -- ∀ z ∈ [min ns .. tz]
+```
+
+Any mechanical fix must therefore be comment-aware, which the existing audit's
+`_strip_haskell_comments` machinery already is — it was written for precisely
+this hazard, and its docstring says so: "extended with string-literal and GLSL
+quasiquote awareness since a false hit here would rewrite content this guard
+must never touch."
+
+**Severity: the highest in this report so far, and of a different kind.** Every
+other EXPL finding is prose that misdescribes correct code; this is code that
+violates a stated convention, at 98 sites, with a guard that reports clean and
+a documentation table that implies the situation is fine. It is also the most
+tractable: the substitution is mechanical, the exemption set is eight known
+lines, and the audit already has the comment-aware scanner needed to enforce it
+afterwards — extending `TOKEN_REPLACEMENTS`-style checking to a Unicode
+forbidden token, plus a CLAUDE.md row stating the rule, would close it
+permanently.
+
+Scope note: the 12 `test-headless/` occurrences are outside
+`unicode_operator_audit.py`'s current `src/` + `app/` scope. Whether they are in
+scope for the convention is the owner's call; they are recorded here so the
+count is complete either way.
