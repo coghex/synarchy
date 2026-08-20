@@ -23,8 +23,10 @@ What it does:
      (see `engagement_cause`),
   6. polls each unit's currentAnim for a few seconds and prints the
      per-unit animation timeline,
-  7. checks the attacker threw a recognizable swing animation and, if it
-     died, settled on a death animation (the two bugs this guards),
+  7. checks the attacker threw a recognizable swing animation and — for
+     a combatant that ended in the authoritative `dead` pose — that its
+     terminal animation is one its own declaration maps for that pose
+     (the two bugs this guards; BOTH gate the exit status),
   8. samples a live frame and an animation duration off the spawned
      units, so the atlas evidence covers a unit that is actually
      playing rather than only one that registered.
@@ -49,7 +51,8 @@ Usage:
 Exit codes:
   0  the expected animation states were observed.
   1  a check FAILED — a registered def, a storage/live-sample/duration
-     mismatch, or (preconditions having held) no swing animation.
+     mismatch, a violated death contract, or (preconditions having held)
+     no swing animation.
   2  the FIXTURE could not be established — unsafe or unverifiable
      terrain, a spawn or AI-state bootstrap that did not take, or a
      fight that never engaged. Nothing about the animations was graded.
@@ -170,8 +173,14 @@ def read_index(unit: str) -> dict:
 
 
 def read_declaration(unit: str) -> dict:
-    """The unit's own YAML entry. Only its DIRECT texture references are
-    read here; animation membership comes from the index."""
+    """The unit's own YAML entry.
+
+    Two things are read out of it. The DIRECT texture references —
+    animation MEMBERSHIP comes from the compiled index instead — and, for
+    the death contract, the `state_animations` values this unit maps for
+    the dead pose, judged against the `animations` this same entry
+    declares.
+    """
     doc = yaml.safe_load((DATA_UNITS / f"{unit}.yaml").read_text("utf-8"))
     for entry in doc.get("units") or []:
         if entry.get("name") == unit:
@@ -582,7 +591,9 @@ def require_spawned(port: int, combatants: list[tuple[int, str]],
 
 
 def anim_of(port: int, uid: int) -> str:
-    r = send(port, f"local i=unit.getInfo({uid}); return i and i.currentAnim or 'DEAD'")
+    r = send(port,
+             f"local i=unit.getInfo({uid}); "
+             f"return i and i.currentAnim or '{GONE_ANIM}'")
     return r.strip('"')
 
 
@@ -590,14 +601,205 @@ def swung(seq: list[str]) -> bool:
     return any("attack" in s for s in seq)
 
 
-def verdict_exit(swing: bool, roster_ok: bool, live_ok: bool) -> int:
+# --------------------------------------------------------------------
+# The death contract (#1397): the POSE is the oracle, not the anim name
+# --------------------------------------------------------------------
+
+# `unit.getPose` (`Engine.Scripting.Lua.API.Units.Spawn`) reports the
+# authoritative `uiPose`, and this is its only value that means death.
+# `collapsed` does NOT: `Unit.Sim.Types` keeps Collapsed and Dead
+# distinct, and `Unit.Thread.Movement.Timers` stands a non-lethally
+# collapsed unit back up on its own timer — collapse is recovery. That
+# is why matching substrings in the animation NAME was never a death
+# oracle: it reported the acolyte's legitimate `injured_collapse`, and a
+# `collapsed-to-climbing` pose transition, as deaths.
+DEAD_POSE = "dead"
+
+# The two state keys `Unit.Thread` resolves for a Dead unit: the
+# `injured-` prefixed one when effective wound severity is over the
+# injured threshold, the plain one otherwise. Their VALUES are the unit's
+# own data, so the accepted set is read from each declaration rather than
+# named here.
+DEAD_STATE_KEYS = ("dead-idle", "injured-dead-idle")
+
+# The timeline entry for a unit with no record at all. Deliberately not
+# spelled "DEAD": a REMOVED unit is not a unit in the dead pose, and
+# nothing here decides death by reading a name any more.
+GONE_ANIM = "GONE"
+
+# `handleUnitKillCommand` stamps `uiPose = "dead"` before the following
+# 30 Hz `publishToRender` resolves the death animation, so the pose can
+# lead `currentAnim` by a frame. A corpse gets this long to settle onto
+# its death animation — and no longer, so one stuck on a stale combat
+# animation still fails.
+DEATH_SETTLE_SECONDS = 3.0
+
+# One combatant's terminal verdict: (graded, report). `graded` is
+# True/False only for a combatant that really ended dead, and None when
+# the branch was not exercised — which never counts as a pass.
+DeathOutcome = tuple[bool | None, str]
+
+
+def dead_anim_names(decl: dict) -> tuple[list[tuple[str, str]],
+                                         list[tuple[str, str]]]:
+    """The death animations this unit's OWN declaration maps, split.
+
+    Returns `(accepted, invalid)`, each a list of `(state key, animation
+    name)` pairs in `DEAD_STATE_KEYS` order. A mapping is accepted only
+    when its value also names an animation this same declaration
+    declares: `Unit.Render` falls back to T-pose for a `currentAnim` the
+    unit's animation library does not contain, so accepting an undeclared
+    value would let a corpse "pass" while rendering nothing.
+    """
+    anims = decl.get("animations") or {}
+    states = decl.get("state_animations") or {}
+    accepted: list[tuple[str, str]] = []
+    invalid: list[tuple[str, str]] = []
+    for key in DEAD_STATE_KEYS:
+        name = states.get(key)
+        if not isinstance(name, str) or not name:
+            continue
+        (accepted if name in anims else invalid).append((key, name))
+    return accepted, invalid
+
+
+def _shown(pairs: list[tuple[str, str]]) -> str:
+    return ", ".join(f"{k} → {v!r}" for k, v in pairs)
+
+
+def death_outcome(tag: str, unit: str, exists: bool, pose: str, anim: str,
+                  decl: dict) -> DeathOutcome:
+    """Grade ONE combatant's terminal state against the death contract.
+
+    True only when the unit ended in the authoritative `dead` pose
+    showing an animation its own declaration maps for that pose; False
+    when a real death violated that; None when the branch was not
+    exercised — a unit with no record (a removal is an accepted terminal
+    outcome) or any other pose. Every case reports the terminal
+    animation, so no terminal state is silent.
+    """
+    where = (f"  {tag:8} {unit:17} pose={(pose or '—'):<10} "
+             f"anim={anim!r}")
+    if not exists:
+        return None, (f"{where}\n      no unit record — the unit was removed, "
+                      f"an accepted terminal outcome. Not exercised.")
+    if pose != DEAD_POSE:
+        return None, (f"{where}\n      not the {DEAD_POSE!r} pose, so this is "
+                      f"not a death whatever the animation is named. "
+                      f"Not exercised.")
+    accepted, invalid = dead_anim_names(decl)
+    if invalid or not accepted:
+        why = (f"maps nothing for {'/'.join(DEAD_STATE_KEYS)}"
+               if not invalid else
+               f"maps {_shown(invalid)}, which this unit does not declare "
+               f"as an animation")
+        return False, (f"{where}\n      FAIL: it died, but its declaration "
+                       f"{why} — there is no death animation it could "
+                       f"correctly settle on.")
+    if anim in {v for _, v in accepted}:
+        return True, (f"{where}\n      OK: a death animation this unit "
+                      f"declares for the dead pose ({_shown(accepted)}).")
+    return False, (f"{where}\n      FAIL: it died, but its terminal animation "
+                   f"is not one its declaration maps for the dead pose "
+                   f"({_shown(accepted)}).")
+
+
+def death_verdict(outcomes: list[bool | None]) -> tuple[bool, str]:
+    """Fold the per-combatant outcomes into `(ok, summary)`.
+
+    `ok` is False only when a combatant that really died violated the
+    contract, so the probe never requires a death in order to pass. A
+    branch nobody exercised says so rather than claiming one.
+    """
+    graded = [g for g in outcomes if g is not None]
+    ok = all(graded)
+    if not graded:
+        return ok, ("not exercised — no combatant ended in the "
+                    f"{DEAD_POSE!r} pose")
+    return ok, (f"{'held' if ok else 'VIOLATED'} for {len(graded)} of "
+                f"{len(outcomes)} combatant(s)")
+
+
+def death_settled(exists: bool, pose: str, anim: str, decl: dict) -> bool:
+    """True when this reading is worth judging now, without more waiting.
+
+    Only one situation is worth waiting out: a unit already in the dead
+    pose whose animation has not yet resolved to a death animation it
+    could legitimately reach. A live unit, a removed one, and a corpse
+    whose declaration offers nothing valid have nothing to settle into.
+    """
+    if not exists or pose != DEAD_POSE:
+        return True
+    accepted, invalid = dead_anim_names(decl)
+    if invalid or not accepted:
+        return True
+    return anim in {v for _, v in accepted}
+
+
+def sample_terminal(port: int, attacker_uid: int,
+                    target_uid: int) -> dict | None:
+    """ONE reading of both combatants' authoritative pose and animation."""
+    lua = (
+        f"local A,B={attacker_uid},{target_uid} "
+        "local ia,ib=unit.getInfo(A),unit.getInfo(B) "
+        "local o={} "
+        "o.aExists=ia~=nil o.bExists=ib~=nil "
+        "o.aPose=unit.getPose(A) or '' o.bPose=unit.getPose(B) or '' "
+        f"o.aAnim=ia and ia.currentAnim or '{GONE_ANIM}' "
+        f"o.bAnim=ib and ib.currentAnim or '{GONE_ANIM}' "
+        "return o"
+    )
+    raw = send(port, lua, timeout=15)
+    try:
+        obs = json.loads(raw)
+    except ValueError:
+        return None
+    return obs if isinstance(obs, dict) else None
+
+
+def await_terminal(port: int, attacker_uid: int, target_uid: int,
+                   attacker_decl: dict, target_decl: dict,
+                   settle: float = DEATH_SETTLE_SECONDS) -> dict | None:
+    """A FRESH terminal reading, taken after the sampling loop.
+
+    The loop sleeps AFTER its last read, so the stored timeline has a
+    blind tail in which a combatant could reach the dead pose unseen;
+    this re-reads once the loop is over, and the pose it reads is the
+    oracle the contract is judged on. A corpse then gets a BOUNDED
+    settling interval to land on its death animation, because the kill
+    stamps the pose before the next publish resolves the animation —
+    bounded, so one stuck on a stale combat animation still fails.
+    """
+    deadline = time.monotonic() + settle
+    obs = sample_terminal(port, attacker_uid, target_uid)
+    while True:
+        if obs is not None and all(
+                death_settled(obs.get(e, False), obs.get(p, ""),
+                              obs.get(a, ""), decl)
+                for e, p, a, decl in (
+                    ("aExists", "aPose", "aAnim", attacker_decl),
+                    ("bExists", "bPose", "bAnim", target_decl))):
+            return obs
+        if time.monotonic() >= deadline:
+            return obs
+        time.sleep(0.1)
+        fresh = sample_terminal(port, attacker_uid, target_uid)
+        if fresh is not None:
+            obs = fresh
+
+
+def verdict_exit(swing: bool, roster_ok: bool, live_ok: bool,
+                 death_ok: bool) -> int:
     """The graded verdict, reached only once both preconditions held.
 
     Establishing the fixture must not rescue a real regression: a run
     that engaged cleanly and still never showed a swing is exactly the
-    failure this probe exists to report (#1396 req 4).
+    failure this probe exists to report (#1396 req 4). A death contract
+    that was exercised and violated fails the run the same way (#1397);
+    one that was never exercised leaves this untouched, so the probe
+    still does not require a combatant to die.
     """
-    return 0 if (swing and roster_ok and live_ok) else FAIL_EXIT
+    return 0 if (swing and roster_ok and live_ok and death_ok) else FAIL_EXIT
 
 
 # --------------------------------------------------------------------
@@ -722,17 +924,125 @@ def self_test() -> int:
     expect_named("the fixture diagnostic names its cause",
                  out.getvalue() + err.getvalue(), "a synthetic fixture cause")
     expect("SETUP is 2", SETUP_EXIT, 2)
-    expect("a graded miss exits FAIL", verdict_exit(False, True, True), FAIL_EXIT)
+    expect("a graded miss exits FAIL", verdict_exit(False, True, True, True),
+           FAIL_EXIT)
     expect("FAIL is 1", FAIL_EXIT, 1)
     expect("the two failure modes differ", SETUP_EXIT == FAIL_EXIT, False)
-    expect("a swing passes", verdict_exit(True, True, True), 0)
+    expect("a swing passes", verdict_exit(True, True, True, True), 0)
     expect("a swing with broken storage still fails",
-           verdict_exit(True, False, True), FAIL_EXIT)
+           verdict_exit(True, False, True, True), FAIL_EXIT)
     expect("a swing with a bad live sample still fails",
-           verdict_exit(True, True, False), FAIL_EXIT)
+           verdict_exit(True, True, False, True), FAIL_EXIT)
+    expect("a swing with a violated death contract still fails",
+           verdict_exit(True, True, True, False), FAIL_EXIT)
     expect("a timeline with a swing", swung(["idle_S", "attack_quick_S"]), True)
     expect("a timeline without one",
            swung(["idle_S", "walk_S", "combat_idle_S"]), False)
+
+    # --- the death contract: the pose decides, the unit's data judges --
+    # A declaration shaped like the shipped acolyte's: both dead mappings,
+    # plus the legitimate COLLAPSE animation whose name is what the old
+    # substring test mistook for a death.
+    both = {"animations": {"death": {}, "injured_death": {},
+                           "injured_collapse": {}, "combat_idle_unarmed": {}},
+            "state_animations": {"dead-idle": "death",
+                                 "injured-dead-idle": "injured_death",
+                                 "collapsed-idle": "injured_collapse"}}
+    one = {"animations": {"death": {}},
+           "state_animations": {"dead-idle": "death"}}
+    none = {"animations": {"idle": {}}, "state_animations": {}}
+    undeclared = {"animations": {"idle": {}},
+                  "state_animations": {"dead-idle": "no_such_anim"}}
+
+    expect("both dead mappings are accepted",
+           [v for _, v in dead_anim_names(both)[0]], ["death", "injured_death"])
+    expect("nothing is invalid there", dead_anim_names(both)[1], [])
+    expect("one dead mapping is accepted",
+           [v for _, v in dead_anim_names(one)[0]], ["death"])
+    expect("a declaration with no dead mapping accepts nothing",
+           dead_anim_names(none), ([], []))
+    expect("a mapping naming no declared animation is invalid",
+           [v for _, v in dead_anim_names(undeclared)[1]], ["no_such_anim"])
+
+    def outcome(pose, anim, decl=both, exists=True):
+        return death_outcome("target", "acolyte", exists, pose, anim, decl)
+
+    expect("a corpse on its death animation passes",
+           outcome("dead", "death")[0], True)
+    expect("a corpse on its INJURED death animation passes",
+           outcome("dead", "injured_death")[0], True)
+    expect_named("a corpse on a stale combat animation fails",
+                 outcome("dead", "combat_idle_unarmed")[1], "FAIL")
+    expect("a corpse on a stale combat animation fails",
+           outcome("dead", "combat_idle_unarmed")[0], False)
+    # A NAME containing "death"/"collapse" is not the oracle either way:
+    # only membership in this unit's own dead mappings passes, so the
+    # substring test cannot creep back as an extra accept path.
+    expect("a corpse on its collapse animation fails",
+           outcome("dead", "injured_collapse")[0], False)
+    expect("a corpse on an undeclared collapse transition fails",
+           outcome("dead", "collapsed-to-climbing")[0], False)
+    expect("a corpse on some other animation merely named death fails",
+           outcome("dead", "death_of_a_different_unit")[0], False)
+    # The two readings the issue recorded from real runs. Both merely
+    # CONTAIN "collapse"; neither is a death, and the unit is not dead.
+    expect("a legitimate collapse is not a death",
+           outcome("collapsed", "injured_collapse")[0], None)
+    expect("a pose transition is not a death",
+           outcome("collapsed", "collapsed-to-climbing")[0], None)
+    for label, (_, report) in (
+            ("a collapse", outcome("collapsed", "injured_collapse")),
+            ("a pose transition", outcome("collapsed", "collapsed-to-climbing"))):
+        expect(f"{label} is never called a death animation",
+               "death animation" in report, False)
+        expect_named(f"{label} still reports its terminal animation", report,
+                     "Not exercised")
+    expect("a living combatant does not exercise the branch",
+           outcome("standing", "combat_idle_unarmed")[0], None)
+    expect("a removed unit is an accepted terminal outcome",
+           outcome("", GONE_ANIM, exists=False)[0], None)
+    expect_named("a removed unit says so", outcome("", GONE_ANIM,
+                 exists=False)[1], "removed")
+    # A unit that really died but whose data offers no valid death
+    # animation cannot satisfy the contract, so it fails rather than
+    # passing vacuously.
+    expect("a corpse whose declaration maps no death animation fails",
+           outcome("dead", "idle", decl=none)[0], False)
+    expect_named("and says why", outcome("dead", "idle", decl=none)[1],
+                 "maps nothing")
+    expect("a corpse whose death mapping is undeclared fails",
+           outcome("dead", "no_such_anim", decl=undeclared)[0], False)
+    expect_named("and says why", outcome("dead", "no_such_anim",
+                 decl=undeclared)[1], "does not declare")
+
+    expect("an unexercised branch never claims a pass",
+           death_verdict([None, None])[0], True)
+    expect_named("and says it was not exercised",
+                 death_verdict([None, None])[1], "not exercised")
+    expect("one clean death holds the contract",
+           death_verdict([None, True]), (True, "held for 1 of 2 combatant(s)"))
+    expect("one violated death fails it",
+           death_verdict([None, False])[0], False)
+    expect_named("and says so", death_verdict([None, False])[1], "VIOLATED")
+
+    # The bounded settle waits only for what can still resolve.
+    expect("a corpse already on its death animation needs no settle",
+           death_settled(True, "dead", "death", both), True)
+    expect("a corpse on a stale animation is worth waiting for",
+           death_settled(True, "dead", "combat_idle_unarmed", both), False)
+    expect("a corpse with no valid mapping has nothing to wait for",
+           death_settled(True, "dead", "idle", none), True)
+    expect("a living combatant is never waited for",
+           death_settled(True, "collapsed", "injured_collapse", both), True)
+    expect("a removed unit is never waited for",
+           death_settled(False, "", GONE_ANIM, both), True)
+
+    # The shipped combatants really do declare what the contract needs,
+    # so the default fixture can be graded rather than failing on data.
+    for unit in ("acolyte", "bear_brown"):
+        accepted, invalid = dead_anim_names(read_declaration(unit))
+        expect(f"{unit} declares its death animations", bool(accepted), True)
+        expect(f"{unit} maps no undeclared death animation", invalid, [])
 
     for line in failures:
         print(f"FAIL: {line}", file=sys.stderr)
@@ -741,12 +1051,14 @@ def self_test() -> int:
     return 0 if not failures else FAIL_EXIT
 
 
-def run_fight(port: int, args) -> tuple[bool, bool, list[str], list[str]]:
+def run_fight(port: int, args) -> tuple[bool, bool, list[str], list[str],
+                                        list[DeathOutcome]]:
     """Establish both preconditions, then observe the fight.
 
-    Returns `(swing, live_ok, attacker_timeline, target_timeline)` — the
-    facts, not a verdict; `main` maps them through `verdict_exit`. Raises
-    `SetupFailure` for anything that leaves the fixture unestablished.
+    Returns `(swing, live_ok, attacker_timeline, target_timeline,
+    death_outcomes)` — the facts, not a verdict; `main` maps them through
+    `verdict_exit`. Raises `SetupFailure` for anything that leaves the
+    fixture unestablished.
     """
     init_arena(port)
 
@@ -810,9 +1122,38 @@ def run_fight(port: int, args) -> tuple[bool, bool, list[str], list[str]]:
             seen_b.append(ba)
         time.sleep(0.25)
 
+    # The loop sleeps after its last read, so re-read now: this is the
+    # observation the death contract is judged on, and the timelines end
+    # where it does rather than a quarter-second short of it.
+    decl_a, decl_b = (read_declaration(args.attacker),
+                      read_declaration(args.target))
+    term = await_terminal(port, a, b, decl_a, decl_b)
+    if term is not None:
+        for seq, key in ((seen_a, "aAnim"), (seen_b, "bAnim")):
+            last = term.get(key, "")
+            if last and seq[-1] != last:
+                seq.append(last)
+
     print(f"\n{args.attacker} #{a} anim timeline:\n  " + " → ".join(seen_a))
     print(f"\n{args.target} #{b} anim timeline:\n  " + " → ".join(seen_b))
-    return swung(seen_a) or swung(seen_b), live_ok, seen_a, seen_b
+
+    print("\n--- death contract (judged on the pose, not the anim name) ---")
+    if term is None:
+        deaths: list[DeathOutcome] = [(
+            False, "  the terminal pose/animation reading never parsed — "
+                   "the death contract could not be judged")]
+    else:
+        deaths = [
+            death_outcome(tag, unit, bool(term.get(e)), term.get(p, ""),
+                          term.get(an, ""), decl)
+            for tag, unit, e, p, an, decl in (
+                ("attacker", args.attacker, "aExists", "aPose", "aAnim",
+                 decl_a),
+                ("target", args.target, "bExists", "bPose", "bAnim", decl_b))]
+    for _, report in deaths:
+        print(report)
+
+    return (swung(seen_a) or swung(seen_b), live_ok, seen_a, seen_b, deaths)
 
 
 def main() -> int:
@@ -862,26 +1203,19 @@ def main() -> int:
             return 0 if roster_ok else FAIL_EXIT
 
         try:
-            swing, live_ok, seen_a, seen_b = run_fight(args.port, args)
+            swing, live_ok, _seen_a, _seen_b, deaths = run_fight(args.port,
+                                                                args)
         except SetupFailure as exc:
             return report_setup_failure(str(exc))
 
-        verdict = verdict_exit(swing, roster_ok, live_ok)
+        death_ok, death_summary = death_verdict([g for g, _ in deaths])
+        verdict = verdict_exit(swing, roster_ok, live_ok, death_ok)
         print("\n--- checks ---")
         print("  fixture precondition       : True")
         print(f"  a swing animation appeared : {swing}")
         print(f"  roster animation storage   : {roster_ok}")
         print(f"  live samples + durations   : {live_ok}")
-        # If a combatant ended dead, it must show a death anim, not a stale
-        # combat idle (the death-anim regression).
-        for tag, seq in ((args.attacker, seen_a), (args.target, seen_b)):
-            last = seq[-1]
-            if last == "DEAD":
-                continue  # removed entirely — fine
-            if "combat_idle" in last or last in ("idle",):
-                continue  # survived
-            if any(d in last for d in ("death", "dead", "collapse")):
-                print(f"  {tag} settled on a death animation: {last}")
+        print(f"  death contract             : {death_summary}")
         return verdict
     finally:
         quit_engine(args.port, proc)

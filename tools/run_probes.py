@@ -16,12 +16,15 @@ world/page names, and 16 restart the engine, so there is no clean per-
 scenario isolation on one long-lived engine; running independent engines in
 parallel gets the speed without that problem. Separate processes and
 separate ports are ALL that isolates — every probe still drives the same
-checkout — so the few probes that mutate a shared repository-relative
-resource declare it in `EXCLUSIVE_RESOURCES` below and are never scheduled
-together (#1322). A full sequential run is low tens of minutes; `--jobs`
-cuts wall-time to ~total/N (bounded by the slowest single probe). This is
-NOT part of any default test tier (see CLAUDE.md Testing Tiers) — run it
-deliberately, and prefer `--only`.
+checkout — so shared repository-relative resources are scheduled
+reader/writer (#1322, #1444): every probe holds the resources named in
+`IMPLICIT_SHARED_RESOURCES` below in a SHARED interest, and the few probes
+that need one to themselves declare it in `EXCLUSIVE_RESOURCES`, which
+holds such a probe back until nothing else is running and holds every other
+probe back until it has finished. A full sequential run is low tens of
+minutes; `--jobs` cuts wall-time to ~total/N (bounded by the slowest single
+probe). This is NOT part of any default test tier (see CLAUDE.md Testing
+Tiers) — run it deliberately, and prefer `--only`.
 
 Usage:
   python3 tools/run_probes.py                  # run everything, sequentially
@@ -320,30 +323,54 @@ PROBES = [
      "wire autotile shape derivation + path-builder UX + construct_job wire AI (#359)"),
 ]
 
-# Probes that MUTATE a shared repository-relative resource, and therefore
-# cannot run at the same time as each other (#1322). Probe key -> the
-# resource name(s) that probe needs EXCLUSIVELY; two probes conflict when
-# their declarations intersect. A probe absent from here declares nothing
-# and is never serialized against anything.
+# ---------------------------------------------------------------------------
+# Shared repository-relative resources: the reader/writer conflict model
+# (#1322, #1444)
 #
-# This is the whole conflict model: the scheduler below reads it and knows
-# nothing about any particular probe, so a third probe touching the same
-# files is handled by adding a row here.
+# Two tables, one per interest. `IMPLICIT_SHARED_RESOURCES` is what EVERY
+# registered probe holds SHARED; `EXCLUSIVE_RESOURCES` is what a named probe
+# holds to itself. Shared holders coexist freely; an exclusive holder
+# coexists with nothing else that names the same resource. The scheduler
+# below reads only these two tables and knows nothing about any particular
+# probe, so a future probe that must run alone is one row here.
 #
 # `repo-config` is the tracked `config/` directory of THIS checkout.
-# `config_migration_probe.py` and `config_state_probe.py` each move the
-# same three tracked legacy files (`config/{video,keybinds,notifications}
-# .yaml`) aside into their OWN fixed /tmp backup directory and each delete
-# the same three `config/*.local.yaml` paths before restoring — so run
-# together, one probe's cleanup deletes or overwrites state the other owns
-# and can leave a tracked file missing or holding fixture content in the
-# primary checkout. (`config_state_probe.py` additionally owns
-# `config/save.local.yaml`, which `config_migration_probe.py` does not
-# touch; the three legacy paths and the other three local paths are
-# shared.) Isolating them behind `--resource-root` is deliberately NOT the
-# fix: `config_state_probe.py` asserts against the real tracked tree
-# because proving the engine never dirties it is that probe's whole
-# purpose (#638), and under an isolated root those assertions go vacuous.
+#
+# EXCLUSIVE side. `config_migration_probe.py` and `config_state_probe.py`
+# each move the same three tracked legacy files
+# (`config/{video,keybinds,notifications}.yaml`) aside into their OWN fixed
+# /tmp backup directory and each delete the same three `config/*.local.yaml`
+# paths before restoring — so run together, one probe's cleanup deletes or
+# overwrites state the other owns and can leave a tracked file missing or
+# holding fixture content in the primary checkout. (`config_state_probe.py`
+# additionally owns `config/save.local.yaml`, which
+# `config_migration_probe.py` does not touch; the three legacy paths and the
+# other three local paths are shared.) Isolating them behind
+# `--resource-root` is deliberately NOT the fix: `config_state_probe.py`
+# asserts against the real tracked tree because proving the engine never
+# dirties it is that probe's whole purpose (#638), and under an isolated
+# root those assertions go vacuous.
+#
+# SHARED side (#1444). Those two are not the whole conflict set, because
+# ENGINE INIT ITSELF writes `config/` when a local file is absent, and
+# absent-local is precisely the fixture state both config probes install:
+# `Engine.Asset.YamlNotifications.loadOverrides` materializes
+# `config/notifications.local.yaml` from registry defaults, and
+# `Engine.Core.Init.migrateLegacyConfig` copies a present legacy file over
+# an absent local one for video/keybinds/notifications. A foreign engine
+# booting while a config probe has removed the local files but has not yet
+# removed or installed every legacy file can therefore copy stale legacy
+# content, or materialize registry defaults, that the config probe then
+# reads back as its own result — a spurious verdict, not a corrupted
+# checkout (both probes clear-then-restore from backups).
+#
+# So every probe declares the shared interest, rather than an enumerated
+# engine-booting subset: the subset would be a second list to keep in sync
+# with ~85 probes, and a probe that GAINS an engine boot must not silently
+# lose the guard. Shared-against-shared never blocks, so the conservative
+# reading costs the undeclared probes nothing.
+IMPLICIT_SHARED_RESOURCES: tuple[str, ...] = ("repo-config",)
+
 EXCLUSIVE_RESOURCES: dict[str, tuple[str, ...]] = {
     "config_migration": ("repo-config",),
     "config_state": ("repo-config",),
@@ -353,6 +380,61 @@ EXCLUSIVE_RESOURCES: dict[str, tuple[str, ...]] = {
 def exclusive_resources(key: str) -> set[str]:
     """The resources probe ``key`` needs exclusively; empty when it declares none."""
     return set(EXCLUSIVE_RESOURCES.get(key, ()))
+
+
+def shared_resources(key: str) -> set[str]:
+    """The resources probe ``key`` touches but does not need exclusively.
+
+    A resource the probe declared EXCLUSIVELY is subtracted rather than
+    held twice: an interest is one or the other, never both, so releasing
+    one cannot leave the other behind.
+    """
+    return set(IMPLICIT_SHARED_RESOURCES) - exclusive_resources(key)
+
+
+class ResourceLedger:
+    """Which resources the running probes hold, and in which interest.
+
+    One reader/writer lock per resource name: any number of probes may hold
+    a resource SHARED at once, while an EXCLUSIVE holder runs only when no
+    one else holds it at all — in either interest, in either direction. The
+    shared side is a COUNT per resource, not a set: three concurrent readers
+    must all release before a writer may start.
+
+    Not thread-safe by design — the scheduler owns it from its own thread
+    and the workers never touch it, which is what keeps a blocked probe out
+    of a worker slot instead of parked inside one.
+    """
+
+    def __init__(self) -> None:
+        self._exclusive: set[str] = set()
+        self._shared: dict[str, int] = {}
+
+    def blocked(self, need_exclusive: set[str], need_shared: set[str]) -> bool:
+        """True when these interests cannot be granted right now."""
+        if need_exclusive & (self._exclusive | set(self._shared)):
+            return True
+        return bool(need_shared & self._exclusive)
+
+    def acquire(self, need_exclusive: set[str], need_shared: set[str]) -> None:
+        self._exclusive |= need_exclusive
+        for name in need_shared:
+            self._shared[name] = self._shared.get(name, 0) + 1
+
+    def release(self, need_exclusive: set[str], need_shared: set[str]) -> None:
+        self._exclusive -= need_exclusive
+        for name in need_shared:
+            remaining = self._shared.get(name, 0) - 1
+            if remaining > 0:
+                self._shared[name] = remaining
+            else:
+                # Dropped rather than kept at zero, so `blocked` can read
+                # the keys as "held shared by someone" without counting.
+                self._shared.pop(name, None)
+
+    def idle(self) -> bool:
+        """True when nothing is held, and therefore nothing can be blocked."""
+        return not self._exclusive and not self._shared
 
 
 # farm_ai_probe.py's O(n^2) TCP tile scan over natural terrain (#336) is the
@@ -860,12 +942,12 @@ def main() -> int:
             # and claims nothing further: separate processes cannot corrupt each
             # other's memory, and unique ports cannot collide on a bind. Every
             # probe still drives the SAME checkout, the same build directory and
-            # the same repository-relative files, so a probe declaring an
-            # EXCLUSIVE_RESOURCES entry is serialized against any probe whose
-            # declaration intersects it (#1322) — the scheduling below holds it
-            # back rather than letting a worker discover the conflict. Anything
-            # NOT declared there is unguarded: `tools/probelib.py` still launches
-            # shared-tree `cabal run` processes, and
+            # the same repository-relative files, so the reader/writer ledger
+            # above decides what may overlap (#1322, #1444) — the scheduling
+            # below holds a conflicting probe back rather than letting a worker
+            # discover the conflict. Anything not named by either resource table
+            # is unguarded: `tools/probelib.py` still launches shared-tree
+            # `cabal run` processes, and
             # `docs/project_review_534-518.md:16-30` records a separate
             # unresolved shared-build-directory race. Retries run SOLO afterward,
             # since parallel contention is exactly what a retry needs to escape.
@@ -889,14 +971,15 @@ def main() -> int:
                 # sees exactly what has been submitted.
                 futs: list[concurrent.futures.Future] = []
                 # Submission is INTERLEAVED with completion rather than done
-                # up front, because a probe waiting on a busy exclusive
-                # resource must not occupy a worker slot that an unrelated
+                # up front, because a probe waiting on a resource someone
+                # else holds must not occupy a worker slot that an unrelated
                 # ready probe could use. Holding it back here — rather than
                 # taking a lock inside the worker — is what keeps `--jobs`
                 # worth of real work in flight while a conflict is pending.
                 pending = list(enumerate(chosen))
-                running: dict[concurrent.futures.Future, set[str]] = {}
-                held: set[str] = set()
+                running: dict[concurrent.futures.Future,
+                              tuple[set[str], set[str]]] = {}
+                ledger = ResourceLedger()
                 done = 0
                 try:
                     while pending or running:
@@ -907,17 +990,18 @@ def main() -> int:
                             if len(running) >= jobs:
                                 break
                             i, probe = item
-                            need = exclusive_resources(probe[0])
-                            if need & held:
+                            need_exclusive = exclusive_resources(probe[0])
+                            need_shared = shared_resources(probe[0])
+                            if ledger.blocked(need_exclusive, need_shared):
                                 continue
-                            held |= need
+                            ledger.acquire(need_exclusive, need_shared)
                             fut = ex.submit(work, i, probe)
-                            running[fut] = need
+                            running[fut] = (need_exclusive, need_shared)
                             futs.append(fut)
                             pending.remove(item)
                         if not running:
-                            # Unreachable: with nothing running nothing is
-                            # held, so the first pending probe always
+                            # Unreachable: with nothing running the ledger is
+                            # idle, so the first pending probe always
                             # dispatches. Say so rather than spin forever.
                             raise RuntimeError(
                                 "probe scheduler stalled with work pending: "
@@ -928,10 +1012,10 @@ def main() -> int:
                             # Released on EVERY outcome — PASS, FAIL and
                             # TIMEOUT alike — and only once `run_one` has
                             # returned, which is after it reaped the probe's
-                            # whole process group. A probe waiting on this
-                            # resource therefore never starts while the
+                            # whole process group. A probe waiting on these
+                            # resources therefore never starts while the
                             # previous holder's engine is still up.
-                            held -= running.pop(fut)
+                            ledger.release(*running.pop(fut))
                             done += 1
                             key, script, status, elapsed, out = fut.result()
                             print(f"[{done}/{n}] {script} ... {status} ({elapsed:.1f}s)")
