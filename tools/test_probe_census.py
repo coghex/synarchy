@@ -51,13 +51,16 @@ COMMIT_B = "b" * 40
 PROBE = "censusprobe"
 OTHER = "otherprobe"
 CIPROBE = "ciprobe"
-ARTIFACT_ROOT = "/tmp/synarchy-probe-flake-test"
-INVOCATION = f"{ARTIFACT_ROOT}/inv"
+# A REAL artifact tree, created per registry and outside every checkout:
+# a reference is minted from a directory the harness wrote, so the
+# fixture writes them too rather than composing plausible strings.
+ARTIFACT_ROOT = ""
+INVOCATION = ""
 
 
-def ref(name: str) -> str:
-    """An artifact reference under the fixture's declared artifact root."""
-    return f"{INVOCATION}/{name}"
+def stamp(index: int) -> str:
+    """A distinct UTC timestamp, the field that tells samples apart."""
+    return f"2026-08-20T{index // 3600:02d}:{index // 60 % 60:02d}:{index % 60:02d}Z"
 
 
 def expect(cond: bool, msg: str) -> None:
@@ -117,12 +120,18 @@ class SyntheticRegistry:
         ci_probes.CI_ELIGIBLE = self.ci
         probe_flake.PROTOCOL_PROBES = self.protocol
         self.root = Path(tempfile.mkdtemp(prefix="probe-census-test-"))
+        global ARTIFACT_ROOT, INVOCATION
+        self.artifacts = Path(tempfile.mkdtemp(prefix="probe-census-art-"))
+        ARTIFACT_ROOT = str(self.artifacts)
+        INVOCATION = f"{ARTIFACT_ROOT}/inv"
+        Path(INVOCATION).mkdir(parents=True, exist_ok=True)
         return self
 
     def __exit__(self, *exc):
         (run_probes.PROBES, ci_probes.CI_ELIGIBLE,
          probe_flake.PROTOCOL_PROBES) = self.saved
         shutil.rmtree(self.root, ignore_errors=True)
+        shutil.rmtree(self.artifacts, ignore_errors=True)
         return False
 
     @property
@@ -132,7 +141,7 @@ class SyntheticRegistry:
 
 def build_result(probe: str = PROBE, *, commit: str = COMMIT_A,
                  outcomes=("PASS", "FAIL"), harness_error: bool = False,
-                 requested: int | None = None, marker: str | None = None,
+                 requested: int | None = None, at: str | None = None,
                  elapsed=None) -> dict:
     """One `probe-flake-result/v1` document, built by the real harness types.
 
@@ -145,27 +154,29 @@ def build_result(probe: str = PROBE, *, commit: str = COMMIT_A,
     measurement = probe_flake.Measurement(
         probe, descriptor, runs, 4, Path(ARTIFACT_ROOT), Path(INVOCATION))
     measurement.commit_sha = commit
-    measurement.timestamp = "2026-08-20T12:00:00Z"
+    measurement.timestamp = at or "2026-08-20T12:00:00Z"
     for index, outcome in enumerate(outcomes, start=1):
         checks = {"alpha": probe_protocol.PASS,
                   "beta": probe_protocol.PASS if outcome == "PASS"
                   else probe_protocol.FAIL}
         keep = outcome in ("FAIL", "TIMEOUT")
+        if keep:
+            Path(f"{INVOCATION}/run-{index:03d}").mkdir(parents=True,
+                                                        exist_ok=True)
         measurement.runs.append(probe_flake.RunRecord(
             index, 8100 + index, outcome,
             1.5 * index if elapsed is None else elapsed, checks,
             Path(f"{INVOCATION}/run-{index:03d}") if keep else None))
     if harness_error:
+        Path(f"{INVOCATION}/run-{len(outcomes) + 1:03d}").mkdir(
+            parents=True, exist_ok=True)
         measurement.status = "harness-error"
         measurement.error = "run 3: the protocol event stream was malformed"
         measurement.error_run = probe_flake.RunRecord(
             len(outcomes) + 1, 8199, probe_flake.RUN_HARNESS_ERROR, 0.5,
             {"alpha": probe_protocol.PASS, "beta": probe_protocol.MISSING},
-            Path(f"{INVOCATION}/run-099"))
-    document = measurement.to_document()
-    if marker is not None:
-        document["retained_artifacts"] = [ref(marker)]
-    return document
+            Path(f"{INVOCATION}/run-{len(outcomes) + 1:03d}"))
+    return measurement.to_document()
 
 
 def seeded(reg: SyntheticRegistry) -> dict:
@@ -312,18 +323,15 @@ def test_cohorts() -> None:
     print("\n-- commit cohorts and the attempt log --")
     with SyntheticRegistry() as reg:
         seeded(reg)
-        probe_census.record_result(reg.census, build_result(commit=COMMIT_A,
-                                                            marker="a1"))
-        probe_census.record_result(reg.census, build_result(commit=COMMIT_A,
-                                                            marker="a2"))
+        probe_census.record_result(reg.census, build_result(commit=COMMIT_A, at=stamp(1)))
+        probe_census.record_result(reg.census, build_result(commit=COMMIT_A, at=stamp(2)))
         census = probe_census.find_entry(
             probe_census.read_for_update(reg.census), PROBE)["census"]
         expect(len(census["current"]["samples"]) == 2 and not census["history"],
                "a second measurement for the same commit appends to the "
                "current cohort")
 
-        probe_census.record_result(reg.census, build_result(commit=COMMIT_B,
-                                                            marker="b1"))
+        probe_census.record_result(reg.census, build_result(commit=COMMIT_B, at=stamp(3)))
         census = probe_census.find_entry(
             probe_census.read_for_update(reg.census), PROBE)["census"]
         expect(census["current"]["commit_sha"] == COMMIT_B
@@ -337,7 +345,7 @@ def test_cohorts() -> None:
         # A well-formed harness error is logged, but contributes nothing.
         probe_census.record_result(
             reg.census, build_result(commit=COMMIT_B, harness_error=True,
-                                     requested=5, marker="err"))
+                                     requested=5, at=stamp(4)))
         census = probe_census.find_entry(
             probe_census.read_for_update(reg.census), PROBE)["census"]
         expect(len(census["current"]["samples"]) == 1,
@@ -346,8 +354,10 @@ def test_cohorts() -> None:
                and census["attempts"][-1]["accepted"] is False
                and census["attempts"][-1]["status"] == "harness-error",
                "a harness-error result is logged as a refused attempt")
-        expect(census["attempts"][-1]["retained_artifacts"] == [ref("err")],
-               "the attempt log keeps the artifact reference, not the artifact")
+        retained = census["attempts"][-1]["retained_artifacts"]
+        expect(retained == [f"{INVOCATION}/run-002", f"{INVOCATION}/run-003"],
+               f"the attempt log keeps the artifact references — the failed "
+               f"run's and the broken one's — not the artifacts (got {retained})")
 
 
 def test_ci_eligible_entries() -> None:
@@ -570,7 +580,7 @@ def test_corrupt_stored_records() -> None:
     print("\n-- a corrupted stored sample or attempt fails to read --")
     with SyntheticRegistry() as reg:
         seeded(reg)
-        probe_census.record_result(reg.census, build_result(marker="kept"))
+        probe_census.record_result(reg.census, build_result(at=stamp(31)))
         healthy = json.loads(reg.census.read_text())
 
         def corrupt(fn, label, substring):
@@ -693,7 +703,7 @@ def test_artifact_boundary() -> None:
     print("\n-- the census holds references, never artifacts --")
     with SyntheticRegistry() as reg:
         document = seeded(reg)
-        valid = build_result(marker="run-007")
+        valid = build_result()
         expect(probe_census.validate_result(valid, document) == [],
                "a real artifact reference is accepted")
 
@@ -730,6 +740,19 @@ def test_artifact_boundary() -> None:
                  "not under the declared artifact root")
         rejected(lambda d: d["runs"][1].update({"artifact_dir": raw_stdout}),
                  "a raw payload as a run's artifact_dir", "control characters")
+        # The case a path-SHAPE check alone would miss: one line, absolute,
+        # under the declared root, and pure payload.
+        rejected(lambda d: d.update({
+            "retained_artifacts": [f"{INVOCATION}/engine booted, 3 warnings, "
+                                   f"exit 0 after 12.4s"]}),
+            "a one-line payload dressed as a path",
+            "does not name a retained run directory")
+        rejected(lambda d: d.update({
+            "retained_artifacts": [f"{INVOCATION}/run-777"]}),
+            "a run directory that was never written", "names no directory")
+        rejected(lambda d: d["runs"][1].update(
+            {"artifact_dir": f"{INVOCATION}/run-901"}),
+            "a run pointing at someone else's directory", "names no directory")
         rejected(lambda d: d["runs"][1].update({"artifact_dir": elsewhere}),
                  "a run artifact_dir outside the artifact root",
                  "not under the declared artifact root")
@@ -786,7 +809,7 @@ def test_artifact_boundary() -> None:
         # error diagnostic, the descriptor's identifiers and labels, and
         # the inventory row's own strings are all bounded and
         # single-line.
-        broken = build_result(harness_error=True, requested=5, marker="run-099")
+        broken = build_result(harness_error=True, requested=5)
         expect(probe_census.validate_result(broken, document) == [],
                "a real harness-error diagnostic is accepted")
         for label, mutate, substring in (
@@ -827,7 +850,7 @@ def test_artifact_boundary() -> None:
         # to disk and refused, so put the healthy census back first.
         reg.census.write_text(json.dumps(healthy, indent=2) + "\n",
                               encoding="utf-8")
-        probe_census.record_result(reg.census, build_result(marker="run-012"))
+        probe_census.record_result(reg.census, build_result(at=stamp(12)))
         base = json.loads(reg.census.read_text())
         for label, mutate, substring in (
                 ("a raw payload as a stored check key",
@@ -890,7 +913,7 @@ def test_malformed_state_and_recovery() -> None:
     print("\n-- malformed state, interrupted write, stale staging --")
     with SyntheticRegistry() as reg:
         seeded(reg)
-        probe_census.record_result(reg.census, build_result(marker="keep"))
+        probe_census.record_result(reg.census, build_result(at=stamp(21)))
         good = reg.census.read_bytes()
 
         # Malformed input never touches the census.
@@ -914,7 +937,7 @@ def test_malformed_state_and_recovery() -> None:
         try:
             expect_raises(OSError,
                           lambda: probe_census.record_result(
-                              reg.census, build_result(marker="lost")),
+                              reg.census, build_result(at=stamp(22))),
                           "a failure before the rename propagates")
         finally:
             probe_census.os.replace = real_replace
@@ -929,13 +952,13 @@ def test_malformed_state_and_recovery() -> None:
         stale = reg.census.parent / f"{probe_census.STAGING_PREFIX}zz" \
             f"{probe_census.STAGING_SUFFIX}"
         stale.write_text("{ truncated", encoding="utf-8")
-        probe_census.record_result(reg.census, build_result(marker="after"))
+        probe_census.record_result(reg.census, build_result(at=stamp(23)))
         expect(not stale.exists(),
                "the next writer removes the stale staging file")
         census = probe_census.find_entry(
             probe_census.read_for_update(reg.census), PROBE)["census"]
-        markers = [s["retained_artifacts"] for s in census["current"]["samples"]]
-        expect(markers == [[ref("keep")], [ref("after")]],
+        stamps = [s["timestamp_utc"] for s in census["current"]["samples"]]
+        expect(stamps == [stamp(21), stamp(23)],
                "the stale staging file never became the census")
 
         # Malformed census STATE is a clean stop, not a silent repair.
@@ -983,8 +1006,9 @@ CONCURRENT_WORKER = textwrap.dedent('''\
     base = json.loads(open(template).read())
     for i in range(int(count)):
         result = json.loads(json.dumps(base))
-        result["retained_artifacts"] = [
-            "{invocation}/w{{}}-{{}}".format(worker, i)]
+        index = int(worker) * 100 + i
+        result["timestamp_utc"] = "2026-08-21T{{:02d}}:{{:02d}}:{{:02d}}Z".format(
+            index // 3600, index // 60 % 60, index % 60)
         probe_census.record_result(census, result)
 ''')
 
@@ -998,7 +1022,7 @@ def test_concurrent_writers() -> None:
         template.write_text(json.dumps(build_result()), encoding="utf-8")
         script = reg.root / "worker.py"
         script.write_text(
-            CONCURRENT_WORKER.format(tools=str(TOOLS), invocation=INVOCATION),
+            CONCURRENT_WORKER.format(tools=str(TOOLS)),
             encoding="utf-8")
 
         children = [
@@ -1019,9 +1043,9 @@ def test_concurrent_writers() -> None:
         expect(probe_census.validate_structure(document) == [],
                "the census is still structurally valid after the contention")
         census = probe_census.find_entry(document, PROBE)["census"]
-        markers = {s["retained_artifacts"][0]
-                   for s in census["current"]["samples"]}
-        want = {ref(f"w{w}-{i}")
+        markers = {s["timestamp_utc"] for s in census["current"]["samples"]}
+        want = {f"2026-08-21T{(w * 100 + i) // 3600:02d}:"
+                f"{(w * 100 + i) // 60 % 60:02d}:{(w * 100 + i) % 60:02d}Z"
                 for w in range(workers) for i in range(per_worker)}
         expect(markers == want,
                f"all {workers * per_worker} concurrent appends survived "
@@ -1128,7 +1152,7 @@ def test_seed_never_overwrites() -> None:
     print("\n-- seeding never overwrites accumulated census data --")
     with SyntheticRegistry() as reg:
         seeded(reg)
-        probe_census.record_result(reg.census, build_result(marker="kept"))
+        probe_census.record_result(reg.census, build_result(at=stamp(31)))
         probe_census.record_policy(reg.census, PROBE, acceptable_failures=1,
                                    justification="one known race")
         before = probe_census.read_for_update(reg.census)
@@ -1137,7 +1161,7 @@ def test_seed_never_overwrites() -> None:
         expect(before == after,
                "re-seeding an existing census is a no-op for its content")
         census = probe_census.find_entry(after, PROBE)["census"]
-        expect(census["current"]["samples"][0]["retained_artifacts"] == [ref("kept")]
+        expect(census["current"]["samples"][0]["timestamp_utc"] == stamp(31)
                and census["acceptable_failures"] == 1,
                "the accumulated sample and policy survive re-seeding")
 

@@ -288,6 +288,12 @@ MAX_REFERENCE_CHARS = 4096
 MAX_DIAGNOSTIC_CHARS = 2000
 MAX_NAME_CHARS = 255
 
+# `probe_flake.measure` retains ONE kind of artifact: the per-run
+# directory `<invocation_dir>/run-NNN`. Holding references to exactly
+# that shape is what leaves nowhere to put a payload — a path-shaped
+# string is not a reference just because it is absolute.
+RUN_DIR_RE = re.compile(r"\Arun-\d{3}\Z")
+
 _WORKTREE_ROOTS: dict[str, tuple[Path, ...]] = {}
 
 
@@ -340,8 +346,16 @@ def _containing_worktree(resolved: Path) -> Path | None:
     return None
 
 
-def _reference_problem(value, where: str) -> str | None:
-    """Why `value` is not an artifact reference, or None if it is."""
+def _reference_problem(value, where: str, *, must_exist: bool = False,
+                       run_dir: bool = False) -> str | None:
+    """Why `value` is not an artifact reference, or None if it is.
+
+    `must_exist` is passed at INGESTION and nowhere else. A reference is
+    minted from a directory the harness has just written, so it has to
+    be real THEN; a stored sample must stay readable long after the
+    platform has swept its temp directory, or the census would rot into
+    unreadability the first time `/tmp` was cleaned.
+    """
     if not isinstance(value, str) or not value:
         return f"{where} must be a non-empty string"
     if len(value) > MAX_REFERENCE_CHARS:
@@ -359,6 +373,17 @@ def _reference_problem(value, where: str) -> str | None:
     if inside is not None:
         return (f"{where} points inside the worktree {inside}: probe "
                 f"artifacts stay outside every checkout")
+    if run_dir and not RUN_DIR_RE.match(Path(value).name):
+        return (f"{where} does not name a retained run directory "
+                f"(run-NNN): {Path(value).name[:80]!r}")
+    if must_exist:
+        try:
+            if not resolved.is_dir():
+                return (f"{where} names no directory on disk: an artifact "
+                        f"reference is minted from a directory the harness "
+                        f"just wrote, not composed as a string")
+        except OSError as error:
+            return f"{where} cannot be inspected ({error})"
     return None
 
 
@@ -376,12 +401,12 @@ def _text_problem(value, where: str, limit: int) -> str | None:
     return None
 
 
-def _check_references(values, where: str) -> list[str]:
+def _check_references(values, where: str, **rules) -> list[str]:
     if not isinstance(values, list):
         return [f"{where} must be a list of artifact references"]
     problems = []
     for position, value in enumerate(values):
-        problem = _reference_problem(value, f"{where}[{position}]")
+        problem = _reference_problem(value, f"{where}[{position}]", **rules)
         if problem:
             problems.append(problem)
     return problems
@@ -478,7 +503,8 @@ def _check_run_series(runs, where: str) -> tuple[list[str], list[str], list[floa
         artifact = record.get("artifact_dir")
         if artifact is not None:
             problem = _reference_problem(
-                artifact, f"{where} run {position} `artifact_dir`")
+                artifact, f"{where} run {position} `artifact_dir`",
+                run_dir=True)
             if problem:
                 problems.append(problem)
     if indices and len(indices) == len(runs) \
@@ -624,7 +650,19 @@ def _validate_sample(sample, where: str) -> list[str]:
                 problems.append(f"{where} check {cid!r} tallies {total} "
                                 f"outcomes across {completed} completed runs")
     problems += _check_references(sample.get("retained_artifacts"),
-                                  f"{where} `retained_artifacts`")
+                                  f"{where} `retained_artifacts`", run_dir=True)
+    # `Measurement.retained_artifacts()` is exactly the runs that kept
+    # one, in order, and a stored sample never has an error run — so the
+    # list is DERIVED, not free-form, and there is nowhere to add an
+    # entry that no run produced.
+    derived = [r["artifact_dir"] for r in runs
+               if isinstance(r, dict) and r.get("artifact_dir") is not None]
+    if isinstance(sample.get("retained_artifacts"), list) \
+            and sample["retained_artifacts"] != derived:
+        problems.append(
+            f"{where} `retained_artifacts` does not match the runs that "
+            f"retained one ({len(derived)} run director"
+            f"{'y' if len(derived) == 1 else 'ies'})")
     return problems
 
 
@@ -713,7 +751,7 @@ def _validate_attempt(attempt, where: str) -> list[str]:
             problems.append(f"{where} is a harness error but completed all "
                             f"{requested} requested runs")
     problems += _check_references(attempt.get("retained_artifacts"),
-                                  f"{where} `retained_artifacts`")
+                                  f"{where} `retained_artifacts`", run_dir=True)
     return problems
 
 
@@ -1126,16 +1164,51 @@ def validate_result(result, document: dict) -> list[str]:
     # boundary tight rather than merely path-shaped: a pasted payload is
     # not a path under the harness's own artifact root.
     root = result.get("artifact_root")
-    root_problem = _reference_problem(root, "result `artifact_root`")
+    root_problem = _reference_problem(root, "result `artifact_root`",
+                                      must_exist=True)
     if root_problem:
         problems.append(root_problem)
         root = None
-    invocation_problem = _reference_problem(result.get("invocation_dir"),
-                                            "result `invocation_dir`")
+    invocation = result.get("invocation_dir")
+    invocation_problem = _reference_problem(invocation,
+                                            "result `invocation_dir`",
+                                            must_exist=True)
     if invocation_problem:
         problems.append(invocation_problem)
+        invocation = None
     problems += _check_references(result.get("retained_artifacts"),
-                                  "result `retained_artifacts`")
+                                  "result `retained_artifacts`",
+                                  must_exist=True, run_dir=True)
+    # Every retained directory is `<invocation_dir>/run-NNN` for the run
+    # that produced it, and `retained_artifacts` is exactly those, in
+    # order, with the error run last. All of it is DERIVED by
+    # `Measurement.retained_artifacts()`, so checking it here leaves no
+    # free-form slot a payload could occupy.
+    derived: list[str] = []
+    for record, index_label in ([(r, f"run {position}")
+                                 for position, r in enumerate(runs)]
+                                + [(result.get("error_run"), "`error_run`")]):
+        if not isinstance(record, dict) or record.get("artifact_dir") is None:
+            continue
+        artifact = record["artifact_dir"]
+        derived.append(artifact)
+        problem = _reference_problem(artifact, f"{index_label} `artifact_dir`",
+                                     must_exist=True, run_dir=True)
+        if problem:
+            problems.append(problem)
+            continue
+        if isinstance(invocation, str) and _is_count(record.get("index")):
+            expected = f"{invocation}/run-{record['index']:03d}"
+            if artifact != expected:
+                problems.append(
+                    f"{index_label} `artifact_dir` is {artifact[:120]!r}, not "
+                    f"the {expected!r} its own index names")
+    if isinstance(result.get("retained_artifacts"), list) \
+            and result["retained_artifacts"] != derived:
+        problems.append(
+            f"result `retained_artifacts` does not match the runs that "
+            f"retained one ({len(derived)} run director"
+            f"{'y' if len(derived) == 1 else 'ies'})")
     references_to_root = []
     if isinstance(result.get("retained_artifacts"), list):
         references_to_root += [
@@ -1143,12 +1216,8 @@ def validate_result(result, document: dict) -> list[str]:
             for position, value in enumerate(result["retained_artifacts"])]
     references_to_root.append((result.get("invocation_dir"),
                                "result `invocation_dir`"))
-    for record, label in ([(r, f"run {position}")
-                           for position, r in enumerate(runs)]
-                          + [(result.get("error_run"), "`error_run`")]):
-        if isinstance(record, dict) and record.get("artifact_dir") is not None:
-            references_to_root.append(
-                (record["artifact_dir"], f"{label} `artifact_dir`"))
+    for position, artifact in enumerate(derived):
+        references_to_root.append((artifact, f"retained artifact {position}"))
     base = _resolved(root) if isinstance(root, str) else None
     if base is not None:
         for value, label in references_to_root:
@@ -1195,11 +1264,9 @@ def _validate_error_run(record, declared: set, completed, requested) -> list[str
     if not _is_number(value) or value < 0:
         problems.append("`error_run` `elapsed_seconds` must be a finite "
                         "non-negative number")
-    artifact = record.get("artifact_dir")
-    if artifact is not None:
-        problem = _reference_problem(artifact, "`error_run` `artifact_dir`")
-        if problem:
-            problems.append(problem)
+    if record.get("artifact_dir") is not None and not isinstance(
+            record["artifact_dir"], str):
+        problems.append("`error_run` `artifact_dir` must be a string or null")
     checks = record.get("checks")
     if not isinstance(checks, dict):
         problems.append("`error_run` `checks` must be an object")
