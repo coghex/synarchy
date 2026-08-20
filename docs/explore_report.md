@@ -56,6 +56,7 @@ cited lines.
 - [ ] EXPL-11. `runPreview`'s `mBrowse` haddock says a `Nothing` is "the degenerate no-target case"; that case never reaches it
 - [ ] EXPL-12. `anySegmentIsSymlink` says it checks "any prefix" and "every ancestor"; the root itself is never lstat'd
 - [ ] EXPL-13. `shutdownEngine`'s inline safety argument says Vulkan teardown precedes "the worker threads" stopping; two are already stopped
+- [ ] EXPL-14. `migrateLegacyConfig` reports a destination write failure as a malformed legacy file, in a user-facing warning
 
 ---
 
@@ -728,3 +729,87 @@ stop and check the invariant.
 **Severity: low**, and no behaviour is at issue — the ordering is correct and
 matches the precise haddock. Recorded because the two sentences describe the
 same boundary and only one of them is right.
+
+---
+
+## Engine initialization
+
+### EXPL-14. `migrateLegacyConfig` reports a destination write failure as a malformed legacy file, in a user-facing warning
+
+`src/Engine/Core/Init.hs:112-130`:
+
+```haskell
+migrateLegacyConfig ∷ ∀ a. FromJSON a ⇒ Proxy a → LoggerState → FilePath → FilePath → IO ()
+migrateLegacyConfig _ logger legacyPath localPath = do
+  hasLocal ← doesFileExist localPath
+  unless hasLocal $ do
+    hasLegacy ← doesFileExist legacyPath
+    when hasLegacy $ do
+      outcome ← try $ do
+        eVal ← Yaml.decodeFileEither legacyPath
+        case (eVal ∷ Either Yaml.ParseException a) of
+          Left err → ioError $ userError $ show err
+          Right _  → copyFile legacyPath localPath
+      case (outcome ∷ Either SomeException ()) of
+        Right () → logInfo logger CatInit $ ...
+        Left e → logWarn logger CatInit $
+          "Legacy config " <> T.pack legacyPath
+            <> " could not be migrated (malformed, partial, "
+            <> "schema-incomplete, or unreadable); falling back to "
+            <> "the versioned default: " <> T.pack (displayException e)
+```
+
+The `try` spans the `copyFile` as well as the decode. A DESTINATION write
+failure — a read-only `config/`, a full disk, wrong permissions — therefore
+takes the same `Left` branch as a bad legacy file, and is reported to the user
+as:
+
+> Legacy config config/video.yaml could not be migrated (malformed, partial,
+> schema-incomplete, or unreadable); falling back to the versioned default: ...
+
+All four named causes are properties of the SOURCE file's content. In this case
+the source decoded cleanly against the very type the real loader expects; it was
+the write that failed. The `displayException e` tail does carry the true cause,
+but the parenthetical is stated as the diagnosis, and it accuses a file that is
+fine.
+
+The haddock at `src/Engine/Core/Init.hs:107-110` presents the same taxonomy as
+exhaustive:
+
+```haskell
+--   look at legacy again). A legacy file that fails this check
+--   (malformed, partial, schema-incomplete, or unreadable) is left
+--   untouched and logged rather than copied, so it falls back to the
+--   versioned default/registry exactly like a missing legacy file.
+```
+
+A copy failure is not "a legacy file that fails this check" — the check passed
+and the copy was then attempted.
+
+Two nearby statements ARE correct and a fix should preserve them:
+
+- **"left untouched"** holds in every case. `copyFile` never writes the source,
+  so the legacy file survives a decode failure and a copy failure alike.
+- **"falls back to the versioned default/registry exactly like a missing legacy
+  file"** holds on a copy failure too: no local file results, so
+  `resolveConfigPath` (`:77-80`) returns the `_default.yaml` template exactly as
+  it would with no legacy file at all. The migration also stays retryable,
+  because the existence gate at `:114` still sees no local file next boot —
+  which is the property the surrounding haddock spends a paragraph protecting.
+
+**Severity: low-medium**, above the pure-comment findings in this report. The
+misattribution reaches a warning a player or an agent actually reads, and would
+send them to inspect valid YAML when the real problem is a non-writable
+`config/` directory. No behaviour is wrong: the fallback is correct either way,
+and nothing is corrupted (`System.Directory.copyFile` replaces the destination
+atomically, so a failed copy leaves no partial local file to poison the gate).
+
+Verified truthful in the same function, and noted so a fix does not disturb it:
+the Proxy-based validation claim holds for all three call sites. `Proxy
+KeyBindingConfig` (`:172`) matches `loadKeyBindings`'s decode
+(`src/Engine/Input/Bindings.hs:110-111`); `Proxy VideoConfigFile` (`:179`)
+matches `loadVideoConfig`'s (`src/Engine/Graphics/Config.hs:240-246`); `Proxy
+OverridesFile` (`:262`) matches `loadOverrides`'s
+(`src/Engine/Asset/YamlNotifications.hs:188`). The cited example is right too —
+`resolution` really is the one required field among the video file's optionals
+(`src/Engine/Graphics/Config.hs:192`).
