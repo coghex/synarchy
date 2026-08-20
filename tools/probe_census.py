@@ -274,6 +274,80 @@ def validate_manifest(manifest) -> list[str]:
 # --------------------------------------------------------------------------
 # Structural validation — what the write path checks
 # --------------------------------------------------------------------------
+# An artifact REFERENCE, not an artifact. A retained run directory is a
+# short absolute path; raw stdout, a protocol stream and an engine log
+# are none of those things, and a value that is any of them is what the
+# artifact boundary exists to keep out of a worktree.
+MAX_REFERENCE_CHARS = 4096
+
+_WORKTREE_ROOTS: tuple[Path, ...] | None = None
+
+
+def worktree_roots() -> tuple[Path, ...]:
+    """Every checkout a probe artifact must stay OUT of, resolved once.
+
+    The repository root plus every registered worktree — the docs
+    worktree and any issue worktree included — because "raw stdout and
+    engine logs remain outside every worktree" is a rule about all of
+    them, not just the primary checkout. Enumerated lazily and cached;
+    if git cannot answer, the repository root alone still applies.
+    """
+    global _WORKTREE_ROOTS
+    if _WORKTREE_ROOTS is not None:
+        return _WORKTREE_ROOTS
+    roots = [Path(run_probes.REPO_ROOT).resolve()]
+    try:
+        done = subprocess.run(["git", "worktree", "list", "--porcelain"],
+                              cwd=run_probes.REPO_ROOT, text=True,
+                              capture_output=True, timeout=30)
+        if done.returncode == 0:
+            for line in done.stdout.splitlines():
+                if line.startswith("worktree "):
+                    roots.append(Path(line[len("worktree "):]).resolve())
+    except (OSError, subprocess.SubprocessError):
+        pass
+    _WORKTREE_ROOTS = tuple(dict.fromkeys(roots))
+    return _WORKTREE_ROOTS
+
+
+def _containing_worktree(value: str) -> Path | None:
+    candidate = Path(os.path.normpath(value))
+    for root in worktree_roots():
+        if candidate == root or root in candidate.parents:
+            return root
+    return None
+
+
+def _reference_problem(value, where: str) -> str | None:
+    """Why `value` is not an artifact reference, or None if it is."""
+    if not isinstance(value, str) or not value:
+        return f"{where} must be a non-empty string"
+    if len(value) > MAX_REFERENCE_CHARS:
+        return (f"{where} is {len(value)} characters long: the census holds a "
+                f"reference TO an artifact, never the artifact")
+    if any(character < " " or character == "\x7f" for character in value):
+        return (f"{where} contains control characters: the census holds a "
+                f"reference TO an artifact, never its contents")
+    if not value.startswith("/"):
+        return f"{where} is not an absolute path: {value!r}"
+    inside = _containing_worktree(value)
+    if inside is not None:
+        return (f"{where} points inside the worktree {inside}: probe "
+                f"artifacts stay outside every checkout")
+    return None
+
+
+def _check_references(values, where: str) -> list[str]:
+    if not isinstance(values, list):
+        return [f"{where} must be a list of artifact references"]
+    problems = []
+    for position, value in enumerate(values):
+        problem = _reference_problem(value, f"{where}[{position}]")
+        if problem:
+            problems.append(problem)
+    return problems
+
+
 def _float_safe(value: int) -> bool:
     """Whether this module may do float arithmetic with a JSON integer.
 
@@ -363,9 +437,11 @@ def _check_run_series(runs, where: str) -> tuple[list[str], list[str], list[floa
         else:
             elapsed.append(float(value))
         artifact = record.get("artifact_dir")
-        if artifact is not None and not isinstance(artifact, str):
-            problems.append(f"{where} run {position} `artifact_dir` must be a "
-                            f"string or null")
+        if artifact is not None:
+            problem = _reference_problem(
+                artifact, f"{where} run {position} `artifact_dir`")
+            if problem:
+                problems.append(problem)
     if indices and len(indices) == len(runs) \
             and indices != list(range(1, len(indices) + 1)):
         # `probe_flake.measure` numbers runs from 1 and stops at the
@@ -500,10 +576,8 @@ def _validate_sample(sample, where: str) -> list[str]:
             if usable and _is_count(completed) and total != completed:
                 problems.append(f"{where} check {cid!r} tallies {total} "
                                 f"outcomes across {completed} completed runs")
-    artifacts = sample.get("retained_artifacts")
-    if not isinstance(artifacts, list) or any(
-            not isinstance(a, str) for a in artifacts):
-        problems.append(f"{where} `retained_artifacts` must be a list of strings")
+    problems += _check_references(sample.get("retained_artifacts"),
+                                  f"{where} `retained_artifacts`")
     return problems
 
 
@@ -589,10 +663,8 @@ def _validate_attempt(attempt, where: str) -> list[str]:
             # ones, so a harness error always stops short.
             problems.append(f"{where} is a harness error but completed all "
                             f"{requested} requested runs")
-    artifacts = attempt.get("retained_artifacts")
-    if not isinstance(artifacts, list) or any(
-            not isinstance(a, str) for a in artifacts):
-        problems.append(f"{where} `retained_artifacts` must be a list of strings")
+    problems += _check_references(attempt.get("retained_artifacts"),
+                                  f"{where} `retained_artifacts`")
     return problems
 
 
@@ -981,10 +1053,44 @@ def validate_result(result, document: dict) -> list[str]:
                             f"one completed all {requested} requested runs")
         problems += _validate_error_run(result.get("error_run"), declared,
                                         completed, requested)
-    artifacts = result.get("retained_artifacts")
-    if not isinstance(artifacts, list) or any(
-            not isinstance(a, str) for a in artifacts):
-        problems.append("result `retained_artifacts` must be a list of strings")
+    # A result additionally DECLARES where its artifacts live, so every
+    # reference in it must sit under that root. This is what makes the
+    # boundary tight rather than merely path-shaped: a pasted payload is
+    # not a path under the harness's own artifact root.
+    root = result.get("artifact_root")
+    root_problem = _reference_problem(root, "result `artifact_root`")
+    if root_problem:
+        problems.append(root_problem)
+        root = None
+    invocation_problem = _reference_problem(result.get("invocation_dir"),
+                                            "result `invocation_dir`")
+    if invocation_problem:
+        problems.append(invocation_problem)
+    problems += _check_references(result.get("retained_artifacts"),
+                                  "result `retained_artifacts`")
+    references_to_root = []
+    if isinstance(result.get("retained_artifacts"), list):
+        references_to_root += [
+            (value, f"result `retained_artifacts`[{position}]")
+            for position, value in enumerate(result["retained_artifacts"])]
+    references_to_root.append((result.get("invocation_dir"),
+                               "result `invocation_dir`"))
+    for record, label in ([(r, f"run {position}")
+                           for position, r in enumerate(runs)]
+                          + [(result.get("error_run"), "`error_run`")]):
+        if isinstance(record, dict) and record.get("artifact_dir") is not None:
+            references_to_root.append(
+                (record["artifact_dir"], f"{label} `artifact_dir`"))
+    if isinstance(root, str):
+        for value, label in references_to_root:
+            if not isinstance(value, str):
+                continue
+            normalized = Path(os.path.normpath(value))
+            base = Path(os.path.normpath(root))
+            if normalized != base and base not in normalized.parents:
+                problems.append(
+                    f"{label} is not under the declared artifact root "
+                    f"{root!r}: {value[:120]!r}")
     return problems
 
 
@@ -1019,8 +1125,10 @@ def _validate_error_run(record, declared: set, completed, requested) -> list[str
         problems.append("`error_run` `elapsed_seconds` must be a finite "
                         "non-negative number")
     artifact = record.get("artifact_dir")
-    if artifact is not None and not isinstance(artifact, str):
-        problems.append("`error_run` `artifact_dir` must be a string or null")
+    if artifact is not None:
+        problem = _reference_problem(artifact, "`error_run` `artifact_dir`")
+        if problem:
+            problems.append(problem)
     checks = record.get("checks")
     if not isinstance(checks, dict):
         problems.append("`error_run` `checks` must be an object")
