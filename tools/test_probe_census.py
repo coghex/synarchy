@@ -569,6 +569,41 @@ def test_corrupt_stored_records() -> None:
         corrupt(lambda c: c["attempts"][0].update(
             {"requested_runs": 0, "completed_runs": 0}),
             "an attempt that requested no runs", "must be positive")
+        # The artifact boundary is a CLOSED schema, not just a habit of
+        # the writer: a pasted raw payload must fail to read.
+        corrupt(lambda c: c["current"]["samples"][0].update(
+            {"stdout": "engine boot log line 1\nline 2\n"}),
+            "a raw stdout payload pasted into a sample", "unexpected field")
+        corrupt(lambda c: c["current"]["samples"][0]["runs"][0].update(
+            {"events": "{\"kind\": \"check\"}"}),
+            "a protocol stream pasted into a stored run", "unexpected field")
+        corrupt(lambda c: c["attempts"][0].update({"engine_log": "..."}),
+            "an engine log pasted into an attempt", "unexpected field")
+        corrupt(lambda c: c.update({"notes": "scratch"}),
+            "an unknown census field", "unexpected field")
+        corrupt(lambda c: c["current"].update({"stdout": "..."}),
+            "an unknown cohort field", "unexpected field")
+
+        # The same closure holds at the document and entry levels.
+        for label, mutate, where in (
+                ("an unknown document field",
+                 lambda d: d.update({"stdout": "..."}), "census"),
+                ("an unknown entry field",
+                 lambda d: probe_census.find_entry(d, PROBE).update(
+                     {"engine_log": "..."}), "probe")):
+            document = json.loads(json.dumps(healthy))
+            mutate(document)
+            reg.census.write_text(json.dumps(document, indent=2) + "\n",
+                                  encoding="utf-8")
+            snapshot = reg.census.read_bytes()
+            expect(any("unexpected field" in p for p in
+                       probe_census.validate_structure(document)),
+                   f"validation reports {label}")
+            expect_raises(probe_census.CensusError,
+                          lambda: probe_census.ensure_document(reg.census),
+                          f"--seed refuses a census with {label}")
+            expect(reg.census.read_bytes() == snapshot,
+                   f"nothing rewrote the census carrying {label}")
 
 
 def test_malformed_state_and_recovery() -> None:
@@ -782,6 +817,17 @@ def test_lock_identity() -> None:
                       "a symlinked lock path is refused, not followed")
         expect(outside.read_text() == "",
                "nothing was written through the planted lock symlink")
+        direct.unlink()
+
+        # A HARD link is the same inode as a file elsewhere, so
+        # O_NOFOLLOW does not stop it — the link count does.
+        os.link(outside, direct)
+        expect_raises(probe_census.CensusError,
+                      lambda: probe_census.record_result(
+                          reg.census, build_result()),
+                      "a hard-linked lock path is refused", "one link")
+        expect(outside.read_text() == "",
+               "nothing was written through the planted hard link")
         direct.unlink()
 
         # A non-regular lock path is refused too, on the same grounds.

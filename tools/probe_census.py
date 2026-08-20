@@ -110,6 +110,28 @@ CHECK_OUTCOMES = (probe_protocol.PASS, probe_protocol.FAIL,
 # string can never read as "not legacy, therefore measurable".
 KNOWN_PROTOCOLS = (LEGACY, probe_protocol.PROTOCOL_VERSION)
 
+# Every census record is a CLOSED schema. That is what makes "raw stdout,
+# protocol streams and engine logs never enter the census" enforceable
+# rather than merely true of what this module writes: a hand-pasted
+# `stdout` payload is refused at read time instead of being carried
+# forward by the next policy edit or seed. Each set is exactly what the
+# corresponding builder below emits.
+DOCUMENT_FIELDS = ("schema", "probes")
+ENTRY_FIELDS = ("key", "script", "classification", "protocol", "census")
+CENSUS_FIELDS = ("acceptable_failures", "acceptable_failures_justification",
+                 "estimated_worst_case_seconds", "current", "history",
+                 "attempts")
+COHORT_FIELDS = ("commit_sha", "samples")
+SAMPLE_FIELDS = ("timestamp_utc", "commit_sha", "requested_runs",
+                 "completed_runs", "runs", "check_counts", "failure_count",
+                 "failure_rate", "timeout_count", "worst_elapsed_seconds",
+                 "total_elapsed_seconds", "rts_capabilities",
+                 "peak_concurrency", "retained_artifacts")
+SAMPLE_RUN_FIELDS = ("index", "outcome", "elapsed_seconds", "artifact_dir")
+ATTEMPT_FIELDS = ("timestamp_utc", "commit_sha", "status", "accepted",
+                  "requested_runs", "completed_runs", "error",
+                  "retained_artifacts")
+
 # A full hexadecimal commit hash: sha1 today, sha256 if the repository
 # ever migrates. An abbreviated hash is refused — a cohort key has to be
 # unambiguous.
@@ -261,6 +283,17 @@ def _is_count(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
+def _closed(record, allowed, where: str) -> list[str]:
+    """Any field `where` has no business carrying."""
+    if not isinstance(record, dict):
+        return []
+    extra = sorted(set(record) - set(allowed))
+    if not extra:
+        return []
+    return [f"{where} carries unexpected field(s) {extra}: a census record "
+            f"holds summarized outcomes and artifact references only"]
+
+
 def _elapsed_tolerance(count: int) -> float:
     """How far a serialized total may sit from the serialized runs' sum.
 
@@ -361,7 +394,7 @@ def _validate_sample(sample, where: str) -> list[str]:
     """
     if not isinstance(sample, dict):
         return [f"{where} is not an object: {sample!r}"]
-    problems: list[str] = []
+    problems: list[str] = _closed(sample, SAMPLE_FIELDS, where)
     commit = sample.get("commit_sha")
     if not isinstance(commit, str) or not COMMIT_RE.match(commit):
         problems.append(f"{where} `commit_sha` is not a full commit hash: "
@@ -403,6 +436,8 @@ def _validate_sample(sample, where: str) -> list[str]:
                         f"completed_runs={completed}")
     series, outcomes, elapsed = _check_run_series(runs, where)
     problems += series
+    for position, record in enumerate(runs):
+        problems += _closed(record, SAMPLE_RUN_FIELDS, f"{where} run {position}")
     problems += _check_aggregates(sample, where, outcomes, elapsed,
                                   complete=len(elapsed) == len(runs))
     rate = sample.get("failure_rate")
@@ -423,6 +458,8 @@ def _validate_sample(sample, where: str) -> list[str]:
             if not isinstance(tally, dict):
                 problems.append(f"{where} check {cid!r} tally is not an object")
                 continue
+            problems += _closed(tally, CHECK_OUTCOMES,
+                                f"{where} check {cid!r} tally")
             total = 0
             usable = True
             for outcome in CHECK_OUTCOMES:
@@ -448,7 +485,7 @@ def _validate_sample(sample, where: str) -> list[str]:
 def _validate_cohort(cohort, where: str) -> list[str]:
     if not isinstance(cohort, dict):
         return [f"{where} is not an object: {cohort!r}"]
-    problems: list[str] = []
+    problems: list[str] = _closed(cohort, COHORT_FIELDS, where)
     commit = cohort.get("commit_sha")
     if not isinstance(commit, str) or not COMMIT_RE.match(commit):
         problems.append(f"{where} `commit_sha` is not a full commit hash: "
@@ -469,7 +506,7 @@ def _validate_cohort(cohort, where: str) -> list[str]:
 def _validate_attempt(attempt, where: str) -> list[str]:
     if not isinstance(attempt, dict):
         return [f"{where} is not an object: {attempt!r}"]
-    problems: list[str] = []
+    problems: list[str] = _closed(attempt, ATTEMPT_FIELDS, where)
     if not isinstance(attempt.get("status"), str) or not attempt["status"]:
         problems.append(f"{where} has no string `status`")
     commit = attempt.get("commit_sha")
@@ -537,7 +574,7 @@ def _validate_attempt(attempt, where: str) -> list[str]:
 def _validate_census(census, where: str) -> list[str]:
     if not isinstance(census, dict):
         return [f"{where} `census` is not an object: {census!r}"]
-    problems: list[str] = []
+    problems: list[str] = _closed(census, CENSUS_FIELDS, f"{where} census")
     x = census.get("acceptable_failures")
     if x is not None and not _is_count(x):
         problems.append(
@@ -588,7 +625,7 @@ def validate_structure(document, *, include_promotion: bool = True) -> list[str]
     """
     if not isinstance(document, dict):
         return [f"census must be a JSON object, got {type(document).__name__}"]
-    problems: list[str] = []
+    problems: list[str] = _closed(document, DOCUMENT_FIELDS, "census")
     if document.get("schema") != CENSUS_SCHEMA:
         problems.append(f"census schema is {document.get('schema')!r}, "
                         f"expected {CENSUS_SCHEMA!r}")
@@ -608,6 +645,7 @@ def validate_structure(document, *, include_promotion: bool = True) -> list[str]
             problems.append(f"duplicate entry for probe {key!r}")
             continue
         seen.add(key)
+        problems += _closed(entry, ENTRY_FIELDS, f"probe {key!r}")
         if not isinstance(entry.get("script"), str) or not entry["script"]:
             problems.append(f"probe {key!r} has no string `script`")
         if entry.get("protocol") not in KNOWN_PROTOCOLS:
@@ -1153,15 +1191,20 @@ def _locked(target: Path):
     # Checked and refused BEFORE the lock is taken, so the failure is not
     # routed through an unlock this file may not support.
     try:
-        regular = stat.S_ISREG(os.fstat(fd).st_mode)
+        info = os.fstat(fd)
     except OSError as error:
         os.close(fd)
         raise CensusError(
             f"could not stat the census lock {guard} ({error})") from None
-    if not regular:
+    # `st_nlink == 1` as well as regular: `O_NOFOLLOW` stops a SYMLINK,
+    # but a HARD LINK planted at the lock path is the same inode as some
+    # file elsewhere, and the note below would be written into it.
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
         os.close(fd)
         raise CensusError(
-            f"refusing to use {guard}: the census lock must be a regular file")
+            f"refusing to use {guard}: the census lock must be a regular file "
+            f"with exactly one link (got mode {stat.S_IFMT(info.st_mode):#o}, "
+            f"{info.st_nlink} links)")
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         # The lock file is deliberately never unlinked: removing a HELD
