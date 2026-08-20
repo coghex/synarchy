@@ -86,6 +86,7 @@ cited lines.
 - [ ] EXPL-36. `computeAmbientLight`'s inline labels name noon and midnight; its input convention puts those values at dawn and dusk
 - [ ] EXPL-37. The Tier 3 damage model's derivation block is stale in two places: a `modeCoupling` constant that does not exist, and a `delivered` formula missing two factors
 - [ ] EXPL-38. Three references outlived the deleted `World.Fluids` facade, one of them a CI path-selector self-test case
+- [ ] EXPL-39. `World.Geology.Ore` says its caller is `World.Geology.Timeline.buildAge`; that module exports only `buildTimeline`
 
 ---
 
@@ -1855,6 +1856,15 @@ a property of the tree rather than a defect in any one file, and because the fix
 is a policy choice — export the named function, point at the exported entry
 point instead, or drop the module qualifier — that wants deciding once.
 
+**The count of 59 is a FLOOR, not a total** (established by EXPL-39). The
+detector required the referenced symbol to have a top-level `name ∷` signature
+IN THE NAMED MODULE before judging it unexported — so it silently skipped every
+reference where the named module exists but the symbol is defined somewhere
+else entirely. `'World.Geology.Timeline.buildAge'` is exactly that case and was
+missed. The corrected rule is "the symbol is not exported by the named module
+AND is defined elsewhere in the tree"; re-running under it would raise the
+count.
+
 **Mechanically detectable.** The sweep above is about twenty-five lines of
 Python with no engine dependency, in the same shape as
 `tools/unicode_operator_audit.py`. If the policy is "a haddock link must
@@ -2917,3 +2927,87 @@ nit tier because one of the three sites is a CI path-selection SELF-TEST whose
 passing status now proves nothing about the selector, and because the comment
 it sits beneath is a rationale for the glob style that its own example no
 longer supports.
+
+---
+
+## Geological ore deposition
+
+### EXPL-39. `World.Geology.Ore` says its caller is `World.Geology.Timeline.buildAge`; that module exports only `buildTimeline`
+
+`src/World/Geology/Ore.hs:1-6`:
+
+```haskell
+-- | Flow-routed sedimentary ore deposition.
+--
+--   Runs once per geological Age (from 'World.Geology.Timeline.buildAge'),
+--   after that age's hydrology simulation. Every volcanic feature
+--   matching a 'DepositSpec' sheds sediment flux proportional to its
+--   size, activity and the age's duration; [...]
+```
+
+`buildAge` is not in `World.Geology.Timeline`. That module's entire export list
+is one function:
+
+```haskell
+module World.Geology.Timeline
+    ( buildTimeline
+    ) where
+```
+
+`buildAge` is defined at `src/World/Geology/Timeline/Loop.hs:191`, and it is
+that module — not `Timeline` — which calls `buildOreSheets`
+(`src/World/Geology/Timeline/Loop.hs:308`, reached through `buildAge` at
+`:194`). So the reference names the wrong module for a function that does exist
+one level down, in the sibling a split moved it into. The same shape as
+EXPL-25, where `Engine.Input.Thread` was named and `Engine.Input.Thread.Mouse`
+was meant.
+
+The rest of the sentence is correct: ore deposition really does run once per
+Age, and really does run after that age's hydrology — `buildOreSheets` is
+called inside `buildAge` with the age's own `FlowResult` in hand.
+
+**Severity: low.** No behaviour is involved. Recorded because it is the first
+line of the module's haddock, it is the pointer a reader follows to find where
+ore deposition is sequenced within an Age, and it leads to a module that does
+not contain the named function.
+
+**This finding revises EXPL-27**, which is why it is worth more than its own
+severity suggests. EXPL-27's sweep reported 59 cross-module dead haddock links;
+its detector required the referenced symbol to have a top-level signature IN THE
+NAMED MODULE before judging it unexported, so it skipped every reference whose
+symbol lives in a different module altogether — precisely this case. The 59 is a
+floor. A note to that effect has been added to EXPL-27.
+
+Verified exact in the same module, so a fix does not disturb it: the structural
+claim "adding a resource means adding a row here (plus its lever in
+`OreLevers`)" holds — `depositSpecs = [ironSpec, copperSpec]`
+(`src/World/Geology/Ore.hs:119-120`) corresponds one-to-one with `OreLevers`'
+two material multipliers `olIron` and `olCopper` beside the global `olGlobal`
+(`src/World/Geology/Ore/Types.hs:102-106`).
+
+#### Also verified exact in this pass: `World.Geology.Erosion.Math`
+
+Recorded because the module is unusually formula-dense and every claim in it
+survived checking, arithmetic included:
+
+- **Hydraulic** — documented "scales with elevation difference"; implemented
+  `hydraulicSlopeBoost = 0.4 + 0.6 * slopeNorm` (`:140`). Its own note that
+  "steep terrain erodes 2.5× faster" is exactly `1.0 / 0.4`.
+- **Wind** — documented "less sensitive to slope"; implemented
+  `windSlopeBoost = 0.8 + 0.2 * slopeNorm` (`:154`).
+- **Thermal** — documented "scales with slope squared"; implemented
+  `thermalSlopeBoost = slopeNorm * slopeNorm` (`:167`), literally squared.
+- **Chemical** — documented "slow, uniform … increases effective erodability of
+  softer rocks"; implemented
+  `chemicalErodability = min 1.0 (erodability + chemical * 0.3)` with the rate
+  multiplied by `0.5` (`:183-188`). Its worked example computes: limestone at
+  hardness 0.4 (erodability 0.6) with `epChemical` 0.5 gives
+  `0.6 + 0.15 = 0.75`, exactly as the comment states.
+- **`applyErosionLerp4`** — documented as lerping "just the 5 hot Floats" and
+  deferring "the 4 sediment-only Floats (temperature, precipitation, humidity,
+  snow)". `ErosionParams`
+  (`src/World/Geology/Timeline/Feature.hs:207-219`) has exactly that split:
+  `epIntensity`, `epHydraulic`, `epThermal`, `epWind`, `epChemical` are the
+  five `lerpHot` is applied to, and `epTemperature`, `epPrecipitation`,
+  `epHumidity`, `epSnowFraction` are the four deferred into the sediment
+  closure.
