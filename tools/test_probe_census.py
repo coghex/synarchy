@@ -468,6 +468,26 @@ def test_result_validation() -> None:
                    f"a mutated harness-error result is rejected for "
                    f"{substring!r} (got {broken_mutation(mutate)[:1]})")
 
+        # `probe_flake.reconcile` makes any failed check a failed run, so
+        # a PASS carrying one is a contradiction no measurement produced.
+        # Everything else about this document stays consistent, so it is
+        # the reconciliation alone that must catch it.
+        contradiction = json.loads(json.dumps(valid))
+        contradiction["runs"][0]["checks"]["beta"] = probe_protocol.FAIL
+        contradiction["check_counts"]["beta"] = {"PASS": 0, "FAIL": 2,
+                                                 "MISSING": 0}
+        reported = probe_census.validate_result(contradiction, document)
+        expect(len(reported) == 1 and "passed but reports failed check" in reported[0],
+               f"a PASS run carrying a FAIL check is the only complaint "
+               f"(got {reported})")
+        before_bytes = reg.census.read_bytes()
+        expect_raises(probe_census.CensusError,
+                      lambda: probe_census.record_result(reg.census,
+                                                         contradiction),
+                      "the contradictory run is refused at ingestion")
+        expect(reg.census.read_bytes() == before_bytes,
+               "the refused contradiction left the census unchanged")
+
         # A protocol string that is merely "not legacy" must not read as
         # measurable — the entry has to name the CURRENT version.
         for status in ("probe-result/v2", "legacy", "", None):
@@ -605,24 +625,37 @@ def test_corrupt_stored_records() -> None:
         corrupt(lambda c: c["current"].update({"stdout": "..."}),
             "an unknown cohort field", "unexpected field")
 
-        # The same closure holds at the document and entry levels.
-        for label, mutate, where in (
+        # Corruption at the document and entry levels, where the census
+        # record itself is not the thing that was edited.
+        for label, mutate, substring in (
                 ("an unknown document field",
-                 lambda d: d.update({"stdout": "..."}), "census"),
+                 lambda d: d.update({"stdout": "..."}), "unexpected field"),
                 ("an unknown entry field",
                  lambda d: probe_census.find_entry(d, PROBE).update(
-                     {"engine_log": "..."}), "probe")):
+                     {"engine_log": "..."}), "unexpected field"),
+                # A v2 entry with no census record is malformed state, not
+                # a v1 row waiting to be migrated: inserting an empty
+                # record would repair it silently on the next write.
+                ("a v2 entry with no census record",
+                 lambda d: probe_census.find_entry(d, PROBE).pop("census"),
+                 "`census` is not an object")):
             document = json.loads(json.dumps(healthy))
             mutate(document)
             reg.census.write_text(json.dumps(document, indent=2) + "\n",
                                   encoding="utf-8")
             snapshot = reg.census.read_bytes()
-            expect(any("unexpected field" in p for p in
+            expect(any(substring in p for p in
                        probe_census.validate_structure(document)),
                    f"validation reports {label}")
             expect_raises(probe_census.CensusError,
-                          lambda: probe_census.ensure_document(reg.census),
-                          f"--seed refuses a census with {label}")
+                          lambda: probe_census.read_for_update(reg.census),
+                          f"reading a census with {label} is a clean stop")
+            for op, name in (
+                    (lambda: probe_census.ensure_document(reg.census), "--seed"),
+                    (lambda: probe_census.record_policy(
+                        reg.census, PROBE, estimate=1.0), "record_policy")):
+                expect_raises(probe_census.CensusError, op,
+                              f"{name} refuses a census with {label}")
             expect(reg.census.read_bytes() == snapshot,
                    f"nothing rewrote the census carrying {label}")
 

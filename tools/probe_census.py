@@ -698,7 +698,10 @@ def migrate_document(document) -> dict:
         if not isinstance(entry, dict):
             raise CensusError(f"census entry {position} is not an object")
         row = dict(entry)
-        if "census" not in row:
+        if schema == SEED_SCHEMA and "census" not in row:
+            # ONLY the v1 seed. In a v2 document a missing census record
+            # is corruption, not migration input, and inserting an empty
+            # one would repair it silently on the next write.
             row["census"] = empty_census()
         migrated.append(row)
     result = dict(document)
@@ -887,6 +890,14 @@ def validate_result(result, document: dict) -> list[str]:
                 problems.append(
                     f"run {position} check {cid!r} result {value!r} is not "
                     f"one of {CHECK_OUTCOMES}")
+        # `probe_flake.reconcile` makes any failed check a failed run, so
+        # a PASS carrying one is a contradiction no measurement produced.
+        failed = sorted(cid for cid, value in checks.items()
+                        if value == probe_protocol.FAIL)
+        if failed and record.get("outcome") == probe_flake.RUN_PASS:
+            problems.append(
+                f"run {position} passed but reports failed check(s) {failed}: "
+                f"a failed check always fails its run")
 
     counts = result.get("check_counts")
     if not isinstance(counts, dict):
