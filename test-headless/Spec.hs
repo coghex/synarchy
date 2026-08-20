@@ -196,6 +196,7 @@ import qualified Test.Headless.Lua.SaveBridge as LuaSaveBridge
 import qualified Test.Headless.Lua.TutorialProgress as LuaTutorialProgress
 import qualified Test.Headless.Lua.TutorialEvaluation as LuaTutorialEvaluation
 import qualified Test.Headless.Lua.UnitAiLocations as LuaUnitAiLocations
+import qualified Test.Headless.Lua.UnitAiHold as LuaUnitAiHold
 import qualified Test.Headless.Lua.UnitAiStall as LuaUnitAiStall
 import qualified Test.Headless.Lua.UnitAiLoadReset as LuaUnitAiLoadReset
 import qualified Test.Headless.Lua.WorkClaimCapacity as LuaWorkClaimCapacity
@@ -390,6 +391,7 @@ main = hspec $ do
     LuaTutorialProgress.spec
     LuaTutorialEvaluation.spec
     LuaUnitAiLocations.spec
+    LuaUnitAiHold.spec
     LuaUnitAiStall.spec
     LuaUnitAiLoadReset.spec
     LuaWorkClaimCapacity.spec

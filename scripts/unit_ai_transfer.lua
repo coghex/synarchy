@@ -87,6 +87,7 @@ local mv = require("scripts.movement_speed")
 -- action won, or one the AI never ticked through, costs a pending order
 -- nothing.
 local stall = require("scripts.unit_ai_stall")
+local hold = require("scripts.unit_ai_hold")
 -- Outcome surfacing, terminal pruning and the cancel gesture (#1253).
 local outcome = require("scripts.unit_ai_transfer_outcome")
 local targetPhrase   = outcome.targetPhrase
@@ -398,6 +399,10 @@ function unitAi.commandTransferOrder(uid, request)
     end
     reportOutcomes(uid, result.outcomes, "can't transfer")
     local s = ensureState(uid)
+    -- #1216: an accepted player order supersedes a position hold. Below
+    -- every refusal branch above, which store no order and must leave a
+    -- standing hold alone.
+    hold.clear(s)
     s.transferOrder = nil
     -- Decide on the next tick rather than at the unit's natural
     -- cadence, the same responsiveness commandMove/commandPickup buy.

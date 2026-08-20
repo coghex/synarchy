@@ -318,8 +318,22 @@ function M.register(aiState)
         -- did before this change, never as one that can no longer
         -- expire. Nothing is inferred here at decode time: the seeding
         -- needs the current game clock, which only the AI tick has.
-        version = 5,
-        inputVersions = { 1, 2, 3, 4, 5 },
+        -- v6 (issue #1216): a unit that COMPLETED a player move order
+        -- carries the position hold that order left behind
+        -- (aiState[uid].holdAnchor, see scripts/unit_ai_hold.lua) --
+        -- durable player intent, not scratch, so it survives a save
+        -- the same way a pending commandedTask does. A v1-v5 payload
+        -- predates the field and decodes with it ABSENT, which is
+        -- exactly right: those sessions had no hold to record, and a
+        -- hold is never INFERRED from an arrived-and-cleared order,
+        -- because the payload cannot say whether the order that ended
+        -- was the player's or scripts/building_spawn.lua's walk-out.
+        -- The anchor carries no entity reference (two tile
+        -- coordinates plus this hold's own stall accounting), so
+        -- unit_ai_save_refs.lua's field walk, the typed-reference
+        -- graph and the dangling/wrong-page rules are untouched.
+        version = 6,
+        inputVersions = { 1, 2, 3, 4, 5, 6 },
         required = true,
         scope = "global",
         -- Requirement 2 (round-8 review): unit_ai_save_refs.lua's
@@ -388,6 +402,11 @@ function M.register(aiState)
             -- from the origin the payload already carries, on the first
             -- tick that has a clock to derive it against (see the
             -- version field's comment above).
+            --
+            -- v5 -> v6 (#1216) is identity again: an older payload's
+            -- ABSENT holdAnchor is the correct v6 value -- that unit
+            -- was not holding, and nothing in the payload could tell
+            -- us otherwise without guessing (version field, above).
             if version == 1 then return refsMod.wrapAiState(data) end
             if version == 2 then return refsMod.addOwnerToAiState(data) end
             return data

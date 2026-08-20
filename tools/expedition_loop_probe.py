@@ -135,9 +135,11 @@ re-checked with the simulation stopped, and everything up to the paired
 orders happens inside that same paused window. They then travel under the same verb (`commandMove`), to
 the same tile (the ruin's anchor), ordered in the same paused window.
 The measurement is taken when BOTH are at the ruin in ONE
-COHERENT SNAPSHOT — not "each has been there at some point", because a
-unit whose move task has completed reverts to wander and can drift back
-out while the other is still walking; and not two `unit.getInfo` calls
+COHERENT SNAPSHOT — not "each has been there at some point", because the
+two arrive at different times and the first one's own physiology can
+still carry it back out (a completed player move order holds position
+since #1216, but that hold yields to the same survival ladder the order
+did) while the other is still walking; and not two `unit.getInfo` calls
 either, because those are two round trips with the simulation running
 in between, so a pair that was never inside together can satisfy them.
 The candidate is a single paired read, and it is then revalidated with
@@ -1211,13 +1213,15 @@ def muster_travellers(port: int, uids, staging, ruin_xy, seconds: float = 420.0)
     has actually carried them. Pausing stops the simulation itself,
     which is what "hold still" has to mean here.
 
-    A completed move order does not hold position either
-    (`docs/expedition_survival_calibration.md` observation E3 watched a
-    unit drift 10.7 tiles back out of camp), so the first arrival
-    wanders while the second is still walking and a naive
-    both-near-the-tile poll can simply never come true — observed twice,
-    once with both units 40+ tiles out and 3.4 tiles apart after a 300 s
-    wait, and once with the muster expiring on a pair 10.0 tiles apart.
+    A completed PLAYER move order does hold position since #1216
+    (SURV-4), which retires observation E3 and makes the muster far more
+    likely to converge — but it is not a substitute for the pause, and
+    the driven shape below stays. The hold sits at `follow_command`'s own
+    utility, so every interrupt that outranked the order still carries a
+    held unit off its anchor, and the muster's own history is what a
+    coincidence hunt costs when that happens: observed twice, once with
+    both units 40+ tiles out and 3.4 tiles apart after a 300 s wait, and
+    once with the muster expiring on a pair 10.0 tiles apart.
     Hence the shape below: re-order anyone who has stopped following and
     drifted outside the radius (convergence is driven, not awaited),
     poll for a sample satisfying the origin contract, pause the instant
@@ -1230,8 +1234,9 @@ def muster_travellers(port: int, uids, staging, ruin_xy, seconds: float = 420.0)
     deadline = time.time() + seconds
     while time.time() < deadline:
         live = paired_positions(port, uids[0], uids[1])
-        # Convergence has to be ACTIVE, not awaited. A unit whose move
-        # order has completed reverts to wander and drifts, so simply
+        # Convergence has to be ACTIVE, not awaited. An arrived unit
+        # holds its destination since #1216, but a survival interrupt
+        # still carries it off and its return is its own to schedule, so
         # polling for a moment when both happen to be at the tile is a
         # coincidence hunt that can time out — observed: a muster that
         # expired with the two 10.0 tiles apart, one of them 9.4 tiles
@@ -1705,9 +1710,10 @@ def main() -> int:
                         visited_ruin.add(uid)
                 # The shared observation point is both travellers inside
                 # the ruin IN THE SAME SAMPLE — not "each has been there
-                # at some point". A unit whose move task has completed
-                # reverts to wander and can drift back out while the
-                # other is still walking, and latching first-entry would
+                # at some point". The two arrive at different times, and
+                # although an arrived unit holds its destination (#1216)
+                # its own physiology can still carry it back out while
+                # the other is still walking; latching first-entry would
                 # score that as a shared observation point.
                 if all(live[u] and in_arrival_box(live[u], box)
                        for u in (prepared, control)):

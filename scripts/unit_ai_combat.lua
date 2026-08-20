@@ -44,6 +44,11 @@ local M = {}
 -- nudged just above so it wins the move-vs-pickup tie.
 -- commandedTask persists until maintainTask clears it on arrival/timeout,
 -- so the unit resumes the move once the higher-priority action finishes.
+-- Exported (see the bottom of this file) so scripts/unit_ai_hold.lua's
+-- own constant can be pinned equal to it by
+-- Test.Headless.Lua.UnitAiHold rather than agreeing by coincidence:
+-- a position hold (#1216) is the standing remainder of the order that
+-- created it, and two numbers would be two ladders free to drift.
 local FOLLOW_COMMAND_UTILITY = 7.0
 
 local function followCommandUtility(uid, s, params)
@@ -395,6 +400,7 @@ local function computeAttackCooldown(uid, mode)
 end
 
 
+M.FOLLOW_COMMAND_UTILITY = FOLLOW_COMMAND_UTILITY
 M.followCommandUtility   = followCommandUtility
 M.followCommandExecute   = followCommandExecute
 M.followCommandPaceTick  = pace.followCommandPaceTick

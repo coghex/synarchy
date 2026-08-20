@@ -908,6 +908,32 @@ before touching each area:
   target on landing, so fall checks assert the fall + landing z, not
   arrival. Gate: `movement_probe.py` (neutralises the unit_ai wander tick
   so `moveTo` is the only steering).
+- **Position hold (#1216, SURV-4)** — a unit that COMPLETES a
+  player-issued move order stands at the destination
+  (`scripts/unit_ai_hold.lua`'s `hold_position`, anchored on
+  `s.holdAnchor`) instead of resuming wander, and stops contributing
+  autonomously until re-commanded. That is a deliberate trade-off, not a
+  bug. The mechanism is ONE number: `hold_position` scores EXACTLY
+  `unit_ai_combat.lua`'s `FOLLOW_COMMAND_UTILITY`, so the #306 ladder is
+  reused rather than restated — every interrupt that could preempt the
+  order (dire self survival, combat, treatment, a mental break) still
+  preempts the hold and the unit walks BACK to its anchor afterwards,
+  and everything the order outranked (wander, work entry and its
+  in-progress locks, situational goals) still loses. Don't add a second
+  constant. Only an ARRIVAL creates a hold — a `TASK_TIMEOUT_SEC` stall
+  creates none — and only a PLAYER-intent move does:
+  `commandMove(uid, x, y, speed, internal)`'s `internal` flag is what
+  keeps `scripts/building_spawn.lua`'s portal walk-out from pinning a
+  fresh acolyte. Only an ACCEPTED, EXPLICIT player command clears one
+  (`commandMove`, a COMMITTED `commandAttack`, an accepted
+  `commandPickup`/`commandTransferOrder`, a Mode A session, or
+  `unitAi.releaseHold`) — a refused pickup and the AI's own emergent
+  engage leave it standing. The walk home is charged against the same
+  eligible-time stall budget the order was, so an unreachable anchor
+  expires instead of re-pathing forever. Persisted via `lua.unit_ai` v6;
+  v1-v5 decode as not-holding, never inferred. Gates: hspec
+  `--match "position hold"`, `tools/position_hold_probe.py`
+  (manual-only).
 - **Tile-coordinate frame at the U seam (#1175/#1230)** — chunks are
   STORED u-wrapped, so one physical tile has two names near the seam. ONE
   contract, stated in full on `World.Render.HitTest`: picking

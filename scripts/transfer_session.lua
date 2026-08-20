@@ -766,6 +766,18 @@ function M.create(sourceUid, kind, destinationId)
     -- otherwise keep walking for up to a full thought interval after the
     -- session that pinned it existed.
     for _, uid in ipairs(heldUnits(M.active)) do
+        -- A Mode A session is an explicit player command, so it
+        -- supersedes a standing position hold (#1216) on either unit
+        -- exactly as commandMove / commandPickup / commandTransferOrder
+        -- do -- otherwise the source would walk back to a stale anchor
+        -- the moment the session ended. Read through package.loaded for
+        -- the same reason nudgeUnit is: a headless UI fixture loads
+        -- this module without the unit AI, and a session with no AI
+        -- running has no hold to release.
+        local unitAi = package.loaded["scripts.unit_ai"]
+        if unitAi and type(unitAi.releaseHold) == "function" then
+            pcall(unitAi.releaseHold, uid)
+        end
         nudgeUnit(uid)
     end
     return M.active
