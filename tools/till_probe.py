@@ -25,9 +25,9 @@ checks:
 Usage: python3 tools/till_probe.py [--port 9178] [--seed 42]
        [--size 64] [--plates 3]
 """
-import argparse, glob, json, os, shutil, socket, subprocess, sys, tempfile, time
+import argparse, glob, os, shutil, socket, subprocess, sys, tempfile, time
 from pathlib import Path
-from probelib import clear_find_water, quit_engine, boot, send, wait_load_published
+from probelib import clear_find_water, quit_engine, boot, send, send_json, wait_load_published
 
 SPROOT = "/tmp"
 REPO = Path(__file__).resolve().parent.parent
@@ -50,14 +50,6 @@ def make_isolated_root(base: str) -> str:
 TILLED_SOIL_VEG_ID = 77
 
 
-def jget(port, lua, timeout=10.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
-
-
 def bootstrap(port):
     for pattern, fn in [
         ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
@@ -77,13 +69,13 @@ def find_tillable(port, span=4):
     flora-free tile; returns (gx, gy) or None."""
     for sx in range(-span * 16, span * 16 + 1, 4):
         for sy in range(-span * 16, span * 16 + 1, 4):
-            slope = jget(port, f"return world.getSlopeAt({sx},{sy})")
+            slope = send_json(port, f"return world.getSlopeAt({sx},{sy})")
             if slope != 0:
                 continue
-            fluid = jget(port, f"return world.getFluidAt({sx},{sy})")
+            fluid = send_json(port, f"return world.getFluidAt({sx},{sy})")
             if isinstance(fluid, dict) and fluid.get("type"):
                 continue
-            flora = jget(port, f"return world.getFloraAt({sx},{sy})")
+            flora = send_json(port, f"return world.getFloraAt({sx},{sy})")
             if isinstance(flora, dict):
                 continue
             return sx, sy
@@ -94,7 +86,7 @@ def find_fluid_tile(port, span=4):
     """Scan for a fluid-covered tile, for the untillable-exclusion check."""
     for sx in range(-span * 16, span * 16 + 1, 4):
         for sy in range(-span * 16, span * 16 + 1, 4):
-            fluid = jget(port, f"return world.getFluidAt({sx},{sy})")
+            fluid = send_json(port, f"return world.getFluidAt({sx},{sy})")
             if isinstance(fluid, dict) and fluid.get("type"):
                 return sx, sy
     return None
@@ -139,7 +131,7 @@ def _run(port, proc, args, passed):
         tx, ty = found
         print(f"  tillable tile at ({tx},{ty})")
 
-        pre = jget(port, f"return world.isPlantable({tx},{ty})")
+        pre = send_json(port, f"return world.isPlantable({tx},{ty})")
         ok0 = pre is False
         passed &= ok0
         print(f"  [{'PASS' if ok0 else 'FAIL'}] isPlantable is false before "
@@ -148,8 +140,8 @@ def _run(port, proc, args, passed):
         send(port, f"till.designate('probe',{tx},{ty},{tx},{ty}); "
                    f"return 'ok'")
         time.sleep(0.5)
-        n = jget(port, "return till.getDesignationCount('probe')")
-        d = jget(port, f"return till.getDesignationAt('probe',{tx},{ty})")
+        n = send_json(port, "return till.getDesignationCount('probe')")
+        d = send_json(port, f"return till.getDesignationAt('probe',{tx},{ty})")
         ok1 = isinstance(n, (int, float)) and n >= 1 \
               and isinstance(d, dict) and isinstance(d.get("z"), (int, float))
         passed &= ok1
@@ -158,7 +150,7 @@ def _run(port, proc, args, passed):
 
         send(port, f"till.cancelDesignation({tx},{ty}); return 'ok'")
         time.sleep(0.5)
-        d2 = jget(port, f"return till.getDesignationAt('probe',{tx},{ty})")
+        d2 = send_json(port, f"return till.getDesignationAt('probe',{tx},{ty})")
         ok1b = not isinstance(d2, dict)
         passed &= ok1b
         print(f"  [{'PASS' if ok1b else 'FAIL'}] cancelDesignation clears "
@@ -171,7 +163,7 @@ def _run(port, proc, args, passed):
             send(port, f"till.designate('probe',{fx},{fy},{fx},{fy}); "
                        f"return 'ok'")
             time.sleep(0.5)
-            df = jget(port, f"return till.getDesignationAt('probe',{fx},{fy})")
+            df = send_json(port, f"return till.getDesignationAt('probe',{fx},{fy})")
             ok2 = not isinstance(df, dict)
             passed &= ok2
             print(f"  [{'PASS' if ok2 else 'FAIL'}] fluid tile excluded "
@@ -198,7 +190,7 @@ def _run(port, proc, args, passed):
         send(port, "engine.setPaused(false); return 'ok'")
         send(port, "return world.loadChunksInRegion(-4, -4, 4, 4)", timeout=30)
         send(port, "return world.waitForChunks(120)", timeout=125)
-        d3 = jget(port, f"return till.getDesignationAt('probe',{tx},{ty})")
+        d3 = send_json(port, f"return till.getDesignationAt('probe',{tx},{ty})")
         ok3 = isinstance(d3, dict) and isinstance(d3.get("z"), (int, float))
         passed &= ok3
         print(f"  [{'PASS' if ok3 else 'FAIL'}] designation survives "
@@ -244,13 +236,13 @@ def _run(port, proc, args, passed):
         tilled = cleared = False
         seen_anims = []
         while time.time() < deadline:
-            poll = jget(port,
-                        f"local d=till.getDesignationAt('probe',{tx},{ty}); "
-                        f"local v=world.getVegAt({tx},{ty}); "
-                        f"local i=unit.getInfo({uid}); "
-                        f"return {{cleared=(d==nil), "
-                        f"tilled=(v=={TILLED_SOIL_VEG_ID}), "
-                        f"anim=(i and i.currentAnim or '')}}")
+            poll = send_json(port,
+                             f"local d=till.getDesignationAt('probe',{tx},{ty}); "
+                             f"local v=world.getVegAt({tx},{ty}); "
+                             f"local i=unit.getInfo({uid}); "
+                             f"return {{cleared=(d==nil), "
+                             f"tilled=(v=={TILLED_SOIL_VEG_ID}), "
+                             f"anim=(i and i.currentAnim or '')}}")
             if isinstance(poll, dict):
                 if poll.get("cleared"):
                     cleared = True
@@ -287,7 +279,7 @@ def _run(port, proc, args, passed):
               f"animation observed: seen={sorted(seen_set)}")
 
         # --- 5. Plantable contract holds post-till ---
-        post = jget(port, f"return world.isPlantable({tx},{ty})")
+        post = send_json(port, f"return world.isPlantable({tx},{ty})")
         ok4b = post is True
         passed &= ok4b
         print(f"  [{'PASS' if ok4b else 'FAIL'}] isPlantable is true after "
@@ -297,7 +289,7 @@ def _run(port, proc, args, passed):
         send(port, f"till.designate('probe',{tx},{ty},{tx},{ty}); "
                    f"return 'ok'")
         time.sleep(0.5)
-        d5 = jget(port, f"return till.getDesignationAt('probe',{tx},{ty})")
+        d5 = send_json(port, f"return till.getDesignationAt('probe',{tx},{ty})")
         ok5 = not isinstance(d5, dict)
         passed &= ok5
         print(f"  [{'PASS' if ok5 else 'FAIL'}] re-sweep skips the "

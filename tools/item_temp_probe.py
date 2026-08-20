@@ -20,7 +20,7 @@ iiTemp / cooling-tick stack end-to-end:
 Usage: python3 tools/item_temp_probe.py [--port 9177] [--seed 42]
        [--size 64] [--plates 3]
 """
-import argparse, glob, json, socket, subprocess, sys, time
+import argparse, glob, socket, subprocess, sys, time
 from probelib import quit_engine, boot, send, wait_load_published
 
 SPROOT = "/tmp"
@@ -32,14 +32,6 @@ def num(port, lua, timeout=10.0):
         return float(raw)
     except ValueError:
         return None
-
-
-def jget(port, lua, timeout=10.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
 
 
 def bootstrap(port):

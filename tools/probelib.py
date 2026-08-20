@@ -100,7 +100,16 @@ def send(port: int, lua: str, timeout: float = 10.0,
 
 
 def send_json(port: int, lua: str, timeout: float = 10.0, idle: float = DEFAULT_IDLE):
-    """``send`` + ``json.loads`` the result. Returns ``None`` on empty/invalid."""
+    """``send`` + ``json.loads`` the result.
+
+    An EMPTY result (no reply, or a Lua empty string, which ``send``
+    returns unquoted) is ``None``. Text that is not valid JSON is
+    returned AS TEXT, not ``None`` — a Lua ``nil`` arrives as the JSON
+    literal ``null`` and so decodes to ``None`` through the normal path,
+    which is why callers can test ``is None`` for "the engine said
+    nothing was there". A caller that must distinguish an empty STRING
+    from an absent value has to call ``send`` directly.
+    """
     raw = send(port, lua, timeout=timeout, idle=idle)
     if not raw:
         return None

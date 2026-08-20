@@ -4,10 +4,11 @@
 ENGINE-FREE, and deliberately so: `action_outcome_probe.py` boots a real
 headless engine and generates a 64-world, which is the ~8-minute cost
 this coverage exists to stop depending on. Nothing here boots an engine,
-opens a TCP console, or generates a world — the probe's own `send`/`jget`
-are swapped for a fake console that answers the exact Lua strings the
-real stage sends. Same model as `test_run_probes.py` (real code paths,
-synthetic inputs) and `test_persistence_contract_sweep.py` (pure, <1 s).
+opens a TCP console, or generates a world — the probe's own `send` and
+`send_json` are swapped for a fake console that answers the exact Lua
+strings the real stage sends. Same model as `test_run_probes.py` (real
+code paths, synthetic inputs) and `test_persistence_contract_sweep.py`
+(pure, <1 s).
 
 The real `tools/action_outcome_probe.py` is imported and driven, so this
 exercises the shipped `find_chop_fixture` / `evaluate_chop_designation` /
@@ -92,7 +93,7 @@ class FakeConsole:
             self._designated = True
         return '"ok"'
 
-    def jget(self, port, lua, timeout=10.0):
+    def send_json(self, port, lua, timeout=10.0, idle=None):
         self.sent.append(lua)
         if "findHarvestableFlora" in lua:
             if self.wood_result is not None:
@@ -117,14 +118,14 @@ class FakeConsole:
 def drive(console, fn=None):
     """Run the chop stage against `console`, capturing its output."""
     fn = fn or probe.run_and_report_chop_stage
-    original_send, original_jget = probe.send, probe.jget
-    probe.send, probe.jget = console.send, console.jget
+    original_send, original_json = probe.send, probe.send_json
+    probe.send, probe.send_json = console.send, console.send_json
     buffer = io.StringIO()
     try:
         with redirect_stdout(buffer):
             result = fn(PORT)
     finally:
-        probe.send, probe.jget = original_send, original_jget
+        probe.send, probe.send_json = original_send, original_json
     return result, buffer.getvalue()
 
 

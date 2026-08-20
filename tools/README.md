@@ -590,7 +590,8 @@ ordinary exit **1**.
 gate, and it is ENGINE-FREE by design — the probe itself boots a real
 headless engine and generates a 64-world, roughly eight minutes, which is
 exactly the cost this coverage exists to stop depending on. It imports the
-real probe and swaps its `send`/`jget` for a fake console, so the shipped
+real probe and swaps its `send`/`send_json` for a fake console, so the
+shipped
 `find_chop_fixture` / `evaluate_chop_designation` / `run_chop_stage` /
 `probe_exit_status` paths run rather than a copy. It also pins the
 property that makes "found nothing" trustworthy: the query origins'
@@ -598,6 +599,35 @@ radius-64 Euclidean discs COVER the probe's loaded region, so discovery
 cannot regress into a sparse sample grid that misses trees. Blocking CI
 step alongside `test_run_probes.py`; `action_outcome` itself stays
 `manual-only`.
+
+### `test_probelib.py` — `send_json`'s result contract (#1160)
+
+`probelib.send_json` is the shared JSON layer over the debug console, and
+twenty-two probes used to define a private `jget` copy of it instead. The
+copies differed from the shared helper in ways nothing documented, so how
+a probe decoded a reply depended on which spelling its author reached for.
+The one difference that was observable: an EMPTY result is `None` from
+`send_json` and was `""` from `jget`, so an `is None` check meant
+different things in different files. #1160 deleted every copy.
+
+`python3 tools/test_probelib.py` keeps that consolidated, and is
+ENGINE-FREE: it stands up a real socket that speaks the console's reply
+protocol, so the transport (`send`) runs for real without a world, a GPU
+or a subprocess. It pins the three result cases — empty is `None`, valid
+JSON is the decoded value, non-JSON is returned AS TEXT (which is why a
+Lua `nil`, arriving as the JSON literal `null`, still reads as `None`) —
+plus `idle` being reachable, the knob the copies hid.
+
+Its source guard is structural, not a name check: a `tools/` function
+qualifies as a copy when it RETURNS `json.loads` of a `send` result AND
+hands `send` one of its own PARAMETERS as the Lua. That parameter clause
+is the scope line. A helper that decodes ONE fixed query it builds itself
+(`snap`, `measure`, `msummary`, `get_identity`) is a different, out-of-
+scope duplication — see `docs/code_health_findings.md` CH-129. Both
+directions are mutation-tested against synthetic trees, so the guard is
+proven to fire on a reintroduced copy and to stay quiet on a fixed-query
+helper rather than merely agreeing that today's tree is clean. Blocking
+CI step alongside `test_run_probes.py`.
 
 ### `ci_probes.py` — CI probe selection + eligibility (#530, #540)
 

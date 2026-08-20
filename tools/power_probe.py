@@ -96,7 +96,6 @@ from __future__ import annotations
 
 import argparse
 import glob
-import json
 import math
 import os
 import shutil
@@ -107,7 +106,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from probelib import quit_engine, boot, send, wait_load_published
+from probelib import quit_engine, boot, send, send_json, wait_load_published
 
 SAVE_PREFIX = "power_probe_"  # save dirs this probe owns (cleanup scoped to it)
 REPO = Path(__file__).resolve().parent.parent
@@ -127,14 +126,6 @@ def make_isolated_root(base: str) -> str:
             os.symlink(os.path.join(REPO, family), target)
     os.makedirs(os.path.join(root, "saves"), exist_ok=True)
     return root
-
-
-def jget(port: int, lua: str, timeout: float = 10.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
 
 
 def as_int(s) -> int | None:
@@ -212,7 +203,7 @@ EV_CAMERA_STOPS = [(cx * 16 + 8, -8) for cx in (10, 13, 16, 19, 22, 25)]
 
 
 def chunk_loaded(port: int, coord: tuple[int, int]) -> bool | None:
-    info = jget(port, f"return world.getChunkInfo({coord[0]}, {coord[1]})")
+    info = send_json(port, f"return world.getChunkInfo({coord[0]}, {coord[1]})")
     if not isinstance(info, dict):
         return None
     return bool(info.get("loaded"))
@@ -251,7 +242,7 @@ def reload_chunk(port: int, coord: tuple[int, int], tile: tuple[int, int],
 def net_members(port: int, node_id: int) -> list[int] | None:
     """The sorted node-id set of the network @node_id sits on, or None when
     it is on no network at all."""
-    net = jget(port, f"return power.getNetworkForNode({node_id})")
+    net = send_json(port, f"return power.getNetworkForNode({node_id})")
     if not isinstance(net, dict):
         return None
     return sorted(net.get("nodeIds", []))
@@ -261,7 +252,7 @@ def listed_members(port: int) -> list[list[int]]:
     """Every network listNetworks reports, as sorted node-id sets — the
     second membership surface requirement 1 names, checked alongside
     getNetworkForNode so the two cannot disagree."""
-    nets = jget(port, "return power.listNetworks()")
+    nets = send_json(port, "return power.listNetworks()")
     if not isinstance(nets, list):
         return []
     return sorted(sorted(n.get("nodeIds", [])) for n in nets
@@ -269,7 +260,7 @@ def listed_members(port: int) -> list[list[int]]:
 
 
 def stored_wh(port: int, bid: int) -> float | None:
-    node = jget(port, f"return power.getNodeForBuilding({bid})")
+    node = send_json(port, f"return power.getNodeForBuilding({bid})")
     if not isinstance(node, dict):
         return None
     value = node.get("storedWh")
@@ -348,7 +339,7 @@ def _run(port: int, root: str) -> int:
 
         # --- 3. commitPlacement with NO unit selected ---
         send(port, "unit.deselectAll(); return 'ok'")
-        r = jget(port,
+        r = send_json(port,
             "local id,err = require('scripts.build_tool').commitPlacement("
             "'solar_panel', 7, 5); return {ok = (id ~= nil), err = err}")
         passed = check(passed, isinstance(r, dict) and r.get("ok") is False,
@@ -367,7 +358,7 @@ def _run(port: int, root: str) -> int:
                        "commitPlacement(solar_panel) with mule selected", panel_bid)
         passed = check(passed, count_item(port, uid, "solar_panel") == 1,
                        "one solar_panel consumed from the mule")
-        node = jget(port, f"return power.getNodeForBuilding({panel_bid})")
+        node = send_json(port, f"return power.getNodeForBuilding({panel_bid})")
         passed = check(passed,
             isinstance(node, dict) and node.get("role") == "source"
             and node.get("peakWatts") == 400 and node.get("capacityWh") == 0,
@@ -381,7 +372,7 @@ def _run(port: int, root: str) -> int:
                        batt_bid)
         passed = check(passed, count_item(port, uid, "high_voltage_battery") == 1,
                        "one high_voltage_battery consumed from the mule")
-        node = jget(port, f"return power.getNodeForBuilding({batt_bid})")
+        node = send_json(port, f"return power.getNodeForBuilding({batt_bid})")
         passed = check(passed,
             isinstance(node, dict) and node.get("role") == "storage"
             and node.get("capacityWh") == 5000 and node.get("peakWatts") == 0,
@@ -396,7 +387,7 @@ def _run(port: int, root: str) -> int:
                        second_panel_bid)
         passed = check(passed, count_item(port, uid, "solar_panel") == 0,
                        "mule now carries 0 solar_panel")
-        r = jget(port,
+        r = send_json(port,
             "local id,err = require('scripts.build_tool').commitPlacement("
             "'solar_panel', 11, 5); return {ok = (id ~= nil), err = err}")
         passed = check(passed, isinstance(r, dict) and r.get("ok") is False,
@@ -416,10 +407,10 @@ def _run(port: int, root: str) -> int:
         for gx, gy in [(7, 6), (8, 6)]:
             send(port, f"require('scripts.wire').place({gx}, {gy}); return 'ok'")
 
-        panel_node = jget(port, f"return power.getNodeForBuilding({panel_bid})")
-        batt_node = jget(port, f"return power.getNodeForBuilding({batt_bid})")
-        panel_net = jget(port, f"return power.getNetworkForNode({panel_node['id']})")
-        batt_net = jget(port, f"return power.getNetworkForNode({batt_node['id']})")
+        panel_node = send_json(port, f"return power.getNodeForBuilding({panel_bid})")
+        batt_node = send_json(port, f"return power.getNodeForBuilding({batt_bid})")
+        panel_net = send_json(port, f"return power.getNetworkForNode({panel_node['id']})")
+        batt_net = send_json(port, f"return power.getNetworkForNode({batt_node['id']})")
         passed = check(passed,
             isinstance(panel_net, dict) and isinstance(batt_net, dict)
             and sorted(panel_net.get("nodeIds", [])) == sorted(batt_net.get("nodeIds", []))
@@ -427,20 +418,20 @@ def _run(port: int, root: str) -> int:
             "solar panel + battery share one network after wiring",
             {"panel_net": panel_net, "battery_net": batt_net})
 
-        second_panel_node = jget(port,
+        second_panel_node = send_json(port,
             f"return power.getNodeForBuilding({second_panel_bid})")
-        lone_net = jget(port,
+        lone_net = send_json(port,
             f"return power.getNetworkForNode({second_panel_node['id']})")
         passed = check(passed, lone_net is None,
                        "the unwired second solar panel has no network", lone_net)
 
         # --- 7. Charging over a simulated few hours of daylight ---
-        stored_before = jget(port,
+        stored_before = send_json(port,
             f"return power.getNodeForBuilding({batt_bid}).storedWh")
         send(port, "world.setTimeScale('power_probe', 120); return 'ok'")
         time.sleep(2.5)
         send(port, "world.setTimeScale('power_probe', 0); return 'ok'")
-        stored_after = jget(port, f"return power.getNodeForBuilding({batt_bid}).storedWh")
+        stored_after = send_json(port, f"return power.getNodeForBuilding({batt_bid}).storedWh")
         passed = check(passed,
             isinstance(stored_before, (int, float))
             and isinstance(stored_after, (int, float))
@@ -455,9 +446,9 @@ def _run(port: int, root: str) -> int:
         # must not restore. The host is the UNWIRED second panel — it is
         # on no network, so retiring it cannot perturb the wired pair's
         # membership or the battery's charge.
-        battery_node_before = jget(port,
+        battery_node_before = send_json(port,
             f"return power.getNodeForBuilding({batt_bid})")
-        demolished_node = jget(port,
+        demolished_node = send_json(port,
             f"return power.getNodeForBuilding({second_panel_bid})")
         demolished_nid = (as_int(demolished_node.get("id"))
                           if isinstance(demolished_node, dict) else None)
@@ -480,17 +471,17 @@ def _run(port: int, root: str) -> int:
                        "BuildingDestroy completed for the second solar panel",
                        gone)
         passed = check(passed,
-            jget(port, f"return power.getNodeForBuilding({second_panel_bid})")
+            send_json(port, f"return power.getNodeForBuilding({second_panel_bid})")
                 is None,
             "getNodeForBuilding reports nil for the demolished panel")
-        listed_ids = jget(port,
+        listed_ids = send_json(port,
             "local out={}; for _,n in ipairs(power.listNodes()) do "
             "out[#out+1]=n.id end; return out")
         passed = check(passed,
             isinstance(listed_ids, list) and demolished_nid not in listed_ids,
             "listNodes no longer contains the demolished panel's node",
             listed_ids)
-        battery_node_after = jget(port,
+        battery_node_after = send_json(port,
             f"return power.getNodeForBuilding({batt_bid})")
         passed = check(passed,
             isinstance(battery_node_after, dict)
@@ -586,10 +577,10 @@ def _run(port: int, root: str) -> int:
             ("meridian panel", meridian_bid, 10, 10),
             ("antipodal panel", antipodal_bid, 64, 0),
         ]:
-            node = jget(port, f"return power.getNodeForBuilding({node_bid})")
-            net = (jget(port, f"return power.getNetworkForNode({node['id']})")
+            node = send_json(port, f"return power.getNodeForBuilding({node_bid})")
+            net = (send_json(port, f"return power.getNetworkForNode({node['id']})")
                    if isinstance(node, dict) else None)
-            sun_angle = jget(port, f"return world.getSunAngleAt({gx}, {gy})")
+            sun_angle = send_json(port, f"return world.getSunAngleAt({gx}, {gy})")
             expected_gen = (400.0 * max(0.0, -math.cos(2 * math.pi * float(sun_angle)))
                             if isinstance(sun_angle, (int, float)) else None)
             generation[label] = net.get("generationW") if isinstance(net, dict) else None
@@ -657,8 +648,8 @@ def _run(port: int, root: str) -> int:
 
         for gx, gy in EV_WIRE_RUN:
             send(port, f"require('scripts.wire').place({gx}, {gy}); return 'ok'")
-        ev_panel_node = jget(port, f"return power.getNodeForBuilding({ev_panel_bid})")
-        ev_batt_node = jget(port, f"return power.getNodeForBuilding({ev_batt_bid})")
+        ev_panel_node = send_json(port, f"return power.getNodeForBuilding({ev_panel_bid})")
+        ev_batt_node = send_json(port, f"return power.getNodeForBuilding({ev_batt_bid})")
         if not (isinstance(ev_panel_node, dict) and isinstance(ev_batt_node, dict)):
             sys.exit(f"FAIL: eviction-page nodes never registered: "
                      f"{ev_panel_node} / {ev_batt_node}")
@@ -721,7 +712,7 @@ def _run(port: int, root: str) -> int:
         send(port, "engine.setPaused(true); return 'ok'")
         time.sleep(0.5)
         detached_after = stored_wh(port, ev_batt_bid)
-        detached_net = jget(port, f"return power.getNetworkForNode({ev_panel_nid})")
+        detached_net = send_json(port, f"return power.getNetworkForNode({ev_panel_nid})")
         passed = check(passed,
             detached_before is not None and detached_after is not None
             and detached_after > detached_before,
@@ -862,11 +853,11 @@ def _run(port: int, root: str) -> int:
             (panel_bid, "solar_panel", "source", 400, 0),
             (batt_bid, "high_voltage_battery", "storage", 0, 5000),
         ]:
-            info = jget(port, f"return building.getInfo({bid})")
+            info = send_json(port, f"return building.getInfo({bid})")
             passed = check(passed,
                 isinstance(info, dict) and info.get("defName") == want_def,
                 f"building #{bid} ({want_def}) survived the reload", info)
-            node = jget(port, f"return power.getNodeForBuilding({bid})")
+            node = send_json(port, f"return power.getNodeForBuilding({bid})")
             passed = check(passed,
                 isinstance(node, dict) and node.get("role") == want_role
                 and node.get("peakWatts") == want_peak
@@ -886,13 +877,13 @@ def _run(port: int, root: str) -> int:
         # back, and no id may have been renumbered or reused to make the
         # count come out right.
         passed = check(passed,
-            jget(port, f"return building.getInfo({second_panel_bid})") is None,
+            send_json(port, f"return building.getInfo({second_panel_bid})") is None,
             "the demolished panel's BUILDING is absent after a fresh-process load")
         passed = check(passed,
-            jget(port, f"return power.getNodeForBuilding({second_panel_bid})")
+            send_json(port, f"return power.getNodeForBuilding({second_panel_bid})")
                 is None,
             "the demolished panel's NODE is absent after a fresh-process load")
-        reloaded_ids = jget(port,
+        reloaded_ids = send_json(port,
             "local out={}; for _,n in ipairs(power.listNodes()) do "
             "out[#out+1]=n.id end; return out")
         passed = check(passed,
@@ -929,9 +920,9 @@ def _run(port: int, root: str) -> int:
         # Re-resolve the node ids through their BUILDINGS rather than
         # reusing engine A's, so this asserts topology and not id stability
         # (which the reload checks above already own).
-        fresh_panel_node = jget(port,
+        fresh_panel_node = send_json(port,
             f"return power.getNodeForBuilding({ev_panel_bid})")
-        fresh_batt_node = jget(port,
+        fresh_batt_node = send_json(port,
             f"return power.getNodeForBuilding({ev_batt_bid})")
         fresh_panel_nid = (as_int(fresh_panel_node.get("id"))
                            if isinstance(fresh_panel_node, dict) else None)

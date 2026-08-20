@@ -134,7 +134,7 @@ echo "==> [17/19] world_check --quick"
 python3 tools/world_check.py --quick
 
 # Validate the probe-runner harness itself (cheap, no engine, no GPU) --
-# the same five checks, in the same order, as ci.yml's "probe runner
+# the same six checks, in the same order, as ci.yml's "probe runner
 # self-tests" step. ci_probes/ci_expensive_gates cover the path->probe
 # and path->gate mappings, which would otherwise only surface after a
 # push as a PR mis-selecting its own gates; test_run_probes covers
@@ -142,13 +142,17 @@ python3 tools/world_check.py --quick
 # test_persistence_contract_sweep covers the cross-probe registry-drift
 # guard; test_action_outcome_probe covers action_outcome_probe.py's
 # fixture classification against a fake console, so its branches are
-# checked without that probe's own ~8-minute real engine.
+# checked without that probe's own ~8-minute real engine;
+# test_probelib pins probelib.send_json's result contract against a real
+# socket and fails if a probe grows a private JSON console wrapper again
+# (#1160).
 echo "==> [18/19] probe runner self-tests"
 python3 tools/ci_probes.py --self-test
 python3 tools/ci_expensive_gates.py --self-test
 python3 tools/test_run_probes.py
 python3 tools/test_persistence_contract_sweep.py
 python3 tools/test_action_outcome_probe.py
+python3 tools/test_probelib.py
 
 # The gate that keeps this file honest (#1355): fails if a
 # `python3 tools/*.py` check runs in ci.yml's build-test job and not

@@ -31,9 +31,9 @@ worldgen; the arena has no flora), then checks:
 Usage: python3 tools/chop_probe.py [--port 9177] [--seed 42]
        [--size 64] [--plates 3]
 """
-import argparse, glob, json, os, shutil, socket, subprocess, sys, tempfile, time
+import argparse, glob, os, shutil, socket, subprocess, sys, tempfile, time
 from pathlib import Path
-from probelib import clear_find_water, quit_engine, boot, send, wait_load_published
+from probelib import clear_find_water, quit_engine, boot, send, send_json, wait_load_published
 
 SPROOT = "/tmp"
 REPO = Path(__file__).resolve().parent.parent
@@ -55,14 +55,6 @@ def make_isolated_root(base: str) -> str:
     return root
 
 
-def jget(port, lua, timeout=10.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
-
-
 def bootstrap(port):
     for pattern, fn in [
         ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
@@ -82,15 +74,15 @@ def find_wood(port, span=4):
     wood-tagged harvestable tile; returns (gx, gy, species) or None."""
     for sx in range(-span * 16, span * 16 + 1, 32):
         for sy in range(-span * 16, span * 16 + 1, 32):
-            r = jget(port,
-                     f"return world.findHarvestableFlora({sx},{sy},64,'wood')")
+            r = send_json(port,
+                          f"return world.findHarvestableFlora({sx},{sy},64,'wood')")
             if isinstance(r, dict):
                 return r["gx"], r["gy"], r["id"]
     return None
 
 
 def count_logs_near(port, gx, gy, radius=4):
-    ground = jget(port, "return item.listGround()")
+    ground = send_json(port, "return item.listGround()")
     if not isinstance(ground, list):
         return 0
     return sum(1 for g in ground
@@ -137,7 +129,7 @@ def _run(port, proc, args, passed):
                   "seed)")
             return 1
         tx, ty, species = found
-        fl = jget(port, f"return world.getFloraAt({tx},{ty})")
+        fl = send_json(port, f"return world.getFloraAt({tx},{ty})")
         ok1 = isinstance(fl, dict) and "wood" in (fl.get("tags") or []) \
               and fl.get("regrowthRemaining", -1) == 0
         passed &= ok1
@@ -145,8 +137,8 @@ def _run(port, proc, args, passed):
               f"choppable tree (wood tag, no regrowth timer): "
               f"{species} at ({tx},{ty}) → {fl}")
 
-        bare = jget(port,
-                    f"return world.findHarvestableFlora({tx},{ty},2)")
+        bare = send_json(port,
+                         f"return world.findHarvestableFlora({tx},{ty},2)")
         ok1b = not (isinstance(bare, dict)
                     and bare.get("gx") == tx and bare.get("gy") == ty)
         passed &= ok1b
@@ -157,8 +149,8 @@ def _run(port, proc, args, passed):
         send(port, f"chop.designate('probe',{tx-1},{ty-1},{tx+1},{ty+1}); "
                    f"return 'ok'")
         time.sleep(0.5)
-        n = jget(port, "return chop.getDesignationCount('probe')")
-        d = jget(port, f"return chop.getDesignationAt('probe',{tx},{ty})")
+        n = send_json(port, "return chop.getDesignationCount('probe')")
+        d = send_json(port, f"return chop.getDesignationAt('probe',{tx},{ty})")
         ok2 = isinstance(n, (int, float)) and n >= 1 \
               and isinstance(d, dict) and isinstance(d.get("z"), (int, float))
         passed &= ok2
@@ -167,7 +159,7 @@ def _run(port, proc, args, passed):
 
         send(port, f"chop.cancelDesignation({tx},{ty}); return 'ok'")
         time.sleep(0.5)
-        d2 = jget(port, f"return chop.getDesignationAt('probe',{tx},{ty})")
+        d2 = send_json(port, f"return chop.getDesignationAt('probe',{tx},{ty})")
         ok2b = not isinstance(d2, dict)
         passed &= ok2b
         print(f"  [{'PASS' if ok2b else 'FAIL'}] cancelDesignation clears "
@@ -191,7 +183,7 @@ def _run(port, proc, args, passed):
         send(port, "engine.setPaused(false); return 'ok'")
         send(port, "return world.loadChunksInRegion(-4, -4, 4, 4)", timeout=30)
         send(port, "return world.waitForChunks(120)", timeout=125)
-        d3 = jget(port, f"return chop.getDesignationAt('probe',{tx},{ty})")
+        d3 = send_json(port, f"return chop.getDesignationAt('probe',{tx},{ty})")
         ok3 = isinstance(d3, dict) and isinstance(d3.get("z"), (int, float))
         passed &= ok3
         print(f"  [{'PASS' if ok3 else 'FAIL'}] designation survives "
@@ -270,13 +262,13 @@ def _run(port, proc, args, passed):
         felled = logs = regrowing = False
         while time.time() < deadline:
             time.sleep(2.0)
-            d4 = jget(port,
-                      f"return chop.getDesignationAt('probe',{tx},{ty})")
+            d4 = send_json(port,
+                           f"return chop.getDesignationAt('probe',{tx},{ty})")
             if not isinstance(d4, dict):
                 felled = True
             if count_logs_near(port, tx, ty) >= 1:
                 logs = True
-            fl4 = jget(port, f"return world.getFloraAt({tx},{ty})")
+            fl4 = send_json(port, f"return world.getFloraAt({tx},{ty})")
             if isinstance(fl4, dict) and not fl4.get("harvestable") \
                and fl4.get("regrowthRemaining", 0) > 0:
                 regrowing = True
@@ -339,8 +331,8 @@ def _run(port, proc, args, passed):
             built = send(port, f"return structure.hasAt({px},{py},"
                                f"'post_n')") == "true"
             cleared = not isinstance(
-                jget(port, f"return construction.getDesignationAt("
-                           f"'probe',{px},{py})"), dict)
+                send_json(port, f"return construction.getDesignationAt("
+                                f"'probe',{px},{py})"), dict)
             if built and cleared:
                 break
         logs_after = count_logs_near(port, tx, ty, radius=8)

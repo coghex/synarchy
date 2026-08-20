@@ -62,22 +62,13 @@ from __future__ import annotations
 
 import argparse
 import glob
-import json
 import socket
 import subprocess
 import sys
 import time
-from probelib import clear_find_water, quit_engine, boot, send
+from probelib import clear_find_water, quit_engine, boot, send, send_json
 
 LOG = "/tmp/repair_ai_probe_engine.log"
-
-
-def jget(port: int, lua: str, timeout: float = 10.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
 
 
 def bootstrap(port: int) -> None:
@@ -157,7 +148,7 @@ def spawn_acolyte(port: int, x: float, y: float) -> int:
     TOOL_DEFS = {"pick_steel", "shovel_steel", "axe_steel", "rations"}
 
     def stripped():
-        inv = jget(port, f"return unit.getInventory({n})")
+        inv = send_json(port, f"return unit.getInventory({n})")
         if inv is None:
             return False
         present = {it["defName"] for it in inv} & TOOL_DEFS
@@ -245,7 +236,7 @@ def force_item_state(port: int, uid: int, def_name: str,
     # just-created unit (e.g. spawn_mule has no internal wait, unlike
     # spawn_acolyte's goal-retirement poll) — retry until addItem's
     # effect is actually queryable instead of assuming it landed already.
-    ids = poll_until(port, 20, lambda: jget(port,
+    ids = poll_until(port, 20, lambda: send_json(port,
         f"local out={{}}; for _,it in ipairs(unit.getInventory({uid}) or {{}}) do "
         f"if it.defName=='{def_name}' then out[#out+1]=it.instanceId end end; "
         f"return #out > 0 and out or false"))
@@ -260,7 +251,7 @@ def force_item_state(port: int, uid: int, def_name: str,
 def item_state(port: int, uid: int, iid: int):
     """{cond, sharp, loc} for instance iid wherever it sits on uid right
     now (inventory, equipped loadout, or worn accessory) — or None."""
-    return jget(port,
+    return send_json(port,
         f"for _,it in ipairs(unit.getInventory({uid}) or {{}}) do "
         f"  if it.instanceId=={iid} then "
         f"    return {{cond=it.condition,sharp=it.sharpness,loc='inv'}} end end; "
@@ -322,7 +313,7 @@ def phase_own_inventory(port: int) -> None:
     # as real gameplay's typical "fetch specifically to repair" flow.
     send(port, "item.spawnGround('lignite_chunk', 6.5, 2.5); "
                "item.spawnGround('lignite_chunk', 6.5, 3.5); return 'ok'")
-    skill_before = jget(port, f"return unit.getSkill({uid}, 'smithing')")
+    skill_before = send_json(port, f"return unit.getSkill({uid}, 'smithing')")
     axe = force_item_state(port, uid, "axe_steel", cond=0.0, sharp=100.0)
     gam = force_item_state(port, uid, "wool_gambeson", cond=5.0, sharp=100.0)
 
@@ -341,7 +332,7 @@ def phase_own_inventory(port: int) -> None:
     check("both ground lignite_chunk fetched and consumed",
           count_ground(port, "lignite_chunk") == 0
           and count_item(port, uid, "lignite_chunk") == 0)
-    skill_after = jget(port, f"return unit.getSkill({uid}, 'smithing')")
+    skill_after = send_json(port, f"return unit.getSkill({uid}, 'smithing')")
     # acolyte.yaml rolls a baseline smithing skill (base 20, range 15) —
     # it's never nil, so "work-XP granted" means the two successful
     # repairs measurably RAISED it, not that it went from nil to a value.
@@ -475,7 +466,7 @@ def phase_abort_returns_item(port: int) -> None:
     # job.bid is cached would just send the acolyte on a long walk to one
     # of those instead of aborting (job.bid pins the abort to THIS
     # building regardless of what else exists elsewhere).
-    bid_cached = poll_until(port, 30, lambda: jget(port,
+    bid_cached = poll_until(port, 30, lambda: send_json(port,
         f"local ai=require('scripts.unit_ai'); local st=ai.getState({uid}); "
         f"return st and st.repairJob and st.repairJob.bid") == bid)
     check("acolyte's job cached this station before it's destroyed",
@@ -545,12 +536,12 @@ def phase_own_item_collision(port: int) -> None:
 def phase_role_weight(port: int) -> None:
     print("\n[phase 7] role_weight: smith's (#265) first real ON_ROLE "
           "effect on repair_job")
-    family = jget(port,
+    family = send_json(port,
         "return require('scripts.unit_roles').ACTION_FAMILY.repair_job")
     check("repair_job mapped to the 'craft' family", family == "craft")
 
     def weight(role: str, action: str) -> float:
-        return jget(port,
+        return send_json(port,
             f"local m = require('scripts.unit_roles'); "
             f"return m.weight({{role='{role}'}}, '{action}')")
 
@@ -622,11 +613,11 @@ def phase_priority_gating(port: int) -> None:
     degraded = "{instanceId=999902, condition=5, sharpness=100}"
 
     check("itemNeedsRepair is false for a healthy item (90% > threshold)",
-          jget(port, f"local ai=require('scripts.unit_ai'); "
-                     f"return ai.itemNeedsRepair({healthy})") is False)
+          send_json(port, f"local ai=require('scripts.unit_ai'); "
+                          f"return ai.itemNeedsRepair({healthy})") is False)
     check("itemNeedsRepair is true for a degraded item (5% < threshold)",
-          jget(port, f"local ai=require('scripts.unit_ai'); "
-                     f"return ai.itemNeedsRepair({degraded})") is True)
+          send_json(port, f"local ai=require('scripts.unit_ai'); "
+                          f"return ai.itemNeedsRepair({degraded})") is True)
 
     # Flag the HEALTHY instance directly at the backend (simulating any
     # path that could set the flag without going through the gated
@@ -634,20 +625,24 @@ def phase_priority_gating(port: int) -> None:
     send(port, "local ai=require('scripts.unit_ai'); "
                "ai.setRepairPriority(999901, true); return 'ok'")
     check("menuItem offers nothing for a flagged-but-healthy item",
-          jget(port, f"local rs=require('scripts.ui.repair_status'); "
-                     f"return rs.menuItem({healthy}) ~= nil") is False)
+          send_json(port, f"local rs=require('scripts.ui.repair_status'); "
+                          f"return rs.menuItem({healthy}) ~= nil") is False)
+    # `send`, not `send_json`: the assertion is that the suffix is the
+    # EMPTY STRING, and send_json maps an empty transport result to None
+    # (probelib.py). `send` returns the bare text, quotes already
+    # stripped, so "" stays "".
     check("suffix shows nothing for a flagged-but-healthy item",
-          jget(port, f"local rs=require('scripts.ui.repair_status'); "
+          send(port, f"local rs=require('scripts.ui.repair_status'); "
                      f"return rs.suffix({healthy})") == "")
     check("hintLine shows nothing for a flagged-but-healthy item",
-          jget(port, f"local rs=require('scripts.ui.repair_status'); "
-                     f"return rs.hintLine({healthy})") is None)
+          send_json(port, f"local rs=require('scripts.ui.repair_status'); "
+                          f"return rs.hintLine({healthy})") is None)
 
     # The degraded instance, still unflagged, DOES get offered.
     check("menuItem offers 'Prioritize Repair' for a degraded item",
-          jget(port, f"local rs=require('scripts.ui.repair_status'); "
-                     f"local m = rs.menuItem({degraded}); "
-                     f"return m ~= nil and m.label") == "Prioritize Repair")
+          send_json(port, f"local rs=require('scripts.ui.repair_status'); "
+                          f"local m = rs.menuItem({degraded}); "
+                          f"return m ~= nil and m.label") == "Prioritize Repair")
 
 
 PHASES = {

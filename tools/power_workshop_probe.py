@@ -99,13 +99,12 @@ from __future__ import annotations
 
 import argparse
 import glob
-import json
 import os
 import socket
 import subprocess
 import sys
 import time
-from probelib import clear_find_water, quit_engine, boot, send
+from probelib import clear_find_water, quit_engine, boot, send, send_json
 
 SPROOT = "/tmp"
 TEST_RECIPE_YAML = f"{SPROOT}/power_workshop_probe_recipes.yaml"
@@ -158,14 +157,6 @@ buildings:
 """
 
 PAGE = "power_workshop_probe"
-
-
-def jget(port: int, lua: str, timeout: float = 10.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
 
 
 def as_int(s) -> int | None:
@@ -309,7 +300,7 @@ def first_network(port: int):
     with no claimed bill doesn't either (#590) — so a lookup keyed on
     "which network mentions bid X" would miss exactly the idle case
     this probe is built to exercise."""
-    nets = jget(port, "return power.listNetworks()")
+    nets = send_json(port, "return power.listNetworks()")
     if isinstance(nets, list) and nets and isinstance(nets[0], dict):
         return nets[0]
     return None
@@ -342,7 +333,7 @@ def main() -> int:
             f.write(TEST_RECIPES)
         n = as_int(send(port, f"return engine.loadRecipeYaml('{TEST_RECIPE_YAML}')"))
         passed = check(passed, n == 2, "probe recipes loaded", f"count={n}")
-        recipe = jget(port, f"return craft.get('{PROBE_RECIPE}')")
+        recipe = send_json(port, f"return craft.get('{PROBE_RECIPE}')")
         passed = check(passed,
             isinstance(recipe, dict) and recipe.get("powerDraw") == PROBE_DRAIN_W,
             "craft.get exposes powerDraw alongside the other recipe fields",
@@ -381,7 +372,7 @@ def main() -> int:
                        "isStationPoweredForRecipe false (never wired)", powered)
 
         send(port, f"unit.addItem({uid}, 'steel_bar'); return 'ok'")
-        r = jget(port,
+        r = send_json(port,
             f"local ok,err = craft.executeAt({uid}, '{PROBE_RECIPE}', {bid_w}); "
             f"return {{ok = ok, err = err}}")
         passed = check(passed,
@@ -400,8 +391,8 @@ def main() -> int:
         passed = check(passed, panel_bid is not None and batt_bid is not None,
                        "solar panel + battery placed", (panel_bid, batt_bid))
 
-        panel_node = jget(port, f"return power.getNodeForBuilding({panel_bid})")
-        batt_node = jget(port, f"return power.getNodeForBuilding({batt_bid})")
+        panel_node = send_json(port, f"return power.getNodeForBuilding({panel_bid})")
+        batt_node = send_json(port, f"return power.getNodeForBuilding({batt_bid})")
         passed = check(passed,
             isinstance(panel_node, dict) and panel_node.get("role") == "source"
             and panel_node.get("peakWatts") == 400,
@@ -444,7 +435,7 @@ def main() -> int:
         passed = check(passed, powered == "false",
                        "still unpowered at midnight (wired but no charge/generation)",
                        powered)
-        r = jget(port,
+        r = send_json(port,
             f"local ok,err = craft.executeAt({uid}, '{PROBE_RECIPE}', {bid_w}); "
             f"return {{ok = ok, err = err}}")
         passed = check(passed,
@@ -472,7 +463,7 @@ def main() -> int:
             "because it exists or is powered)", drain_of(port))
 
         before_bars = ground_count_near(port, "steel_hardware", 6, 2, 3)
-        r = jget(port,
+        r = send_json(port,
             f"local ok,err = craft.executeAt({uid}, '{PROBE_RECIPE}', {bid_w}); "
             f"return {{ok = ok, err = err}}")
         passed = check(passed, isinstance(r, dict) and r.get("ok") is True,
@@ -558,11 +549,11 @@ def main() -> int:
         passed = check(passed, drain_of(port) == PROBE_DRAIN_W,
                        "drainW still 150W: pausing mid-cycle doesn't cut "
                        "the in-flight cycle's draw", drain_of(port))
-        remaining = jget(port, f"return craft.completeBillCycle({bill_cont})")
+        remaining = send_json(port, f"return craft.completeBillCycle({bill_cont})")
         passed = check(passed, remaining == 1,
                        "paused continuing bill retains its count (2 -> 1) "
                        "at cycle completion", remaining)
-        after = jget(port, f"return craft.getBill({bill_cont})")
+        after = send_json(port, f"return craft.getBill({bill_cont})")
         ok = (isinstance(after, dict) and "claimant" not in after
               and after.get("working") is False and after.get("paused") is True)
         passed = check(passed, ok,
@@ -597,7 +588,7 @@ def main() -> int:
         time.sleep(1.0)
         clear_find_water(port, uid)
 
-        claimed = poll(port, 20, lambda: jget(
+        claimed = poll(port, 20, lambda: send_json(
             port, f"local b = craft.getBill({bill_id}); "
                   f"return b and b.claimant or -1") == uid)
         passed = check(passed, claimed, "AI claims the bill")
@@ -606,7 +597,7 @@ def main() -> int:
         # brief but real — poll for the AI to actually reach "working"
         # (marked via craft.setBillWorking) rather than asserting drain
         # the instant it claims, which would still be mid-walk.
-        working = poll(port, 20, lambda: jget(
+        working = poll(port, 20, lambda: send_json(
             port, f"local b = craft.getBill({bill_id}); "
                   f"return b and b.working or false") is True)
         passed = check(passed, working, "AI reaches the working phase")
@@ -618,8 +609,8 @@ def main() -> int:
         # Give the AI a few seconds standing at the (browned-out) station
         # — progress must NOT move.
         time.sleep(5)
-        stalled = jget(port, f"local b = craft.getBill({bill_id}); "
-                              f"return b and b.progress or -1")
+        stalled = send_json(port, f"local b = craft.getBill({bill_id}); "
+                                   f"return b and b.progress or -1")
         passed = check(passed, stalled == 0,
                        "bill claimed but progress stays 0 while browned out",
                        stalled)
@@ -648,12 +639,12 @@ def main() -> int:
         send(port, f"craft.claimBill({bill_id}, {uid}, 3600); "
                    f"craft.setBillWorking({bill_id}, true); return 'ok'")
 
-        stored0 = as_float(jget(port, f"return power.getNodeForBuilding({batt_bid}).storedWh"))
+        stored0 = as_float(send_json(port, f"return power.getNodeForBuilding({batt_bid}).storedWh"))
         send(port, f"world.setTime('{PAGE}', 12, 0); return 'ok'")
         send(port, f"world.setTimeScale('{PAGE}', 60); return 'ok'")
         time.sleep(5)
         send(port, f"world.setTimeScale('{PAGE}', 0); return 'ok'")
-        stored1 = as_float(jget(port, f"return power.getNodeForBuilding({batt_bid}).storedWh"))
+        stored1 = as_float(send_json(port, f"return power.getNodeForBuilding({batt_bid}).storedWh"))
         passed = check(passed,
             stored0 is not None and stored1 is not None and stored1 > stored0,
             "battery storedWh rises over simulated daylight (generation > active drain)",
@@ -663,7 +654,7 @@ def main() -> int:
         send(port, f"world.setTimeScale('{PAGE}', 60); return 'ok'")
         time.sleep(5)
         send(port, f"world.setTimeScale('{PAGE}', 0); return 'ok'")
-        stored2 = as_float(jget(port, f"return power.getNodeForBuilding({batt_bid}).storedWh"))
+        stored2 = as_float(send_json(port, f"return power.getNodeForBuilding({batt_bid}).storedWh"))
         passed = check(passed,
             stored1 is not None and stored2 is not None and stored2 < stored1,
             "battery storedWh falls over simulated night (active drain, no generation)",
