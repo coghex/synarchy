@@ -25,9 +25,17 @@ Cross-file claims ("this is the only caller", "the dump walks it twice", "derive
 rather than restated") are checked by grepping for the other side rather than
 assumed.
 
-A finding is recorded only when the code and the prose genuinely disagree, or
-when a comment states an invariant the code does not enforce. Stylistic
-disagreements, stale issue references, and wording preferences are not findings.
+A finding is recorded when the code and the prose genuinely disagree, when a
+comment states an invariant the code does not enforce, or when a claim is
+imprecise in a way that would mislead a reader who takes it literally. Stylistic
+disagreements and wording preferences are not findings.
+
+**Calibration (owner, 2026-08-20): small findings are the point.** A comment
+that is correct in spirit, or correct on a quick read, but imprecise in its
+literal claim still counts — the standard for this report is precise and correct
+language, not defensible-on-charitable-reading language. Findings are therefore
+recorded regardless of how consequential they are, and each one states its own
+severity honestly rather than being inflated or suppressed to fit a bar.
 
 No build, test suite, probe, or engine boot has been run for this report; every
 finding so far is derived by reading source and is verifiable by reading the
@@ -45,6 +53,7 @@ cited lines.
 - [ ] EXPL-8. `discoverBuildingEntries` claims every frame is lstat-proved regular; its static-entry branch tests only the name
 - [ ] EXPL-9. `buildPreviewUnit`'s pipeline summary still describes the filesystem-first flow #1261 replaced
 - [ ] EXPL-10. `App.LanguageReport` claims constant runtime "regardless of how many seeds are requested"; the work is linear
+- [ ] EXPL-11. `runPreview`'s `mBrowse` haddock says a `Nothing` is "the degenerate no-target case"; that case never reaches it
 
 ---
 
@@ -557,3 +566,60 @@ the header's `outputInventory` cross-language claim
 carry its own literal `OUTPUT_INVENTORY`, and `:1098-1108` does `fail()` on any
 divergence from the emitted value, naming the generator-only and checker-only
 characters in both directions.
+
+### EXPL-11. `runPreview`'s `mBrowse` haddock says a `Nothing` is "the degenerate no-target case"; that case never reaches it
+
+`app/App/Preview.hs:34-42`:
+
+```haskell
+-- | Run the engine in preview mode: GLFW window + Vulkan, but no world,
+--   unit, sim, or combat thread. The input thread is kept so the OS
+--   window-close button and the debug console (started inside the Lua
+--   thread, same as headless) both work normally. 'mBrowse' is the
+--   browsing state @app/Main.hs@ already resolved (discovery,
+--   containment, and default selection all done pre-boot — #886/#887/
+--   #888); as of #888 every canonical target supplies one, so a
+--   'Nothing' here is only the degenerate no-target case.
+runPreview ∷ (Text, Maybe Text) → Maybe PreviewBrowse → Maybe Int → IO ()
+```
+
+Everything up to the last clause is accurate. The last clause names a case that
+cannot occur.
+
+`runPreview` has exactly five call sites, all in `app/Main.hs`, and every one
+passes `Just`:
+
+| Site | Argument |
+|---|---|
+| `Main.hs:173` | `Just (PreviewList entries)` — bare simple category |
+| `Main.hs:184` | `Just (PreviewItem entry)` — focused simple item |
+| `Main.hs:206` | `Just (PreviewUnitAnims unit)` — `units/<name>` |
+| `Main.hs:211` | `Just (PreviewBuildingAssets building)` — `buildings/<name>` |
+| `Main.hs:217` | `Just (PreviewList entries)` — `flora`/`structures` item |
+
+The "degenerate no-target case" does not reach here either. It is intercepted
+upstream at `app/Main.hs:133-139`, which prints `--preview requires a target`
+and exits 1 without ever calling `runPreview`. Main documents that at
+`:133-135`, in terms that make the exhaustiveness explicit:
+
+```haskell
+        -- @--preview@ with no target at all. Plain 'Nothing' cannot
+        -- occur here — 'parsePreview' answering 'Just' is what selected
+        -- this mode — and would be the same user error if it did.
+```
+
+So `Nothing` corresponds to no reachable case at all, and the
+`Maybe PreviewBrowse` parameter is vestigial rather than covering a residual
+possibility. A reader trying to work out what a `Nothing` would mean is pointed
+at a case the CLI already refuses, and would reasonably go looking for a
+call site that produces one.
+
+**Severity: low**, comparable to EXPL-6 and well below EXPL-2, EXPL-8 and
+EXPL-9. It is the same shape as EXPL-6 — a pointer to something that is not
+there: a symbol that is not exported in that case, a case that cannot happen in
+this one.
+
+Verified nominal in the same file, so a fix does not disturb them: the trimmed
+topology really is trimmed (`ewCombat`/`ewSim`/`ewUnit`/`ewWorld` all `Nothing`
+at `:58-61`), and the input thread really is kept and really is passed as the
+already-started worker to `luaThreadOrAbort` at `:53`.
