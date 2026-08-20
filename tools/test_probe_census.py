@@ -439,9 +439,43 @@ def test_result_validation() -> None:
         broken = build_result(harness_error=True, requested=5)
         expect(probe_census.validate_result(broken, document) == [],
                "a well-formed harness-error result is accepted for logging")
-        expect(any("failure_rate" in p for p in probe_census.validate_result(
-            {**broken, "failure_rate": 0.5}, document)),
-               "a harness-error result claiming a failure rate is rejected")
+
+        def broken_mutation(fn):
+            doc = json.loads(json.dumps(broken))
+            fn(doc)
+            return probe_census.validate_result(doc, document)
+
+        for substring, mutate in (
+                ("failure_rate", lambda d: d.update({"failure_rate": 0.5})),
+                ("must carry its `error_run`",
+                 lambda d: d.update({"error_run": None})),
+                ("outcome", lambda d: d["error_run"].update({"outcome": "FAIL"})),
+                ("index", lambda d: d["error_run"].update({"index": 9})),
+                ("descriptor declares",
+                 lambda d: d["error_run"]["checks"].pop("alpha")),
+                ("is not one of",
+                 lambda d: d["error_run"]["checks"].update({"alpha": "MAYBE"})),
+                ("elapsed_seconds",
+                 lambda d: d["error_run"].update({"elapsed_seconds": -1})),
+                ("stops short", lambda d: d.update({"requested_runs": 2}))):
+            expect(any(substring in p for p in broken_mutation(mutate)),
+                   f"a mutated harness-error result is rejected for "
+                   f"{substring!r} (got {broken_mutation(mutate)[:1]})")
+
+        # A protocol string that is merely "not legacy" must not read as
+        # measurable — the entry has to name the CURRENT version.
+        for status in ("probe-result/v2", "legacy", "", None):
+            stale = json.loads(json.dumps(document))
+            probe_census.find_entry(stale, PROBE)["protocol"] = status
+            expect(any("trustworthy measurement" in p for p in
+                       probe_census.validate_result(valid, stale)),
+                   f"a {status!r} protocol column takes no measurement")
+            if status not in probe_census.KNOWN_PROTOCOLS:
+                expect(any("protocol" in p for p in
+                           probe_census.validate_structure(stale)),
+                       f"a {status!r} protocol column fails structural "
+                       f"validation")
+
         expect(probe_census.validate_result([], document) != [],
                "a non-object result is rejected")
 
@@ -524,6 +558,14 @@ def test_corrupt_stored_records() -> None:
             "a stored run index gap", "contiguous")
         corrupt(lambda c: c["attempts"][0].update({"commit_sha": "nope"}),
             "a malformed stored attempt hash", "commit hash")
+        corrupt(lambda c: c["current"]["samples"][0].update(
+            {"requested_runs": 3, "failure_rate": round(1 / 3, 6)}),
+            "a stored sample that never finished", "completes all of them")
+        corrupt(lambda c: c["attempts"][0].update({"accepted": False}),
+            "an accepted flag disagreeing with its status", "accepted=False")
+        corrupt(lambda c: c["attempts"][0].update(
+            {"status": "harness-error", "error": "invented"}),
+            "an ok attempt relabelled a harness error", "accepted=True")
 
 
 def test_malformed_state_and_recovery() -> None:

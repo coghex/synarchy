@@ -104,6 +104,10 @@ RUN_OUTCOMES = (probe_flake.RUN_PASS, probe_flake.RUN_FAIL,
                 probe_flake.RUN_TIMEOUT)
 CHECK_OUTCOMES = (probe_protocol.PASS, probe_protocol.FAIL,
                   probe_protocol.MISSING)
+# The only protocol strings an entry may carry. A measurement is
+# ingestible only for the CURRENT version, so an unknown or corrupted
+# string can never read as "not legacy, therefore measurable".
+KNOWN_PROTOCOLS = (LEGACY, probe_protocol.PROTOCOL_VERSION)
 
 # A full hexadecimal commit hash: sha1 today, sha256 if the repository
 # ever migrates. An abbreviated hash is refused — a cohort key has to be
@@ -378,9 +382,13 @@ def _validate_sample(sample, where: str) -> list[str]:
     completed = sample.get("completed_runs")
     if _is_count(requested) and requested < 1:
         problems.append(f"{where} `requested_runs` must be positive")
-    if _is_count(requested) and _is_count(completed) and completed > requested:
+    if _is_count(requested) and _is_count(completed) and completed != requested:
+        # A sample exists only because an `ok` result was accepted, and
+        # an `ok` result completes every run it requested. A stored
+        # partial is corruption, not a shorter measurement.
         problems.append(f"{where} completed {completed} of {requested} "
-                        f"requested runs")
+                        f"requested runs, but a stored sample always "
+                        f"completes all of them")
     for field in ("rts_capabilities", "peak_concurrency"):
         value = sample.get(field)
         if not _is_count(value) or value < 1:
@@ -492,6 +500,27 @@ def _validate_attempt(attempt, where: str) -> list[str]:
     error = attempt.get("error")
     if error is not None and not isinstance(error, str):
         problems.append(f"{where} `error` must be a string or null")
+    # `accepted` is DERIVED from the status at ingestion, so the two can
+    # only disagree in a record somebody edited.
+    status = attempt.get("status")
+    accepted = attempt.get("accepted")
+    if isinstance(accepted, bool) and status in RESULT_STATUSES:
+        if accepted != (status == "ok"):
+            problems.append(f"{where} is {status!r} but accepted={accepted}")
+    if status == "ok":
+        if error is not None:
+            problems.append(f"{where} is ok but carries an `error`")
+        if _is_count(requested) and _is_count(completed) and completed != requested:
+            problems.append(f"{where} is ok but completed {completed} of "
+                            f"{requested} requested runs")
+    elif status == "harness-error":
+        if not isinstance(error, str) or not error:
+            problems.append(f"{where} is a harness error with no `error`")
+        if _is_count(requested) and _is_count(completed) and completed >= requested:
+            # The run that broke the stream is never one of the completed
+            # ones, so a harness error always stops short.
+            problems.append(f"{where} is a harness error but completed all "
+                            f"{requested} requested runs")
     artifacts = attempt.get("retained_artifacts")
     if not isinstance(artifacts, list) or any(
             not isinstance(a, str) for a in artifacts):
@@ -573,9 +602,12 @@ def validate_structure(document, *, include_promotion: bool = True) -> list[str]
             problems.append(f"duplicate entry for probe {key!r}")
             continue
         seen.add(key)
-        for field in ("script", "protocol"):
-            if not isinstance(entry.get(field), str) or not entry[field]:
-                problems.append(f"probe {key!r} has no string `{field}`")
+        if not isinstance(entry.get("script"), str) or not entry["script"]:
+            problems.append(f"probe {key!r} has no string `script`")
+        if entry.get("protocol") not in KNOWN_PROTOCOLS:
+            problems.append(
+                f"probe {key!r} protocol {entry.get('protocol')!r} is not one "
+                f"of {KNOWN_PROTOCOLS}")
         if entry.get("classification") not in (CI_ELIGIBLE, MANUAL_ONLY):
             problems.append(
                 f"probe {key!r} classification {entry.get('classification')!r} "
@@ -719,10 +751,11 @@ def validate_result(result, document: dict) -> list[str]:
             problems.append(
                 f"probe {probe!r} is {entry.get('classification')!r} in the "
                 f"census, so it takes no current census samples")
-        if entry.get("protocol") == LEGACY:
+        if entry.get("protocol") != probe_protocol.PROTOCOL_VERSION:
             problems.append(
-                f"probe {probe!r} is a legacy probe in the census, so it "
-                f"produces no trustworthy measurement")
+                f"probe {probe!r} is {entry.get('protocol')!r} in the census, "
+                f"not {probe_protocol.PROTOCOL_VERSION!r}, so it produces no "
+                f"trustworthy measurement")
     # The LIVE classification is authoritative and wins over a stale
     # census row: `tools/ci_probes.py` owns the CI/manual XOR.
     if probe in ci_probes.CI_ELIGIBLE:
@@ -863,10 +896,62 @@ def validate_result(result, document: dict) -> list[str]:
         if rate is not None:
             problems.append("a harness-error result must carry no "
                             "`failure_rate` — no trustworthy rate exists")
+        if _is_count(requested) and _is_count(completed) and completed >= requested:
+            problems.append(f"a harness-error result stops short, but this "
+                            f"one completed all {requested} requested runs")
+        problems += _validate_error_run(result.get("error_run"), declared,
+                                        completed, requested)
     artifacts = result.get("retained_artifacts")
     if not isinstance(artifacts, list) or any(
             not isinstance(a, str) for a in artifacts):
         problems.append("result `retained_artifacts` must be a list of strings")
+    return problems
+
+
+def _validate_error_run(record, declared: set, completed, requested) -> list[str]:
+    """The one run whose protocol stream could not be trusted.
+
+    `probe_flake.measure` ALWAYS records this run on a harness error —
+    it is what stops the result reading as "nothing went wrong, nothing
+    retained" — so its absence is malformed input, not a lighter kind of
+    harness error. It is deliberately not one of the completed runs, so
+    it sits at exactly the next index.
+    """
+    if record is None:
+        return ["a harness-error result must carry its `error_run`"]
+    if not isinstance(record, dict):
+        return [f"`error_run` is not an object: {record!r}"]
+    problems: list[str] = []
+    if record.get("outcome") != probe_flake.RUN_HARNESS_ERROR:
+        problems.append(f"`error_run` outcome {record.get('outcome')!r} is not "
+                        f"{probe_flake.RUN_HARNESS_ERROR!r}")
+    index = record.get("index")
+    if not _is_count(index):
+        problems.append("`error_run` has no integer `index`")
+    elif _is_count(completed) and index != completed + 1:
+        problems.append(f"`error_run` index {index} is not the run after the "
+                        f"{completed} completed ones")
+    elif _is_count(requested) and index > requested:
+        problems.append(f"`error_run` index {index} exceeds the {requested} "
+                        f"requested runs")
+    value = record.get("elapsed_seconds")
+    if not _is_number(value) or value < 0:
+        problems.append("`error_run` `elapsed_seconds` must be a finite "
+                        "non-negative number")
+    artifact = record.get("artifact_dir")
+    if artifact is not None and not isinstance(artifact, str):
+        problems.append("`error_run` `artifact_dir` must be a string or null")
+    checks = record.get("checks")
+    if not isinstance(checks, dict):
+        problems.append("`error_run` `checks` must be an object")
+    else:
+        if declared and set(checks) != declared:
+            problems.append(f"`error_run` reports checks {sorted(checks)} but "
+                            f"the descriptor declares {sorted(declared)}")
+        for cid, outcome in checks.items():
+            if outcome not in CHECK_OUTCOMES:
+                problems.append(f"`error_run` check {cid!r} result {outcome!r} "
+                                f"is not one of {CHECK_OUTCOMES}")
     return problems
 
 
