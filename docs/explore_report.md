@@ -30,6 +30,11 @@ comment states an invariant the code does not enforce, or when a claim is
 imprecise in a way that would mislead a reader who takes it literally. Stylistic
 disagreements and wording preferences are not findings.
 
+The prose in question is usually a comment or haddock, but the same standard
+applies to repository documentation that describes the code — `CLAUDE.md`, an
+audit tool's docstring, a contract document — and to the code itself where a
+walk turns up a stated convention the tree does not follow (EXPL-21).
+
 **Calibration (owner, 2026-08-20): small findings are the point.** A comment
 that is correct in spirit, or correct on a quick read, but imprecise in its
 literal claim still counts — the standard for this report is precise and correct
