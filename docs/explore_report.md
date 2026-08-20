@@ -75,6 +75,7 @@ cited lines.
 - [ ] EXPL-25. `isPointerSurfaceBlocked` names `Engine.Input.Thread` as its caller; since #787 that is `Engine.Input.Thread.Mouse`
 - [ ] EXPL-26. `World.Save.Storage`'s header says it "receives only" four of six parameters, and its numbered transaction omits the requirement-9 refusal
 - [ ] EXPL-27. 59 cross-module haddock links point at functions their named module does not export, concentrated on module-split seams
+- [ ] EXPL-28. `Engine.Asset.YamlVegetation`'s summary names a `data/vegetation.yaml` that does not exist; the data is a directory of five files
 
 ---
 
@@ -1919,3 +1920,90 @@ was found in context with detail this entry does not carry: **EXPL-6**
 | `src/World/Slope/Recompute.hs:18` | `'World.Slope.Compute.computeTileSlope'` |
 | `src/World/Slope/Roughness.hs:60` | `'World.Slope.Compute.computeTileSlope'` |
 | `app/Main.hs:142` | `'App.Boot.patchBootConfig'` |
+
+---
+
+## Asset-loader path references
+
+### EXPL-28. `Engine.Asset.YamlVegetation`'s summary names a `data/vegetation.yaml` that does not exist; the data is a directory of five files
+
+`src/Engine/Asset/YamlVegetation.hs:2`:
+
+```haskell
+-- | Vegetation definitions loaded from @data/vegetation.yaml@.
+```
+
+That one line is wrong twice.
+
+**No such file exists.** `data/vegetation` is a DIRECTORY, holding five files:
+`farmland.yaml`, `grasses.yaml`, `ground_cover.yaml`, `mosses.yaml`,
+`snow.yaml`.
+
+**And the module does not load from a fixed path at all.** Its loader is
+path-parameterised (`src/Engine/Asset/YamlVegetation.hs:40-42`):
+
+```haskell
+loadVegetationYaml ∷ LoggerState → FilePath → IO [VegetationDef]
+loadVegetationYaml logger =
+    loadYamlList logger "vegetation" "vegetation types" vfVegetation
+```
+
+Production reaches it through `buildColorPalette`
+(`src/World/ZoomMap/ColorPalette.hs:92-101`), which enumerates the directory
+and folds every file's definitions together:
+
+```haskell
+    -- Load all vegetation YAMLs
+    vegFiles ← listVegetationYamls vegDir
+    vegDefs ← concat ⊚ mapM (loadVegetationYaml logger) vegFiles
+```
+
+with `vegDir` supplied as `"data/vegetation"` by both callers
+(`src/World/Load/Stage.hs:114`, `src/World/Thread/Command/Init.hs:271`). The
+third consumer, `loadVegetationYamlFn`
+(`src/Engine/Scripting/Lua/API/YamlTextures.hs:140-153`), likewise takes its
+path from Lua.
+
+**A sibling module documents the identical situation correctly**, which is what
+marks this as isolated staleness rather than a house convention.
+`src/Engine/Asset/YamlMaterials.hs:2`:
+
+```haskell
+-- | Material definitions loaded from @data/materials/*.yaml@, and the
+--   fold of those definitions into a 'World.Material.MaterialRegistry'.
+```
+
+— the directory-glob form, and `buildColorPalette` treats the two symmetrically
+(`loadMaterialDirectory logger matDir` beside `listVegetationYamls vegDir`).
+
+**Severity: low.** No behaviour is involved; this is the module's one-line
+summary. Recorded because it sends a reader looking for a single data file that
+does not exist, does not tell them the five real ones are enumerated by the
+caller, and is contradicted by the sibling loader one directory over.
+
+#### Method note: two sweeps that did not pay off
+
+This finding is the residue of two tree-wide sweeps run after EXPL-27, both
+recorded here so the technique's limits are on file and the negative results are
+not rediscovered.
+
+**References to nonexistent project modules** — 195 raw hits, ALL false
+positives. The matcher treated `'Engine.Core.State.EngineEnv'`-style TYPE links
+as module names. A correct version would have to split the trailing
+capitalised component and check it against the target's exported types and
+constructors; EXPL-27's function-level technique does not transfer as cheaply.
+
+**Comment references to nonexistent file paths** — 749 raw hits across `src/`,
+`app/`, `tools/`, `docs/` and `test-headless/`, and nearly all legitimate:
+self-test fixtures (`scripts/fake.lua` ×144, `src/Fake/Init.hs` ×26,
+`docs/a.md` ×25, `tools/foo.py` ×6), gitignored-by-design runtime files
+(`config/video.local.yaml` ×35, `config/notifications.local.yaml` ×34,
+`config/keybinds.local.yaml` ×28, `config/save.local.yaml` ×20), and
+deliberate counterexamples (`assets/textures/iconsEvil/x.png`, the
+containment case in `Engine.Preview.Discovery`). Restricting to comments in
+`src/`+`app/` naming a non-gitignored path left SIX mentions across four
+distinct paths — two of them false positives from a regex splitting
+`--preview items/tools/hammer.png` at a slash, and one correct as written:
+`src/World/Save/Compat/SessionV90.hs:62` and `:300` cite
+`scripts/lib/serialize.lua` while explicitly describing it as "long-removed"
+and "removed by #761", which is the point of those comments.
