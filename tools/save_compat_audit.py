@@ -568,7 +568,9 @@ def _normalize_haskell_block(block: str) -> str:
     return re.sub(r"\s+", " ", _strip_line_comments(block)).strip()
 
 
-# One `{-# LANGUAGE ... #-}` pragma, possibly spread over several lines.
+# Any `{-# ... #-}` block pragma, possibly spread over several lines,
+# and the LANGUAGE ones specifically.
+BLOCK_PRAGMA_RE = re.compile(r"\{-#.*?#-\}", re.DOTALL)
 LANGUAGE_PRAGMA_RE = re.compile(r"\{-#\s*LANGUAGE\s(.*?)#-\}", re.DOTALL)
 EXTENSION_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_']*$")
 
@@ -697,18 +699,46 @@ def _drop_redundant_language_pragmas(
     and is kept. Only `LANGUAGE` is in scope -- `OPTIONS_GHC` and every
     other block pragma is untouched. Extensions implied by
     `default-language: GHC2024` are deliberately NOT treated as
-    inherited: over-keeping is the fail-safe direction."""
+    inherited: over-keeping is the fail-safe direction.
+
+    Only the module HEADER is rewritten -- the leading run of block
+    pragmas, which is the only place GHC accepts a `LANGUAGE`
+    declaration. Scanning the whole file instead would match
+    pragma-SHAPED ordinary source: a string literal (or quasiquote, or
+    block comment) reading `"{-# LANGUAGE UnicodeSyntax #-}"` would be
+    erased, colliding with the same literal naming a different
+    inherited extension even though such a literal can itself be part
+    of what the codec writes. The walk stops at the first token that is
+    not whitespace or a block pragma, so anything past the header --
+    including a stray mid-file `LANGUAGE` pragma GHC would reject
+    anyway -- stays fingerprinted verbatim, which is the fail-safe
+    direction."""
     def is_redundant(name: str) -> bool:
         base, enabled = _extension_state(name)
         return base in inherited and inherited[base] == enabled
 
-    def rewrite(match: "re.Match[str]") -> str:
-        names = [tok.strip() for tok in match.group(1).split(",")]
+    def rewrite(pragma: str) -> str:
+        m = LANGUAGE_PRAGMA_RE.fullmatch(pragma)
+        if m is None:
+            return pragma
+        names = [tok.strip() for tok in m.group(1).split(",")]
         kept = [n for n in names if n and not is_redundant(n)]
         if not kept:
             return ""
         return "{-# LANGUAGE " + ", ".join(kept) + " #-}"
-    return LANGUAGE_PRAGMA_RE.sub(rewrite, text)
+
+    out: list[str] = []
+    pos = 0
+    while True:
+        gap_end = pos + len(text[pos:]) - len(text[pos:].lstrip())
+        pragma = BLOCK_PRAGMA_RE.match(text, gap_end)
+        if pragma is None:
+            break
+        out.append(text[pos:gap_end])
+        out.append(rewrite(pragma.group(0)))
+        pos = pragma.end()
+    out.append(text[pos:])
+    return "".join(out)
 
 
 DTO_TYPE_NAME_RE = re.compile(r"\b(\w+DTO(?:v\d+)?)\b")

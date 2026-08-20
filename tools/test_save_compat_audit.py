@@ -551,6 +551,55 @@ def test_envelope_framing_fingerprint_changes_on_options_ghc_edit() -> None:
                "framing fingerprint")
 
 
+def test_envelope_framing_fingerprint_keeps_pragma_shaped_source() -> None:
+    print("issue #1416 review: only the module HEADER's pragma run is "
+          "normalized -- pragma-SHAPED ordinary source (a string literal a "
+          "codec could itself write) must stay fingerprinted, or two "
+          "different literals naming different inherited extensions would "
+          "collide")
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        literal = ("{-# LANGUAGE Strict #-}\n"
+                   "module World.Save.Envelope.Codec (encodeEnvelope) where\n"
+                   "import qualified Data.ByteString as BS\n"
+                   "marker = \"{-# LANGUAGE %s #-}\"\n"
+                   "encodeEnvelope x = x\n")
+        unicode_syntax = _framing_fp(d, literal % "UnicodeSyntax")
+        overloaded = _framing_fp(d, literal % "OverloadedStrings")
+        expect(unicode_syntax != overloaded,
+               "expected two string literals naming DIFFERENT inherited "
+               "extensions to keep different envelope framing fingerprints "
+               "-- erasing pragma-shaped literals collides them")
+        removed = _framing_fp(
+            d, literal.replace("marker = \"{-# LANGUAGE %s #-}\"\n", ""))
+        expect(unicode_syntax != removed,
+               "expected deleting a pragma-shaped string literal outright to "
+               "move the envelope framing fingerprint")
+        # A LANGUAGE pragma past the header (which GHC rejects anyway) is
+        # left alone rather than normalized: over-keeping is fail-safe.
+        trailing = _framing_fp(
+            d, "{-# LANGUAGE Strict #-}\n"
+            "module World.Save.Envelope.Codec (encodeEnvelope) where\n"
+            "import qualified Data.ByteString as BS\n"
+            "{-# LANGUAGE UnicodeSyntax #-}\n"
+            "encodeEnvelope x = x\n")
+        expect(trailing != _framing_fp(d, "{-# LANGUAGE Strict #-}\n"
+                                       + _CODEC_BODY),
+               "expected a LANGUAGE pragma outside the module header to stay "
+               "fingerprinted verbatim")
+        # An OPTIONS_GHC pragma sitting IN the header run must not stop the
+        # walk before a redundant LANGUAGE pragma that follows it.
+        interleaved_with = _framing_fp(
+            d, "{-# OPTIONS_GHC -Wall #-}\n"
+            "{-# LANGUAGE Strict, UnicodeSyntax #-}\n" + _CODEC_BODY)
+        interleaved_without = _framing_fp(
+            d, "{-# OPTIONS_GHC -Wall #-}\n"
+            "{-# LANGUAGE Strict #-}\n" + _CODEC_BODY)
+        expect(interleaved_with == interleaved_without,
+               "expected the header walk to see a redundant LANGUAGE pragma "
+               "that follows an OPTIONS_GHC pragma")
+
+
 def test_inherited_extension_set_is_read_live_and_fails_loudly() -> None:
     print("issue #1416: the inherited extension set is derived from "
           "synarchy.cabal's `common lang`, and a stanza that cannot be read "
@@ -1846,6 +1895,7 @@ def main() -> int:
         test_envelope_framing_fingerprint_changes_on_effective_language_change,
         test_envelope_framing_fingerprint_changes_on_import_edit,
         test_envelope_framing_fingerprint_changes_on_options_ghc_edit,
+        test_envelope_framing_fingerprint_keeps_pragma_shaped_source,
         test_inherited_extension_set_is_read_live_and_fails_loudly,
         test_frozen_dto_fingerprint_unaffected_by_pragma_normalization,
         test_detects_envelope_framing_fingerprint_mismatch,
