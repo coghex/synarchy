@@ -64,7 +64,7 @@ from probelib import boot, init_world, poll_until, quit_engine, send, send_json
 # This probe's console default. Its registry queries decode whole
 # catalogues, so they get longer than probelib.send_json's 10 s --
 # the same 15 s the local jget this file used to define had, and the
-# same one `num` below still uses.
+# same one `num` below takes.
 QUERY_TIMEOUT = 15.0
 
 PROBE_SUBSTANCE_YAML = "/tmp/content_registry_probe_substances.yaml"
@@ -86,7 +86,7 @@ substances:
 """
 
 
-def num(port, lua, timeout=15.0):
+def num(port, lua, timeout=QUERY_TIMEOUT):
     raw = send(port, lua, timeout).strip().strip('"')
     try:
         return float(raw)
