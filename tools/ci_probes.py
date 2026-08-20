@@ -135,9 +135,17 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                             "timing flakes run-to-run on CI (#722; the disarm lesson — "
                             "local greenness isn't sufficient evidence for an "
                             "AI-reaction/arbitration-timing probe)"),),
-    "combat_anim": (Reason(FLAKY, "the attacker occasionally falls to its death approaching "
-                                  "the target and never swings, failing 'a swing animation "
-                                  "appeared' (1/3 solo runs, #724)"),),
+    "combat_anim": (Reason(FLAKY, "#1396 retired the recorded failure mode: the fixture is "
+                                  "the flat arena, every tile the combatants can traverse "
+                                  "is verified flat/dry/loaded, engagement is positively "
+                                  "observed before sampling, and an unestablished fixture "
+                                  "now exits 2 instead of masquerading as the missing "
+                                  "swing it used to (the attacker fell to its death "
+                                  "approaching the target in 1/3 solo runs, #724). What is "
+                                  "still GRADED rides on AI arbitration and swing-cooldown "
+                                  "timing across a sampling window, so the disarm lesson "
+                                  "still applies — green solo runs locally are not "
+                                  "evidence for the slower, variable-speed CI runner"),),
     "follow_command_priority": (Reason(FLAKY, "a struck goal-bound unit occasionally treats "
                                               "an ally instead of engaging combat, failing "
                                               "'combat reached over a pending move' "

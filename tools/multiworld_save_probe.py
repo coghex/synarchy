@@ -130,8 +130,11 @@ def wait_active(port: int, page: str, secs: float = 10.0) -> bool:
 def find_flat_strip(port: int) -> tuple[int, int, int] | None:
     """Return (gx, gy, z) of a dry 3-wide equal-z land strip, or None.
 
-    Same shape as combat_anim_probe.find_flat_strip — a unit goes at the
-    west end and a building two tiles east, both on flat dry ground.
+    A unit goes at the west end and a building two tiles east, both on
+    flat dry ground. combat_anim_probe.py used to carry the same helper;
+    #1396 moved it to a verified flat arena instead, because accepting
+    any three adjacent equal-height dry tiles in a generated world can
+    land the strip at the lip of a lethal drop.
     """
     lua = (
         "local function f() for gy=-8,8 do for gx=-8,6 do "
