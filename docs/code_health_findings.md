@@ -107,7 +107,7 @@ an entry's current status.
 - [x] CH-64. `--dump` emits three fields that no documentation mentions — [#1040]
 - [x] CH-65. `App/Dump.hs` hand-concatenates JSON — [#1058]
 - [x] CH-66. Primitive-obsession in the dump signatures — [#1081]
-- [ ] CH-67. `parseRegion` silently substitutes a default for malformed input — [deferred]: #1081 retypes the region
+- [x] CH-67. `parseRegion` silently substitutes a default for malformed input — [#1481]
 - [x] CH-68. Two module haddocks enumerate the boot modes and both are stale — [#1084]
 - [x] CH-69. Minor `app/` defects for one cleanup issue — [#1086]
 - [x] CH-70. The save system's item enumeration is implemented three times — [#1090]
@@ -178,7 +178,7 @@ an entry's current status.
 - [x] CH-135. Status markers are inconsistent, and two of the six that exist are wrong — [no-issue]
 - [x] CH-136. Minor doc defects for one cleanup issue — [no-issue]
 - [x] CH-137. Verified: four docs are accurate and worth using as the pattern — [no-issue]
-- [ ] CH-138. Every GitHub Actions dependency is pinned by mutable tag, not by SHA — [deferred]: #1356 must merge first
+- [x] CH-138. Every GitHub Actions dependency is pinned by mutable tag, not by SHA — [#1482]
 
 ---
 
@@ -1484,12 +1484,7 @@ and it compiles and generates a different world. `dumpTilesJSON` takes the
 region as four loose `Int`s even though `parseRegion` already produced it as a
 tuple, so the tuple is destructured purely to be re-spread positionally.
 
-### [deferred] CH-67. `parseRegion` silently substitutes a default for malformed input
-> **Deferred:** #1081 retypes `parseRegion`'s bare `(Int,Int,Int,Int)` return and
-> rewrites the `Main.hs:94-95` call site this fix must change, and its Out-of-scope
-> section states the named region type should be shaped so this finding can wrap it
-> in `Maybe`/`Either` — precondition: **#1081 merges**, then file against the landed shape.
-
+### [#1481] CH-67. `parseRegion` silently substitutes a default for malformed input
 > **Note (2026-08-03, since superseded):** the 2026-08-03 verification widened this
 > entry to every value-carrying flag — `--seed`/`--worldSize`/`--plates`/`--ages`/
 > `--port` were observed defaulting just as silently via `fromMaybe` at their
@@ -3960,18 +3955,12 @@ The lesson for CH-133/CH-134: the failure is not that docs drift from code —
 these four don't — it is that *design* docs have no lifecycle step that marks
 them implemented.
 
-### [deferred] CH-138. Every GitHub Actions dependency is pinned by mutable tag, not by SHA
-> **Deferred:** The SHAs must be taken from the versions the pending major bump
-> selects, so filing now would produce an issue that cannot be worked and whose
-> substance is not yet determined — **#1356** ("Move the four deprecated GitHub
-> Actions off their Node 20 majors", OPEN, `reviewed:approve`) already scopes
-> SHA pinning out and names this entry: *"bump first, pin second."* The
-> precondition that clears this: **#1356 is closed by a merged PR.**
->
-> Verified 2026-08-18, with three corrections. (1) **`secrets.NTFY_URL` is NOT
-> exposed** — `ntfy-notify.yml` has zero `uses:` entries (pure `run:` + `curl`)
-> and secrets do not cross workflows, so no third-party action here can reach
-> it; drop that consequence. The real exposure stands on its own:
+### [#1482] CH-138. Every GitHub Actions dependency is pinned by mutable tag, not by SHA
+> **Note:** Verified 2026-08-18, with three corrections. (1)
+> **`secrets.NTFY_URL` is NOT exposed** — `ntfy-notify.yml` has zero `uses:`
+> entries (pure `run:` + `curl`) and secrets do not cross workflows, so no
+> third-party action here can reach it; drop that consequence. The real
+> exposure stands on its own:
 > `packages: write` (`ci-image.yml:36-38`, `:64-66`; `ci.yml:153-155`),
 > `secrets.GITHUB_TOKEN` handed to `docker/login-action` at `ci-image.yml:79`,
 > and `pull-requests: write` (`review-gate.yml:52-54`) in the job running
