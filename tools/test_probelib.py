@@ -28,6 +28,7 @@ Exit codes: 0 = all tests passed, 1 = one or more failed.
 from __future__ import annotations
 
 import ast
+import inspect
 import socket
 import sys
 import tempfile
@@ -146,8 +147,14 @@ def test_invalid_json_is_returned_as_text() -> None:
 def test_idle_is_reachable() -> None:
     print("\n-- callers can tune the console idle gap (the knob the local "
           "jget copies hid)")
+    # `jget` called `send` positionally with three arguments and never
+    # named `idle`, so no caller of a copy could reach probelib's one
+    # console-read knob. Both halves are asserted: that the parameter
+    # exists to be passed, and that passing it still decodes normally.
+    expect("idle" in inspect.signature(send_json).parameters,
+           "send_json should expose an `idle` parameter")
     expect(decode('{"ok":true}', idle=0.05) == {"ok": True},
-           "send_json should accept and honour an explicit idle")
+           "send_json should accept an explicit idle and still decode")
 
 
 # ---------------------------------------------------------------------

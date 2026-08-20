@@ -626,8 +626,8 @@ is the scope line. A helper that decodes ONE fixed query it builds itself
 scope duplication — see `docs/code_health_findings.md` CH-129. Both
 directions are mutation-tested against synthetic trees, so the guard is
 proven to fire on a reintroduced copy and to stay quiet on a fixed-query
-helper rather than merely agreeing that today's tree is clean. Blocking
-CI step alongside `test_run_probes.py`.
+helper rather than merely agreeing that today's tree is clean. ~5 s;
+blocking CI step alongside `test_run_probes.py`.
 
 ### `ci_probes.py` — CI probe selection + eligibility (#530, #540)
 
