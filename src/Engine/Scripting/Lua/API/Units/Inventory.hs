@@ -35,7 +35,7 @@ import Engine.Scripting.Lua.API.Items.Contents
 import Engine.Scripting.Lua.API.Units.Page (unitOwningWorldState)
 import Unit.Types
 import Engine.Asset.Handle (TextureHandle(..))
-import Item.Roll (rollItemSpec, rollItemWeight)
+import Item.Materialize (filledItem, materializeItem)
 import Item.Ground (spawnGroundItem)
 import World.Types (WorldManager(..), WorldState(..), WorldGenParams(..))
 import World.Weather.Ambient (ambientTempAt)
@@ -44,9 +44,11 @@ import Item.Types (ItemInstance(..), itemMatches, itemContentsSig, ItemDef(..), 
 
 
 -- | unit.addItem(uid, defName, fill) → bool. Adds a new ItemInstance
---   to the unit's inventory. Fill is clamped to the def's container
---   capacity (or zeroed for non-containers). Returns false if the
---   unit or item def doesn't exist.
+--   to the unit's inventory, materialised through the one mint boundary
+--   (#1418) — so a container def's authored @contents:@ arrive with it.
+--   Fill is clamped to the def's container capacity (or zeroed for
+--   non-containers). Returns false if the unit or item def doesn't
+--   exist.
 unitAddItemFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitAddItemFn env = do
     idArg    ← Lua.tointeger 1
@@ -63,43 +65,28 @@ unitAddItemFn env = do
                 itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
                 case lookupItemDef defName itemMgr of
                     Nothing → return False
-                    Just def → do
-                        -- No fill arg → the def's default_fill (a quinoa
-                        -- sack arrives full); explicit fill wins. Clamped
-                        -- to capacity, non-containers stay 0.
-                        let clampedFill = case idContainer def of
-                                Just c  → max 0 (min (icCapacity c)
-                                            (fromMaybe (icDefaultFill c) mFillIn))
-                                Nothing → 0
-                        qual ← rollItemSpec (idQualitySpec def)
-                                            (ucStatRNGRef (toUnitCombatCapability env))
-                        wght ← rollItemWeight def (ucStatRNGRef (toUnitCombatCapability env))
-                        iid ← freshItemInstanceId env
-                        let inst' = ItemInstance
-                                { iiDefName     = defName
-                                , iiCurrentFill = clampedFill
-                                , iiQuality     = qual
-                                  -- Fresh item: full condition (#1421).
-                                , iiCondition   = 100.0
-                                , iiWeight      = wght
-                                , iiSharpness   = 100.0
-                                , iiContents    = []
-                                , iiInstanceId  = iid
-                                , iiTemp        = Nothing
-                                  -- #1233: snapshotted from the def,
-                                  -- like iiWeight.
-                                , iiBulk        = Just (idBulk def)
-                                , iiStorage     = idStorage def
-                                }
-                        atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
-                            case HM.lookup uid (umInstances um) of
-                                Nothing → (um, False)
-                                Just u  →
-                                    let u' = u { uiInventory =
-                                                  uiInventory u ++ [inst'] }
-                                    in (um { umInstances = HM.insert uid u'
-                                                            (umInstances um) },
-                                        True)
+                    Just _ → do
+                        -- The caller's fill is this path's ONE root-scoped
+                        -- override; everything else — including the def's
+                        -- authored default contents, so an added first-aid
+                        -- kit now arrives stocked — is the materializer's
+                        -- (#1418).
+                        mInst ← materializeItem itemMgr
+                                    (ucStatRNGRef (toUnitCombatCapability env))
+                                    (freshItemInstanceId env)
+                                    (filledItem mFillIn) defName
+                        case mInst of
+                          Nothing → return False
+                          Just inst' →
+                            atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
+                                case HM.lookup uid (umInstances um) of
+                                    Nothing → (um, False)
+                                    Just u  →
+                                        let u' = u { uiInventory =
+                                                      uiInventory u ++ [inst'] }
+                                        in (um { umInstances = HM.insert uid u'
+                                                                (umInstances um) },
+                                            True)
             Lua.pushboolean ok
             return 1
         _ → do

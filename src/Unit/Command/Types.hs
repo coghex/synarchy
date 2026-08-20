@@ -7,6 +7,7 @@ import UPrelude
 import Unit.Types (UnitId(..))
 import Unit.Faction (Faction(..))
 import Unit.Sim.Types (Pose(..))
+import Unit.Pathing.Hazard (MoveHazardPolicy(..))
 import World.Page.Types (WorldPageId(..))
 
 data UnitCommand
@@ -23,12 +24,19 @@ data UnitCommand
     | UnitDestroy !UnitId
     | UnitTeleport !UnitId !Float !Float !(Maybe Int)
         -- ^ unitId, gridX, gridY, optional gridZ (Nothing = surface lookup)
-    | UnitMoveTo !UnitId !Float !Float !Float
-        -- ^ unitId, targetX, targetY, speed (tiles per second)
+    | UnitMoveTo !UnitId !Float !Float !Float !MoveHazardPolicy
+        -- ^ unitId, targetX, targetY, speed (tiles per second), and the
+        --   route's hazard policy (#1217). The policy is EXPLICIT per
+        --   request and defaults to 'FallPermitted' at the scripting
+        --   boundary, so every pre-existing caller keeps today's
+        --   behavior; ambient wander asks for 'FallProhibited'. A new
+        --   request always REPLACES the previous one's policy along with
+        --   its destination — see 'UnitSetMoveSpeed', which does not.
     | UnitSetMoveSpeed !UnitId !Float
         -- ^ unitId, speed (tiles per second). Retargets the speed of an
-        --   ALREADY in-flight move without touching its destination or
-        --   local path — a no-op if the unit has no active move target.
+        --   ALREADY in-flight move without touching its destination,
+        --   local path, or hazard policy — a no-op if the unit has no
+        --   active move target.
         --   Lets a caller (#999's stamina-adaptive pacing) adjust the
         --   commanded pace every tick without the path-reset cost a
         --   repeated UnitMoveTo would incur.

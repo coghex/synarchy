@@ -26,10 +26,9 @@ import World.Generate.Coordinates (canonicalTile)
 import World.Flora.Growth (floraGrowth, harvestOpen)
 import World.Flora.CropPlot (CropPlot(..), cropPlotElapsedDays,
                              cropPlotInstance)
-import Item.Types (ItemDef(..), ItemInstance(..), ItemContainer(..),
-                   lookupItemDef)
+import Item.Types (lookupItemDef)
 import Item.Ground (spawnGroundItem)
-import Item.Roll (rollItemSpec, rollItemWeight)
+import Item.Materialize (materializeItem, pristineItem)
 import Engine.Scripting.Lua.API.Forage.Lookup (floraAt, growthClock)
 
 -- | world.harvestFlora(gx, gy [, tag]) → array of {id, gid} | nil
@@ -162,38 +161,22 @@ spawnYields env ws gx gy yields = do
     fmap concat $ forM yields $ \(name, lo, hi) →
         case lookupItemDef name itemMgr of
             Nothing → pure []
-            Just def → do
+            Just _ → do
                 count ← atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \g →
                     let (v, g') = randomR (lo, hi) g in (g', v)
-                forM [1 .. max 0 count] $ \_ → do
-                    qual ← rollItemSpec (idQualitySpec def) (ucStatRNGRef (toUnitCombatCapability env))
-                    wght ← rollItemWeight def (ucStatRNGRef (toUnitCombatCapability env))
-                    iid ← freshItemInstanceId env
+                fmap catMaybes ∘ forM [1 .. max 0 count] $ \_ → do
+                    -- Every instance value is the materializer's (#1418);
+                    -- this path contributes no override.
+                    mInst ← materializeItem itemMgr
+                                (ucStatRNGRef (toUnitCombatCapability env))
+                                (freshItemInstanceId env) pristineItem name
                     (ju, jv) ← atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \g →
                         let (u, g')  = randomR (-0.3, 0.3 ∷ Float) g
                             (v, g'') = randomR (-0.3, 0.3 ∷ Float) g'
                         in (g'', (u, v))
-                    let fill = case idContainer def of
-                            Just c  → max 0 (min (icCapacity c) (icDefaultFill c))
-                            Nothing → 0
-                        inst = ItemInstance
-                            { iiDefName     = name
-                            , iiCurrentFill = fill
-                            , iiQuality     = qual
-                              -- Fresh item: full condition (#1421).
-                            , iiCondition   = 100.0
-                            , iiWeight      = wght
-                            , iiSharpness   = 100.0
-                            , iiContents    = []
-                            , iiInstanceId  = iid
-                            , iiTemp        = Nothing
-                              -- #1233: snapshotted from the def, like
-                              -- iiWeight.
-                            , iiBulk        = Just (idBulk def)
-                            , iiStorage     = idStorage def
-                            }
-                    gid ← atomicModifyIORef' (wsGroundItemsRef ws) $
-                        spawnGroundItem inst
-                            (fromIntegral gx + 0.5 + ju)
-                            (fromIntegral gy + 0.5 + jv)
-                    pure (name, gid)
+                    forM mInst $ \inst → do
+                        gid ← atomicModifyIORef' (wsGroundItemsRef ws) $
+                            spawnGroundItem inst
+                                (fromIntegral gx + 0.5 + ju)
+                                (fromIntegral gy + 0.5 + jv)
+                        pure (name, gid)

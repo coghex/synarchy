@@ -29,9 +29,8 @@ import Craft.Bills (BillId(..))
 import Craft.Types
 import Craft.Execute (consumeIngredients, craftQuality, applyMentalQuality)
 import Combat.Resolution.Common (mentalEffectiveness)
-import Item.Roll (rollItemSpec, rollItemWeight)
-import Item.Types (ItemDef(..), ItemInstance(..), ItemContainer(..),
-                   lookupItemDef)
+import Item.Materialize (ItemOverrides(..), materializeItem, pristineItem)
+import Item.Types (ItemDef, ItemInstance(..), ItemManager, lookupItemDef)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..),
                        BuildingActivity(..), BuildingManager(..),
@@ -184,7 +183,7 @@ executeCraft env uid rid = do
                 Left err → return (Left err)
                 Right outs → do
                     instances ← concat
-                        ⊚ mapM (rollOutputs env (rdOutputTemp recipe)) outs
+                        ⊚ mapM (rollOutputs env im (rdOutputTemp recipe)) outs
                     atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                         applyCraft recipe instances uid um
   where
@@ -228,37 +227,31 @@ applyCraft recipe outs uid um = case HM.lookup uid (umInstances um) of
                 in ( um { umInstances = HM.insert uid u' (umInstances um) }
                    , Right (map iiInstanceId outs') )
 
--- | Roll one output line into fresh instances. A crafted item is
---   factory-new: condition and sharpness start at 100 — which since
---   #1421 is simply what EVERY freshly made item does, the salvage path
---   'item.spawnGround' being the one exception. Quality rolls from the
---   def's spec here as the fallback for skill-less recipes;
---   skill-tagged recipes overwrite it in applyCraft with the crafter-
---   derived craftQuality (#343). Containers spawn at their default
---   fill, same as unit.addItem. @outputTemp@ is the recipe's
---   rdOutputTemp (#344/#346) — Just sets a tracked spawn temperature
---   (hot bar off the smelter, 100 °C fresh-brewed coffee), Nothing
---   spawns at ambient (the historical default).
-rollOutputs ∷ EngineEnv → Maybe Float → (RecipeIngredient, ItemDef)
-            → IO [ItemInstance]
-rollOutputs env outputTemp (ing, def) = replicateM (max 0 (riCount ing)) $ do
-    qual ← rollItemSpec (idQualitySpec def) (ucStatRNGRef (toUnitCombatCapability env))
-    wght ← rollItemWeight def (ucStatRNGRef (toUnitCombatCapability env))
-    iid  ← freshItemInstanceId env
-    let fill = case idContainer def of
-            Just c  → max 0 (min (icCapacity c) (icDefaultFill c))
-            Nothing → 0
-    pure ItemInstance
-        { iiDefName     = riItem ing
-        , iiCurrentFill = fill
-        , iiQuality     = qual
-        , iiCondition   = 100.0
-        , iiWeight      = wght
-        , iiSharpness   = 100.0
-        , iiContents    = []
-        , iiInstanceId  = iid
-        , iiTemp        = outputTemp
-          -- #1233: snapshotted from the def, like iiWeight.
-        , iiBulk        = Just (idBulk def)
-        , iiStorage     = idStorage def
-        }
+-- | Roll one output line into fresh instances through the one mint
+--   boundary (#1418) — a crafted container therefore arrives holding its
+--   definition's authored contents, like every other creation path.
+--   Quality rolls from the def's spec here as the fallback for
+--   skill-less recipes; skill-tagged recipes overwrite it in applyCraft
+--   with the crafter-derived craftQuality (#343), and #353 then shifts
+--   it by mental effectiveness — both AFTER materialization, on the root
+--   output only. @outputTemp@ is the recipe's rdOutputTemp (#344/#346) —
+--   Just sets a tracked spawn temperature (hot bar off the smelter,
+--   100 °C fresh-brewed coffee), Nothing spawns at ambient (the
+--   historical default). It is root-scoped: a crate crafted hot does not
+--   hand its heat to the items inside it.
+--
+--   The 'ItemDef' half of the pair is 'executeCraft'\'s own resolution
+--   proof (an unrecognised output name fails the whole craft before any
+--   of this runs) and is not consulted here — the materializer resolves
+--   the same name against the same registry snapshot, so the 'Nothing'
+--   'catMaybes' drops is unreachable rather than a silently shortened
+--   output line.
+rollOutputs ∷ EngineEnv → ItemManager → Maybe Float
+            → (RecipeIngredient, ItemDef) → IO [ItemInstance]
+rollOutputs env itemMgr outputTemp (ing, _resolved) =
+    catMaybes ⊚ replicateM (max 0 (riCount ing))
+        (materializeItem itemMgr
+                         (ucStatRNGRef (toUnitCombatCapability env))
+                         (freshItemInstanceId env)
+                         pristineItem { ovTemp = outputTemp }
+                         (riItem ing))

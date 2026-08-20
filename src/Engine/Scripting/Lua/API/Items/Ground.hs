@@ -30,7 +30,8 @@ import Engine.Core.State (EngineEnv, activeWorldStateFrom, freshItemInstanceId)
 import Engine.Scripting.Lua.API.Units.Page (unitOwningWorldState)
 import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem
                    , removeGroundItem)
-import Item.Roll (rollGroundCondition, rollGroundQuality, rollItemWeight)
+import Item.Materialize (ItemOverrides(..), materializeItem, pristineItem)
+import Item.Roll (rollGroundCondition, rollGroundQuality)
 import Item.Temperature (effectiveItemTemp)
 import Item.Types
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
@@ -106,38 +107,31 @@ itemSpawnGroundFn env = do
             case (HM.lookup name (imDefs im), mWs) of
                 (Just iDef, Just ws) → do
                     let rng = ucStatRNGRef (toUnitCombatCapability env)
+                    -- Salvage quality and condition are #1421's rules and
+                    -- stay #1421's rules: resolved HERE, in the two draws
+                    -- and the order they always had, then handed to the
+                    -- materializer as root-scoped overrides (#1418). They
+                    -- describe how THIS item came to be lying in the
+                    -- world, so they deliberately do not reach the
+                    -- default contents it spawns holding.
                     quality ← Lua.liftIO $ rollGroundQuality iDef mQuality rng
                     condition ← Lua.liftIO $ rollGroundCondition mCondition rng
-                    wght ← Lua.liftIO $ rollItemWeight iDef rng
-                    iid ← Lua.liftIO $ freshItemInstanceId env
-                    -- No explicit fill from the caller → the def's
-                    -- default_fill (so a loot-rolled quinoa sack spawns
-                    -- holding quinoa). Explicit fill always wins; both
-                    -- clamp to capacity, non-containers stay 0.
-                    let fill = case idContainer iDef of
-                            Just c  → max 0 (min (icCapacity c)
-                                        (fromMaybe (icDefaultFill c) mFill))
-                            Nothing → 0
-                        inst = ItemInstance
-                            { iiDefName = name
-                            , iiCurrentFill = fill
-                            , iiQuality = quality
-                            , iiCondition = condition
-                            , iiWeight = wght
-                            , iiSharpness = 100.0
-                            , iiContents = []
-                            , iiInstanceId = iid
-                            , iiTemp = mTemp
-                              -- #1233: snapshotted from the def, like
-                              -- iiWeight.
-                            , iiBulk = Just (idBulk iDef)
-                            , iiStorage = idStorage iDef
-                            }
-                    gid ← Lua.liftIO $
-                        atomicModifyIORef' (wsGroundItemsRef ws) $
-                            spawnGroundItem inst (realToFrac x) (realToFrac y)
-                    Lua.pushinteger (fromIntegral gid)
-                    return 1
+                    mInst ← Lua.liftIO $ materializeItem im rng
+                        (freshItemInstanceId env)
+                        pristineItem { ovFill      = mFill
+                                     , ovQuality   = Just quality
+                                     , ovCondition = Just condition
+                                     , ovTemp      = mTemp }
+                        name
+                    case mInst of
+                        Nothing → Lua.pushnil >> return 1
+                        Just inst → do
+                            gid ← Lua.liftIO $
+                                atomicModifyIORef' (wsGroundItemsRef ws) $
+                                    spawnGroundItem inst (realToFrac x)
+                                                         (realToFrac y)
+                            Lua.pushinteger (fromIntegral gid)
+                            return 1
                 _ → Lua.pushnil >> return 1
         _ → Lua.pushnil >> return 1
 

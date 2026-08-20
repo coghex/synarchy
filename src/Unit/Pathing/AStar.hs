@@ -11,6 +11,7 @@
 -- navigation philosophy in code form.
 module Unit.Pathing.AStar
     ( localAStar
+    , localAStarUnder
     , defaultMaxRadius
     ) where
 
@@ -18,7 +19,8 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet        as HS
 import qualified Data.Set            as Set
-import Unit.Pathing.Cost (stepCost, PathingConfig)
+import Unit.Pathing.Cost (stepCostUnder, PathingConfig)
+import Unit.Pathing.Hazard (MoveHazardPolicy(..), defaultMoveHazardPolicy)
 import World.Tile.Types (WorldTileData)
 import World.Material (MaterialRegistry)
 
@@ -36,7 +38,18 @@ defaultMaxRadius = 16
 --   * Returns `[]` if `src == dst` or if no neighbor of src is
 --     passable.
 localAStar ∷ PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Int → [(Int, Int)]
-localAStar pc reg wtd src dst maxRadius
+localAStar = localAStarUnder defaultMoveHazardPolicy
+
+-- | 'localAStar' under an explicit per-request hazard policy (#1217).
+--   The policy reaches the search only through `stepCostUnder`, so a
+--   'FallProhibited' expansion rejects a damaging drop exactly the way
+--   the greedy stepper does — no waypoint over a cliff can be installed,
+--   and a replan can't route around the stepper's own refusal. When no
+--   safe route exists the search still returns its usual partial path to
+--   the closest SAFELY reached tile (or `[]`), which is what lets the
+--   caller terminate an ambient request instead of retrying forever.
+localAStarUnder ∷ MoveHazardPolicy → PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Int → [(Int, Int)]
+localAStarUnder policy pc reg wtd src dst maxRadius
     | src ≡ dst = []
     | otherwise =
         let h0 = euclid src dst
@@ -49,7 +62,7 @@ localAStar pc reg wtd src dst maxRadius
                 , asBestH  = h0
                 }
             budget = max 64 (maxRadius * maxRadius * 4)
-            final  = run pc reg wtd src dst maxRadius budget initial
+            final  = run policy pc reg wtd src dst maxRadius budget initial
             endTile
                 | HS.member dst (asClosed final) = dst
                 | otherwise                      = asBest final
@@ -69,8 +82,8 @@ data AS = AS
 
 -- | Drive the A* loop. Recurses until dst is closed, the open set
 --   empties, or the node budget runs out.
-run ∷ PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Int → Int → AS → AS
-run pc reg wtd src dst maxR budget st
+run ∷ MoveHazardPolicy → PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Int → Int → AS → AS
+run policy pc reg wtd src dst maxR budget st
     | HS.size (asClosed st) ≥ budget = st
     | otherwise = case Set.minView (asOpen st) of
         Nothing -> st
@@ -78,25 +91,26 @@ run pc reg wtd src dst maxR budget st
             | cur ≡ dst ->
                 st { asOpen = open', asClosed = HS.insert cur (asClosed st) }
             | HS.member cur (asClosed st) ->
-                run pc reg wtd src dst maxR budget (st { asOpen = open' })
+                run policy pc reg wtd src dst maxR budget (st { asOpen = open' })
             | otherwise ->
                 let st1 = st { asOpen   = open'
                              , asClosed = HS.insert cur (asClosed st)
                              }
-                    st2 = expand pc reg wtd src dst maxR cur st1
-                in  run pc reg wtd src dst maxR budget st2
+                    st2 = expand policy pc reg wtd src dst maxR cur st1
+                in  run policy pc reg wtd src dst maxR budget st2
 
 -- | Relax all 8 neighbors of `cur`.
-expand ∷ PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Int → (Int, Int) → AS → AS
-expand pc reg wtd src dst maxR cur st0 =
-    foldl' (relax pc reg wtd src dst maxR cur) st0 (neighbors cur)
+expand ∷ MoveHazardPolicy → PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Int → (Int, Int) → AS → AS
+expand policy pc reg wtd src dst maxR cur st0 =
+    foldl' (relax policy pc reg wtd src dst maxR cur) st0 (neighbors cur)
 
 -- | Standard A* relaxation with two extra guards:
 --   * Skip neighbors farther than `maxR` (Chebyshev) from src.
 --   * Track the best-h-so-far so we can return a partial path on
 --     failure to reach dst.
 relax
-    ∷ PathingConfig
+    ∷ MoveHazardPolicy
+    → PathingConfig
     → MaterialRegistry
     → WorldTileData
     → (Int, Int)  -- ^ src
@@ -106,10 +120,10 @@ relax
     → AS
     → (Int, Int)  -- ^ nbr
     → AS
-relax pc reg wtd src dst maxR cur st nbr
+relax policy pc reg wtd src dst maxR cur st nbr
     | HS.member nbr (asClosed st)    = st
     | chebyshev src nbr > maxR       = st
-    | otherwise = case stepCost pc reg wtd cur nbr of
+    | otherwise = case stepCostUnder policy pc reg wtd cur nbr of
         Nothing → st
         Just c  →
             let curG  = fromMaybe 0 (HM.lookup cur (asGScore st))

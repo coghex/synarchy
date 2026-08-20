@@ -4,7 +4,8 @@
 -- carried canteen, eat from inventory, and forage from the land
 -- (#94). Self-contained except for movement_speed and unit_stats.
 
-local mv = require("scripts.movement_speed")
+local mv      = require("scripts.movement_speed")
+local ambient = require("scripts.ambient_movement")
 
 local M = {}
 
@@ -43,19 +44,43 @@ local function wanderUtility(uid, s, params)
          - params.wander_time_penalty * timeInSession
 end
 
-local function wanderExecute(uid, s, params)
+-- Sample a wander destination around the unit's current position.
+-- Shared by both execute variants below so the two can only differ in
+-- the hazard policy they ask for, never in where they aim.
+local function sampleWanderTarget(uid, params)
     local info = unit.getInfo(uid)
-    if not info then return end
+    if not info then return nil end
 
     local angle = math.random() * 2 * math.pi
     local dist  = math.random() * params.wander_radius
-    local tx = info.gridX + math.cos(angle) * dist
-    local ty = info.gridY + math.sin(angle) * dist
+    return info.gridX + math.cos(angle) * dist,
+           info.gridY + math.sin(angle) * dist
+end
+
+-- The DEFAULT (fall-permitted) wander leg. unit_ai_mental.lua reuses this
+-- for panic, lash-out idling, delirium and mental breaks, which must keep
+-- behaving exactly as they do today — a panicking unit running off a
+-- ledge is the behavior, not a bug (#1217 requirement 3).
+local function wanderExecute(uid, s, params)
+    local tx, ty = sampleWanderTarget(uid, params)
+    if not tx then return end
 
     -- Aimless wander is a slow meander — well below comfort, so the unit
     -- ambles (and recovers stamina) rather than cruising. Units only move
     -- at comfort/ordered/sprint when they have an actual purpose.
     unit.moveTo(uid, tx, ty, mv.meander(uid))
+end
+
+-- The AMBIENT (fall-prohibited) wander leg — what the registered
+-- `wander` action uses for acolytes and the technomule (#1217). Same
+-- destination sampling, routed through the shared ambient mechanism so
+-- the engine refuses a route over a damaging drop and terminates the
+-- request when no safe route exists (the AI then resamples on a later
+-- thought tick).
+local function ambientWanderExecute(uid, s, params)
+    local tx, ty = sampleWanderTarget(uid, params)
+    if not tx then return end
+    ambient.wanderTo(uid, tx, ty)
 end
 
 -----------------------------------------------------------
@@ -386,6 +411,7 @@ M.idleUtility           = idleUtility
 M.idleExecute           = idleExecute
 M.wanderUtility         = wanderUtility
 M.wanderExecute         = wanderExecute
+M.ambientWanderExecute  = ambientWanderExecute
 M.findCanteenWithWater  = findCanteenWithWater
 M.drinkUtility          = drinkUtility
 M.drinkExecute          = drinkExecute

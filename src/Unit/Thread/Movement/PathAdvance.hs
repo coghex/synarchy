@@ -6,6 +6,10 @@
 module Unit.Thread.Movement.PathAdvance
     ( tickUnit
     , snapshotVisibleWorldTiles
+    , TerrainSnapshot(..)
+    , MoveWorld(..)
+    , moveWorldFor
+    , maxProtectedStep
     ) where
 
 import UPrelude
@@ -13,12 +17,14 @@ import Data.IORef (readIORef)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
 import World.Types (WorldManager(..), WorldState(..))
+import World.Page.Types (WorldPageId(..))
 import World.Tile.Types (WorldTileData(..))
 import Unit.Sim.Types
-import Unit.Pathing.Cost (stepCost, lookupTerrainZ, isCliffStep
+import Unit.Pathing.Cost (stepCostUnder, lookupTerrainZ, isCliffStep
+                         , isDamagingDrop
                          , materialFactor, materialDetour
                          , slopeGrade, slopeSpeedFactor, PathingConfig(..))
-import Unit.Pathing.AStar (localAStar, defaultMaxRadius)
+import Unit.Pathing.AStar (localAStarUnder, defaultMaxRadius)
 import World.Material (MaterialRegistry)
 import Unit.Thread.Movement.Types (UnitMoveStats(..), vectorToDirection)
 import Unit.Thread.Movement.Climb (tickClimbZ, tickPullup, startClimb)
@@ -33,6 +39,14 @@ import Unit.Thread.Movement.Timers
 arrivalEpsilon ∷ Float
 arrivalEpsilon = 0.1
 
+-- | The one terrain snapshot the whole movement batch paths against,
+--   tagged with the page it came from so a per-unit caller can tell
+--   whether it is that unit's OWN terrain.
+data TerrainSnapshot = TerrainSnapshot
+    { tsPageId ∷ !WorldPageId
+    , tsTiles  ∷ !WorldTileData
+    }
+
 -- | KNOWN FOLLOW-UP (#797 audit clause): like the pre-#797 LOS code,
 --   this snapshots wmVisible's HEAD page rather than each unit's own
 --   uiPage — a unit on a secondary visible page paths against the
@@ -41,19 +55,50 @@ arrivalEpsilon = 0.1
 --   per-unit-page fix is materially larger in scope than #797's LOS
 --   change (a per-caller WorldTileData lookup, not a single shared
 --   snapshot). Tracked as a deferred follow-up, not fixed in #797.
-snapshotVisibleWorldTiles ∷ WorldSimCapability → IO (Maybe WorldTileData)
+--
+--   #1217 does NOT lift that defect, but it does stop a HAZARD-PROTECTED
+--   request from riding on it: the snapshot now reports which page it is
+--   (see 'moveWorldFor'), and a protected mover whose own page isn't the
+--   one snapshotted fails closed rather than judging cliffs against
+--   another world's heightmap. A fall-permitted mover keeps the exact
+--   pre-#1217 behavior, defect included.
+snapshotVisibleWorldTiles ∷ WorldSimCapability → IO (Maybe TerrainSnapshot)
 snapshotVisibleWorldTiles wsc = do
     wm ← readIORef (wsWorldManagerRef wsc)
     case wmVisible wm of
         []          → pure Nothing
         (pageId:_)  → case lookup pageId (wmWorlds wm) of
             Nothing → pure Nothing
-            Just ws → Just <$> readIORef (wsTilesRef ws)
+            Just ws → Just . TerrainSnapshot pageId <$> readIORef (wsTilesRef ws)
 
-tickUnit ∷ PathingConfig → MaterialRegistry → Double → Double → Maybe WorldTileData
+-- | What the per-unit stepping path knows about the terrain it is
+--   pathing against: the tiles (as before) plus whether they are
+--   VERIFIED to be this mover's own page.
+data MoveWorld = MoveWorld
+    { mwTiles   ∷ !(Maybe WorldTileData)
+    , mwOwnPage ∷ !Bool
+      -- ^ True only when a snapshot exists AND its page is the mover's
+      --   'Unit.Types.uiPage'. Missing, hidden (no visible page),
+      --   unresolvable and wrong-page terrain all read as False, which
+      --   is what a 'FallProhibited' request fails closed on.
+    }
+
+-- | Build the per-unit view of the batch's terrain snapshot. The mover's
+--   page is 'Nothing' when the unit has no instance in the manager (a
+--   sim state outliving its unit) — which is exactly a case a protected
+--   request must not path through.
+moveWorldFor ∷ Maybe TerrainSnapshot → Maybe WorldPageId → MoveWorld
+moveWorldFor mSnap mMoverPage = MoveWorld
+    { mwTiles   = tsTiles <$> mSnap
+    , mwOwnPage = case (mSnap, mMoverPage) of
+        (Just ts, Just pid) → tsPageId ts ≡ pid
+        _                   → False
+    }
+
+tickUnit ∷ PathingConfig → MaterialRegistry → Double → Double → MoveWorld
          → UnitMoveStats
          → UnitSimState → UnitSimState
-tickUnit pc reg now dt mWtd stats us =
+tickUnit pc reg now dt mw stats us =
     let us1 = handleGetUp now
             $ handleTransitionExpiry now
             $ handlePickupExpiry now
@@ -80,11 +125,30 @@ tickUnit pc reg now dt mWtd stats us =
         TransitioningTo _   → us2
         _ → case usTarget us2 of
             Nothing → us2
+            -- Fail-closed terrain gate (#1217): a hazard-PROTECTED
+            -- request may only advance against terrain verified to be
+            -- this mover's own page. Anything else — no snapshot, no
+            -- visible page, an unresolvable page, or another page's
+            -- heightmap — abandons the request so the ambient AI
+            -- resamples later, rather than judging cliffs against the
+            -- wrong world. Fall-permitted requests are untouched.
+            Just mt
+                | mtHazard mt ≡ FallProhibited ∧ not (mwOwnPage mw) →
+                    abandonTarget us2
             Just mt →
                 let subGoal = case usLocalPath us2 of
                         (p : _) → p
                         []      → (mtTargetX mt, mtTargetY mt)
-                in stepTowardSubGoal pc reg now dt mWtd stats us2 mt subGoal
+                in stepTowardSubGoal pc reg now dt mw stats us2 mt subGoal
+
+-- | Drop the in-flight request entirely: no target, no local path,
+--   Idle. The terminal state of a 'FallProhibited' request that can make
+--   no safe progress — deliberately NOT the fall-permitted "never gives
+--   up" behavior (which keeps the target and retries every tick), so an
+--   ambient mover is free to pick a different destination on a later
+--   thought tick instead of replanning an unreachable one forever.
+abandonTarget ∷ UnitSimState → UnitSimState
+abandonTarget us = us { usTarget = Nothing, usLocalPath = [], usState = Idle }
 
 -- | Try to advance toward `subGoal`. If we arrive, pop the waypoint
 --   (or clear the final target). Otherwise, take one step.
@@ -93,14 +157,15 @@ stepTowardSubGoal
     → MaterialRegistry
     → Double
     → Double
-    → Maybe WorldTileData
+    → MoveWorld
     → UnitMoveStats
     → UnitSimState
     → MoveTarget
     → (Float, Float)
     → UnitSimState
-stepTowardSubGoal pc reg now dt mWtd stats us mt (gx, gy) =
-    let dx   = gx - usRealX us
+stepTowardSubGoal pc reg now dt mw stats us mt (gx, gy) =
+    let mWtd = mwTiles mw
+        dx   = gx - usRealX us
         dy   = gy - usRealY us
         dist = sqrt (dx * dx + dy * dy)
         -- A crawling unit (legs maimed) is capped to a crawl regardless of
@@ -129,12 +194,83 @@ stepTowardSubGoal pc reg now dt mWtd stats us mt (gx, gy) =
                 slopeGrade wtd (floor (usRealX us)) (floor (usRealY us))
                            (usGridZ us) (dx / dist, dy / dist)
             _ → 0
-        step = (effSpeed * slopeSpeedFactor pc grade / matSlow)
-             * realToFrac dt
+        rawStep = (effSpeed * slopeSpeedFactor pc grade / matSlow)
+                * realToFrac dt
+        -- A protected tick may not span more than one tile boundary —
+        -- see `maxProtectedStep`. Fall-permitted movement keeps its exact
+        -- uncapped speed.
+        step = case mtHazard mt of
+            FallPermitted  → rawStep
+            -- Bound the MAGNITUDE, not just the upper end: nothing
+            -- rejects a negative speed at the `unit.moveTo` boundary, and
+            -- a large negative step spans just as many tiles (backwards)
+            -- as a large positive one. A non-finite step refuses to move
+            -- at all, the fail-closed posture the rest of the policy
+            -- takes — with the isNaN test FIRST, because every comparison
+            -- against NaN is False and a bare clamp chain would launder it
+            -- straight through (the same reasoning as
+            -- `Unit.Pathing.Cost.clampStepCost`).
+            FallProhibited
+                | isNaN rawStep → 0
+                | otherwise     → max (negate maxProtectedStep)
+                                      (min maxProtectedStep rawStep)
+        -- Arrival SNAPS x/y and re-grounds z at the sub-goal without
+        -- consulting the cost function at all, so a sub-goal within
+        -- `max step arrivalEpsilon` on the far side of a tile boundary
+        -- is crossed by the snap rather than by a step. For a protected
+        -- request that is a third way over a damaging drop, past both
+        -- the greedy stepper and A* (#1217, review round 1): a wander
+        -- target sampled just over a ledge is reached at 7.95 → 8.04 and
+        -- the unit lands at the bottom with no fall and no check.
+        --
+        -- So the snap is validated by the SAME function every other
+        -- crossing goes through — and ONLY when the request is
+        -- protected, because a fall-permitted arrival has never consulted
+        -- it and must stay byte-for-byte what it was. Missing or
+        -- unreadable terrain fails closed here for the same reason it
+        -- does everywhere else a protected request touches it.
+        srcTile = (floor (usRealX us), floor (usRealY us))
+        goalTile = (floor gx, floor gy) ∷ (Int, Int)
+        snapBlocked = mtHazard mt ≡ FallProhibited
+                    ∧ srcTile ≢ goalTile
+                    ∧ isNothing (do wtd ← mWtd
+                                    stepCostUnder FallProhibited pc reg wtd
+                                                  srcTile goalTile)
     in if dist ≤ max step arrivalEpsilon
-       then arriveAtSubGoal stats us mt (gx, gy) mWtd
+       then if snapBlocked
+            -- No safe way onto the sub-goal's tile. Replan from here;
+            -- if A* can't make safe progress either, it terminates the
+            -- request (see `replan`) so the ambient AI resamples.
+            then replan pc reg (us { usMoveGrade = grade }) mt mw srcTile
+            else arriveAtSubGoal stats us mt (gx, gy) mWtd
        else moveToward pc reg now stats (us { usMoveGrade = grade })
-                       mt mWtd dx dy dist step
+                       mt mw dx dy dist step
+
+-- | Ceiling on a hazard-PROTECTED request's per-tick displacement, in
+--   tiles (#1217, review round 2).
+--
+--   `dt` is an uncapped wall-clock delta ("Unit.Thread"'s @unitTick@) and
+--   @unit.moveTo@ takes an uncapped speed, so one tick's motion can span
+--   several tiles. Both the greedy check and the arrival snap validate
+--   only the tick's START and END tiles, so a multi-tile span could step
+--   clean over an intermediate damaging drop and land on a below-trigger
+--   one: z=10 across an intermediate z=8 onto a z=9 tile reads as an
+--   ordinary 1-z walk-off, and the unit crosses the 2-z drop untouched.
+--
+--   Rather than marching the crossed boundaries, a protected tick simply
+--   cannot span more than one. A displacement strictly under 1 tile moves
+--   each axis' `floor` by at most 1, so the destination tile is always
+--   8-connected to the source — which makes the SINGLE `stepCostUnder`
+--   check the COMPLETE check, and keeps the mover's step model identical
+--   to the one A* plans in. 0.9 bounds each axis component, since
+--   @|Δx| = |nx| * step ≤ step@.
+--
+--   The cost is that a protected request commanded faster than ~0.9
+--   tiles per tick travels at that cap instead. Ambient wander is a
+--   meander and never approaches it; a fall-permitted request is
+--   unaffected either way.
+maxProtectedStep ∷ Float
+maxProtectedStep = 0.9
 
 -- | Top speed (tiles/sec) of a unit dragging itself along on a maimed
 --   body. Slow enough to read as a crawl; the injury speed-multiplier
@@ -187,14 +323,15 @@ moveToward
     → UnitMoveStats
     → UnitSimState
     → MoveTarget
-    → Maybe WorldTileData
+    → MoveWorld
     → Float    -- dx
     → Float    -- dy
     → Float    -- distance to sub-goal
     → Float    -- step length this tick
     → UnitSimState
-moveToward pc reg now stats us mt mWtd dx dy dist step =
-    let nx   = dx / dist
+moveToward pc reg now stats us mt mw dx dy dist step =
+    let mWtd = mwTiles mw
+        nx   = dx / dist
         ny   = dy / dist
         newX = usRealX us + nx * step
         newY = usRealY us + ny * step
@@ -206,8 +343,18 @@ moveToward pc reg now stats us mt mWtd dx dy dist step =
         mCost
             | srcTile ≡ dstTile = Just 0  -- sub-tile motion, no boundary cross
             | otherwise = case mWtd of
-                Just wtd → stepCost pc reg wtd srcTile dstTile
-                Nothing  → Just 0  -- no world snapshot: don't block
+                -- The request's own hazard policy (#1217) reaches the
+                -- greedy stepper and A* through the SAME cost function,
+                -- so a protected route can't lose its protection by
+                -- being planned one way rather than the other.
+                Just wtd → stepCostUnder (mtHazard mt) pc reg wtd srcTile dstTile
+                -- No world snapshot: a fall-permitted move doesn't block
+                -- (its historical behavior). A protected move can't get
+                -- here — tickUnit abandons an unverified snapshot before
+                -- stepping — but refuse rather than step blind.
+                Nothing  → case mtHazard mt of
+                    FallPermitted  → Just 0
+                    FallProhibited → Nothing
         followingPath = not (null (usLocalPath us))
         -- Soft-ground detour trigger (#312). Material step costs are mild
         -- (sand 1.5, mud 1.8) — far below pcReplanCostThreshold — so the
@@ -245,14 +392,14 @@ moveToward pc reg now stats us mt mWtd dx dy dist step =
                 case (lookupTerrainZ wtd (fst srcTile) (snd srcTile),
                       lookupTerrainZ wtd (fst dstTile) (snd dstTile)) of
                     (Just sz, Just dz)
-                        | sz - dz ≥ pcFallTriggerDrop pc → Just (sz, dz)
+                        | isDamagingDrop pc sz dz → Just (sz, dz)
                     _ → Nothing
             _ → Nothing
     in case mCost of
         Nothing →
-            replan pc reg us mt mWtd srcTile
+            replan pc reg us mt mw srcTile
         Just c | not followingPath ∧ (c > pcReplanCostThreshold pc ∨ matEdge) →
-            replan pc reg us mt mWtd srcTile
+            replan pc reg us mt mw srcTile
         Just _ → case (mCliff, mFall) of
             (Just (srcZ, dstZ), _) →
                 -- Face the CLIFF, not the unit's walking sub-step.
@@ -306,25 +453,33 @@ gaitForPose _ stats mt   = gaitFor stats mt
 
 -- | Run local A* from `srcTile` to the final target's tile. Store
 --   the resulting waypoints (in tile-center continuous coords) in
---   `usLocalPath`. If A* makes no progress (empty path), the unit
---   sits this tick — `usTarget` is preserved so the next tick can
---   try again ("never gives up").
+--   `usLocalPath`. If A* makes no progress (empty path), a
+--   fall-permitted request sits this tick — `usTarget` is preserved so
+--   the next tick can try again ("never gives up").
+--
+--   A 'FallProhibited' request TERMINATES instead (#1217): "no safe
+--   progress" is a real answer for ambient movement, and holding an
+--   unreachable target would replan it every movement tick forever
+--   while the ambient AI, seeing a still-active move, never resamples.
 replan
     ∷ PathingConfig
     → MaterialRegistry
     → UnitSimState
     → MoveTarget
-    → Maybe WorldTileData
+    → MoveWorld
     → (Int, Int)
     → UnitSimState
-replan pc reg us mt mWtd srcTile =
+replan pc reg us mt mw srcTile =
     let finalTile = (floor (mtTargetX mt), floor (mtTargetY mt))
-        tilePath = case mWtd of
-            Just wtd → localAStar pc reg wtd srcTile finalTile defaultMaxRadius
+        tilePath = case mwTiles mw of
+            Just wtd → localAStarUnder (mtHazard mt) pc reg wtd srcTile
+                                       finalTile defaultMaxRadius
             Nothing  → []
         wps = map tileCenter tilePath
     in if null wps
-       then us { usLocalPath = [], usState = Idle }
+       then case mtHazard mt of
+                FallPermitted  → us { usLocalPath = [], usState = Idle }
+                FallProhibited → abandonTarget us
        else us { usLocalPath = wps, usState  = Walking }
 
 tileCenter ∷ (Int, Int) → (Float, Float)
