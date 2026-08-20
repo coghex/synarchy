@@ -484,10 +484,16 @@ def test_envelope_framing_fingerprint_ignores_inherited_language_pragma() -> Non
         expect(separate == after,
                "expected an inherited extension declared on its OWN pragma "
                "line to be just as redundant as one sharing a pragma")
-        # A header carrying ANY negative form is kept verbatim, even
-        # though NoImplicitPrelude merely restates an inherited default:
-        # once something is turned off, deciding what is redundant needs
-        # GHC's implication graph. Over-keeping is the fail-safe side.
+        # DECIDED TRADE-OFF (owner, 2026-08-19), pinned here so it reads
+        # as intentional: a header carrying ANY negative form is kept
+        # verbatim, even though NoImplicitPrelude merely restates an
+        # inherited default and so leaves the effective set unchanged.
+        # Proving that particular case redundant needs to know whether
+        # the preceding `Strict` implies `ImplicitPrelude` -- GHC's
+        # implication table, which this tool deliberately does not carry
+        # (see test_envelope_framing_fingerprint_keeps_undecidable_
+        # headers). Over-keeping costs one explicable fingerprint move;
+        # the other direction hides a real change.
         negative = _framing_fp(
             d, "{-# LANGUAGE Strict, NoImplicitPrelude #-}\n" + _CODEC_BODY)
         expect(negative != after,

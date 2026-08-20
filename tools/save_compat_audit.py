@@ -751,6 +751,23 @@ def _drop_redundant_language_pragmas(
     fail-safe direction: it costs a fingerprint move that did not have
     to happen, where the other direction hides a real change.
 
+    ONE case is knowingly given up to that gate, and it is a decided
+    trade-off rather than an oversight: re-declaring an extension the
+    stanza already supplies in its NEGATIVE form
+    (`{-# LANGUAGE Strict, NoImplicitPrelude #-}` against an inherited
+    `NoImplicitPrelude`) leaves the effective set unchanged and yet is
+    retained, because proving THAT requires knowing whether the
+    preceding `Strict` implies `ImplicitPrelude` -- i.e. the very table
+    the paragraph above establishes this tool must not pretend to have.
+    Handling it would mean checking one in, with an
+    unknown-extension fallback, and accepting its drift; the project
+    owner chose the conservative gate instead on 2026-08-19. Issue
+    #1416's own enumerated acceptance cases are unaffected: the
+    representative `UnicodeSyntax` removal is all-positive and
+    duplicate-free, so it still normalizes away. If a shipped module
+    ever does declare an inherited negative locally, the cost is one
+    explicable fingerprint move, not a hidden change.
+
     Only `LANGUAGE` is in scope -- `OPTIONS_GHC` and every other block
     pragma passes through verbatim, as do extensions merely implied by
     `default-language: GHC2024`, which are likewise not treated as
