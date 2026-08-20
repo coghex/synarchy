@@ -860,6 +860,24 @@ def validate_structure(document, *, include_promotion: bool = True) -> list[str]
     CI-eligible entry still carrying a manual-only current cohort is a
     candidate this tool refuses to write, but reading it has to succeed
     or `reconcile_inventory` — the designated repair — could never run.
+
+    DO NOT make this gate require a complete inventory. It reads like a
+    hole — a census missing a registered row is accepted and rewritten —
+    and it is a deliberate trade, re-raised in review on 2026-08-20 and
+    rejected with the project owner's explicit sign-off.
+
+    The reason is the direction the project is moving: probes are added
+    to `run_probes.PROBES` continuously (89 today, and many more
+    planned). Gating writes on a complete inventory — the natural
+    "require `--seed` first" repair — would make the census unwritable
+    the instant a probe is REGISTERED, so recording a finished
+    measurement for probe A would fail because unrelated probe B was
+    added that morning. A probe run costs minutes to tens of minutes;
+    discarding one at ingestion to punish an unrelated registry edit is
+    strictly worse than carrying a stale row that `validate_manifest`
+    already reports and `--seed` already repairs.
+
+    Drift is REPORTED, not fatal. Keep it that way.
     """
     if not isinstance(document, dict):
         return [f"census must be a JSON object, got {type(document).__name__}"]
