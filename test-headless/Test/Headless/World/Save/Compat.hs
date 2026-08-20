@@ -101,7 +101,7 @@ import World.River.Naming
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..))
-import Unit.Sim.Types (UnitSimState(..))
+import Unit.Sim.Types (UnitSimState(..), MoveTarget(..), MoveHazardPolicy(..))
 import Craft.Bills (CraftBills(..), CraftBill(..), BillId(..), BillMode(..))
 import World.Save.Component.Entities (BillQueueDTOv1(..), CraftBillDTOv1(..))
 import Power.Types (PowerNodes(..), PowerNode(..), PowerNodeId(..))
@@ -1122,6 +1122,44 @@ spec = do
                         decomposeName cat (rvnDisplayName rn) (rvnGloss rn)
                                       (rvnEtymology rn)
                             `shouldSatisfy` isAvailableFor (rvnDisplayName rn)
+
+    describe "movement hazard policy across baselines (issue #1217)" $ do
+        -- The unit-sim component went to v3 so a move target could carry
+        -- the request's damaging-drop policy. These two cases are the
+        -- pair: an OLD baseline must default to fall-permitted (the
+        -- behavior its bytes were written under), and the CURRENT one
+        -- must carry a genuinely FallProhibited target, so this coverage
+        -- can never decay into asserting the default on both sides.
+        let withTargets path k = do
+                bytes ← BS.readFile path
+                case decodeSessionEnvelope luaNames luaNames bytes of
+                    Left err → expectationFailure
+                        (path <> " did not decode: " <> T.unpack err)
+                    Right (_, snap, _, _) → k
+                        [ mt | p ← HM.elems (snapPages snap)
+                             , ss ← HM.elems (pgsUnitSimStates p)
+                             , Just mt ← [usTarget ss] ]
+            luaNames = HS.fromList ["unit_ai", "building_spawn"]
+
+        it "a tracked baseline written BEFORE the hazard policy decodes \
+           \with every in-flight move target fall-permitted -- an old \
+           \save's routes keep behaving exactly as they did, and no \
+           \policy is ever inferred from a speed or a destination" $
+            withTargets
+                "test-headless/data/save-compat/l1-order-stall-budget.bin" $
+                \mts → do
+                    mts `shouldNotBe` []
+                    map mtHazard mts `shouldSatisfy` all (≡ FallPermitted)
+
+        it "the tracked current-version baseline carries a genuinely \
+           \FALL-PROHIBITED in-flight target, so this coverage can never \
+           \silently decay into the same permitted default the pre-#1217 \
+           \baselines already prove" $
+            withTargets
+                "test-headless/data/save-compat/o1-wander-hazard-policy.bin" $
+                \mts → do
+                    mts `shouldNotBe` []
+                    map mtHazard mts `shouldSatisfy` all (≡ FallProhibited)
 
     describe "unknown optional data in a legacy envelope (requirement 9)" $ do
         it "refuses to migrate a legacy envelope carrying an extra \

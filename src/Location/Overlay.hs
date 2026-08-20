@@ -108,11 +108,17 @@ data PlacementOutcome
       --   authored @max_count: 0@. The guarantee deliberately does NOT
       --   fire here — an authored "do not place" is not a generation
       --   failure, and a def-less world must keep yielding an empty
-      --   overlay or the tracked world-gen baselines shift.
+      --   overlay or the tracked world-gen baselines shift. Reported
+      --   only for a world that HOLDS land; see 'NoLand'.
     | NoLand
       -- ^ The world holds no land chunk at all, so no placement of any
       --   kind is possible. The explicit no-location result: callers
       --   surface this rather than reporting a successful generation.
+      --
+      --   Takes precedence over 'NoPlaceableDefinitions' (#1414): when
+      --   BOTH hold, a landless world reports 'NoLand', because that is
+      --   the fact the caller has to surface — nothing a later
+      --   definition registration could change.
     deriving (Show, Eq)
 
 -- | The placement pass's full result: the overlay plus why it looks the
@@ -132,7 +138,9 @@ data Cuts = Cuts
 
 -- | Place every location def into the world. Returns the sparse
 --   chunk→id overlay. Empty when no defs are registered (the common
---   headless-dump path), which also short-circuits the per-chunk scan.
+--   headless-dump path), which short-circuits the placement and
+--   settlement work. Not the per-chunk land scan: this module is
+--   {-# LANGUAGE Strict #-}, so that one is forced on every path (#1414).
 --
 --   The overlay-only view of 'computeLocationPlacement', kept because
 --   most callers only ever want the map.
@@ -163,8 +171,14 @@ computeLocationPlacement
     → [LocationDef]   -- ^ registered location defs
     → LocationPlacement
 computeLocationPlacement seed worldSize plates oceanMap oceanDist lakes rivers defs
-    | null placeable   = LocationPlacement emptyLocationOverlay NoPlaceableDefinitions
+    -- Land first (#1414): 'NoLand' is the stronger physical fact, so it
+    -- is what a caller is told when both conditions hold. Ordering it
+    -- first costs nothing the other path was not already paying —
+    -- 'landMetrics' is a `where` value binding and this module is
+    -- {-# LANGUAGE Strict #-}, so it is forced to WHNF before any guard
+    -- runs, and @null@ needs exactly WHNF.
     | null landMetrics = LocationPlacement emptyLocationOverlay NoLand
+    | null placeable   = LocationPlacement emptyLocationOverlay NoPlaceableDefinitions
     | otherwise        = settle (fst (foldl' placeDef (emptyLocationOverlay, HS.empty)
                                              placeable))
   where
@@ -176,8 +190,9 @@ computeLocationPlacement seed worldSize plates oceanMap oceanDist lakes rivers d
 
     -- A function, not a value binding: this module is {-# LANGUAGE
     -- Strict #-}, so a `where` value would be forced on every path,
-    -- including the no-definitions short-circuit above that the
-    -- headless-dump path relies on staying cheap.
+    -- including the two short-circuits above. Unlike the already-forced
+    -- 'landMetrics' detection, settling is real work the headless-dump
+    -- path relies on skipping.
     settle ∷ LocationOverlay → LocationPlacement
     settle strict
         | not (HM.null strict) = LocationPlacement strict PlacedStrict

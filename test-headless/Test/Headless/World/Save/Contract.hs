@@ -114,7 +114,9 @@ import Building.Types (BuildingId(..))
 import Building.Knowledge
     (ContainerKnowledge(..), ContainerRecord(..), emptyContainerKnowledge)
 import Unit.Types (UnitId(..), Wound(..), Scar(..), StatModifier(..))
-import Unit.Sim.Types (UnitSimState(..), Pose(..), UnitActivity(..), MoveTarget(..))
+import Unit.Sim.Types
+    (UnitSimState(..), Pose(..), UnitActivity(..), MoveTarget(..)
+    , MoveHazardPolicy(..))
 import Unit.Direction (Direction(..))
 
 page1, page2 ∷ WorldPageId
@@ -274,7 +276,11 @@ richTransferOrders =
 richSimState ∷ UnitSimState
 richSimState = UnitSimState
     { usRealX = 12.5, usRealY = 7.5, usGridZ = 2, usRealZ = 2.0
-    , usTarget = Just (MoveTarget 20.0 15.0 1.5)
+      -- FallProhibited deliberately (#1217): the representative session
+      -- must carry a NON-default hazard policy, so a codec that dropped
+      -- it — or defaulted it back on load — fails this contract rather
+      -- than round-tripping vacuously.
+    , usTarget = Just (MoveTarget 20.0 15.0 1.5 FallProhibited)
     , usPose = Standing, usState = Walking, usFacing = DirS
     , usLocalPath = [(13.0, 7.5), (14.0, 8.0), (15.0, 8.5)]
     , usDrinkUntil = Just 54321.0, usEatUntil = Nothing, usPickupUntil = Nothing

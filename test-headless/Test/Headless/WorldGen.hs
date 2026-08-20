@@ -463,6 +463,17 @@ spec = do
                 lpOverlay res `shouldBe` HM.empty
                 lpOutcome res `shouldBe` NoLand
 
+            it "reports NoLand when the world is also definition-less" $ \_env → do
+                -- Precedence when BOTH conditions hold (#1414). The same
+                -- landless fixture as above, minus every definition: the
+                -- physical fact wins, so this is NoLand and not the
+                -- NoPlaceableDefinitions a def-less world WITH land
+                -- reports two examples up.
+                let allOcean = HS.fromList gcoords
+                    res = placeWith allOcean allDry []
+                lpOverlay res `shouldBe` HM.empty
+                lpOutcome res `shouldBe` NoLand
+
             it "leaves a successful strict pass exactly as it was" $ \env → do
                 ws ← sharedWorld env 42 64 3
                 Just p ← getWorldGenParams ws
