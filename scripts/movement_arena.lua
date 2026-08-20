@@ -167,6 +167,22 @@ M.courses.fall_edge = function()
              note = "start on a 3-high plateau (x<=0); walk east off the edge, fall to z=0" }
 end
 
+-- Wander ledge (#1217). A small 3-high plateau with a DAMAGING drop
+-- (>= fall_trigger_drop) on every side and no ramp anywhere, so a unit
+-- ambling around on top is continuously one step from a fall. Its
+-- half-extent (2.5 tiles from the centre) is deliberately well inside an
+-- acolyte's wander_radius (5.0), so MOST sampled legs aim off the ledge
+-- — which is what makes a sustained wander window a continuous test of
+-- the fall-free routing policy rather than a lucky one. The goal sits on
+-- the low ground east, so a COMMANDED move over the same edge still
+-- falls.
+M.courses.wander_ledge = function()
+    M.plateau(-2, -2, 2, 2, 3, LOAM)
+    return { name = "wander_ledge", sx = 0, sy = 0, gx = 6, gy = 0,
+             note = "5x5 3-high plateau, no ramps; ambient wander must " ..
+                    "stay on top, a commanded move off the edge still falls" }
+end
+
 -- Ramp (symptom #3). A 1-high plateau whose west edge is authored as a
 -- WALKABLE ramp via setSlope. The unit should WALK up the ramp (no climb
 -- transition), not treat it as a cliff. Exercises isCliffStep + the ramp

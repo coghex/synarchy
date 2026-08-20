@@ -246,6 +246,29 @@ DEEP_KIT_CONTENTS = [
     "tomato", "wheat_grain", "granite_chunk", "steel_plate",
     "steel_hardware",
 ]
+# Since #1418 EVERY creation path materializes a container def's
+# declared `contents:` -- `unit.addItem` included -- so the deep kit
+# would arrive stocked either way. It still comes in through a spawned
+# carrier's starting inventory, deliberately: that is the path the
+# nesting fixture was BUILT on, and re-routing it would be changing the
+# fixture rather than following the behaviour change.
+#
+# What the change does take away is the free empty container the
+# item-contents scenario used for its "(empty)" render state. That state
+# is real UI behaviour and keeps its coverage, so the probe now AUTHORS
+# an empty container: a throwaway def with no `contents:` key at all
+# decodes to an empty list and materializes empty, however it is created.
+DEF_EMPTY_BOX = "probe_empty_box"
+TEST_EMPTY_BOX = f"""\
+  - name: "{DEF_EMPTY_BOX}"
+    display_name: "Probe Empty Box"
+    sprite: "assets/textures/items/medical/first_aid_kit.png"
+    weight: 0.5
+    bulk: 4.0
+    kind: container
+    category: Medical
+"""
+
 TEST_ITEMS = "items:\n" + f"""\
   - name: "{DEF_DEEP_KIT}"
     display_name: "Probe Deep Kit"
@@ -257,13 +280,8 @@ TEST_ITEMS = "items:\n" + f"""\
     contents:
 """ + "".join(f"      - {{ item: {d}, count: 1 }}\n"
               for d in DEEP_KIT_CONTENTS) + \
-    "      - { item: first_aid_kit, count: 1 }\n"
+    "      - { item: first_aid_kit, count: 1 }\n" + TEST_EMPTY_BOX
 
-# `unit.addItem` mints an EMPTY container (the comment on the
-# item-contents fixture below says so, and it is why that scenario has
-# an empty-state case at all): only the spawn path materializes an item
-# def's declared `contents`. So the STOCKED deep kit has to arrive in a
-# spawned unit's starting inventory and be deposited from there.
 TEST_UNIT_YAML = os.path.join(SPROOT, "item_list_widget_probe_units.yaml")
 DEF_CARRIER = "probe_kit_carrier"
 TEST_UNITS = f"""\
@@ -1232,8 +1250,10 @@ def knowledge_scenario(port: int, unseen_bid: int, empty_bid: int,
 def item_contents_scenario(port: int, mule_uid: int, uid: int) -> None:
     print("== first-aid-kit Contents panel ==")
     # The technomule's own starting inventory carries a PRE-STOCKED kit
-    # (data/units/technomule.yaml -> starting_inventory); unit.addItem
-    # mints an empty one, which is the empty-state fixture below.
+    # (data/units/technomule.yaml -> starting_inventory). Since #1418 so
+    # does every other creation path, so the empty-state case below uses
+    # a def that AUTHORS no contents rather than a creation path that
+    # used to skip them.
     engine_rows = send_json(
         port, f"return unit.getItemContents({mule_uid}, 'first_aid_kit')")
     if not check("engine reports the kit's pre-grouped contents",
@@ -1287,11 +1307,27 @@ def item_contents_scenario(port: int, mule_uid: int, uid: int) -> None:
     check("item-contents panel renders NO tab strip",
           not tab_boxes(port, ITEM_CONTENTS_LIST_ID))
 
-    # -- The empty state, on the acolyte's own freshly-minted (empty) kit.
+    # -- The empty state, on a container that is GENUINELY empty: a def
+    #    authoring no `contents:` key decodes to an empty list, so it
+    #    materializes empty however it was created. Since #1418 that is
+    #    the only way to get one -- a first-aid kit now arrives stocked
+    #    from `unit.addItem` too -- and this state is real UI behaviour,
+    #    so it keeps its coverage rather than going away with the
+    #    creation-path quirk that used to supply it.
     send(port, "require('scripts.item_contents_panel').closeIfOpen(); return 'ok'")
     time.sleep(0.3)
+    send(port, f"return unit.addItem({uid}, '{DEF_EMPTY_BOX}')")
+    # Row COUNT over the console, not the serialized table: an empty Lua
+    # table has no array/object distinction to preserve, so `#r` is what
+    # separates "container with no contents" (0) from "no such container"
+    # (-1).
+    engine_empty = send(
+        port, f"local r=unit.getItemContents({uid}, '{DEF_EMPTY_BOX}'); "
+              "if not r then return -1 end; return #r").strip().strip('"')
+    check("the fixture container really is empty at the engine level",
+          engine_empty in ("0", "0.0"), f"row count {engine_empty!r}")
     send(port, "require('scripts.item_contents_panel').openFor("
-               f"{uid}, 'first_aid_kit', 400, 300); return 'ok'")
+               f"{uid}, '{DEF_EMPTY_BOX}', 400, 300); return 'ok'")
     time.sleep(0.6)
     check("an empty container still opens its panel",
           send(port, "return require('scripts.item_contents_panel')"
@@ -1299,6 +1335,7 @@ def item_contents_scenario(port: int, mule_uid: int, uid: int) -> None:
     check("an empty container renders no rows (the '(empty)' state)",
           not item_rows(port, ITEM_CONTENTS_LIST_ID))
     send(port, "require('scripts.item_contents_panel').closeIfOpen(); return 'ok'")
+    send(port, f"return unit.removeItem({uid}, '{DEF_EMPTY_BOX}')")
 
 
 def unit_inv_row(port: int, def_name: str, category: str):

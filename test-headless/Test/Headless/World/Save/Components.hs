@@ -99,13 +99,21 @@ import Power.Types
     , PowerRole(..) )
 import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..))
-import Unit.Sim.Types (UnitSimState(..), MoveTarget(..), Pose(..), UnitActivity(..))
+import Unit.Sim.Types
+    (UnitSimState(..), MoveTarget(..), Pose(..), UnitActivity(..)
+    , MoveHazardPolicy(..))
 import Unit.Direction (Direction(..))
 import Building.Knowledge (emptyContainerKnowledge, ContainerRecord(..))
 
 -- ---------------------------------------------------------------------
 -- Fixtures (mirror Test.Headless.Save.Snapshot's minimal* pattern)
 -- ---------------------------------------------------------------------
+
+-- | The hazard policy of a decoded sim state's in-flight target, if any
+--   (#1217). Spelled once so the migration cases below read as
+--   assertions rather than as nested Maybe plumbing.
+hazardOf ∷ Maybe UnitSimStateDTO → Maybe MoveHazardPolicy
+hazardOf mSim = fmap mvtHazard (simTarget =<< mSim)
 
 page1, page2 ∷ WorldPageId
 page1 = WorldPageId "page1"
@@ -336,7 +344,7 @@ minimalSimState = UnitSimState
 richSimState ∷ UnitSimState
 richSimState = minimalSimState
     { usRealX = 3.5, usRealY = -2.25, usGridZ = 4, usRealZ = 4.5
-    , usTarget = Just (MoveTarget 9 10 1.5)
+    , usTarget = Just (MoveTarget 9 10 1.5 FallProhibited)
     , usPose = Climbing, usState = Running, usFacing = DirNE
     , usLocalPath = [(1,2),(3,4)]
     , usDrinkUntil = Just 12.5, usTransitionStride = 2
@@ -1148,14 +1156,20 @@ spec = do
                 `shouldBe` Just (ComponentError craftBillsComponentId 3
                     DecodePhase
                     "unsupported schema version (reader supports v1, v2)")
-            decodeErrorOf unitSimCodec 0 BS.empty
-                `shouldBe` Just (ComponentError unitSimComponentId 0
-                    DecodePhase
-                    "unsupported schema version (reader supports v1, v2)")
             decodeErrorOf powerNodesCodec 7 BS.empty
                 `shouldBe` Just (ComponentError powerNodesComponentId 7
                     DecodePhase
                     "unsupported schema version (reader supports v1, v2)")
+
+        -- unit-sim gained a third version with #1217's per-request hazard
+        -- policy; it is the reader that exercises the rendering between
+        -- the two- and seven-version cases either side of it.
+        it "reports an unsupported version identically for a THREE-version \
+           \reader" $
+            decodeErrorOf unitSimCodec 0 BS.empty
+                `shouldBe` Just (ComponentError unitSimComponentId 0
+                    DecodePhase
+                    "unsupported schema version (reader supports v1, v2, v3)")
 
         it "reports an unsupported version identically for a SEVEN-version \
            \reader" $
@@ -1497,26 +1511,69 @@ spec = do
             fromNodeRegistryDTO (toNodeRegistryDTO richNodes) `shouldBe` richNodes
 
         it "migrates an unambiguous v1 unit-sim page slice into the typed \
-           \v2 shape (issue #764 round-3 review: psSim's map KEY is a \
+           \current shape (issue #764 round-3 review: psSim's map KEY is a \
            \same-page cross-component reference to its owning unit, typed \
            \the same way as a bill's station or a node's host building)" $ do
             let v1 = PageSimDTOv1
                     { ps1PageId = page1
                     , ps1Sim = HM.singleton (UnitId 5)
-                        (toUnitSimStateDTO richSimState) }
+                        (toUnitSimStateDTOv1 richSimState) }
                 v2 = migratePageSimDTOv1 v1
             psPageId v2 `shouldBe` page1
             HM.keys (psSim v2) `shouldBe` [SamePageRef (UnitId 5)]
             HM.lookup (SamePageRef (UnitId 5)) (psSim v2)
-                `shouldBe` Just (toUnitSimStateDTO richSimState)
+                `shouldBe` Just (migrateUnitSimStateDTOv1
+                                    (toUnitSimStateDTOv1 richSimState))
 
         it "migrateUnitSimDTOv1 migrates every page slice in a v1 payload" $
             let v1 = UnitSimDTOv1
                     [ PageSimDTOv1 page1 (HM.singleton (UnitId 5)
-                        (toUnitSimStateDTO richSimState))
+                        (toUnitSimStateDTOv1 richSimState))
                     , PageSimDTOv1 page2 HM.empty ]
                 UnitSimDTO v2Pages = migrateUnitSimDTOv1 v1
             in map psPageId v2Pages `shouldBe` [page1, page2]
+
+        -- #1217: the unit-sim component is at v3, and BOTH older shapes
+        -- must land on the fall-permitted default a pre-#1217 target was
+        -- written under. richSimState's own target is FallProhibited, so
+        -- a migration that simply carried the current policy through
+        -- (rather than defaulting) would pass the round-trip test above
+        -- and fail these.
+        it "migrates a v1 unit-sim target to the fall-permitted default" $
+            let v1 = PageSimDTOv1 page1 (HM.singleton (UnitId 5)
+                        (toUnitSimStateDTOv1 richSimState))
+                migrated = HM.lookup (SamePageRef (UnitId 5))
+                                     (psSim (migratePageSimDTOv1 v1))
+            in hazardOf migrated `shouldBe` Just FallPermitted
+
+        it "migrates a v2 unit-sim page slice, defaulting its target's \
+           \hazard policy to fall-permitted" $ do
+            let v2 = PageSimDTOv2
+                    { ps2PageId = page1
+                    , ps2Sim = HM.singleton (SamePageRef (UnitId 5))
+                        (toUnitSimStateDTOv1 richSimState) }
+                v3 = migratePageSimDTOv2 v2
+            psPageId v3 `shouldBe` page1
+            HM.keys (psSim v3) `shouldBe` [SamePageRef (UnitId 5)]
+            let migrated = HM.lookup (SamePageRef (UnitId 5)) (psSim v3)
+            hazardOf migrated `shouldBe` Just FallPermitted
+            -- Everything else carries across untouched.
+            fmap simLocalPath migrated `shouldBe` Just (usLocalPath richSimState)
+
+        it "migrateUnitSimDTOv2 migrates every page slice in a v2 payload" $
+            let v2 = UnitSimDTOv2
+                    [ PageSimDTOv2 page1 (HM.singleton (SamePageRef (UnitId 5))
+                        (toUnitSimStateDTOv1 richSimState))
+                    , PageSimDTOv2 page2 HM.empty ]
+                UnitSimDTO v3Pages = migrateUnitSimDTOv2 v2
+            in map psPageId v3Pages `shouldBe` [page1, page2]
+
+        it "a v1 move target loses nothing but its (absent) policy" $
+            let current = toUnitSimStateDTO richSimState
+                back    = migrateUnitSimStateDTOv1 (toUnitSimStateDTOv1 richSimState)
+                permitted = fmap (\t → t { mvtHazard = FallPermitted })
+                                 (simTarget current)
+            in back `shouldBe` current { simTarget = permitted }
 
     describe "frozen worldgen + item DTOs (boundary rule, review round 6)" $ do
         -- The nested worldgen config/state records and the recursive
