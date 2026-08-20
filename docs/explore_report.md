@@ -84,6 +84,7 @@ cited lines.
 - [ ] EXPL-34. `flattenItemInstances` says "all three now go through this one definition" and enumerates three; there are four
 - [ ] EXPL-35. `loadVegetationYamlFn`'s body says it parses "the single vegetation YAML file"; both Lua callers loop over five
 - [ ] EXPL-36. `computeAmbientLight`'s inline labels name noon and midnight; its input convention puts those values at dawn and dusk
+- [ ] EXPL-37. The Tier 3 damage model's derivation block documents a linear `m_eff` with a `modeCoupling` constant that does not exist; the code is rotational
 
 ---
 
@@ -2669,3 +2670,110 @@ change to any curve. The suggested repair is to relabel the two inline comments
 in terms the input convention supports, note the deliberate offset that
 `Unit.LineOfSight` already documents, and correct `Init.hs:206`'s "start at
 noon".
+
+---
+
+## Combat damage model
+
+### EXPL-37. The Tier 3 damage model's derivation block documents a linear `m_eff` with a `modeCoupling` constant that does not exist; the code is rotational
+
+`src/Combat/Resolution/Constants.hs:43-53` is the derivation block for the whole
+Tier 3 damage model — the thing `Combat.Resolution`'s own haddock sends readers
+here for ("see that module's haddock for the model derivation these tunables
+feed"):
+
+```
+-- Tier 3 physical damage model (real-units kinematics). The wielder
+-- does muscular WORK on the swing; that work becomes kinetic energy of
+-- an effective striking mass at an impact velocity (capped by how fast
+-- the limb can move). From the swing we read off ENERGY (what shears /
+-- penetrates tissue) and MOMENTUM (what crushes):
+--
+--   work  = eHuman · strength · modeWork · skillEff · stamina · (1−pain)   [J]
+--   m_eff = weaponMass + modeCoupling · bodyMass                          [kg]
+--   v_max = vHuman · modeSpeed · (0.6 + 0.4·dexterity)                    [m/s]
+--   v     = min(v_max, sqrt(2·work / m_eff))     -- work-limited OR capped
+--   E     = ½·m_eff·v²        p = m_eff·v
+```
+
+Three of those five lines match the implementation. Two describe a model the
+code does not implement.
+
+**`modeCoupling` does not exist.** A grep across `src/`, `docs/` and
+`test-headless/` returns exactly one occurrence: line 51 of this comment. There
+is no such constant anywhere in the tree, and it is absent from
+`Constants.hs`'s own export list.
+
+**The implemented effective mass is ROTATIONAL, not a linear coupling.**
+`swingKinematics` (`src/Combat/Resolution/Damage.hs:203-217`) builds a moment of
+inertia about the shoulder and reduces it to an effective mass at the tip:
+
+```haskell
+swingKinematics work wMass wLen wCoM armLen armMass dexterity mode =
+    let lw   = wLen   / 100.0                       -- m
+        la   = armLen / 100.0                       -- m
+        rCoM = la + clamp 0.0 1.0 wCoM * lw          -- implement CoM radius
+        bigR = max 0.05 (la + lw)                    -- contact (tip) radius
+        iArm = (1.0 / 3.0) * armMass * la * la        -- rod about one end
+        iWep = wMass * rCoM * rCoM                    -- point mass at CoM
+        inertia = max 1.0e-4 (iArm + iWep)
+        vMax = vHuman * modeSpeed mode * (0.6 + 0.4 * dexterity)
+        omegaMax = vMax / bigR
+        omega = min omegaMax (sqrt (2.0 * work / inertia))
+        vTip  = omega * bigR
+        mEff  = inertia / (bigR * bigR)
+    in (0.5 * inertia * omega * omega, mEff * vTip)
+```
+
+So `m_eff` is `inertia / R²`, and BODY MASS enters only through
+`armMass = armMassFrac * bodyMassA` (`Damage.hs:265`) as part of the limb's own
+inertia — five percent of it — never as a `modeCoupling · bodyMass` term added
+to the weapon's mass. The documented velocity line is likewise a reduction of
+the real one: the code solves for ANGULAR speed against `inertia`
+(`omega = min omegaMax (sqrt (2·work / inertia))`) and only then converts,
+`vTip = omega * bigR`.
+
+**Two lines DO survive, which is what makes the block read as current.**
+`½·inertia·ω²` expands to `½·(m_eff·R²)·(v/R)² = ½·m_eff·v²`, and the returned
+momentum is `mEff * vTip` outright — so the final line is algebraically correct
+as written. It is only the DEFINITION of `m_eff` feeding it that is wrong, and
+nothing in the block hints that the quantity is derived from a lever rather than
+stated directly.
+
+**The rotational model is the design, not a drift.** Two exported constants
+exist solely to build `iArm`, and their own haddock describes the lever:
+
+```haskell
+armMassFrac ∷ Float
+armMassFrac = 0.05
+
+-- | Inferred swinging-limb length as a fraction of height (single-arm
+--   reach ≈ 0.4·height). Sets the lever arm length.
+armLengthFrac ∷ Float
+armLengthFrac = 0.40
+```
+
+Neither has any role in the documented linear model. The formula block predates
+the rotational form and was not revisited when it landed.
+
+**Severity: medium — the highest non-behavioural rating in this report.** No
+behaviour is wrong and every number the model produces is correct. It ranks
+above the other documentation findings because of where it sits and who reads
+it: this is the derivation for the entire Tier 3 damage model, at the head of
+the module whose sole purpose is to hold its tunables, and it is the block a
+maintainer consults before touching `armMassFrac`, `armLengthFrac`, `vHuman`,
+`eHuman`, or a weapon's mass / length / centre-of-mass. Two of its five lines
+describe a mass model built on a constant that does not exist, and omit the
+lever-arm geometry that actually determines the answer — so reasoning from it
+about how weapon length or reach affects a strike gives the wrong result.
+
+Verified accurate in the same block, so a fix need not touch them:
+
+- `work = eHuman · strength · modeWork · skillEff · stamina · (1−pain)` matches
+  `src/Combat/Resolution/Damage.hs:252-253` exactly, including the
+  `skillEff = 0.6 + 0.4 · clamp 0 1 (skill/100)` shaping at `:245` and the
+  stamina floor of 0.3 at `:250`.
+- `v_max = vHuman · modeSpeed · (0.6 + 0.4·dexterity)` matches
+  `src/Combat/Resolution/Damage.hs:211` exactly.
+- `E = ½·m_eff·v²` and `p = m_eff·v` are the correct readings of the returned
+  pair, as shown above.
