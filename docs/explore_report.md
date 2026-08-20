@@ -87,6 +87,7 @@ cited lines.
 - [ ] EXPL-37. The Tier 3 damage model's derivation block is stale in two places: a `modeCoupling` constant that does not exist, and a `delivered` formula missing two factors
 - [ ] EXPL-38. Three references outlived the deleted `World.Fluids` facade, one of them a CI path-selector self-test case
 - [ ] EXPL-39. `World.Geology.Ore` says its caller is `World.Geology.Timeline.buildAge`; that module exports only `buildTimeline`
+- [ ] EXPL-40. `World.Save.Component.Types` says concrete components live in three modules; five define them, and the two omitted are the optional pair
 
 ---
 
@@ -3048,3 +3049,78 @@ survived checking, arithmetic included:
   five `lerpHot` is applied to, and `epTemperature`, `epPrecipitation`,
   `epHumidity`, `epSnowFraction` are the four deferred into the sediment
   closure.
+
+---
+
+## Save component machinery
+
+### EXPL-40. `World.Save.Component.Types` says concrete components live in three modules; five define them, and the two omitted are the optional pair
+
+`src/World/Save/Component/Types.hs:7-12`:
+
+```haskell
+--   This module is deliberately CONTENT-FREE — it knows the SHAPE of a
+--   component (id, version, required/optional, dependencies, an
+--   encoder, a version-dispatched decoder, a validator) but nothing
+--   about any specific gameplay slice. The concrete components live in
+--   "World.Save.Component.Session"/".Page"/".Entities"; the authoritative
+--   registry + cross-component assembly is "World.Save.Component". Both
+--   import THIS module, so this one must not import them (no cycle).
+```
+
+**Five modules under `src/World/Save/Component/` define concrete components,
+not three.** Counting `ComponentCodec` declarations:
+
+| Module | Codecs it declares | Named in the header? |
+|---|---|---|
+| `World.Save.Component.Session` | `CoreSessionDTO`, `TexPaletteDTO`, … | yes |
+| `World.Save.Component.Page` | `WorldPages`, `WorldEditsDTO`, … | yes |
+| `World.Save.Component.Entities` | `BuildingsDTO`, `UnitsDTO`, … | yes |
+| **`World.Save.Component.Knowledge`** | `ContainerKnowledgeDTO` | **no** |
+| **`World.Save.Component.Transfer`** | `TransferOrdersDTO` | **no** |
+
+`World.Save.Component.WorldGen` declares none — it holds the frozen DTOs that
+`Page` consumes — so its absence from the list is correct and a fix should not
+add it.
+
+**The two omitted modules are precisely the pair the persistence contract
+singles out.** `container-knowledge` and `transfer-orders` are the ONLY two
+optional components in the envelope. CLAUDE.md lists the registry as
+"…, `metadata`, the two OPTIONAL `container-knowledge` and `transfer-orders`,
+plus dynamic `lua.<module>` components", and states that
+`docs/persistence_contract.md` §5 must be read "before declaring a third". So a
+reader consulting this header to find where concrete components live is pointed
+at the three required-component modules and misses both optional ones — the two
+whose contract is most delicate, since each has to supply an honest default for
+its own absence.
+
+**The sentence reads as closed rather than illustrative**, which is what makes
+it misleading rather than merely brief. It is the statement that establishes
+this module's place in the layering: content-free machinery here, concrete
+components there, registry over there — and "**Both** import THIS module, so
+this one must not import them (no cycle)" turns the preceding list into a claim
+about the whole module graph.
+
+**Severity: low-medium.** No behaviour is involved, and the registry itself
+(`World.Save.Component.saveComponentRegistry`) remains the authority and lists
+every component. Above the nit tier because this is the layering statement for
+the persistence machinery — the thing a contributor reads before adding a
+component — and the two entries it drops are exactly the two whose optionality
+is a documented, contract-governed exception rather than the norm.
+
+Verified exact in the same header, so a fix does not disturb it — including its
+hardest and longest-reaching part:
+
+- The **frozen-DTO boundary rule** (`:24-56`) is stated coherently and
+  transitively ("recurse the decision into a frozen type's own fields, so the
+  boundary is transitive"), with both FREEZE criteria, both LEAF criteria, and
+  worked examples on each side (`MaterialId`, `ChunkCoord`, `Pose`,
+  `Direction` as leaves; `GeoTimeline` as the leaf-by-a-different-mechanism
+  case).
+- Its explicit carve-out that `World.Save.Types`' positional entity snapshots
+  (`BuildingInstanceSnapshot` / `UnitInstanceSnapshot`) do NOT qualify as
+  leaves, because they directly carry mutable `ItemInstance` values and live
+  `StatModifier` / `Wound` / `Scar` data.
+- The frozen-wire-contract rule (`:14-22`): a shipped DTO is never edited in
+  place, the old type is frozen and moved to `csOlderVersions` via `atVersion`,
+  and the new one becomes `csVersion` / `csEncode` / `csDecode`.
