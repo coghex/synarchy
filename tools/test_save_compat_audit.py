@@ -484,20 +484,37 @@ def test_envelope_framing_fingerprint_ignores_inherited_language_pragma() -> Non
         expect(separate == after,
                "expected an inherited extension declared on its OWN pragma "
                "line to be just as redundant as one sharing a pragma")
+        # An inherited NEGATIVE inside the leading inert prefix is
+        # provably a no-op: nothing ran before it, `No` propagates
+        # nothing, and the extension was already off. No implication
+        # table needed.
+        silent = _framing_fp(d, _CODEC_BODY)
+        lone_negative = _framing_fp(
+            d, "{-# LANGUAGE NoImplicitPrelude #-}\n" + _CODEC_BODY)
+        expect(lone_negative == silent,
+               "expected a lone inherited NoImplicitPrelude to normalize "
+               "away exactly like no LANGUAGE declaration at all")
+        prefix_pair = _framing_fp(
+            d, "{-# LANGUAGE NoImplicitPrelude, UnicodeSyntax #-}\n"
+            + _CODEC_BODY)
+        expect(prefix_pair == silent,
+               "expected a header made up ENTIRELY of inherited "
+               "declarations to normalize away whatever their polarity")
+
         # DECIDED TRADE-OFF (owner, 2026-08-19), pinned here so it reads
-        # as intentional: a header carrying ANY negative form is kept
-        # verbatim, even though NoImplicitPrelude merely restates an
+        # as intentional: an inherited negative PAST the prefix is
+        # retained, even though NoImplicitPrelude merely restates an
         # inherited default and so leaves the effective set unchanged.
-        # Proving that particular case redundant needs to know whether
-        # the preceding `Strict` implies `ImplicitPrelude` -- GHC's
-        # implication table, which this tool deliberately does not carry
-        # (see test_envelope_framing_fingerprint_keeps_undecidable_
-        # headers). Over-keeping costs one explicable fingerprint move;
-        # the other direction hides a real change.
+        # Proving that one redundant needs to know whether the preceding
+        # `Strict` implies `ImplicitPrelude` -- GHC's implication table,
+        # which this tool deliberately does not carry (see
+        # test_envelope_framing_fingerprint_keeps_undecidable_headers).
+        # Over-keeping costs one explicable fingerprint move; the other
+        # direction hides a real change.
         negative = _framing_fp(
             d, "{-# LANGUAGE Strict, NoImplicitPrelude #-}\n" + _CODEC_BODY)
         expect(negative != after,
-               "expected a header containing a NEGATIVE form to be kept "
+               "expected a NEGATIVE form past the inert prefix to be kept "
                "verbatim rather than normalized on name matching alone")
 
 

@@ -732,41 +732,54 @@ def _drop_redundant_language_pragmas(
     unchanged (issue #1416; PR #1001's removal of the already-inherited
     `UnicodeSyntax` is the representative case).
 
-    The exception is deliberately gated on a header this tool can
-    reason about WITHOUT modelling GHC's extension-implication graph,
-    which it has no way to know: every declaration must be in POSITIVE
-    form, and no extension may be named twice. Such a header is a plain
-    set of enables layered on a state that already contains each
-    inherited extension's own implied closure, so removing one of those
-    inherited names cannot change anything.
+    The exception is deliberately gated on what can be established
+    WITHOUT modelling GHC's extension-implication graph, which this tool
+    has no way to know. Two rules do that, in order.
 
-    The moment a header turns something OFF -- directly
-    (`NoImplicitPrelude`) or by re-enabling after a disable
+    First, the leading INERT PREFIX. While every declaration so far has
+    been dropped, the state is provably still exactly the inherited one,
+    so a declaration that merely restates it -- in EITHER polarity --
+    changes nothing and drops as well. A positive one re-enables an
+    extension whose implied closure the stanza already applied; a
+    negative one disables something already off, and `No` propagates
+    nothing. That is what makes a lone
+    `{-# LANGUAGE NoImplicitPrelude #-}` against an inherited
+    `NoImplicitPrelude` a provable no-op with no table involved.
+
+    Past that prefix the state may already differ from the inherited
+    one, so a narrower rule applies: every REMAINING declaration must be
+    in POSITIVE form, and no extension may be named twice anywhere in
+    the header. Such a remainder is a plain set of enables layered on a
+    state that still contains each inherited extension's own implied
+    closure, so removing one of those inherited names cannot change
+    anything. This is the rule that keeps requirement 1's representative
+    case working: in `{-# LANGUAGE Strict, UnicodeSyntax #-}` the
+    non-inherited `Strict` ends the prefix, and the inherited
+    `UnicodeSyntax` still drops.
+
+    Once a header turns something OFF past the prefix -- directly
+    (`Strict, NoImplicitPrelude`) or by re-enabling after a disable
     (`NoTypeFamilies, TypeFamilyDependencies`, where the second
     declaration reinstates the `TypeFamilies` the first removed, since
     GHC's `TypeFamilyDependencies` implies it) -- redundancy stops being
-    decidable from the names alone, and the whole header is kept
-    verbatim instead. The same goes for an extension named twice, and
-    for a token that is not a bare extension name. Over-keeping is the
-    fail-safe direction: it costs a fingerprint move that did not have
-    to happen, where the other direction hides a real change.
+    decidable from the names alone, and the remainder is kept verbatim.
+    The same goes for an extension named twice, and for a token that is
+    not a bare extension name. Over-keeping is the fail-safe direction:
+    it costs a fingerprint move that did not have to happen, where the
+    other direction hides a real change.
 
-    ONE case is knowingly given up to that gate, and it is a decided
-    trade-off rather than an oversight: re-declaring an extension the
-    stanza already supplies in its NEGATIVE form
-    (`{-# LANGUAGE Strict, NoImplicitPrelude #-}` against an inherited
-    `NoImplicitPrelude`) leaves the effective set unchanged and yet is
-    retained, because proving THAT requires knowing whether the
-    preceding `Strict` implies `ImplicitPrelude` -- i.e. the very table
-    the paragraph above establishes this tool must not pretend to have.
-    Handling it would mean checking one in, with an
+    ONE case is knowingly given up to that boundary, and it is a decided
+    trade-off rather than an oversight: an inherited NEGATIVE re-declared
+    past the prefix (`{-# LANGUAGE Strict, NoImplicitPrelude #-}`) does
+    leave the effective set unchanged, and is still retained, because
+    proving THAT requires knowing whether the preceding `Strict` implies
+    `ImplicitPrelude` -- the very table this tool must not pretend to
+    have. Handling it would mean checking one in, with an
     unknown-extension fallback, and accepting its drift; the project
-    owner chose the conservative gate instead on 2026-08-19. Issue
-    #1416's own enumerated acceptance cases are unaffected: the
-    representative `UnicodeSyntax` removal is all-positive and
-    duplicate-free, so it still normalizes away. If a shipped module
-    ever does declare an inherited negative locally, the cost is one
-    explicable fingerprint move, not a hidden change.
+    owner chose the conservative boundary instead on 2026-08-19. Issue
+    #1416's own enumerated acceptance cases are unaffected, and if a
+    shipped module ever does write that shape the cost is one explicable
+    fingerprint move, not a hidden change.
 
     Only `LANGUAGE` is in scope -- `OPTIONS_GHC` and every other block
     pragma passes through verbatim, as do extensions merely implied by
@@ -818,18 +831,44 @@ def _drop_redundant_language_pragmas(
 
     flat = [name for names in declared for name in names]
     states = [_extension_state(name) for name in flat]
-    if not all(enabled for _, enabled in states):
-        return text
-    if len({base for base, _ in states}) != len(states):
-        return text
+
+    # The leading INERT PREFIX: while every declaration so far has been
+    # dropped, the state is provably still exactly the inherited one, so
+    # a declaration restating it -- in either polarity -- changes
+    # nothing and drops too. This is what makes a lone
+    # `{-# LANGUAGE NoImplicitPrelude #-}` against an inherited
+    # `NoImplicitPrelude` a no-op with no implication table involved:
+    # nothing ran before it, `No` propagates nothing, and the extension
+    # was already off.
+    prefix = 0
+    for base, enabled in states:
+        if inherited.get(base) is not enabled:
+            break
+        prefix += 1
+    dropped = set(range(prefix))
+
+    # Past the prefix the state may already differ from the inherited
+    # one, so only the gate that needs no implication graph applies:
+    # remaining declarations all POSITIVE, and no extension named twice
+    # anywhere in the header.
+    rest_states = states[prefix:]
+    decidable = (all(enabled for _, enabled in rest_states)
+                 and len({base for base, _ in states}) == len(states))
+    if decidable:
+        for offset, (base, _) in enumerate(rest_states):
+            if inherited.get(base) is True:
+                dropped.add(prefix + offset)
 
     out: list[str] = []
+    index = 0
     for gap, pragma, names in zip(gaps, pragmas, declared):
         out.append(gap)
         if not names:
             out.append(pragma)
             continue
-        kept = [name for name in names if inherited.get(name) is not True]
+        kept = [name for offset, name in enumerate(names)
+                if index + offset not in dropped]
+        index += len(names)
         if kept:
             out.append("{-# LANGUAGE " + ", ".join(kept) + " #-}")
     out.append(rest)
