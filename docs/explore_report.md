@@ -74,6 +74,7 @@ cited lines.
 - [ ] EXPL-24. `hitsAtPointBy`'s haddock cites `UI.InputOwnership.pagesInScope`, which is not exported
 - [ ] EXPL-25. `isPointerSurfaceBlocked` names `Engine.Input.Thread` as its caller; since #787 that is `Engine.Input.Thread.Mouse`
 - [ ] EXPL-26. `World.Save.Storage`'s header says it "receives only" four of six parameters, and its numbered transaction omits the requirement-9 refusal
+- [ ] EXPL-27. 59 cross-module haddock links point at functions their named module does not export, concentrated on module-split seams
 
 ---
 
@@ -1777,3 +1778,144 @@ Verified truthful in the same header, so a fix does not disturb any of it:
   `AuthoritativeTopology`'s three constructors (`:646`), including the
   staging/rotation skip in the two topologies where the previous generation is
   the live load source.
+
+---
+
+## Haddock references that cannot resolve
+
+### EXPL-27. 59 cross-module haddock links point at functions their named module does not export, concentrated on module-split seams
+
+Unlike every other finding in this report, this one is systematic rather than
+situational: it was found by sweeping the whole tree rather than by reading one
+function.
+
+**Method.** Every haddock reference of the form `'Module.function'` in a comment
+under `src/` or `app/` was resolved against the named module's export list.
+A reference counts as dead only when all of the following hold, which keeps the
+obvious false positives out:
+
+* the named module exists in this tree;
+* it HAS an explicit export list (a module without one exports everything);
+* the symbol is a top-level function there (it has a `name ∷` signature at
+  column 0), not a record field — a field reached through `Type(..)` IS
+  exported and is excluded;
+* the symbol does not appear in the export list;
+* the export list contains no `module X` re-export that could smuggle it out.
+  ZERO of the targets below have one, so that path is not a source of error
+  here.
+
+**Result: 59 cross-module dead links**, plus one same-module self-reference
+(`src/World/Save/Storage.hs:905` → `publishValidated`, which at least sits in
+the same file a reader already has open).
+
+**Spot-checked by hand**, the three most-referenced targets:
+
+| Target | Refs | Verified |
+|---|---|---|
+| `Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged` | 8 | defined at `:384`; module exports only `processLuaMsg`, `processLuaMsgs` |
+| `Engine.Input.Thread.Dispatch.dispatchInput` | 4 | defined at `:96`; module exports only `processInputs`, `processInput` |
+| `World.Fluid.River.Identify.traceRivers` | 4 | defined at `:157`; export list is `identifyWorldRivers`, `riverThreshold`, `labelRiverComponents`, `computeBedDepth`, `depthFromRadius`, `maxBedDepth` |
+
+Two more were confirmed against export lists read in full earlier in this
+exploration: `App.Boot.patchBootConfig` (referenced from `app/Main.hs:142` and
+`src/Engine/Core/Defaults.hs:19`) and `Engine.Preview.Discovery.walkFiles`
+(referenced from `src/Engine/Preview/Unit.hs:94` and
+`src/Engine/Preview/Building.hs:247`).
+
+**Why these cluster the way they do.** The pattern concentrates on
+MODULE-SPLITTING SEAMS. All four of `Engine.Input.Thread.Keyboard`, `.Char`,
+`.Mouse` and `.Scroll` open by saying they are "reached only through
+`'Engine.Input.Thread.Dispatch.dispatchInput'`" — #787 moved the router into a
+module that exports only its two public entry points, so the function each
+sibling names to explain how it is reached is the one thing a reader cannot
+reach. The same shape produced the eight `handleLoadStaged` references across
+the save/load path and the four `traceRivers` references across the
+`World.Fluid.River.Identify.*` split. These are not typos; they are the residue
+of extracting a module and then documenting the extraction from the outside.
+
+The reader cost is uniform: the comment names the function that actually does
+the thing, and that is precisely the name that will not resolve as a link, will
+not import, and cannot be jumped to. Nothing in the gate set inspects haddock
+link targets, so the count only grows as more modules are split.
+
+**Severity: low individually, moderate in aggregate.** No behaviour is involved
+anywhere. It is recorded as one finding because 59 instances across 46 files is
+a property of the tree rather than a defect in any one file, and because the fix
+is a policy choice — export the named function, point at the exported entry
+point instead, or drop the module qualifier — that wants deciding once.
+
+**Mechanically detectable.** The sweep above is about twenty-five lines of
+Python with no engine dependency, in the same shape as
+`tools/unicode_operator_audit.py`. If the policy is "a haddock link must
+resolve", that guard is cheap to add and would hold the line afterwards.
+
+Already filed separately, and cross-referenced rather than removed, because each
+was found in context with detail this entry does not carry: **EXPL-6**
+(`Engine.Core.Workers.allWorkers`, referenced twice from `App.Boot`) and
+**EXPL-24** (`UI.InputOwnership.pagesInScope`, referenced from
+`UI.Manager.Query` and `UI.FocusNavigation`).
+
+#### The full list
+
+| Reference site | Dead target |
+|---|---|
+| `src/Building/HitTest.hs:6` | `'Building.Render.buildingToQuad'` |
+| `src/Engine/Asset/YamlLocations.hs:90` | `'Location.Bounds.rawContainsPoint'` |
+| `src/Engine/Asset/YamlLocations.hs:101` | `'Location.Overlay.anchorOk'` |
+| `src/Engine/Asset/YamlLocations.hs:104` | `'Location.Overlay.anchorOk'` |
+| `src/Engine/Core/Defaults.hs:19` | `'App.Boot.patchBootConfig'` |
+| `src/Engine/Core/State.hs:349` | `'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged'` |
+| `src/Engine/Input/Thread/Char.hs:8` | `'Engine.Input.Thread.Dispatch.dispatchInput'` |
+| `src/Engine/Input/Thread/Keyboard.hs:7` | `'Engine.Input.Thread.Dispatch.dispatchInput'` |
+| `src/Engine/Input/Thread/Mouse.hs:8` | `'Engine.Input.Thread.Dispatch.dispatchInput'` |
+| `src/Engine/Input/Thread/Scroll.hs:10` | `'Engine.Input.Thread.Dispatch.dispatchInput'` |
+| `src/Engine/Input/Thread.hs:83` | `'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged'` |
+| `src/Engine/Loop/Mode.hs:220` | `'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged'` |
+| `src/Engine/Loop/Mode.hs:225` | `'Engine.Scripting.Lua.API.Save.saveOwnerSet'` |
+| `src/Engine/Preview/Building.hs:247` | `'Engine.Preview.Discovery.walkFiles'` |
+| `src/Engine/Preview/Unit.hs:94` | `'Engine.Preview.Discovery.walkFiles'` |
+| `src/Engine/Scripting/Lua/API/InputInject.hs:19` | `'Engine.Input.Inject.deferModUps'` |
+| `src/Engine/Scripting/Lua/API/Items/Ground.hs:48` | `'Engine.Scripting.Lua.API.Structure.resolveStructurePage'` |
+| `src/Engine/Scripting/Lua/API/Power.hs:144` | `'Unit.Selection.onActivePage'` |
+| `src/Engine/Scripting/Lua/API/Save/Bridge.hs:318` | `'World.Save.Integrity.luaEdgeResolves'` |
+| `src/Engine/Scripting/Lua/API/Save/Bridge.hs:362` | `'World.Save.Integrity.luaEdgeResolves'` |
+| `src/Engine/Scripting/Lua/API/Save/Bridge.hs:422` | `'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged'` |
+| `src/Engine/Scripting/Lua/API/Save/Bridge.hs:475` | `'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged'` |
+| `src/Engine/Scripting/Lua/API/Save/Bridge.hs:503` | `'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged'` |
+| `src/Engine/Scripting/Lua/API/Save.hs:243` | `'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged'` |
+| `src/Engine/Scripting/Lua/API/Units/Page.hs:22` | `'Engine.Scripting.Lua.API.Units.Inventory.unitAmbientTemp'` |
+| `src/Engine/Scripting/Lua/API/Units/Transfer.hs:765` | `'Unit.Transfer.withinReach'` |
+| `src/Engine/Scripting/Lua/API/WorldQuery/Pick.hs:251` | `'Location.Bounds.seamAliases'` |
+| `src/Engine/Scripting/Lua/Thread/Dispatch.hs:412` | `'Engine.Scripting.Lua.API.Save.saveOwnerSet'` |
+| `src/Language/Generated/Boundary.hs:50` | `'Language.Generated.Render.capitalizeWord'` |
+| `src/Language/Generated/Hash.hs:5` | `'World.Gem.mix64'` |
+| `src/Language/Generated/Hash.hs:6` | `'Location.Overlay.idSalt'` |
+| `src/Language/Generated/Hash.hs:41` | `'Location.Overlay.idSalt'` |
+| `src/Language/Generated/Orthography.hs:23` | `'Language.Generated.Render.capitalizeWord'` |
+| `src/Location/Overlay.hs:368` | `'Engine.Asset.YamlLocations.validAnchorTags'` |
+| `src/UI/FocusNavigation.hs:14` | `'UI.InputOwnership.pagesInScope'` |
+| `src/UI/InteractiveBounds.hs:145` | `'UI.Clipping.absolutePosition'` |
+| `src/UI/Manager/Query.hs:185` | `'UI.InputOwnership.pagesInScope'` |
+| `src/UI/Manager/Query.hs:312` | `'Engine.Scripting.Lua.API.UI.Property.pushElementInfoTable'` |
+| `src/UI/Types.hs:66` | `'UI.Render.uiLayerToLayerId'` |
+| `src/UI/Types.hs:206` | `'UI.Manager.Query.hitsAtPointBy'` |
+| `src/World/Command/Types.hs:265` | `'Engine.Scripting.Lua.API.Save.continueLoad'` |
+| `src/World/Fluid/River/Identify/BedDepth.hs:8` | `'World.Fluid.River.Identify.traceRivers'` |
+| `src/World/Fluid/River/Identify/Breakthrough.hs:6` | `'World.Fluid.River.Identify.traceRivers'` |
+| `src/World/Fluid/River/Identify/ChunkIndex.hs:9` | `'World.Fluid.River.Identify.traceRivers'` |
+| `src/World/Fluid/River/Identify/Components.hs:9` | `'World.Fluid.River.Identify.traceRivers'` |
+| `src/World/Fluid/River/Identify.hs:92` | `'World.Fluid.River.Identify.Components.targetRiverCount'` |
+| `src/World/Fluid/Types.hs:51` | `'Sim.Thread.emitWorldDirtyFluids'` |
+| `src/World/Generate/Chunk/Fluid.hs:549` | `'Sim.Thread.emitWorldDirtyFluids'` |
+| `src/World/Load/Publish.hs:57` | `'World.Thread.processAuthorizedSave'` |
+| `src/World/Load/Publish.hs:74` | `'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged'` |
+| `src/World/Load/Stage.hs:99` | `'Engine.Scripting.Lua.API.Save.continueLoad'` |
+| `src/World/Load/Stage.hs:156` | `'World.Save.Snapshot.Adapter.pageToWorldPageSave'` |
+| `src/World/Render/Zoom/Icons.hs:231` | `'World.Render.Zoom.Cursor.emitCursorQuad'` |
+| `src/World/Save/Component/Page.hs:1175` | `'World.Save.Component.WorldGen.fromLocationInstanceDTOv1'` |
+| `src/World/Save/Serialize.hs:176` | `'World.Save.Storage.selectLoadGenerationUnsafe'` |
+| `src/World/Save/Storage.hs:905` | `'World.Save.Storage.publishValidated'` (same module) |
+| `src/World/Save/Types.hs:807` | `'World.Save.Snapshot.itemAllocatorErrors'` |
+| `src/World/Slope/Recompute.hs:18` | `'World.Slope.Compute.computeTileSlope'` |
+| `src/World/Slope/Roughness.hs:60` | `'World.Slope.Compute.computeTileSlope'` |
+| `app/Main.hs:142` | `'App.Boot.patchBootConfig'` |
