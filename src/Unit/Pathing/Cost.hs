@@ -124,7 +124,19 @@ stepCostUnder policy pc reg wtd (sgx, sgy) (dgx, dgy) = do
         -- classification the `fall` term below uses, so the policy and
         -- the cost model can never disagree about what a real fall is.
         fallBlocked = policy ≡ FallProhibited ∧ isDamagingDrop pc srcZ dstZ
-    if cornerBlocked ∨ fallBlocked
+        -- A DIAGONAL step's continuous path really does pass through one
+        -- of the two axis-neighbours it grazes, even though the mover's
+        -- z only ever moves from src to dst. The no-corner-cutting rule
+        -- above already requires both to be PASSABLE; for a protected
+        -- request they must additionally not be a damaging drop from the
+        -- source, so the policy can't be slipped past on the diagonal
+        -- (#1217, review round 2). An unloaded neighbour needs no case
+        -- here — `cornerBlocked` has already rejected the step.
+        grazedIsDamaging (gx, gy) =
+            maybe False (isDamagingDrop pc srcZ) (lookupTerrainZ wtd gx gy)
+        diagonalDropBlocked = isDiagonal ∧ policy ≡ FallProhibited
+                            ∧ any grazedIsDamaging [(dgx, sgy), (sgx, dgy)]
+    if cornerBlocked ∨ fallBlocked ∨ diagonalDropBlocked
       then Nothing
       else
         let dx     = fromIntegral (dgx - sgx) ∷ Float

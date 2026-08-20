@@ -193,8 +193,14 @@ stepTowardSubGoal pc reg now dt mw stats us mt (gx, gy) =
                 slopeGrade wtd (floor (usRealX us)) (floor (usRealY us))
                            (usGridZ us) (dx / dist, dy / dist)
             _ → 0
-        step = (effSpeed * slopeSpeedFactor pc grade / matSlow)
-             * realToFrac dt
+        rawStep = (effSpeed * slopeSpeedFactor pc grade / matSlow)
+                * realToFrac dt
+        -- A protected tick may not span more than one tile boundary —
+        -- see `maxProtectedStep`. Fall-permitted movement keeps its exact
+        -- uncapped speed.
+        step = case mtHazard mt of
+            FallPermitted  → rawStep
+            FallProhibited → min maxProtectedStep rawStep
         -- Arrival SNAPS x/y and re-grounds z at the sub-goal without
         -- consulting the cost function at all, so a sub-goal within
         -- `max step arrivalEpsilon` on the far side of a tile boundary
@@ -226,6 +232,32 @@ stepTowardSubGoal pc reg now dt mw stats us mt (gx, gy) =
             else arriveAtSubGoal stats us mt (gx, gy) mWtd
        else moveToward pc reg now stats (us { usMoveGrade = grade })
                        mt mw dx dy dist step
+
+-- | Ceiling on a hazard-PROTECTED request's per-tick displacement, in
+--   tiles (#1217, review round 2).
+--
+--   `dt` is an uncapped wall-clock delta ("Unit.Thread"'s @unitTick@) and
+--   @unit.moveTo@ takes an uncapped speed, so one tick's motion can span
+--   several tiles. Both the greedy check and the arrival snap validate
+--   only the tick's START and END tiles, so a multi-tile span could step
+--   clean over an intermediate damaging drop and land on a below-trigger
+--   one: z=10 across an intermediate z=8 onto a z=9 tile reads as an
+--   ordinary 1-z walk-off, and the unit crosses the 2-z drop untouched.
+--
+--   Rather than marching the crossed boundaries, a protected tick simply
+--   cannot span more than one. A displacement strictly under 1 tile moves
+--   each axis' `floor` by at most 1, so the destination tile is always
+--   8-connected to the source — which makes the SINGLE `stepCostUnder`
+--   check the COMPLETE check, and keeps the mover's step model identical
+--   to the one A* plans in. 0.9 bounds each axis component, since
+--   @|Δx| = |nx| * step ≤ step@.
+--
+--   The cost is that a protected request commanded faster than ~0.9
+--   tiles per tick travels at that cap instead. Ambient wander is a
+--   meander and never approaches it; a fall-permitted request is
+--   unaffected either way.
+maxProtectedStep ∷ Float
+maxProtectedStep = 0.9
 
 -- | Top speed (tiles/sec) of a unit dragging itself along on a maimed
 --   body. Slow enough to read as a crawl; the injury speed-multiplier

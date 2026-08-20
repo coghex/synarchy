@@ -73,6 +73,27 @@ ridgeWorld ∷ Int → Int → WorldTileData
 ridgeWorld high low = worldWith $ zChunk $ \(lx, _) →
     if lx ≤ 7 then high else low
 
+-- | A one-tile SHELF at x = 8: the plateau (x ≤ 7) is at z = 10, the
+--   shelf itself is at z = 8, and everything east of it sits at z = 9.
+--
+--   The point is the ENDPOINT ILLUSION: 10 → 9 is a below-trigger
+--   walk-off, so a check that only looks at a tick's start and end tiles
+--   waves the crossing through, while the real path drops 2 z onto the
+--   shelf first.
+shelfWorld ∷ WorldTileData
+shelfWorld = worldWith $ zChunk $ \(lx, _) → case compare lx 8 of
+    LT → 10
+    EQ → 8
+    GT → 9
+
+-- | A ledge that a DIAGONAL step grazes the corner of: (8, 3) is a 4-z
+--   drop from the plateau, while the diagonal's own destination (8, 4)
+--   is only 1 z down — below the trigger, and so invisible to a check
+--   that looks at the diagonal's endpoints alone.
+cornerWorld ∷ WorldTileData
+cornerWorld = worldWith $ zChunk $ \(lx, ly) →
+    if lx ≤ 7 then 10 else if ly ≤ 3 then 6 else 9
+
 -- | Uniformly flat ground at z = 10: no drop anywhere, so both policies
 --   must agree on every route across it.
 flatWorld ∷ WorldTileData
@@ -126,12 +147,18 @@ ownPageWorld wtd = moveWorldFor (Just (TerrainSnapshot pageA wtd)) (Just pageA)
 -- | Run the movement tick repeatedly at a fixed dt, collecting each
 --   intermediate state. Deterministic — 'tickUnit' is pure.
 runTicks ∷ PathingConfig → MoveWorld → Int → UnitSimState → [UnitSimState]
-runTicks cfg mw n us0 = go n 0 us0 []
+runTicks cfg mw = runTicksAt cfg mw 0.1
+
+-- | 'runTicks' at an explicit tick delta, so a test can hand the mover
+--   the large @dt@ a stalled or resumed process really does produce.
+runTicksAt ∷ PathingConfig → MoveWorld → Double → Int → UnitSimState
+           → [UnitSimState]
+runTicksAt cfg mw dt n us0 = go n 0 us0 []
   where
     go 0 _ us acc = reverse (us : acc)
     go k t us acc =
-        let t'  = t + 0.1 ∷ Double
-            us' = tickUnit cfg reg t' 0.1 mw stats us
+        let t'  = t + dt
+            us' = tickUnit cfg reg t' dt mw stats us
         in go (k - 1 ∷ Int) t' us' (us : acc)
 
 isFalling ∷ UnitSimState → Bool
@@ -185,6 +212,19 @@ spec = do
             -- Protection is about damaging DROPS only; climbing the same
             -- ridge from below stays priced, not forbidden.
             stepCostUnder FallProhibited pc reg (ridgeWorld 10 6) (8, 3) (7, 3)
+                `shouldSatisfy` isJust
+
+        it "rejects a protected DIAGONAL that grazes a damaging drop" $ do
+            -- (7,3) → (8,4) descends only 1 z, but the step's continuous
+            -- path clips (8,3), which is 4 z down. Endpoint-only checking
+            -- lets this through.
+            stepCostUnder FallProhibited pc reg cornerWorld (7, 3) (8, 4)
+                `shouldBe` Nothing
+            -- The same diagonal stays priced, not forbidden, by default.
+            stepCostUnder FallPermitted pc reg cornerWorld (7, 3) (8, 4)
+                `shouldSatisfy` isJust
+            -- And a protected diagonal grazing nothing damaging is fine.
+            stepCostUnder FallProhibited pc reg flatWorld (2, 2) (3, 3)
                 `shouldSatisfy` isJust
 
         it "isDamagingDrop is the one classification both sides use" $ do
@@ -306,6 +346,32 @@ spec = do
                                 (atEdge FallProhibited)
             usRealX us' `shouldSatisfy` (> 8.0)
             usGridZ us' `shouldBe` 9
+
+        -- Review round 2: `dt` is an uncapped wall-clock delta and
+        -- `unit.moveTo` takes an uncapped speed, so one tick's motion can
+        -- span several tiles — and both the greedy check and the arrival
+        -- snap look only at the tick's start and end tiles.
+        let shelf = ownPageWorld shelfWorld
+            -- 3 tiles/s over a 2-second tick: 6 tiles of raw travel,
+            -- clean over the shelf, landing on a below-trigger tile.
+            sprinter p = moverAt (7.5, 3.5) 10 (MoveTarget 13.5 3.5 3.0 p)
+
+        it "never steps a protected request OVER an intermediate drop" $ do
+            let states = runTicksAt pc shelf 2.0 40 (sprinter FallProhibited)
+            -- Never reaches the shelf or the ground beyond it...
+            map usGridZ states `shouldSatisfy` all (≡ 10)
+            -- ...and never crosses onto them either, however long the
+            -- tick. The endpoint-only check would have let the very first
+            -- tick land at x ≈ 13.5 on z = 9.
+            map usRealX states `shouldSatisfy` all (< 8.0)
+            states `shouldSatisfy` not . any isFalling
+
+        it "leaves a fall-permitted high-speed tick uncapped" $ do
+            -- The contrast that makes the cap a POLICY rather than a
+            -- global change: the same tick under the default crosses in
+            -- one go, exactly as it does today.
+            let states = runTicksAt pc shelf 2.0 3 (sprinter FallPermitted)
+            map usRealX states `shouldSatisfy` any (> 8.0)
 
         it "abandons a protected request when the terrain is another page" $ do
             let wrongPage = moveWorldFor (Just (TerrainSnapshot pageB ridge))
