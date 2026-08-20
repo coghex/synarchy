@@ -54,6 +54,8 @@ cited lines.
 - [ ] EXPL-9. `buildPreviewUnit`'s pipeline summary still describes the filesystem-first flow #1261 replaced
 - [ ] EXPL-10. `App.LanguageReport` claims constant runtime "regardless of how many seeds are requested"; the work is linear
 - [ ] EXPL-11. `runPreview`'s `mBrowse` haddock says a `Nothing` is "the degenerate no-target case"; that case never reaches it
+- [ ] EXPL-12. `anySegmentIsSymlink` says it checks "any prefix" and "every ancestor"; the root itself is never lstat'd
+- [ ] EXPL-13. `shutdownEngine`'s inline safety argument says Vulkan teardown precedes "the worker threads" stopping; two are already stopped
 
 ---
 
@@ -623,3 +625,106 @@ Verified nominal in the same file, so a fix does not disturb them: the trimmed
 topology really is trimmed (`ewCombat`/`ewSim`/`ewUnit`/`ewWorld` all `Nothing`
 at `:58-61`), and the input thread really is kept and really is passed as the
 already-started worker to `luaThreadOrAbort` at `:53`.
+
+### EXPL-12. `anySegmentIsSymlink` says it checks "any prefix" and "every ancestor"; the root itself is never lstat'd
+
+`src/Engine/Preview/Discovery.hs:289-303`:
+
+```haskell
+-- | True if 'root' followed by any prefix of 'segs' (checked
+--   incrementally, root-outward) is itself a symlink — every ancestor
+--   directory as well as the final leaf, so a symlinked directory
+--   further up the chain can't smuggle a file discovery would never
+--   have reached (walkFiles skips a symlinked directory the moment it's
+--   encountered, at whatever depth; this mirrors that one level at a
+--   time instead of jumping straight to the final candidate path).
+anySegmentIsSymlink ∷ FilePath → [String] → IO Bool
+anySegmentIsSymlink root = go root
+  where
+    go _ [] = pure False
+    go acc (s:rest) = do
+        let acc' = acc </> s
+        isLink ← pathIsSymbolicLink acc'
+        if isLink then pure True else go acc' rest
+```
+
+Two statements of the same off-by-one, both in the first sentence:
+
+- **"root followed by any prefix of `segs`"** — the prefixes of a list include
+  the EMPTY one, and `root` followed by the empty prefix is `root` itself.
+  `go _ [] = pure False` returns before calling `pathIsSymbolicLink` at all, so
+  the empty prefix is never tested. What the code checks is every NON-EMPTY
+  prefix.
+- **"every ancestor directory as well as the final leaf"** — `root` is an
+  ancestor directory of the item, and it is not among the ones checked.
+
+The BEHAVIOUR is deliberate and correct, which is why this is a wording defect
+rather than a security gap. `walkFiles` does not test its own root either: the
+only thing `discoverEntries` does to `root` is `doesDirectoryExist`
+(`src/Engine/Preview/Discovery.hs:155`), which follows symlinks. So a symlinked
+category root is accepted identically by discovery and by focused-item
+resolution — precisely the agreement `FocusSymlink`'s haddock at `:44-49` says
+the unconditional symlink rule exists to guarantee:
+
+> rejected unconditionally (not just an escaping one) so a bare category listing
+> ('discoverEntries', which skips every symlink the identical way) and a
+> typed-out item target ('resolveFocusedEntry') can never disagree about the
+> same path.
+
+The defect is that the quantifiers are absolute — "any prefix", "every ancestor"
+— where the code means "every level strictly below `root`". A reader auditing
+containment would conclude the root is covered, and would have to read `go`'s
+base case to discover it is not.
+
+**Severity: low.** No behaviour is wrong and no attack is enabled beyond what
+`discoverEntries` already permits identically. It is recorded because this
+haddock is the containment argument for a pre-boot security check, and an
+absolute quantifier in that position should be literally true.
+
+### EXPL-13. `shutdownEngine`'s inline safety argument says Vulkan teardown precedes "the worker threads" stopping; two are already stopped
+
+`src/Engine/Loop/Shutdown.hs:50-61`:
+
+```haskell
+shutdownEngine targets = do
+    logInfoM CatSystem "Starting engine shutdown..."
+
+    stopWorkers announceStop (preRenderWorkers (stWorkers targets))
+
+    state ← gets graphicsState
+    let device = vulkanDevice state
+
+    -- Vulkan teardown below runs BEFORE the worker threads stop. That
+    -- is safe only while Vulkan objects are touched exclusively by
+    -- this (main) thread — workers hand pixel data over via
+    -- IORefs/queues and must never call into Vulkan.
+```
+
+By the time that comment is reached, the pre-render workers have already
+stopped — six lines above it, at `:52`. `preRenderWorkers`
+(`src/Engine/Core/Workers.hs:57-59`) is combat and sim, so the Vulkan teardown
+runs before FOUR of the six workers stop (unit, world, input, Lua), not before
+"the worker threads" stop.
+
+This is more than word choice because the comment is the stated SAFETY ARGUMENT
+for the phase split — the reason it is acceptable to destroy Vulkan objects
+while workers are still live. A reader checking whether the split is sound is
+told the "must never call into Vulkan" constraint has to hold for all six
+workers across the teardown, when in fact two are already gone and the
+constraint only needs to hold for the four in `postRenderWorkers`. That
+overstates what the rest of the engine must guarantee, and understates how much
+the ordering above it is doing.
+
+The function's own haddock, eight lines earlier at `:41-48`, states the same
+thing precisely:
+
+> combat and sim stop ahead of the render teardown, unit, world, input and Lua
+> after it.
+
+So the file already contains the correct sentence; the inline comment is an
+imprecise restatement of it sitting at the point a reader is most likely to
+stop and check the invariant.
+
+**Severity: low**, and no behaviour is at issue — the ordering is correct and
+matches the precise haddock. Recorded because the two sentences describe the
+same boundary and only one of them is right.
