@@ -57,6 +57,7 @@ cited lines.
 - [ ] EXPL-12. `anySegmentIsSymlink` says it checks "any prefix" and "every ancestor"; the root itself is never lstat'd
 - [ ] EXPL-13. `shutdownEngine`'s inline safety argument says Vulkan teardown precedes "the worker threads" stopping; two are already stopped
 - [ ] EXPL-14. `migrateLegacyConfig` reports a destination write failure as a malformed legacy file, in a user-facing warning
+- [ ] EXPL-15. `Unit.Atlas.Digest`'s description of the digest stream omits the tag's length prefix and the label field entirely
 
 ---
 
@@ -813,3 +814,105 @@ OverridesFile` (`:262`) matches `loadOverrides`'s
 (`src/Engine/Asset/YamlNotifications.hs:188`). The cited example is right too —
 `resolution` really is the one required field among the video file's optionals
 (`src/Engine/Graphics/Config.hs:192`).
+
+---
+
+## Unit animation atlases
+
+### EXPL-15. `Unit.Atlas.Digest`'s description of the digest stream omits the tag's length prefix and the label field entirely
+
+`src/Unit/Atlas/Digest.hs:2-10`:
+
+```haskell
+-- | The two digests @tools\/pack_atlas.py@ records in a compiled unit
+--   index (#1259, TEX-3), reproduced exactly so the runtime can verify
+--   them.
+--
+--   Both are @sha256@ over a canonical, length-prefixed stream of
+--   labelled fields (the compiler's @digest_stream@): the domain tag,
+--   then each field as @\<u64 LE length\>\<bytes\>@. The length prefixes
+--   are what make the stream injective — a bare concatenation would let
+--   a character move across a field boundary without changing the hash.
+```
+
+The stream the code actually hashes (`src/Unit/Atlas/Digest.hs:120-131`) is:
+
+```haskell
+digestStream tag fields =
+    hex ∘ SHA256.finalize ∘ SHA256.updates SHA256.init $
+        [lengthPrefix (BS.length tag), tag] <> concatMap field fields
+  where
+    field (label, value) =
+        [ lengthPrefix (BS.length label), label
+        , lengthPrefix (BS.length value), value ]
+```
+
+That is:
+
+```
+<u64 LE len(tag)> tag
+  then, per field:  <u64 LE len(label)> label  <u64 LE len(value)> value
+```
+
+The description departs from it in two places:
+
+- **The domain tag is itself length-prefixed.** The sentence names it bare and
+  ahead of the "then each field as `<u64 LE length><bytes>`" clause, so the
+  prefixing reads as starting at the fields.
+- **A field contributes TWO length-prefixed units, not one.** The label is
+  emitted, length-prefixed, immediately before its value. That is what makes
+  them "labelled fields" in the first place, and it is what the very next
+  sentence's injectivity argument rests on — yet the label appears nowhere in
+  the stated wire format.
+
+This is worth more than a usual wording nit because reproduction is the
+module's stated job. Line 3 says the digests are "reproduced exactly so the
+runtime can verify them", and a mismatch is not a soft failure: a wrong digest
+REJECTS a unit's whole definition at load
+(`Unit.Atlas.Load.loadUnitAtlasIndex`). Someone reconstructing the format from
+this paragraph — porting the check to another tool, or re-implementing the
+compiler side — would emit an unprefixed tag and drop the labels, and get a
+different SHA-256 for every input, with no hint from the prose that they had
+missed two of the four components.
+
+The Python side states it correctly, which is where the drift is visible.
+`tools/pack_atlas.py:1584-1589`:
+
+> A canonical, length-prefixed digest over labelled fields.
+>
+> Every field carries **its label** and an explicit byte length, so no
+> concatenation of two different field sequences can produce the same stream
+
+**Severity: low** in the sense that no behaviour is wrong — the two
+implementations agree, which I verified field by field (see below). It is
+recorded because this paragraph is the only specification of a cross-language
+wire format, and it is not usable as one.
+
+Verified truthful in the same module, so a fix does not disturb any of it:
+
+- `sourceDigest` (`:93-116`) matches `pack_atlas.py`'s `source_digest`
+  (`:1613-1633`) label for label and in order: the eight header fields
+  (`unit`, `animation`, `flip`, `loop`, `fps`, `cell`, `columns`,
+  `direction_count`), then per direction `direction`/`row`/`frame_count`, then
+  per frame `frame_path`/`frame_size`/`frame_pixels`.
+- `atlasContentDigest` (`:53-58`) matches `content_digest`
+  (`tools/pack_atlas.py:1647-1651`): `width`, `height`, `pixels`.
+- `lengthPrefix` (`:129-131`) really is u64 little-endian, matching Python's
+  `struct.pack("<Q", ...)`.
+- `pythonFloatRepr`'s thresholds are right. CPython's `format_float_short` in
+  mode `'r'` switches to exponential on exactly `decpt <= -4 || decpt > 16`,
+  and Haskell's own `show` does NOT share that pair (it switches at `0.1` and
+  `10^7`), which is the stated reason the function exists. The trailing `.0`
+  and the signed, two-digit-minimum exponent are both correct.
+
+One narrow divergence in `pythonFloatRepr` was found and deliberately NOT filed
+as a finding, recorded here so it is not rediscovered: `render`'s
+`d ≡ 0 = "0.0"` guard fires for negative zero (IEEE `-0.0 == 0.0`) while the
+`x < 0` test above it is False for `-0.0`, so the function yields `"0.0"` where
+CPython's `repr(-0.0)` is `'-0.0'`. It is not a defect in practice on two
+counts: the haddock scopes itself in the same sentence ("for the narrowed value
+the compiler records as `fps`"), and `-0.0` can never BE an fps —
+`fits_runtime_float` (`tools/pack_atlas.py:689-703`) requires
+`narrowed != 0.0`, which is False for `-0.0`, so such a declaration is rejected
+before compilation. Negative non-zero rates are accepted there and are
+formatted correctly.
