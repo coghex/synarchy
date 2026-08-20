@@ -663,6 +663,22 @@ def test_corrupt_stored_records() -> None:
             "an unknown census field", "unexpected field")
         corrupt(lambda c: c["current"].update({"stdout": "..."}),
             "an unknown cohort field", "unexpected field")
+        # ...and the mirror of the closed schema: a DELETED census field.
+        # Four of the six are nullable, so `.get()` cannot distinguish
+        # "explicitly null" from "removed by hand" -- every `is not None`
+        # guard in _validate_census skips an absent key. Without a
+        # presence check such a record reads clean and the next
+        # record_policy()/--seed rewrite preserves the hole, which is
+        # exactly the malformed-state-survives-a-write shape the closed
+        # schema above exists to prevent. One case per field, because a
+        # presence check that covered only the obvious `current` would
+        # pass a three-quarters-empty policy just as silently.
+        for field in ("current", "acceptable_failures",
+                      "acceptable_failures_justification",
+                      "estimated_worst_case_seconds", "history", "attempts"):
+            corrupt(lambda c, f=field: c.pop(f),
+                    f"a census record with `{field}` deleted",
+                    "missing required field")
 
         # Corruption at the document and entry levels, where the census
         # record itself is not the thing that was edited.

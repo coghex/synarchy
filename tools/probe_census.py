@@ -763,6 +763,22 @@ def _validate_census(census, where: str) -> list[str]:
     if not isinstance(census, dict):
         return [f"{where} `census` is not an object: {census!r}"]
     problems: list[str] = _closed(census, CENSUS_FIELDS, f"{where} census")
+    # The mirror of `_closed`, and the reason it is not enough on its
+    # own: it rejects fields a census has no business CARRYING, but says
+    # nothing about the ones it must HOLD. Four census fields are
+    # nullable, and `.get()` cannot tell an explicit null from a deleted
+    # key -- so every `is not None` guard below silently passes an absent
+    # one. A hand-edited record with `current`, `acceptable_failures`,
+    # its justification, or the estimate REMOVED would validate clean,
+    # and the next `record_policy` or `--seed` would rewrite the file
+    # preserving the hole. Presence is therefore required for all of
+    # CENSUS_FIELDS; nullability is about a field's VALUE, never about
+    # whether it is there.
+    absent = sorted(set(CENSUS_FIELDS) - set(census))
+    if absent:
+        problems.append(
+            f"{where} census is missing required field(s) {absent}: a "
+            f"nullable census field must be present and null, never deleted")
     x = census.get("acceptable_failures")
     if x is not None and not _is_count(x):
         problems.append(
