@@ -41,6 +41,7 @@ cited lines.
 - [ ] EXPL-4. `shutdownEngineWorkers`'s stated reason for not announcing is false for both of its normal-path callers
 - [ ] EXPL-5. `stopWorkers` claims to be the only `WorkerSlot` traversal in the tree; `App.Boot` has another
 - [ ] EXPL-6. `App.Boot` haddock links to `Engine.Core.Workers.allWorkers`, which is not exported
+- [ ] EXPL-7. `sortFrameFiles` claims to be shared by the units and buildings viewers; the units viewer no longer calls it
 
 ---
 
@@ -287,3 +288,64 @@ The order they mean is documented and reachable — `allWorkers` is
 `:68-70` spells it out as "combat → sim → unit → world → input → Lua". This is
 the smallest of the four and is recorded only so a sweep of the module's
 documentation is complete.
+
+---
+
+## Preview asset discovery
+
+### EXPL-7. `sortFrameFiles` claims to be shared by the units and buildings viewers; the units viewer no longer calls it
+
+`src/Engine/Preview/Discovery.hs:131-140`:
+
+```haskell
+-- | Order a directory's @frame_NNN.png@ files NUMERICALLY, not
+--   lexicographically: the shipped names are zero-padded so the two
+--   agree today, but an unpadded @frame_10.png@ must not sort before
+--   @frame_2.png@. Files whose stem carries no trailing digits sort
+--   after the numbered ones, by name, so nothing is silently dropped.
+--   Shared by the units viewer ('Engine.Preview.Unit', which re-exports
+--   it) and the buildings viewer ('Engine.Preview.Building') so the two
+--   can never disagree about frame order.
+sortFrameFiles ∷ [FilePath] → [FilePath]
+```
+
+The ordering logic is correct and the first half of the comment is accurate.
+The sharing claim in the last sentence is not.
+
+`sortFrameFiles` occurs in `src/Engine/Preview/Unit.hs` exactly twice — line 49
+(the module's export list) and line 74 (its import list). It is **never called
+in that module's body**. The only caller in the tree is
+`src/Engine/Preview/Building.hs:288`.
+
+The cause is #1261. The units viewer no longer enumerates source frames at all:
+it resolves the unit's compiled atlas through the production loader
+(`resolveUnitAtlasesIn`, `src/Engine/Preview/Unit.hs:422`) and derives every
+frame from the generated index via `atlasFrames` and the frozen cell arithmetic
+`atlasCellUV` (`src/Engine/Preview/Unit.hs:212-220`). Frame order there comes
+from the index's recorded per-direction row and column layout, which
+`tools/pack_atlas.py` wrote. There is no directory listing left for
+`sortFrameFiles` to order.
+
+The stated invariant is therefore vacuous. There is only one consumer, so
+"the two can never disagree about frame order" guarantees nothing — and someone
+changing frame ordering in the buildings viewer would believe, on the strength
+of this comment, that they were also constraining the units viewer. They would
+not be, and the units viewer's real ordering authority (the compiled index)
+is not mentioned here at all.
+
+Two supporting details, both consequences of the same drift rather than
+independent problems:
+
+- The re-export at `src/Engine/Preview/Unit.hs:49` is what keeps the import at
+  `:74` from tripping `-Wunused-imports` under CI's `-Werror`. Nothing
+  mechanical flags the dead relationship, which is why it survived the #1261
+  migration.
+- `test-headless/Test/Headless/Preview/UnitAnimation.hs:280-289` covers
+  `sortFrameFiles`, importing it from `Engine.Preview.Unit`
+  (`:34`). The coverage is real and worth keeping; it now lives in the suite
+  for the one viewer that does not use the function, which is a second place a
+  reader would infer a relationship that no longer exists.
+
+Verification: `grep -rn "sortFrameFiles" src/ app/ test-headless/` returns the
+definition, the `Building.hs` call, the `Unit.hs` export/import pair, and the
+test — no call site in `Unit.hs`.
