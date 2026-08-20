@@ -7,13 +7,23 @@ engine instance.
 ## Pre-push gate: `ci-local.sh`
 
 `make ci` (repo root) runs `tools/ci-local.sh`, which runs the complete local
-CI gate: a warning-clean (`-Werror`) build of
-the library/exe + both test suites, the headless hspec suite,
-`test_audit.py`, the unit-asset inventory gate (`test_pack_atlas.py` +
-`pack_atlas.py --validate-only --strict`), and `world_check.py --quick`. PR
-CI is path-selective for the graphical test-suite build, the quick worldgen
-check, and the unit-asset gate, while pushes to master run all three; a green
+CI gate: a warning-clean (`-Werror`) build of the library/exe + both test
+suites, the headless hspec suite, `test_audit.py`, the unit-asset inventory
+gate (`test_pack_atlas.py` + `pack_atlas.py --validate-only --strict`),
+`world_check.py --quick`, and the probe-runner self-tests. PR CI is
+path-selective for the graphical test-suite build, the quick worldgen check,
+and the unit-asset gate, while pushes to master run all three; a green
 `make ci` remains a conservative CI prediction.
+
+That "same gate set" claim is now enforced rather than maintained by hand:
+`ci_parity_audit.py` (#1355) compares this file's `python3 tools/*.py`
+invocations against those of `.github/workflows/ci.yml`'s `build-test` job,
+at command-and-arguments granularity and in both directions, and fails on
+any difference outside a hard-coded exemption list carrying a reason per
+entry (CI's path selectors, which `make ci` has nothing to select for, and
+`run_probes.py`'s engine-booting sweep). It runs last in both files and has
+its own `--self-test`.
+
 `-Werror` itself lives in `synarchy.cabal`'s checked-in warning policy, so
 every build already carries it; `ci-local.sh` only scopes a temporary
 `-fforce-recomp` via `cabal.project.local` (forcing a genuine recheck of
