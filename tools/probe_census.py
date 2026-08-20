@@ -813,6 +813,37 @@ def _validate_census(census, where: str) -> list[str]:
     else:
         for position, attempt in enumerate(attempts):
             problems += _validate_attempt(attempt, f"{where} attempts[{position}]")
+
+    # Cohorts and attempts are each well-formed on their own above, and
+    # that is not enough: they are two views of ONE history and a hand
+    # edit can leave them disagreeing. An accepted attempt is the LOG of
+    # a measurement that was ingested; the sample it produced is that
+    # measurement's retained form, in `current` or in `history`. So the
+    # two counts are the same number by construction, and any difference
+    # means state no run could have written.
+    #
+    # The direction that loses data is the one worth naming: clearing
+    # `current` and `history` while leaving the accepted attempts behind
+    # reads as "these measurements were taken" with the measurements
+    # gone, and the next record_policy()/--seed rewrite persists that
+    # loss. The opposite skew -- more samples than accepted attempts --
+    # is equally impossible, so both are reported rather than only the
+    # lossy one.
+    if isinstance(attempts, list) and isinstance(history, list):
+        accepted = sum(1 for attempt in attempts
+                       if isinstance(attempt, dict)
+                       and attempt.get("status") == "ok")
+        retained = 0
+        for cohort in [current] + history:
+            if isinstance(cohort, dict) and isinstance(cohort.get("samples"),
+                                                       list):
+                retained += len(cohort["samples"])
+        if accepted != retained:
+            problems.append(
+                f"{where} logs {accepted} accepted attempt(s) but retains "
+                f"{retained} sample(s) across `current` and `history`: every "
+                f"accepted attempt is one retained measurement, so these "
+                f"cannot disagree")
     return problems
 
 

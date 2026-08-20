@@ -686,6 +686,19 @@ def test_corrupt_stored_records() -> None:
             "an unknown census field", "unexpected field")
         corrupt(lambda c: c["current"].update({"stdout": "..."}),
             "an unknown cohort field", "unexpected field")
+        # Cohorts and attempts are two views of ONE history, so a hand
+        # edit can leave them disagreeing even though each validates
+        # cleanly alone. The lossy direction is the one that matters:
+        # clearing the retained measurements while leaving the accepted
+        # attempts reads as "these runs happened" with the runs gone, and
+        # the next record_policy()/--seed persists that loss. Both skews
+        # are corruption, so both are covered.
+        corrupt(lambda c: (c.update({"current": None, "history": []})),
+                "accepted attempts whose retained samples were deleted",
+                "accepted attempt")
+        corrupt(lambda c: c["attempts"].clear(),
+                "retained samples whose accepted attempts were deleted",
+                "accepted attempt")
         # ...and the mirror of the closed schema: a DELETED census field.
         # Four of the six are nullable, so `.get()` cannot distinguish
         # "explicitly null" from "removed by hand" -- every `is not None`
