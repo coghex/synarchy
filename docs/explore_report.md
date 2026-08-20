@@ -62,6 +62,7 @@ cited lines.
 - [ ] EXPL-17. `unitToQuad`'s climb-occlusion branch is justified by a `spriteRowSpan` push the same function says it does not apply
 - [ ] EXPL-18. `Building.Render`'s sort comment says units add a `spriteRowSpan` term "as units do"; they no longer do
 - [ ] EXPL-19. `Unit.HitTest` claims to mirror a tile hit-test that no longer holds the math, and to use the "same math" the engine documents as different
+- [ ] EXPL-20. `resolveTexture`'s haddock credits itself with animation mirroring; animations never reach it and it cannot honour `flip: false`
 
 ---
 
@@ -1193,3 +1194,78 @@ Verified truthful in the same module, so a fix does not disturb any of it:
 - The `effDepth` expression matches the renderer's. (It is the same expression
   in ten places across nine files — duplication, but with no drift, and not a
   comment defect.)
+
+### EXPL-20. `resolveTexture`'s haddock credits itself with animation mirroring; animations never reach it and it cannot honour `flip: false`
+
+`src/Unit/Sprite.hs:49-56`:
+
+```haskell
+-- | Pick the correct directional sprite for a unit given its world-space
+--   facing and the current camera rotation.
+--
+--   Lookup order: requested screen direction → its `mirrorDir` (returned
+--   with `flipX = True` so the renderer flips UVs) → fallback default
+--   (no flip). The mirror step lets animations ship 5 directional
+--   sprites (S/SE/E/NE/N) instead of 8 — SW/W/NW are produced by
+--   horizontal mirror at draw time.
+```
+
+The lookup order is exactly right. The last sentence is wrong about this
+function on two counts, and the module's OWN header contradicts it twelve lines
+earlier (`src/Unit/Sprite.hs:12-16`):
+
+```haskell
+--   Since #1259 this is reached only when there is no animation frame
+--   to show: an ANIMATED unit is both drawn and hit-tested from
+--   'Unit.Render.pickFrame''s sample, which is the same shared-resolution
+--   principle applied one level up (a frame's size is its atlas CELL,
+--   which no texture-handle lookup can report).
+```
+
+**(1) Animations never reach `resolveTexture`.** Its
+`Map.Map Direction TextureHandle` argument is `uiDirSprites`, which traces back
+through `udDirSprites` (`src/Unit/Thread/Command/Spawn.hs:165`,
+`src/World/Save/Types.hs:691`) to the unit YAML's `directional_sprites` key
+(`src/Engine/Asset/YamlUnits.hs:417`) — the T-POSE sprite set, which
+`docs/engine_contracts.md` and the asset inventory both classify as a
+non-animation unit texture. All three call sites
+(`src/Unit/Render.hs:119`, `src/Unit/Render.hs:213`,
+`src/Unit/HitTest.hs:251`) are the T-pose fallback. Since #1261 an ANIMATION's
+five-versus-eight economy is implemented in `Unit.Render.pickFrame`'s
+`lookupFlip`, against the authored rows the atlas index records.
+
+**(2) The two mirroring paths differ in a way the sentence conceals.**
+`resolveTexture` mirrors UNCONDITIONALLY: when the direct direction is absent it
+always tries `mirrorDir`, and there is no opt-out anywhere in the function. The
+animation path gates on the per-animation `aFlip` flag, and
+`src/Unit/Render.hs:117-122` states why the gate is load-bearing:
+
+> `flipOK` from the animation's `aFlip` flag gates the mirror fallback. When
+> False we deliberately do NOT mirror — an anim with an asymmetric held prop
+> (weapon in right hand) would otherwise have the prop visually swap sides on
+> western directions. Author sets `flip: false` (or omits) to opt out.
+
+So a reader taking `resolveTexture`'s haddock at face value concludes that this
+is the mechanism behind animation mirroring, and therefore that it honours
+`flip: false`. Neither holds. The asymmetric-weapon case is one the asset
+pipeline explicitly supports — the approved `<lowercase>_RH_<lowercase>`
+animation-identifier form exists for exactly it — so the distinction is not
+hypothetical.
+
+Worth distinguishing, so a fix does not over-correct: `src/Unit/Direction.hs:40-45`
+uses the same "lets bilaterally-symmetric animations ship 5 directional sprites
+instead of 8" framing for `mirrorDir` itself, and there it is CORRECT —
+`mirrorDir` genuinely serves both paths, `pickFrame`'s and `resolveTexture`'s.
+The defect is confined to `resolveTexture`, whose domain is the T-pose only.
+
+**Severity: low.** No behaviour is wrong. Recorded because it is a same-file
+contradiction in which the function-level comment survived the correction its
+own module header applies, and because it hides the
+unconditional-versus-`aFlip` difference between the two mirroring paths.
+
+Verified truthful in the same module, so a fix does not disturb it:
+`cameraRotSteps`' "each 90 deg CW rotation = 2 steps" is right (S 180° → W 270°
+→ N 0° → E 90° is clockwise, and eight directions over four quarter-turns is
+two steps each); `screenDirOf` subtracts the camera's steps in the correct
+sense and its `mod` is non-negative; and `resolveTexture`'s stated lookup order
+matches the code exactly, `flipX` included.
