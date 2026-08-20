@@ -292,7 +292,11 @@ MAX_NAME_CHARS = 255
 # directory `<invocation_dir>/run-NNN`. Holding references to exactly
 # that shape is what leaves nowhere to put a payload — a path-shaped
 # string is not a reference just because it is absolute.
-RUN_DIR_RE = re.compile(r"\Arun-\d{3}\Z")
+# `f"run-{index:03d}"` pads to a MINIMUM of three digits, so a long
+# measurement names its 1000th run `run-1000`. `--runs` has no upper
+# bound, and the exact per-index check below is what pins the number —
+# this only has to recognize the shape.
+RUN_DIR_RE = re.compile(r"\Arun-\d{3,}\Z")
 
 _WORKTREE_ROOTS: dict[str, tuple[Path, ...]] = {}
 

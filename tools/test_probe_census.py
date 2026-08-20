@@ -753,6 +753,24 @@ def test_artifact_boundary() -> None:
         rejected(lambda d: d["runs"][1].update(
             {"artifact_dir": f"{INVOCATION}/run-901"}),
             "a run pointing at someone else's directory", "names no directory")
+
+        # `f"{index:03d}"` pads to a MINIMUM of three digits, so a long
+        # measurement's 1000th run is `run-1000`. `--runs` has no upper
+        # bound, and that artifact is as real as any other.
+        long_run = build_result(outcomes=("PASS",) * 999 + ("FAIL",),
+                                at=stamp(41))
+        expect(long_run["retained_artifacts"] == [f"{INVOCATION}/run-1000"],
+               f"the 1000th run's artifact is named run-1000 (got "
+               f"{long_run['retained_artifacts']})")
+        expect(probe_census.validate_result(long_run, document) == [],
+               f"a four-digit run artifact is accepted "
+               f"({probe_census.validate_result(long_run, document)[:1]})")
+        probe_census.record_result(reg.census, long_run)
+        recorded = probe_census.find_entry(
+            probe_census.read_for_update(reg.census), PROBE)["census"]
+        expect(any(sample["timestamp_utc"] == stamp(41)
+                   for sample in recorded["current"]["samples"]),
+               "the 1000-run measurement is recorded and reads back")
         rejected(lambda d: d["runs"][1].update({"artifact_dir": elsewhere}),
                  "a run artifact_dir outside the artifact root",
                  "not under the declared artifact root")
