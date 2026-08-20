@@ -66,9 +66,15 @@ end
 --
 -- Constant while a session names this unit, which is the whole point.
 -- unit.setFrozen is NOT this (it only pins the render publish while the
--- sim keeps walking) and neither is a completed move order (the unit
--- reverts to wander the moment it arrives) --
--- docs/expedition_survival_calibration.md E3 measured both.
+-- sim keeps walking) -- docs/expedition_survival_calibration.md E3
+-- measured that. Neither is #1216's position hold, which is a different
+-- thing that looks similar: it stands a unit on the tile its own
+-- COMPLETED move order named, at follow_command's 7.0 rather than this
+-- 7.5, so a session still outranks and supersedes it (M.create clears
+-- the anchor on both units it takes), and a survival interrupt that
+-- outranks 7.0 walks a held unit off its anchor and back again. This
+-- lock does neither: it names a unit the SESSION chose, at a number
+-- nothing below 8.0 can move.
 --
 -- ONE constant for BOTH sides of a unit-to-unit session (#1251, UIT-4):
 -- the target's hold is the same in-progress lock as the escort's, which

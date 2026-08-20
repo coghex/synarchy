@@ -192,8 +192,16 @@ coherent multi-unit observations.
 
 **Handoff context:**
 
-- **Current behavior:** Reaching a commanded point restores autonomous wander,
-  so units do not reliably remain mustered or at camp.
+- **Resolved by #1216:** a completed PLAYER move order now leaves the unit
+  holding its destination (`scripts/unit_ai_hold.lua`), at `follow_command`'s
+  own utility — so every survival/combat/treatment interrupt that outranked
+  the order still preempts the hold and returns to the anchor afterwards,
+  while wander and work entry stay suppressed until an accepted player
+  command or `unitAi.releaseHold`. The source note below quotes the original
+  calibration and is retained as history.
+- **Current behavior (as of the source calibration):** Reaching a commanded
+  point restores autonomous wander, so units do not reliably remain mustered
+  or at camp.
 - **Expected direction:** Make the post-command behavior explicit and
   player-legible, whether that is hold, remain within a formation radius, or
   intentionally resume autonomous work.

@@ -425,12 +425,13 @@ def run_pacing_mode(port: int, args) -> int:
         gx = flat["gx"]
         never_died = bool(trail) and all(s.get("act") != "DEAD" for s in trail)
         # Restrict the pacing-SHAPE checks to the commanded leg (up to first
-        # arrival) — afterward follow_command clears and ambient wander
-        # takes over (and can drift the unit right back past the goal
-        # tile), which is a different regime this issue doesn't govern.
+        # arrival) — afterward follow_command clears and the unit holds its
+        # destination (#1216), which is a different regime this issue
+        # doesn't govern; before #1216 ambient wander took over instead and
+        # could drift the unit right back past the goal tile.
         # "reached" must be evaluated the SAME way: the goal was reached if
         # the unit was EVER within tolerance, not whether the FINAL sample
-        # (which may be long past arrival, mid-wander) happens to be close.
+        # (which may be long past arrival) happens to be close.
         arrival_i = next((i for i, s in enumerate(trail)
                           if abs(s.get("x", -1e9) - gx) < 1.2), None)
         reached = arrival_i is not None

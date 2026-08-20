@@ -681,9 +681,11 @@ theatre — and the traps found while building it.
 6. **The observation point is both travellers at the ruin in ONE COHERENT
    SNAPSHOT** — a single paired read revalidated with the simulation
    stopped. Two separate `unit.getInfo` round trips let the sim run in
-   between, and a pair that was never inside together can satisfy them; a
-   unit that finishes its move reverts to wander and can drift back out
-   while the other is still walking.
+   between, and a pair that was never inside together can satisfy them.
+   The two arrive at different times, and since #1216 the first one HOLDS
+   its destination rather than wandering off — but a survival interrupt
+   can still carry a held unit off its anchor while the second is walking,
+   so the coherent snapshot is still what the check needs.
 
 **Canteens stay full on both.** A dry one puts `refill_canteen` at its 7.5
 peak, above `follow_command`, and the control then abandons the leg to
@@ -704,8 +706,13 @@ down to compensate just moves the blackout to the first meal's salt bolus
 (`salts.mealSalt` restores 0.30 of max_salt per feed). Both were observed
 live while building the gate.
 
-**Two instrument gotchas.** A completed move order does NOT hold position
-(E3). And **`unit.setFrozen` is not a hold at all**: `uiFrozen` only makes
+**Two instrument gotchas.** A completed PLAYER move order now holds
+position (#1216, SURV-4) — E3's "it does not" is retired — so the pause
+pinning here is belt-and-braces rather than the only thing keeping an
+arrival in place. Do not lean on the hold alone: it yields to the same
+survival ladder the move order did, so an interrupted traveller still
+leaves its anchor mid-measurement. And **`unit.setFrozen` is not a hold
+at all**: `uiFrozen` only makes
 `publishToRender` skip the sim-derived update, so a "frozen" unit keeps
 walking while `unit.getInfo` reports where it was when the flag went up.
 Use `engine.setPaused` when you need a unit to actually stay put, and

@@ -227,8 +227,11 @@ local function tickOne(bid, info)
     -- before the unit reaches its destination).
     -- No explicit speed → the sustainable "ordered" regime. A hard-coded
     -- fast speed exhausts the unit's stamina (collapses it mid-walk).
+    -- INTERNAL (#1216): the player did not ask for this walk, so
+    -- completing it must not leave the fresh acolyte holding the tile
+    -- the roster picked -- it goes straight back to autonomous work.
     local unitAi = require("scripts.unit_ai")
-    unitAi.commandMove(newUid, walkX, walkY)
+    unitAi.commandMove(newUid, walkX, walkY, nil, true)
 
     local newRemaining = building.consumeSpawn(bid) or 0
     s.lastUid       = newUid

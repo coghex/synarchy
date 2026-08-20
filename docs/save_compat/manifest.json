@@ -1522,6 +1522,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/o1-wander-hazard-policy.expected.json"
         }
       ]
+    },
+    {
+      "id": "p1-position-hold",
+      "description": "Position hold after a completed player move order (issue #1216, SURV-4): lua.unit_ai became v6, adding aiState[uid].holdAnchor -- the destination a COMPLETED player move order leaves the unit standing on (scripts/unit_ai_hold.lua's hold_position candidate, scored at unit_ai_combat.lua's own FOLLOW_COMMAND_UTILITY so the #306 interrupt ladder is reused rather than restated). This baseline tracks a REAL current-format session written by the live engine at lua.unit_ai v6, whose acolyte was given a real player move order through unitAi.commandMove and is HOLDING the commanded tile at save time -- the anchor was written by the live maintainTask arrival branch, not staged, so the new shape has its own compatibility coverage rather than a version number with nothing behind it. The order names the tile the unit already stands on, which is the shortest completion the real verb has: a longer leg is not what a persistence fixture measures, and seed 42 / size 16 puts open lake around the spawn (the terrain every earlier baseline shares), so a distant target would only ever have stall-timed-out. Proving a real walk holds its destination -- and returns to the anchor after a survival interrupt -- is tools/position_hold_probe.py's job. v1-v5 payloads stay tracked by the b3/c3/d1/e1/f1/g1/h1/i1/j1/k1/l1/m1/n1/o1 baselines above and decode with holdAnchor absent, which is exactly right: those sessions had no hold to record.",
+      "declaredAt": "2026-08-20",
+      "declaredByIssue": 1216,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "scripts/unit_ai_save.lua's decode (v1 -> wrapAiState, v2 -> addOwnerToAiState, v3/v4/v5 -> identity: a pre-#1216 payload carries no holdAnchor at all, and its ABSENCE is already the correct v6 value -- a hold is never inferred at decode time from an order that has already been cleared, because the payload cannot say whether that order was the player's or scripts/building_spawn.lua's internal walk-out)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 7,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "p1-position-hold-session",
+          "path": "test-headless/data/save-compat/p1-position-hold.bin",
+          "kind": "complete-session",
+          "sha256": "0ce034db7e0c85a639beb5c840610b29c263e239f77eaf0633728b6ad29dd491",
+          "sizeBytes": 908665,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then return require('scripts.unit_ai').commandMove({uid}, 0, 0), settled 10.0s and held until `(function() local h = require('scripts.unit_ai').getHold(1); return h ~= nil and h.x == 0 and h.y == 0 end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/p1-position-hold.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

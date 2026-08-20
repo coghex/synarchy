@@ -183,6 +183,11 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                             "fresh-process regeneration -- around two real "
                                             "16-chunk worldgens"),),
     "item_temp": (Reason(SCENARIO_HEAVY, "real worldgen, cooling waits, and save/load round-trip"),),
+    "position_hold": (Reason(SCENARIO_HEAVY, "#1216: four acolytes sharing one arena through a "
+                                             "32 s unpaused containment window, a real "
+                                             "refill excursion out to a lake and back, and a "
+                                             "post-release work resume -- every stage is a "
+                                             "real-time AI-arbitration leg, ~4 minutes solo"),),
     "power_workshop": (Reason(SCENARIO_HEAVY, "long powered-workshop AI plus day/night balance scenario"),),
     "power": (Reason(SCENARIO_HEAVY, "long build-tool power-node placement + wire network + "
                                      "day/night balance + save/restart/load round-trip scenario"),),

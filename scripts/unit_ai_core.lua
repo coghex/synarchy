@@ -19,6 +19,9 @@ local unitAi = package.loaded["scripts.unit_ai"]
 -- below, so every existing `core.maintainTask` / `core.TASK_*` caller
 -- is unchanged.
 local stall = require("scripts.unit_ai_stall")
+-- Position hold after a completed player move order (#1216). Requires
+-- stall only, never this module -- so the verbs below can clear a hold.
+local hold = require("scripts.unit_ai_hold")
 
 local M = {}
 
@@ -63,6 +66,9 @@ end
 --                                           -- empty list = none known
 --   knownLocations     = { {page,id,x,y} }, -- dedup'd by IDENTITY,
 --                                           -- see unit_ai_locations
+--   holdAnchor         = { x, y, ... }|nil, -- #1216: stand here until
+--                                           -- an accepted player
+--                                           -- command (unit_ai_hold)
 --   role               = "miner"|"woodcutter"|"builder"|"smith"
 --                        |"laborer"| nil,   -- derived each thought
 --                                           -- tick (unit_roles.lua);
@@ -260,13 +266,24 @@ end
 -- Player code (e.g. right-click handler) calls this instead of
 -- `unit.moveTo` so the AI can treat the command as a candidate
 -- action and resume it after higher-priority interrupts.
-function unitAi.commandMove(uid, tx, ty, speed)
+--
+-- `internal` marks a move the PLAYER did not ask for
+-- (scripts/building_spawn.lua's portal walk-out): an ordinary commanded
+-- task in every other respect, but completing it leaves no position
+-- hold (#1216) and issuing it clears none — a newly spawned acolyte
+-- must not be pinned where the roster walked it, and a spawn must not
+-- release a hold the player set.
+function unitAi.commandMove(uid, tx, ty, speed, internal)
     local s = ensureState(uid)
+    if not internal then hold.clear(s) end
     s.commandedTask = {
         x         = tx,
         y         = ty,
         speed     = speed,
         startedAt = engine.gameTime(),
+        -- Only a player-intent move may create a hold on arrival
+        -- (unit_ai_stall.lua's maintainTask reads this).
+        player    = (not internal) or nil,
     }
     -- Force a fresh decision on the next tick rather than waiting
     -- for the unit's natural cadence — feels more responsive.
@@ -451,6 +468,9 @@ end
 function unitAi.commandAttack(uid, targetUid, committed)
     if not targetUid then return end
     local s = ensureState(uid)
+    -- #1216: the ORDER supersedes a position hold; the AI's own
+    -- emergent engage (unit_ai_combat.lua, no flag) stays an interrupt.
+    if committed then hold.clear(s) end
     s.attackTargetUid = targetUid
     s.committed = committed and true or nil
     setGoal(s, "attack")

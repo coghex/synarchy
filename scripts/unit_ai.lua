@@ -74,6 +74,7 @@ local roles = require("scripts.unit_roles")
 
 local core = require("scripts.unit_ai_core")
 local aiState = core.aiState
+local hold = require("scripts.unit_ai_hold")
 
 local config = require("scripts.unit_ai_tunables")
 
@@ -125,19 +126,18 @@ local actions, actionNames = {}, require("scripts.unit_ai_actions")
 -----------------------------------------------------------
 
 local UNIVERSAL_ACTIONS = {
-    { name = "retreat",        utility = combat.retreatUtility,
-      execute = combat.retreatExecute,
-      forceExecute = true },
-    { name = "engage",         utility = combat.engageUtility,
-      execute = combat.engageExecute },
-    { name = "attack_target",  utility = combatAttack.attackTargetUtility,
-      execute = combatAttack.attackTargetExecute,
-      forceExecute = true },
+    { name = "retreat", utility = combat.retreatUtility,
+      execute = combat.retreatExecute, forceExecute = true },
+    { name = "engage", utility = combat.engageUtility, execute = combat.engageExecute },
+    { name = "attack_target", utility = combatAttack.attackTargetUtility,
+      execute = combatAttack.attackTargetExecute, forceExecute = true },
     -- The TARGET side of a Mode A session (#1251): universal because a
     -- session's destination may be ANY player-commandable unit, while
     -- being its SOURCE is a per-species capability the source gate asks
     -- about — scripts/unit_ai_escort.lua's header has the asymmetry.
     transfer.escortHoldAction,
+    -- #1216, universal for the same reason a move order is.
+    hold.action,
 }
 
 function unitAi.setConfig(defName, cfg)

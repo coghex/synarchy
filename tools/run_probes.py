@@ -215,6 +215,11 @@ PROBES = [
      "starting-building placement excluded from placed-location bounds; spawn/preview agreement (#778)"),
     ("power", "power_probe.py",
      "build-tool-routed power-node placement + wire connectivity + energy balance, save/load reconnect (#358, #360)"),
+    ("position_hold", "position_hold_probe.py",
+     "position hold after a completed player move order: sustained unpaused "
+     "containment, work suppression vs a same-unit post-release resume, a "
+     "displacing refill interrupt that returns to the anchor, and the "
+     "supersede/release/internal-move boundaries (#1216)"),
     ("power_workshop", "power_workshop_probe.py",
      "requires_power workshop consumer: unpowered refusal, wired-uncharged gate, AI stall/resume, day/night balance (#361)"),
     ("preview", "preview_probe.py",

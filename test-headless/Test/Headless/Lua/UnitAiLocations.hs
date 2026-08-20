@@ -316,18 +316,19 @@ spec = describe "unit location knowledge" $ do
                 , "assert(captured ~= nil)"
                 ]
 
-        it "declares the current version (v5 since #1291) while still \
+        it "declares the current version (v6 since #1216) while still \
            \accepting every historical input version" $
             runsOk $ lns
                 [ registered
-                , "assert(captured.version == 5)"
+                , "assert(captured.version == 6)"
                 , "local accepted = {}"
                 , "for _, v in ipairs(captured.inputVersions) do"
                 , "  accepted[v] = true end"
                 -- Every historical version decodes, this gate's own v4
                 -- included: #915's memory rides payloads that predate
-                -- #1291's stall accounting.
-                , "for v = 1, 5 do assert(accepted[v], 'v' .. v"
+                -- #1291's stall accounting (v5) and #1216's position
+                -- hold (v6) alike.
+                , "for v = 1, 6 do assert(accepted[v], 'v' .. v"
                 , "  .. ' must still decode') end"
                 ]
 

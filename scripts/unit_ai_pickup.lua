@@ -27,6 +27,7 @@ local mv = require("scripts.movement_speed")
 -- Shared eligible-time stall accounting (#1291) — the same one
 -- maintainTask charges a commanded move against.
 local stall = require("scripts.unit_ai_stall")
+local hold = require("scripts.unit_ai_hold")
 
 -- How much closer the carrier must get before its pickup deadline
 -- resets. Comfortably above path jitter, small enough that a real
@@ -204,6 +205,10 @@ function unitAi.commandPickup(uid, gid)
         end
     end
     local s = ensureState(uid)
+    -- #1216: an ACCEPTED player order supersedes a position hold. Past
+    -- the capacity gate above and not before -- a refusal stores no
+    -- order, so it must leave the unit holding exactly as it was.
+    hold.clear(s)
     s.pickupOrder = { gid = gid, issuedAt = engine.gameTime() }
     s.nextActionAt = 0
     return true

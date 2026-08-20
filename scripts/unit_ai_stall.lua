@@ -5,7 +5,9 @@
 -- and unit_ai_transfer.lua's transfer_order_timeout for a queued
 -- transfer order (#1247) -- are STALL timers, not total-trip budgets
 -- (#920): they answer "is this unit getting anywhere?", never "how
--- long has this trip taken".
+-- long has this trip taken". scripts/unit_ai_hold.lua's walk back to a
+-- position anchor (#1216) is charged by the same rules through the
+-- same M.charge/M.reset, for the same reason.
 --
 -- What they measure is ELIGIBLE time. The #306 ladder deliberately
 -- outranks a commanded move with eating, drinking, a dry-canteen
@@ -138,6 +140,10 @@ function M.suspendOrders(s)
     if s.commandedTask  then s.commandedTask.stallSeenAt  = nil end
     if s.pickupOrder    then s.pickupOrder.stallSeenAt    = nil end
     if s.transferOrder  then s.transferOrder.stallSeenAt  = nil end
+    -- A position hold's walk back to its anchor (#1216) is charged
+    -- against the same budget by the same rules, so it takes the same
+    -- boundary.
+    if s.holdAnchor     then s.holdAnchor.stallSeenAt     = nil end
 end
 
 -- A new closest approach: the whole budget is available again.
@@ -161,9 +167,24 @@ local function maintainTask(uid, s)
         return
     end
 
-    -- Arrival check.
+    -- Arrival check. A PLAYER move order that actually completed
+    -- leaves the unit holding its destination (#1216, SURV-4): the
+    -- anchor is written here because this is the one branch that
+    -- distinguishes arrival from the timeout below, and requirement 5
+    -- turns on exactly that distinction -- an order that gave up
+    -- creates no hold. `task.player` is set by unit_ai_core.lua's
+    -- commandMove and deliberately absent on an internal one
+    -- (scripts/building_spawn.lua's portal walk-out), so a freshly
+    -- spawned acolyte is never pinned where the roster put it.
+    --
+    -- Written as a plain field rather than a call into
+    -- scripts/unit_ai_hold.lua, which owns everything else about the
+    -- hold: that module requires THIS one (for the arrival radius and
+    -- this accounting), so requiring it back would be a load cycle --
+    -- the same reason `distance` is duplicated above.
     local d = distance(info.gridX, info.gridY, task.x, task.y)
     if d <= TASK_ARRIVAL_TILES then
+        if task.player then s.holdAnchor = { x = task.x, y = task.y } end
         s.commandedTask = nil
         return
     end
