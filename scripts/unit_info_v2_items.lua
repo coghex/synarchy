@@ -58,7 +58,12 @@ function M.buildItemHint(it, equippedSlot)
             string.format("quality: %d%%", math.floor(it.quality + 0.5))
             .. qualityTier.suffix(it)
     end
-    if it.condition then
+    -- Every item reports a condition now (#1421), so presence says
+    -- nothing. Show the line only while the item has actually taken
+    -- wear: a pristine item stays clean, and a condition line appearing
+    -- MEANS something. Food, raw materials and everything else nothing
+    -- damages need no classification to stay quiet.
+    if it.condition and it.condition < 100 then
         hintLines[#hintLines + 1] =
             string.format("condition: %d%%", math.floor(it.condition + 0.5))
     end

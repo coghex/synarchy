@@ -12,9 +12,6 @@ items:
     quality:
       min: 50
       max: 75
-    condition:
-      min: 80
-      max: 100
 
     # Lightest of the three tools. A proper cutting edge that bites
     # into flesh and wood alike; the point is too short to thrust

@@ -229,9 +229,10 @@ applyCraft recipe outs uid um = case HM.lookup uid (umInstances um) of
                    , Right (map iiInstanceId outs') )
 
 -- | Roll one output line into fresh instances. A crafted item is
---   factory-new: condition and sharpness start at 100 (per #325; loot
---   spawns roll condition to simulate age, crafts don't). Quality rolls
---   from the def's spec here as the fallback for skill-less recipes;
+--   factory-new: condition and sharpness start at 100 — which since
+--   #1421 is simply what EVERY freshly made item does, the salvage path
+--   'item.spawnGround' being the one exception. Quality rolls from the
+--   def's spec here as the fallback for skill-less recipes;
 --   skill-tagged recipes overwrite it in applyCraft with the crafter-
 --   derived craftQuality (#343). Containers spawn at their default
 --   fill, same as unit.addItem. @outputTemp@ is the recipe's

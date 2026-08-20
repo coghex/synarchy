@@ -10,7 +10,6 @@ items:
     material: leather  # combat resistance lives in
                        # data/substances/leathers.yaml under "leather"
     quality:   { min: 60, max: 90 }
-    condition: { min: 80, max: 100 }
     armor:
       thickness: 5
       covers: [l_foot, r_foot]

@@ -448,7 +448,7 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `thought_probe.py` | #351 | arena | Thought event stream (`thought.emit`/`drainEvents`), STATE/ENVIRONMENTAL thought triggers, state-of-mind-biased selection (mood-weighted valence), and the thought-log data path. |
 | `till_probe.py` | #333 | worldgen (isolated resource root) | Till-designation layer + till AI end to end: designate/cancel, fluid-tile exclusion, save/load, autonomous tilling (`world.getVegAt` confirms the flip), idempotent re-sweep. |
 | `tutorial_probe.py` | #922 | worldgen (two engine boots, real save/load) | First-session tutorial integration gate: the shipped `data/tutorials/first_session.yaml` branch driven end to end from real gameplay state — a fresh session revealing only the root row, a placed `acolyte_portal` completing the portal objective, one acolyte discovering generated water by FOV scan and radio-sharing it with a second acolyte held immobile with no water anywhere in its own `getVisibleTiles` field of view (so a received source cannot be a second independent discovery, and must be one of the finder's own), the live water/food subobjectives checking one at a time as supplies are restored stepwise, the composite latching when a single acolyte holds both, that latch surviving the supplies being stripped again, and a fresh-process save/load round trip preserving every completed objective while the HUD returns collapsed and the live subobjectives recompute from the loaded world. Injects no tree and stubs no predicate. |
-| `tutorial_hud_probe.py` | #960 | worldgen, `--offscreen` (needs-gpu, manual-only) | Tutorial checklist HUD rendered over a real world: collapsed at session entry, real toggle clicks opening/closing the list (located through the module's own `dump()`, never a hardcoded coordinate), a transparent overlay that leaves terrain visible inside the list's rect, a 41-row injected tree scrolling under a real wheel event, and a real click landing on a row still selecting the terrain tile beneath it. |
+| `tutorial_hud_probe.py` | #960 | worldgen, `--offscreen` (needs-gpu, manual-only) | Tutorial checklist HUD rendered over a real world: collapsed at session entry, real toggle clicks opening/closing the list (located through the module's own `dump()`, never a hardcoded coordinate), a transparent overlay that leaves terrain visible inside the list's rect, a 41-row injected tree scrolling under a real wheel event, and a real click landing on a row still selecting the terrain tile beneath it. Since #1419 it also measures the toggle caption's own RENDERED GLYPH COLUMNS — separately for the collapsed `> Objectives` and the open `v Objectives`, by hiding and re-showing the caption element and diffing the frames, so the 9-slice box behind it is never mistaken for text — and requires a non-empty glyph set contained half-open inside both the toggle box and the framebuffer. |
 | `transactional_load_probe.py` | #763 | worldgen (three real engine boots, isolated resource root) | Whole-session load transaction: several deliberately invalid loads (missing save, corrupt save, missing gameplay definition) each leave the current session unchanged and paused, reporting `LoadFailed` via `engine.getLoadStatus()`; mutual exclusion rejects a save mid-load (creating no save, and starting no save transaction), rejects a second concurrent load, keeps the original request authoritative and non-terminal across both, and makes `scripts.pause.set(false)` a complete no-op — all against an in-flight window ESTABLISHED and positively observed by request id via the test-only `debug.armLoadStageGate` staging gate (#1181), never raced for, and failing rather than skipping if that window cannot be established; a successful load REPLACES the complete session (a page live only pre-load, never part of the save, does not survive publication) rather than merging; Haskell and Lua state agree immediately post-publication; a paused dwell advances no gameplay state and unpausing lands on the default time scale; repeated loads accumulate no ghost pages. |
 | `transfer_order_probe.py` | #1247, #1253 | arena (phases 1-8, 10, 11) + worldgen with two further engine boots (phase 9); manual-only, ~10 min | The transfer-order unit job (`scripts/unit_ai_transfer.lua`) driven by the real `unit_ai.update` tick: a queued order walks its carrier to a 3x1 hold and commits exactly once on arrival — approached from the FAR end, so arrival is measured against the footprint rather than the anchor — advancing `queued -> in_transit -> ready_to_commit -> completed` in the store, emitting exactly one attributed `unit_event`, never losing the carrier to the wander tick, and committing nothing further over ten more seconds of ticking. Then the refusals: the command-time capacity gate (nothing queued, a warning naming unit and item), a partial twelve-into-eight batch, the arrival gate re-checking capacity as `became_stale/receiver_full`, an instance that left the carrier's hands mid-walk as `became_stale/instance_missing` while its sibling still lands, a demolished destination retiring as `became_stale/receiver_missing`, a blocked approach (an ocean ring) stalling out to `out_of_range`, and a progressing ~90-tile haul completing despite outlasting the 60 s stall budget. #1253's terminal cleanup rides every one of those: each phase checks the outcome was surfaced EXACTLY once (summing the event log's own coalesced `count`, not rows) and that the store is left holding no terminal order, since an order that ends is pruned on the tick that ended it. Phase 10 is the player's own "Cancel transfer" mid-walk: nothing moves, the order goes, the carrier stops walking at the hold, and a second cancel is inert. Phase 11 KILLS a carrier mid-walk — the corpse stays a live instance, so every reference still resolves and nothing downstream would have flagged the abandoned order, but the AI short-circuits a `dead` pose and the order must be retired anyway. Phase 9 saves an order mid-walk, quits, and reloads it in a FRESH process on a real world page (never an arena, #365), where the carrier resumes and completes it — and carries a SECOND carrier destroyed mid-order, whose orphaned order must never reach the save, asserted by both boundaries logging no integrity diagnostic at all. |
 | `transfer_context_menu_probe.py` | #1014, #1085 | worldgen, `--offscreen` (needs-gpu, manual-only) | The "Transfer" context-menu entry end to end: a real right-click on a real built storage building, a real technomule and (since #1085's faction-based widening) a second real player acolyte, with the "Transfer" row located through `ui.dumpWidgets()` by its visible label (never a hardcoded coordinate), the existing "Contents"/"Info" rows still present alongside it, `debug.drainActionOutcomes()` confirming the click routed through the context-menu handler and never fell through to a move order, a real click on the row producing a `scripts.transfer_session` session naming the exact NAMED source/destination endpoints (and no operation field), and the two exclusions that must survive the widening — self-transfer and a non-player-commandable wildlife target both offer no row. |
@@ -585,6 +585,15 @@ the blocking CI gate. Deterministic probes can still be manual-only when
 they are too narrow or too expensive for every matching PR, and paths
 covered only by manual-only probes select no behavior probe by default.
 
+A manual-only probe records ONE OR MORE reasons (#1440), each a
+`(category, explanation)` record naming one INDEPENDENT ground for
+exclusion — `expedition_retrieval` needs a real generated world *and*
+walks its legs in real time, either of which would keep it out on its
+own. Categories are unique within a probe, so two facets of the same
+category belong in one explanation; the declared order is the render
+order. Adding a `flaky` reason is the de-flake workflow's job (#1426),
+never an opportunistic edit from an unrelated branch.
+
 ```bash
 # What would CI run for these changed files?
 python3 tools/ci_probes.py --changed src/Power/Network.hs
@@ -592,11 +601,90 @@ python3 tools/ci_probes.py --changed src/Power/Network.hs
 # Validate the mapping (no engine) — also a blocking CI step
 python3 tools/ci_probes.py --self-test
 
-# Every registered probe's CI status: CI-eligible, or manual-only with a
-# reason category (flaky / base-failing / slow/worldgen-heavy /
-# scenario-heavy / targeted / needs-gpu / unclassified)
+# Every registered probe's CI status: CI-eligible, or manual-only with
+# EVERY reason excluding it, each tagged with its category (flaky /
+# base-failing / slow/worldgen-heavy / scenario-heavy / targeted /
+# needs-gpu / unclassified). A probe appears exactly once however many
+# reasons it carries.
 python3 tools/ci_probes.py --status
 ```
+
+### `probe_flake.py` — repeat-run flakiness measurement (#1425)
+
+Nine manual-only probes are classified `flaky` and several more have known
+flakes recorded under other reasons, but none of that is measured. This runs
+ONE registered probe N times in a row under a fixed `+RTS -N4 -RTS` setting
+and reports a per-check `PASS`/`FAIL`/`MISSING` table plus an aggregate
+failure rate (timeouts in the numerator, and separately visible).
+
+```bash
+python3 tools/probe_flake.py --probe role --runs 10
+python3 tools/probe_flake.py --probe role --runs 10 --result /tmp/role.json
+python3 tools/test_probe_flake.py     # the focused self-test (no engine)
+```
+
+Only probes that implement the shared `probe-result/v1` protocol
+(`tools/probe_protocol.py`) can be measured; everything else is `legacy` and
+is rejected BY NAME before execution, without running the probe at all —
+heuristically parsing free-form stdout is the guesswork a reliability harness
+must not do, and invoking a legacy probe to find out would boot a real engine.
+`role` is the only migrated probe today; later issues migrate one at a time.
+
+A migrated probe prints its ordered, stable check declaration with
+`--describe` (no engine) and, when the harness supplies an event path, writes
+one flushed JSON event per line instead of bracketed stdout markers. Run by
+hand it is unchanged: `python3 tools/role_probe.py --port N` still prints its
+`[PASS]`/`[FAIL]` lines and exits 0/1, and `run_probes.py --only role` behaves
+exactly as before.
+
+`run_probes.run_one` still owns process launch, output capture, elapsed
+timing, deferred SIGINT, timeout escalation and process-group cleanup; the
+harness reuses it through four keyword-only parameters (event path, artifact
+dir, engine-log dir, RTS capabilities) that default to today's behavior.
+
+Ports come from an atomic cross-process lease over 8009-8999 (8008 — the GUI
+port — is always forbidden), held until `run_one` has reaped the probe's whole
+process group, so concurrent harnesses never collide. The lease is an advisory
+`flock`, not a file anyone deletes, so a harness that dies releases it with no
+staleness heuristic — and the live-invocation registry behind the reported peak
+concurrency is held the same way, so an abandoned entry can never look live
+because the operating system recycled its pid; its namespace is `/tmp` ITSELF — not
+`--artifact-root`, not `TMPDIR`, and with no uid in it, because a TCP port is
+host-global and anything that split the namespace would let two harnesses lock
+different files and land on one port. The lease files are flat in `/tmp` rather
+than in a subdirectory: a directory's OWNER may unlink entries in it however
+the sticky bit is set, so a harness-created subdirectory would let whoever made
+it replace another user's held lease. `/tmp` is root-owned and sticky, which
+the harness verifies rather than assumes, and every lease file is opened
+`O_NOFOLLOW` and checked to be a plain unlinked-to file. Artifacts,
+by contrast, DO follow the platform temp dir —
+`<platform temp dir>/synarchy-probe-flake` — and never land inside a worktree;
+successful runs are deleted and `FAIL`/`TIMEOUT`/harness-error runs keep their
+stdout, protocol events and every engine log.
+
+A valid measurement exits 0 whatever rate it observed. Nonzero is reserved for
+pre-execution rejections (2), port exhaustion (3) and harness errors (4) — a
+malformed, truncated, duplicate, out-of-order or unclassifiable protocol
+event, which is never reported as a probe pass.
+
+### `probe_census.py` — the probe migration inventory (#1425)
+
+Builds and validates `docs/probe_census.json`: every registered probe exactly
+once, with its script, its CI-eligible/manual-only classification and its
+protocol status (`legacy` or `probe-result/v1`). The manifest lives in the
+worktree whose branch is `docs-wip`, resolved BY BRANCH the way
+`tools/docs_land.sh` does — never a hard-coded path and never the primary
+checkout.
+
+```bash
+python3 tools/probe_census.py --print       # what the live registry implies
+python3 tools/probe_census.py --seed        # write it into the docs worktree
+python3 tools/probe_census.py --validate    # check the seeded copy
+```
+
+Nothing at runtime reads it: `probe_flake.py` takes protocol status from its
+own in-repo `PROTOCOL_PROBES` and check identity from each probe's descriptor,
+so a checkout with no docs worktree behaves identically.
 
 ### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets selection
 

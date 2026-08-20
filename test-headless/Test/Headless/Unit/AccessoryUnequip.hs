@@ -46,7 +46,7 @@ accDef name disp buffs = ItemDef
     , idWeight = 0.2, idWeightSpec = Nothing, idBulk = 0.8
     , idStorage = Nothing, idKind = "accessory"
     , idCategory = "Misc", idMake = "", idMaterial = ""
-    , idQualitySpec = Nothing, idQualityTiers = [], idConditionSpec = Nothing
+    , idQualitySpec = Nothing, idQualityTiers = []
     , idContainer = Nothing, idDefaultContents = [], idFood = Nothing
     , idWeapon = Nothing, idArmor = Nothing, idUnequippable = False
     , idBuffs = buffs, idInsulation = 0

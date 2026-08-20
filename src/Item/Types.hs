@@ -235,10 +235,6 @@ data ItemDef = ItemDef
       --   YAML), e.g. 90→"excellent" so a 95%-quality coffee reads
       --   "coffee (excellent)". Empty ⇒ fall back to
       --   'defaultQualityTiers'.
-    , idConditionSpec ∷ !(Maybe (Float, Float))
-      -- ^ (min, max) % range for condition rolls at spawn. Same
-      --   distribution shape as quality. Condition degrades with use;
-      --   quality is fixed for the item's lifetime.
     , idContainer   ∷ !(Maybe ItemContainer)
     , idDefaultContents ∷ ![(Text, Int, Maybe Float)]
       -- ^ For ITEM-containers (a first-aid kit, a toolbox): the contents a
@@ -282,14 +278,20 @@ data ItemDef = ItemDef
 
 -- | Per-unit instance. References its def by name; currentFill is for
 --   containers, quality is rolled once at spawn (immutable), condition
---   is rolled at spawn and degrades with use.
+--   is runtime wear state that degrades with use. Condition is NOT
+--   authored per definition (#1421): every freshly made item starts at
+--   100, and the one exception is the salvage path @item.spawnGround@,
+--   which starts an item below full because it was already lying in the
+--   world.
 data ItemInstance = ItemInstance
     { iiDefName     ∷ !Text
     , iiCurrentFill ∷ !Float    -- ^ litres held; 0 for non-containers
     , iiQuality     ∷ !Float    -- ^ 0..100; how well-made this instance
                                 --   is. Multiplicative on effective
                                 --   sharpness / damage / armor value.
-    , iiCondition   ∷ !Float    -- ^ 0..100; current wear. Degrades with
+    , iiCondition   ∷ !Float    -- ^ 0..100; current wear. Starts at 100
+                                --   for every fresh item (ground salvage
+                                --   excepted, #1421) and degrades with
                                 --   use. 0 = broken.
     , iiWeight      ∷ !Float    -- ^ THIS instance's empty weight (kg),
                                 --   rolled at creation from the def's

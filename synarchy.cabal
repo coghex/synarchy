@@ -1070,6 +1070,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.WrapSeam
                    Test.Headless.WorldGen.CoastBreach
                    Test.Headless.WorldGen.BedDepth
+                   Test.Headless.WorldGen.FluidSurfaceFold
                    Test.Headless.Unit.Pathing.Cost
                    Test.Headless.Unit.Pathing.AStar
                    Test.Headless.Unit.Pathing.Config
@@ -1092,6 +1093,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Item.Temperature
                    Test.Headless.Item.BuffYaml
                    Test.Headless.Item.QualityTier
+                   Test.Headless.Item.Condition
         Test.Headless.Item.BulkStorage
                    Test.Headless.Item.Discovery
                    Test.Headless.Asset.TextureFallback
@@ -1111,6 +1113,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Storage
                    Test.Headless.World.Save.Contract
                    Test.Headless.Save.AutosaveGuards
+                   Test.Headless.Save.AutosaveListing
                    Test.Headless.Save.Barrier
                    Test.Headless.Load.Status
                    Test.Headless.Save.Snapshot
@@ -1280,4 +1283,8 @@ test-suite synarchy-test-headless
                 , scientific
                 , directory
                 , filepath
+                -- One fixture needs a special file (a FIFO named like a
+                -- frame) that `directory` cannot create; the library
+                -- already depends on `unix`.
+                , unix
     ghc-options: "-with-rtsopts=-N -A128M"

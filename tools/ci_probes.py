@@ -26,6 +26,7 @@ Usage:
   git diff --name-only origin/master...HEAD | python3 tools/ci_probes.py --stdin
   python3 tools/ci_probes.py --self-test    # validate the mapping, no engine
   python3 tools/ci_probes.py --status       # list every probe's CI eligibility (#540)
+                                            # (manual-only probes list EVERY reason)
 """
 from __future__ import annotations
 
@@ -33,6 +34,8 @@ import argparse
 import fnmatch
 import sys
 import os
+from dataclasses import dataclass
+from typing import Sequence
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from run_probes import PROBES  # noqa: E402
@@ -86,248 +89,303 @@ TARGETED = "targeted"
 NEEDS_GPU = "needs-gpu"
 UNCLASSIFIED = "unclassified"
 
+
+@dataclass(frozen=True)
+class Reason:
+    """One independent ground for keeping a probe out of the blocking gate.
+
+    A probe is often excluded on more than one count that would each hold
+    on its own -- `expedition_retrieval` needs a real generated world AND
+    walks its legs in real time -- and #1440 exists because a single
+    `(category, explanation)` tuple could only ever record one of them.
+    """
+
+    category: str
+    explanation: str
+
+
 # Every registered probe (ALL_KEYS) NOT in CI_ELIGIBLE must have an entry
-# here: (category, one-line reason). `_self_test` enforces full coverage so
-# a newly-registered probe can't silently land in neither bucket.
-MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
+# here: a non-empty tuple of `Reason` records, one per INDEPENDENT ground,
+# each with a known category and a non-blank explanation, and no category
+# repeated within one probe (fold two facets of the same category into one
+# explanation instead). `_self_test` enforces full coverage so a
+# newly-registered probe can't silently land in neither bucket, and
+# `validate_manual_only_reasons` enforces the record shape.
+#
+# Reasons render in DECLARED order: that is the stable per-probe order
+# `--status` and any later census reporting read (#1440). The `--- category
+# ---` banners below group entries by their FIRST declared reason; a probe
+# excluded on more than one count is filed under that one and carries the
+# rest inline.
+#
+# OWNERSHIP (#1426): a command that merely NOTICES possible flakiness
+# appends its evidence to the de-flake census, not here. Only the de-flake
+# workflow promotes verified evidence into this registry, so an unrelated
+# branch must not add a `flaky` reason opportunistically -- and never from
+# an old mention or one unrelated failing run.
+MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
     # --- flaky: AI-reaction/arbitration timing the slower, variable-speed
     # Linux CI runner destabilizes run-to-run;
     # within-run retry can't fix run-to-run flakiness. ---
-    "craft_bill": (FLAKY, "craft_job AI claim/work timing flakes run-to-run on CI"),
-    "role": (FLAKY, "role-hysteresis timing flakes run-to-run on CI"),
-    "chop": (FLAKY, "chop AI claim/work timing flakes run-to-run on CI"),
-    "foraging": (FLAKY, "foraging AI timing flakes run-to-run on CI"),
-    "sleep": (FLAKY, "go_to_sleep AI goal-arbitration + multi-hop pose-chain "
-                     "timing flakes run-to-run on CI (#722; the disarm lesson — "
-                     "local greenness isn't sufficient evidence for an "
-                     "AI-reaction/arbitration-timing probe)"),
-    "combat_anim": (FLAKY, "#1396 retired the recorded failure mode: the fixture is "
-                           "the flat arena, every tile the combatants can traverse is "
-                           "verified flat/dry/loaded, engagement is positively "
-                           "observed before sampling, and an unestablished fixture "
-                           "now exits 2 instead of masquerading as the missing swing "
-                           "it used to (the attacker fell to its death approaching "
-                           "the target in 1/3 solo runs, #724). What is still GRADED "
-                           "rides on AI arbitration and swing-cooldown timing across "
-                           "a sampling window, so the disarm lesson still applies — "
-                           "green solo runs locally are not evidence for the slower, "
-                           "variable-speed CI runner"),
-    "follow_command_priority": (FLAKY, "a struck goal-bound unit occasionally treats "
-                                       "an ally instead of engaging combat, failing "
-                                       "'combat reached over a pending move' "
-                                       "(1/3 solo runs, #724)"),
-    "repair_ai": (FLAKY, "repair-AI claim/fetch/work timing flakes with a DIFFERENT "
-                         "failing-check set each run (3/3 solo runs failed, no two "
-                         "alike, #724) — not #489 (whetstone), which is long fixed "
-                         "and never implicated"),
-    "physiology": (FLAKY, "'temperate (22C/0.5): circ min' sits right at its 0.75 "
-                          "pass threshold and failed both failing runs (0.74, 0.75); "
-                          "the combat-vs-idle calorie-drain-ratio check also flaked "
-                          "once, alongside it (2/3 solo runs failed, #724)"),
+    "craft_bill": (Reason(FLAKY, "craft_job AI claim/work timing flakes run-to-run on CI"),),
+    "role": (Reason(FLAKY, "role-hysteresis timing flakes run-to-run on CI"),),
+    "chop": (Reason(FLAKY, "chop AI claim/work timing flakes run-to-run on CI"),),
+    "foraging": (Reason(FLAKY, "foraging AI timing flakes run-to-run on CI"),),
+    "sleep": (Reason(FLAKY, "go_to_sleep AI goal-arbitration + multi-hop pose-chain "
+                            "timing flakes run-to-run on CI (#722; the disarm lesson — "
+                            "local greenness isn't sufficient evidence for an "
+                            "AI-reaction/arbitration-timing probe)"),),
+    "combat_anim": (Reason(FLAKY, "#1396 retired the recorded failure mode: the fixture is "
+                                  "the flat arena, every tile the combatants can traverse "
+                                  "is verified flat/dry/loaded, engagement is positively "
+                                  "observed before sampling, and an unestablished fixture "
+                                  "now exits 2 instead of masquerading as the missing "
+                                  "swing it used to (the attacker fell to its death "
+                                  "approaching the target in 1/3 solo runs, #724). What is "
+                                  "still GRADED rides on AI arbitration and swing-cooldown "
+                                  "timing across a sampling window, so the disarm lesson "
+                                  "still applies — green solo runs locally are not "
+                                  "evidence for the slower, variable-speed CI runner"),),
+    "follow_command_priority": (Reason(FLAKY, "a struck goal-bound unit occasionally treats "
+                                              "an ally instead of engaging combat, failing "
+                                              "'combat reached over a pending move' "
+                                              "(1/3 solo runs, #724)"),),
+    "repair_ai": (Reason(FLAKY, "repair-AI claim/fetch/work timing flakes with a DIFFERENT "
+                                "failing-check set each run (3/3 solo runs failed, no two "
+                                "alike, #724) — not #489 (whetstone), which is long fixed "
+                                "and never implicated"),),
+    "physiology": (Reason(FLAKY, "'temperate (22C/0.5): circ min' sits right at its 0.75 "
+                                 "pass threshold and failed both failing runs (0.74, 0.75); "
+                                 "the combat-vs-idle calorie-drain-ratio check also flaked "
+                                 "once, alongside it (2/3 solo runs failed, #724)"),),
     # --- scenario-heavy: deterministic enough to run manually, but either
     # long-running or broad end-to-end scenarios that make the blocking PR
     # gate too expensive. ---
-    "construction": (SCENARIO_HEAVY, "long construct_job AI end-to-end scenario: "
-                                     "inventory + ground sourcing, dead-claimant "
-                                     "release, blueprint staking (4 phases, "
-                                     "~123-168s solo); 14/14 checks passed all 3 "
-                                     "solo runs (#724)"),
-    "infection": (SCENARIO_HEAVY, "timed infection/sepsis scenario with deliberate sleeps"),
-    "location_content": (SCENARIO_HEAVY, "four real-engine-boot scenario: ruin content "
-                                         "spawn + geometry, save/quit/restart/load "
-                                         "round-trip, bogus/valid content-registry "
-                                         "validation, and hidden-page multiworld "
-                                         "building/unit spawn (#800 replaced the stale "
-                                         "loot_names allowlist with the live item "
-                                         "registry, resolving the prior quinoa_sack "
-                                         "flake; #915 added the per-unit location-"
-                                         "knowledge layer alongside the player-wide "
-                                         "discovery checks)"),
-    "item_instance": (SCENARIO_HEAVY, "real worldgen plus save/load identity regression"),
-    "river_naming": (SCENARIO_HEAVY, "#1102: three real engine boots -- generation, a "
-                                     "fresh-process save/load round trip, and a "
-                                     "fresh-process regeneration -- around two real "
-                                     "16-chunk worldgens"),
-    "item_temp": (SCENARIO_HEAVY, "real worldgen, cooling waits, and save/load round-trip"),
-    "power_workshop": (SCENARIO_HEAVY, "long powered-workshop AI plus day/night balance scenario"),
-    "power": (SCENARIO_HEAVY, "long build-tool power-node placement + wire network + "
-                              "day/night balance + save/restart/load round-trip scenario"),
-    "save_compat_migration": (SCENARIO_HEAVY, "two real engine boots plus a real "
-                                               "process restart exercising a tracked "
-                                               "legacy-fixture load/publish/resave/"
-                                               "reload round trip (#766)"),
-    "autosave": (SCENARIO_HEAVY, "#913: the validated 1-minute minimum for "
-                 "interval_minutes forces multiple >60s wall-clock waits (the "
-                 "default-off dwell and the one real-interval fire alone are "
-                 "~3 minutes), and the player-intent-suppression check depends "
-                 "on racing the post-capture storage-write window -- neither is "
-                 "cheap or stable enough for a blocking per-PR gate"),
-    "save_pause": (SCENARIO_HEAVY, "real worldgen plus save/load pause race checks"),
-    "save_barrier": (SCENARIO_HEAVY, "two real engine boots plus worldgen/save/load boundary smoke"),
-    "save_storage": (SCENARIO_HEAVY, "worldgen plus ~10 real engine boots exercising the "
-                                     "atomic storage transaction's restart-and-select fallback"),
-    "transactional_load": (SCENARIO_HEAVY, "three real engine boots, three real world pages, "
-                                            "a deterministically-held in-flight mutual-exclusion "
-                                            "window (#1181), and a repeated-load loop "
-                                            "(#763)"),
+    "construction": (Reason(SCENARIO_HEAVY, "long construct_job AI end-to-end scenario: "
+                                            "inventory + ground sourcing, dead-claimant "
+                                            "release, blueprint staking (4 phases, "
+                                            "~123-168s solo); 14/14 checks passed all 3 "
+                                            "solo runs (#724)"),),
+    "infection": (Reason(SCENARIO_HEAVY, "timed infection/sepsis scenario with deliberate sleeps"),),
+    "location_content": (Reason(SCENARIO_HEAVY, "four real-engine-boot scenario: ruin content "
+                                                "spawn + geometry, save/quit/restart/load "
+                                                "round-trip, bogus/valid content-registry "
+                                                "validation, and hidden-page multiworld "
+                                                "building/unit spawn (#800 replaced the stale "
+                                                "loot_names allowlist with the live item "
+                                                "registry, resolving the prior quinoa_sack "
+                                                "flake; #915 added the per-unit location-"
+                                                "knowledge layer alongside the player-wide "
+                                                "discovery checks)"),),
+    "item_instance": (Reason(SCENARIO_HEAVY, "real worldgen plus save/load identity regression"),),
+    "river_naming": (Reason(SCENARIO_HEAVY, "#1102: three real engine boots -- generation, a "
+                                            "fresh-process save/load round trip, and a "
+                                            "fresh-process regeneration -- around two real "
+                                            "16-chunk worldgens"),),
+    "item_temp": (Reason(SCENARIO_HEAVY, "real worldgen, cooling waits, and save/load round-trip"),),
+    "power_workshop": (Reason(SCENARIO_HEAVY, "long powered-workshop AI plus day/night balance scenario"),),
+    "power": (Reason(SCENARIO_HEAVY, "long build-tool power-node placement + wire network + "
+                                     "day/night balance + save/restart/load round-trip scenario"),),
+    "save_compat_migration": (Reason(SCENARIO_HEAVY, "two real engine boots plus a real "
+                                                      "process restart exercising a tracked "
+                                                      "legacy-fixture load/publish/resave/"
+                                                      "reload round trip (#766)"),),
+    "autosave": (Reason(SCENARIO_HEAVY, "#913: the validated 1-minute minimum for "
+                        "interval_minutes forces multiple >60s wall-clock waits (the "
+                        "default-off dwell and the one real-interval fire alone are "
+                        "~3 minutes), and the player-intent-suppression check depends "
+                        "on racing the post-capture storage-write window -- neither is "
+                        "cheap or stable enough for a blocking per-PR gate"),),
+    "save_pause": (Reason(SCENARIO_HEAVY, "real worldgen plus save/load pause race checks"),),
+    "save_barrier": (Reason(SCENARIO_HEAVY, "two real engine boots plus worldgen/save/load boundary smoke"),),
+    "save_storage": (Reason(SCENARIO_HEAVY, "worldgen plus ~10 real engine boots exercising the "
+                                            "atomic storage transaction's restart-and-select fallback"),),
+    "transactional_load": (Reason(SCENARIO_HEAVY, "three real engine boots, three real world pages, "
+                                                   "a deterministically-held in-flight mutual-exclusion "
+                                                   "window (#1181), and a repeated-load loop "
+                                                   "(#763)"),),
     # --- targeted: useful regression probes, but too narrow for the default
     # PR gate. Run them when touching the named feature. ---
-    "collapse_crawl": (TARGETED, "narrow #304 collapse/crawl hysteresis regression"),
-    "concussion_revive": (TARGETED, "narrow #304 concussion revive hysteresis regression"),
-    "config_migration": (TARGETED, "narrow #786 pre-#661 legacy config upgrade regression"),
-    "config_state": (TARGETED, "narrow #638 config load/save vs git-tracking regression"),
-    "cooking": (TARGETED, "cooking content integration; craft remains the generic craft smoke gate"),
-    "disarm": (TARGETED, "narrow #193 disabled-hand auto-drop regression"),
-    "injury_log": (TARGETED, "injury-log backend plumbing, narrower than the combat subsystem"),
-    "lua_strict_msg": (TARGETED, "narrow #622 LuaToEngineMsg/LuaMsg strictness crash regression"),
-    "machine_shop": (TARGETED, "electric furnace + machine_shop content regression, narrower "
-                               "than the generic #590 power-draw mechanism probe"),
-    "meal_waste": (TARGETED, "narrow #1219 stop-before-waste meal-policy regression; "
-                             "foraging remains the generic #94 food-ladder gate"),
-    "mental_efficiency": (TARGETED, "narrow #353 mental-effectiveness combat/craft tie-in "
-                                    "regression: getMentalEffectiveness, craft-bill progress "
-                                    "rate, craft-quality delta, damage-energy invariance"),
-    "mental_state": (TARGETED, "narrow #352 mental-state ladder/hysteresis/break-AI regression"),
-    "movement": (TARGETED, "registered CI invocation takes no arguments, so it runs only "
-                           "movement_probe.py's default corner_trap diagonal-routing "
-                           "regression, not the cliff/fall/ramp/stamina courses the "
-                           "obstacle-course description implies (#722 defined promotion "
-                           "broadness from the actual registered invocation; #754 made "
-                           "the unsupported promotion; #772 demoted it)"),
-    "remote_warning_page_guard": (TARGETED, "narrow #844 remote-warning establishHere() "
-                                            "cross-page revalidation regression"),
-    "resource_root": (TARGETED, "narrow #636 resource-root launch-contract regression "
-                                "(also runs its own small worldgen dump)"),
-    "text_encoding": (TARGETED, "narrow #618 Lua text API decodeUtf8Lenient regression, "
-                                "extended by #665 with a representative non-Text API "
-                                "(world.show) boundary from the same decodeUtf8Lenient sweep"),
-    "blood_decal": (TARGETED, "narrow #604/#606 blood decal texture reuse/eviction/render regression"),
-    "blood_impact": (TARGETED, "narrow #607 wound-to-impact-blood mapping regression"),
-    "bleeding_trail": (TARGETED, "narrow #882/#883 ongoing-bleeding emission regression "
-                                 "(moving trail + stationary/collapsed pooling)"),
-    "circadian": (TARGETED, "narrow #611 circadian urge + sleep_pressure drain regression"),
-    "circadian_species": (TARGETED, "narrow #613 species-specific circadian phase regression"),
-    "thought": (TARGETED, "thought event/log backend plumbing, narrower than the full "
-                          "psychology arc (mirrors injury_log_probe.py)"),
-    "wire": (TARGETED, "narrow #359 wire connection/path-builder/build-AI regression"),
-    "lua_orphan_prune": (TARGETED, "narrow #195 Lua per-id AI-state-pruning save/load "
-                                   "regression; ~40s solo, passed all 3 solo runs (#724)"),
-    "state_of_mind": (TARGETED, "narrow #350 state-of-mind/awareness-term regression; "
-                                "periodic thoughts (#351) are neutralised for the probe's "
-                                "own engine so a random 0-30s thought can't land inside its "
-                                "mood-drift sampling windows (#793)"),
+    "collapse_crawl": (Reason(TARGETED, "narrow #304 collapse/crawl hysteresis regression"),),
+    "concussion_revive": (Reason(TARGETED, "narrow #304 concussion revive hysteresis regression"),),
+    "config_migration": (Reason(TARGETED, "narrow #786 pre-#661 legacy config upgrade regression"),),
+    "config_state": (Reason(TARGETED, "narrow #638 config load/save vs git-tracking regression"),),
+    "cooking": (Reason(TARGETED, "cooking content integration; craft remains the generic craft smoke gate"),),
+    "disarm": (Reason(TARGETED, "narrow #193 disabled-hand auto-drop regression"),),
+    "injury_log": (Reason(TARGETED, "injury-log backend plumbing, narrower than the combat subsystem"),),
+    "lua_strict_msg": (Reason(TARGETED, "narrow #622 LuaToEngineMsg/LuaMsg strictness crash regression"),),
+    "machine_shop": (Reason(TARGETED, "electric furnace + machine_shop content regression, narrower "
+                                      "than the generic #590 power-draw mechanism probe"),),
+    "meal_waste": (Reason(TARGETED, "narrow #1219 stop-before-waste meal-policy regression; "
+                                    "foraging remains the generic #94 food-ladder gate"),),
+    "mental_efficiency": (Reason(TARGETED, "narrow #353 mental-effectiveness combat/craft tie-in "
+                                           "regression: getMentalEffectiveness, craft-bill progress "
+                                           "rate, craft-quality delta, damage-energy invariance"),),
+    "mental_state": (Reason(TARGETED, "narrow #352 mental-state ladder/hysteresis/break-AI regression"),),
+    "movement": (Reason(TARGETED, "registered CI invocation takes no arguments, so it runs only "
+                                  "movement_probe.py's default corner_trap diagonal-routing "
+                                  "regression, not the cliff/fall/ramp/stamina courses the "
+                                  "obstacle-course description implies (#722 defined promotion "
+                                  "broadness from the actual registered invocation; #754 made "
+                                  "the unsupported promotion; #772 demoted it)"),),
+    "remote_warning_page_guard": (Reason(TARGETED, "narrow #844 remote-warning establishHere() "
+                                                   "cross-page revalidation regression"),),
+    "resource_root": (Reason(TARGETED, "narrow #636 resource-root launch-contract regression "
+                                       "(also runs its own small worldgen dump)"),),
+    "text_encoding": (Reason(TARGETED, "narrow #618 Lua text API decodeUtf8Lenient regression, "
+                                       "extended by #665 with a representative non-Text API "
+                                       "(world.show) boundary from the same decodeUtf8Lenient sweep"),),
+    "blood_decal": (Reason(TARGETED, "narrow #604/#606 blood decal texture reuse/eviction/render regression"),),
+    "blood_impact": (Reason(TARGETED, "narrow #607 wound-to-impact-blood mapping regression"),),
+    "bleeding_trail": (Reason(TARGETED, "narrow #882/#883 ongoing-bleeding emission regression "
+                                        "(moving trail + stationary/collapsed pooling)"),),
+    "circadian": (Reason(TARGETED, "narrow #611 circadian urge + sleep_pressure drain regression"),),
+    "circadian_species": (Reason(TARGETED, "narrow #613 species-specific circadian phase regression"),),
+    "thought": (Reason(TARGETED, "thought event/log backend plumbing, narrower than the full "
+                                 "psychology arc (mirrors injury_log_probe.py)"),),
+    "wire": (Reason(TARGETED, "narrow #359 wire connection/path-builder/build-AI regression"),),
+    "lua_orphan_prune": (Reason(TARGETED, "narrow #195 Lua per-id AI-state-pruning save/load "
+                                          "regression; ~40s solo, passed all 3 solo runs (#724)"),),
+    "state_of_mind": (Reason(TARGETED, "narrow #350 state-of-mind/awareness-term regression; "
+                                       "periodic thoughts (#351) are neutralised for the probe's "
+                                       "own engine so a random 0-30s thought can't land inside its "
+                                       "mood-drift sampling windows (#793)"),),
     # (no probes currently classified base-failing — the category stays
     # defined below for any future genuinely-broken-on-master case.)
     # --- needs-gpu: requires a real Vulkan device, which the CI runner
     # does not have. First candidate for a future GPU-equipped CI lane. ---
-    "offscreen": (NEEDS_GPU, "boots the full Vulkan render pipeline (windowless) — no GPU on the CI runner"),
-    "blood_gpu_lifecycle": (NEEDS_GPU, "offscreen boot: uploadBloodTextures needs a real Vulkan "
-                                       "device to upload/dispose blood textures (#788) — no GPU on the CI runner"),
-    "preview": (NEEDS_GPU, "real preview boot creates a GLFW window and calls "
-                           "initializeVulkan (app/App/Preview.hs), same as the "
-                           "graphical boot path — no GPU on the CI runner (#722)"),
-    "construction_blueprint_footprint": (NEEDS_GPU, "offscreen boot: proves the "
-                           "committed building-blueprint footprint via real "
-                           "screenshot diffing (#807) — no GPU on the CI runner"),
-    "portal_ghost": (NEEDS_GPU, "offscreen boot: verifies the build-tool ghost's "
-                                "rendered tint via real screenshots — no GPU on the CI runner (#778)"),
-    "tutorial_hud": (NEEDS_GPU, "offscreen boot: verifies the tutorial checklist "
-                                "HUD's rendered overlay, real toggle clicks, wheel "
-                                "scrolling and click-through via screenshots — no "
-                                "GPU on the CI runner (#960)"),
-    "etymology": (NEEDS_GPU, "offscreen boot: drives the in-game etymology panel "
-                  "through the real UI (name-plate rows located via the widget "
-                  "dump, clicked with input.click) against a real generated "
-                  "world -- needs a Vulkan device the CI runner does not have"),
-    "location_embark": (NEEDS_GPU, "offscreen boot: real embark-to-discovery session "
-                                   "through zoom-map icons, portal ghost/remote-modal "
-                                   "flow, and real-input-driven unit movement — no GPU "
-                                   "on the CI runner (#782)"),
-    "item_list_widget": (NEEDS_GPU, "offscreen boot: the shared item-list "
-                         "widget's real rendered rows/tabs across its migrated "
-                         "hosts, the container window's nesting stack (#1238), "
-                         "the real rendered Store/Retrieve row menus whose "
-                         "gestures queue durable transfer orders (#1249), and "
-                         "the Mode A escort session's two flanking panels and "
-                         "their immediate commits (#1250), "
-                         "located via ui.dumpWidgets() against a real "
-                         "Vulkan-rendered HUD — no GPU on the CI runner "
-                         "(#1088)"),
-    "unified_transfer": (NEEDS_GPU, "offscreen boot: the unified transfer "
-                         "system's end-to-end gate (#1255) - two real "
-                         "Vulkan-rendered engine boots driving Mode A's "
-                         "flanking panes and Mode B's row menus through "
-                         "ui.dumpWidgets(), plus a real generated world and a "
-                         "fresh-process save/load - no GPU on the CI runner"),
-    "transfer_context_menu": (NEEDS_GPU, "offscreen boot: real right-click -> "
-                              "\"Transfer\" context-menu row located via "
-                              "ui.dumpWidgets() against a real Vulkan-rendered "
-                              "menu — no GPU on the CI runner (#1014/#1085)"),
+    "offscreen": (Reason(NEEDS_GPU, "boots the full Vulkan render pipeline (windowless) — no GPU on the CI runner"),),
+    "blood_gpu_lifecycle": (Reason(NEEDS_GPU, "offscreen boot: uploadBloodTextures needs a real Vulkan "
+                                              "device to upload/dispose blood textures (#788) — no GPU on the CI runner"),),
+    "preview": (Reason(NEEDS_GPU, "real preview boot creates a GLFW window and calls "
+                                  "initializeVulkan (app/App/Preview.hs), same as the "
+                                  "graphical boot path — no GPU on the CI runner (#722)"),),
+    "construction_blueprint_footprint": (Reason(NEEDS_GPU, "offscreen boot: proves the "
+                                  "committed building-blueprint footprint via real "
+                                  "screenshot diffing (#807) — no GPU on the CI runner"),),
+    "portal_ghost": (Reason(NEEDS_GPU, "offscreen boot: verifies the build-tool ghost's "
+                                       "rendered tint via real screenshots — no GPU on the CI runner (#778)"),),
+    "tutorial_hud": (Reason(NEEDS_GPU, "offscreen boot: verifies the tutorial checklist "
+                                       "HUD's rendered overlay, real toggle clicks, wheel "
+                                       "scrolling and click-through via screenshots — no "
+                                       "GPU on the CI runner (#960)"),),
+    "etymology": (Reason(NEEDS_GPU, "offscreen boot: drives the in-game etymology panel "
+                         "through the real UI (name-plate rows located via the widget "
+                         "dump, clicked with input.click) against a real generated "
+                         "world -- needs a Vulkan device the CI runner does not have"),),
+    "location_embark": (Reason(NEEDS_GPU, "offscreen boot: real embark-to-discovery session "
+                                          "through zoom-map icons, portal ghost/remote-modal "
+                                          "flow, and real-input-driven unit movement — no GPU "
+                                          "on the CI runner (#782)"),),
+    "item_list_widget": (Reason(NEEDS_GPU, "offscreen boot: the shared item-list "
+                                "widget's real rendered rows/tabs across its migrated "
+                                "hosts, the container window's nesting stack (#1238), "
+                                "the real rendered Store/Retrieve row menus whose "
+                                "gestures queue durable transfer orders (#1249), and "
+                                "the Mode A escort session's two flanking panels and "
+                                "their immediate commits (#1250), "
+                                "located via ui.dumpWidgets() against a real "
+                                "Vulkan-rendered HUD — no GPU on the CI runner "
+                                "(#1088)"),),
+    # #1440: two independent counts. Even on a GPU-equipped runner the
+    # real generated world and fresh-process save/load would still make
+    # the unified transfer gate too expensive for every matching PR.
+    "unified_transfer": (Reason(NEEDS_GPU, "offscreen boot: the unified transfer "
+                                "system's end-to-end gate (#1255) - two real "
+                                "Vulkan-rendered engine boots driving Mode A's "
+                                "flanking panes and Mode B's row menus through "
+                                "ui.dumpWidgets() - no GPU on the CI runner"),
+                         Reason(SLOW_WORLDGEN, "the same gate also generates a real "
+                                "world and drives a fresh-process save/load across "
+                                "its two boots (#1255)"),),
+    "transfer_context_menu": (Reason(NEEDS_GPU, "offscreen boot: real right-click -> "
+                                     "\"Transfer\" context-menu row located via "
+                                     "ui.dumpWidgets() against a real Vulkan-rendered "
+                                     "menu — no GPU on the CI runner (#1014/#1085)"),),
     # --- slow/worldgen-heavy: needs a real generated world, not the flat
     # arena — too slow for a blocking per-PR gate. ---
-    "action_outcome": (SLOW_WORLDGEN, "needs a real generated world to scan for a mixed tillable/fluid box and a real tree for the chop partial path (#646)"),
-    "flora_growth": (SLOW_WORLDGEN, "needs a real generated world for natural ground cover"),
-    "multiworld_save": (SLOW_WORLDGEN, "generates two real world pages"),
-    "persistence_integrity": (SLOW_WORLDGEN, "generates a real world page and boots "
-                              "three engines (build+save, dangling-reference load, "
-                              "corrupted-load-vs-live-session) (#764)"),
-    "persistence_contract_sweep": (SLOW_WORLDGEN, "real worldSize-64 generation plus "
-                              "four real engine boots (three fresh-process save->load-"
-                              "save cycles) for the broader representative-scenario "
-                              "comparison, plus every cross-referenced probe it runs "
-                              "(#767); the compact persistence_contract probe is "
-                              "CI-eligible instead"),
-    "transfer_order": (SLOW_WORLDGEN, "manual-only on two independent counts "
-                       "(#1247): its save/load phase generates a real world "
-                       "page and boots two more engines, because a save "
-                       "containing an arena page hangs the world thread on "
-                       "load (#365); and the stall/long-haul phases are "
-                       "REAL-TIME by construction — a stall budget can only "
-                       "be shown to expire by letting ~60 s of it elapse, and "
-                       "a progressing trip can only be shown to outlive that "
-                       "budget by walking for longer than it. Both also lean "
-                       "on AI arbitration timing (the transfer_order lock "
-                       "holding against the wander tick), the same grounds "
-                       "that keep every other AI-driven probe out of the "
-                       "blocking gate. Total ~8 min"),
-    "location_overlay": (SLOW_WORLDGEN, "needs real worldgen for overlay placement"),
-    "location_stamp_idempotent": (SLOW_WORLDGEN, "needs real worldgen plus a save/restart/reload round-trip"),
-    "portal_location": (SLOW_WORLDGEN, "needs real worldgen for a placed ruin_small to test starting-building exclusion against (#778)"),
-    "thermo_altitude": (SLOW_WORLDGEN, "needs a real generated world (worldSize 128) for elevation data, ~1 min runtime"),
-    "crop": (SLOW_WORLDGEN, "needs a real generated world for natural row-crop placement + "
-                            "groundcover planting, plus a save/load round-trip"),
-    "expedition_loop": (SLOW_WORLDGEN, "the arc's whole first expedition in one "
-                        "session: a real worldSize-64 generation, a scan for a "
-                        "ruin with a walkable colony site and nearby water, the "
-                        "portal's own six-unit spawn roster, two travellers "
-                        "walking ~30 tiles each way in real time, and a real "
-                        "save/restart/load across two engine boots (~15 min). It "
-                        "also leans on AI arbitration timing (drink_from_canteen "
-                        "and eat_from_inventory outranking a move order, "
-                        "pickup_ground, follow_command), so it is manual-only on "
-                        "both counts — the same grounds as expedition_retrieval "
-                        "below, and #923's own scenario contract classifies this "
-                        "as recorded manual verification rather than a CI gate "
-                        "(#923)"),
-    "expedition_retrieval": (SLOW_WORLDGEN, "needs a real generated world for a placed "
-                             "ruin_small and a walkable colony site tens of tiles from it, "
-                             "then walks both legs in real time across two engine boots "
-                             "with a real save/restart/load in the middle; it also leans "
-                             "on AI arbitration timing (pickup_ground, drink_from_canteen, "
-                             "notify_allies), so it is manual-only on both counts (#920)"),
-    "plant": (SLOW_WORLDGEN, "needs a real generated world for natural ground cover + "
-                             "real climate/slope suitability data"),
-    "till": (SLOW_WORLDGEN, "needs a real generated world for natural ground cover to "
-                            "exercise the tillable-tile filter; slow AI loop (~7 min observed)"),
-    "farm_ai": (SLOW_WORLDGEN, "needs a real generated world for the till->plant->harvest AI "
-                               "loop across 5 distinct tillable sites; slowest registered "
-                               "probe (~11 min observed, O(n^2) TCP tile scan over natural terrain)"),
-    "tutorial": (SLOW_WORLDGEN, "needs a real generated world for a natural lake or river "
-                                "to discover and a water-free camp far from it, then runs "
-                                "the radio-share leg on AI arbitration timing and a real "
-                                "save/restart/load across two engine boots; #922 requirement "
-                                "6 also classifies this integration check as recorded manual "
-                                "verification rather than a CI gate"),
+    "action_outcome": (Reason(SLOW_WORLDGEN, "needs a real generated world to scan for a "
+                             "mixed tillable/fluid box and a real tree for the chop "
+                             "partial path (#646)"),),
+    "flora_growth": (Reason(SLOW_WORLDGEN, "needs a real generated world for natural ground cover"),),
+    "multiworld_save": (Reason(SLOW_WORLDGEN, "generates two real world pages"),),
+    "persistence_integrity": (Reason(SLOW_WORLDGEN, "generates a real world page and boots "
+                                     "three engines (build+save, dangling-reference load, "
+                                     "corrupted-load-vs-live-session) (#764)"),),
+    "persistence_contract_sweep": (Reason(SLOW_WORLDGEN, "real worldSize-64 generation plus "
+                                     "four real engine boots (three fresh-process save->load-"
+                                     "save cycles) for the broader representative-scenario "
+                                     "comparison, plus every cross-referenced probe it runs "
+                                     "(#767); the compact persistence_contract probe is "
+                                     "CI-eligible instead"),),
+    # #1440: the "two independent counts" #1247 already recorded in prose,
+    # now one reason record each. Neither is a `flaky` claim: no recorded
+    # run-to-run failure evidence exists for this probe, and real-time /
+    # AI-arbitration dependence alone is scenario weight, not flakiness.
+    "transfer_order": (Reason(SLOW_WORLDGEN, "its save/load phase generates a real "
+                              "world page and boots two more engines, because a "
+                              "save containing an arena page hangs the world thread "
+                              "on load (#365/#1247)"),
+                       Reason(SCENARIO_HEAVY, "the stall/long-haul phases are "
+                              "REAL-TIME by construction — a stall budget can only "
+                              "be shown to expire by letting ~60 s of it elapse, and "
+                              "a progressing trip can only be shown to outlive that "
+                              "budget by walking for longer than it; both also lean "
+                              "on AI arbitration timing (the transfer_order lock "
+                              "holding against the wander tick), the same grounds "
+                              "that keep every other AI-driven probe out of the "
+                              "blocking gate. Total ~8 min (#1247)"),),
+    "location_overlay": (Reason(SLOW_WORLDGEN, "needs real worldgen for overlay placement"),),
+    "location_stamp_idempotent": (Reason(SLOW_WORLDGEN, "needs real worldgen plus a save/restart/reload round-trip"),),
+    "portal_location": (Reason(SLOW_WORLDGEN, "needs real worldgen for a placed ruin_small "
+                              "to test starting-building exclusion against (#778)"),),
+    "thermo_altitude": (Reason(SLOW_WORLDGEN, "needs a real generated world (worldSize 128) "
+                              "for elevation data, ~1 min runtime"),),
+    "crop": (Reason(SLOW_WORLDGEN, "needs a real generated world for natural row-crop placement + "
+                                   "groundcover planting, plus a save/load round-trip"),),
+    # #1440: the "manual-only on both counts" #923 already recorded in
+    # prose, now one reason record each.
+    "expedition_loop": (Reason(SLOW_WORLDGEN, "the arc's whole first expedition in "
+                               "one session: a real worldSize-64 generation, a scan "
+                               "for a ruin with a walkable colony site and nearby "
+                               "water, the portal's own six-unit spawn roster, and a "
+                               "real save/restart/load across two engine boots "
+                               "(~15 min) (#923)"),
+                        Reason(SCENARIO_HEAVY, "two travellers walk ~30 tiles each "
+                               "way in real time, and that leg leans on AI "
+                               "arbitration timing (drink_from_canteen and "
+                               "eat_from_inventory outranking a move order, "
+                               "pickup_ground, follow_command) — the same grounds as "
+                               "expedition_retrieval below; #923's own scenario "
+                               "contract also classifies this as recorded manual "
+                               "verification rather than a CI gate"),),
+    # #1440: the "manual-only on both counts" #920 already recorded in
+    # prose, now one reason record each.
+    "expedition_retrieval": (Reason(SLOW_WORLDGEN, "needs a real generated world for "
+                                    "a placed ruin_small and a walkable colony site "
+                                    "tens of tiles from it, across two engine boots "
+                                    "with a real save/restart/load in the middle "
+                                    "(#920)"),
+                             Reason(SCENARIO_HEAVY, "it walks both legs in real time "
+                                    "and leans on AI arbitration timing "
+                                    "(pickup_ground, drink_from_canteen, "
+                                    "notify_allies) (#920)"),),
+    "plant": (Reason(SLOW_WORLDGEN, "needs a real generated world for natural ground cover + "
+                                    "real climate/slope suitability data"),),
+    "till": (Reason(SLOW_WORLDGEN, "needs a real generated world for natural ground cover to "
+                                   "exercise the tillable-tile filter; slow AI loop (~7 min observed)"),),
+    "farm_ai": (Reason(SLOW_WORLDGEN, "needs a real generated world for the till->plant->harvest AI "
+                                      "loop across 5 distinct tillable sites; slowest registered "
+                                      "probe (~11 min observed, O(n^2) TCP tile scan over natural terrain)"),),
+    # #1440: #922's description already recorded two independent counts.
+    "tutorial": (Reason(SLOW_WORLDGEN, "needs a real generated world for a natural "
+                        "lake or river to discover and a water-free camp far from "
+                        "it, plus a real save/restart/load across two engine boots "
+                        "(#922)"),
+                 Reason(SCENARIO_HEAVY, "the radio-share leg runs on AI arbitration "
+                        "timing, and #922 requirement 6 classifies this integration "
+                        "check as recorded manual verification rather than a CI "
+                        "gate"),),
 }
 
 # Sentinels (distinct objects so `is` comparisons are unambiguous).
@@ -437,6 +495,204 @@ KNOWN_REASON_CATEGORIES = {
     UNCLASSIFIED,
 }
 
+MANUAL_ONLY_LABEL = "manual-only"
+
+
+def validate_manual_only_reasons(mapping: object) -> list[str]:
+    """Return every structural problem in a probe -> reason-records mapping.
+
+    Deliberately takes an arbitrary object and RETURNS problems instead of
+    raising: `_self_test` drives it over SYNTHETIC malformed mappings to
+    prove each rejection, and a traceback there would be a crash rather
+    than a reported failure. Problems come out in mapping-insertion order,
+    so repeated runs print identically.
+
+    Rejects: a non-mapping; a value that is not an ordered collection; an
+    empty collection; a record that is not a `Reason`; a non-string or
+    unknown category; a category repeated within one probe; a non-string
+    or blank explanation.
+    """
+    if not isinstance(mapping, dict):
+        return [f"manual-only reasons must be a dict, got {type(mapping).__name__}"]
+    problems: list[str] = []
+    for key, reasons in mapping.items():
+        where = f"MANUAL_ONLY_REASONS[{key!r}]"
+        # `str`/`bytes` are sequences but not collections OF records, and a
+        # `set` has no stable order, so neither can carry a render order.
+        if isinstance(reasons, (str, bytes)) or not isinstance(reasons, (list, tuple)):
+            problems.append(f"{where} must be an ordered collection of Reason "
+                            f"records, got {type(reasons).__name__}")
+            continue
+        if not reasons:
+            problems.append(f"{where} declares no reasons")
+            continue
+        seen: set[str] = set()
+        for index, record in enumerate(reasons):
+            at = f"{where}[{index}]"
+            if not isinstance(record, Reason):
+                problems.append(f"{at} is not a Reason record "
+                                f"(got {type(record).__name__})")
+                continue
+            category = record.category
+            if not isinstance(category, str):
+                problems.append(f"{at} has a non-string category "
+                                f"({type(category).__name__})")
+            elif category not in KNOWN_REASON_CATEGORIES:
+                problems.append(f"{at} has unknown category {category!r}")
+            elif category in seen:
+                problems.append(f"{at} repeats category {category!r}; fold both "
+                                f"facets into one explanation instead")
+            else:
+                seen.add(category)
+            explanation = record.explanation
+            if not isinstance(explanation, str):
+                problems.append(f"{at} has a non-string explanation "
+                                f"({type(explanation).__name__})")
+            elif not explanation.strip():
+                problems.append(f"{at} has a blank explanation")
+    return problems
+
+
+def format_manual_only_lines(key: str, reasons: Sequence[Reason],
+                             width: int) -> list[str]:
+    """Render one manual-only probe as `--status` lines, one per reason.
+
+    The probe key and the `manual-only` label occupy the FIRST line only;
+    every further reason is indented to the same category column. That is
+    what lets a probe excluded on several counts show all of them while
+    still appearing exactly once in the listing (#1440).
+    """
+    head = f"  {key:<{width}}  {MANUAL_ONLY_LABEL}  "
+    continuation = " " * len(head)
+    return [f"{head if i == 0 else continuation}[{r.category}]  {r.explanation}"
+            for i, r in enumerate(reasons)]
+
+
+def status_lines() -> list[str]:
+    """The `--status` report as lines (#540).
+
+    Reads the same CI_ELIGIBLE / MANUAL_ONLY_REASONS dicts `select()` and
+    `_self_test()` use -- nothing here can drift from actual CI selection
+    without `--self-test` catching it first. Returned rather than printed
+    so `_self_test` can assert on the rendering itself.
+    """
+    width = max(len(k) for k in ALL_KEYS)
+    lines = [f"{len(CI_ELIGIBLE)} CI-eligible, {len(MANUAL_ONLY_REASONS)} manual-only, "
+             f"{len(ALL_KEYS)} total registered probes", ""]
+    lines.append("-- CI-eligible --")
+    for k in sorted(CI_ELIGIBLE):
+        lines.append(f"  {k:<{width}}  CI-eligible")
+    lines.append("")
+    lines.append(f"-- {MANUAL_ONLY_LABEL} --")
+    for k in sorted(MANUAL_ONLY_REASONS):
+        lines.extend(format_manual_only_lines(k, MANUAL_ONLY_REASONS[k], width))
+    return lines
+
+
+def _reason_shape_cases() -> list[str]:
+    """Prove `validate_manual_only_reasons` on SYNTHETIC mappings (#1440).
+
+    Each case names a shape the registry must never take. The validator is
+    driven through the same entry point the real registry goes through, so
+    a rejection that regressed to a raise shows up here as a reported
+    failure rather than a traceback out of `--self-test`.
+    """
+    ok = Reason(SLOW_WORLDGEN, "needs a real generated world")
+    other = Reason(SCENARIO_HEAVY, "walks its legs in real time")
+    accept: list[tuple[str, object]] = [
+        ("one reason", {"a": (ok,)}),
+        ("multiple reasons", {"a": (ok, other)}),
+        ("multiple reasons in a list", {"a": [ok, other]}),
+        ("several probes", {"a": (ok,), "b": (ok, other)}),
+    ]
+    reject: list[tuple[str, object]] = [
+        ("not a mapping", [(ok,)]),
+        ("empty reason set", {"a": ()}),
+        ("empty reason list", {"a": []}),
+        ("duplicate categories", {"a": (ok, Reason(SLOW_WORLDGEN, "again"))}),
+        ("unknown category", {"a": (Reason("made-up", "why"),)}),
+        ("bare tuple record", {"a": ((SLOW_WORLDGEN, "why"),)}),
+        ("dict record", {"a": ({"category": SLOW_WORLDGEN, "explanation": "why"},)}),
+        ("unwrapped Reason", {"a": ok}),
+        ("string instead of records", {"a": "slow"}),
+        ("unordered set of records", {"a": {ok}}),
+        ("non-string category", {"a": (Reason(0, "why"),)}),
+        ("non-string explanation", {"a": (Reason(SLOW_WORLDGEN, None),)}),
+        ("blank explanation", {"a": (Reason(SLOW_WORLDGEN, "   "),)}),
+    ]
+    problems: list[str] = []
+    for must_reject, cases in ((False, accept), (True, reject)):
+        for name, mapping in cases:
+            try:
+                found = validate_manual_only_reasons(mapping)
+            except Exception as error:  # broad on purpose: a raise IS the failure
+                problems.append(f"reason-shape case {name!r} raised "
+                                f"{type(error).__name__}: {error}")
+                continue
+            if must_reject and not found:
+                problems.append(f"reason-shape case {name!r} was accepted "
+                                f"but must be rejected")
+            if not must_reject and found:
+                problems.append(f"reason-shape case {name!r} must be accepted, "
+                                f"got {found}")
+    return problems
+
+
+def _status_rendering_cases() -> list[str]:
+    """Prove the `--status` rendering is deterministic and key-unique (#1440)."""
+    problems: list[str] = []
+    width = 6
+    # Column layout restated independently of format_manual_only_lines:
+    # two spaces, the key column, two spaces, "manual-only", two spaces.
+    indent = " " * (2 + width + 2 + len(MANUAL_ONLY_LABEL) + 2)
+    single = format_manual_only_lines(
+        "demo", (Reason(NEEDS_GPU, "no GPU on the CI runner"),), width)
+    want_single = [f"  demo    {MANUAL_ONLY_LABEL}  [{NEEDS_GPU}]  no GPU on the CI runner"]
+    if single != want_single:
+        problems.append(f"single-reason rendering: expected {want_single} got {single}")
+    multi = format_manual_only_lines(
+        "demo",
+        (Reason(SLOW_WORLDGEN, "generates a real world"),
+         Reason(SCENARIO_HEAVY, "walks its legs in real time")),
+        width)
+    want_multi = [
+        f"  demo    {MANUAL_ONLY_LABEL}  [{SLOW_WORLDGEN}]  generates a real world",
+        f"{indent}[{SCENARIO_HEAVY}]  walks its legs in real time",
+    ]
+    if multi != want_multi:
+        problems.append(f"multi-reason rendering: expected {want_multi} got {multi}")
+    # the probe key appears exactly once however many reasons it carries
+    occurrences = sum(line.count("demo") for line in multi)
+    if occurrences != 1:
+        problems.append(f"multi-reason rendering repeats the probe key "
+                        f"{occurrences} times, expected 1")
+    # the real report is stable across renders, lists every probe key once,
+    # and emits one line per declared reason
+    first, second = status_lines(), status_lines()
+    if first != second:
+        problems.append("status_lines() is not deterministic across calls")
+    heads = [ln for ln in first if f"  {MANUAL_ONLY_LABEL}  [" in ln]
+    if len(heads) != len(MANUAL_ONLY_REASONS):
+        problems.append(f"--status listed {len(heads)} manual-only probe keys, "
+                        f"expected {len(MANUAL_ONLY_REASONS)}")
+    reason_lines = sum(len(v) for v in MANUAL_ONLY_REASONS.values())
+    rendered = sum(len(format_manual_only_lines(k, v, max(len(x) for x in ALL_KEYS)))
+                   for k, v in MANUAL_ONLY_REASONS.items())
+    if rendered != reason_lines:
+        problems.append(f"--status rendered {rendered} reason lines, "
+                        f"expected {reason_lines}")
+    # both shapes are actually exercised by the live registry
+    if not any(len(v) == 1 for v in MANUAL_ONLY_REASONS.values()):
+        problems.append("no manual-only probe declares exactly one reason")
+    if not any(len(v) > 1 for v in MANUAL_ONLY_REASONS.values()):
+        problems.append("no manual-only probe declares multiple reasons")
+    # #1440's named minimum: these two recorded independent causes in prose
+    # and must now record them as separate reasons.
+    for key in ("transfer_order", "expedition_retrieval"):
+        if len(MANUAL_ONLY_REASONS.get(key, ())) < 2:
+            problems.append(f"{key} must declare more than one manual-only reason (#1440)")
+    return problems
+
 
 def _self_test() -> int:
     """Validate the mapping wiring — no engine needed."""
@@ -463,11 +719,9 @@ def _self_test() -> int:
     if uncovered:
         problems.append(f"probes with no CI status at all (add to CI_ELIGIBLE or "
                          f"MANUAL_ONLY_REASONS): {sorted(uncovered)}")
-    for k, (category, reason) in MANUAL_ONLY_REASONS.items():
-        if category not in KNOWN_REASON_CATEGORIES:
-            problems.append(f"MANUAL_ONLY_REASONS[{k!r}] has unknown category {category!r}")
-        if not reason.strip():
-            problems.append(f"MANUAL_ONLY_REASONS[{k!r}] has an empty reason")
+    problems += validate_manual_only_reasons(MANUAL_ONLY_REASONS)
+    problems += _reason_shape_cases()
+    problems += _status_rendering_cases()
     # behavioural expectations
     cases = [
         (["README.md"], [], "docs only"),
@@ -507,22 +761,9 @@ def _self_test() -> int:
 
 
 def _status() -> int:
-    """Print every registered probe's CI eligibility (#540).
-
-    Reads the same CI_ELIGIBLE / MANUAL_ONLY_REASONS dicts `select()` and
-    `_self_test()` use — nothing here can drift from actual CI selection
-    without `--self-test` catching it first.
-    """
-    width = max(len(k) for k in ALL_KEYS)
-    print(f"{len(CI_ELIGIBLE)} CI-eligible, {len(MANUAL_ONLY_REASONS)} manual-only, "
-          f"{len(ALL_KEYS)} total registered probes\n")
-    print("-- CI-eligible --")
-    for k in sorted(CI_ELIGIBLE):
-        print(f"  {k:<{width}}  CI-eligible")
-    print("\n-- manual-only --")
-    for k in sorted(MANUAL_ONLY_REASONS):
-        category, reason = MANUAL_ONLY_REASONS[k]
-        print(f"  {k:<{width}}  manual-only  [{category}]  {reason}")
+    """Print every registered probe's CI eligibility (#540)."""
+    for line in status_lines():
+        print(line)
     return 0
 
 
@@ -537,7 +778,8 @@ def main() -> int:
                     help="validate the mapping and exit (no engine)")
     ap.add_argument("--status", action="store_true",
                     help="list every registered probe's CI eligibility "
-                         "(CI-eligible, or manual-only with a reason category) and exit")
+                         "(CI-eligible, or manual-only with every reason category "
+                         "excluding it) and exit")
     args = ap.parse_args()
 
     if args.self_test:

@@ -17,6 +17,7 @@ import qualified Test.Headless.WorldGen.BorderProbe as BorderProbe
 import qualified Test.Headless.WorldGen.WrapSeam as WrapSeam
 import qualified Test.Headless.WorldGen.CoastBreach as CoastBreach
 import qualified Test.Headless.WorldGen.BedDepth as BedDepth
+import qualified Test.Headless.WorldGen.FluidSurfaceFold as FluidSurfaceFold
 import qualified Test.Headless.Unit.Pathing.Cost as PathingCost
 import qualified Test.Headless.Unit.Pathing.AStar as PathingAStar
 import qualified Test.Headless.Unit.Pathing.Config as PathingConfig
@@ -39,6 +40,7 @@ import qualified Test.Headless.Item.GroundPageOwnership as GroundPageOwnership
 import qualified Test.Headless.Item.Temperature as ItemTemp
 import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Item.QualityTier as ItemQualityTier
+import qualified Test.Headless.Item.Condition as ItemCondition
 import qualified Test.Headless.Item.BulkStorage as ItemBulkStorage
 import qualified Test.Headless.Item.Discovery as ItemDiscovery
 import qualified Test.Headless.Asset.TextureFallback as TextureFallback
@@ -174,6 +176,7 @@ import qualified Test.Headless.Location.Bounds as LocationBounds
 import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
 import qualified Test.Headless.Save.AutosaveGuards as AutosaveGuards
+import qualified Test.Headless.Save.AutosaveListing as AutosaveListing
 import qualified Test.Headless.Save.Barrier as SaveBarrier
 import qualified Test.Headless.Load.Status as LoadStatus
 import qualified Test.Headless.Save.Snapshot as SaveSnapshot
@@ -335,6 +338,7 @@ main = hspec $ do
     describe "Wrap Seam" WrapSeam.spec
     describe "WorldGen.CoastBreach" CoastBreach.spec
     describe "WorldGen.BedDepth" BedDepth.spec
+    describe "WorldGen.FluidSurfaceFold" FluidSurfaceFold.spec
     describe "Asset.Types" AssetTypes.spec
     describe "Asset.UnitInventory" AssetUnitInventory.spec
     describe "Asset.YamlList" AssetYamlList.spec
@@ -351,6 +355,7 @@ main = hspec $ do
     aroundAll withHeadlessEngine UnitAtlasLoader.spec
 
     aroundAll withHeadlessEngine ItemDiscovery.spec
+    aroundAll withHeadlessEngineNoWorld ItemCondition.spec
     describe "Unit.Anim" AnimTest.spec
     describe "Unit.Injury" InjuryTest.spec
     describe "Unit.InjurySpeed" InjurySpeedTest.spec
@@ -375,6 +380,7 @@ main = hspec $ do
     describe "persistence reference integrity" LuaSaveBridge.spec
     describe "atomic save storage" SaveStorage.spec
     describe "persistence contract" SaveContract.spec
+    describe "autosave staging slots (#1413)" AutosaveListing.spec
     describe "Save.Barrier" SaveBarrier.spec
     describe "Load.Status" LoadStatus.spec
     describe "Save.Snapshot" SaveSnapshot.spec

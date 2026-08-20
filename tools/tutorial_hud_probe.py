@@ -34,6 +34,15 @@ in-game HUD, then:
      its normal completed marker, instead of an empty checklist. Same
      `setTree` injection point as check 4, shaped like the real
      first_session tree so a composite branch exists to latch early.
+  7. (#1419) The toggle caption's RENDERED GLYPH PIXELS fall inside the
+     toggle box and inside the framebuffer, measured separately for the
+     collapsed "> Objectives" and the open "v Objectives". This is the
+     only check here that looks at the glyphs themselves: the dump can
+     say a label handle exists and the toggle rect is in frame while the
+     text paints straight off the right edge, which is exactly what
+     #1419 was. Nothing in the module is trusted for the measurement —
+     the caption element is hidden and re-shown, and the pixels that
+     change ARE the glyphs.
 
 Needs a GPU (Vulkan device) — manual-only, never CI-gated, same as
 tools/offscreen_probe.py.
@@ -240,6 +249,117 @@ def transparency_phase(port: int, closed_shot: str, d: dict, shots: str) -> None
           colors >= 16, f"distinct colors {colors}")
 
 
+# --------------------------------------------------------------------------
+# Rendered-caption oracle (#1419)
+#
+# An advance-width query would NOT do: engine.getTextWidth sums glyph
+# advances (Engine.Graphics.Font.Util.calculateTextWidthScaled) while the
+# renderer places quads by bearing and bitmap size
+# (Engine.Graphics.Font.Draw.layoutTextUI), so only the frame itself says
+# where the ink landed. The caption element is hidden and re-shown around
+# a capture, and the columns that change are the glyphs — which isolates
+# them from the 9-slice box behind them without assuming anything about
+# either one's color.
+# --------------------------------------------------------------------------
+def _differing_columns(path_a: str, path_b: str, rect: dict) -> set[int]:
+    """Absolute x columns inside `rect` that differ between two frames."""
+    from PIL import Image, ImageChops
+    box = (rect["x"], rect["y"], rect["x"] + rect["w"], rect["y"] + rect["h"])
+    with Image.open(path_a) as a, Image.open(path_b) as b:
+        diff = ImageChops.difference(a.convert("RGBA").crop(box),
+                                     b.convert("RGBA").crop(box)).convert("L")
+        cols = set()
+        px = diff.load()
+        for x in range(diff.width):
+            for y in range(diff.height):
+                if px[x, y] != 0:
+                    cols.add(rect["x"] + x)
+                    break
+    return cols
+
+
+def _caption_band(t: dict, w: int, h: int) -> dict:
+    """The toggle's own row of the frame, extended to the RIGHT EDGE so
+    ink painting past the box is measured rather than cropped away."""
+    pad = 24
+    x0 = max(0, int(t["x"]) - pad)
+    y0 = max(0, int(t["y"]) - pad)
+    y1 = min(h, int(t["y"]) + int(t["h"]) + pad)
+    return {"x": x0, "y": y0, "w": max(1, w - x0), "h": max(1, y1 - y0)}
+
+
+def caption_bounds_phase(port: int, w: int, h: int, shots: str,
+                         tag: str) -> None:
+    """Measure the live caption's glyph columns and bound them."""
+    for attempt in range(3):
+        before = dump(port)
+        t = before.get("toggle") or {}
+        label = t.get("label")
+        if not check(f"[{tag}] the caption element exists to measure",
+                     bool(label), str(t)):
+            return
+        band = _caption_band(t, w, h)
+        with_a = os.path.join(shots, f"caption_{tag}_with_{attempt}.png")
+        without = os.path.join(shots, f"caption_{tag}_without_{attempt}.png")
+        with_b = os.path.join(shots, f"caption_{tag}_again_{attempt}.png")
+        shot_a = screenshot(port, with_a)
+        send(port, f"UI.setVisible({label}, false); return 'ok'", timeout=10.0)
+        time.sleep(0.4)
+        shot_b = screenshot(port, without)
+        # Re-shown before anything can return, so a failed capture or a
+        # drifting frame never leaves the surface without its caption.
+        send(port, f"UI.setVisible({label}, true); return 'ok'", timeout=10.0)
+        time.sleep(0.4)
+        shot_c = screenshot(port, with_b)
+        if not (shot_a and shot_b and shot_c):
+            if attempt < 2:
+                continue
+            check(f"[{tag}] caption screenshots answer", False,
+                  f"with={shot_a} without={shot_b} again={shot_c}")
+            return
+        after = dump(port)
+        # A rebuild mid-measurement would have replaced the very element
+        # being hidden, so the three frames would not be comparable.
+        rebuilt = (after.get("rebuildCount") != before.get("rebuildCount")
+                   or (after.get("toggle") or {}).get("label") != label)
+        # Anything OTHER than the caption that moved between the first
+        # and last capture is background drift; retry rather than fold
+        # it into the measurement.
+        drift = _differing_columns(with_a, with_b, band)
+        if rebuilt or drift:
+            if attempt < 2:
+                print(f"       [{tag}] retrying: rebuilt={rebuilt}, "
+                      f"{len(drift)} column(s) drifted between the two "
+                      "captioned frames")
+                continue
+            check(f"[{tag}] the frame held still long enough to measure "
+                  "the caption",
+                  False, f"rebuilt={rebuilt} drifting columns={len(drift)}")
+            return
+        cols = _differing_columns(with_a, without, band)
+        tx, tw = int(t["x"]), int(t["w"])
+        if not check(f"[{tag}] the caption renders at all "
+                     "(a non-empty glyph set)", bool(cols),
+                     f"no pixels changed when the caption was hidden, "
+                     f"band {band}"):
+            return
+        lo, hi = min(cols), max(cols)
+        print(f"       [{tag}] caption {t.get('caption')!r} glyph columns "
+              f"x={lo} -> x={hi}; toggle box x={tx} w={tw} "
+              f"(exclusive right edge {tx + tw}); framebuffer width {w}")
+        # Half-open, exactly like the in-frame checks above: the box owns
+        # columns [t.x, t.x + t.w) and the frame owns [0, w).
+        check(f"[{tag}] every caption glyph column starts at or after the "
+              "toggle box's left edge", lo >= tx,
+              f"leftmost glyph x={lo} < box x={tx}")
+        check(f"[{tag}] every caption glyph column falls inside the "
+              "toggle box", hi < tx + tw,
+              f"rightmost glyph x={hi} >= box right edge {tx + tw}")
+        check(f"[{tag}] every caption glyph column falls inside the "
+              "framebuffer", hi < w, f"rightmost glyph x={hi} >= width {w}")
+        return
+
+
 def inject_wide_tree(port: int) -> None:
     """Replace the session tree through #958's own injection point."""
     send(port,
@@ -423,11 +543,17 @@ def main() -> int:
             check(f"closed PNG valid at {w}x{h}",
                   bool(st) and st[0] == w and st[1] == h, str(st))
 
+        print("== 1b. the collapsed caption's rendered glyph bounds (#1419) ==")
+        caption_bounds_phase(args.port, w, h, shots, "collapsed")
+
         print("== 2. open by a real click on the toggle ==")
         opened = open_phase(args.port, shot_closed, shots)
 
         print("== 3. transparent overlay over terrain ==")
         transparency_phase(args.port, shot_closed, opened, shots)
+
+        print("== 3b. the open caption's rendered glyph bounds (#1419) ==")
+        caption_bounds_phase(args.port, w, h, shots, "open")
 
         print("== 4. long-list scrolling ==")
         scrolled = scroll_phase(args.port, shots)

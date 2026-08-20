@@ -107,9 +107,10 @@ instance FromJSON UnitYamlBody where
 
 -- | One starting-inventory entry: which item def to give the unit,
 --   optionally how much fill it has (for containers), and how many
---   copies to grant. Each copy is a distinct ItemInstance (quality /
---   condition are rolled per instance), so a count: 5 entry rolls
---   five independent items rather than a stacked one.
+--   copies to grant. Each copy is a distinct ItemInstance (quality
+--   and weight are rolled per instance; condition starts full on every
+--   one, #1421), so a count: 5 entry rolls five independent items
+--   rather than a stacked one.
 --
 --   drop_priority feeds the spawn-time capacity check: a unit whose
 --   full loadout (inventory + equipment + accessories, fill counted

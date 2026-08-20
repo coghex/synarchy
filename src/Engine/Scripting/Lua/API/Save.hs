@@ -38,7 +38,7 @@ import World.Material (mergeMaterialRegistry)
 import World.Save.Serialize
     (listSaves, loadWorld, sanitizeSaveName, SaveListing(..))
 import World.Save.Autosave
-    (prepareAutosaveCycle, finalizeAutosaveRotation)
+    (prepareAutosaveCycle, finalizeAutosaveRotation, publicSaveListings)
 import Engine.Core.Capability.WorldSim
     (toWorldSimCapability, withPlayerIntentHeld)
 import Engine.Save.Config
@@ -93,6 +93,15 @@ import Engine.Load.Status
 --   8). Since #1107 the save browser renders it as a "[Recovered]" row
 --   tag, beside the "[Autosave]" one — both are durable classifications
 --   of the slot, never inferred from its name.
+--
+--   This is the PUBLIC listing boundary, and #1413 makes it the one
+--   place the autosave rotation's two internal staging slots are hidden
+--   (see 'World.Save.Autosave.publicSaveListings'). Applying it here
+--   rather than inside 'listSaves' is deliberate twice over: rotation
+--   reads that same enumeration and must keep seeing both slots, and a
+--   future listing surface inherits the rule without a private filter of
+--   its own — neither @scripts\/main_menu.lua@ nor
+--   @scripts\/save_browser.lua@ carries one.
 saveListFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 saveListFn env = do
     logger ← Lua.liftIO $ readIORef (loggerRef env)
@@ -111,7 +120,11 @@ saveListFn env = do
             Lua.liftIO $ logWarn logger CatLua $ "listSaves: " <> err
             return []
     let luaKnownNames = HS.fromList [ name | (name, _, _) ← descriptors ]
-    saves ← Lua.liftIO $ listSaves logger luaKnownNames
+    listed ← Lua.liftIO $ listSaves logger luaKnownNames
+    -- Filter BEFORE indexing: the survivors are numbered 1..n with no
+    -- hole, which is what `#`, `[1]` and `ipairs` on the Lua side
+    -- already rely on.
+    let saves = publicSaveListings listed
     Lua.newtable
     forM_ (zip [1..] saves) $ \(i, listing) → do
         let name = slName listing
