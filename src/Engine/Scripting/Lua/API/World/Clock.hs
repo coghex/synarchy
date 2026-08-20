@@ -24,6 +24,7 @@ import Engine.Core.State (activeWorldStateFrom)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scripting.Lua.Material (parseTextureType)
 import World.Types
+import World.Render.Zoom.Types (textToMapMode)
 
 -- | world.setTexture(pageId, textureType, textureHandle)
 worldSetTextureFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults

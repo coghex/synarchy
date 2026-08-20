@@ -19,7 +19,7 @@ module World.Types
     , module World.Hydrology.Types
     , module World.Render.Camera.Types
     , module World.Render.Textures.Types
-    , module World.Render.Zoom.Types
+    , module World.ZoomMap.Types
     , module World.State.Types
     , module World.Save.Types
     , module World.Command.Types
@@ -44,7 +44,7 @@ import World.Geology.Types
 import World.Hydrology.Types
 import World.Render.Camera.Types
 import World.Render.Textures.Types
-import World.Render.Zoom.Types
+import World.ZoomMap.Types
 import World.State.Types
 import World.Save.Types
 import World.Command.Types
