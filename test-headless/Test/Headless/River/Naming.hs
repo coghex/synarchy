@@ -47,6 +47,54 @@ provB = LanguageProvenance (LangSeed 0x0FF1CE0000000B2C) currentGeneratorVersion
 riverIds ∷ [GeoFeatureId]
 riverIds = map GeoFeatureId [0 .. 7]
 
+-- | GOLDEN -- every name 'provA' renders for 'riverIds', in the
+--   ascending 'GeoFeatureId' order 'riverNamesToList' fixes with its
+--   @sortOn fst@.
+--
+--   Written out by hand, and never re-derived: an expectation produced
+--   by calling 'buildRiverNames' or 'namerOf' a second time compares
+--   the generator with itself and measures nothing, which is exactly
+--   the hole this list was written to close (#1385).
+--
+--   /What a failure here means./ The rendering this generator produces
+--   for a FIXED seed, a FIXED concept catalogue and FIXED river ids has
+--   changed. 'provA' carries 'currentGeneratorVersion', so a version
+--   bump changes the provenance itself and lands here too -- that case
+--   is DELIBERATE. A move with no accompanying bump is ACCIDENTAL, and
+--   costly: river names are write-once (#708 principle 5), so every
+--   name already stored in a save keeps the old rendering, and #1104's
+--   etymology re-renders a stored name and CHECKS it against the
+--   recorded provenance before showing any of it. This is not a list to
+--   re-bless until the suite goes green; find the change that moved it
+--   first.
+goldenNamesA ∷ [Text]
+goldenNamesA =
+    [ "Ydfyą-jdyebto"          -- 0
+    , "Kelyayw-dowąc"          -- 1
+    , "Aydeel-nylwo"           -- 2
+    , "Ftobącbje-ywetąftla"    -- 3
+    , "Oney-ąckoy"             -- 4
+    , "Tąracwa-nylwo"          -- 5
+    , "Ląew-wnayąeb"           -- 6
+    , "Ląew-ywetąftla"         -- 7
+    ]
+
+-- | Three of those eight pinned WITH the gloss stored beside them, id
+--   and all, so the correspondence is the thing under test rather than
+--   two independently ordered vectors that happen to line up.
+--
+--   Chosen, not sampled: 1 is the RIVER head itself, the concept #1102
+--   added for this pool; 6 and 7 share the modifier morpheme @Ląew@ and
+--   differ only in their head, so a gloss that tracked position instead
+--   of its own name would have to break one of the two. The same
+--   re-blessing rule as 'goldenNamesA' applies.
+goldenNamedGlossesA ∷ [(GeoFeatureId, Text, Maybe Text)]
+goldenNamedGlossesA =
+    [ (GeoFeatureId 1, "Kelyayw-dowąc",  Just "Sky River")
+    , (GeoFeatureId 6, "Ląew-wnayąeb",   Just "Keep Vale")
+    , (GeoFeatureId 7, "Ląew-ywetąftla", Just "Keep Crossing")
+    ]
+
 -- | A river's params. Only the fields "World.River.Identity" checks a
 --   pairing against carry meaning here; the geometry is a single
 --   placeholder segment.
@@ -193,10 +241,18 @@ spec = do
                                  , length (filter (≡ h) glossHeads) > 1 ]
                 repeated `shouldSatisfy` (not ∘ null)
 
-            it "produces the same names every time from the same language \
-               \and the same river ids" $
-                namesOf (buildRiverNames (Just (namerOf provA)) riverIds)
-                    `shouldBe` namesOf builtA
+            it "renders exactly these eight names for this language -- \
+               \an oracle written out by hand, so a rendering change \
+               \has something to fail against" $
+                namesOf builtA `shouldBe` goldenNamesA
+
+            it "glosses each of those names as its OWN expression's \
+               \English reading: name, gloss and feature id come from \
+               \one stored entry" $
+                [ (fid, rvnDisplayName nm, rvnGloss nm)
+                | (fid, nm) ← riverNamesToList builtA
+                , fid `elem` [ i | (i, _, _) ← goldenNamedGlossesA ] ]
+                    `shouldBe` goldenNamedGlossesA
 
             it "keys names by feature id, not by position: reordering the \
                \id list changes nothing" $

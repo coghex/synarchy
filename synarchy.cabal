@@ -200,6 +200,7 @@ library
                      Engine.Graphics.Vulkan.Image
                      Engine.Graphics.Vulkan.Init
                      Engine.Graphics.Vulkan.Instance
+                     Engine.Graphics.Vulkan.Instance.Plan
                      Engine.Graphics.Vulkan.MSAA
                      Engine.Graphics.Vulkan.Pipeline
                      Engine.Graphics.Vulkan.Offscreen
@@ -1148,6 +1149,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Graphics.VideoConfig
                    Test.Headless.Graphics.VulkanAppIdentity
                    Test.Headless.Graphics.BindlessFeatures
+                   Test.Headless.Graphics.InstancePlan
                    Test.Headless.Graphics.WindowMode
                    Test.Headless.Graphics.AmbientLight
                    Test.Headless.Graphics.Screenshot
