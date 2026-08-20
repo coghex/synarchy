@@ -724,48 +724,51 @@ def _header_gap_end(text: str, pos: int) -> int | None:
 
 def _drop_redundant_language_pragmas(
         text: str, inherited: dict[str, bool]) -> str:
-    """Reduce the module header's locally declared LANGUAGE extensions to
-    the DELTA they actually make against what Codec.hs already inherits
-    from synarchy.cabal's `common lang` stanza, so an edit that adds or
-    removes a declaration the module was getting anyway leaves the
-    module's effective extension set -- and therefore its behavior, and
-    therefore the bytes it writes -- unchanged (issue #1416; PR #1001's
-    removal of the already-inherited `UnicodeSyntax` is the
-    representative case).
+    """Drop those locally declared LANGUAGE extensions in the module
+    header that Codec.hs already inherits from synarchy.cabal's
+    `common lang` stanza, so an edit that adds or removes a declaration
+    the module was getting anyway leaves its effective extension set --
+    and therefore its behavior, and therefore the bytes it writes --
+    unchanged (issue #1416; PR #1001's removal of the already-inherited
+    `UnicodeSyntax` is the representative case).
 
-    Declarations are resolved IN ORDER, across every header pragma, the
-    way GHC applies them: the LAST mention of an extension wins. Judging
-    each token independently against the inherited state instead would
-    collide `Strict, ImplicitPrelude, NoImplicitPrelude` (whose final
-    `ImplicitPrelude` state matches the inherited default, so the whole
-    conflict is redundant) with `Strict, ImplicitPrelude` (whose final
-    state REVERSES it) -- two modules that compile differently.
+    The exception is deliberately gated on a header this tool can
+    reason about WITHOUT modelling GHC's extension-implication graph,
+    which it has no way to know: every declaration must be in POSITIVE
+    form, and no extension may be named twice. Such a header is a plain
+    set of enables layered on a state that already contains each
+    inherited extension's own implied closure, so removing one of those
+    inherited names cannot change anything.
 
-    An extension whose final state matches the inherited one is dropped.
-    Everything else is kept, spelled in the state it ends up in: an
-    extension the module does not inherit at all (its `Strict`) is kept
-    regardless, since this tool knows the cabal stanza but not GHC's own
-    per-extension defaults, and over-keeping is the fail-safe direction.
+    The moment a header turns something OFF -- directly
+    (`NoImplicitPrelude`) or by re-enabling after a disable
+    (`NoTypeFamilies, TypeFamilyDependencies`, where the second
+    declaration reinstates the `TypeFamilies` the first removed, since
+    GHC's `TypeFamilyDependencies` implies it) -- redundancy stops being
+    decidable from the names alone, and the whole header is kept
+    verbatim instead. The same goes for an extension named twice, and
+    for a token that is not a bare extension name. Over-keeping is the
+    fail-safe direction: it costs a fingerprint move that did not have
+    to happen, where the other direction hides a real change.
+
     Only `LANGUAGE` is in scope -- `OPTIONS_GHC` and every other block
-    pragma passes through verbatim. Extensions implied by
-    `default-language: GHC2024` are deliberately NOT treated as
-    inherited, for the same fail-safe reason. If any token is not a bare
-    extension name, the header is left exactly as written rather than
-    guessed at.
+    pragma passes through verbatim, as do extensions merely implied by
+    `default-language: GHC2024`, which are likewise not treated as
+    inherited.
 
     Only the module HEADER is touched -- the leading run of block
     pragmas (with whitespace and nested `{- ... -}` comments allowed
     between them, and preserved verbatim), which is the only place GHC
     accepts a `LANGUAGE` declaration. Scanning the whole file instead
-    would match
-    pragma-SHAPED ordinary source: a string literal (or quasiquote, or
-    block comment) reading `"{-# LANGUAGE UnicodeSyntax #-}"` would be
-    erased, colliding with the same literal naming a different
-    inherited extension even though such a literal can itself be part
-    of what the codec writes. The walk stops at the first token that is
-    not whitespace or a block pragma, so anything past the header --
-    including a stray mid-file `LANGUAGE` pragma GHC would reject
-    anyway -- stays fingerprinted verbatim."""
+    would match pragma-SHAPED ordinary source: a string literal (or
+    quasiquote, or block comment) reading
+    `"{-# LANGUAGE UnicodeSyntax #-}"` would be erased, colliding with
+    the same literal naming a different inherited extension even though
+    such a literal can itself be part of what the codec writes. The walk
+    stops at the first token that is not whitespace, a block comment or
+    a block pragma, so anything past the header -- including a stray
+    mid-file `LANGUAGE` pragma GHC would reject anyway -- stays
+    fingerprinted verbatim."""
     # Split the header's leading pragma run off from the rest of the
     # module, keeping the gaps so whitespace, block comments and
     # non-LANGUAGE pragmas all survive in place.
@@ -784,45 +787,34 @@ def _drop_redundant_language_pragmas(
         pos = match.end()
     rest = text[pos:]
 
-    declared: list[str] = []
-    is_language = []
+    declared: list[list[str]] = []
     for pragma in pragmas:
         m = LANGUAGE_PRAGMA_RE.fullmatch(pragma)
-        is_language.append(m is not None)
         if m is None:
+            declared.append([])
             continue
-        for token in m.group(1).split(","):
-            token = token.strip()
-            if not token:
-                continue
-            if not EXTENSION_NAME_RE.match(token):
-                # Unparseable: leave the whole header alone rather than
-                # normalize away something not understood.
-                return text
-            declared.append(token)
+        names = [token.strip() for token in m.group(1).split(",")]
+        names = [name for name in names if name]
+        if not all(EXTENSION_NAME_RE.match(name) for name in names):
+            return text
+        declared.append(names)
 
-    # GHC applies these left to right, so the last mention of an
-    # extension is the one that holds.
-    final: dict[str, bool] = {}
-    for name in declared:
-        base, enabled = _extension_state(name)
-        final[base] = enabled
-    delta = sorted(base if enabled else "No" + base
-                   for base, enabled in final.items()
-                   if inherited.get(base) != enabled)
-    canonical = "{-# LANGUAGE " + ", ".join(delta) + " #-}" if delta else ""
+    flat = [name for names in declared for name in names]
+    states = [_extension_state(name) for name in flat]
+    if not all(enabled for _, enabled in states):
+        return text
+    if len({base for base, _ in states}) != len(states):
+        return text
 
     out: list[str] = []
-    emitted = False
-    for gap, pragma, language in zip(gaps, pragmas, is_language):
+    for gap, pragma, names in zip(gaps, pragmas, declared):
         out.append(gap)
-        if not language:
+        if not names:
             out.append(pragma)
-        elif not emitted:
-            # The first LANGUAGE pragma carries the whole resolved delta;
-            # any later one has already been folded into it.
-            out.append(canonical)
-            emitted = True
+            continue
+        kept = [name for name in names if inherited.get(name) is not True]
+        if kept:
+            out.append("{-# LANGUAGE " + ", ".join(kept) + " #-}")
     out.append(rest)
     return "".join(out)
 

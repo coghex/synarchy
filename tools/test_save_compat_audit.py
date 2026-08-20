@@ -484,11 +484,15 @@ def test_envelope_framing_fingerprint_ignores_inherited_language_pragma() -> Non
         expect(separate == after,
                "expected an inherited extension declared on its OWN pragma "
                "line to be just as redundant as one sharing a pragma")
+        # A header carrying ANY negative form is kept verbatim, even
+        # though NoImplicitPrelude merely restates an inherited default:
+        # once something is turned off, deciding what is redundant needs
+        # GHC's implication graph. Over-keeping is the fail-safe side.
         negative = _framing_fp(
             d, "{-# LANGUAGE Strict, NoImplicitPrelude #-}\n" + _CODEC_BODY)
-        expect(negative == after,
-               "expected re-declaring the inherited NEGATIVE form "
-               "NoImplicitPrelude to be redundant too")
+        expect(negative != after,
+               "expected a header containing a NEGATIVE form to be kept "
+               "verbatim rather than normalized on name matching alone")
 
 
 def test_envelope_framing_fingerprint_changes_on_effective_language_change() -> None:
@@ -600,52 +604,80 @@ def test_envelope_framing_fingerprint_keeps_pragma_shaped_source() -> None:
                "that follows an OPTIONS_GHC pragma")
 
 
-def test_envelope_framing_fingerprint_resolves_conflicting_flags() -> None:
-    print("issue #1416 review round 2: repeated LANGUAGE flags are resolved "
-          "IN ORDER the way GHC applies them (last mention wins), so a "
-          "conflicting pair is not judged token-by-token against the "
-          "inherited state and collapsed onto a module that compiles "
-          "differently")
+def test_envelope_framing_fingerprint_keeps_undecidable_headers() -> None:
+    print("issue #1416 review rounds 2 and 4: a header that turns an "
+          "extension OFF -- directly, or by re-enabling one after a disable "
+          "through GHC's implication graph -- is not decidable from the "
+          "names alone, so the whole header is kept verbatim rather than "
+          "normalized into a collision")
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp)
-        # Inherited NoImplicitPrelude. Ending on ImplicitPrelude REVERSES
-        # it; ending on NoImplicitPrelude restates it.
+        plain = _framing_fp(d, "{-# LANGUAGE Strict #-}\n" + _CODEC_BODY)
+
+        # Round 2: GHC applies repeated flags left to right, so ending on
+        # ImplicitPrelude REVERSES the inherited NoImplicitPrelude while
+        # ending on NoImplicitPrelude restates it. These compile
+        # differently and must not share a fingerprint.
         reverses = _framing_fp(
             d, "{-# LANGUAGE Strict, ImplicitPrelude #-}\n" + _CODEC_BODY)
         restates = _framing_fp(
             d, "{-# LANGUAGE Strict, ImplicitPrelude, NoImplicitPrelude #-}\n"
             + _CODEC_BODY)
-        plain = _framing_fp(d, "{-# LANGUAGE Strict #-}\n" + _CODEC_BODY)
-        expect(reverses != restates,
-               "expected a conflicting flag list ENDING on ImplicitPrelude to "
-               "differ from one ending on NoImplicitPrelude -- GHC applies "
-               "the last mention, so these two modules compile differently")
-        expect(restates == plain,
-               "expected a conflict whose FINAL state matches the inherited "
-               "default to be fully redundant, matching a header that never "
-               "mentioned it")
-        expect(reverses != plain,
-               "expected a conflict whose FINAL state reverses the inherited "
-               "default to stay fingerprinted")
-        # The same resolution has to work ACROSS pragmas, not just within
-        # one -- GHC does not care how they are split up.
-        split_restates = _framing_fp(
+        expect(len({reverses, restates, plain}) == 3,
+               "expected a conflicting flag list ending on ImplicitPrelude, "
+               "one ending on NoImplicitPrelude, and a header declaring "
+               "neither to keep three distinct fingerprints")
+        split = _framing_fp(
             d, "{-# LANGUAGE Strict, ImplicitPrelude #-}\n"
             "{-# LANGUAGE NoImplicitPrelude #-}\n" + _CODEC_BODY)
-        expect(split_restates == restates,
-               "expected conflicting flags SPLIT across two header pragmas to "
-               "resolve exactly as they do within one")
-        # An extension the module does not inherit at all is kept in the
-        # state it ends up in -- this tool knows the cabal stanza, not
-        # GHC's own defaults, so `NoStrict` must not collapse onto
-        # `Strict` or onto silence.
+        expect(split not in {reverses, plain},
+               "expected the same conflict SPLIT across two header pragmas "
+               "to stay distinct from both a header ending on "
+               "ImplicitPrelude and one declaring neither")
+
+        # Round 4: `common lang` inherits TypeFamilyDependencies, which
+        # ENABLES TypeFamilies. Re-declaring it after NoTypeFamilies
+        # reinstates TypeFamilies, so it is not redundant despite being
+        # inherited -- the exact collision a name-only rule produces.
+        disabled = _framing_fp(
+            d, "{-# LANGUAGE NoTypeFamilies #-}\n" + _CODEC_BODY)
+        reinstated = _framing_fp(
+            d, "{-# LANGUAGE NoTypeFamilies, TypeFamilyDependencies #-}\n"
+            + _CODEC_BODY)
+        expect(disabled != reinstated,
+               "expected an inherited TypeFamilyDependencies re-declared "
+               "AFTER NoTypeFamilies to stay fingerprinted -- it re-enables "
+               "the TypeFamilies the previous flag removed")
+
+        # An extension the module does not inherit is untouched either
+        # way, and a NEGATIVE form of one is distinct from both its
+        # positive form and no declaration at all.
         no_strict = _framing_fp(d, "{-# LANGUAGE NoStrict #-}\n" + _CODEC_BODY)
         silent = _framing_fp(d, _CODEC_BODY)
-        expect(no_strict != plain and no_strict != silent,
-               "expected a NEGATIVE form of a non-inherited extension to stay "
-               "distinct from both its positive form and no declaration")
-        # A token that is not a bare extension name leaves the header
-        # exactly as written rather than being guessed at.
+        expect(len({no_strict, plain, silent}) == 3,
+               "expected NoStrict, Strict and no declaration at all to keep "
+               "three distinct fingerprints")
+
+        # A negative form ANYWHERE in the header suppresses the exception
+        # for the whole header, including an otherwise-redundant name
+        # sitting beside it.
+        beside = _framing_fp(
+            d, "{-# LANGUAGE Strict, UnicodeSyntax, NoStrictData #-}\n"
+            + _CODEC_BODY)
+        beside_without = _framing_fp(
+            d, "{-# LANGUAGE Strict, NoStrictData #-}\n" + _CODEC_BODY)
+        expect(beside != beside_without,
+               "expected an inherited UnicodeSyntax to be kept when a "
+               "negative form shares its header")
+
+        # So does naming one extension twice, and a token that is not a
+        # bare extension name.
+        duplicated = _framing_fp(
+            d, "{-# LANGUAGE Strict, UnicodeSyntax, UnicodeSyntax #-}\n"
+            + _CODEC_BODY)
+        expect(duplicated != plain,
+               "expected an extension named TWICE to leave the header "
+               "verbatim rather than be deduplicated away")
         odd_a = _framing_fp(
             d, "{-# LANGUAGE Strict, UnicodeSyntax, -Wall #-}\n" + _CODEC_BODY)
         odd_b = _framing_fp(
@@ -1996,7 +2028,7 @@ def main() -> int:
         test_envelope_framing_fingerprint_changes_on_import_edit,
         test_envelope_framing_fingerprint_changes_on_options_ghc_edit,
         test_envelope_framing_fingerprint_keeps_pragma_shaped_source,
-        test_envelope_framing_fingerprint_resolves_conflicting_flags,
+        test_envelope_framing_fingerprint_keeps_undecidable_headers,
         test_envelope_framing_fingerprint_sees_past_header_block_comments,
         test_inherited_extension_set_is_read_live_and_fails_loudly,
         test_frozen_dto_fingerprint_unaffected_by_pragma_normalization,
