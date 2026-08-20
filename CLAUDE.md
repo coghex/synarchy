@@ -1233,8 +1233,9 @@ before touching each area:
   animation, a mental break, a load boundary — seen as a gap longer than
   `MAX_CHARGED_INTERVAL`), costs a pending order nothing, while the
   budget still ACCUMULATES across interruptions so no order becomes
-  immortal. That state (`stalledFor`/`stallSeenAt` on the order) rides
-  `lua.unit_ai` v5; a v1–v4 order carries the
+  immortal. That state (`stalledFor`/`stallSeenAt` on the order) arrived
+  in `lua.unit_ai` v5 (the component is at v6 since #1216, and every
+  version from v1 is still an accepted input); a v1–v4 order carries the
   old absolute `progressAt` and is seeded from it on its first tick.
   Gates: `expedition_retrieval_probe.py` (manual-only), hspec
   `--match "commanded order stall budget"`.
