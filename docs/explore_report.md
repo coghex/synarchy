@@ -78,6 +78,7 @@ cited lines.
 - [ ] EXPL-28. `Engine.Asset.YamlVegetation`'s summary names a `data/vegetation.yaml` that does not exist; the data is a directory of five files
 - [ ] EXPL-29. `engine_contracts.md`'s enum-audit coverage counts are each off by one, in the paragraph that says not to hand-count them
 - [ ] EXPL-30. CLAUDE.md says `tools/README.md` "lists all ~85" probes; there are 89 and README names 83
+- [ ] EXPL-31. `Unit.Transfer`'s header calls its serializable set "the six types" and then names seven
 
 ---
 
@@ -2114,3 +2115,94 @@ will not find them there.
 prefer it over any prose list is exactly the right one and is what makes this
 harmless in practice. Recorded because "lists all" is checkable, is currently
 false by six, and points at a file a reader is being sent to as complete.
+
+---
+
+## Player transfers
+
+### EXPL-31. `Unit.Transfer`'s header calls its serializable set "the six types" and then names seven
+
+`src/Unit/Transfer.hs:29-38`:
+
+```haskell
+--   __On the 'Data.Serialize.Serialize' instances below__ (#1246): the
+--   six types a durable transfer ORDER carries — 'TransferEndpoint',
+--   'TransferItemRef', 'TransferReason', 'TransferFailure',
+--   'TransferState' and the 'QueuedTransfer'/'TransferBatch' pair — are
+--   serializable ONLY so 'Unit.Transfer.Orders.TransferOrders' can ride
+--   'World.Save.Types.WorldPageSave', the transitional IN-MEMORY load
+--   bridge [...]
+```
+
+Counting the list as written: `TransferEndpoint`, `TransferItemRef`,
+`TransferReason`, `TransferFailure`, `TransferState`, `QueuedTransfer`,
+`TransferBatch` — **seven**, in the sentence that calls them six. Naming the
+last two as "the `QueuedTransfer`/`TransferBatch` pair" makes them read as one
+list ITEM, but they are two types, and the noun the number governs is "types".
+
+The enumeration is otherwise exactly right, which is worth stating so a fix does
+not go looking for a missing entry: extracting every `data` declaration paired
+with a `deriving (… Serialize …)` in this module yields those seven and nothing
+else —
+
+| Type | Declared |
+|---|---|
+| `TransferEndpoint` | `:138`, deriving at `:147` |
+| `TransferItemRef` | `:174`, deriving at `:182` |
+| `TransferReason` | `:196`, deriving at `:207` |
+| `TransferFailure` | `:285`, deriving at `:288` |
+| `TransferState` | `:303`, deriving at `:310` |
+| `QueuedTransfer` | `:339`, deriving at `:342` |
+| `TransferBatch` | `:346`, deriving at `:350` |
+
+Nothing is missing from the list and nothing extra is claimed; only the count is
+wrong.
+
+**Where the "six" plausibly came from**, which is the reason this is worth
+correcting rather than shrugging at: six is the RIGHT number twenty lines
+earlier, for a different thing. `src/Unit/Transfer.hs:22-24` says "every item
+keeps its own six-state lifecycle entry", and `TransferState` really does have
+exactly six constructors (`:303-310`): `TransferQueued`, `TransferInTransit`,
+`TransferReadyToCommit`, `TransferCompleted`, `TransferCancelled`,
+`TransferFailed`. A reader who has just absorbed "six-state lifecycle" and then
+meets "the six types" now has two sixes in play in one header, one correct and
+one not, describing different sets.
+
+**Severity: low.** No behaviour is involved and the list is accurate, so a
+reader who counts rather than trusts gets the truth. Recorded because it is a
+stated count immediately followed by the items it counts — the easiest kind of
+claim to check and the least excusable kind to get wrong — and because the
+adjacent correct "six" invites the two to be conflated.
+
+Verified truthful in the same header, so a fix does not disturb it: the claim
+that `@tools/enum_append_only_audit.py@ guards the constructor ORDER of both
+halves` holds. `docs/save_compat/enum_baseline.json` carries
+`Unit.Transfer.TransferEndpoint`, `Unit.Transfer.TransferReason` and
+`Unit.Transfer.TransferState` alongside their
+`World.Save.Component.Transfer.TransferEndpointDTO` / `TransferReasonDTO` /
+`TransferStateDTO` mirrors — both halves, as claimed. The remaining four are
+records rather than sum types and so have no constructor order to guard, which
+is why they are correctly absent.
+
+#### Also verified exact in this pass, and needing no change
+
+Two dense contracts checked alongside this one, recorded so the negative
+results are on file:
+
+- **The #1330 `math.random` contract** (`CLAUDE.md:271-278`). "Eleven gameplay
+  modules draw from it" is EXACT: stripping comments and counting real
+  `math.random(` call sites gives precisely eleven Lua files —
+  `bear_ai.lua`, `locations.lua`, `mental_state.lua`, `red_squirrel_ai.lua`,
+  `thoughts.lua`, `unit_ai_combat_attack.lua`, `unit_ai_core.lua`,
+  `unit_ai_mental.lua`, `unit_ai_needs.lua`, `unit_ai_sleep.lua`,
+  `unit_ai_water.lua` — every one of them gameplay, none under `scripts/ui/`.
+  "Nothing under `scripts/` may call `math.randomseed`" is upheld: zero call
+  sites, and the only two occurrences of the identifier are comments in
+  `scripts/ui/random.lua:9` and `scripts/ui/randbox.lua:159` describing the
+  rule and the removed call respectively.
+- **The 500-line module budgets.** Both tools really do cover the families
+  CLAUDE.md names — `tools/haskell_module_budget.py:32` globs
+  `src/Engine/Input/Thread.hs` plus `src/Engine/Input/Thread/**/*.hs`, and
+  `tools/lua_module_budget.py:31` globs `scripts/unit_ai.lua` plus
+  `scripts/unit_ai_*.lua` — and both report every budgeted module within its
+  limit.
