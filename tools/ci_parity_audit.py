@@ -108,6 +108,15 @@ EXEMPT_COMMANDS: tuple[tuple[str, str], ...] = (
         "unit-asset gate unconditionally.",
     ),
     (
+        "python3 tools/ci_docs_fast_path.py --stdin --explain",
+        "CI path-selection orchestration for the docs-only fast path "
+        "(#1490): reads one push's changed-path range and prints whether "
+        "CI may skip the Haskell build. `make ci` builds and tests "
+        "unconditionally against a working tree, not a push range, so "
+        "there is nothing local for the selector to decide. Its "
+        "--self-test form is NOT exempt and does run locally.",
+    ),
+    (
         "python3 tools/ci_probes.py --stdin",
         "CI path-selection orchestration for the behaviour-probe gate: "
         "picks which CI-eligible probes a change needs. `make ci` runs no "
