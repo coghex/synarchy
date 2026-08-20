@@ -1856,14 +1856,51 @@ a property of the tree rather than a defect in any one file, and because the fix
 is a policy choice — export the named function, point at the exported entry
 point instead, or drop the module qualifier — that wants deciding once.
 
-**The count of 59 is a FLOOR, not a total** (established by EXPL-39). The
-detector required the referenced symbol to have a top-level `name ∷` signature
-IN THE NAMED MODULE before judging it unexported — so it silently skipped every
-reference where the named module exists but the symbol is defined somewhere
-else entirely. `'World.Geology.Timeline.buildAge'` is exactly that case and was
-missed. The corrected rule is "the symbol is not exported by the named module
-AND is defined elsewhere in the tree"; re-running under it would raise the
-count.
+**The count of 59 was a FLOOR** (established by EXPL-39, then closed by the
+re-run below). The original detector required the referenced symbol to have a
+top-level `name ∷` signature IN THE NAMED MODULE before judging it unexported —
+so it silently skipped every reference where the named module exists but the
+symbol is defined somewhere else entirely. `'World.Geology.Timeline.buildAge'`
+is exactly that case and was missed.
+
+**Corrected re-run.** Under the rule "the symbol is not exported by the named
+module AND is a real top-level function defined elsewhere in the tree", eight
+further sites appear — seven of them new here, plus EXPL-39's, which is filed
+separately for the context around it:
+
+| Reference site | Dead target | Actually defined in |
+|---|---|---|
+| `src/Engine/PlayerEvent.hs:14` | `'Engine.PlayerEvent.emitEvent'` | `Engine.PlayerEvent.Emit` |
+| `src/Engine/Core/Log/Types.hs:59` | `'Engine.PlayerEvent.emitEvent'` | `Engine.PlayerEvent.Emit` |
+| `src/Engine/Core/State.hs:418` | `'Engine.PlayerEvent.emitEvent'` | `Engine.PlayerEvent.Emit` |
+| `src/Engine/Graphics/Vulkan/Texture/Limits.hs:35` | `'Engine.Graphics.Vulkan.Texture.Handle.generateTextureHandle'` | `Engine.Asset.Manager` |
+| `src/World/Plate/Coast.hs:105` | `'World.Plate.Elevation.continentalShelf'` | `World.Plate.Profiles` |
+| `src/World/Save/Types.hs:1243` | `'Engine.Scripting.Lua.API.Units.Combat.lookupInfection'` | `Infection.Types` |
+| `src/World/Thread/Command/Save.hs:51` | `'World.Thread.handleWorldCommand'` | `World.Thread.Command` |
+| `src/World/Geology/Ore.hs:4` | `'World.Geology.Timeline.buildAge'` | `World.Geology.Timeline.Loop` (EXPL-39) |
+
+Verified by reading the named modules' export lists: `Engine.PlayerEvent`
+exports only `PlayerEvent(..)`, `CategoryCfg(..)`, `NotificationCfg` and
+`eventStoreCap`; `Engine.Graphics.Vulkan.Texture.Handle` exports only
+`BindlessTextureHandle(..)` and `toBindlessHandle`. Neither re-exports the
+named function.
+
+Two of these are worth singling out. **`src/Engine/PlayerEvent.hs:14` is
+SELF-referential** — the facade's own haddock points at a function its own
+module does not export. And **`src/World/Plate/Coast.hs:105`** names
+`World.Plate.Elevation` where `World.Plate.Profiles` owns the function, while
+`World.Plate`'s own facade header gets it right ("`World.Plate.Profiles` —
+boundary elevation profiles + continental shelf"), so the tree contains both
+the correct and the incorrect attribution.
+
+**Corrected total: 67 cross-module dead links.** The full list below is the
+original 59; the eight above are additional.
+
+**Excluded as false positives**, so a re-run does not resurface them: haddock
+references of the form `'UI.setVisible'`, `'UI.setClickable'`,
+`'UI.removeElement'`, `'UI.setControlFocus'`, `'UI.clearControlFocus'` name LUA
+API bindings, not Haskell functions. They resolve as module references only
+because `src/UI.hs` happens to exist.
 
 **Mechanically detectable.** The sweep above is about twenty-five lines of
 Python with no engine dependency, in the same shape as
