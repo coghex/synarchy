@@ -58,6 +58,7 @@ cited lines.
 - [ ] EXPL-13. `shutdownEngine`'s inline safety argument says Vulkan teardown precedes "the worker threads" stopping; two are already stopped
 - [ ] EXPL-14. `migrateLegacyConfig` reports a destination write failure as a malformed legacy file, in a user-facing warning
 - [ ] EXPL-15. `Unit.Atlas.Digest`'s description of the digest stream omits the tag's length prefix and the label field entirely
+- [ ] EXPL-16. `pickFrame`'s "used by the render path and the hit-tester" omits both Lua API consumers
 
 ---
 
@@ -916,3 +917,74 @@ the compiler records as `fps`"), and `-0.0` can never BE an fps —
 `narrowed != 0.0`, which is False for `-0.0`, so such a declaration is rejected
 before compilation. Negative non-zero rates are accepted there and are
 formatted correctly.
+
+### EXPL-16. `pickFrame`'s "used by the render path and the hit-tester" omits both Lua API consumers
+
+`src/Unit/Render.hs:46-64`:
+
+```haskell
+-- | Choose a frame for a unit. If the unit has an active animation and
+--   the requested frames exist, pick by elapsed time; otherwise fall back
+--   to the T-pose. Used by the render path and the hit-tester.
+--
+--   [...]
+--
+--   THE FRAME-INDEX ARITHMETIC BELOW IS FROZEN (#1259, D-3). [...]
+```
+
+`pickFrame` has FOUR call sites in `src/`, not two:
+
+| Site | Consumer |
+|---|---|
+| `src/Unit/Render.hs:210` | `renderUnitQuads` — the render path |
+| `src/Unit/HitTest.hs:248` | `unitHitRect` — the hit-tester |
+| `src/Engine/Scripting/Lua/API/Units/List.hs:333` | `unit.getFrameTexture` |
+| `src/Engine/Scripting/Lua/API/Units/List.hs:375` | `unit.getFrameSample` |
+
+(The `pickFrame` in `src/UI/Tooltip/Render.hs:273` is an unrelated function of
+type `Float → TooltipSprite → TextureHandle`, not a consumer of this one.)
+
+The two-item list reads as complete and omits an entire consumer CLASS — the
+Lua query API, where this function's output crosses out of Haskell into script
+code.
+
+That omission is the opposite of incidental for this particular function. Two
+paragraphs below the same haddock declares:
+
+> THE FRAME-INDEX ARITHMETIC BELOW IS FROZEN (#1259, D-3).
+
+so the caller list is exactly what a reader consults to find everything a
+change to that arithmetic would reach. A frozen-arithmetic notice and a partial
+caller list are a bad pairing: the notice tells you the blast radius matters and
+the list understates it by half.
+
+The omitted pair is also where the atlas migration bit hardest, which is why
+they are worth naming rather than glossing. `List.hs:327-332` carries its own
+warning beside the first of them:
+
+```haskell
+                            -- Handle only. Enough for a WHOLE-IMAGE
+                            -- sample (a T-pose's direct sprite), and
+                            -- never enough for an animation frame,
+                            -- which since #1261 is always an atlas cell
+                            -- and needs the sub-rect too — such a
+                            -- caller must use `unit.getFrameSample`.
+```
+
+Both consumers read `pickFrame`'s `FrameSample`, and neither is discoverable
+from `pickFrame` itself.
+
+**Severity: low.** No behaviour is wrong, and each omitted consumer is
+correctly documented on its own side. Recorded because it is a completeness
+claim about the callers of a function whose arithmetic is explicitly declared
+frozen — precisely the case where a caller list needs to be exhaustive.
+
+Verified truthful in the same function, so a fix does not disturb any of it:
+`fsFlipX` really is `True` only on the `mirrorDir` branch (`:129-135`); the
+present-but-empty direction really does fall to the T-pose via the `n ≤ 0`
+guard while an ABSENT one falls to its mirror, exactly as
+`Unit.Atlas.Types.storageFrameCount`'s haddock claims; the stride comment is
+right (`strided = raw * stride` shows frames 0, 2, 4, … at stride 2, halving a
+9-frame transition); and the reverse path really does hold frame 0 when a
+non-looping clip runs out, since `fwdIdx` clamps to `n - 1` and
+`idx = (n - 1) - fwdIdx`.
