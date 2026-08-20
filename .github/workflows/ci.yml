@@ -172,7 +172,7 @@ jobs:
     steps:
       # fetch-depth: 0 so the path-selective probe step (#530) can diff a
       # PR against its base to see which files changed.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -250,7 +250,7 @@ jobs:
       # plan.json exists after --dry-run; its hash keys the store cache.
       # The store path is static because the image pins CABAL_DIR (#671).
       - name: Restore dependency cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         id: cache
         with:
           path: /usr/local/cabal/store
@@ -267,7 +267,7 @@ jobs:
       # restores the newest prior snapshot for this GHC/Cabal via
       # restore-keys and then saves exactly one new entry.
       - name: Cache project build (dist-newstyle)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: dist-newstyle
           key: dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}
@@ -281,7 +281,7 @@ jobs:
       # the package build doesn't throw away the expensive part.
       - name: Save dependency cache
         if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: /usr/local/cabal/store
           key: deps-v2-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
