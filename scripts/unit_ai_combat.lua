@@ -44,6 +44,10 @@ local M = {}
 -- nudged just above so it wins the move-vs-pickup tie.
 -- commandedTask persists until maintainTask clears it on arrival/timeout,
 -- so the unit resumes the move once the higher-priority action finishes.
+-- Clearing it on ARRIVAL is not the end of the order's effect: a PLAYER
+-- move leaves the unit holding the tile it named (#1216,
+-- scripts/unit_ai_hold.lua), at this same utility, so what could
+-- interrupt the walk can still interrupt the standing.
 -- Exported (see the bottom of this file) so scripts/unit_ai_hold.lua's
 -- own constant can be pinned equal to it by
 -- Test.Headless.Lua.UnitAiHold rather than agreeing by coincidence:
