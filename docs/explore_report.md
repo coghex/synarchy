@@ -73,6 +73,7 @@ cited lines.
 - [ ] EXPL-23. `inputBoundaryPage` explains the modal-boundary tie-break by `PageHandle` and show-recency; the sort key is `(upLayer, upZIndex)`
 - [ ] EXPL-24. `hitsAtPointBy`'s haddock cites `UI.InputOwnership.pagesInScope`, which is not exported
 - [ ] EXPL-25. `isPointerSurfaceBlocked` names `Engine.Input.Thread` as its caller; since #787 that is `Engine.Input.Thread.Mouse`
+- [ ] EXPL-26. `World.Save.Storage`'s header says it "receives only" four of six parameters, and its numbered transaction omits the requirement-9 refusal
 
 ---
 
@@ -1682,3 +1683,97 @@ the same `scopedPageOk` restriction as `routePointer`; and
 `isPointerSurfaceBlocked`'s deliberately UNSCOPED `topHitBy (const True)` with
 the boundary folded in through `isGameplayBlocked` is exactly what its haddock
 describes.
+
+---
+
+## Save publication
+
+### EXPL-26. `World.Save.Storage`'s header says it "receives only" four of six parameters, and its numbered transaction omits the requirement-9 refusal
+
+`src/World/Save/Storage.hs:11-16`:
+
+```haskell
+--   This module never reads live gameplay state and never participates in
+--   snapshot capture (issue #758's barrier already released by the time
+--   'publishGeneration' runs — see "World.Thread.Command.Save.WriteWorld").
+--   It receives only already-encoded bytes, the metadata that encode
+--   produced, a slot directory, and a slot name for diagnostics, and
+--   performs a classic write-validate-publish-rotate transaction:
+```
+
+followed by a numbered 1-7 list of the transaction's steps. Two linked
+exhaustiveness claims, both incomplete in the same place.
+
+**"Receives only" names four of six parameters.** The real signature
+(`src/World/Save/Storage.hs:349-357`):
+
+```haskell
+publishGeneration
+    ∷ FilePath        -- ^ slot directory
+    → Text             -- ^ slot name (diagnostics only)
+    → SaveMetadata      -- ^ metadata this candidate must decode back to
+    → BS.ByteString      -- ^ complete, already-encoded envelope bytes
+    → HS.HashSet Text    -- ^ every Lua component NAME this encode included
+    → HS.HashSet Text    -- ^ the subset of those marked required
+    → IO (Either PublishFailure [Text])
+```
+
+The two Lua registry sets appear nowhere in the prose, and the word "only"
+makes the list an exhaustive claim rather than a summary.
+
+**The numbered transaction omits two phases the code runs**, both of which this
+module's own `StoragePhase` type enumerates — and whose haddock states it lists
+them "in the order a real publication reaches them"
+(`src/World/Save/Storage.hs:296-317`):
+
+```haskell
+data StoragePhase
+    = PhaseUnsafePath
+    | PhaseForeignOptionalData
+    | PhaseDirectoryCreate
+    | PhaseCandidateCreate
+    ...
+```
+
+`publishGenerationWithCandidateCreator` (`:373-397`) runs, in order:
+`rejectSymlinkedSlotDir` → **`foreignOptionalDataCheck`** (`:379-383`) →
+**`createDirectoryIfMissing`** (`:387-390`) → `createCandidate` →
+`writeValidateAndPublish`. The header's step 1 is the symlink check and its step
+2 is "Write the candidate to a UNIQUELY named temporary file", so both middle
+phases vanish.
+
+**The two omissions are one omission.** `foreignOptionalDataCheck dir
+luaKnownNames` is precisely what the missing fifth parameter feeds. Drop the
+step from the list and the parameter has no reason to appear in the input
+sentence either.
+
+**Why this is more than a missing bullet.** `PhaseForeignOptionalData` is a
+REFUSAL, not a stage of the write. Requirement 9 (#766) aborts the entire
+publish before any candidate exists, specifically so a slot whose existing
+generation carries an optional component this build does not recognise is never
+overwritten — its constructor haddock (`:301-306`) and a thirty-line rationale
+at `:411-440` (including why it must check `world.synworld.prev` as well as the
+authoritative file) both spell this out. A reader consulting the numbered list
+to answer "what can stop a save before anything is written?" is told: the
+symlink check, and nothing else. Answering that question is what a numbered
+transaction list is for.
+
+**Severity: low-medium.** No behaviour is wrong, and the omitted step is
+documented thoroughly at its own definition and on its `StoragePhase`
+constructor — it is only the module-level specification that skips it. Above
+the nit tier because this header is the specification for a 932-line
+transactional module, it makes two explicit exhaustiveness claims, and both drop
+the same first-class failure phase.
+
+Verified truthful in the same header, so a fix does not disturb any of it:
+
+- `rejectSymlinkedSlotDir` (`:267-272`) really does check the slot directory AND
+  `takeDirectory dir`, and really is built from the single `rejectSymlinkedPath`
+  primitive the generation-file decoder shares.
+- The macOS durability trade-off is real: the module uses
+  `System.Posix.Unistd.fileSynchronise` (`:169`), which is plain POSIX `fsync`,
+  not `F_FULLFSYNC`.
+- The crash-window section's per-topology guarantee matches
+  `AuthoritativeTopology`'s three constructors (`:646`), including the
+  staging/rotation skip in the two topologies where the previous generation is
+  the live load source.
