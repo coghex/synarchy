@@ -82,6 +82,7 @@ cited lines.
 - [ ] EXPL-32. `runGatedByCaptureLock` cites "the same shape every other owner uses" and names Combat, which acks only while paused
 - [ ] EXPL-33. CLAUDE.md's `text_wrap.lua` summary names two functions and four consumers; there are three functions and ten
 - [ ] EXPL-34. `flattenItemInstances` says "all three now go through this one definition" and enumerates three; there are four
+- [ ] EXPL-35. `loadVegetationYamlFn`'s body says it parses "the single vegetation YAML file"; both Lua callers loop over five
 
 ---
 
@@ -2491,3 +2492,73 @@ items privately any more.
   (`Movement/Types.hs:41`) really does give a baseline acolyte a climb reach of
   exactly 1 z, and `data/units/acolyte.yaml:40` really does declare a height
   mean of 1.8.
+
+### EXPL-35. `loadVegetationYamlFn`'s body says it parses "the single vegetation YAML file"; both Lua callers loop over five
+
+`src/Engine/Scripting/Lua/API/YamlTextures.hs:148-153`:
+
+```haskell
+        Just pathBS → do
+            let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
+            count ← Lua.liftIO $ do
+                logger ← readIORef (loggerRef env)
+                -- Parse the single vegetation YAML file
+                defs ← loadVegetationYaml logger filePath
+```
+
+There is no single vegetation YAML file. `data/vegetation/` holds five —
+`farmland.yaml`, `grasses.yaml`, `ground_cover.yaml`, `mosses.yaml`,
+`snow.yaml` — and `loadVegetationYaml` takes its path as a parameter,
+decoded from the Lua argument on the line above.
+
+**Both Lua callers enumerate the directory**, which is what makes this a
+cardinality claim rather than a wording preference.
+`scripts/vegetation_loader.lua` describes itself in its first line as
+"enumerates data/vegetation/*.yaml and loads each one", and does exactly that:
+
+```lua
+    local files = engine.listFiles(folder, ".yaml")
+    ...
+    for _, filename in ipairs(files) do
+        local fullPath = folder .. "/" .. filename
+        local count = engine.loadVegetationYaml(fullPath)
+```
+
+and `scripts/startup_loader.lua:190` and `:235` both route it through
+`addYamlDir`, whose whole body (`:23-30`) is a `engine.listFiles` call and a
+`for` loop queueing one `loaderFn(path)` per file. So this binding is invoked
+FIVE times per boot, once per file, and the comment at the point of the call
+says it parses the one file that exists.
+
+**Distinct from EXPL-28, and recorded separately.** EXPL-28 is
+`src/Engine/Asset/YamlVegetation.hs:2` naming a `data/vegetation.yaml` that
+does not exist — a wrong PATH, in a module summary. This is a different file, a
+different sentence, and a wrong CARDINALITY, asserted in a function body at the
+exact seam where the caller loops. Two separate edits, and together they show
+the "vegetation is one file" belief outliving the split in more than one place.
+
+**A near-miss worth naming so a fix does not over-reach.** The same function's
+sibling in that file, `src/Engine/Scripting/Lua/API/YamlTextures.hs:72`, reads
+`-- Parse the single YAML file` for materials — and `data/materials` is a
+directory too, loaded through the same `addYamlDir` at
+`scripts/startup_loader.lua:189` and `:231`. That one is NOT counted as a
+defect here: it does not name a family, and immediately follows the decoding of
+one `filePath` argument, so "the single YAML file" reads naturally as "the one
+file passed in". It is the qualifier "vegetation" at `:152` that turns the same
+phrase into a statement about how many vegetation files there are.
+
+**Severity: low.** No behaviour is involved — the function correctly parses
+whatever path it is handed. Recorded because it is an in-body comment at the
+call site, contradicted by both of its callers in the adjacent language, and
+because it corroborates EXPL-28 rather than duplicating it.
+
+#### Also verified in this pass
+
+- `src/Sim/State/Types.hs:39`'s "the world thread, the sole writer of
+  `wsTilesRef`" is consistent with the tree: every mutation site is under
+  `src/World/Thread/` (Command, ChunkLoading, and the Edit/Cursor modules) plus
+  `src/World/Load/Stage.hs:326` and `:398`, which write freshly-staged
+  replacement state rather than the live session's.
+- `src/Building/Thread/Command.hs:7`'s "its only caller — `Unit.Thread`" holds:
+  `processAllBuildingCommands` is invoked once, from
+  `src/Unit/Thread.hs:99`, inside that thread's `unless locked` block.
