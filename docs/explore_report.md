@@ -61,6 +61,7 @@ cited lines.
 - [ ] EXPL-16. `pickFrame`'s "used by the render path and the hit-tester" omits both Lua API consumers
 - [ ] EXPL-17. `unitToQuad`'s climb-occlusion branch is justified by a `spriteRowSpan` push the same function says it does not apply
 - [ ] EXPL-18. `Building.Render`'s sort comment says units add a `spriteRowSpan` term "as units do"; they no longer do
+- [ ] EXPL-19. `Unit.HitTest` claims to mirror a tile hit-test that no longer holds the math, and to use the "same math" the engine documents as different
 
 ---
 
@@ -1087,3 +1088,108 @@ in front.
 correct as written. Recorded because these are load-bearing rendering-order
 comments, both are the first thing a reader consults before touching a sort
 key, and both describe a mechanism that no longer exists.
+
+---
+
+## Unit hit testing
+
+### EXPL-19. `Unit.HitTest` claims to mirror a tile hit-test that no longer holds the math, and to use the "same math" the engine documents as different
+
+Two claims, one in the module haddock and one inside `hitTestUnitAt`.
+
+`src/Unit/HitTest.hs:4-7`:
+
+```haskell
+-- Given mouse coordinates in framebuffer pixels, find which (if any)
+-- spawned unit is under the cursor. Mirrors the screen→world projection
+-- in `World/Render/CursorQuads.hs::renderWorldCursorQuads::hitTest` and
+-- the per-unit sprite math in `Unit/Render.hs::unitToQuad`.
+```
+
+`src/Unit/HitTest.hs:81-83`:
+
+```haskell
+                -- Screen pixel → world coord. Same math as the tile
+                -- hit-test in `renderWorldCursorQuads::hitTest`:
+                --   normX/Y in [0..1]
+```
+
+**(a) The named target no longer contains the cited math.**
+`renderWorldCursorQuads::hitTest` is now a delegation
+(`src/World/Render/CursorQuads.hs:74-76`):
+
+```haskell
+    let hitTest pixX pixY =
+            pickWorldTile facing zoom zSlice camX camY fbW fbH winW winH
+                          worldSize effectiveDepth vb tileData pixX pixY
+```
+
+The projection moved into `World.Render.HitTest.pickWorldTile`. A reader
+following either pointer lands on a call site, not on a projection to compare
+against.
+
+**(b) "Same math" is false, and the engine's own documentation classifies it as
+false.** The two derive the aspect ratio from DIFFERENT sources:
+
+| | aspect | pixel→norm | degeneracy guard |
+|---|---|---|---|
+| `pickWorldTile` (`src/World/Render/HitTest.hs:101-104`) | `fbW / fbH` — **framebuffer** | `winW` / `winH` | `viewportDegenerate winW winH fbW fbH` |
+| `hitTestUnitAt` (`src/Unit/HitTest.hs:87-91`) | `winW / winH` — **window** | `winW` / `winH` | `windowDegenerate winW winH` |
+
+`src/Engine/Graphics/Viewport.hs:26-43` names these as two families and states
+the split outright — `windowDegenerate` is
+
+> Used by the hit-test paths, which derive their aspect ratio from the window
+> size.
+
+while `viewportDegenerate` is for
+
+> the paths that normalize by the window size AND derive their aspect ratio
+> from the framebuffer (the world tile pick and the zoom-map chunk pick).
+
+So the difference is intentional, documented, and carries a distinct guard on
+each side — which is exactly what makes the flat "Same math as the tile
+hit-test" claim wrong by the codebase's own taxonomy.
+
+**No behaviour is wrong today.** Under uniform DPI scaling
+`fbW / fbH == winW / winH`, so both projections produce identical world
+coordinates; that is presumably why the divergence has been tolerable. This
+finding is about the claim, not about the projection.
+
+**The "cannot drift" guarantee does not extend here**, which is the part most
+likely to mislead. `src/World/Render/CursorQuads.hs:65-67` says of
+`pickWorldTile`:
+
+> Shared with the synchronous Lua pick (@world.pickTile@) so the two can't
+> drift — see 'World.Render.HitTest'.
+
+Unit hit-testing is a THIRD consumer of the same projection that keeps its own
+copy rather than calling the shared function, so it sits outside that
+guarantee — the opposite of what "Mirrors the screen→world projection in …"
+leads a reader to assume. A maintainer changing `pickWorldTile` would read
+`Unit.HitTest` as a mirror of it and reasonably conclude nothing needed
+updating.
+
+`hitTestUnitsInRect` carries the same copy at `src/Unit/HitTest.hs:156`; its own
+comment there ("Mirrors the math in hitTestUnitAt", `:159-160`) is accurate and
+should be left alone.
+
+**Severity: low-medium** — above the pure-nit tier because the misdirection is
+about which code two implementations must be kept in step with, and no shipping
+configuration currently exposes it.
+
+Verified truthful in the same module, so a fix does not disturb any of it:
+
+- `unitHitRect`'s claim that "the ONE deliberate difference from the renderer is
+  the height offset, which uses the INTEGER `uiGridZ` here against the
+  renderer's continuous `uiRealZ`" survives a line-by-line diff against
+  `unitToQuad`: every other term — `applyFacingF`, `rawX`, `rawY`,
+  `baseRadius`, `frameDimensions`, both scales, both quad dimensions, `drawX`
+  and `drawY` — is identical, including the correct ABSENCE of a
+  `tileHalfDiamondHeight` term.
+- `frameSampleOf` really does delegate to `Unit.Render.pickFrame` and really
+  does keep the directional T-pose fallback for a unit whose def is missing,
+  matching `unitToQuad`.
+- The `effDepth` expression matches the renderer's. (It is the same expression
+  in ten places across nine files — duplication, but with no drift, and not a
+  comment defect.)
