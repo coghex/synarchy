@@ -84,7 +84,7 @@ cited lines.
 - [ ] EXPL-34. `flattenItemInstances` says "all three now go through this one definition" and enumerates three; there are four
 - [ ] EXPL-35. `loadVegetationYamlFn`'s body says it parses "the single vegetation YAML file"; both Lua callers loop over five
 - [ ] EXPL-36. `computeAmbientLight`'s inline labels name noon and midnight; its input convention puts those values at dawn and dusk
-- [ ] EXPL-37. The Tier 3 damage model's derivation block documents a linear `m_eff` with a `modeCoupling` constant that does not exist; the code is rotational
+- [ ] EXPL-37. The Tier 3 damage model's derivation block is stale in two places: a `modeCoupling` constant that does not exist, and a `delivered` formula missing two factors
 
 ---
 
@@ -2675,7 +2675,7 @@ noon".
 
 ## Combat damage model
 
-### EXPL-37. The Tier 3 damage model's derivation block documents a linear `m_eff` with a `modeCoupling` constant that does not exist; the code is rotational
+### EXPL-37. The Tier 3 damage model's derivation block is stale in two places: a `modeCoupling` constant that does not exist, and a `delivered` formula missing two factors
 
 `src/Combat/Resolution/Constants.hs:43-53` is the derivation block for the whole
 Tier 3 damage model — the thing `Combat.Resolution`'s own haddock sends readers
@@ -2766,6 +2766,61 @@ maintainer consults before touching `armMassFrac`, `armLengthFrac`, `vHuman`,
 describe a mass model built on a constant that does not exist, and omit the
 lever-arm geometry that actually determines the answer — so reasoning from it
 about how weapon length or reach affects a strike gives the wrong result.
+
+#### Second defect in the same block: the `delivered` formula omits two factors
+
+Ten lines below the kinematics, the same block states the delivery and severity
+chain (`src/Combat/Resolution/Constants.hs:61-63`):
+
+```
+--   delivered = driver · η_kind · (1 − natRes[kind]) · (1 − toughCut)
+--   severity  = delivered · kindSeverityFactor[kind] / (partMaxHp · perHp)
+--   perHp = energyPerHp (stab/slash) | momentumPerHp (blunt)
+```
+
+The implementation (`src/Combat/Resolution/Damage.hs:308-309`) carries SIX
+multiplicative factors where the comment lists four:
+
+```haskell
+        budget = driver * rsEff strike * qualityF
+                        * (1.0 - natRes) * (1.0 - toughCut) * kindWeight
+```
+
+- **`qualityF` is a real, missing tuning term.** It is
+  `0.6 + 0.4 * rsQuality strike` (`Damage.hs:300`), a 0.6–1.0 multiplier, and
+  `rsQuality` is a SEPARATE field from `rsEff`, so it is not folded into
+  η_kind — `ResolvedStrike` declares them distinctly (`Damage.hs:53-54`):
+  `rsEff` is "0..1 weapon suitability for kind" (η_kind), `rsQuality` is
+  "0..1 build quality". The line immediately above it records that the term is
+  test-pinned: "weaponPenetration's quality term is pinned by a unit test
+  ('a better-made weapon penetrates more')". A weapon's build quality can cut
+  delivered damage by forty percent and the documented formula has no term for
+  it.
+- **`kindWeight`** is 1.0 for a single-kind attack and splits the swing across
+  components for a combo attack (`computeSeverity`'s haddock,
+  `Damage.hs:232-236`) — a decomposition factor rather than a tuning one, so a
+  weaker omission, but still absent.
+
+A third, softer gap in the same two lines: the chain runs `delivered → severity`
+directly, while the code computes `sev` from **`sevDriver`**
+(`Damage.hs:394`), not from `budget`. The function's own haddock
+(`Damage.hs:220-224`) draws that distinction explicitly — "`driver` is the
+swing's raw energy …; `sevDriver` the tissue-weighted damage that survived the
+layer stack" — so the entire layered-penetration stage sits between the block's
+two lines. This is recorded as a simplification the surrounding prose partly
+qualifies ("layered-penetration target model"), not as a flat error.
+
+Correct as written in those same lines, and needing no change:
+`severity = … · kindSeverityFactor[kind] / (partMaxHp · perHp)` matches
+`Damage.hs:394` in shape exactly, and
+`perHp = energyPerHp (stab/slash) | momentumPerHp (blunt)` matches
+`Damage.hs:280-282` exactly.
+
+Both defects live in the one comment block and one editing pass fixes them.
+They are recorded together for that reason, while being distinct failures: the
+kinematics half names a constant that does not exist and swaps a rotational
+model for a linear one, whereas this half keeps the right shape and drops two
+factors from it.
 
 Verified accurate in the same block, so a fix need not touch them:
 
