@@ -14,6 +14,12 @@ item APIs target by it. This probe verifies, headless and without a GPU:
                  "Equip hits wrong instance" case, the headline of the bug.
   3. FALLBACK  — equip with NO instanceId still works (AI/legacy callers),
                  removing the first defName match.
+  3b. DIVERGENCE — the #67A container rule, now that EVERY creation path
+                 materializes a container def's authored contents (#1418):
+                 two freshly stocked kits are INTERCHANGEABLE and share one
+                 contentsKey, and only drawing a supply out of one splits
+                 them, after which getItemContents-by-id answers about the
+                 exact kit asked for.
   4. PERSIST   — save + load preserves instanceIds and the allocator
                  continues above every loaded id (a fresh item gets a new,
                  non-colliding id). Best-effort; skipped with --no-save.
@@ -117,6 +123,22 @@ def content_weight(port: int, uid: int, cont_def: str, inst_id: int,
         f"for _,it in ipairs(r) do if it.defName=='{content_def}' then "
         "return it.weight end end; return -1")
     return float(raw.strip().strip('"'))
+
+
+def content_count(port: int, uid: int, cont_def: str, inst_id: int,
+                  content_def: str) -> int:
+    """How many of one content type the Contents view reports, or -1.
+
+    Rows are GROUPED by def name (pushGroupedContents), so ten bandages
+    are one row of count 10 -- drawing a few out changes the count, never
+    the row total, which is why the divergence check reads this and not
+    `contents_rows`.
+    """
+    raw = send(port,
+        f"local r=unit.getItemContents({uid}, '{cont_def}', {inst_id}) or {{}}; "
+        f"for _,it in ipairs(r) do if it.defName=='{content_def}' then "
+        "return it.count end end; return -1")
+    return int(float(raw.strip().strip('"')))
 
 
 CHECKS: list[tuple[str, bool]] = []
@@ -251,10 +273,19 @@ def main() -> int:
                   can_id in still2, f"canteen ids {sorted(still2)}")
 
         print("\n== CONTAINER DIVERGENCE (#67A) ==")
-        # The technomule spawns with a PRE-STOCKED first_aid_kit. Add a
-        # second (empty) kit and confirm the two same-def containers stay
-        # distinct: different contentsKey, and getItemContents-by-id returns
-        # each kit's own contents instead of collapsing onto a representative.
+        # The technomule spawns with a PRE-STOCKED first_aid_kit, and since
+        # #1418 EVERY creation path materializes a container def's authored
+        # `contents:` -- `unit.addItem` included. So a second kit arrives
+        # stocked too, and the two are genuinely INTERCHANGEABLE.
+        #
+        # That makes one shared contentsKey the CORRECT answer, not a
+        # collapse: #67A's rule is that same-def containers merge until
+        # their internal state diverges (itemContentsSig hashes each
+        # child's defName/fill/condition/sharpness and never the instance
+        # id, so two kits freshly minted from one definition MUST hash
+        # alike). What has to separate them is a real divergence, so this
+        # block draws bandages out of one kit through the shipped medical
+        # path and re-reads both.
         muid = as_int(send(args.port,
             f"return unit.spawn('technomule', {gx}+0.5, {gy}+0.5, nil, 'debug')"))
         if muid <= 0:
@@ -269,30 +300,94 @@ def main() -> int:
                   f"kits={len(kits)} contentsKey={sk[:16]!r}")
             if stocked and sk != "":
                 stocked_id = stocked["instanceId"]
-                send(args.port, f"return unit.addItem({muid}, 'first_aid_kit', 0)")
+                send(args.port, f"return unit.addItem({muid}, 'first_aid_kit')")
                 kits2 = [it for it in inventory(args.port, muid)
                          if it.get("defName") == "first_aid_kit"]
-                empties = [it for it in kits2 if (it.get("contentsKey") or "") == ""]
-                check("two same-def kits expose DIFFERENT contentsKey",
-                      len(kits2) >= 2 and len(empties) >= 1,
+                keys2 = {(k.get("contentsKey") or "") for k in kits2}
+                ids2 = [k["instanceId"] for k in kits2]
+                check("unit.addItem now mints a STOCKED kit too (#1418)",
+                      len(kits2) >= 2 and "" not in keys2,
                       f"keys={[(k['instanceId'], (k.get('contentsKey') or '')[:8]) for k in kits2]}")
-                if empties:
-                    empty_id = empties[0]["instanceId"]
-                    sc = contents_rows(args.port, muid, "first_aid_kit", stocked_id)
-                    ec = contents_rows(args.port, muid, "first_aid_kit", empty_id)
-                    check("getItemContents(stocked id) returns its supplies",
-                          sc > 0, f"rows={sc}")
-                    check("getItemContents(empty id) returns the EMPTY kit",
-                          ec == 0, f"rows={ec}")
-                    check("the diverged kits keep distinct instance ids",
-                          stocked_id != empty_id, f"{stocked_id} vs {empty_id}")
-                    # The 1 L antiseptic bottle must report its FILLED mass
-                    # (0.12 empty + 1.0 L × 1.0 ≈ 1.12 kg), not the empty-bottle
-                    # def weight (0.12).
-                    aw = content_weight(args.port, muid, "first_aid_kit",
-                                        stocked_id, "antiseptic")
-                    check("Contents weight includes bottle fill (~1.12, not 0.12)",
-                          aw > 1.0, f"antiseptic weight={aw}")
+                check("two IDENTICALLY stocked kits share ONE contentsKey -- "
+                      "interchangeable until they diverge (#67A)",
+                      len(kits2) >= 2 and len(keys2) == 1,
+                      f"distinct keys={len(keys2)}")
+                check("...while still being distinct physical items",
+                      len(set(ids2)) == len(ids2) and len(ids2) >= 2,
+                      f"ids={sorted(ids2)}")
+                # The 1 L antiseptic bottle must report its FILLED mass
+                # (0.12 empty + 1.0 L × 1.0 ≈ 1.12 kg), not the empty-bottle
+                # def weight (0.12). Unconditional now: every kit is stocked,
+                # so nothing can skip this by there being no empty twin --
+                # and it runs BEFORE the treatment below, which spends a
+                # dose of that very bottle.
+                aw = content_weight(args.port, muid, "first_aid_kit",
+                                    stocked_id, "antiseptic")
+                check("Contents weight includes bottle fill (~1.12, not 0.12)",
+                      aw > 1.1, f"antiseptic weight={aw}")
+
+                new_id = next((i for i in ids2 if i != stocked_id), None)
+                # NB: `check` reports, it does not answer -- it returns
+                # None, so it can never gate a block.
+                check("the second kit is located by its own id",
+                      new_id is not None, f"ids={sorted(ids2)}")
+                if new_id is not None:
+                    rows = [contents_rows(args.port, muid, "first_aid_kit", i)
+                            for i in (stocked_id, new_id)]
+                    check("getItemContents(either id) returns that kit's "
+                          "supplies", rows[0] == rows[1] > 0, f"rows={rows}")
+                    before = [content_count(args.port, muid, "first_aid_kit",
+                                            i, "bandage")
+                              for i in (stocked_id, new_id)]
+                    check("both kits report the same authored bandage count",
+                          before[0] == before[1] > 0, f"counts={before}")
+
+                    # -- The divergence, through the shipped path that
+                    #    actually draws a supply out of a kit: an acolyte
+                    #    (the unit that KNOWS bleed_control) dresses a
+                    #    wound, naming the mule as the explicit kit owner
+                    #    so the bandages come out of the pair above.
+                    #    consumeBandages spends from the FIRST carried kit
+                    #    holding any, which is the mule's starting one.
+                    #
+                    #    A SEPARATE acolyte carries the wound: the one
+                    #    under test above is the subject of the PERSIST
+                    #    block below, and leaving it bleeding would put a
+                    #    survival tick between that block and its own
+                    #    assertions.
+                    med = as_int(send(args.port,
+                        f"return unit.spawn('acolyte', {gx}+0.5, {gy}+0.5,"
+                        " nil, 'debug')"))
+                    check("a second acolyte is spawned to carry the wound",
+                          med > 0, f"uid={med}")
+                    send(args.port,
+                         f"return unit.injure({med}, 'head', 'cut', 0.4, 1.0)")
+                    used = as_int(send(args.port,
+                        f"local r=unit.treatBleeding({med}, {med}, {muid}); "
+                        "return (r and r.bandagesUsed) or 0"))
+                    check("treating a wound out of the mule's kit really "
+                          "spent bandages", used > 0, f"bandagesUsed={used}")
+
+                    after = [content_count(args.port, muid, "first_aid_kit",
+                                           i, "bandage")
+                             for i in (stocked_id, new_id)]
+                    check("getItemContents(id) answers about the EXACT kit "
+                          "asked for -- the drawn-from one lost supplies, "
+                          "its twin lost none",
+                          after[0] == before[0] - used and after[1] == before[1],
+                          f"before={before} after={after} used={used}")
+                    kits3 = [it for it in inventory(args.port, muid)
+                             if it.get("defName") == "first_aid_kit"]
+                    keys3 = {(k.get("contentsKey") or "") for k in kits3}
+                    check("a REAL divergence splits the contentsKey, so the "
+                          "two kits stop merging in the UI",
+                          len(keys3) == 2,
+                          f"keys={[(k['instanceId'], (k.get('contentsKey') or '')[:8]) for k in kits3]}")
+                    check("the diverged kits keep their distinct instance ids",
+                          sorted(k["instanceId"] for k in kits3)
+                              == sorted(ids2),
+                          f"{sorted(k['instanceId'] for k in kits3)} vs {sorted(ids2)}")
+
 
         if not args.no_save:
             print("\n== PERSIST (save / load) ==")

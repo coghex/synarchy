@@ -18,7 +18,7 @@
 -- the saveModules registration in unit_ai.init. Nothing extra here.
 
 local unitAi   = require("scripts.unit_ai")
-local mv       = require("scripts.movement_speed")
+local ambient  = require("scripts.ambient_movement")
 local sleepGoal = require("scripts.unit_ai_sleep")
 
 local bearAi = package.loaded["scripts.bear_ai"] or {}
@@ -94,7 +94,8 @@ local function bearWanderExecute(uid, s, params)
     local r     = math.sqrt(math.random()) * params.wander_radius
     local tx = s.bearAnchor.x + math.cos(angle) * r
     local ty = s.bearAnchor.y + math.sin(angle) * r
-    unit.moveTo(uid, tx, ty, mv.meander(uid))  -- aimless wander → slow meander
+    -- Aimless wander → slow meander on a fall-free route (#1217).
+    ambient.wanderTo(uid, tx, ty)
     s.activityUntil = engine.gameTime()
         + randRange(params.wander_dur_min, params.wander_dur_max)
     if math.random() < params.anchor_drift_chance then
