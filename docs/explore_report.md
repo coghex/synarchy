@@ -76,6 +76,8 @@ cited lines.
 - [ ] EXPL-26. `World.Save.Storage`'s header says it "receives only" four of six parameters, and its numbered transaction omits the requirement-9 refusal
 - [ ] EXPL-27. 59 cross-module haddock links point at functions their named module does not export, concentrated on module-split seams
 - [ ] EXPL-28. `Engine.Asset.YamlVegetation`'s summary names a `data/vegetation.yaml` that does not exist; the data is a directory of five files
+- [ ] EXPL-29. `engine_contracts.md`'s enum-audit coverage counts are each off by one, in the paragraph that says not to hand-count them
+- [ ] EXPL-30. CLAUDE.md says `tools/README.md` "lists all ~85" probes; there are 89 and README names 83
 
 ---
 
@@ -2007,3 +2009,108 @@ distinct paths — two of them false positives from a regex splitting
 `src/World/Save/Compat/SessionV90.hs:62` and `:300` cite
 `scripts/lib/serialize.lua` while explicitly describing it as "long-removed"
 and "removed by #761", which is the point of those comments.
+
+---
+
+## Numeric claims in repository documentation
+
+A targeted sweep of the countable assertions in `CLAUDE.md` and
+`docs/engine_contracts.md`. Most held exactly, which is worth recording
+alongside the two that did not: `src/` really is 731 Haskell modules against a
+stated "~730"; the compiled-atlas corpus really is 7 unit trees, 7
+`data/units/*.yaml` files, 116 compiled atlas PNGs and 4,620 source animation
+frames, matching every statement of those figures in CLAUDE.md and in
+`Unit.Atlas.Load`'s "ALL SEVEN shipped units" header.
+
+### EXPL-29. `engine_contracts.md`'s enum-audit coverage counts are each off by one, in the paragraph that says not to hand-count them
+
+`docs/engine_contracts.md:1337-1342`:
+
+```markdown
+**Coverage.** Of the 43 guarded types, 38 are on the save wire and 28 are
+named by a live component today; the rest are guarded pre-emptively, which
+is the point of keying on the `Serialize`-via-`Generic` instance rather
+than on save reachability. Don't hand-count these: the audit prints the
+guarded total on every run, and `docs/save_compat/enum_baseline.json`'s
+per-type `onSaveWire` / `components` fields are the other two.
+```
+
+Running the audit this paragraph names:
+
+```
+$ python3 tools/enum_append_only_audit.py
+enum_append_only_audit.py: 44 guarded sum type(s) match docs/save_compat/enum_baseline.json
+```
+
+and counting the two `docs/save_compat/enum_baseline.json` fields it names:
+
+| Claim | Documented | Actual |
+|---|---|---|
+| guarded types | 43 | **44** |
+| entries with `onSaveWire` | 38 | **39** |
+| entries with a non-empty `components` | 28 | **29** |
+
+All three are off by exactly one, consistent with a single type having been
+appended without the prose being revisited — which is precisely what the
+audit's `--update-baseline` ratchet is designed to make routine.
+
+What lifts this above arithmetic drift is that this is the paragraph that says
+**"Don't hand-count these: the audit prints the guarded total on every run"**.
+It is itself the stale hand-count it warns against, and it cites the two
+baseline fields that disprove its own other two figures. A reader who follows
+its advice gets the right answer and finds the sentence that gave the advice
+contradicting it.
+
+**Severity: low.** Nothing is enforced by these numbers and the audit itself is
+green — `44 guarded sum type(s) match` — so no gate is weakened. Recorded
+because the three figures are trivially re-derivable from artifacts the same
+sentence points at, and because a documentation paragraph whose stated purpose
+is to stop people hand-counting should not be a hand-count.
+
+### EXPL-30. CLAUDE.md says `tools/README.md` "lists all ~85" probes; there are 89 and README names 83
+
+`CLAUDE.md:73-74`:
+
+```markdown
+4. **Behavior probes — opt-in, not a default gate.** ~85 headless
+   `tools/*_probe.py` scripts each boot a real engine and gate one system
+```
+
+and `CLAUDE.md:720`:
+
+```markdown
+engine, pass/fail checks). `tools/README.md` lists all ~85;
+```
+
+There are **89** probe files in `tools/`, and `python3 tools/ci_probes.py
+--status` — which CLAUDE.md itself designates "the authoritative list of every
+probe's CI eligibility — never trust a prose list of probe names" — enumerates
+89.
+
+The tilde absorbs 85 against 89. **"lists all ~85" does not**, and that is the
+actual defect: it is a COMPLETENESS claim about another file.
+`tools/README.md` names **83** distinct probes, so **six probes are absent from
+the file CLAUDE.md says lists them all**:
+
+- `blood_gpu_lifecycle_probe.py`
+- `construction_blueprint_footprint_probe.py`
+- `item_list_widget_probe.py`
+- `location_embark_probe.py`
+- `portal_ghost_probe.py`
+- `portal_location_probe.py`
+
+The discrepancy runs one way only — README names no probe that does not exist
+on disk, so nothing there is stale in the other direction.
+
+Four of the six are probes CLAUDE.md discusses BY NAME elsewhere in its own
+subsystem-contract section — `item_list_widget_probe` (the container window
+stack and the moving-target preemption proof), `location_embark_probe`
+(location discovery), and `blood_gpu_lifecycle_probe` (the needs-GPU blood
+gate). So the reader is told these exist, told README lists all of them, and
+will not find them there.
+
+**Severity: low.** Nothing is enforced by the count, and `ci_probes.py
+--status` remains authoritative and correct — CLAUDE.md's own instruction to
+prefer it over any prose list is exactly the right one and is what makes this
+harmless in practice. Recorded because "lists all" is checkable, is currently
+false by six, and points at a file a reader is being sent to as complete.
