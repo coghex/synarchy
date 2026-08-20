@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 import json
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -23,9 +24,11 @@ from world_audit import (  # type: ignore
     audit_dump, INT64_MIN, severity_of, classify_category,
     BUG_CATEGORIES, QUALITY_CATEGORIES, QUALITY_THRESHOLDS,
 )
+import world_baseline  # type: ignore
+import world_check  # type: ignore
 from world_check import (  # type: ignore
     CheckResult, check_issue_summary, check_determinism_status,
-    PASS, FAIL, IMPROVED,
+    check_seed, format_result, PASS, FAIL, IMPROVED,
 )
 
 
@@ -1255,6 +1258,196 @@ def test_check_determinism_single_run_safe() -> None:
     expect(not r.failures, f"no failures expected, got {r.failures}")
 
 
+# ----- Baseline content-hash gate (#1361) ----------------------------------
+#
+# These drive the real world_check.check_seed over synthetic dumps rather
+# than re-implementing hash equality here: the baseline fixture is built
+# by the real world_baseline.capture_seed, and every pass/fail decision
+# below is made by production code. A test that compared hashes itself
+# would still pass if check_seed stopped calling check_baseline_hash.
+
+HASH_ENTRY = {"seed": 4242, "world_size": 32, "region": [-1, -1, 1, 1]}
+
+
+def hash_tile(x: int, y: int, matId: int = 64) -> dict[str, Any]:
+    """A dry, flat, audit-clean land tile."""
+    return {
+        "x": x, "y": y, "v": x + y,
+        "terrainZ": 10, "surfaceZ": 10,
+        "matId": matId,
+        "fluidType": None, "fluidSurf": None,
+        "iceSurf": None, "iceMode": None,
+        "glacierZone": False, "beyondGlacier": False,
+    }
+
+
+def hash_dump_fixture(matId_at_index: tuple[int, int] | None = None
+                      ) -> list[dict[str, Any]]:
+    """A 6x6 flat dry grid, optionally with one tile's matId changed.
+
+    matId is the point: 64 (muck) and 70 both sit on flat terrain, so
+    neither trips WETLAND_ON_SLOPE or DESERT_SOIL_ON_SLOPE, and matId
+    appears in no statistic world_check compares. A one-tile change is
+    therefore invisible to tileCount, elevationStats, fluidStats and the
+    audit summary alike — exactly the drift class the content hash
+    exists to catch.
+    """
+    tiles = [hash_tile(x, y) for y in range(6) for x in range(6)]
+    if matId_at_index is not None:
+        index, matId = matId_at_index
+        tiles[index] = dict(tiles[index], matId=matId)
+    return tiles
+
+
+def capture_hash_baseline(dumps: list[list[dict[str, Any]]]) -> dict[str, Any]:
+    """Build a baseline the way world_baseline.py really builds one."""
+    pending = list(dumps)
+    original = world_baseline.run_dump
+    world_baseline.run_dump = lambda *a, **k: pending.pop(0)
+    try:
+        return world_baseline.capture_seed(
+            HASH_ENTRY["seed"], HASH_ENTRY["world_size"],
+            tuple(HASH_ENTRY["region"]), len(dumps),
+        )
+    finally:
+        world_baseline.run_dump = original
+
+
+def run_check_seed(baseline: dict[str, Any],
+                   current: list[list[dict[str, Any]]]) -> CheckResult:
+    """Run the production check_seed against a real on-disk baseline."""
+    pending = list(current)
+    original_run = world_check.run_dump
+    original_path = world_check.baseline_path
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "baseline.json"
+        path.write_text(json.dumps(baseline, indent=2) + "\n")
+        world_check.run_dump = lambda *a, **k: pending.pop(0)
+        world_check.baseline_path = lambda *a, **k: path
+        try:
+            return check_seed(HASH_ENTRY, runs=len(current))
+        finally:
+            world_check.run_dump = original_run
+            world_check.baseline_path = original_path
+
+
+def test_baseline_hash_match_passes() -> None:
+    """A dump reproducing its baseline's recorded hash passes."""
+    print("test_baseline_hash_match_passes")
+    clean = hash_dump_fixture()
+    baseline = capture_hash_baseline([clean, clean, clean])
+    expect(baseline["determinism"]["distinctHashes"] == 1,
+           f"fixture baseline should be deterministic, got "
+           f"{baseline['determinism']['distinctHashes']} distinct hashes")
+
+    r = run_check_seed(baseline, [hash_dump_fixture()])
+    expect(r.status == PASS, f"matching hash should PASS, got {r.status}: {r.failures}")
+    expect(not r.failures, f"no failures expected, got {r.failures}")
+    expect(not r.banners,
+           f"a gated deterministic seed needs no banner, got {r.banners}")
+
+
+def test_baseline_hash_mismatch_fails_on_aggregate_preserving_drift() -> None:
+    """A matId change no statistic models still fails, naming the seed.
+
+    This is the false-pass class the gate was added for: every existing
+    comparison sees identical values, so only the content hash can flag it.
+    """
+    print("test_baseline_hash_mismatch_fails_on_aggregate_preserving_drift")
+    clean = hash_dump_fixture()
+    baseline = capture_hash_baseline([clean, clean, clean])
+    drifted = hash_dump_fixture(matId_at_index=(7, 70))
+
+    # The drift really is invisible to every other comparison.
+    a = audit_dump(clean, seed=HASH_ENTRY["seed"])
+    b = audit_dump(drifted, seed=HASH_ENTRY["seed"])
+    expect(a.tile_count == b.tile_count
+           and a.elevation_stats == b.elevation_stats
+           and a.fluid_stats == b.fluid_stats
+           and a.summary() == b.summary(),
+           "matId fixture must be aggregate-preserving for this test to mean "
+           f"anything: {a.summary()} vs {b.summary()}")
+
+    r = run_check_seed(baseline, [drifted])
+    expect(r.status == FAIL, f"content drift should FAIL, got {r.status}")
+    hash_failures = [f for f in r.failures if "content hash mismatch" in f]
+    expect(len(hash_failures) == 1,
+           f"expected exactly one content-hash failure, got {r.failures}")
+    if hash_failures:
+        message = hash_failures[0]
+        expect(f"seed={HASH_ENTRY['seed']}" in message,
+               f"failure must name the seed, got {message!r}")
+        expect(baseline["determinism"]["hashes"][0] in message,
+               f"failure must expose the expected hash, got {message!r}")
+        expect(world_check.hash_dump(drifted) in message,
+               f"failure must expose the actual hash, got {message!r}")
+
+
+def test_baseline_hash_racy_baseline_is_announced_not_gated() -> None:
+    """A multi-hash baseline is neither silently passed nor silently failed."""
+    print("test_baseline_hash_racy_baseline_is_announced_not_gated")
+    clean = hash_dump_fixture()
+    variant = hash_dump_fixture(matId_at_index=(7, 70))
+    baseline = capture_hash_baseline([clean, variant, clean])
+    expect(baseline["determinism"]["distinctHashes"] == 2,
+           f"fixture baseline should be racy, got "
+           f"{baseline['determinism']['distinctHashes']} distinct hashes")
+
+    # A current dump matching NEITHER recorded hash: three samples of a
+    # race do not enumerate its outcomes, so this must not fail.
+    unseen = hash_dump_fixture(matId_at_index=(11, 71))
+    expect(world_check.hash_dump(unseen)
+           not in baseline["determinism"]["hashes"],
+           "the racy-case fixture must not accidentally match a recorded hash")
+
+    r = run_check_seed(baseline, [unseen])
+    expect(not any("content hash" in f for f in r.failures),
+           f"a racy baseline must not gate content identity, got {r.failures}")
+    banners = [b for b in r.banners if "racy baseline" in b]
+    expect(len(banners) == 1,
+           f"expected one racy-baseline banner, got {r.banners}")
+
+    # ...and the banner must survive the normal, non-verbose output, which
+    # prints format_result only. Notes are suppressed on a PASS, so a note
+    # would be exactly the silent pass this rule forbids.
+    line = format_result(r)
+    expect(all(b in line for b in banners),
+           f"banner must ride the seed's own output line: {line!r}")
+
+
+def test_baseline_hash_inconsistent_baseline_fails() -> None:
+    """A baseline whose deterministic flag contradicts its hashes fails."""
+    print("test_baseline_hash_inconsistent_baseline_fails")
+    clean = hash_dump_fixture()
+    baseline = capture_hash_baseline([clean, clean, clean])
+    baseline["determinism"]["deterministic"] = False
+
+    r = run_check_seed(baseline, [hash_dump_fixture()])
+    expect(r.status == FAIL,
+           f"a self-contradictory baseline should FAIL, got {r.status}")
+    expect(any("malformed baseline" in f for f in r.failures),
+           f"expected a malformed-baseline failure, got {r.failures}")
+
+
+def test_check_determinism_inactive_at_one_run() -> None:
+    """At runs==1 the determinism rule records nothing, in either direction.
+
+    The guard is explicit rather than incidental: one dump cannot be
+    compared with itself, so this branch must not read as though it gates
+    something. Content coverage at this setting comes from the baseline
+    hash instead.
+    """
+    print("test_check_determinism_inactive_at_one_run")
+    r = _result()
+    check_determinism_status(deterministic_baseline=True, deterministic_now=False,
+                             n_distinct=2, runs=1, result=r)
+    expect(r.status == PASS,
+           f"determinism status must be inactive at runs==1, got {r.status}")
+    expect(not r.failures and not r.improvements,
+           f"nothing should be recorded at runs==1, got "
+           f"{r.failures} / {r.improvements}")
+
+
 # ----- Runner --------------------------------------------------------------
 
 def main() -> int:
@@ -1298,6 +1491,11 @@ def main() -> int:
         test_check_determinism_regression,
         test_check_determinism_improvement,
         test_check_determinism_single_run_safe,
+        test_check_determinism_inactive_at_one_run,
+        test_baseline_hash_match_passes,
+        test_baseline_hash_mismatch_fails_on_aggregate_preserving_drift,
+        test_baseline_hash_racy_baseline_is_announced_not_gated,
+        test_baseline_hash_inconsistent_baseline_fails,
     ]
 
     for t in tests:
