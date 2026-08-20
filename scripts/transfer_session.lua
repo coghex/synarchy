@@ -106,7 +106,7 @@ package.loaded["scripts.transfer_session"] = M
 local nextSessionId = 1
 
 -- The contract's reason vocabulary (Unit.Transfer.transferReasonId).
--- These three literals name WHICH of B1's own creation-time failure
+-- These five literals name WHICH of B1's own creation-time failure
 -- branches fired (there is no other way to ask the contract "give me
 -- the id meaning source-missing" -- 'reasons' is one flat, unordered
 -- array covering every per-item reason, so a caller has to know which
@@ -119,9 +119,21 @@ local nextSessionId = 1
 -- NOT part of the engine's vocabulary -- it names a distinct B1-internal
 -- failure class (the live contract itself came back malformed/missing
 -- what B1 needs), never a transfer policy refusal.
+--
+-- 'source_ineligible' and 'out_of_range' joined the list with #1415,
+-- which gave 'M.create' the two source rules 'M.resolveSource' had
+-- always enforced and it never did. Both are the engine's OWN answer
+-- to the condition they report, not a name invented here:
+-- Unit.Transfer.planItemWith refuses an uncommandable source with
+-- ReasonSourceIneligible, and a page mismatch is exactly how its
+-- 'reachable' check fails, which it reports as ReasonOutOfRange. The
+-- self-transfer rule needs no new id at all -- the engine maps
+-- 'from == to' onto ReasonReceiverIneligible, which B1 already named.
 local REASON_SOURCE_MISSING       = "source_missing"
+local REASON_SOURCE_INELIGIBLE    = "source_ineligible"
 local REASON_RECEIVER_MISSING     = "receiver_missing"
 local REASON_RECEIVER_INELIGIBLE  = "receiver_ineligible"
+local REASON_OUT_OF_RANGE         = "out_of_range"
 local REASON_CONTRACT_UNAVAILABLE = "contract_unavailable"
 
 -- Likewise NOT engine vocabulary, and named the same way and for the
@@ -216,8 +228,10 @@ end
 -- starts rather than only the first time a player happens to hit an
 -- affected branch.
 local function checkVocabulary()
-    for _, id in ipairs({ REASON_SOURCE_MISSING, REASON_RECEIVER_MISSING,
-                           REASON_RECEIVER_INELIGIBLE }) do
+    for _, id in ipairs({ REASON_SOURCE_MISSING, REASON_SOURCE_INELIGIBLE,
+                           REASON_RECEIVER_MISSING,
+                           REASON_RECEIVER_INELIGIBLE,
+                           REASON_OUT_OF_RANGE }) do
         if not resolveReason(id) then
             engine.logWarn("transfer_session: reason id '" .. id
                 .. "' missing from unit.transferContract() -- drifted "
@@ -537,17 +551,42 @@ function M.resolveSource(selectedUids, excludeUid, target, requiredAction)
 end
 
 -- Create (or replace) the active transfer session for `sourceUid` ->
--- `(kind, destinationId)`. Re-validates BOTH sides against fresh live
--- state (never the menu-build-time snapshot the caller may have used to
--- decide whether to show "Transfer" at all), so a destination destroyed
--- or made ineligible between right-click and the player's actual click
--- is caught here as a stale target (requirement 9) instead of producing
--- a session that points at nothing.
+-- `(kind, destinationId)`. Re-validates BOTH sides, and the PAIR they
+-- form, against fresh live state (never the menu-build-time snapshot
+-- the caller may have used to decide whether to show "Transfer" at
+-- all), so a destination destroyed or made ineligible between
+-- right-click and the player's actual click is caught here as a stale
+-- target (requirement 9) instead of producing a session that points at
+-- nothing.
+--
+-- Exactly what each side is checked for, because this is the ONE place
+-- a session is built and it is deliberately reusable by surfaces that
+-- never ran 'M.resolveSource' (#1415):
+--
+--   * DESTINATION -- it still resolves as an endpoint, and it is
+--     eligible.
+--   * PAIR -- it is not the source itself, and it is on the source's
+--     page.
+--   * SOURCE -- the unit exists, it still projects as an endpoint, it
+--     is eligible (which for a unit IS player-commandability --
+--     Unit.Transfer.endpointEligible is `uevCommandable` and nothing
+--     else), and its SPECIES can run the escort action.
+--
+-- Check ORDER is the engine's, not this module's convenience: a call
+-- wrong on both sides reports the DESTINATION first (the placement rule
+-- the escort-capability check already documented), and a self-pair
+-- reports `receiver_ineligible` ahead of any source rule exactly as
+-- Unit.Transfer.planItemWith orders its own refusals. What this does
+-- NOT re-derive is the engine's REACH rule: a fresh session is always
+-- `approaching` and adjacency is the escort's job, so the pair check
+-- here is page identity alone.
 --
 -- Returns the session table on success, or (nil, reasonId) on failure.
--- A failure emits a player-visible "unit_warning" event and mutates
--- NEITHER endpoint -- B1 never moves an item; that stays C2's job once
--- C1 has picked one.
+-- A failure emits ONE player-visible "unit_warning" event for the
+-- source unit and mutates NOTHING -- no item moves (B1 never moves an
+-- item; that stays C2's job once C1 has picked one), and an
+-- already-active session keeps its panels, its phase and its held units
+-- exactly as they were.
 function M.create(sourceUid, kind, destinationId)
     if not sourceUid or not unit.exists(sourceUid) then
         engine.emitEvent("unit_warning", "Cannot transfer: source unit not found")
@@ -567,6 +606,65 @@ function M.create(sourceUid, kind, destinationId)
         return nil, resolveReason(REASON_RECEIVER_INELIGIBLE) or REASON_CONTRACT_UNAVAILABLE
     end
 
+    -- The PAIR rules and the remaining SOURCE rules, in the engine's own
+    -- order (#1415). Each is one 'M.resolveSource' already enforced and
+    -- 'M.create' trusted the caller for; the two menus screen all of
+    -- them before they ever get here, so nothing player-facing changes
+    -- -- what changes is that a surface which never ran resolveSource
+    -- can no longer mint a session the contract will refuse every
+    -- commit from.
+
+    -- Identity, not state, and ahead of every source rule because
+    -- Unit.Transfer.planItemWith puts it there: `from == to` is the
+    -- engine's own ReasonReceiverIneligible, so a caller that hands the
+    -- same unit twice gets the same id from B1 as from a commit. Left
+    -- unchecked this was the one failure NOTHING caught afterwards --
+    -- 'endpointFailure' validates each side independently, so both
+    -- passed, and the escort walked to itself forever.
+    if kind == KIND_UNIT and destinationId == sourceUid then
+        engine.emitEventForUnit("unit_warning",
+            "Cannot transfer: a unit cannot transfer to itself", sourceUid)
+        return nil, resolveReason(REASON_RECEIVER_INELIGIBLE)
+                    or REASON_CONTRACT_UNAVAILABLE
+    end
+
+    -- The source's own live projection, which is where the remaining
+    -- two rules are decided. Asked ONCE: 'eligible' and 'page' are both
+    -- read off it, and a second query could answer differently.
+    local srcEp = unit.transferEndpointInfo({ kind = KIND_UNIT,
+                                              id   = sourceUid })
+    if not srcEp then
+        -- The existence guard at the top already passed, so the unit is
+        -- still addressable and the warning goes to it. Reported as
+        -- source-missing rather than as a contract failure because that
+        -- is what it is, and what planItemWith calls the same condition
+        -- (it notes an absent source ahead of every pair-policy check).
+        engine.emitEventForUnit("unit_warning",
+            "Cannot transfer: source unit not found", sourceUid)
+        return nil, resolveReason(REASON_SOURCE_MISSING)
+                    or REASON_CONTRACT_UNAVAILABLE
+    end
+    if not srcEp.eligible then
+        engine.emitEventForUnit("unit_warning",
+            "Cannot transfer: this unit cannot transfer items", sourceUid)
+        return nil, resolveReason(REASON_SOURCE_INELIGIBLE)
+                    or REASON_CONTRACT_UNAVAILABLE
+    end
+    -- Page identity is the half of Unit.Transfer's 'reachable' rule a
+    -- session can decide at creation; the other half (adjacency) is the
+    -- escort's whole job and is deliberately NOT re-derived here. A
+    -- cross-page pair is refused with 'out_of_range', the id that rule
+    -- fails as, and refusing it HERE rather than leaving it to the
+    -- commit is the point: the escort would simply never arrive, so the
+    -- session would sit in `approaching` with nothing ever going wrong
+    -- enough for the liveness tick to close it.
+    if srcEp.page ~= info.page then
+        engine.emitEventForUnit("unit_warning",
+            "Cannot transfer: target is not in this world", sourceUid)
+        return nil, resolveReason(REASON_OUT_OF_RANGE)
+                    or REASON_CONTRACT_UNAVAILABLE
+    end
+
     -- BOTH endpoint kinds are resolved by membership, not just the
     -- destination: B1's gesture always makes the source a unit, but
     -- "always a unit" is still an id this module names, and naming an
@@ -580,6 +678,10 @@ function M.create(sourceUid, kind, destinationId)
     -- so the capability is re-checked here rather than trusted. Placed
     -- after the destination checks so a call that is wrong on both
     -- counts still reports the destination first, as it always did.
+    -- It stays LAST of the source rules for the same reason: it is this
+    -- module's own capability question, not one of the contract's, so
+    -- every id the engine would produce for this pair is reported
+    -- before the one only Mode A knows about.
     if not require("scripts.unit_ai_actions").unitHas(sourceUid,
                                                       ESCORT_ACTION) then
         engine.emitEventForUnit("unit_warning",
@@ -619,11 +721,15 @@ function M.create(sourceUid, kind, destinationId)
         destination            = { kind = destinationKind,
                                     id   = destinationId },
         destinationDisplayName = info.displayName,
-        -- Same page on both sides by construction: the contract refuses
-        -- any cross-page request outright (Unit.Transfer's own page
-        -- check), so the destination's resolved page IS the source's
-        -- page for any real player interaction (hit-testing only ever
-        -- matches entities on the currently visible world).
+        -- Same page on both sides, and since #1415 that is a CHECKED
+        -- fact rather than an assumed one: the pair gate above refuses
+        -- a cross-page creation outright, so the destination's resolved
+        -- page IS the source's page for every session that exists. (It
+        -- was always true of real player interaction -- hit-testing only
+        -- ever matches entities on the currently visible world -- and
+        -- the contract refuses a cross-page request at commit time
+        -- anyway; what the check adds is that a caller reaching this
+        -- boundary directly cannot make the record lie.)
         --
         -- A creation-time RECORD, and nothing more (#1250 review): the
         -- escort reads live positions for everything it decides -- the

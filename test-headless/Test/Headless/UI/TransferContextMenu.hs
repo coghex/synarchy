@@ -739,6 +739,99 @@ spec = describe "Transfer context menu" $ do
             after ← evalDebug ls "return require('scripts.transfer_session').get()"
             after `shouldBe` "null"
 
+        -- #1415: the source and PAIR rules 'M.resolveSource' had always
+        -- enforced and 'M.create' trusted its caller for. Driven
+        -- DIRECTLY -- no init_context_menu, no tryUnitMenu, no click --
+        -- because the whole claim being hardened is that this boundary
+        -- is reusable by a surface that never resolved a source.
+
+        it "a source that no longer projects as an endpoint yields no \
+           \session, reports source_missing, and warns the source once" $
+           \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls warningSpy
+            -- Answers for the DESTINATION only. 'unit.exists' still
+            -- says yes (baseSetupLua's default), so the top guard
+            -- passes and it is the PROJECTION that comes back empty --
+            -- which is the ordering Unit.Transfer.planItemWith uses
+            -- too, classifying an absent source ahead of every pair
+            -- rule.
+            run ls (pairStub ("building", 530, "p") Nothing)
+            r ← evalDebug ls
+                "local s, reason = require('scripts.transfer_session')\
+                \.create(7, 'building', 530); \
+                \return { made = tostring(s), reason = tostring(reason), \
+                \         warns = _G.__warnCount(7) }"
+            r `shouldSatisfy` T.isInfixOf "\"made\":\"nil\""
+            r `shouldSatisfy` T.isInfixOf "\"reason\":\"source_missing\""
+            r `shouldSatisfy` T.isInfixOf "\"warns\":1"
+            after ← evalDebug ls "return require('scripts.transfer_session').get()"
+            after `shouldBe` "null"
+
+        it "an INELIGIBLE source is reported as contract_unavailable when \
+           \the live contract has dropped source_ineligible (#1014 review \
+           \round 2's rule, applied to the id #1415 adds)" $ \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls (pairStub ("building", 531, "p") (Just (7, False, "p")))
+            -- Everything the module names EXCEPT the id this branch
+            -- wants, so a fallback to the unverified string would show
+            -- up as 'source_ineligible' here.
+            run ls (contractStub [ "source_missing", "receiver_missing"
+                                 , "receiver_ineligible", "out_of_range" ])
+            r ← evalDebug ls
+                "local s, reason = require('scripts.transfer_session')\
+                \.create(7, 'building', 531); return reason"
+            r `shouldBe` "\"contract_unavailable\""
+            after ← evalDebug ls "return require('scripts.transfer_session').get()"
+            after `shouldBe` "null"
+
+        it "…and a CROSS-PAGE pair the same way when out_of_range is gone" $
+           \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            -- Identical coordinates on both sides, so the only thing
+            -- separating these endpoints is page identity.
+            run ls (pairStub ("building", 532, "p") (Just (7, True, "q")))
+            run ls (contractStub [ "source_missing", "source_ineligible"
+                                 , "receiver_missing", "receiver_ineligible" ])
+            r ← evalDebug ls
+                "local s, reason = require('scripts.transfer_session')\
+                \.create(7, 'building', 532); return reason"
+            r `shouldBe` "\"contract_unavailable\""
+            after ← evalDebug ls "return require('scripts.transfer_session').get()"
+            after `shouldBe` "null"
+
+        it "the boot-time vocabulary check names source_ineligible and \
+           \out_of_range, so drift in either is visible at startup" $
+           \env → do
+            ls ← newBareLuaBackend env
+            run ls baseSetupLua
+            run ls "_G.__logged = {}; engine.logWarn = function(m) \
+                   \_G.__logged[#_G.__logged + 1] = tostring(m) end; "
+            -- A contract advertising every id the module named BEFORE
+            -- #1415 and neither of the two it names now.
+            run ls (contractStub [ "source_missing", "receiver_missing"
+                                 , "receiver_ineligible" ])
+            drifted ← evalDebug ls
+                "require('scripts.transfer_session').init('transfer_session'); \
+                \return table.concat(_G.__logged, '\\n')"
+            drifted `shouldSatisfy` T.isInfixOf "'source_ineligible'"
+            drifted `shouldSatisfy` T.isInfixOf "'out_of_range'"
+            -- The same check against a contract that still advertises
+            -- them warns about neither, so the assertion above is about
+            -- DRIFT rather than about a check that fires unconditionally.
+            run ls "_G.__logged = {}; "
+            run ls (contractStub [ "source_missing", "source_ineligible"
+                                 , "receiver_missing", "receiver_ineligible"
+                                 , "out_of_range" ])
+            clean ← evalDebug ls
+                "require('scripts.transfer_session').init('transfer_session'); \
+                \return table.concat(_G.__logged, '\\n')"
+            clean `shouldNotSatisfy` T.isInfixOf "'source_ineligible'"
+            clean `shouldNotSatisfy` T.isInfixOf "'out_of_range'"
+
         it "the endpoint-kind/state identity is validated against the live contract by MEMBERSHIP (#1085 §11)" $ \env → do
             -- #1014 round 1 read operations[1]/states[1] POSITIONALLY
             -- because the contract was three flat arrays. A2 removed the
@@ -950,14 +1043,89 @@ baseSetupLua = T.concat
     , "unit.transferEndpointInfo = function(ep) return nil end; "
     ]
 
+-- | @unit.transferEndpointInfo@ answering for exactly one DESTINATION
+-- and (optionally) one SOURCE unit, each on a page of the caller's
+-- choosing -- the stub #1415's own cases need, because each of them
+-- turns on a property of the source projection that
+-- 'endpointInfoStubAt' deliberately makes uniform.
+--
+-- Both endpoints report the SAME grid position, so a case that
+-- separates them by page is proving page identity and nothing else: at
+-- equal coordinates a distance rule could not tell them apart.
+-- @Nothing@ leaves the source unanswered, which is how a unit whose
+-- projection has stopped resolving reads.
+pairStub ∷ (Text, Int, Text) → Maybe (Int, Bool, Text) → Text
+pairStub (dstKind, dstId, dstPage) mSrc = T.concat
+    [ "unit.transferEndpointInfo = function(ep) "
+    , "  if ep and ep.kind == '", dstKind, "' and ep.id == ", tshow dstId
+    , " then "
+    , "    return { eligible = true, displayName = 'Cargo Hold', page = '"
+    , dstPage, "', gridX = 10, gridY = 20, capacity = 200, "
+    , "             storedWeight = 0, contents = {} } "
+    , "  end; "
+    , case mSrc of
+        Nothing → ""
+        Just (srcId, srcEligible, srcPage) → T.concat
+            [ "  if ep and ep.kind == 'unit' and ep.id == ", tshow srcId
+            , " then "
+            , "    return { eligible = "
+            , if srcEligible then "true" else "false"
+            , ", displayName = 'Acolyte', page = '", srcPage
+            , "', gridX = 10, gridY = 20, capacity = 200, "
+            , "             storedWeight = 0, contents = {} } "
+            , "  end; " ]
+    , "  return nil end; "
+    ]
+
+-- | @unit.transferContract()@ advertising exactly these reason ids (and
+-- the state/endpoint-kind vocabulary every case here keeps whole), so a
+-- case can remove ONE id and see what the module does without it.
+contractStub ∷ [Text] → Text
+contractStub reasons = T.concat
+    [ "unit.transferContract = function() return { reasons = {"
+    , T.intercalate ", " [ T.concat [ "'", r, "'" ] | r ← reasons ]
+    , "}, states = {'queued'}, "
+    , "endpointKinds = { unit = true, building = true } } end; "
+    ]
+
+-- | Record the uid every @unit_warning@ is attributed to, so a refusal
+-- can be checked for emitting exactly ONE and for aiming it at the
+-- SOURCE (#1415 requirement 4). Replaces the verb outright: this
+-- backend has no event log to read back through, and what is under test
+-- is the attribution, not the engine's own emit.
+warningSpy ∷ Text
+warningSpy = T.concat
+    [ "_G.__warns = {}; "
+    , "engine.emitEventForUnit = function(cat, text, uid) "
+    , "  if cat == 'unit_warning' then "
+    , "    _G.__warns[#_G.__warns + 1] = tostring(uid) end "
+    , "end; "
+    , "_G.__warnCount = function(uid) "
+    , "  local n = 0; "
+    , "  for _, u in ipairs(_G.__warns) do "
+    , "    if u == tostring(uid) then n = n + 1 end "
+    , "  end; return n end; "
+    ]
+
 -- | @unit.getSelected()@ returning exactly this fixed uid list.
 selectedStub ∷ [Int] → Text
 selectedStub uids = "unit.getSelected = function() return {"
     <> T.intercalate "," (map (T.pack . show) uids) <> "} end; "
 
--- | @unit.transferEndpointInfo({ kind, id })@ answering ONLY for this
--- one endpoint -- every other endpoint falls through to baseSetupLua's
--- default nil, matching a genuinely stale/missing target.
+-- | @unit.transferEndpointInfo({ kind, id })@ answering for this one
+-- named endpoint, plus a generic live projection for every OTHER unit
+-- id -- which is what a selected SOURCE reads as. A building id this
+-- stub does not name still falls through to baseSetupLua's default nil,
+-- matching a genuinely stale/missing target.
+--
+-- The source half is not decoration (#1415): since @M.create@ projects
+-- its source endpoint too, a stub answering for the destination alone
+-- would make every unchanged success case below refuse with
+-- @source_missing@ -- and it would be refusing against a world no
+-- engine can produce, in which the unit the menu just ranked has no
+-- projection at all. A case that needs the source to be missing,
+-- ineligible or elsewhere says so with its own stub rather than
+-- relying on this one's silence.
 endpointInfoStub ∷ Text → Int → Bool → Text → Text
 endpointInfoStub kind rid eligible displayName =
     endpointInfoStubAt kind rid eligible displayName (10, 20)
@@ -974,6 +1142,14 @@ endpointInfoStubAt kind rid eligible displayName (gx, gy) = T.concat
     , ", displayName = '", displayName, "', page = 'p', gridX = ", tshow gx
     , ", gridY = ", tshow gy
     , ", capacity = 200, storedWeight = 0, contents = {} } "
+    , "  end; "
+    -- Same page ('p') as the named endpoint on purpose: these scenarios
+    -- are all one-world, so a source that projected elsewhere would
+    -- refuse every one of them as cross-page.
+    , "  if ep and ep.kind == 'unit' then "
+    , "    return { eligible = true, displayName = 'Acolyte', "
+    , "             page = 'p', gridX = 1, gridY = 2, capacity = 200, "
+    , "             storedWeight = 0, contents = {} } "
     , "  end; return nil end; "
     ]
 
