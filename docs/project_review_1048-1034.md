@@ -7,7 +7,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 ## Status
 
 - [x] PRR-1. Shutdown comments still claim every worker stops after Vulkan teardown — [#1408]
-- [ ] PRR-2. `logEntryWith` documents a logging skip list that no longer exists
+- [x] PRR-2. `logEntryWith` documents a logging skip list that no longer exists — [#1410]
 - [ ] PRR-3. Shared YAML loading collapses every asset loader's source attribution
 
 ## 1. Shutdown lifecycle documentation
@@ -36,7 +36,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## 2. Logging contracts
 
-### PRR-2. `logEntryWith` documents a logging skip list that no longer exists
+### [#1410] PRR-2. `logEntryWith` documents a logging skip list that no longer exists
 
 > **Captured note:** Remove the `logEntryWith` Haddock's claim that `extractCallSite` has an unchanged skip list. PR #1042 deleted that mechanism immediately before PR #1043 introduced the shared helper and its stale explanation.
 
