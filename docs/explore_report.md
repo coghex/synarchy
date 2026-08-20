@@ -81,6 +81,7 @@ cited lines.
 - [ ] EXPL-31. `Unit.Transfer`'s header calls its serializable set "the six types" and then names seven
 - [ ] EXPL-32. `runGatedByCaptureLock` cites "the same shape every other owner uses" and names Combat, which acks only while paused
 - [ ] EXPL-33. CLAUDE.md's `text_wrap.lua` summary names two functions and four consumers; there are three functions and ten
+- [ ] EXPL-34. `flattenItemInstances` says "all three now go through this one definition" and enumerates three; there are four
 
 ---
 
@@ -2405,3 +2406,88 @@ Recorded so the negative results are on file and are not re-derived:
   passes `frameIdx` for both arguments of `renderSceneFrame`.
 - **`World/Render/Quads.hs:75`** really does use the 128-chunk fallback that
   `Engine.Loop.Frame.activeWorldCircumferenceTiles` cites as "the same default".
+
+---
+
+## Save-system item walk
+
+### EXPL-34. `flattenItemInstances` says "all three now go through this one definition" and enumerates three; there are four
+
+`src/World/Save/Types.hs:793-799`:
+
+```haskell
+--   THE recursive item walk of the save system (#1090). It used to be
+--   written out three times, once per consumer; all three now go
+--   through this one definition, together with 'pageItemContainers'
+--   below: 'World.Save.Snapshot.allItemInstanceIds' (the id-allocator
+--   and duplicate-id checks),
+--   'Engine.Scripting.Lua.API.Save.Integrity.knownEntitiesFromSaveData'
+--   (the load-time known-entity set), and 'missingItemDefReferences'.
+```
+
+`flattenItemInstances` has FOUR consumers:
+
+| Consumer | Call site | Named in the comment? |
+|---|---|---|
+| `World.Save.Snapshot.allItemInstanceIds` (defined `:336`) | `src/World/Save/Snapshot.hs:343` | yes |
+| `Engine.Scripting.Lua.API.Save.Integrity.knownEntitiesFromSaveData` (defined `:38`) | `src/Engine/Scripting/Lua/API/Save/Integrity.hs:81` | yes |
+| `missingItemDefReferences` (defined `:913`, same module) | `src/World/Save/Types.hs:937` | yes |
+| **`World.Save.Integrity.pageEntitiesFrom`** (defined `:373`) | `src/World/Save/Integrity.hs:381` | **no** |
+
+**The unnamed consumer uses exactly the idiom the comment describes.**
+`pageEntitiesFrom` calls `pageItemContainers ItemsGroundFirst` at
+`src/World/Save/Integrity.hs:378` and `flattenItemInstances` at `:381` — the
+same paired walk, in the same shape, as all three named consumers. The
+companion function tracks identically: `pageItemContainers` has three external
+call sites (`Snapshot.hs:340`, `Integrity.hs:378`,
+`Lua/API/Save/Integrity.hs:78`) plus one internal (`Types.hs:921`) — the same
+four consumers, so the pair really is consumed as a pair everywhere.
+
+**It is not an obscure caller.** `transferOrderRefs`' own haddock in that same
+file (`src/World/Save/Integrity.hs:318-322`) treats `pageEntitiesFrom` as a
+first-class stage of the integrity graph:
+
+> 'orderRefErrors' (wrong-page, fatal) and 'danglingOrderRefErrors' (absent,
+> tolerated) both consume it, and the load boundary consumes it a third time
+> through 'pageEntitiesFrom', so a reference kind added to an order is checked
+> everywhere from one edit.
+
+**What is true and what is not.** "It used to be written out three times, once
+per consumer" is a historical statement about the pre-#1090 tree and is not in
+question. The falsified part is "**all three now** go through this one
+definition", followed by an enumeration that stops at three. `pageEntitiesFrom`
+belongs to the later transfer-order integrity work (#1246), so this is the
+familiar shape seen in EXPL-29, EXPL-30 and EXPL-31: a consumer added after a
+consolidation, with the consolidation's own count left behind.
+
+**Severity: low.** No behaviour is involved, and the consolidation itself is
+intact — the fourth consumer DOES route through the shared walk, which is the
+invariant that matters. Recorded because the sentence opens "THE recursive item
+walk of the save system" and then enumerates its consumers, which is an
+exhaustiveness claim, in a module whose entire subject is that nothing walks
+items privately any more.
+
+#### Also verified exact in this pass
+
+- **`wsSpoilRef` "has exactly two writers"**
+  (`src/World/Render/SpoilQuads.hs:124-132`) holds as written: the only writes
+  are `src/World/Thread/Command/Edit/Dig.hs:158` and `:317` and
+  `src/World/Load/Stage.hs:240`, i.e. the two modules named. Its further claim
+  that "the scripting API only READS this state" also holds —
+  `src/Engine/Scripting/Lua/API/World/Query.hs:66` and `:232` are both
+  `readIORef` — so the deliberately-raw (unwrapped) chunk lookup it justifies
+  is sound.
+- **`WorldGenParamsDTO`'s "all five are decode-only"**
+  (`src/World/Save/Component/WorldGen.hs:1095-1103`) is exact: five frozen DTOs
+  are named and five are declared — `WorldGenParamsDTOv5` (`:1200`), `v4`
+  (`:1302`), `v3` (`:1403`), `v2` (`:1503`), `v1` (`:1599`).
+- **`Unit.Thread.Movement.Climb`'s spelled-out slip-chance formula**
+  (`:44-55`) matches `slipChancePerZ` term for term — base 0.05, squared skill
+  modifier, the `1.5 / (dex × str)` control modifier clamped to [0.1, 5], the
+  `max(1, mass/70)` weight modifier, and the final [0.001, 0.5] clamp. The
+  code's extra `max 0.05` floor on `dex × str` is a divide-by-zero guard the
+  outer clamp already subsumes, so the documented formula is equivalent for
+  every reachable input. `heightPerClimbZ = baselineUnitHeight = 1.8`
+  (`Movement/Types.hs:41`) really does give a baseline acolyte a climb reach of
+  exactly 1 z, and `data/units/acolyte.yaml:40` really does declare a height
+  mean of 1.8.
