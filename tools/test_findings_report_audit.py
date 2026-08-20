@@ -251,9 +251,8 @@ def test_real_report() -> None:
            f"the real report has one heading per checklist entry "
            f"({len(checklist)} vs {len(headings)})")
     markers = {entry.marker for entry in headings}
-    for form in ("[no-issue]", "[deferred]"):
-        expect(form in markers,
-               f"the real report's `{form}` headings are recognised")
+    expect("[no-issue]" in markers,
+           "the real report's `[no-issue]` headings are recognised")
     expect(any(m.startswith("[#") for m in markers),
            "the real report's issue-number headings are recognised")
     # There is deliberately NO "at least one bare heading" case here, and
@@ -277,10 +276,33 @@ def test_real_report() -> None:
     # for one would be vacuous by construction, which is worse than an
     # absent check because it reads as coverage.
     #
+    # There is deliberately NO "at least one `[deferred]` heading" case
+    # either, and it was removed for the SAME reason, one step later.
+    # `[deferred]` reads like a disposition but is transitional: it means
+    # "blocked on a stated precondition", so when that precondition lands
+    # the processing lane files the entry and the marker becomes `[#N]`.
+    # A fully caught-up report therefore has ZERO of them, and asserting
+    # one exists measured the deferral backlog rather than the lexer.
+    # Master 559e946f filed the last two (CH-67 as #1481, CH-138 as
+    # #1482), taking `[deferred]` headings from 2 to 0 and turning this
+    # self-test red on master and on every branch built against it, none
+    # of which had touched the report -- the identical failure the bare
+    # case above had already produced at 8f451433.
+    #
+    # Only `[no-issue]` and `[#N]` are terminal, and only they accumulate
+    # and never leave, so only they can back a real-report assertion. Do
+    # not add a third form here without first checking it is terminal.
+    #
+    # No coverage is lost here either: `[deferred]` is exercised three
+    # times over by the synthetic fixtures -- as an agreeing form, as the
+    # losing side of a differing-marker pair, and in CH-67's shape of an
+    # UNCHECKED box whose marker carries a precondition -- and this file
+    # owns all three, so none of them can expire.
+    #
     # What the real report is here to catch is the lexer that silently
     # stops recognising markers: every heading would read as bare, both
     # sides would then agree, and the audit would pass everything. The
-    # three form assertions above ARE that guard -- each needs a real
+    # two form assertions above ARE that guard -- each needs a real
     # marker to survive lexing -- and they hold on a fully dispositioned
     # report, because terminal dispositions accumulate and never leave.
 
