@@ -80,6 +80,7 @@ cited lines.
 - [ ] EXPL-30. CLAUDE.md says `tools/README.md` "lists all ~85" probes; there are 89 and README names 83
 - [ ] EXPL-31. `Unit.Transfer`'s header calls its serializable set "the six types" and then names seven
 - [ ] EXPL-32. `runGatedByCaptureLock` cites "the same shape every other owner uses" and names Combat, which acks only while paused
+- [ ] EXPL-33. CLAUDE.md's `text_wrap.lua` summary names two functions and four consumers; there are three functions and ten
 
 ---
 
@@ -2308,3 +2309,99 @@ Verified truthful in the same module, so a fix does not disturb any of it:
 - `promoteToRunning`'s documented four-row transition table matches its
   `atomicModifyIORef'` exactly, and the stated requirement that the read and
   the write be ONE atomic step is honoured.
+
+---
+
+## Lua text display
+
+### EXPL-33. CLAUDE.md's `text_wrap.lua` summary names two functions and four consumers; there are three functions and ten
+
+`CLAUDE.md`'s #1159 text-display contract:
+
+```markdown
+Pixel-width wrapping goes through `scripts/ui/text_wrap.lua` —
+`byCharacter` (the debug console) and `byWord` (all three log panels) —
+rather than a fourth private copy.
+```
+
+The rule this sentence exists to state — one shared code-point-aware
+implementation, no private copies — HOLDS, and nothing in `scripts/` implements
+a rival walk. The parenthetical attributions do not.
+
+**Measured across `scripts/`:**
+
+| Function | Defined | Consumers |
+|---|---|---|
+| `textWrap.byCharacter` | `scripts/ui/text_wrap.lua:48` | `shell.lua` — **1**, exactly the debug console |
+| `textWrap.byWord` | `scripts/ui/text_wrap.lua:73` | `combat_log.lua`, `unit_log.lua`, `injury_log_panel.lua`, **`etymology_panel.lua`** — **4** |
+| `textWrap.truncateToWidth` | `scripts/ui/text_wrap.lua:148` | `event_log.lua`, `popup.lua`, `loading_screen.lua`, `ui/list.lua`, `ui/item_list.lua` — **5** |
+
+Three departures:
+
+1. **`byWord` has four consumers, and one is not a log panel.**
+   `scripts/etymology_panel.lua` is the name-etymology popup (#1104's single
+   panel for all three entry points), not a log.
+2. **`event_log.lua` never calls `byWord`.** The archetypal log panel requires
+   the module at `:34` and uses `truncateToWidth` at `:534`, `:538` and `:549`.
+   So whichever three panels "all three log panels" is counting, the primary
+   event log is not among the word-wrapping ones.
+3. **The module exports a THIRD function the sentence has no room for.**
+   `truncateToWidth` has more consumers than either wrapping function, and the
+   framing "pixel-width wrapping goes through … `byCharacter` and `byWord`"
+   describes the module as doing one job when it does two.
+   `scripts/ui/item_list.lua:372-376` documents its own thin re-export of it as
+   the shared implementation, so the third function is load-bearing rather than
+   incidental.
+
+**The module's own header is accurate**, which is what makes this a CLAUDE.md
+defect rather than a code one. `scripts/ui/text_wrap.lua:1-12`:
+
+```lua
+-- Shared pixel-width FITTING for text DISPLAY surfaces (#1159, #1107):
+-- wrapping text that may run onto more lines, and truncating text that
+-- must stay on one.
+--
+-- [...] this module is the one implementation
+-- that does, shared by the debug console (character wrap) and the log
+-- panels (word wrap with a character hard-break).
+```
+
+It names BOTH jobs — wrapping and truncating — and says "the log panels"
+without asserting a count. The summary in CLAUDE.md narrowed both.
+
+**Severity: low-medium.** No behaviour is involved and the no-private-copies
+rule is intact. Above the nit tier because CLAUDE.md is the always-loaded file
+and this is the entry a contributor reads before adding a display surface: told
+the module offers two WRAPPING functions with a fixed four-consumer roster,
+someone who needs single-line truncation has been given no reason to believe
+`text_wrap.lua` covers their case — and would write exactly the private copy
+the sentence's last clause forbids.
+
+#### Also verified exact in this pass
+
+Recorded so the negative results are on file and are not re-derived:
+
+- **`scripts/unit_ai.lua`'s #538 split.** Its only `utility =` / `execute =`
+  occurrences are action-registry wiring pointing at submodule functions
+  (`combat.retreatUtility`, `needs.idleUtility`, …), never an inline body — so
+  "entry/orchestration module only" holds. Every submodule its header names
+  exists, `unit_ai_locations.lua` included, and the five designation-job fields
+  land in exactly the four files claimed, with `s.tillJob` and `s.plantJob`
+  sharing `scripts/unit_ai_farm.lua`.
+- **`World.Generate.Chunk.generateLoadedChunk`.** "Chunk loading and the
+  zoom-map ore survey both go through here" is exactly its consumer set:
+  `World/Thread/ChunkLoading.hs:97` and `:275`, and `World/Thread/Cursor.hs:188`
+  (the Resources-tab ore survey, which `World/Thread/Helpers.hs:68` calls the
+  "zoom-chunk ore survey").
+- **`Engine.Loop.Frame.computeAmbientLight`.** Both inline value comments are
+  arithmetically exact — day `0.5 + 0.2·sin` gives 0.5 at the horizon and 0.7
+  at noon, night `0.15 + 0.35·(1+sin)` gives 0.15 at midnight and 0.5 at the
+  horizon. This also confirms `Engine/Core/Init.hs`'s
+  `sunAngleRef ← newIORef 0.25 -- start at noon`, since 0.25 · 2π is π/2.
+- **The offscreen render target.** "One plain color image per frame in flight"
+  and "the image index IS the frame-in-flight index" both hold:
+  `Engine/Graphics/Vulkan/Init.hs:138-140` passes `gcMaxFrames
+  defaultGraphicsConfig` (2) as the image count, and `drawFrameOffscreen`
+  passes `frameIdx` for both arguments of `renderSceneFrame`.
+- **`World/Render/Quads.hs:75`** really does use the 128-chunk fallback that
+  `Engine.Loop.Frame.activeWorldCircumferenceTiles` cites as "the same default".
