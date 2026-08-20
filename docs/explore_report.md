@@ -71,6 +71,8 @@ cited lines.
 - [ ] EXPL-21. 98 production call sites spell inequality `≠` instead of `≢`; neither the operator audit nor CLAUDE.md's table can see it
 - [ ] EXPL-22. The capability inventory says four of the five capability splits are §3.1 thread-privacy splits; two are, and the doc contradicts itself
 - [ ] EXPL-23. `inputBoundaryPage` explains the modal-boundary tie-break by `PageHandle` and show-recency; the sort key is `(upLayer, upZIndex)`
+- [ ] EXPL-24. `hitsAtPointBy`'s haddock cites `UI.InputOwnership.pagesInScope`, which is not exported
+- [ ] EXPL-25. `isPointerSurfaceBlocked` names `Engine.Input.Thread` as its caller; since #787 that is `Engine.Input.Thread.Mouse`
 
 ---
 
@@ -1595,3 +1597,88 @@ along with everything above it; `isGameplayBlocked` really is
 input boundary by default; every other layer defaults pass-through"
 (`src/UI/Manager/Page.hs:34-38`) matches `upInputExclusive = layer ≡ LayerModal`
 exactly.
+
+### EXPL-24. `hitsAtPointBy`'s haddock cites `UI.InputOwnership.pagesInScope`, which is not exported
+
+`src/UI/Manager/Query.hs:182-186`:
+
+```haskell
+--   @pageOk@ is a plain filter here, not a modal-boundary decision —
+--   callers that need the #742 modal-input-exclusive boundary (a miss
+--   on the boundary page must not fall through to a lower one) go
+--   through 'UI.InputOwnership.routePointer', which computes a scoped
+--   @pageOk@ from 'UI.InputOwnership.pagesInScope' and passes it in
+--   here/'topHitBy' unchanged.
+```
+
+`pagesInScope` is defined at `src/UI/InputOwnership.hs:139` but does not appear
+in that module's export list (`src/UI/InputOwnership.hs:65-73`), which exports
+only `PointerKind(..)`, `InputRoute(..)`, `isPageInScope`, `isGameplayBlocked`,
+`routePointer`, `routeScroll` and `isPointerSurfaceBlocked`. The haddock link
+therefore does not resolve and a reader cannot navigate to the named function.
+
+The sentence is also slightly wrong about the mechanism it describes.
+`routePointer` does not compute its `pageOk` from `pagesInScope` directly — it
+passes `scopedPageOk mgr` (`src/UI/InputOwnership.hs:170-173`), a second
+unexported helper that builds a membership `Set` once and closes over it, and
+which calls `pagesInScope` internally. Naming the inner function skips the one
+that actually exists at the call site.
+
+`src/UI/FocusNavigation.hs:14` carries the identical dangling reference.
+
+**Severity: low**, the same shape as EXPL-6 (`Engine.Core.Workers.allWorkers`),
+and recorded separately for the same reason: it is a distinct file naming a
+distinct symbol, and would be fixed by a distinct edit — either by exporting
+`pagesInScope` or by pointing at something a reader can reach.
+
+### EXPL-25. `isPointerSurfaceBlocked` names `Engine.Input.Thread` as its caller; since #787 that is `Engine.Input.Thread.Mouse`
+
+Two places in `src/UI/InputOwnership.hs` attribute the middle-click check to
+the wrong module.
+
+The module header, `:38-40`:
+
+```haskell
+--   'isPointerSurfaceBlocked' extends the boundary to middle-click
+--   (camera drag), which has no owned handler and no page concept of
+--   its own in 'Engine.Input.Thread' [...]
+```
+
+and the function's own haddock, `:239-241`:
+
+```haskell
+-- | #742: the middle-click "UI surface blocks" check
+--   ('Engine.Input.Thread' — middle-click has no owned handler of its
+--   own and exists purely to pan the camera). [...]
+```
+
+Since #787, `Engine.Input.Thread` is a thin lifecycle facade exporting only
+`startInputThread`, `processInputs` and `processInput`
+(`src/Engine/Input/Thread.hs:18-22`), and it does not import
+`UI.InputOwnership` at all. The sole production caller of
+`isPointerSurfaceBlocked` is `src/Engine/Input/Thread/Mouse.hs:172`, importing
+it at `:32`.
+
+This is weaker than EXPL-19's stale pointer: the named module IS the facade for
+the subsystem that performs the check, and the work does happen on the input
+thread, so the sentence reads as nearly right. That is precisely the category
+worth recording under this report's calibration — a pointer that survives a
+split because the parent name still means something.
+
+The rest of the tree already uses the precise name where it matters
+(`src/UI/ControlActivation.hs:11`, `src/UI/FocusNavigation.hs:122`,
+`src/UI/Types.hs:171` all say `Engine.Input.Thread.Mouse` or
+`.Keyboard`), so this is an outlier rather than a convention.
+
+**Severity: low.** No behaviour is involved.
+
+Verified truthful in the same module, so a fix does not disturb any of it:
+`routePointer`'s documented ordering matches its code exactly, including the
+`ueClickable` gate applied to BOTH callback fields via `activeCallback` and the
+right-click fallback to a left-clickable control; `RouteConsumedNoHandler`'s
+"consumed (focus clears)" is honoured by its caller
+(`src/Engine/Input/Thread/Mouse.hs:339-345`); `routeScroll` really does apply
+the same `scopedPageOk` restriction as `routePointer`; and
+`isPointerSurfaceBlocked`'s deliberately UNSCOPED `topHitBy (const True)` with
+the boundary folded in through `isGameplayBlocked` is exactly what its haddock
+describes.
