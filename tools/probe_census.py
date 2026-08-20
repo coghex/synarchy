@@ -274,13 +274,34 @@ def validate_manifest(manifest) -> list[str]:
 # --------------------------------------------------------------------------
 # Structural validation — what the write path checks
 # --------------------------------------------------------------------------
+def _float_safe(value: int) -> bool:
+    """Whether this module may do float arithmetic with a JSON integer.
+
+    JSON integers have unbounded precision, so `10**309` is perfectly
+    valid input — and `math.isfinite` and ordinary division both refuse
+    it with `OverflowError`. Bounding it HERE is what turns a
+    pathological number into a reported problem instead of a traceback
+    out of `validate_result` or `read_for_update`, which would be a
+    crash where the contract promises a safe refusal.
+    """
+    try:
+        float(value)
+    except OverflowError:
+        return False
+    return True
+
+
 def _is_number(value) -> bool:
-    return (isinstance(value, (int, float)) and not isinstance(value, bool)
-            and math.isfinite(value))
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    if isinstance(value, int):
+        return _float_safe(value)
+    return math.isfinite(value)
 
 
 def _is_count(value) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+    return (isinstance(value, int) and not isinstance(value, bool)
+            and value >= 0 and _float_safe(value))
 
 
 def _closed(record, allowed, where: str) -> list[str]:

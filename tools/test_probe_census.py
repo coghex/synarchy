@@ -426,6 +426,17 @@ def test_result_validation() -> None:
             ("no `error`", lambda d: d.update({"error": "surprise"})),
             ("retained_artifacts", lambda d: d.update(
                 {"retained_artifacts": [7]})),
+            # A JSON integer has unbounded precision, so these are valid
+            # input that float arithmetic refuses with OverflowError.
+            # They must REPORT, not raise.
+            ("requested_runs", lambda d: d.update({"requested_runs": 10 ** 309})),
+            ("peak_concurrency",
+             lambda d: d.update({"peak_concurrency": 10 ** 309})),
+            ("worst_elapsed_seconds",
+             lambda d: d.update({"worst_elapsed_seconds": 10 ** 309})),
+            ("elapsed_seconds", lambda d: d["runs"][0].update(
+                {"elapsed_seconds": 10 ** 309})),
+            ("failure_count", lambda d: d.update({"failure_count": 10 ** 309})),
             ("non-empty list", lambda d: d.update({"checks": []})),
             ("{id, label} object", lambda d: d["checks"].append({"id": 7})),
             ("appears twice", lambda d: d["checks"].append(d["checks"][0])),
@@ -591,6 +602,18 @@ def test_corrupt_stored_records() -> None:
         corrupt(lambda c: c["current"]["samples"][0].update(
             {"failure_count": True}),
             "a stored boolean aggregate", "must be a non-negative integer")
+        corrupt(lambda c: c["current"]["samples"][0].update(
+            {"rts_capabilities": 10 ** 309}),
+            "a stored integer beyond the float range",
+            "must be a positive integer")
+        corrupt(lambda c: c["current"]["samples"][0].update(
+            {"total_elapsed_seconds": 10 ** 309}),
+            "a stored duration beyond the float range",
+            "total_elapsed_seconds")
+        corrupt(lambda c: c.update(
+            {"estimated_worst_case_seconds": 10 ** 309}),
+            "a stored estimate beyond the float range",
+            "estimated_worst_case_seconds")
         corrupt(lambda c: c["current"]["samples"][0]["check_counts"]["alpha"]
                 .update({"PASS": 9}),
             "a stored check tally that outnumbers the runs", "tallies")
