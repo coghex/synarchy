@@ -69,6 +69,7 @@ cited lines.
 - [ ] EXPL-19. `Unit.HitTest` claims to mirror a tile hit-test that no longer holds the math, and to use the "same math" the engine documents as different
 - [ ] EXPL-20. `resolveTexture`'s haddock credits itself with animation mirroring; animations never reach it and it cannot honour `flip: false`
 - [ ] EXPL-21. 98 production call sites spell inequality `≠` instead of `≢`; neither the operator audit nor CLAUDE.md's table can see it
+- [ ] EXPL-22. The capability inventory says four of the five capability splits are §3.1 thread-privacy splits; two are, and the doc contradicts itself
 
 ---
 
@@ -1401,3 +1402,106 @@ Scope note: the 12 `test-headless/` occurrences are outside
 `unicode_operator_audit.py`'s current `src/` + `app/` scope. Whether they are in
 scope for the convention is the owner's call; they are recorded here so the
 count is complete either way.
+
+---
+
+## EngineEnv capability split
+
+### EXPL-22. The capability inventory says four of the five capability splits are §3.1 thread-privacy splits; two are, and the doc contradicts itself
+
+`docs/engineenv_capability_inventory.md:109-113`:
+
+```markdown
+**Eight identifiers, thirteen record/view types.** The record set is
+finer-grained than the identifier set, because five capabilities are
+deliberately split — four of them by §3.1's pointer-record visibility
+rule (a thread-private field forces a strictly narrower worker-safe
+view, never a documented restriction on a wider record), one by
+consumer coupling:
+```
+
+Two of the three counts are right. "Eight identifiers, thirteen
+record/view types" checks out — `src/Engine/Core/Capability/` holds thirteen
+modules, each exporting exactly one `<Name>Capability` record and one total
+`to<Name>Capability` projection, and §2.1's own identifier table sums to
+thirteen. "Five capabilities are deliberately split" is right too.
+
+**"Four of them by §3.1's pointer-record visibility rule" is wrong. It is
+two.**
+
+§3.1's rule produces a specific shape: one main-only/owner-only record PLUS a
+strictly narrower worker-safe view that omits the thread-private field. Exactly
+two capabilities have it:
+
+| Identifier | Record / view pair | Thread-private field | Enforced at |
+|---|---|---|---|
+| `render-gpu-asset` | `RenderCapability` / `RenderViewCapability` | `engineStateRef` | `tools/engine_env_capability_audit.py:693-706` (#891) |
+| `input-lua-transport` | `InputCapability` / `InputViewCapability` | barrier-token allocator, current-key handoff | `tools/engine_env_capability_audit.py:839-853` (#892) |
+
+The remaining three two-record identifiers are PEER-DOMAIN splits, and each one
+says so in its own module header:
+
+- **`ui-hud-events`** — both halves carry the literal heading
+  `== No thread-private field, so no split record`
+  (`src/Engine/Core/Capability/Ui.hs:20`,
+  `src/Engine/Core/Capability/Events.hs:19`) and state:
+
+  > Unlike `@render-gpu-asset@` (§3.1) and `@input-lua-transport@` (§7.3),
+  > this capability owns nothing one thread privately owns […] So there is
+  > **one record here, not a main-only/worker-safe pair**, and
+  > `@tools/engine_env_capability_audit.py@` needs no import boundary for it
+  > beyond the §6 ratchet.
+
+- **`units-buildings-combat`** — split on domain, not thread
+  (`src/Engine/Core/Capability/Building.hs:9-19`):
+
+  > __"Building" is a domain, not a thread__ (§2.2 […]). There is no building
+  > thread: the command queue below is drained on `@UnitThread@` […]. That is
+  > precisely why the record is separate from
+  > `UnitCombatCapability` rather than folded into it […]
+
+- **`world-sim-render-handoff`** — the document itself excludes this one at
+  `:127`: "The `world-sim-render-handoff` split is the one that is not a §3.1
+  thread-privacy split".
+
+**The document contradicts itself sixty-three lines later.** Its own canonical
+convention block, at `:170-174`, lists `ui-hud-events` among the capabilities
+that do NOT meet §3.1's trigger:
+
+> A field being read or written by only one thread today is not by itself the
+> trigger — `save-load-coordination`'s `slLastSaveTimeRef` and two
+> `ui-hud-events` fields are single-role with no privileged pointer behind
+> them, so documenting the restriction on the field alone is sufficient there.
+
+So `ui-hud-events` is counted inside the "four" at `:111` and excluded from the
+rule at `:172`.
+
+**The arithmetic only closes on the error.** As written, 4 (§3.1) + 1 (consumer
+coupling) = 5. Correctly attributed it is 2 (§3.1) + 1 (consumer coupling) + 2
+(domain separation) = 5 — and the sentence offers no category for those last
+two, so `units-buildings-combat` and `ui-hud-events` are not merely unexplained,
+they are actively miscounted into a rule that excludes them.
+
+**Nothing catches it.** `tools/engine_env_capability_audit.py` enforces the
+eight `CAPABILITIES` identifiers (`:99-103`), the §3 main-render ownership
+boundary, and the §7.3 `LuaThread` ownership boundary. It does not parse §2.1's
+split taxonomy, so this count is unguarded in both directions. The audit's own
+comments corroborate the correct number: it describes exactly two capabilities
+being split for thread privacy — "#891 therefore splits `render-gpu-asset` into
+two interfaces" (`:702`) and "#892 therefore splits the capability into two
+interfaces" (`:850`) — and names no third or fourth.
+
+**Severity: low-medium.** No code is wrong and no boundary is unenforced. Above
+the nit tier because `CLAUDE.md` still directs every agent to this exact block —
+"Before adding a capability record, read §2.1's canonical convention block
+rather than inferring the shape from an existing one" — so it is the first thing
+read before adding a ninth capability. From this sentence a reader takes that
+thread-privacy is the dominant reason to split (four of five, when it is two of
+five) and that `ui-hud-events` is a worked example of the rule, when both of its
+modules explicitly disclaim it.
+
+Scope note: an earlier revision of `CLAUDE.md` restated this count directly
+("five capabilities are split, four by the thread-private rule (§3.1)"). The
+CLAUDE.md trim landed on master as `78ca07ec` / `b84c2dd7` removed that
+sentence, so no `CLAUDE.md` edit is required — the defect now lives only in the
+authoritative document.
