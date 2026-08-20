@@ -42,6 +42,7 @@ cited lines.
 - [ ] EXPL-5. `stopWorkers` claims to be the only `WorkerSlot` traversal in the tree; `App.Boot` has another
 - [ ] EXPL-6. `App.Boot` haddock links to `Engine.Core.Workers.allWorkers`, which is not exported
 - [ ] EXPL-7. `sortFrameFiles` claims to be shared by the units and buildings viewers; the units viewer no longer calls it
+- [ ] EXPL-8. `discoverBuildingEntries` claims every frame is lstat-proved regular; its static-entry branch tests only the name
 
 ---
 
@@ -349,3 +350,71 @@ independent problems:
 Verification: `grep -rn "sortFrameFiles" src/ app/ test-headless/` returns the
 definition, the `Building.hs` call, the `Unit.hs` export/import pair, and the
 test — no call site in `Unit.hs`.
+
+### EXPL-8. `discoverBuildingEntries` claims every frame is lstat-proved regular; its static-entry branch tests only the name
+
+`src/Engine/Preview/Building.hs:249-255` states an unqualified invariant about
+every frame the buildings viewer produces:
+
+```haskell
+--   A frame is always a REGULAR FILE, established by @lstat@ rather
+--   than by either existence predicate. A supported extension is a
+--   NAME test, so a directory called @frame_001.png@ — or a FIFO, or
+--   any other special file — is never a frame: a directory is only
+--   ever a container, descended into like any other when its only
+--   @.png@ children are themselves directories, and whatever lies
+--   beneath is classified by these same rules.
+```
+
+`discoverBuildingEntries` has TWO branches that produce a frame, and the claim
+holds for only one of them.
+
+The animation branch does exactly what is claimed. `classifyDir`
+(`:283-284`) filters candidate names through
+`filterM (isRegularFileChild dir)`, and `isRegularFileChild` (`:317-323`) is a
+genuine `lstat` — `pathIsSymbolicLink` first, then
+`isRegularFile ⊚ getSymbolicLinkStatus`.
+
+The static branch does not. `walk`'s non-directory case (`:272-278`) is:
+
+```haskell
+                    isDir ← doesDirectoryExist full
+                    if isDir
+                        then classifyDir segs' full ⌦ \case
+                            Just entry → pure [entry]
+                            Nothing    → walk segs'
+                        else pure [ staticEntry segs' full
+                                  | isSupportedTextureFile name ]
+```
+
+The only guard on that path is `isSupportedTextureFile name` — the pure name
+test the comment explicitly disclaims — and it is reached for anything
+`doesDirectoryExist` reports as not-a-directory. `staticEntry` (`:324-330`)
+then writes that path directly into `pbeFrames = [T.pack full]`, so the result
+is a frame by this module's own record shape; `PreviewBuildingEntry` carries
+`pbeFrames` for animated and static entries alike.
+
+The gap is one the file documents against itself. The inline comment on
+`isRegularFileChild` (`:310-316`) explains why an existence predicate is not
+enough:
+
+> `'doesDirectoryExist'` misses a FIFO, socket or device node, and
+> `'doesFileExist'` means "exists and is NOT a directory", so it ACCEPTS every
+> one of them. The type therefore comes from a real `@lstat@`.
+
+`walk` decides the static case on `doesDirectoryExist` alone. So a FIFO, socket,
+or device node named `x.png` sitting directly in a building's asset folder
+becomes a static `PreviewBuildingEntry` whose one frame path cannot be loaded —
+exactly the outcome the module says the `lstat` exists to prevent, and exactly
+the class of file the comment names.
+
+A *directory* named `x.png` at that same level is handled correctly: it routes
+to `classifyDir`, finds no regular-file PNGs, yields `Nothing`, and is descended
+into. So the half of the claim about directories is true and the half spelled
+out as "or a FIFO, or any other special file" is not.
+
+Scope note: `Engine.Preview.Discovery.walkFiles`
+(`src/Engine/Preview/Discovery.hs:182-196`) has the same structure and the same
+absent check, but it makes no regular-file claim anywhere, so it is not a
+finding. The defect recorded here is that `Engine.Preview.Building` asserts an
+invariant that one of its two frame producers does not enforce.
