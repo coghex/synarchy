@@ -89,6 +89,14 @@ tinyBid = BuildingId 8
 fixturePage ∷ WorldPageId
 fixturePage = WorldPageId "transfer_session_page"
 
+-- | A SECOND page, for the one rule that needs two (#1415): a pair on
+--   different pages. Never registered in @wmWorlds@ and never
+--   populated — an endpoint's page is its own instance's @uiPage@ /
+--   @biPage@ and the projection reads nothing else, so moving one unit
+--   onto this id is the entire fixture.
+otherPage ∷ WorldPageId
+otherPage = WorldPageId "transfer_session_other_page"
+
 -- * Fixture
 
 -- | THREE identical rations, which the shared widget merges into one
@@ -183,6 +191,18 @@ setFaction env uid f =
     atomicModifyIORef' (unitManagerRef env) $ \um →
         (um { umInstances = HM.adjust
                 (\u → u { uiFactionId = f }) uid (umInstances um) }
+        , ())
+
+-- | Move one unit onto another world page, leaving its coordinates
+--   alone — the #1415 cross-page fixture. The two sides stay at EQUAL
+--   coordinates on purpose: a distance rule cannot tell two endpoints
+--   sharing one tile apart, so a refusal there is page identity and
+--   nothing else.
+setPage ∷ EngineEnv → UnitId → WorldPageId → IO ()
+setPage env uid pg =
+    atomicModifyIORef' (unitManagerRef env) $ \um →
+        (um { umInstances = HM.adjust
+                (\u → u { uiPage = pg }) uid (umInstances um) }
         , ())
 
 -- | Remove a unit outright: the instance is gone, so every engine
@@ -326,7 +346,7 @@ sceneLua = luaLines
     -- each case's wrapper inside the last one's and count a single call
     -- once per case that had run before it. That made every "exactly
     -- once" assertion depend on hspec's randomized ordering.
-    , "_G.__events = {};"
+    , "_G.__events = {}; _G.__eventUids = {};"
     , "if not _G.__wrapped then"
     , "  _G.__wrapped = true;"
     , "  local realGoTo = camera.goToTile;"
@@ -348,6 +368,10 @@ sceneLua = luaLines
     , "  local realEmitFor = engine.emitEventForUnit;"
     , "  engine.emitEventForUnit = function(cat, text, uid, gx, gy)"
     , "    _G.__events[#_G.__events + 1] = cat .. '|' .. text;"
+    -- The uid a warning was ATTRIBUTED to, recorded in lockstep with
+    -- its text so the two arrays index together: #1415 requirement 4
+    -- is about the attribution, not merely about a count.
+    , "    _G.__eventUids[#_G.__eventUids + 1] = tostring(uid);"
     , "    return realEmitFor(cat, text, uid, gx, gy) end;"
     , "end;"
     , "_G.__snaps = 0; _G.__reveals = 0; _G.__moves = 0; _G.__stops = 0;"
@@ -361,6 +385,17 @@ sceneLua = luaLines
     -- through, so the scene records them rather than trusting a count.
     , "_G.__eventText = function()"
     , "  return table.concat(_G.__events, '\\n') end;"
+    -- Clearing the log clears BOTH arrays, or the next warning's uid
+    -- would line up against an older event's text.
+    , "_G.__clearEvents = function()"
+    , "  _G.__events = {}; _G.__eventUids = {} end;"
+    -- How many 'unit_warning' events were aimed at THIS uid.
+    , "_G.__warnCount = function(uid)"
+    , "  local n = 0;"
+    , "  for i, e in ipairs(_G.__events) do"
+    , "    if e:sub(1, 13) == 'unit_warning|'"
+    , "       and _G.__eventUids[i] == tostring(uid) then n = n + 1 end"
+    , "  end; return n end;"
     -- One AI tick of Mode A's actions for `uid`: score BOTH sides the
     -- way the dispatch loop does, then execute whichever won. Since
     -- #1251 review round 1 the source-side escort and the target-side
@@ -1316,6 +1351,129 @@ spec = aroundAll withSharedFixture $
                 , "return tostring(g > 0 and g <= 24)" ])
             gapText `shouldBe` "\"true\""
 
+    -- #1415. 'M.create' is the ONE place a session is built and is
+    -- deliberately reusable by a surface that never ran
+    -- 'M.resolveSource', so every rule that resolution enforces has to
+    -- hold HERE too. The two shipped menus screen all of them before
+    -- they call, which is why nothing player-facing changes; these
+    -- cases therefore call 'create' DIRECTLY, with no menu, no
+    -- resolution and no click, and read every answer back out of the
+    -- real engine rather than a stub.
+    describe "the creation boundary's own source rules (#1415)" $ do
+
+        it "an uncommandable source creates no session, reports \
+           \source_ineligible, and warns that unit exactly once" $
+           \(env, ls) → do
+            resetFixture env ls
+            -- Faction loss is exactly what the engine's endpoint rule
+            -- means: Unit.Transfer.endpointEligible is `uevCommandable`
+            -- and nothing else, so this is the contract's own refusal
+            -- read through the projection rather than a rule invented
+            -- for the session.
+            setFaction env carrierUid FactionWildlife
+            refused ← evalOk ls
+                "local s, reason = _G.__session().create(1, 'building', 7); \
+                \return { made = tostring(s), reason = tostring(reason), \
+                \         warns = _G.__warnCount(1) }"
+            refused `shouldSatisfy` T.isInfixOf "\"made\":\"nil\""
+            refused `shouldSatisfy`
+                T.isInfixOf "\"reason\":\"source_ineligible\""
+            refused `shouldSatisfy` T.isInfixOf "\"warns\":1"
+            after ← evalOk ls
+                "return tostring(_G.__session().get())"
+            after `shouldBe` "\"nil\""
+
+        it "a self-transfer creates no session and reports \
+           \receiver_ineligible — the id the ENGINE produces for \
+           \from == to" $ \(env, ls) → do
+            resetFixture env ls
+            -- Nothing downstream ever caught this: 'endpointFailure'
+            -- validates each side independently, so a session on one
+            -- unit twice passed the liveness tick forever while every
+            -- commit was refused by planItemWith's `from == to`.
+            refused ← evalOk ls
+                "local s, reason = _G.__session().create(1, 'unit', 1); \
+                \return { made = tostring(s), reason = tostring(reason), \
+                \         warns = _G.__warnCount(1) }"
+            refused `shouldSatisfy` T.isInfixOf "\"made\":\"nil\""
+            refused `shouldSatisfy`
+                T.isInfixOf "\"reason\":\"receiver_ineligible\""
+            refused `shouldSatisfy` T.isInfixOf "\"warns\":1"
+            after ← evalOk ls "return tostring(_G.__session().get())"
+            after `shouldBe` "\"nil\""
+
+        it "a cross-page pair creates no session and reports \
+           \out_of_range, at IDENTICAL coordinates so only the page \
+           \differs" $ \(env, ls) → do
+            resetFixture env ls
+            placeUnit env carrierUid (10, 10)
+            placeUnit env matesUid  (10, 10)
+            setPage env matesUid otherPage
+            -- Distance 0 and still refused: 'reachable' fails on page
+            -- identity before it ever measures, and this asserts the
+            -- session agrees with it. Left unchecked the escort simply
+            -- never arrived, so the session sat in `approaching` with
+            -- nothing ever going wrong enough for the liveness tick to
+            -- close it.
+            refused ← evalOk ls
+                "local s, reason = _G.__session().create(1, 'unit', 2); \
+                \return { made = tostring(s), reason = tostring(reason), \
+                \         warns = _G.__warnCount(1) }"
+            refused `shouldSatisfy` T.isInfixOf "\"made\":\"nil\""
+            refused `shouldSatisfy` T.isInfixOf "\"reason\":\"out_of_range\""
+            refused `shouldSatisfy` T.isInfixOf "\"warns\":1"
+            after ← evalOk ls "return tostring(_G.__session().get())"
+            after `shouldBe` "\"nil\""
+
+        it "a DESTINATION failure still wins over a source one, so a call \
+           \wrong on both sides reports the destination" $
+           \(env, ls) → do
+            resetFixture env ls
+            setFaction env carrierUid FactionWildlife
+            -- Building 999 does not exist AND the source is
+            -- uncommandable. The placement rule the escort-capability
+            -- check already documented says the destination answers.
+            refused ← evalOk ls
+                "local s, reason = _G.__session().create(1, 'building', 999); \
+                \return tostring(reason)"
+            refused `shouldBe` "\"receiver_missing\""
+
+        it "each of the three new refusals leaves a RUNNING session — its \
+           \identity, phase, hold, panes, both inventories and its stop \
+           \count — exactly as it found them" $ \(env, ls) → do
+            resetFixture env ls
+            placeUnit env carrierUid (42, 41)
+            _ ← evalOk ls (createLua "building" 7)
+            _ ← evalOk ls "return _G.__tick(1)"
+            -- One joined STRING rather than a table, so the comparison
+            -- below is a real equality and not a bet on key order.
+            let snapshot = "local cip = require('scripts.cargo_inventory_panel'); \
+                           \return table.concat({ _G.__session().get().id, \
+                           \  _G.__phase(), _G.__session().roleOf(1), \
+                           \  cip.depth(), cip.dump().levels[1].paneCount, \
+                           \  _G.__ids('unit', 1), _G.__ids('building', 7), \
+                           \  _G.__stops }, '|')"
+            before ← evalOk ls snapshot
+            -- Three refusals in a row, one per NEW branch, and none of
+            -- them may disturb what is open. Two of them are not even
+            -- ABOUT this session: a refusal naming other units has to
+            -- leave it alone just as surely as one naming its own.
+            setPage env muleUid otherPage
+            setFaction env matesUid FactionWildlife
+            reasons ← evalOk ls
+                "local s = _G.__session(); \
+                \local _, a = s.create(1, 'unit', 1); \
+                \local _, b = s.create(1, 'unit', 3); \
+                \local _, c = s.create(2, 'building', 8); \
+                \return { a = tostring(a), b = tostring(b), \
+                \         c = tostring(c) }"
+            reasons `shouldSatisfy` T.isInfixOf "\"a\":\"receiver_ineligible\""
+            reasons `shouldSatisfy` T.isInfixOf "\"b\":\"out_of_range\""
+            reasons `shouldSatisfy` T.isInfixOf "\"c\":\"source_ineligible\""
+            after ← evalOk ls snapshot
+            after `shouldBe` before
+
+
 
     -- #1254 (UIT-5B): every way a session can be interrupted.
     --
@@ -1788,7 +1946,7 @@ spec = aroundAll withSharedFixture $
             _ ← evalOk ls "return _G.__tick(1)"
             phase ← evalOk ls "return _G.__phase()"
             phase `shouldBe` "\"open\""
-            _ ← evalOk ls "_G.__events = {}; return 'ok'"
+            _ ← evalOk ls "_G.__clearEvents(); return 'ok'"
             _ ← evalOk ls
                 "return tostring(_G.__fire(_G.__rowMenu('source', 'ration'), \
                 \                          'Store all'))"
@@ -1824,7 +1982,7 @@ spec = aroundAll withSharedFixture $
             -- (#1254) deliberately left that so: a live, commandable
             -- endpoint that merely drifted is not a session failure.
             placeUnit env matesUid (60, 60)
-            _ ← evalOk ls "_G.__events = {}; return 'ok'"
+            _ ← evalOk ls "_G.__clearEvents(); return 'ok'"
             _ ← evalOk ls
                 "return tostring(_G.__fire(_G.__rowMenu('source', 'ration'), \
                 \                          'Store all'))"

@@ -29,10 +29,12 @@ the port a SIGKILLed engine had held. Also covers `select`/`main`'s
 request, the pre-existing all-invalid empty-selection diagnostic, a
 wholly valid request's registry-order and duplicate-collapse behavior,
 and substring selection's unchanged permissiveness. And the parallel
-scheduler's `EXCLUSIVE_RESOURCES` serialization (issue #1322): probes stamp
-their own occupancy windows, so the two config declarations are proved never
-to overlap while an undeclared probe still overlaps one of them, across a
-conflicting probe that passes, one that fails, and one that times out.
+scheduler's reader/writer serialization (issues #1322 and #1444): probes
+stamp their own occupancy windows, so a probe declaring an exclusive
+interest is proved never to overlap ANY other probe -- the other config
+declaration or an ordinary engine-booting one, in either dispatch order --
+while two ordinary probes still overlap each other, across a conflicting
+probe that passes, one that fails, and one that times out.
 
 Usage:
   python3 tools/test_run_probes.py
@@ -577,13 +579,19 @@ def test_aggregate_exit_codes_unchanged() -> None:
 
 
 # --------------------------------------------------------------------------
-# Parallel scheduling honours the EXCLUSIVE_RESOURCES declaration (#1322)
+# Parallel scheduling honours the reader/writer resource model (#1322, #1444)
 #
-# These drive the SHIPPED `run_probes.EXCLUSIVE_RESOURCES` -- only `PROBES`
-# and `REPO_ROOT` are redirected at the synthetic tree, and the synthetic
-# probes are deliberately named `config_migration` and `config_state` so the
-# real declaration is what decides. A test-local conflict table would prove
-# the mechanism while leaving the two probes the issue is about unguarded.
+# These drive the SHIPPED `run_probes.EXCLUSIVE_RESOURCES` and
+# `IMPLICIT_SHARED_RESOURCES` -- only `PROBES` and `REPO_ROOT` are redirected
+# at the synthetic tree, and the synthetic probes are deliberately named
+# `config_migration` and `config_state` so the real declaration is what
+# decides. A test-local conflict table would prove the mechanism while
+# leaving the two probes the issue is about unguarded.
+#
+# `unrelated_a`/`unrelated_b` stand in for the ~85 probes that declare
+# nothing and simply boot an engine in the shared checkout. Under #1444
+# those hold `repo-config` SHARED, so they overlap each other freely and
+# neither of them may overlap a config probe.
 # --------------------------------------------------------------------------
 def overlaps(a: tuple[float, float | None],
              b: tuple[float, float | None]) -> bool:
@@ -605,97 +613,160 @@ def progress_lines(out: str, script: str) -> int:
 
 
 def test_declared_conflicts_never_overlap() -> None:
-    print("\n-- --jobs never overlaps the two config probes, and does not "
-          "serialize anything else")
+    print("\n-- --jobs runs an exclusive probe alone, and does not serialize "
+          "the probes that declare nothing")
     tree = Tree()
     try:
         # No descendant: this is about SCHEDULING, and an extra process per
         # probe only adds teardown jitter to the windows being compared.
         #
-        # Three probes into TWO jobs, with the conflicting pair adjacent, is
-        # the discriminating shape. A scheduler that submitted everything and
-        # took a lock INSIDE the worker would park `config_state` in the
-        # second slot for the whole of `config_migration`, and `unrelated`
-        # could not start until one of them finished -- so the overlap
-        # asserted at the end fails for it exactly as it does for a runner
-        # with no conflict handling at all.
-        tree.add("config_migration", dwell=1.0, descendant=False)
-        tree.add("config_state", dwell=1.0, descendant=False)
-        tree.add("unrelated", dwell=2.5, descendant=False)
-        rc, out = _main_with(tree, ["--jobs", "2"])
+        # DISPATCH ORDER A: both exclusive probes are dispatched before any
+        # ordinary one, so this is the direction where the barrier must hold
+        # NEW work back. Three jobs against four probes means a scheduler
+        # that only serialized the two config declarations against each
+        # other would happily run `unrelated_a` and `unrelated_b` alongside
+        # `config_migration` -- which is exactly #1444's defect.
+        tree.add("config_migration", dwell=0.8, descendant=False)
+        tree.add("config_state", dwell=0.8, descendant=False)
+        tree.add("unrelated_a", dwell=0.8, descendant=False)
+        tree.add("unrelated_b", dwell=0.8, descendant=False)
+        rc, out = _main_with(tree, ["--jobs", "3"])
         expect(rc == 0, f"every probe still passes (exit {rc})")
-        expect("3/3 passed" in out, "and the aggregate summary counts all three")
+        expect("4/4 passed" in out, "and the aggregate summary counts all four")
 
         # Exactly once each: a naive lock inside the worker would still run
         # them all, so this is the floor the overlap checks build on.
-        for name in ("config_migration", "config_state", "unrelated"):
+        names = ("config_migration", "config_state", "unrelated_a", "unrelated_b")
+        for name in names:
             got = tree.intervals(name)
             expect(len(got) == 1 and got[0][1] is not None,
                    f"{name} ran exactly once and to completion "
                    f"(windows: {got})")
             expect(progress_lines(out, f"{name}_probe.py") == 1,
-                   f"and the runner reported its verdict exactly once")
+                   f"and the runner reported {name}'s verdict exactly once")
 
         migration = tree.window("config_migration")
         state = tree.window("config_state")
-        other = tree.window("unrelated")
+        first = tree.window("unrelated_a")
+        second = tree.window("unrelated_b")
         expect(not overlaps(migration, state),
                f"the two declared-conflicting probes never overlap "
                f"(migration {migration}, state {state})")
-        # Requirement 3: the declaration must not cost unrelated probes
-        # their concurrency, and a blocked probe must not hold a worker
-        # slot. `unrelated` is third in a two-job run, so it can only
-        # overlap `config_migration` if `config_state` was held back
-        # WITHOUT being submitted.
-        expect(overlaps(other, migration),
-               f"a blocked probe yields its slot: the undeclared probe runs "
-               f"concurrently with the first (unrelated {other}, "
-               f"migration {migration})")
+        # Requirement 1: no OTHER probe's engine may boot while either
+        # config probe runs, whether or not it declares anything.
+        for label, solo in (("config_migration", migration),
+                            ("config_state", state)):
+            for other_label, other in (("unrelated_a", first),
+                                       ("unrelated_b", second)):
+                expect(not overlaps(solo, other),
+                       f"{other_label} never overlaps {label} "
+                       f"({other_label} {other}, {label} {solo})")
+        # Requirement 3: the declaration must not cost the undeclared
+        # probes their concurrency -- the suite is not serialized wholesale.
+        expect(overlaps(first, second),
+               f"two probes declaring nothing still run concurrently "
+               f"(unrelated_a {first}, unrelated_b {second})")
+    finally:
+        tree.cleanup()
+
+
+def test_a_solo_probe_waits_for_work_already_running() -> None:
+    print("\n-- an exclusive probe waits for running work, without parking "
+          "in a worker slot")
+    tree = Tree()
+    try:
+        # DISPATCH ORDER B, the mirror of the test above: ordinary work is
+        # already running when the exclusive probe becomes dispatchable, so
+        # this is the direction where the barrier must hold the CONFIG probe
+        # back. A scheduler that only blocked new work during a solo probe
+        # would let `config_migration` start alongside `unrelated_a` here.
+        #
+        # Putting it in the MIDDLE of the registry order also proves it
+        # yields its worker slot: `unrelated_b` is dispatched behind it,
+        # into a two-job run, which can only happen if the blocked probe was
+        # skipped rather than submitted and parked on a lock.
+        tree.add("unrelated_a", dwell=1.0, descendant=False)
+        tree.add("config_migration", dwell=0.5, descendant=False)
+        tree.add("unrelated_b", dwell=1.0, descendant=False)
+        rc, out = _main_with(tree, ["--jobs", "2"])
+        expect(rc == 0, f"every probe still passes (exit {rc})")
+        expect("3/3 passed" in out, "and the aggregate summary counts all three")
+
+        first = tree.window("unrelated_a")
+        migration = tree.window("config_migration")
+        second = tree.window("unrelated_b")
+        expect(first[1] is not None and second[1] is not None,
+               f"both undeclared probes ran to completion "
+               f"(unrelated_a {first}, unrelated_b {second})")
+        expect(overlaps(first, second),
+               f"the blocked probe yielded its slot: the two undeclared "
+               f"probes ran concurrently (unrelated_a {first}, "
+               f"unrelated_b {second})")
+        expect(not overlaps(migration, first) and not overlaps(migration, second),
+               f"and the exclusive probe overlapped neither "
+               f"(migration {migration}, unrelated_a {first}, "
+               f"unrelated_b {second})")
+        expect(migration[0] >= max(first[1], second[1]),
+               f"it started only after both were reaped "
+               f"(migration start {migration[0]}, latest end "
+               f"{max(first[1], second[1])})")
     finally:
         tree.cleanup()
 
 
 def test_conflict_is_released_after_a_failure() -> None:
-    print("\n-- a FAILING conflicting probe still releases its resource")
+    print("\n-- a FAILING exclusive probe still releases both interests")
     tree = Tree()
     try:
         tree.add("config_migration", exit_code=1, tail_lines=3,
                  dwell=0.6, descendant=False)
         tree.add("config_state", dwell=0.6, descendant=False)
-        rc, out = _main_with(tree, ["--jobs", "2"])
+        # The undeclared probe is here because the barrier it waits on is
+        # the SHARED half of the ledger, released by the same code path but
+        # counted separately -- a release that dropped only the exclusive
+        # set would still pass the two-config-probe check below.
+        tree.add("unrelated", dwell=0.6, descendant=False)
+        rc, out = _main_with(tree, ["--jobs", "3"])
         expect(rc == 1, f"the failing selection still exits 1 (got {rc})")
         expect("FAIL" in out and "PASS" in out,
-               "and both probes report their own verdict")
+               "and every probe reports its own verdict")
+        expect("2/3 passed" in out,
+               "with the aggregate counting the two that passed")
         migration = tree.window("config_migration")
         state = tree.window("config_state")
-        expect(state[0] >= migration[0],
-               "the second probe waited for the first")
-        expect(not overlaps(migration, state),
-               f"and never overlapped it (migration {migration}, "
-               f"state {state})")
+        other = tree.window("unrelated")
+        expect(state[0] >= migration[0] and other[0] >= migration[0],
+               "the other probes waited for the failing one")
+        expect(not overlaps(migration, state) and not overlaps(migration, other),
+               f"and neither overlapped it (migration {migration}, "
+               f"state {state}, unrelated {other})")
     finally:
         tree.cleanup()
 
 
 def test_conflict_is_released_after_a_timeout() -> None:
-    print("\n-- a TIMED-OUT conflicting probe still releases its resource")
+    print("\n-- a TIMED-OUT exclusive probe still releases both interests")
     tree = Tree()
     try:
-        # Hangs until the runner's own --timeout kills it; the second probe
-        # can only start after that, which is what the gap below measures.
+        # Hangs until the runner's own --timeout kills it; the other probes
+        # can only start after that, which is what the gaps below measure.
         tree.add("config_migration", hang=True, descendant=False)
         tree.add("config_state", dwell=0.3, descendant=False)
-        rc, out = _main_with(tree, ["--jobs", "2", "--timeout", "2"])
+        tree.add("unrelated", dwell=0.3, descendant=False)
+        rc, out = _main_with(tree, ["--jobs", "3", "--timeout", "2"])
         expect(rc == 1, f"the timed-out selection exits 1 (got {rc})")
         expect("TIMEOUT" in out, "the hanging probe is reported as a TIMEOUT")
         expect(progress_lines(out, "config_state_probe.py") == 1
+               and progress_lines(out, "unrelated_probe.py") == 1
                and "PASS" in out,
-               "and the conflicting probe still ran and reported PASS")
+               "and both waiting probes still ran and reported PASS")
         migration = tree.window("config_migration")
-        state = tree.window("config_state")
-        expect(state[0] - migration[0] >= 1.5,
-               f"it started only after the timeout fired, not alongside it "
-               f"(gap {state[0] - migration[0]:.2f}s of a 2s timeout)")
+        for name in ("config_state", "unrelated"):
+            waited = tree.window(name)
+            expect(waited[0] - migration[0] >= 1.5,
+                   f"{name} started only after the timeout fired, not "
+                   f"alongside it (gap {waited[0] - migration[0]:.2f}s of a "
+                   f"2s timeout)")
         expect(migration[1] is None,
                "and the hanging probe never completed on its own")
     finally:
@@ -718,6 +789,81 @@ def test_exclusive_resource_declaration_is_data_about_real_probes() -> None:
            f"(shared: {sorted(both)})")
     expect(not run_probes.exclusive_resources("combat_anim"),
            "an undeclared probe needs nothing exclusively")
+
+
+def test_every_probe_shares_what_the_config_probes_take_exclusively() -> None:
+    print("\n-- the shipped declaration serializes BOTH config probes against "
+          "the whole registry (#1444)")
+    expect(bool(run_probes.IMPLICIT_SHARED_RESOURCES),
+           "there is an implicit shared interest at all "
+           f"(got {run_probes.IMPLICIT_SHARED_RESOURCES!r})")
+    solo = {"config_migration", "config_state"}
+    declared = set(run_probes.EXCLUSIVE_RESOURCES)
+    expect(declared == solo,
+           f"both config probes are the declared exclusive holders "
+           f"(declared: {sorted(declared)})")
+    taken: set[str] = set()
+    for key in solo:
+        taken |= run_probes.exclusive_resources(key)
+        # An interest is one or the other, never both, or a release would
+        # drop the exclusive half and leave the shared count behind.
+        overlap = (run_probes.exclusive_resources(key)
+                   & run_probes.shared_resources(key))
+        expect(not overlap,
+               f"{key} holds no resource in both interests "
+               f"(both: {sorted(overlap)})")
+    # The whole registry, not a sample: this is what makes requirement 1 --
+    # "no probe's engine may boot while a config probe is running" -- a
+    # property of the shipped data rather than of the three synthetic
+    # probes the scheduling tests above drive.
+    unguarded = sorted(key for key, _, _ in run_probes.PROBES
+                       if key not in solo
+                       and not taken <= run_probes.shared_resources(key))
+    expect(not unguarded,
+           f"every other registered probe holds every resource they take, "
+           f"so none can be scheduled beside them (unguarded: {unguarded})")
+
+
+def test_resource_ledger_is_a_reader_writer_lock() -> None:
+    print("\n-- the ledger grants many readers at once and a writer only alone")
+    ledger = run_probes.ResourceLedger()
+    shared, exclusive = {"repo-config"}, {"repo-config"}
+    expect(ledger.idle(), "a fresh ledger holds nothing")
+    expect(not ledger.blocked(exclusive, set()),
+           "so an exclusive interest is grantable")
+
+    # Three readers, then a writer: the shared side must COUNT, not merely
+    # remember that someone held it, or the writer starts after the first
+    # release with two engines still up.
+    for _ in range(3):
+        expect(not ledger.blocked(set(), shared),
+               "another reader may join while readers hold it")
+        ledger.acquire(set(), shared)
+    for held in (2, 1):
+        expect(ledger.blocked(exclusive, set()),
+               f"a writer is blocked while {held + 1} reader(s) hold it")
+        ledger.release(set(), shared)
+    expect(ledger.blocked(exclusive, set()),
+           "still blocked with the last reader holding it")
+    ledger.release(set(), shared)
+    expect(ledger.idle() and not ledger.blocked(exclusive, set()),
+           "and grantable only once every reader has released")
+
+    # And the mirror: a writer excludes readers and writers alike.
+    ledger.acquire(exclusive, set())
+    expect(ledger.blocked(set(), shared),
+           "a reader is blocked while a writer holds it")
+    expect(ledger.blocked(exclusive, set()),
+           "and so is a second writer")
+    ledger.release(exclusive, set())
+    expect(ledger.idle(), "releasing the writer empties the ledger")
+
+    # A probe that declares nothing shared is never blocked by anything,
+    # which is what keeps an unrelated resource out of this decision.
+    ledger.acquire(exclusive, set())
+    expect(not ledger.blocked(set(), {"some-other-resource"}),
+           "an interest in a different resource is unaffected")
+    ledger.release(exclusive, set())
 
 
 # --------------------------------------------------------------------------
@@ -1291,7 +1437,10 @@ def main() -> int:
     test_reap_group_on_a_dead_group_is_a_noop()
     test_aggregate_exit_codes_unchanged()
     test_exclusive_resource_declaration_is_data_about_real_probes()
+    test_every_probe_shares_what_the_config_probes_take_exclusively()
+    test_resource_ledger_is_a_reader_writer_lock()
     test_declared_conflicts_never_overlap()
+    test_a_solo_probe_waits_for_work_already_running()
     test_conflict_is_released_after_a_failure()
     test_conflict_is_released_after_a_timeout()
     test_exact_mixed_selection_is_rejected_before_listing()

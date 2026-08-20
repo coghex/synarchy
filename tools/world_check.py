@@ -5,9 +5,21 @@ Runs the dump pipeline against all seeds in tools/baselines/_seeds.json,
 compares to stored baselines, and reports pass/fail.
 
 For each seed:
-  1. Runs the dump N times to detect determinism
+  1. Runs the dump N times (default 1)
   2. Runs the audit on the first dump
   3. Compares to the stored baseline:
+     - The canonical content hash of every dump must equal the hash the
+       baseline recorded (see check_baseline_hash). This is the only
+       check here that sees the dump's full content: matId, ore bands,
+       ice mode and the water table appear in none of the statistics
+       below, so a change that shuffles one of them while preserving
+       elevation and tile counts is caught here and nowhere else. It
+       covers exactly what the bare `--dump` schema emits and no more —
+       the opt-in slope layer, flora, structures and magma are not in
+       the dump, so they are not fingerprinted by this or any other
+       comparison in this tool. A baseline that recorded more than one
+       distinct hash is racy: content identity cannot be gated against
+       it, and the seed's own output line says so.
      - Tile count and elevation stats must match exactly
      - Fluid stats must stay within the baseline envelope (with a
        tile-count-scaled tolerance for racy shuffling)
@@ -22,7 +34,10 @@ For each seed:
            baseline summary exactly — a count above baseline fails as a
            regression, below baseline is reported as an improvement
          * racy seeds only get an informational envelope-drift note
-     - Determinism status: improvement is OK, regression is a failure
+     - Determinism status: improvement is OK, regression is a failure.
+       Only active at --runs 2+; at the default --runs 1 a single dump
+       cannot be compared with itself, and the content coverage comes
+       from the baseline-hash comparison above instead.
 
 Exit codes:
   0 = all checks passed
@@ -44,7 +59,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from world_audit import (  # type: ignore
     audit_dump, classify_category, QUALITY_THRESHOLDS, BUG_CATEGORIES,
 )
-from world_determinism import canonical_dump, hash_dump, run_dump  # type: ignore
+from world_determinism import hash_dump, run_dump  # type: ignore
 from world_baseline import baseline_path, BASELINE_DIR, SEEDS_FILE  # type: ignore
 
 
@@ -65,6 +80,21 @@ class CheckResult:
     notes: list[str] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
     improvements: list[str] = field(default_factory=list)
+    # Banners ride the seed's own summary line, so they survive a PASS.
+    # `notes` are suppressed unless the seed fails or -v is passed, which
+    # makes them the wrong carrier for "this seed is not being gated".
+    banners: list[str] = field(default_factory=list)
+
+
+def seed_label(result: CheckResult) -> str:
+    """Full identity of a seed entry — seed alone is not unique.
+
+    The corpus runs seed 137 at both worldSize 32 and 64, so a failure
+    message naming only the seed cannot be traced to a baseline file.
+    """
+    cx1, cy1, cx2, cy2 = result.region
+    return (f"seed={result.seed} worldSize={result.world_size} "
+            f"region={cx1},{cy1},{cx2},{cy2}")
 
 
 def fmt_status(status: str) -> str:
@@ -123,9 +153,24 @@ def check_determinism_status(deterministic_baseline: bool, deterministic_now: bo
     A seed that was deterministic in the baseline but produced more than
     one distinct output across this run's dumps is a regression (FAIL).
     A seed that was racy and is now deterministic across runs>1 is an
-    improvement. With runs==1 only a single dump exists, so a regression
-    cannot be observed — pass runs>=2 to exercise this check.
+    improvement.
+
+    INACTIVE AT runs == 1 — the default, and the only setting any CI or
+    `make ci` path uses. A single dump cannot be compared with itself, so
+    `deterministic_now` is structurally True there and neither branch
+    below can fire. The guard states that outright rather than leaving a
+    dead branch reading as though it gates something.
+
+    Content coverage at runs == 1 comes from check_baseline_hash, which
+    compares the one dump against the hash the baseline recorded. That is
+    SAMPLED content identity against a fixed reference: it catches a race
+    only when the sampled run differs from that reference, and it is not
+    equivalent to observing run-to-run determinism. Pass runs>=2 to
+    activate this check as well.
     """
+    if runs < 2:
+        return
+
     if deterministic_baseline and not deterministic_now:
         result.status = FAIL
         result.failures.append(
@@ -138,6 +183,83 @@ def check_determinism_status(deterministic_baseline: bool, deterministic_now: bo
         )
         if result.status == PASS:
             result.status = IMPROVED
+
+
+def check_baseline_hash(current_hashes: list[str],
+                        determinism: dict[str, Any],
+                        result: CheckResult) -> None:
+    """Compare this run's dump content hashes against the baseline's.
+
+    Every baseline capture already records the canonical content hash of
+    each of its runs (world_baseline.py::capture_seed). Comparing one
+    current dump against that fixed reference is the cheapest coverage
+    available — it needs no extra world generation, so it applies at the
+    default --runs 1 that CI uses — and it is the only comparison in this
+    tool that sees the dump's whole content rather than a derived
+    statistic.
+
+    Three baseline shapes, all handled explicitly:
+
+      one distinct recorded hash (the entire current corpus)
+        Strict content identity: every current dump must equal it. Any
+        mismatch is a FAIL naming the seed and both hashes.
+
+      more than one distinct recorded hash (a genuinely racy baseline)
+        The recorded hashes are three samples of a race, not an
+        enumeration of its outcomes, so a current dump matching none of
+        them proves nothing and matching one proves nothing either.
+        Picking one historical run as the reference would be arbitrary.
+        The established racy-envelope policy therefore stands alone for
+        such a seed: no content-identity gate, and a banner on the seed's
+        own output line saying so, since a silent pass would read exactly
+        like a gated one. No tracked baseline is in this state today.
+
+      no recorded hashes at all
+        A baseline predating hash capture. Same treatment as racy: no
+        gate, and a banner saying the gate is unavailable.
+
+    A baseline whose `deterministic` flag disagrees with its own hash
+    count is malformed — capture_seed derives the flag from exactly that
+    count — and fails, because the two rules would otherwise disagree
+    about the same seed: this function keys the strict/racy split on the
+    hashes while check_determinism_status keys on the flag.
+    """
+    recorded = determinism.get("hashes")
+    if not isinstance(recorded, list) or not recorded:
+        result.banners.append(
+            "no recorded baseline hash: content-identity gate unavailable"
+        )
+        return
+
+    distinct = sorted(set(recorded))
+    deterministic_baseline = bool(determinism.get("deterministic"))
+    if (len(distinct) == 1) != deterministic_baseline:
+        result.status = FAIL
+        result.failures.append(
+            f"malformed baseline ({seed_label(result)}): determinism.deterministic "
+            f"is {deterministic_baseline} but determinism.hashes holds "
+            f"{len(distinct)} distinct value(s) — the flag is derived from that "
+            f"count, so the baseline was hand-edited or written by an older tool"
+        )
+        return
+
+    if len(distinct) > 1:
+        result.banners.append(
+            f"racy baseline ({len(distinct)} distinct recorded hashes): "
+            f"content-identity gate unavailable, envelope checks only"
+        )
+        return
+
+    expected = distinct[0]
+    mismatched = sorted({h for h in current_hashes if h != expected})
+    if mismatched:
+        result.status = FAIL
+        result.failures.append(
+            f"content hash mismatch ({seed_label(result)}): baseline "
+            f"{expected}, current {', '.join(mismatched)} — the dump's content "
+            f"changed in a field the statistic comparisons do not model, or "
+            f"worldgen is no longer reproducing this seed"
+        )
 
 
 def check_issue_summary(current_summaries: list[dict[str, int]],
@@ -276,6 +398,11 @@ def check_seed(entry: dict[str, Any], runs: int) -> CheckResult:
         deterministic_baseline, deterministic_now, len(set(hashes)), runs, result
     )
 
+    # Content identity against the baseline's own recorded hash. Runs at
+    # every --runs setting, including the default 1, and is what gives
+    # the gate any coverage of fields no statistic below models.
+    check_baseline_hash(hashes, baseline["determinism"], result)
+
     # Audit every dump to get a current envelope
     current_audits = [
         audit_dump(d, seed=seed, world_size=world_size, region=region)
@@ -351,6 +478,12 @@ def format_result(r: CheckResult) -> str:
         line += f"  ({len(r.improvements)} improvement(s))"
     elif r.status == SKIP:
         line += f"  ({'; '.join(r.notes)})"
+    # Banners print unconditionally — on PASS too, and without -v. A seed
+    # whose content-identity gate is unavailable must not be reportable
+    # as an unqualified pass; format_details is suppressed on PASS, so a
+    # note there would be exactly that silent pass.
+    for banner in r.banners:
+        line += f"  [{banner}]"
     return line
 
 
@@ -370,12 +503,19 @@ def format_details(r: CheckResult) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runs", type=int, default=1,
-                        help="Dump runs per seed (default: 1). Pass 2+ to "
-                             "also re-check per-seed determinism; routine "
-                             "determinism coverage lives in the baseline "
-                             "capture (world_baseline.py) and the hspec "
-                             "determinism test, so the gate doesn't pay "
-                             "for it on every run.")
+                        help="Dump runs per seed (default: 1). At 1 the "
+                             "gate compares each dump against the content "
+                             "hash its baseline recorded — sampled content "
+                             "identity against a fixed reference, which "
+                             "needs no extra world generation. That is NOT "
+                             "a determinism check: run-to-run determinism "
+                             "cannot be observed from one dump, so the "
+                             "determinism-status rule is inactive at this "
+                             "setting. Pass 2+ to activate it; routine "
+                             "determinism coverage otherwise lives in the "
+                             "baseline capture (world_baseline.py) and the "
+                             "hspec determinism test, so the gate doesn't "
+                             "pay for it on every run.")
     parser.add_argument("--seeds-file", type=Path, default=SEEDS_FILE,
                         help=f"Seed config file (default: {SEEDS_FILE})")
     parser.add_argument("--seed", type=int,
@@ -410,6 +550,11 @@ def main() -> int:
             return 2
 
     print(f"World gen regression check: {len(seeds)} seed(s), {args.runs} runs each")
+    if args.runs == 1:
+        print("  content identity: each dump compared against its baseline's "
+              "recorded hash")
+        print("  determinism status: inactive at --runs 1 (needs 2+ dumps to "
+              "observe run-to-run drift)")
     print()
 
     results: list[CheckResult] = []
