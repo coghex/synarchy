@@ -655,6 +655,51 @@ def test_envelope_framing_fingerprint_resolves_conflicting_flags() -> None:
                "verbatim, so nothing beside it is normalized away either")
 
 
+def test_envelope_framing_fingerprint_sees_past_header_block_comments() -> None:
+    print("issue #1416 review round 3: _strip_line_comments removes only "
+          "`--` comments, so a `{- ... -}` haddock block in the module "
+          "header must not end the pragma walk and leave a redundant "
+          "LANGUAGE declaration behind it fingerprinted")
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        for label, header in [
+                ("a leading block comment", "{- the codec -}\n"),
+                ("a NESTED block comment",
+                 "{- the codec {- an aside -} continued -}\n"),
+                ("a block comment BETWEEN header pragmas",
+                 "{-# OPTIONS_GHC -Wall #-}\n{- an aside -}\n")]:
+            with_inherited = _framing_fp(
+                d, header + "{-# LANGUAGE Strict, UnicodeSyntax #-}\n"
+                + _CODEC_BODY)
+            without = _framing_fp(
+                d, header + "{-# LANGUAGE Strict #-}\n" + _CODEC_BODY)
+            expect(with_inherited == without,
+                   f"expected a redundant LANGUAGE declaration behind "
+                   f"{label} to still be normalized away")
+
+        # Block comments are only STEPPED OVER, never erased -- the
+        # existing normalization strips `--` comments alone, and this
+        # change must not quietly widen that.
+        comment_a = _framing_fp(
+            d, "{- one -}\n{-# LANGUAGE Strict #-}\n" + _CODEC_BODY)
+        comment_b = _framing_fp(
+            d, "{- two -}\n{-# LANGUAGE Strict #-}\n" + _CODEC_BODY)
+        expect(comment_a != comment_b,
+               "expected a header block comment's own text to stay in the "
+               "hash -- stepping over one must not start excluding it")
+
+        # An unterminated block comment leaves the header alone rather
+        # than guessing where it ended.
+        unterminated_with = _framing_fp(
+            d, "{- never closed\n{-# LANGUAGE Strict, UnicodeSyntax #-}\n"
+            + _CODEC_BODY)
+        unterminated_without = _framing_fp(
+            d, "{- never closed\n{-# LANGUAGE Strict #-}\n" + _CODEC_BODY)
+        expect(unterminated_with != unterminated_without,
+               "expected an unterminated header block comment to leave the "
+               "header verbatim rather than normalize past it")
+
+
 def test_inherited_extension_set_is_read_live_and_fails_loudly() -> None:
     print("issue #1416: the inherited extension set is derived from "
           "synarchy.cabal's `common lang`, and a stanza that cannot be read "
@@ -1952,6 +1997,7 @@ def main() -> int:
         test_envelope_framing_fingerprint_changes_on_options_ghc_edit,
         test_envelope_framing_fingerprint_keeps_pragma_shaped_source,
         test_envelope_framing_fingerprint_resolves_conflicting_flags,
+        test_envelope_framing_fingerprint_sees_past_header_block_comments,
         test_inherited_extension_set_is_read_live_and_fails_loudly,
         test_frozen_dto_fingerprint_unaffected_by_pragma_normalization,
         test_detects_envelope_framing_fingerprint_mismatch,

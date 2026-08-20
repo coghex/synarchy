@@ -682,6 +682,46 @@ def inherited_default_extensions(
     return inherited
 
 
+def _header_gap_end(text: str, pos: int) -> int | None:
+    """The end of the run of whitespace and NESTED Haskell block
+    comments starting at `pos` -- i.e. everything that may legally sit
+    between two module-header pragmas without ending the header. None
+    if a block comment is never closed, which makes the header
+    unreadable and must leave it alone.
+
+    `{-#` opens a pragma, not a comment, so it is never consumed here;
+    inside a comment it nests and is balanced by its own `#-}`. Skipping
+    these matters because `_strip_line_comments` removes only `--`
+    comments: a `{- ... -}` haddock block before the pragma would
+    otherwise end the header walk, and a redundant `LANGUAGE`
+    declaration behind it would stay fingerprinted (issue #1416
+    requirement 1). The comments themselves are preserved verbatim in
+    the hash, exactly as before."""
+    i = pos
+    n = len(text)
+    while True:
+        while i < n and text[i].isspace():
+            i += 1
+        if not text.startswith("{-", i) or text.startswith("{-#", i):
+            return i
+        depth = 0
+        j = i
+        while j < n:
+            if text.startswith("{-", j):
+                depth += 1
+                j += 2
+            elif text.startswith("-}", j):
+                depth -= 1
+                j += 2
+                if depth == 0:
+                    break
+            else:
+                j += 1
+        if depth != 0:
+            return None
+        i = j
+
+
 def _drop_redundant_language_pragmas(
         text: str, inherited: dict[str, bool]) -> str:
     """Reduce the module header's locally declared LANGUAGE extensions to
@@ -714,8 +754,10 @@ def _drop_redundant_language_pragmas(
     guessed at.
 
     Only the module HEADER is touched -- the leading run of block
-    pragmas, which is the only place GHC accepts a `LANGUAGE`
-    declaration. Scanning the whole file instead would match
+    pragmas (with whitespace and nested `{- ... -}` comments allowed
+    between them, and preserved verbatim), which is the only place GHC
+    accepts a `LANGUAGE` declaration. Scanning the whole file instead
+    would match
     pragma-SHAPED ordinary source: a string literal (or quasiquote, or
     block comment) reading `"{-# LANGUAGE UnicodeSyntax #-}"` would be
     erased, colliding with the same literal naming a different
@@ -725,12 +767,15 @@ def _drop_redundant_language_pragmas(
     including a stray mid-file `LANGUAGE` pragma GHC would reject
     anyway -- stays fingerprinted verbatim."""
     # Split the header's leading pragma run off from the rest of the
-    # module, keeping the gaps so non-LANGUAGE pragmas survive in place.
+    # module, keeping the gaps so whitespace, block comments and
+    # non-LANGUAGE pragmas all survive in place.
     gaps: list[str] = []
     pragmas: list[str] = []
     pos = 0
     while True:
-        gap_end = pos + len(text[pos:]) - len(text[pos:].lstrip())
+        gap_end = _header_gap_end(text, pos)
+        if gap_end is None:
+            break
         match = BLOCK_PRAGMA_RE.match(text, gap_end)
         if match is None:
             break
