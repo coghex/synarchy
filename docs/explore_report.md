@@ -43,6 +43,7 @@ cited lines.
 - [ ] EXPL-6. `App.Boot` haddock links to `Engine.Core.Workers.allWorkers`, which is not exported
 - [ ] EXPL-7. `sortFrameFiles` claims to be shared by the units and buildings viewers; the units viewer no longer calls it
 - [ ] EXPL-8. `discoverBuildingEntries` claims every frame is lstat-proved regular; its static-entry branch tests only the name
+- [ ] EXPL-9. `buildPreviewUnit`'s pipeline summary still describes the filesystem-first flow #1261 replaced
 
 ---
 
@@ -418,3 +419,78 @@ Scope note: `Engine.Preview.Discovery.walkFiles`
 absent check, but it makes no regular-file claim anywhere, so it is not a
 finding. The defect recorded here is that `Engine.Preview.Building` asserts an
 invariant that one of its two frame producers does not enforce.
+
+### EXPL-9. `buildPreviewUnit`'s pipeline summary still describes the filesystem-first flow #1261 replaced
+
+`src/Engine/Preview/Unit.hs:392-395`:
+
+```haskell
+-- | The whole pre-boot pipeline for @--preview units/\<name\>@:
+--   validate the target, discover its animations, resolve its compiled
+--   atlases through the PRODUCTION loader, augment the rest from the
+--   unit's own YAML, and pick the default selection.
+```
+
+That is #887's pipeline. The code beneath it is #1261's, and the same file
+states the difference twice.
+
+The body (`src/Engine/Preview/Unit.hs:417-439`) runs four steps:
+
+1. `resolveUnitDir root name` — validate the target;
+2. `loadUnitAnimMetaIn resourceRoot unitName` — read `data/units/<name>.yaml`;
+3. `resolveUnitAtlasesIn resourceRoot unitName meta` — resolve the compiled
+   atlases, **taking that YAML as an argument**;
+4. `buildPreviewAnims` + `defaultAnimationName` — assemble and pick the
+   default.
+
+Two of the summary's five steps correspond to nothing in that.
+
+**"discover its animations"** — there is no discovery step. The animation set is
+the key set of the resolved atlas map, i.e. whatever the compiled index covers.
+The module header at `:23-32` says so directly: "That REPLACES #887's
+filesystem-first discovery," and adds that an animation folder present on disk
+and absent from the YAML "is therefore EXCLUDED from the browse list rather
+than rendered from its frames."
+
+**"augment the rest from the unit's own YAML"** — nothing is augmented from the
+YAML, and the stated ordering is reversed. The YAML is an INPUT to atlas
+resolution, not a pass after it:
+
+```haskell
+resolveUnitAtlasesIn root name yamlAnims =
+    loadUnitAtlasIndexIn root name (unitAnimFacts yamlAnims)
+```
+
+(`src/Unit/Atlas/Yaml.hs:87-88`), where `unitAnimFacts` reduces the declarations
+to `YamlAnimFacts` purely so the index can be checked for staleness and reverse
+coverage.
+
+Every playback field the viewer displays comes from the index instead.
+`buildPreviewAnims` (`src/Engine/Preview/Unit.hs:375-390`) reads `aaFps`,
+`aaLoop`, `aaFlip`, `aaPath`, `aaCellWidth`/`aaCellHeight` and `aaDirections`
+off `AtlasAnimation`, and those three playback fields are populated at
+`src/Unit/Atlas/Index.hs:308-310` from `rawFlip`/`rawFps`/`rawLoop` — the
+parsed `index.json` record, not the unit YAML.
+
+The contradiction is internal and thirty lines apart. `buildPreviewAnims`'s own
+haddock at `src/Engine/Preview/Unit.hs:359-364` says:
+
+> Every animation takes EVERYTHING from its index record — directions, real
+> per-direction frame counts (never the padded column count),
+> cell geometry, `@fps@`/`@loop@`/`@flip@` — because that is what the game does
+> with it. There is no other branch: since #1261 there is no representation an
+> animation could be in that this does not describe.
+
+So a reader who starts at the public entry point is told the viewer discovers
+animations from the asset tree and augments them from YAML; a reader who starts
+one function earlier is told neither happens. The first is the one a caller
+reads.
+
+Contrast rather than a second defect: the sibling `buildPreviewBuilding`
+(`src/Engine/Preview/Building.hs:335-338`) summarises its pipeline as "validate
+the target (the shared grouped-item containment rule), read the building's own
+YAML, discover its entries, and pick the default selection" — which matches its
+code exactly, ordering included. Buildings genuinely ARE filesystem-first with
+YAML augmentation (see this module's own authority-split header). Units stopped
+being that at #1261, and only this summary sentence was left behind, which is
+also why the two files now read as if they share a design they no longer share.
