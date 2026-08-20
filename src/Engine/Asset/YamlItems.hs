@@ -130,12 +130,18 @@ parseItemYamlStorage defName val = case val of
         \(litres), got " <> T.pack (show val)
 
 -- | One entry in an item-container's default contents (first-aid kit /
---   toolbox): which item, how many, and an optional fill for fillable
---   contents (a pill bottle's count, a fluid bottle's litres).
+--   toolbox): which item, how many, an optional fill for fillable
+--   contents (a pill bottle's count, a fluid bottle's litres), and —
+--   since #1418 — an optional NESTED @contents:@ list of the same shape.
+--
+--   The historical flat form decodes completely unchanged:
+--   @- { item: bandage, count: 2, fill: 1 }@ is still exactly that entry
+--   with no nested contents authored.
 data ItemYamlContent = ItemYamlContent
-    { iycoItem  ∷ !Text
-    , iycoCount ∷ !Int
-    , iycoFill  ∷ !(Maybe Float)
+    { iycoItem     ∷ !Text
+    , iycoCount    ∷ !Int
+    , iycoFill     ∷ !(Maybe Float)
+    , iycoContents ∷ !(Maybe [ItemYamlContent])
     } deriving (Show, Eq, Generic)
 
 instance FromJSON ItemYamlContent where
@@ -143,6 +149,19 @@ instance FromJSON ItemYamlContent where
         ⊚ v .:  "item"
         ⊛ v .:? "count" .!= 1
         ⊛ v .:? "fill"
+        -- NO @.!= []@ here, deliberately, and it is load-bearing: the
+        -- three authoring states this field exists to express are
+        -- omitted (delegate to the child definition's own defaults),
+        -- @contents: []@ (materialise that child EMPTY) and a non-empty
+        -- list (replace the child's defaults). Defaulting to @[]@ the way
+        -- the DEFINITION-level key below does would collapse the first
+        -- two into one and silently defeat the rule (#1418).
+        --
+        -- @contents: null@ resolves to the OMITTED case: aeson's '.:?'
+        -- reads an explicit null as absent. That is deliberate, not
+        -- incidental — an authored null says "nothing to say here", and
+        -- saying nothing means the child definition decides.
+        ⊛ v .:? "contents"
 
 -- | Optional food block. Items without this can't be eaten. The
 --   calories live under a `nutrition:` sub-object so future diet work
