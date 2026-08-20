@@ -91,6 +91,7 @@ import qualified Test.Headless.Input.WheelPolicy as InputWheelPolicy
 import qualified Test.Headless.Graphics.VideoConfig as VideoConfig
 import qualified Test.Headless.Graphics.VulkanAppIdentity as VulkanAppIdentity
 import qualified Test.Headless.Graphics.BindlessFeatures as BindlessFeatures
+import qualified Test.Headless.Graphics.InstancePlan as GraphicsInstancePlan
 import qualified Test.Headless.Graphics.WindowMode as GraphicsWindowMode
 import qualified Test.Headless.Graphics.AmbientLight as AmbientLight
 import qualified Test.Headless.Graphics.Screenshot as GraphicsScreenshot
@@ -415,6 +416,7 @@ main = hspec $ do
     describe "Graphics.VideoConfig" VideoConfig.spec
     describe "Graphics.VulkanAppIdentity" VulkanAppIdentity.spec
     BindlessFeatures.spec
+    GraphicsInstancePlan.spec
     describe "Graphics.WindowMode" GraphicsWindowMode.spec
     describe "Graphics.computeAmbientLight" AmbientLight.spec
     describe "Graphics.Screenshot" GraphicsScreenshot.spec
