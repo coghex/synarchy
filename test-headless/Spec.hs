@@ -19,6 +19,7 @@ import qualified Test.Headless.WorldGen.CoastBreach as CoastBreach
 import qualified Test.Headless.WorldGen.BedDepth as BedDepth
 import qualified Test.Headless.WorldGen.FluidSurfaceFold as FluidSurfaceFold
 import qualified Test.Headless.Unit.Pathing.Cost as PathingCost
+import qualified Test.Headless.Unit.Pathing.Hazard as PathingHazard
 import qualified Test.Headless.Unit.Pathing.AStar as PathingAStar
 import qualified Test.Headless.Unit.Pathing.Config as PathingConfig
 import qualified Test.Headless.Unit.Render.PickFrame as PickFrame
@@ -349,6 +350,7 @@ main = hspec $ do
     describe "Bindless texture filter rebinding" BindlessRebind.spec
     describe "Bindless texture release" BindlessRelease.spec
     describe "Unit.Pathing.Cost" PathingCost.spec
+    PathingHazard.spec
     describe "Unit.Pathing.AStar" PathingAStar.spec
     describe "Unit.Pathing.Config" PathingConfig.spec
     describe "Unit.Render.pickFrame" PickFrame.spec
