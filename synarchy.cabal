@@ -462,6 +462,7 @@ library
                      Unit.HitTest
                      Unit.LineOfSight
                      Unit.Pathing.Config
+                     Unit.Pathing.Hazard
                      Unit.Pathing.Cost
                      Unit.Pathing.AStar
                      Unit.Fall
@@ -1072,6 +1073,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.BedDepth
                    Test.Headless.WorldGen.FluidSurfaceFold
                    Test.Headless.Unit.Pathing.Cost
+                   Test.Headless.Unit.Pathing.Hazard
                    Test.Headless.Unit.Pathing.AStar
                    Test.Headless.Unit.Pathing.Config
                    Test.Headless.Unit.Render.PickFrame

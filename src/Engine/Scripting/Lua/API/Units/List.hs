@@ -30,6 +30,7 @@ import Unit.Types
 import Unit.Direction (Direction(..))
 import Unit.Render (pickFrame)
 import Unit.Sim.Types (UnitActivity(..), UnitSimState(..), MoveTarget(..), UnitThreadState(..))
+import Unit.Pathing.Hazard (moveHazardPolicyToken)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (Camera2D(..))
 
@@ -174,12 +175,23 @@ unitGetInfoFn env = do
                         knockedDown = case HM.lookup uid (utsSimStates uts) of
                             Just ss → maybe False (const True) (usGetUpAt ss)
                             _       → False
-                    pure (inst, mDef, moveSpeed, moveGrade, knockedDown)
+                        -- The IN-FLIGHT request's damaging-drop policy
+                        -- (#1217), or Nothing when the unit has no move
+                        -- target. Observing it is what lets a test tell a
+                        -- protected ambient wander from an ordinary
+                        -- command on the SAME unit.
+                        moveHazard = case HM.lookup uid (utsSimStates uts) of
+                            Just ss → moveHazardPolicyToken . mtHazard
+                                          <$> usTarget ss
+                            _       → Nothing
+                    pure ( inst, mDef, moveSpeed, moveGrade, knockedDown
+                         , moveHazard )
             case mPair of
                 Nothing → do
                     Lua.pushnil
                     return 1
-                Just (inst, mDef, moveSpeed, moveGrade, knockedDown) → do
+                Just ( inst, mDef, moveSpeed, moveGrade, knockedDown
+                     , moveHazard ) → do
                     Lua.newtable
                     Lua.pushstring (TE.encodeUtf8 (uiDefName inst))
                     Lua.setfield (-2) "defName"
@@ -217,6 +229,13 @@ unitGetInfoFn env = do
                     Lua.setfield (-2) "moveGrade"
                     Lua.pushboolean knockedDown
                     Lua.setfield (-2) "knockedDown"
+                    -- Only present while a move target exists; absent
+                    -- rather than a made-up default when the unit is
+                    -- standing still, since a policy with no request
+                    -- would be a fiction.
+                    forM_ moveHazard $ \tok → do
+                        Lua.pushstring (TE.encodeUtf8 tok)
+                        Lua.setfield (-2) "moveHazard"
                     -- equipmentClass is per-def, not per-instance. Only
                     -- present in the table when the def declares one.
                     case mDef ⌦ udEquipmentClass of

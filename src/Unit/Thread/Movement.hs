@@ -65,14 +65,15 @@ import Unit.Thread.Movement.Leap
     , lungeImpactSpeed, startJump)
 import Unit.Thread.Movement.Climb
     (rollClimbSlips, convertSlippedClimb, applyClimbXP, clearPendingClimbXP)
-import Unit.Thread.Movement.PathAdvance (tickUnit, snapshotVisibleWorldTiles)
+import Unit.Thread.Movement.PathAdvance
+    (tickUnit, snapshotVisibleWorldTiles, moveWorldFor)
 
 -- | Advance all units with active move targets, using cost-aware
 --   greedy movement + local A* replan. World tile data is snapshotted
 --   once per tick so all units in this batch see the same world.
 tickAllMovement ∷ Double → EngineEnv → IORef UnitThreadState → IO ()
 tickAllMovement dt env utsRef = do
-    mWtd ← snapshotVisibleWorldTiles (toWorldSimCapability env)
+    mSnap ← snapshotVisibleWorldTiles (toWorldSimCapability env)
     now  ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     -- Snapshot per-unit body_mass + toughness so the pure movement
     -- tick can compute fall impact without reading the unit manager.
@@ -89,7 +90,13 @@ tickAllMovement dt env utsRef = do
     -- soft/loose ground slows the unit and biases A* toward firm routes.
     -- Read once per tick (single IORef deref), like the pathing config.
     reg ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
-    let statsFor uid = case HM.lookup uid (umInstances um) of
+    -- Per-unit view of the shared snapshot (#1217): the tiles as before,
+    -- plus whether they are verified to be this mover's OWN page. Only a
+    -- hazard-protected request consults the verification; every other
+    -- mover keeps the historical "path against the active page" behavior.
+    let worldFor mInst = moveWorldFor mSnap (uiPage <$> mInst)
+        statsFor uid   = statsForInst (HM.lookup uid (umInstances um))
+        statsForInst mInst = case mInst of
             Just inst →
                 -- Gait threshold (absolute tiles/s) from the unit's def:
                 -- run_threshold × max_speed. No def → leave it effectively
@@ -110,8 +117,13 @@ tickAllMovement dt env utsRef = do
             Nothing → defaultMoveStats
     uts ← readIORef utsRef
     let simStates  = utsSimStates uts
+        -- The stats and the terrain view both derive from the mover's
+        -- instance, so they share ONE lookup per moving unit per tick.
         simStates' = HM.mapWithKey
-                        (\uid ss → tickUnit pc reg now dt mWtd (statsFor uid) ss)
+                        (\uid ss →
+                            let mInst = HM.lookup uid (umInstances um)
+                            in tickUnit pc reg now dt (worldFor mInst)
+                                        (statsForInst mInst) ss)
                         simStates
 
     -- Climb slip rolls + climb→fall conversions. Two passes that

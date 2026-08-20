@@ -40,6 +40,8 @@ import Unit.Faction
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Thread.Command (recomputeBodyDerivedStats)
 import Unit.Sim.Types (Pose(..))
+import Unit.Pathing.Hazard
+    (defaultMoveHazardPolicy, parseMoveHazardPolicy)
 import World.Types (WorldManager(..))
 import Engine.Scripting.Lua.API.Units.Yaml (surfaceZInWorld)
 
@@ -227,12 +229,24 @@ unitSetPosFn env = do
             return 1
 
 -- | Order a unit to walk to a target. Speed defaults to 2.0 tiles/sec.
+--
+--   Signature: @unit.moveTo(uid, gx, gy, [speed], [hazardPolicy])@
+--
+--   @hazardPolicy@ (#1217) is the route's damaging-drop policy, stated
+--   EXPLICITLY per request: @"allow_falls"@ (the default, and every
+--   pre-#1217 caller's behavior) or @"avoid_falls"@, which makes a
+--   descent the cost model classifies as a real fall impassable for this
+--   request. An unrecognized token is REFUSED — it returns false, warns,
+--   and enqueues nothing — rather than silently degrading to
+--   @"allow_falls"@, which would turn a typo in an ambient mover into
+--   exactly the cliff walk the policy exists to prevent.
 unitMoveToFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitMoveToFn env = do
-    idArg    ← Lua.tointeger 1
-    xArg     ← Lua.tonumber 2
-    yArg     ← Lua.tonumber 3
-    speedArg ← Lua.tonumber 4
+    idArg     ← Lua.tointeger 1
+    xArg      ← Lua.tonumber 2
+    yArg      ← Lua.tonumber 3
+    speedArg  ← Lua.tonumber 4
+    hazardArg ← Lua.tostring 5
 
     case idArg of
         Nothing → do
@@ -249,10 +263,24 @@ unitMoveToFn env = do
                 speed = case speedArg of
                             Just (Lua.Number v) → realToFrac v
                             _                   → 2.0
-            Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $
-                UnitMoveTo uid tx ty speed
-            Lua.pushboolean True
-            return 1
+                mHazard = case hazardArg of
+                    Nothing  → Just defaultMoveHazardPolicy
+                    Just raw → parseMoveHazardPolicy (TE.decodeUtf8 raw)
+            case mHazard of
+                Nothing → do
+                    logger ← Lua.liftIO $ readIORef (loggerRef env)
+                    Lua.liftIO $ logWarn logger CatAsset $
+                        "unit.moveTo: unrecognized hazard policy '"
+                        <> maybe "" TE.decodeUtf8 hazardArg
+                        <> "' (expected 'allow_falls' or 'avoid_falls')"
+                        <> " — move refused"
+                    Lua.pushboolean False
+                    return 1
+                Just hazard → do
+                    Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $
+                        UnitMoveTo uid tx ty speed hazard
+                    Lua.pushboolean True
+                    return 1
 
 -- | unit.setMoveSpeed(uid, speed) — retarget the speed of an ALREADY
 --   in-flight move (see UnitSetMoveSpeed) without resetting its

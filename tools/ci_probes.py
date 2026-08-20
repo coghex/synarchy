@@ -228,6 +228,12 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                   "obstacle-course description implies (#722 defined promotion "
                                   "broadness from the actual registered invocation; #754 made "
                                   "the unsupported promotion; #772 demoted it)"),),
+    "wander_hazard": (Reason(TARGETED, "narrow #1217 ambient-wander fall-free routing "
+                                       "regression; movement_probe.py remains the general "
+                                       "obstacle-course gate"),
+                      Reason(FLAKY, "stage A is a sustained window of REAL unit_ai wander, so it "
+                                    "depends on AI thought-tick timing the slower, variable-speed "
+                                    "Linux CI runner destabilizes run-to-run")),
     "remote_warning_page_guard": (Reason(TARGETED, "narrow #844 remote-warning establishHere() "
                                                    "cross-page revalidation regression"),),
     "resource_root": (Reason(TARGETED, "narrow #636 resource-root launch-contract regression "

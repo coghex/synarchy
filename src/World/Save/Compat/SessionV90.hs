@@ -130,7 +130,7 @@ import World.Save.Component.Entities
     , migrateBuildingsDTOv1, applyBuildings
     , UnitInstanceDTOv1, PageUnitsDTOv1(..), UnitsDTOv1(..)
     , migrateUnitsDTOv1, applyUnits
-    , UnitSimStateDTO, PageSimDTOv1(..), UnitSimDTOv1(..)
+    , UnitSimStateDTOv1, PageSimDTOv1(..), UnitSimDTOv1(..)
     , migrateUnitSimDTOv1, applyUnitSim
     , BillQueueDTOv1(..), PageCraftBillsDTOv1(..)
     , CraftBillsDTOv1(..), migrateCraftBillsDTOv1, applyCraftBills
@@ -194,7 +194,7 @@ data WorldPageSaveV90 = WorldPageSaveV90
     , wp90SpoilPiles   ∷ !(HM.HashMap (Int, Int) SpoilPileDTO)
     , wp90Buildings    ∷ !BuildingSnapshotV90
     , wp90Units        ∷ !UnitSnapshotV90
-    , wp90UnitSimStates ∷ !(HM.HashMap UnitId UnitSimStateDTO)
+    , wp90UnitSimStates ∷ !(HM.HashMap UnitId UnitSimStateDTOv1)
     , wp90FloraHarvests ∷ !FloraHarvests
     , wp90ChopDesignations ∷ !(HM.HashMap (Int, Int) ChopDesignationDTO)
     , wp90CraftBills   ∷ !BillQueueDTOv1

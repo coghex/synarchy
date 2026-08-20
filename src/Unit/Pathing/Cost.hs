@@ -42,6 +42,8 @@
 -- modifier may need one threaded through the same way.
 module Unit.Pathing.Cost
     ( stepCost
+    , stepCostUnder
+    , isDamagingDrop
     , lookupTerrainZ
     , lookupFluidType
     , lookupSlopeAt
@@ -51,6 +53,9 @@ module Unit.Pathing.Cost
     , slopeGrade
     , slopeSpeedFactor
     , isCliffStep
+    -- * Per-request hazard policy (re-exported from "Unit.Pathing.Hazard")
+    , MoveHazardPolicy(..)
+    , defaultMoveHazardPolicy
     -- * Tunables (loaded from config/pathing.yaml; see "Unit.Pathing.Config")
     , PathingConfig(..)
     , defaultPathingConfig
@@ -65,6 +70,8 @@ import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Material (MaterialRegistry, MaterialId(..), getMaterialProps, mpMoveCost)
 import World.Generate (globalToChunk)
 import Unit.Pathing.Config (PathingConfig(..), defaultPathingConfig)
+import Unit.Pathing.Hazard
+    (MoveHazardPolicy(..), defaultMoveHazardPolicy)
 
 -- * Cost function
 
@@ -82,7 +89,20 @@ import Unit.Pathing.Config (PathingConfig(..), defaultPathingConfig)
 --   enforces the "movement clamped to loaded chunks" rule
 --   bottom-up.
 stepCost ∷ PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Maybe Float
-stepCost pc reg wtd (sgx, sgy) (dgx, dgy) = do
+stepCost = stepCostUnder defaultMoveHazardPolicy
+
+-- | 'stepCost' under an explicit per-request hazard policy (#1217).
+--
+--   Under 'FallProhibited' a step whose descent the cost model itself
+--   classifies as a real fall ('isDamagingDrop') is IMPASSABLE — the
+--   same `Nothing` an unloaded chunk or a lava tile yields — so the
+--   greedy stepper and every A* expansion agree by construction (they
+--   both consult this one function). Every drop strictly BELOW
+--   @pcFallTriggerDrop@ stays allowed, and 'FallPermitted' is
+--   byte-for-byte the pre-#1217 function, so no existing caller's cost
+--   semantics or determinism change.
+stepCostUnder ∷ MoveHazardPolicy → PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Maybe Float
+stepCostUnder policy pc reg wtd (sgx, sgy) (dgx, dgy) = do
     srcZ <- lookupTerrainZ wtd sgx sgy
     dstZ <- lookupTerrainZ wtd dgx dgy
     let fluidAtDst = lookupFluidType wtd dgx dgy
@@ -99,7 +119,12 @@ stepCost pc reg wtd (sgx, sgy) (dgx, dgy) = do
     let isDiagonal = sgx ≢ dgx ∧ sgy ≢ dgy
         cornerBlocked = isDiagonal
                       ∧ not (passable pc wtd dgx sgy ∧ passable pc wtd sgx dgy)
-    if cornerBlocked
+        -- Per-request hazard policy (#1217): an ambient mover's route
+        -- may not include a damaging drop at all. Keyed on the SAME
+        -- classification the `fall` term below uses, so the policy and
+        -- the cost model can never disagree about what a real fall is.
+        fallBlocked = policy ≡ FallProhibited ∧ isDamagingDrop pc srcZ dstZ
+    if cornerBlocked ∨ fallBlocked
       then Nothing
       else
         let dx     = fromIntegral (dgx - sgx) ∷ Float
@@ -124,10 +149,24 @@ stepCost pc reg wtd (sgx, sgy) (dgx, dgy) = do
             -- Downward: a single step is a free walk-off; a real fall
             -- (drop ≥ pcFallTriggerDrop) costs an exponential in height so
             -- the planner avoids damaging drops.
-            fall   = if negate dz ≥ pcFallTriggerDrop pc
+            fall   = if isDamagingDrop pc srcZ dstZ
                      then pcFallFactor pc ** fromIntegral (negate dz)
                      else 0
         in pure $! clampStepCost (horizD + climb + fall + fluidCost)
+
+-- | Does descending from @srcZ@ to @dstZ@ count as a DAMAGING DROP —
+--   a real fall rather than a free walk-off? True iff the drop reaches
+--   @pcFallTriggerDrop@; every smaller descent (a single-z step under
+--   the shipped default of 2, and nothing at all under a normalized
+--   value of 1) is an ordinary walk-off.
+--
+--   This is the ONE classification: `stepCost`'s exponential fall
+--   penalty, 'FallProhibited''s rejection, and
+--   "Unit.Thread.Movement.PathAdvance"'s runtime "start a fall now"
+--   check all call it, so the planner's idea of a damaging drop and the
+--   mover's cannot drift apart.
+isDamagingDrop ∷ PathingConfig → Int → Int → Bool
+isDamagingDrop pc srcZ dstZ = srcZ - dstZ ≥ pcFallTriggerDrop pc
 
 -- | Ceiling for a single step's total cost (see `clampStepCost`).
 --   Comfortably discourages the step over any real route (routing
