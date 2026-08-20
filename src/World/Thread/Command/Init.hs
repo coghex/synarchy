@@ -208,8 +208,12 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- Location overlay (#89): deterministically choose which chunks
     -- host the registered locations, from the just-finalised plates +
     -- ocean + lake/river data (locations keep clear of water, #414).
-    -- Empty (and skipped) when no defs are loaded — the common
-    -- headless-dump path stays byte-identical and zero-cost.
+    -- Empty when no defs are loaded — the common headless-dump path
+    -- stays byte-identical, and the placement and settlement work is
+    -- skipped. The land detection is not: 'Location.Overlay' is
+    -- {-# LANGUAGE Strict #-}, so its per-chunk scan is forced on every
+    -- path, which is what lets a landless world report NoLand even
+    -- there (#1414).
     locRegistry ← readIORef (crLocationDefsRef (toContentRegistriesCapability env))
     -- #1101/#1102: this page's placed locations AND its rivers are both
     -- named in THIS page's own generated language, resolved from the

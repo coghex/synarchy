@@ -21,8 +21,8 @@ import Unit.Thread.Command.Pose (isTransitioning)
 import Unit.Thread.Movement (startJump, jumpMaxTiles)
 
 handleUnitMoveToCommand ∷ EngineEnv → IORef UnitThreadState → UnitId
-                        → Float → Float → Float → IO ()
-handleUnitMoveToCommand env utsRef uid tx ty speed = do
+                        → Float → Float → Float → MoveHazardPolicy → IO ()
+handleUnitMoveToCommand env utsRef uid tx ty speed hazard = do
     -- Apply the injury speed multiplier on receipt so EVERY move
     -- command — commanded, wander, attack-pursuit, retreat — gets
     -- scaled the same way without the AI caller having to know.
@@ -65,7 +65,12 @@ handleUnitMoveToCommand env utsRef uid tx ty speed = do
                     -- a standing unit can break into a Running activity.
                     let activity = if isRunning ∧ usPose ss ≡ Standing
                                    then Running else Walking
-                        ss' = ss { usTarget    = Just (MoveTarget tx ty effSpeed)
+                        -- A new request REPLACES the previous one
+                        -- wholesale — destination, speed, local path
+                        -- AND hazard policy (#1217). A protected wander
+                        -- can therefore never make a later player
+                        -- command refuse a cliff, nor vice versa.
+                        ss' = ss { usTarget    = Just (MoveTarget tx ty effSpeed hazard)
                                  , usState     = activity
                                  , usLocalPath = []
                                  }
@@ -80,6 +85,11 @@ handleUnitMoveToCommand env utsRef uid tx ty speed = do
 --   continuous feedback (#999's stamina-adaptive pacing) can retarget
 --   speed every tick without that cost. No-op if the unit has no
 --   in-flight target (nothing to retarget) — never creates one.
+--
+--   The target's hazard policy (#1217) is deliberately RETAINED: this
+--   command changes the pace of the route the caller already asked for,
+--   so re-permitting a fall it refused would be a silent policy change
+--   nobody requested.
 handleUnitSetMoveSpeedCommand ∷ EngineEnv → IORef UnitThreadState → UnitId
                               → Float → IO ()
 handleUnitSetMoveSpeedCommand env utsRef uid speed = do

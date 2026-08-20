@@ -306,6 +306,35 @@
         }
       ]
     },
+    "Unit.Pathing.Hazard.MoveHazardPolicy": {
+      "source": "src/Unit/Pathing/Hazard.hs",
+      "onSaveWire": true,
+      "components": [
+        "unit-sim"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"unit-sim\" — World.Save.Component.Entities",
+          "via": "PageSimDTO → UnitSimStateDTO → MoveTargetDTO → MoveHazardPolicy"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → UnitSimState → MoveTarget → MoveHazardPolicy"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "FallPermitted",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "FallProhibited",
+          "arity": 0,
+          "payload": []
+        }
+      ]
+    },
     "Unit.Sim.Types.Pose": {
       "source": "src/Unit/Sim/Types.hs",
       "onSaveWire": true,
@@ -319,7 +348,7 @@
         },
         {
           "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
-          "via": "WorldPageSaveV90 → UnitSimStateDTO → Pose"
+          "via": "WorldPageSaveV90 → UnitSimStateDTOv1 → Pose"
         },
         {
           "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
@@ -382,7 +411,7 @@
         },
         {
           "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
-          "via": "WorldPageSaveV90 → UnitSimStateDTO → UnitActivity"
+          "via": "WorldPageSaveV90 → UnitSimStateDTOv1 → UnitActivity"
         },
         {
           "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",

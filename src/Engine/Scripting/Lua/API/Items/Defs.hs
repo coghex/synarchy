@@ -19,6 +19,12 @@ module Engine.Scripting.Lua.API.Items.Defs
     , registerItemDefs
     , itemDuplicateMessage
     , itemListDefsFn
+      -- * The pure YAML → registry mapping
+      --
+      -- Exported for the tests that materialize SHIPPED definitions
+      -- (#1418): building an 'ItemDef' by hand there would prove the
+      -- fixture, not the data.
+    , itemDefFromYaml
     ) where
 
 import UPrelude
@@ -161,6 +167,18 @@ registerItemDefs env logger poolRef lteq managerRef filePath defs = do
         return (acc + 1)
         ) (0 ∷ Int) defs
 
+-- | One authored default-content entry, YAML → registry (#1418).
+--   Recursive: a nested @contents:@ list carries the same shape all the
+--   way down, and the omitted / empty / replaced distinction the decoder
+--   preserves survives verbatim into 'ItemContentEntry'.
+contentEntry ∷ ItemYamlContent → ItemContentEntry
+contentEntry c = ItemContentEntry
+    { iceItem     = iycoItem c
+    , iceCount    = iycoCount c
+    , iceFill     = iycoFill c
+    , iceContents = map contentEntry <$> iycoContents c
+    }
+
 -- | The authored YAML definition, as the registry holds it. Pure: the
 --   only things it cannot derive are the already-loaded sprite handle
 --   and the file the definition came from, both passed in.
@@ -182,8 +200,7 @@ itemDefFromYaml filePath handle def = ItemDef
     , idQualityTiers = map (\t → QualityTier (iyqtMin t) (iyqtLabel t))
                            (iydQualityTiers def)
     , idContainer   = container
-    , idDefaultContents =
-        [ (iycoItem c, iycoCount c, iycoFill c) | c ← iydContents def ]
+    , idDefaultContents = map contentEntry (iydContents def)
     , idStorage     = storage
     , idFood        = food
     , idWeapon      = weapon

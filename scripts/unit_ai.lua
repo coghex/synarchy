@@ -165,7 +165,7 @@ unitAi.markGoalAccomplished  = core.markGoalAccomplished
 -- the same way it does for bears.
 unitAi.registerActions("acolyte", {
     { name = "idle", utility = needs.idleUtility, execute = needs.idleExecute },
-    { name = "wander", utility = needs.wanderUtility, execute = needs.wanderExecute },
+    { name = "wander", utility = needs.wanderUtility, execute = needs.ambientWanderExecute },
     { name = "follow_command", utility = combat.followCommandUtility, execute = combat.followCommandExecute },
     { name = "treat_ally", utility = medic.treatAllyUtility, execute = medic.treatExecute },
     { name = "drink_from_canteen", utility = needs.drinkUtility, execute = needs.drinkExecute },
@@ -210,7 +210,7 @@ unitAi.setConfig("technomule", {
 
 unitAi.registerActions("technomule", {
     { name = "idle", utility = needs.idleUtility, execute = needs.idleExecute },
-    { name = "wander", utility = needs.wanderUtility, execute = needs.wanderExecute },
+    { name = "wander", utility = needs.wanderUtility, execute = needs.ambientWanderExecute },
     { name = "follow_command", utility = combat.followCommandUtility, execute = combat.followCommandExecute },
     transfer.action, transfer.escortAction,
 })

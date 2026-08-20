@@ -5,6 +5,7 @@ module Unit.Sim.Types
     , UnitActivity(..)
     , Pose(..)
     , poseDepth
+    , MoveHazardPolicy(..)   -- re-exported from Unit.Pathing.Hazard
     , Direction(..)          -- re-exported from Unit.Direction
     , UnitThreadState(..)
     , emptyUnitThreadState
@@ -16,6 +17,7 @@ import GHC.Generics (Generic)
 import Data.Serialize (Serialize)
 import Unit.Types (UnitId(..))
 import Unit.Direction (Direction(..))
+import Unit.Pathing.Hazard (MoveHazardPolicy(..))
 
 data UnitSimState = UnitSimState
     { usRealX     ∷ !Float
@@ -139,6 +141,13 @@ data MoveTarget = MoveTarget
     { mtTargetX ∷ !Float
     , mtTargetY ∷ !Float
     , mtSpeed   ∷ !Float
+    -- | Whether THIS request's route may traverse a damaging drop
+    --   (#1217). A property of the request, not of the mover: it is set
+    --   once by the `UnitMoveTo` that created the target and is replaced
+    --   wholesale by the next one. `UnitSetMoveSpeed` deliberately
+    --   retains it — retargeting the pace of an in-flight move must not
+    --   quietly re-permit a fall the caller refused.
+    , mtHazard  ∷ !MoveHazardPolicy
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | What pose the unit is currently *in*. Orthogonal to UnitActivity.

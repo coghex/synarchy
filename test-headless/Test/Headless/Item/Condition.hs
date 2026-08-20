@@ -63,7 +63,8 @@ import Item.Roll
     , groundQualityFallbackRange, rollGroundCondition, rollGroundQuality
     , rollItemSpec, salvageCondition )
 import Item.Types
-    ( ItemDef(..), ItemInstance(..), ItemManager(..), ItemWeapon(..) )
+    ( ItemContentEntry(..), ItemDef(..), ItemInstance(..), ItemManager(..)
+    , ItemWeapon(..) )
 import Substance.Types (emptySubstanceManager)
 import System.Random (StdGen, mkStdGen, randomR)
 import Unit.Direction (Direction(..))
@@ -109,7 +110,10 @@ testItems = ItemManager $ HM.fromList
     [ ("worn_tool", (bareDef "worn_tool" "tool")
                       { idQualitySpec = Just (50, 75) })
     , ("kit",       (bareDef "kit" "misc")
-                      { idDefaultContents = [("worn_tool", 2, Nothing)] })
+                      { idDefaultContents =
+                          [ ItemContentEntry
+                              { iceItem = "worn_tool", iceCount = 2
+                              , iceFill = Nothing, iceContents = Nothing } ] })
     , ("ration",    bareDef "ration" "misc")
     , ("steel_bar", bareDef "steel_bar" "misc")
     ]

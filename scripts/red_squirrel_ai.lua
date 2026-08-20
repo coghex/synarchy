@@ -17,7 +17,8 @@
 -- the saveModules registration in unit_ai.init. Nothing extra here.
 
 local unitAi = require("scripts.unit_ai")
-local mv = require("scripts.movement_speed")
+local mv      = require("scripts.movement_speed")
+local ambient = require("scripts.ambient_movement")
 
 local squirrelAi = package.loaded["scripts.red_squirrel_ai"] or {}
 package.loaded["scripts.red_squirrel_ai"] = squirrelAi
@@ -167,7 +168,8 @@ local function squirrelWanderExecute(uid, s, params)
     local r     = math.sqrt(math.random()) * params.wander_radius
     local tx = s.sqAnchor.x + math.cos(angle) * r
     local ty = s.sqAnchor.y + math.sin(angle) * r
-    unit.moveTo(uid, tx, ty, mv.meander(uid))  -- aimless → slow meander
+    -- Aimless → slow meander on a fall-free route (#1217).
+    ambient.wanderTo(uid, tx, ty)
     s.activityUntil = engine.gameTime()
         + randRange(params.wander_dur_min, params.wander_dur_max)
     if math.random() < params.anchor_drift_chance then
