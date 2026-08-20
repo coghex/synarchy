@@ -85,6 +85,7 @@ cited lines.
 - [ ] EXPL-35. `loadVegetationYamlFn`'s body says it parses "the single vegetation YAML file"; both Lua callers loop over five
 - [ ] EXPL-36. `computeAmbientLight`'s inline labels name noon and midnight; its input convention puts those values at dawn and dusk
 - [ ] EXPL-37. The Tier 3 damage model's derivation block is stale in two places: a `modeCoupling` constant that does not exist, and a `delivered` formula missing two factors
+- [ ] EXPL-38. Three references outlived the deleted `World.Fluids` facade, one of them a CI path-selector self-test case
 
 ---
 
@@ -2832,3 +2833,87 @@ Verified accurate in the same block, so a fix need not touch them:
   `src/Combat/Resolution/Damage.hs:211` exactly.
 - `E = ½·m_eff·v²` and `p = m_eff·v` are the correct readings of the returned
   pair, as shown above.
+
+---
+
+## Hydrology namespace map
+
+### EXPL-38. Three references outlived the deleted `World.Fluids` facade, one of them a CI path-selector self-test case
+
+`World.Fluids` no longer exists. Commit `88d8c96f` — "Delete World.Fluids
+facade, import World.Fluid.Ocean directly" — removed `src/World/Fluids.hs`,
+resolving `docs/code_health_findings.md` CH-81 (filed as `[#1110]`). Three
+references survived it.
+
+**1. `tools/ci_expensive_gates.py:22-24` — the comment's example does not
+exist.**
+
+```python
+    # Generation-family subtrees use a `Name*` prefix (not `Name/*`) so each
+    # family's facade module (e.g. src/World/Generate.hs, src/World/Fluids.hs)
+    # matches alongside its directory. Deliberately NOT src/World/* wholesale:
+```
+
+`src/World/Generate.hs` exists. `src/World/Fluids.hs` does not. This comment is
+the RATIONALE for why the globs at `:28-32` are written `Name*` rather than
+`Name/*`, and half of the evidence it offers is a deleted module.
+
+The fluid family makes that worse rather than incidental: there is now no fluid
+facade of any kind. CH-81's own verification note records that
+`src/World/Fluid.hs` never existed either
+(`docs/code_health_findings.md:1986-1988`: "`src/World/Fluid.hs` does not
+exist, so the confusable pair is `World.Fluids` vs `World.Fluid.<Sub>`"). So
+fluid is precisely the family for which the `Name*` form buys nothing — and it
+is the example chosen to justify the `Name*` form.
+
+**2. `tools/ci_expensive_gates.py:135` — a self-test case for a path that can
+never change.**
+
+```python
+        ("worldgen", ["src/World/Fluids.hs"], True),
+```
+
+The case asserts that this path selects the worldgen gate, and it still PASSES:
+selection is a pure `fnmatch` of the diff paths against `"src/World/Fluid*"`
+(`:29`), with no filesystem check anywhere. But it is now vacuous — no pull
+request can touch `src/World/Fluids.hs`, so this case can never guard a real
+diff, and the gate's genuine coverage of the fluid family rests entirely on its
+other cases. A self-test that passes while testing an unreachable input reports
+coverage it does not have.
+
+**3. `docs/hydrology_pipeline.md:284-285` — cites a resolved collision as
+current.**
+
+```markdown
+- `docs/code_health_findings.md` CH-80 (this document's origin), CH-81 (the
+  `World.Fluids` / `World.Fluid.*` naming collision).
+```
+
+CH-81 is checked off and filed, and the collision was resolved by deleting one
+of its two halves. This is the mildest of the three — a pointer into a findings
+document, which is historical by nature — but a reader following it to
+understand the current naming goes looking for a collision that no longer has
+two sides.
+
+**Everything else in that index is exact**, which is worth recording because
+the index is large and was checked in full. All seventeen modules named in
+`docs/hydrology_pipeline.md` §12 ("Where does X live?") and §13 ("Outside the
+pipeline") were resolved against the tree, and sixteen exist exactly as
+written:
+
+`World.Geology.Timeline.River`, `World.Geology.Timeline.RiverTrace`,
+`World.Hydrology.Event`, `World.Fluid.Ocean`, `World.Fluid.OceanMask`,
+`World.Fluid.Lake.Identify.Ocean`, `World.Hydrology.WaterTable`,
+`Sim.Fluid.Active`, `World.Hydrology.Simulation.Flow`, `World.Fluid.IceLevel`,
+`World.Fluid.Ice`, `World.Fluid.Lava`, `World.River.Identity`,
+`World.River.Naming`, `World.Fluid.Internal`, `World.Fluid.Types`.
+
+`World.Fluids` is the only miss, and it is the one that was deleted.
+
+**Severity: low-medium.** No behaviour is affected and no gate is currently
+weakened — the `src/World/Fluid*` glob still matches every real fluid module,
+so a genuine fluid change still triggers the worldgen gate. It sits above the
+nit tier because one of the three sites is a CI path-selection SELF-TEST whose
+passing status now proves nothing about the selector, and because the comment
+it sits beneath is a rationale for the glob style that its own example no
+longer supports.
