@@ -453,6 +453,29 @@ def test_result_validation() -> None:
             ("elapsed_seconds", lambda d: d["runs"][0].update(
                 {"elapsed_seconds": 10 ** 309})),
             ("failure_count", lambda d: d.update({"failure_count": 10 ** 309})),
+            # The same "valid input must REPORT, not raise" shape one
+            # level down. A run's `checks` is reported by the per-run
+            # loop and skipped, but the check_counts aggregation pass
+            # then reached it again through an `or {}` fallback, which
+            # rescues a FALSY non-mapping and passes a TRUTHY one
+            # straight to .items(). A non-empty list/string/True/int
+            # there raised AttributeError, turning malformed input into
+            # a crash instead of the clean refusal every other malformed
+            # field gets.
+            ("`checks` must be an object",
+             lambda d: d["runs"][0].update({"checks": ["alpha"]})),
+            ("`checks` must be an object",
+             lambda d: d["runs"][0].update({"checks": "alpha"})),
+            ("`checks` must be an object",
+             lambda d: d["runs"][0].update({"checks": True})),
+            ("`checks` must be an object",
+             lambda d: d["runs"][0].update({"checks": 5})),
+            # The falsy ones the `or {}` DID rescue, kept so a later
+            # simplification cannot quietly drop half the guard.
+            ("`checks` must be an object",
+             lambda d: d["runs"][0].update({"checks": []})),
+            ("`checks` must be an object",
+             lambda d: d["runs"][0].update({"checks": None})),
             ("non-empty list", lambda d: d.update({"checks": []})),
             ("{id, label} object", lambda d: d["checks"].append({"id": 7})),
             ("appears twice", lambda d: d["checks"].append(d["checks"][0])),

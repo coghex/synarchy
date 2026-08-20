@@ -1128,7 +1128,18 @@ def validate_result(result, document: dict) -> list[str]:
         for record in runs:
             if not isinstance(record, dict):
                 continue
-            for cid, value in (record.get("checks") or {}).items():
+            # `or {}` rescues a FALSY non-mapping (None, [], "") but
+            # passes a truthy one straight through to .items(). The loop
+            # above has already recorded "`checks` must be an object" for
+            # it and moved on, so reaching here with a non-empty list,
+            # string or True raised AttributeError and turned a malformed
+            # INPUT into a crash instead of the clean refusal every other
+            # malformed field gets. Aggregate mappings only; the problem
+            # is already reported.
+            checks = record.get("checks")
+            if not isinstance(checks, dict):
+                continue
+            for cid, value in checks.items():
                 if cid in observed and value in CHECK_OUTCOMES:
                     observed[cid][value] += 1
         for cid, tally in counts.items():
