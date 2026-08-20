@@ -59,6 +59,8 @@ cited lines.
 - [ ] EXPL-14. `migrateLegacyConfig` reports a destination write failure as a malformed legacy file, in a user-facing warning
 - [ ] EXPL-15. `Unit.Atlas.Digest`'s description of the digest stream omits the tag's length prefix and the label field entirely
 - [ ] EXPL-16. `pickFrame`'s "used by the render path and the hit-tester" omits both Lua API consumers
+- [ ] EXPL-17. `unitToQuad`'s climb-occlusion branch is justified by a `spriteRowSpan` push the same function says it does not apply
+- [ ] EXPL-18. `Building.Render`'s sort comment says units add a `spriteRowSpan` term "as units do"; they no longer do
 
 ---
 
@@ -988,3 +990,100 @@ right (`strided = raw * stride` shows frames 0, 2, 4, … at stride 2, halving a
 9-frame transition); and the reverse path really does hold frame 0 when a
 non-looping clip runs out, since `fwdIdx` clamps to `n - 1` and
 `idx = (n - 1) - fwdIdx`.
+
+---
+
+## Quad sorting: a removed mechanism still cited as live
+
+`spriteRowSpan` does not exist anywhere in this tree. A grep across `src`,
+`app`, `scripts`, `test-headless`, `cbits`, `tools` and `shaders` returns
+exactly three hits, all inside comments and none in code:
+
+```
+src/Unit/Render.hs:273:            -- spriteRowSpan forward-push would otherwise draw the climber
+src/Building/Render.hs:205:            -- top. Adding spriteRowSpan (the sprite's vertical extent)
+src/Building/Render.hs:207:            -- a 96×96 cargo hold has spriteRowSpan ≈ 2.0 — outrank
+```
+
+`src/Unit/Render.hs:254-262` records why it went, and is the one CURRENT
+statement of the rule:
+
+```haskell
+            -- It deliberately does NOT add a "sprite row span" forward
+            -- push. A tall sprite spans more than one screen row, so a
+            -- push sized to its height (~1.33 rows for a 1:1 sprite, more
+            -- for taller units) exceeded a full row and let an elevated /
+            -- climbing unit out-sort — and draw OVER — a cliff a full row
+            -- in FRONT of it. The screen row (faF+fbF) already orders the
+            -- unit correctly against tiles ahead of and behind it; [...]
+```
+
+The two findings below are the comments left behind, recorded separately
+because they are in different files, make different claims, and would be fixed
+by different edits.
+
+### EXPL-17. `unitToQuad`'s climb-occlusion branch is justified by a `spriteRowSpan` push the same function says it does not apply
+
+`src/Unit/Render.hs:269-278`, nineteen lines below the passage above:
+
+```haskell
+            -- Far-side climb occlusion: while climbing onto a cliff
+            -- column whose face is between the unit and the camera (its
+            -- screen-row is in FRONT of the unit's frozen base), sort the
+            -- unit just BEHIND that column so the cliff hides it. The
+            -- spriteRowSpan forward-push would otherwise draw the climber
+            -- OVER the column it's climbing. [...]
+```
+
+That sentence is the stated REASON the branch exists, and it names a push the
+same function has already said it deliberately does not apply. The two comments
+describe mutually exclusive versions of `normalSort`; only one of them can
+describe the code as it stands, and `:254` is the one that does.
+
+**This finding does NOT claim the branch is dead**, and a fix must not assume
+so. The branch still changes the outcome: `sortKey = destRow - 0.5` moves the
+climber ahead of every intermediate screen row while keeping it behind the
+destination column, which `normalSort = baseRow + 0.0006` would not do. The
+defect is that the justification given cannot be the operative one, so a reader
+deciding whether the branch is still needed — the exact question this comment
+exists to answer — reasons from a mechanism that was removed.
+
+The rest of the branch's comment is accurate: "Only applies while the unit is
+still on the base side (its tile ≠ the dest column)" matches the
+`baseTile ≢ dest` guard, and the fallback to `normalSort` once the pullup
+carries the unit onto the top tile is real.
+
+### EXPL-18. `Building.Render`'s sort comment says units add a `spriteRowSpan` term "as units do"; they no longer do
+
+`src/Building/Render.hs:203-212`:
+
+```haskell
+            -- Sort by the iso depth of the GROUND TILE, not the sprite
+            -- top. Adding spriteRowSpan (the sprite's vertical extent)
+            -- to the sort key as units do made tall buildings — e.g.
+            -- a 96×96 cargo hold has spriteRowSpan ≈ 2.0 — outrank
+            -- units at the same tile, drawing the building on top of
+            -- a unit standing in front of it. Keeping just the iso
+            -- bottom plus the +0.0005 tiebreaker means a unit at the
+            -- same row sorts in front (their key has +0.0006), and
+            -- units north of the building still get obscured because
+            -- their key is lower (north = smaller faF + fbF).
+```
+
+**"as units do" is false.** Units did once; `src/Unit/Render.hs:254` states
+they deliberately no longer do. This is the more misleading of the pair,
+because it presents a deliberate DIFFERENCE between building and unit sorting
+on the one point where the two now agree: both key off the iso bottom of the
+ground tile with no sprite-height term, differing only in their constant
+tiebreaker.
+
+The remaining arithmetic in the same block is correct, and I checked it:
+`unitSortNudge = 0.0003` (`src/Unit/Render.hs:39`) and `normalSort` adds
+`2 * unitSortNudge` (`:264-267`), so a unit's key really does carry `+0.0006`
+against the building's `+0.0005`, and a unit at the same row really does sort
+in front.
+
+**Severity for both: low** — no behaviour is wrong, and the sort keys are
+correct as written. Recorded because these are load-bearing rendering-order
+comments, both are the first thing a reader consults before touching a sort
+key, and both describe a mechanism that no longer exists.
