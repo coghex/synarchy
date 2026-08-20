@@ -893,6 +893,7 @@ library
                      World.ZoomMap.Cache.Pixels
                      World.ZoomMap.ChunkTexture
                      World.ZoomMap.ColorPalette
+                     World.ZoomMap.Types
     default-extensions: FlexibleInstances
     other-extensions: Strict
                     , StrictData

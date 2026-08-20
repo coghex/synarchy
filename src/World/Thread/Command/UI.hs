@@ -15,6 +15,7 @@ import Engine.Core.Log (logInfo, logDebug, logWarn, LogCategory(..), LoggerState
 import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
 import World.Types
+import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Thread.Helpers (unWorldPageId)
 
 handleWorldShowCommand ∷ WorldSimCapability → LoggerState → WorldPageId → IO ()

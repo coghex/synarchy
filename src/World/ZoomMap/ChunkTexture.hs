@@ -14,7 +14,7 @@ import qualified Data.ByteString.Internal as BSI
 import qualified Data.Vector as V
 import Control.DeepSeq (NFData(..))
 import Foreign.Marshal.Utils (copyBytes, fillBytes)
-import World.Types (zoomTileSize)
+import World.ZoomMap.Types (zoomTileSize)
 
 -- | The atlas image data ready for GPU upload.
 data ZoomAtlasData = ZoomAtlasData
