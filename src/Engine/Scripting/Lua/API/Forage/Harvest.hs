@@ -11,6 +11,8 @@ module Engine.Scripting.Lua.API.Forage.Harvest
 import UPrelude
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.Core
+    (CoreCapability(..), toCoreCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
@@ -158,6 +160,7 @@ spawnYields ∷ EngineEnv → WorldState → Int → Int → [(Text, Int, Int)]
             → IO [(Text, Int)]
 spawnYields env ws gx gy yields = do
     itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+    logger ← readIORef (ccLoggerRef (toCoreCapability env))
     fmap concat $ forM yields $ \(name, lo, hi) →
         case lookupItemDef name itemMgr of
             Nothing → pure []
@@ -167,7 +170,7 @@ spawnYields env ws gx gy yields = do
                 fmap catMaybes ∘ forM [1 .. max 0 count] $ \_ → do
                     -- Every instance value is the materializer's (#1418);
                     -- this path contributes no override.
-                    mInst ← materializeItem itemMgr
+                    mInst ← materializeItem itemMgr logger
                                 (ucStatRNGRef (toUnitCombatCapability env))
                                 (freshItemInstanceId env) pristineItem name
                     (ju, jv) ← atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \g →

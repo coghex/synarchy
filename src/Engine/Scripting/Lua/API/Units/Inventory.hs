@@ -20,6 +20,8 @@ module Engine.Scripting.Lua.API.Units.Inventory
 import UPrelude
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.Core
+    (CoreCapability(..), toCoreCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
@@ -71,7 +73,9 @@ unitAddItemFn env = do
                         -- authored default contents, so an added first-aid
                         -- kit now arrives stocked — is the materializer's
                         -- (#1418).
-                        mInst ← materializeItem itemMgr
+                        logger ← readIORef
+                            (ccLoggerRef (toCoreCapability env))
+                        mInst ← materializeItem itemMgr logger
                                     (ucStatRNGRef (toUnitCombatCapability env))
                                     (freshItemInstanceId env)
                                     (filledItem mFillIn) defName

@@ -16,6 +16,8 @@ import Engine.Core.Capability.Building
     (BuildingCapability(..), toBuildingCapability)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.Core
+    (CoreCapability(..), toCoreCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
@@ -248,9 +250,10 @@ applyCraft recipe outs uid um = case HM.lookup uid (umInstances um) of
 --   output line.
 rollOutputs ∷ EngineEnv → ItemManager → Maybe Float
             → (RecipeIngredient, ItemDef) → IO [ItemInstance]
-rollOutputs env itemMgr outputTemp (ing, _resolved) =
+rollOutputs env itemMgr outputTemp (ing, _resolved) = do
+    logger ← readIORef (ccLoggerRef (toCoreCapability env))
     catMaybes ⊚ replicateM (max 0 (riCount ing))
-        (materializeItem itemMgr
+        (materializeItem itemMgr logger
                          (ucStatRNGRef (toUnitCombatCapability env))
                          (freshItemInstanceId env)
                          pristineItem { ovTemp = outputTemp }
