@@ -362,14 +362,19 @@ def _check_aggregates(record, where: str, outcomes: list[str],
     failures = sum(1 for o in outcomes
                    if o in (probe_flake.RUN_FAIL, probe_flake.RUN_TIMEOUT))
     timeouts = sum(1 for o in outcomes if o == probe_flake.RUN_TIMEOUT)
-    if record.get("failure_count") != failures:
-        problems.append(f"{where} reports failure_count="
-                        f"{record.get('failure_count')!r} but the runs show "
-                        f"{failures}")
-    if record.get("timeout_count") != timeouts:
-        problems.append(f"{where} reports timeout_count="
-                        f"{record.get('timeout_count')!r} but the runs show "
-                        f"{timeouts}")
+    for field, expected in (("failure_count", failures),
+                            ("timeout_count", timeouts)):
+        value = record.get(field)
+        # The TYPE is checked before the value: Python compares
+        # `False == 0` and `True == 1`, so a boolean count would
+        # otherwise satisfy an equality test and be recorded as a real
+        # tally.
+        if not _is_count(value):
+            problems.append(f"{where} `{field}` must be a non-negative "
+                            f"integer, got {value!r}")
+        elif value != expected:
+            problems.append(f"{where} reports {field}={value!r} but the runs "
+                            f"show {expected}")
     tolerance = _elapsed_tolerance(len(elapsed))
     for field, expected, slack in (
             ("worst_elapsed_seconds", max(elapsed, default=0.0), 0.0015),
@@ -408,8 +413,7 @@ def _validate_sample(sample, where: str) -> list[str]:
         except ValueError:
             problems.append(f"{where} `timestamp_utc` {stamp!r} is not "
                             f"{TIMESTAMP_FORMAT}")
-    for field in ("requested_runs", "completed_runs", "failure_count",
-                  "timeout_count"):
+    for field in ("requested_runs", "completed_runs"):
         if not _is_count(sample.get(field)):
             problems.append(f"{where} `{field}` must be a non-negative integer")
     requested = sample.get("requested_runs")

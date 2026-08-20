@@ -457,7 +457,13 @@ def test_result_validation() -> None:
                  lambda d: d["error_run"]["checks"].update({"alpha": "MAYBE"})),
                 ("elapsed_seconds",
                  lambda d: d["error_run"].update({"elapsed_seconds": -1})),
-                ("stops short", lambda d: d.update({"requested_runs": 2}))):
+                ("stops short", lambda d: d.update({"requested_runs": 2})),
+                # `True == 1` and `False == 0`, so a boolean aggregate
+                # satisfies an equality test. Each of these matches the
+                # real tally numerically and must still be refused.
+                ("failure_count", lambda d: d.update({"failure_count": True})),
+                ("timeout_count",
+                 lambda d: d.update({"timeout_count": False}))):
             expect(any(substring in p for p in broken_mutation(mutate)),
                    f"a mutated harness-error result is rejected for "
                    f"{substring!r} (got {broken_mutation(mutate)[:1]})")
@@ -478,6 +484,18 @@ def test_result_validation() -> None:
 
         expect(probe_census.validate_result([], document) != [],
                "a non-object result is rejected")
+
+        # The attempt log takes only WELL-FORMED harness errors, so a
+        # boolean-aggregate one must be refused at ingestion, not logged.
+        boolean = json.loads(json.dumps(broken))
+        boolean["failure_count"] = True
+        before_bytes = reg.census.read_bytes()
+        expect_raises(probe_census.CensusError,
+                      lambda: probe_census.record_result(reg.census, boolean),
+                      "a boolean-aggregate harness error is never logged",
+                      "failure_count")
+        expect(reg.census.read_bytes() == before_bytes,
+               "the refused harness error left the census unchanged")
 
 
 def test_long_run_rounding() -> None:
@@ -550,6 +568,9 @@ def test_corrupt_stored_records() -> None:
         corrupt(lambda c: c["current"]["samples"][0].update(
             {"failure_count": 9}),
             "a stored aggregate the runs contradict", "failure_count")
+        corrupt(lambda c: c["current"]["samples"][0].update(
+            {"failure_count": True}),
+            "a stored boolean aggregate", "must be a non-negative integer")
         corrupt(lambda c: c["current"]["samples"][0]["check_counts"]["alpha"]
                 .update({"PASS": 9}),
             "a stored check tally that outnumbers the runs", "tallies")
