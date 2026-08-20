@@ -44,6 +44,7 @@ cited lines.
 - [ ] EXPL-7. `sortFrameFiles` claims to be shared by the units and buildings viewers; the units viewer no longer calls it
 - [ ] EXPL-8. `discoverBuildingEntries` claims every frame is lstat-proved regular; its static-entry branch tests only the name
 - [ ] EXPL-9. `buildPreviewUnit`'s pipeline summary still describes the filesystem-first flow #1261 replaced
+- [ ] EXPL-10. `App.LanguageReport` claims constant runtime "regardless of how many seeds are requested"; the work is linear
 
 ---
 
@@ -494,3 +495,65 @@ code exactly, ordering included. Buildings genuinely ARE filesystem-first with
 YAML augmentation (see this module's own authority-split header). Units stopped
 being that at #1261, and only this summary sentence was left behind, which is
 also why the two files now read as if they share a design they no longer share.
+
+---
+
+## Report and dump entry points
+
+### EXPL-10. `App.LanguageReport` claims constant runtime "regardless of how many seeds are requested"; the work is linear
+
+`app/App/LanguageReport.hs:1-7`:
+
+```haskell
+-- | @--language-report@ boot path (#710): dump every requested seed's
+--   generated-language profile, signature, and canonical-expression
+--   native/English renderings as JSON to stdout, then exit. Reads the
+--   production concept catalogue from disk and does pure computation
+--   only — no engine init, no world thread, no Lua, no GPU
+--   (requirement 17), so it starts and finishes in a fraction of a
+--   second regardless of how many seeds are requested.
+```
+
+The premise is true and the conclusion does not follow from it. Skipping engine
+init, the world thread, Lua and the GPU bounds the FIXED startup cost; it says
+nothing about the per-seed cost, and the per-seed work is plainly linear:
+
+```haskell
+      case mapM (buildSeedReport cat currentGeneratorVersion)
+                [loSeed .. hiSeed] of
+```
+
+(`app/App/LanguageReport.hs:42-43`.) Runtime is O(`hiSeed` − `loSeed`), and
+because `mapM` in the `Either` monad forces the entire result list before
+`encode` is ever reached (`:47-61`), so is memory — nothing about this path
+streams.
+
+The flag's documented domain is what makes that reachable rather than
+theoretical. `parseSeeds` (`app/App/Cli.hs:362-375`) accepts any inclusive range
+inside the full `Word64` space, and `app/Main.hs:114-115` advertises exactly
+that to the user:
+
+```haskell
+          hPutStrLn stderr $ "--language-report requires --seeds LO:HI "
+              ⧺ "(an inclusive range within 0.." ⧺ show (maxBound ∷ Word64) ⧺ ")"
+```
+
+So `--seeds 0:1000000` is a legal and plausible thing to type when hunting for a
+rare language, and it will neither start-and-finish in a fraction of a second
+nor produce any output until it has built a million reports in memory.
+
+**Severity is lower than the findings above, deliberately recorded as such.**
+The canonical in-tree sample is `--seeds 0:255` (`tools/README.md:294`), at
+which the claim is true, and nothing shipped drives a large range. This is a
+false performance invariant on a flag with a 2^64 domain — the same shape as
+EXPL-4 (the stated reason is not the operative one) rather than EXPL-9 (a
+pipeline description that no longer matches its code). It is recorded because
+the sentence is the only guidance a caller has about what a wide range costs,
+and it actively misleads about both time and memory.
+
+Verified truthful in the same file, and noted here so a fix does not disturb it:
+the header's `outputInventory` cross-language claim
+(`app/App/LanguageReport.hs:52-57`) holds. `tools/language_report.py:149` does
+carry its own literal `OUTPUT_INVENTORY`, and `:1098-1108` does `fail()` on any
+divergence from the emitted value, naming the generator-only and checker-only
+characters in both directions.
