@@ -158,10 +158,12 @@ def local_json_console_wrappers(root: Path = TOOLS) -> list[str]:
 
     Structural, and name-agnostic on purpose -- `jget` was the spelling
     that proliferated, but a `getj`/`query`/`jsend` copy is the same
-    defect. A function qualifies when it RETURNS `json.loads` of a
-    `send` result AND the Lua it hands `send` is one of its own
-    PARAMETERS: that pair is what makes it a general-purpose console
-    decoder rather than a query helper.
+    defect. A function qualifies when it `json.loads` a `send` result
+    AND the Lua it hands `send` is one of its own PARAMETERS: that pair
+    is what makes it a general-purpose console decoder rather than a
+    query helper. Deliberately not keyed on `return`, so a copy that
+    guards the decode (`json.loads(raw) if raw else None`) or buries it
+    in a branch counts the same.
 
     The parameter clause is what keeps this inside #1160's scope. A
     helper that decodes ONE fixed query it builds itself (`snap`,
@@ -188,14 +190,16 @@ def local_json_console_wrappers(root: Path = TOOLS) -> list[str]:
 
     def is_wrapper(fn) -> bool:
         params = param_names(fn)
-        # `send` is handed a bare parameter as its command.
+        # `send` is handed one of this function's parameters as its Lua.
         parameterised = any(
             any(isinstance(arg, ast.Name) and arg.id in params
                 for arg in call.args[1:])
+            or any(isinstance(kw.value, ast.Name) and kw.value.id in params
+                   for kw in call.keywords)
             for call in send_calls(fn))
         if not parameterised:
             return False
-        # ...and the function's own result is that reply, JSON-decoded.
+        # ...and that reply is what gets JSON-decoded.
         from_send = {t.id for node in ast.walk(fn)
                      if isinstance(node, ast.Assign)
                      and isinstance(node.value, ast.Call)
@@ -203,9 +207,9 @@ def local_json_console_wrappers(root: Path = TOOLS) -> list[str]:
                      and node.value.func.id == "send"
                      for t in node.targets if isinstance(t, ast.Name)}
         for node in ast.walk(fn):
-            if not (isinstance(node, ast.Return) and is_json_loads(node.value)):
+            if not is_json_loads(node):
                 continue
-            arg = node.value.args[0] if node.value.args else None
+            arg = node.args[0] if node.args else None
             if isinstance(arg, ast.Name) and arg.id in from_send:
                 return True
             if (isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name)
@@ -279,6 +283,17 @@ def snap(port):
 """
 
 
+GUARDED_COPY = """
+import json
+from probelib import send
+
+
+def query(port, lua):
+    raw = send(port, lua)
+    return json.loads(raw) if raw else None
+"""
+
+
 def in_temp_tree(name: str, source: str):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -298,6 +313,14 @@ def test_a_renamed_copy_is_caught() -> None:
     found = in_temp_tree("renamed_probe.py", RENAMED_COPY)
     expect(len(found) == 1 and found[0].endswith("fetch_json"),
            f"expected the renamed copy to be flagged, got {found!r}")
+
+
+def test_a_guarded_copy_is_caught() -> None:
+    print("\n-- a copy that guards the decode instead of returning it "
+          "directly is caught")
+    found = in_temp_tree("guarded_probe.py", GUARDED_COPY)
+    expect(len(found) == 1 and found[0].endswith("query"),
+           f"expected the guarded copy to be flagged, got {found!r}")
 
 
 def test_a_fixed_query_helper_is_not_caught() -> None:
@@ -362,6 +385,7 @@ def main() -> int:
     test_no_local_json_console_wrapper()
     test_a_reintroduced_jget_is_caught()
     test_a_renamed_copy_is_caught()
+    test_a_guarded_copy_is_caught()
     test_a_fixed_query_helper_is_not_caught()
     test_send_json_callers_import_it()
     test_no_unused_send_json_import()
