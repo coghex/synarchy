@@ -280,40 +280,54 @@ def validate_manifest(manifest) -> list[str]:
 # artifact boundary exists to keep out of a worktree.
 MAX_REFERENCE_CHARS = 4096
 
-_WORKTREE_ROOTS: tuple[Path, ...] | None = None
+_WORKTREE_ROOTS: dict[str, tuple[Path, ...]] = {}
 
 
-def worktree_roots() -> tuple[Path, ...]:
+def worktree_roots(repo_root: str | None = None) -> tuple[Path, ...]:
     """Every checkout a probe artifact must stay OUT of, resolved once.
 
     The repository root plus every registered worktree — the docs
     worktree and any issue worktree included — because "raw stdout and
     engine logs remain outside every worktree" is a rule about all of
-    them, not just the primary checkout. Enumerated lazily and cached;
-    if git cannot answer, the repository root alone still applies.
+    them, not just the primary checkout. Enumerated lazily and cached
+    per root; a single checkout, or one where git cannot answer, is
+    simply the repository root alone.
     """
-    global _WORKTREE_ROOTS
-    if _WORKTREE_ROOTS is not None:
-        return _WORKTREE_ROOTS
-    roots = [Path(run_probes.REPO_ROOT).resolve()]
+    root = str(repo_root or run_probes.REPO_ROOT)
+    cached = _WORKTREE_ROOTS.get(root)
+    if cached is not None:
+        return cached
+    roots = [Path(root).resolve()]
     try:
         done = subprocess.run(["git", "worktree", "list", "--porcelain"],
-                              cwd=run_probes.REPO_ROOT, text=True,
-                              capture_output=True, timeout=30)
+                              cwd=root, text=True, capture_output=True,
+                              timeout=30)
         if done.returncode == 0:
             for line in done.stdout.splitlines():
                 if line.startswith("worktree "):
                     roots.append(Path(line[len("worktree "):]).resolve())
     except (OSError, subprocess.SubprocessError):
         pass
-    _WORKTREE_ROOTS = tuple(dict.fromkeys(roots))
-    return _WORKTREE_ROOTS
+    _WORKTREE_ROOTS[root] = tuple(dict.fromkeys(roots))
+    return _WORKTREE_ROOTS[root]
 
 
-def _containing_worktree(value: str) -> Path | None:
-    candidate = Path(os.path.normpath(value))
+def _resolved(value: str) -> Path | None:
+    """`value` with every symlink component followed, or None.
+
+    Lexical normalization is not enough: an artifact root that is a
+    SYMLINK into a checkout looks like an unrelated `/tmp` path but puts
+    the artifacts themselves inside a worktree.
+    """
+    try:
+        return Path(value).resolve()
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
+def _containing_worktree(resolved: Path) -> Path | None:
     for root in worktree_roots():
-        if candidate == root or root in candidate.parents:
+        if resolved == root or root in resolved.parents:
             return root
     return None
 
@@ -330,7 +344,10 @@ def _reference_problem(value, where: str) -> str | None:
                 f"reference TO an artifact, never its contents")
     if not value.startswith("/"):
         return f"{where} is not an absolute path: {value!r}"
-    inside = _containing_worktree(value)
+    resolved = _resolved(value)
+    if resolved is None:
+        return f"{where} cannot be resolved to a real path: {value[:120]!r}"
+    inside = _containing_worktree(resolved)
     if inside is not None:
         return (f"{where} points inside the worktree {inside}: probe "
                 f"artifacts stay outside every checkout")
@@ -1081,13 +1098,16 @@ def validate_result(result, document: dict) -> list[str]:
         if isinstance(record, dict) and record.get("artifact_dir") is not None:
             references_to_root.append(
                 (record["artifact_dir"], f"{label} `artifact_dir`"))
-    if isinstance(root, str):
+    base = _resolved(root) if isinstance(root, str) else None
+    if base is not None:
         for value, label in references_to_root:
             if not isinstance(value, str):
                 continue
-            normalized = Path(os.path.normpath(value))
-            base = Path(os.path.normpath(root))
-            if normalized != base and base not in normalized.parents:
+            # Resolved on BOTH sides, so a symlinked root and a symlinked
+            # reference are compared as the places they actually are.
+            resolved = _resolved(value)
+            if resolved is None or (resolved != base
+                                    and base not in resolved.parents):
                 problems.append(
                     f"{label} is not under the declared artifact root "
                     f"{root!r}: {value[:120]!r}")

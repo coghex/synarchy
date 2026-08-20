@@ -767,12 +767,50 @@ def test_artifact_boundary() -> None:
             expect(reg.census.read_bytes() == snapshot,
                    f"nothing rewrote the census carrying {label}")
 
+        # A symlinked artifact root is the case lexical normalization
+        # misses: it looks like an unrelated /tmp path while the
+        # artifacts themselves sit in a checkout.
+        link = reg.root / "artifacts-link"
+        link.symlink_to(Path(run_probes.REPO_ROOT) / "docs")
+        rejected(lambda d: d.update({
+            "artifact_root": str(link),
+            "invocation_dir": f"{link}/inv",
+            "retained_artifacts": [f"{link}/inv/run-001"]}),
+            "an artifact root symlinked into a worktree",
+            "inside the worktree")
+        rejected(lambda d: d.update({
+            "retained_artifacts": [f"{link}/inv/run-001"]}),
+            "a reference symlinked into a worktree", "inside the worktree")
+
         expect(Path(run_probes.REPO_ROOT).resolve() in
                probe_census.worktree_roots(),
                "the repository root is one of the checkouts artifacts avoid")
-        expect(len(probe_census.worktree_roots()) > 1,
-               f"every registered worktree is covered, not just the primary "
-               f"one (got {len(probe_census.worktree_roots())})")
+
+        # Every REGISTERED worktree is covered, proven against a
+        # repository this case creates rather than against whatever
+        # worktrees happen to exist where the suite runs.
+        scratch = Path(tempfile.mkdtemp(prefix="probe-census-wt-"))
+        try:
+            main_repo = scratch / "main"
+            main_repo.mkdir()
+            git = ["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                   "-C", str(main_repo)]
+            subprocess.run(["git", "init", "-q", str(main_repo)], check=True,
+                           capture_output=True)
+            (main_repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+            subprocess.run(git + ["add", "seed.txt"], check=True,
+                           capture_output=True)
+            subprocess.run(git + ["commit", "-qm", "seed"], check=True,
+                           capture_output=True)
+            second = scratch / "second"
+            subprocess.run(git + ["worktree", "add", "-q", "--detach",
+                                  str(second)], check=True, capture_output=True)
+            roots = probe_census.worktree_roots(str(main_repo))
+            expect(main_repo.resolve() in roots and second.resolve() in roots,
+                   f"both the repository and its second worktree are covered "
+                   f"(got {[str(r) for r in roots]})")
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
 
 
 def test_malformed_state_and_recovery() -> None:
