@@ -106,7 +106,8 @@ is not a spawnable unit under the asset-only `asset_units:` key (`name` +
 `animations` only). Frames must be contiguous from `frame_000.png`, declared in
 ascending order, and match the `flip` rule below exactly: `flip: true` ⇒ exactly
 the five stored directions, `flip: false` ⇒ all eight.
-See **Unit asset inventory** in `CLAUDE.md` for the full contract.
+See **Unit animation art** in `CLAUDE.md` and `docs/engine_contracts.md`
+§Unit animation art for the full contract.
 
 The gate validates frame CONTENTS as well as paths and structure (#1311): it
 decodes every declared frame, so a truncated or corrupt PNG, a non-image, and
