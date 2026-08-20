@@ -566,6 +566,9 @@ def test_corrupt_stored_records() -> None:
         corrupt(lambda c: c["attempts"][0].update(
             {"status": "harness-error", "error": "invented"}),
             "an ok attempt relabelled a harness error", "accepted=True")
+        corrupt(lambda c: c["attempts"][0].update(
+            {"requested_runs": 0, "completed_runs": 0}),
+            "an attempt that requested no runs", "must be positive")
 
 
 def test_malformed_state_and_recovery() -> None:
@@ -764,6 +767,32 @@ def test_lock_identity() -> None:
                and direct.name.endswith(probe_census.LOCK_SUFFIX),
                "the lock is a sibling of its target, out of reach of a "
                "temp reaper")
+
+        # The lock is a THIRD path beside the target and its directory,
+        # so it needs its own no-follow guard: writing the lock note
+        # through a planted symlink would land outside docs-wip.
+        seeded(reg)
+        outside = reg.root / "outside.txt"
+        outside.write_text("", encoding="utf-8")
+        direct.unlink()
+        direct.symlink_to(outside)
+        expect_raises(probe_census.CensusError,
+                      lambda: probe_census.record_result(
+                          reg.census, build_result()),
+                      "a symlinked lock path is refused, not followed")
+        expect(outside.read_text() == "",
+               "nothing was written through the planted lock symlink")
+        direct.unlink()
+
+        # A non-regular lock path is refused too, on the same grounds.
+        os.mkfifo(direct)
+        try:
+            expect_raises(probe_census.CensusError,
+                          lambda: probe_census.record_result(
+                              reg.census, build_result()),
+                          "a non-regular lock path is refused")
+        finally:
+            direct.unlink()
 
 
 def test_seed_never_overwrites() -> None:

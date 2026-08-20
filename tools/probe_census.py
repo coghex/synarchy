@@ -69,6 +69,7 @@ import json
 import math
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -494,6 +495,11 @@ def _validate_attempt(attempt, where: str) -> list[str]:
         if not _is_count(attempt.get(field)):
             problems.append(f"{where} `{field}` must be a non-negative integer")
     requested, completed = attempt.get("requested_runs"), attempt.get("completed_runs")
+    if _is_count(requested) and requested < 1:
+        # An ingestion attempt exists only because a result was
+        # measured, and a result requesting no runs is refused, so a
+        # stored zero can only come from an edit.
+        problems.append(f"{where} `requested_runs` must be positive")
     if _is_count(requested) and _is_count(completed) and completed > requested:
         problems.append(f"{where} completed {completed} of {requested} "
                         f"requested runs")
@@ -1136,10 +1142,26 @@ def _locked(target: Path):
         # too. Reaching this point already means a `docs-wip` worktree
         # resolved, so nothing is created anywhere else.
         guard.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(guard), os.O_CREAT | os.O_RDWR, 0o600)
+        # O_NOFOLLOW because the lock is a THIRD path, beside the target
+        # and its directory: a lock path replaced with a symlink must
+        # fail rather than be followed, or the note written below would
+        # land wherever it points — the primary checkout included.
+        fd = os.open(str(guard), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     except OSError as error:
         raise CensusError(
             f"could not open the census lock {guard} ({error})") from None
+    # Checked and refused BEFORE the lock is taken, so the failure is not
+    # routed through an unlock this file may not support.
+    try:
+        regular = stat.S_ISREG(os.fstat(fd).st_mode)
+    except OSError as error:
+        os.close(fd)
+        raise CensusError(
+            f"could not stat the census lock {guard} ({error})") from None
+    if not regular:
+        os.close(fd)
+        raise CensusError(
+            f"refusing to use {guard}: the census lock must be a regular file")
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         # The lock file is deliberately never unlinked: removing a HELD
@@ -1147,13 +1169,18 @@ def _locked(target: Path):
         # that, and lose an update. It is a small untracked file in the
         # docs worktree — which is where CLAUDE.md's working-tree
         # discipline says an uncommitted file belongs — so it says so
-        # itself for whoever finds it in `git status`.
+        # itself for whoever finds it in `git status`. Re-stat under the
+        # lock: another writer may have filled it since the open.
         if os.fstat(fd).st_size == 0:
             os.write(fd, LOCK_NOTE)
         yield
     finally:
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            # Closing the descriptor releases the lock regardless, and a
+            # failing unlock must never mask the error that got us here.
+            pass
         finally:
             os.close(fd)
 
