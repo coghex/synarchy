@@ -152,8 +152,8 @@ computeSpillways worldSize lakes terrain lakeIdAt =
                                         let nidx = nyo * worldTiles + nxo
                                             nz   = terrain VU.! nidx
                                             nLid = lakeIdAt VU.! nidx
-                                        when (nz ≠ minBound
-                                              ∧ nLid ≠ lid) $ do
+                                        when (nz ≢ minBound
+                                              ∧ nLid ≢ lid) $ do
                                             cur ← readSTRef bestZ
                                             when (nz < cur) $ do
                                                 writeSTRef bestZ nz
@@ -259,7 +259,7 @@ bucketSortAscending terrain =
         counts ← VUM.replicate nBuckets (0 ∷ Int)
         forM_ [0 .. nTiles - 1] $ \i → do
             let z = terrain VU.! i
-            when (z ≠ minBound) $
+            when (z ≢ minBound) $
                 VUM.modify counts (+ 1) (toBucket z)
         -- Prefix sum into bucketStart.
         bucketStart ← VUM.new nBuckets
@@ -274,7 +274,7 @@ bucketSortAscending terrain =
         write ← VUM.clone bucketStart
         forM_ [0 .. nTiles - 1] $ \i → do
             let z = terrain VU.! i
-            when (z ≠ minBound) $ do
+            when (z ≢ minBound) $ do
                 let b = toBucket z
                 p ← VUM.read write b
                 VUM.write out p i
@@ -313,7 +313,7 @@ computeFlowAccumulation worldTiles terrain lakeIdAt dir spillwayOf
         forM_ [nOrder - 1, nOrder - 2 .. 0] $ \k → do
             let idx = ascOrder VU.! k
                 t   = terrain VU.! idx
-            when (t ≠ minBound) $ do
+            when (t ≢ minBound) $ do
                 upstream ← VUM.read flow idx
                 let local   = precipUnits VU.! idx - evapUnits VU.! idx
                     routed  = max 0 (upstream + local)
@@ -373,5 +373,5 @@ walkInject worldTiles terrain lakeIdAt dir lakeFlow flow start inject =
                        then VUM.modify lakeFlow (+ inject) nLid
                        else do
                            VUM.modify flow (+ inject) dn
-                           when (terrain VU.! dn ≠ minBound) (go dn)
+                           when (terrain VU.! dn ≢ minBound) (go dn)
     in go start

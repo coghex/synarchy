@@ -271,14 +271,14 @@ identifyCoastalErosion seed worldSize plates registry allMouths
                     in if newM ≡ globalMat VU.! idx
                        then 0 ∷ Word8
                        else unMaterialId newM
-            , VU.any (≠ 0) deltas ∨ VU.any (≠ 0) mats
+            , VU.any (≢ 0) deltas ∨ VU.any (≢ 0) mats
             ]
 
     in CoastalTable
         { coElevDelta   = HM.fromList
-            [ (cc, dv) | (cc, dv, _) ← chunkEntries, VU.any (≠ 0) dv ]
+            [ (cc, dv) | (cc, dv, _) ← chunkEntries, VU.any (≢ 0) dv ]
         , coMatOverride = HM.fromList
-            [ (cc, mv) | (cc, _, mv) ← chunkEntries, VU.any (≠ 0) mv ]
+            [ (cc, mv) | (cc, _, mv) ← chunkEntries, VU.any (≢ 0) mv ]
         }
 
 -- | Apply the global coastal table to one chunk's BORDERED

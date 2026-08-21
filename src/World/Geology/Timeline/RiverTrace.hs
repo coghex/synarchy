@@ -114,7 +114,7 @@ traceRiverFromSource seed worldSize elevGrid _filledElev flowDir
         -- the first grid cell (source may be between grid points).
         fullPath = case extendedPath of
             ((fx, fy, _):_)
-                | fx ≠ gx ∨ fy ≠ gy → (gx, gy, srcElev) : extendedPath
+                | fx ≢ gx ∨ fy ≢ gy → (gx, gy, srcElev) : extendedPath
             _ → (gx, gy, srcElev) : extendedPath
 
         -- Add perpendicular noise to each waypoint so the path

@@ -333,7 +333,7 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
         -- onKeyDown handler can also act on it; every unconsumed key
         -- keeps reaching gameplay exactly as before #745.
         controlFocusConsumedFresh ← readIORef controlFocusConsumedRef
-        when (key ≠ KeyGrave ∧ not (controlFocusConsumedFresh ∨ alreadyConsumed)) $ do
+        when (key ≢ KeyGrave ∧ not (controlFocusConsumedFresh ∨ alreadyConsumed)) $ do
             let lq = ivLuaQueue (toInputViewCapability env)
             -- Carry the exact GLFW key alongside the merged logical key:
             -- onKeyDown still gets the merged name string, but

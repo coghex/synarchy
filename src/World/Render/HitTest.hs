@@ -143,7 +143,7 @@ pickWorldTile facing zoom zSlice camX camY fbW fbH winW winH
                     i = z - colMinZ
                 in if i < 0 ∨ i >= colLen
                    then tryZ (z - 1)
-                   else if ctMats col VU.! i ≠ 0
+                   else if ctMats col VU.! i ≢ 0
                         -- The lookup above is seam-aware (#1175) and the
                         -- offset this returns is facing-aware (#1176), so
                         -- a seam-side pixel now both resolves its tile and

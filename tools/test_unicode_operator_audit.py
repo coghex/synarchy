@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Unit tests for unicode_operator_audit.py (issue #1005 acceptance: the
 guard detects an intentionally planted forbidden-operator regression
-using synthetic fixtures, never by editing real tracked sources).
+using synthetic fixtures, never by editing real tracked sources;
+extended by issue #1494 to cover the noncanonical `≠` spelling of
+inequality, which is detected by a separate single-code-point path).
 
 Mirrors tools/test_engine_env_capability_audit.py's approach: feed the
 audit's pure `find_violations` synthetic Haskell text, so these tests
@@ -20,9 +22,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from unicode_operator_audit import (  # type: ignore
     find_violations, FORBIDDEN_TOKENS, TOKEN_REPLACEMENTS,
+    NONCANONICAL_TOKENS, ALL_REPLACEMENTS,
     GLSL_QUASIQUOTE_FILE, EQ_INSTANCE_FILE, MONAD_INSTANCE_FILE,
     WHOLE_FILE_EXEMPT,
 )
+
+# The ASCII tokens and the noncanonical Unicode ones are found by two
+# different code paths, so the shared comment/string/detection fixtures
+# below run over BOTH -- a `≠` that only the dedicated tests exercised
+# would leave the generic exclusions unproven for it.
+ALL_TOKENS = FORBIDDEN_TOKENS | NONCANONICAL_TOKENS
 
 FAILURES: list[str] = []
 
@@ -45,7 +54,7 @@ def _tokens(violations) -> set[str]:
 # ----- Each forbidden operator is caught as real code -------------------
 
 def test_each_forbidden_operator_detected_as_real_code():
-    for tok in FORBIDDEN_TOKENS:
+    for tok in ALL_TOKENS:
         text = f"go x y = x {tok} y\n"
         v = find_violations(text, ORDINARY_FILE)
         expect(len(v) == 1 and v[0].token == tok,
@@ -56,22 +65,26 @@ def test_each_forbidden_operator_detected_as_real_code():
 
 
 def test_replacement_table_is_self_consistent():
-    for tok in FORBIDDEN_TOKENS:
-        expect(tok in TOKEN_REPLACEMENTS,
-               f"'{tok}' has a Unicode replacement recorded")
+    for tok in ALL_TOKENS:
+        expect(tok in ALL_REPLACEMENTS,
+               f"'{tok}' has a canonical replacement recorded")
+    expect(FORBIDDEN_TOKENS.isdisjoint(NONCANONICAL_TOKENS),
+           "the ASCII and noncanonical token sets do not overlap")
+    expect(all(tok in TOKEN_REPLACEMENTS for tok in FORBIDDEN_TOKENS),
+           "every ASCII token keeps its entry in TOKEN_REPLACEMENTS")
 
 
 # ----- Comments and strings never trigger ------------------------------
 
 def test_line_comment_does_not_trigger():
-    for tok in FORBIDDEN_TOKENS:
+    for tok in ALL_TOKENS:
         text = f"-- mentions {tok} in prose, not code\ngo x y = x ∧ y\n"
         v = find_violations(text, ORDINARY_FILE)
         expect(v == [], f"'{tok}' inside a line comment is not flagged")
 
 
 def test_block_comment_does_not_trigger():
-    for tok in FORBIDDEN_TOKENS:
+    for tok in ALL_TOKENS:
         text = f"{{- a block comment mentioning {tok} -}}\ngo x y = x ∧ y\n"
         v = find_violations(text, ORDINARY_FILE)
         expect(v == [], f"'{tok}' inside a block comment is not flagged")
@@ -90,7 +103,7 @@ def test_nested_block_comment_does_not_trigger_but_real_code_after_does():
 
 
 def test_string_literal_does_not_trigger():
-    for tok in FORBIDDEN_TOKENS:
+    for tok in ALL_TOKENS:
         text = f'msg = "please use {tok} carefully"\ngo x y = x ∧ y\n'
         v = find_violations(text, ORDINARY_FILE)
         expect(v == [], f"'{tok}' inside a string literal is not flagged")
@@ -228,6 +241,9 @@ def test_unicode_lowercase_prefix_is_not_a_valid_qualifier():
 # ----- Whole-file exemption (UPrelude.hs) -------------------------------
 
 def test_uprelude_whole_file_is_exempt():
+    # Scoped to the ASCII tokens: the noncanonical half of the same
+    # exemption is pinned by
+    # `test_noncanonical_inequality_is_not_exempt_in_uprelude` below.
     upl = next(iter(WHOLE_FILE_EXEMPT))
     text = "\n".join(f"go x y = x {tok} y" for tok in FORBIDDEN_TOKENS) + "\n"
     v = find_violations(text, upl)
@@ -377,6 +393,103 @@ def test_construct_exemptions_do_not_leak_to_other_files():
            f"ordinary code and is flagged (got {v})")
 
 
+# ----- Noncanonical inequality `≠` (#1494) -------------------------------
+# `≠` and `≢` are the same `Data.Eq.Unicode` operator; only `≢` is this
+# project's spelling. The ASCII lexer cannot see `≠` at all, so these
+# pin the separate detection path rather than re-covering the loops above.
+
+def test_noncanonical_inequality_as_an_operator_is_flagged():
+    text = "go x y = x ≠ y\n"
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {"≠"} and len(v) == 1,
+           f"'≠' used as an operator is flagged exactly once "
+           f"(got {[str(x) for x in v]})")
+    expect(v != [] and v[0].line == 1,
+           "the '≠' violation reports the correct line number")
+    expect(v != [] and "≢" in str(v[0]),
+           f"the '≠' violation names '≢' as the replacement (got "
+           f"{[str(x) for x in v]})")
+
+
+def test_noncanonical_inequality_in_comment_prose_passes():
+    # The whole point of the rule: `≠` stays legal in prose (pseudocode,
+    # a maths formula), which is the form the eight retained production
+    # occurrences take.
+    text = (
+        "-- a run is stable while wind ≠ 0, per the formula\n"
+        "{- and here too: v ≠ w -}\n"
+        "go x y = x ≢ y\n"
+    )
+    v = find_violations(text, ORDINARY_FILE)
+    expect(v == [], f"'≠' in line and block comment prose is not flagged "
+           f"(got {[str(x) for x in v]})")
+
+
+def test_canonical_inequality_is_never_flagged():
+    text = "go x y = x ≢ y\n"
+    v = find_violations(text, ORDINARY_FILE)
+    expect(v == [], f"the canonical '≢' is not flagged (got {v})")
+
+
+def test_noncanonical_char_literal_is_not_an_operator():
+    # `_scan_code` keeps a char literal inside its code span, so a raw
+    # single-code-point search would read `'≠'` -- a legitimate
+    # character value -- as an operator unless its span is excluded.
+    # The operator on the next line proves the exclusion is the literal
+    # only, not an amnesty for the file.
+    text = "notEqualChar = '≠'\ngo x y = x ≠ y\n"
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {"≠"} and len(v) == 1,
+           f"a '≠' char literal passes while a real '≠' operator is "
+           f"flagged (got {[str(x) for x in v]})")
+    expect(v != [] and v[0].line == 2,
+           f"the flagged occurrence is the operator on line 2, not the "
+           f"char literal on line 1 (got lines "
+           f"{[x.line for x in v]})")
+
+
+def test_noncanonical_inequality_is_not_exempt_in_uprelude():
+    # The whole-file exemption exists for the ASCII DEFINITION sites; a
+    # `≠` operator there is ordinary drift with no such excuse, and the
+    # exemption must not have widened into a blanket amnesty.
+    upl = next(iter(WHOLE_FILE_EXEMPT))
+    text = "go x y = x ≠ y\n"
+    v = find_violations(text, upl)
+    expect(_tokens(v) == {"≠"} and len(v) == 1,
+           f"'≠' used as an operator in {upl} is still flagged despite "
+           f"its whole-file ASCII exemption (got {[str(x) for x in v]})")
+
+
+def test_noncanonical_inequality_in_glsl_quasiquote_is_exempt():
+    # GLSL source is not Haskell -- and the surrounding Haskell in the
+    # same file is still held to the rule.
+    text = (
+        "shaderCode = [frag|\n"
+        "    // a ≠ b in a GLSL comment\n"
+        "|]\n"
+        "\n"
+        "otherCode x y = x ≠ y\n"
+    )
+    v = find_violations(text, GLSL_QUASIQUOTE_FILE)
+    expect(_tokens(v) == {"≠"} and len(v) == 1,
+           f"'≠' inside [frag|...|] is exempt but the real Haskell '≠' "
+           f"elsewhere in the same file still fails "
+           f"(got {[str(x) for x in v]})")
+    expect(v != [] and v[0].line == 5,
+           "the surviving violation is reported on the Haskell line, "
+           "not the GLSL block")
+
+
+def test_ascii_and_noncanonical_violations_report_in_source_order():
+    # The two passes run per code span; their hits must interleave into
+    # one source-order report rather than one pass's trailing the other's.
+    text = "a x y = x ≠ y\nb x y = x == y\nc x y = x ≠ y\n"
+    v = find_violations(text, ORDINARY_FILE)
+    expect([(x.line, x.token) for x in v] == [(1, "≠"), (2, "=="), (3, "≠")],
+           f"violations are reported in source order across both "
+           f"detection paths (got {[(x.line, x.token) for x in v]})")
+
+
 def main() -> int:
     for fn in [
         test_each_forbidden_operator_detected_as_real_code,
@@ -407,6 +520,13 @@ def main() -> int:
         test_glsl_marker_text_inside_comments_does_not_manufacture_a_span,
         test_eq_instance_text_inside_a_comment_does_not_manufacture_an_exemption,
         test_construct_exemptions_do_not_leak_to_other_files,
+        test_noncanonical_inequality_as_an_operator_is_flagged,
+        test_noncanonical_inequality_in_comment_prose_passes,
+        test_canonical_inequality_is_never_flagged,
+        test_noncanonical_char_literal_is_not_an_operator,
+        test_noncanonical_inequality_is_not_exempt_in_uprelude,
+        test_noncanonical_inequality_in_glsl_quasiquote_is_exempt,
+        test_ascii_and_noncanonical_violations_report_in_source_order,
     ]:
         fn()
     if FAILURES:

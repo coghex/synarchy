@@ -83,7 +83,7 @@ extendRiverChains worldTiles terrain lakeIdAt dir isPrimary ascOrder =
                     Just dn → do
                         let dnT       = terrain  VU.! dn
                             dnLake    = lakeIdAt VU.! dn ≥ 0
-                            dnOcean   = dnT ≠ minBound ∧ dnT ≤ seaLevel
+                            dnOcean   = dnT ≢ minBound ∧ dnT ≤ seaLevel
                                       ∧ not dnLake
                             dnBeyond  = dnT ≡ minBound
                         -- Stop the river at any terminus tile (lake,
@@ -246,7 +246,7 @@ expandWidth worldTiles terrain dir flow isRiverCentre centreSurf =
                                 Nothing → pure ()
                                 Just nxt → do
                                     let nT = terrain VU.! nxt
-                                    when (nT ≠ minBound
+                                    when (nT ≢ minBound
                                           ∧ nT ≤ maxBank
                                           ∧ nT ≥ minBank) $ do
                                         updateTile nxt r centreS k
