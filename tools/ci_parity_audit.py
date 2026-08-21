@@ -124,6 +124,17 @@ EXEMPT_COMMANDS: tuple[tuple[str, str], ...] = (
         "so it has nothing to select. Its --self-test form is NOT exempt "
         "and does run locally.",
     ),
+    (
+        "python3 tools/ci_cache_report.py",
+        "CI cache-outcome reporting (#1358): classifies what the two "
+        "actions/cache restore steps got from the outputs those steps "
+        "published into the runner's environment. `make ci` restores no "
+        "GitHub Actions cache, so there is no outcome for it to classify "
+        "-- and this reports rather than gates, so it fails nothing "
+        "either way. Its --self-test form is NOT exempt and does run "
+        "locally, which is what keeps the classification and its ci.yml "
+        "wiring honest from `make ci`.",
+    ),
 )
 
 # Scripts exempt however they are invoked, because the exemption is a

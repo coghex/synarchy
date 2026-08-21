@@ -34,7 +34,18 @@ player's saves, see make_isolated_root):
   2. Boot engine A, engine.loadSave(slot), wait for the load transaction
      to publish through the normal #763 staging/publish path (proving
      the migrated/decoded session is NOT special-cased at that
-     boundary).
+     boundary). Both halves of that are PREREQUISITES: if the load is
+     not accepted, or does not publish, this fixture's scenario stops
+     there (issue #1486). Everything below would otherwise run against
+     a session that does not exist -- and some of it PASSES there, most
+     vacuously step 3's paused dwell, which would compare an absent
+     page's date against itself. The failed prerequisite is the last
+     check reported for the fixture, the stages it made unreachable are
+     accounted for as `[SKIP]` diagnostics (tools/probe_protocol.py's
+     existing vocabulary -- a skip is never a pass and never a
+     failure), the per-fixture cleanup below runs unchanged, and the
+     remaining fixtures in the sweep are untouched. The same rule
+     guards step 5's reload boundary.
   3. Assert the resulting session's structural state matches the
      fixture's OWN expectedCanonicalSummary: active page, paused, and a
      short paused dwell advances no gameplay date.
@@ -85,8 +96,11 @@ Usage:
 --self-test boots no engine at all: it verifies the registry bootstrap
 plan below and the startup-loader parser that keeps it honest, which is
 what a reviewer can run in a second instead of grepping this file for
-loader names. A normal run performs the same verification first, before
-placing a fixture or booting anything.
+loader names, plus both branches of the load-prerequisite stop above
+(driven through injected doubles, so a rejection and an
+accepted-but-unpublished load are provable without an engine). A normal
+run performs the bootstrap-plan verification first, before placing a
+fixture or booting anything.
 
 Exit 0 = every check above passed, for every declared complete-session
 fixture.
@@ -94,6 +108,8 @@ fixture.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import re
@@ -458,11 +474,90 @@ def boot_probe(root: str, port: int, log: str):
 class Checks:
     def __init__(self) -> None:
         self.failed = 0
+        self.skipped = 0
 
     def ok(self, cond: bool, label: str) -> None:
         print(f"  [{'PASS' if cond else 'FAIL'}] {label}")
         if not cond:
             self.failed += 1
+
+    def skip(self, label: str) -> None:
+        """A check that could not run, reported in the SKIP vocabulary
+        tools/probe_protocol.py already defines -- its `SKIP`
+        DIAGNOSTIC_LEVELS entry (:83) and the `[SKIP]` line marker its
+        standalone `reporter.skip` prints (:506) -- rather than a third
+        vocabulary invented here (issue #1486 requirement 3; this probe
+        is deliberately NOT migrated to probe-result/v1, which is #1471
+        and #1474's kind of work).
+
+        A skipped check is neither a pass nor a failure, so this never
+        touches `self.failed` (requirement 4): the run's exit status
+        stays driven by real failed checks, and a fixture whose load
+        prerequisite failed still exits non-zero because that
+        prerequisite is itself a genuine FAILED check.
+        """
+        print(f"  [SKIP] {label}")
+        self.skipped += 1
+
+    def skip_stages(self, prerequisite: str, stages) -> None:
+        """Account for every scenario stage a failed prerequisite made
+        unreachable, naming that prerequisite on each line -- so what
+        did not run is visible rather than silently absent."""
+        for stage in stages:
+            self.skip(f"{stage} -- not run: {prerequisite}")
+
+
+def await_load_prerequisite(chk: Checks, port: int, slot: str, accepted,
+                            published: str, unreachable,
+                            *, sender=send, waiter=wait_load_published
+                            ) -> bool:
+    """One load boundary's two prerequisites -- `engine.loadSave(slot)`
+    being accepted synchronously, and the transaction it starts actually
+    publishing -- reported as the same two checks this probe has always
+    reported, and answering whether the fixture's scenario may continue
+    (issue #1486).
+
+    True only when the load was BOTH accepted and published. A caller
+    that gets False returns from the fixture immediately, because every
+    later check would otherwise run against a session that does not
+    exist -- and some of them PASS there: the 2s paused dwell compares
+    `world.getDate` for an absent page against itself, reporting a
+    preserved invariant about a session that was never loaded. Returning
+    is cleanup-safe and sweep-safe: it passes through
+    `run_one_fixture`'s own `finally` (both engines quit, temporary root
+    removed) and `main` iterates the remaining fixtures regardless.
+
+    The failing check is the LAST check outcome printed for the fixture;
+    only `[SKIP]` diagnostics follow it, since SKIP is a DIAGNOSTIC
+    level in tools/probe_protocol.py's vocabulary and not a check
+    result. `unreachable` names the downstream stages, grouped by stage
+    rather than reproducing every dynamic check label. A synchronous
+    rejection additionally skips the publication check and never calls
+    `waiter`: no transaction was started, so waiting could only report a
+    timeout as though a real load had stalled.
+
+    `sender`/`waiter` are injectable ONLY so `self_test` can drive both
+    failure branches with no engine at all; production always uses this
+    module's own `send`/`wait_load_published`.
+    """
+    response = sender(port, f"return engine.loadSave('{slot}')")
+    if response.strip() != "true":
+        chk.ok(False, accepted(response))
+        chk.skip_stages(
+            f"engine.loadSave('{slot}') did not accept the load "
+            f"(got {response!r})",
+            (published,) + tuple(unreachable))
+        return False
+    chk.ok(True, accepted(response))
+    did_publish, status = waiter(port)
+    if not did_publish:
+        chk.ok(False, f"{published} -- {load_failure_reason(status)}")
+        chk.skip_stages(
+            f"the load of '{slot}' was accepted but never published",
+            unreachable)
+        return False
+    chk.ok(True, published)
+    return True
 
 
 def _values_match(actual: str, expected) -> bool:
@@ -583,16 +678,31 @@ def run_one_fixture(chk: Checks, port: int, fixture: dict) -> None:
         # ── Engine A: load the fixture, verify, re-save ─────────────────
         procA = boot_probe(root, port, logA)
         bootstrap_defs(port)
-        loaded = send(port, f"return engine.loadSave('{legacy_slot}')")
-        chk.ok(loaded.strip() == "true",
-               f"engine.loadSave('{legacy_slot}') accepted the fixture "
-               f"(got {loaded!r})")
-        published, status = wait_load_published(port)
-        chk.ok(published,
-               "fixture's load transaction published through the normal "
-               "#763 staging/publish path"
-               + ("" if published
-                  else f" -- {load_failure_reason(status)}"))
+        lua_checks = len(fixture["lua_state_checks"])
+        # Everything below this boundary needs a session that actually
+        # published; a failure here stops THIS fixture and nothing else
+        # (issue #1486).
+        if not await_load_prerequisite(
+                chk, port, legacy_slot,
+                accepted=lambda got: (
+                    f"engine.loadSave('{legacy_slot}') accepted the fixture "
+                    f"(got {got!r})"),
+                published="fixture's load transaction published through the "
+                          "normal #763 staging/publish path",
+                unreachable=(
+                    "engine A's migrated-session structural checks (active "
+                    "page, begins paused, and no gameplay date advancing "
+                    "across the 2s paused dwell)",
+                    f"this fixture's {lua_checks} declared Lua-state "
+                    f"check(s) after the initial migration-load",
+                    "the resave under a new slot, and the real-dumped "
+                    "Haskell state comparison against the fixture's "
+                    "declared canonical summary",
+                    "engine B's whole fresh-process reload of that resave: "
+                    "its structural checks, its declared Lua-state checks, "
+                    "the second resave and dump comparison, and the default "
+                    "time-scale check")):
+            return
 
         active = send(port, "return world.getActiveWorldId()").strip('"')
         chk.ok(active == active_page,
@@ -644,15 +754,24 @@ def run_one_fixture(chk: Checks, port: int, fixture: dict) -> None:
         chk.ok(pre in ("nil", "null", '""', ""),
                f"fresh engine B has no pre-load active world (got {pre!r})")
 
-        loaded_b = send(port, f"return engine.loadSave('{resaved_slot}')")
-        chk.ok(loaded_b.strip() == "true",
-               f"engine.loadSave('{resaved_slot}') accepted the re-saved "
-               f"current-format file (got {loaded_b!r})")
-        published_b, status_b = wait_load_published(port)
-        chk.ok(published_b,
-               "re-saved file's load transaction published"
-               + ("" if published_b
-                  else f" -- {load_failure_reason(status_b)}"))
+        # The same rule at the fixture scenario's SECOND load boundary:
+        # engine B's checks below are exactly as absent-session-blind as
+        # engine A's were.
+        if not await_load_prerequisite(
+                chk, port, resaved_slot,
+                accepted=lambda got: (
+                    f"engine.loadSave('{resaved_slot}') accepted the "
+                    f"re-saved current-format file (got {got!r})"),
+                published="re-saved file's load transaction published",
+                unreachable=(
+                    "engine B's reloaded-session structural checks (active "
+                    "page survived the restart, begins paused)",
+                    f"this fixture's {lua_checks} declared Lua-state "
+                    f"check(s) after the resave/restart/reload round trip",
+                    "the second resave from engine B's reloaded state, and "
+                    "its real-dumped Haskell state comparison",
+                    "the default time-scale check after unpausing")):
+            return
 
         active_b = send(port, "return world.getActiveWorldId()").strip('"')
         chk.ok(active_b == active_page,
@@ -732,16 +851,68 @@ end
 """
 
 
+#: The downstream-stage descriptions `_run_prerequisite_branch` hands
+#: `await_load_prerequisite`. Their WORDING is irrelevant to what the
+#: self-test proves (which stages are skipped, and that skipping is
+#: neither a pass nor a failure), so they stay deliberately generic
+#: rather than duplicating run_one_fixture's real ones.
+_SELF_TEST_STAGES = ("first downstream stage", "second downstream stage")
+
+
+def _run_prerequisite_branch(load_response: str, publish_result):
+    """Drive `await_load_prerequisite` with no engine, capturing what a
+    REAL `Checks` printed (issue #1486).
+
+    `publish_result` is the `(published, status)` pair the injected
+    waiter returns, or None to assert the waiter is never called at all.
+    Returns `(proceeded, markers, lines, waiter_calls, chk)`, where
+    `markers` is the ordered `PASS`/`FAIL`/`SKIP` sequence of the real
+    printed lines -- which is how "the failed prerequisite is the last
+    check reported, and only SKIP diagnostics follow it" is checked
+    without matching prose.
+    """
+    calls = {"waiter": 0}
+
+    def fake_sender(port, expr):
+        assert "engine.loadSave(" in expr, expr
+        return load_response
+
+    def fake_waiter(port):
+        calls["waiter"] += 1
+        if publish_result is None:
+            raise AssertionError("the waiter must not be called after a "
+                                 "synchronous rejection")
+        return publish_result
+
+    chk = Checks()
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        proceeded = await_load_prerequisite(
+            chk, 0, "probe_slot",
+            accepted=lambda got: f"accepted the load (got {got!r})",
+            published="the load transaction published",
+            unreachable=_SELF_TEST_STAGES,
+            sender=fake_sender, waiter=fake_waiter)
+    lines = [line.strip() for line in buffer.getvalue().splitlines()
+             if line.strip()]
+    markers = [line.split("]")[0].lstrip("[") for line in lines]
+    return proceeded, markers, lines, calls["waiter"], chk
+
+
 def self_test() -> int:
     """Prove the bootstrap plan and the parser that checks it, with no
-    engine, no GPU and no fixture (issue #1485).
+    engine, no GPU and no fixture (issue #1485) -- and both branches of
+    the load-prerequisite stop (issue #1486).
 
-    Two halves, both deterministic. The parser is exercised against
+    Three parts, all deterministic. The parser is exercised against
     `_SELF_TEST_LOADER`, whose expected answer is written out
     independently of the regex, plus the two ways reading production can
     fail; then the REAL plan is verified against the REAL startup
     loader, which is the assertion that replaces grepping this file for
-    loader names.
+    loader names; then `await_load_prerequisite` is driven through a
+    synchronous rejection, an accepted-but-unpublished load and a clean
+    load, via injected doubles -- the branches a real failing fixture
+    would otherwise be the only way to observe.
     """
     failures = 0
 
@@ -786,6 +957,68 @@ def self_test() -> int:
           "locations, and enumerates files for every family"
           + ("" if not problems else ": " + "; ".join(problems)))
 
+    print("\n=== the load-prerequisite stop (#1486) ===")
+
+    proceeded, markers, lines, waiter_calls, chk = _run_prerequisite_branch(
+        "false", None)
+    check(proceeded is False,
+          f"a synchronously REJECTED load stops the fixture's scenario "
+          f"(got {proceeded!r})")
+    check(waiter_calls == 0,
+          f"a synchronously rejected load never waits for a publication "
+          f"that was never started ({waiter_calls} waiter call(s))")
+    check(markers == ["FAIL"] + ["SKIP"] * (1 + len(_SELF_TEST_STAGES)),
+          f"the rejection is the LAST check reported, and only SKIP "
+          f"diagnostics follow it -- covering the publication check and "
+          f"every downstream stage (got {markers!r})")
+    check("'false'" in lines[0],
+          f"the raw acceptance response is preserved as the failure's "
+          f"detail (got {lines[0]!r})")
+    check(all("not run:" in line for line in lines[1:]),
+          "every skipped stage names the prerequisite that stopped it")
+    check((chk.failed, chk.skipped) == (1, 1 + len(_SELF_TEST_STAGES)),
+          f"the rejection counts as exactly one FAILED check and the "
+          f"skips count as neither passes nor failures (failed="
+          f"{chk.failed}, skipped={chk.skipped})")
+
+    for label, status, expected_detail in (
+            ("a terminal LoadFailed",
+             {"failedAtPhase": "LoadFailed", "outcome": "decode exploded"},
+             "decode exploded"),
+            ("a terminal LoadReconciliationFailed",
+             {"failedAtPhase": "LoadReconciliationFailed", "outcome": "ref"},
+             "LoadReconciliationFailed"),
+            ("a publication TIMEOUT reporting no status at all",
+             None,
+             "never reported a terminal status")):
+        proceeded, markers, lines, waiter_calls, chk = (
+            _run_prerequisite_branch("true", (False, status)))
+        check(proceeded is False and waiter_calls == 1,
+              f"{label}: an ACCEPTED but unpublished load stops the "
+              f"fixture's scenario (got {proceeded!r} after "
+              f"{waiter_calls} waiter call(s))")
+        check(markers == ["PASS", "FAIL"] + ["SKIP"] * len(_SELF_TEST_STAGES),
+              f"{label}: the publication failure is the LAST check "
+              f"reported, with the downstream stages skipped after it "
+              f"(got {markers!r})")
+        check(expected_detail in lines[1],
+              f"{label}: the waiter's own returned status is preserved in "
+              f"the failure (expected {expected_detail!r} in {lines[1]!r})")
+        check((chk.failed, chk.skipped) == (1, len(_SELF_TEST_STAGES)),
+              f"{label}: one FAILED check, and skips that are neither "
+              f"passes nor failures (failed={chk.failed}, "
+              f"skipped={chk.skipped})")
+
+    proceeded, markers, lines, waiter_calls, chk = _run_prerequisite_branch(
+        "true", (True, {"phase": "LoadPublished"}))
+    check(proceeded is True and waiter_calls == 1,
+          f"an accepted, published load lets the fixture's scenario "
+          f"continue (got {proceeded!r})")
+    check(markers == ["PASS", "PASS"] and (chk.failed, chk.skipped) == (0, 0),
+          f"a successful boundary reports exactly the two checks it "
+          f"always did, with nothing skipped (got {markers!r}, failed="
+          f"{chk.failed}, skipped={chk.skipped})")
+
     print(f"\n{'PASS' if failures == 0 else 'FAIL'}: {failures} "
           f"self-test check(s) failed")
     return 0 if failures == 0 else 1
@@ -824,7 +1057,12 @@ def main() -> int:
 
     print(f"\n{'PASS' if chk.failed == 0 else 'FAIL'}: "
           f"{chk.failed} check(s) failed across {len(fixtures)} declared "
-          f"complete-session fixture(s)")
+          f"complete-session fixture(s)"
+          + (f", and {chk.skipped} check(s) were skipped after a failed "
+             f"load prerequisite" if chk.skipped else ""))
+    # A skipped check is neither a pass nor a failure (#1486): the exit
+    # status is still driven purely by real failed checks -- of which a
+    # fixture whose load prerequisite failed always has at least one.
     return 0 if chk.failed == 0 else 1
 
 
