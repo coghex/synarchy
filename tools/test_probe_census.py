@@ -681,6 +681,101 @@ def test_refusals() -> None:
 
 
 # ==========================================================================
+def test_malformed_rows_refuse_cleanly() -> None:
+    """Valid JSON, structurally unusable: refuse, never traceback (#1503)."""
+    print("\n-- structurally malformed census state --")
+
+    def census_with(rows):
+        return {"schema": "probe-census/v2", "probes": rows}
+
+    def row(key="alpha", census=None):
+        return {"key": key, "script": "alpha_probe.py",
+                "classification": "manual-only", "protocol": "legacy",
+                "census": probe_census.empty_census() if census is None
+                else census}
+
+    with registry(), scratch() as root:
+        cases = [
+            # An UNHASHABLE key: `key in live` and `{e["key"] for e ...}`
+            # both raise TypeError on this, so it must be refused first.
+            (census_with([row(key=[])]), "has no string `key`",
+             "a row whose key is an unhashable list"),
+            (census_with([row(key=7)]), "has no string `key`",
+             "a row whose key is a number"),
+            (census_with([{"script": "x.py"}]), "has no string `key`",
+             "a row with no key at all"),
+            ({"schema": "probe-census/v2", "probes": {"alpha": {}}},
+             "must be a list", "a `probes` mapping instead of a list"),
+            (census_with(["alpha"]), "is not an object",
+             "a row that is a bare string"),
+            (census_with([row(census={**probe_census.empty_census(),
+                                      "attempts": 5})]),
+             "must be a list to append to", "a non-list attempt log"),
+            (census_with([row(census={**probe_census.empty_census(),
+                                      "history": "old",
+                                      "current": {"commit_sha": COMMIT_B,
+                                                  "samples": []}})]),
+             "must be a list to append to", "a non-list history"),
+            (census_with([row(census={**probe_census.empty_census(),
+                                      "current": {"commit_sha": COMMIT_A,
+                                                  "samples": 3}})]),
+             "must be a list to append to", "a non-list sample list"),
+            (census_with([row(census="not a record")]),
+             "no census record", "a row whose census is a string"),
+        ]
+        for index, (document, fragment, why) in enumerate(cases):
+            path = root / f"case-{index}.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            before = path.read_bytes()
+            expect_refusal(
+                lambda p=path: probe_census.record_result(p, result_document()),
+                f"--record refuses {why}", fragment)
+            unchanged(path, before, f"...and changes no bytes ({why})")
+
+        # `--seed` walks the same rows, through reconcile_inventory.
+        for index, (document, fragment, why) in enumerate(cases[:5]):
+            path = root / f"seed-{index}.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            before = path.read_bytes()
+            expect_refusal(lambda p=path: probe_census.ensure_document(p),
+                           f"--seed refuses {why}", fragment)
+            unchanged(path, before, f"...and changes no bytes ({why})")
+
+        # And a policy update, which addresses a row by key too.
+        path = root / "policy.json"
+        path.write_text(json.dumps(census_with([row(key=[])])), encoding="utf-8")
+        before = path.read_bytes()
+        expect_refusal(lambda: probe_census.record_policy(
+            path, "alpha", acceptable_failures=1),
+            "a policy update refuses an unusable row key", "has no string `key`")
+        unchanged(path, before, "...and changes no bytes")
+
+        # The safety boundary at `update`'s funnel: any structural or
+        # type error a mutation meets becomes a controlled refusal.
+        good = root / "good.json"
+        seeded(good)
+        payload = good.read_bytes()
+
+        def exploding(_before):
+            raise TypeError("unhashable type: 'list'")
+
+        expect_refusal(lambda: probe_census.update(good, exploding),
+                       "a structural/type error inside the transaction is a "
+                       "controlled refusal, not a traceback",
+                       "structurally malformed", "TypeError")
+        unchanged(good, payload, "...and changes no bytes")
+
+        # A CensusError from the mutation is NOT rewrapped: its own
+        # actionable message survives.
+        def refusing(_before):
+            raise probe_census.CensusError("seed it first with --seed")
+
+        expect_refusal(lambda: probe_census.update(good, refusing),
+                       "a deliberate refusal keeps its own message",
+                       "seed it first with --seed")
+
+
+# ==========================================================================
 def test_path_substitution() -> None:
     print("\n-- symlink, hard-link and non-regular path refusal --")
     with registry(), scratch() as root:
@@ -1130,6 +1225,7 @@ def main() -> int:
     for test in (test_record_shape, test_migration, test_seed_and_noop,
                  test_reconciliation, test_ingest_accepted,
                  test_ingest_harness_error, test_policy, test_refusals,
+                 test_malformed_rows_refuse_cleanly,
                  test_path_substitution, test_atomicity,
                  test_preservation_guard,
                  test_independent_process_contention, test_cli):

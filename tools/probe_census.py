@@ -262,6 +262,14 @@ def _rows(document, what: str) -> list:
     for position, entry in enumerate(entries):
         if not isinstance(entry, dict):
             raise CensusError(f"{what} entry {position} is not an object")
+        # Every operation ADDRESSES a row by its key — membership tests,
+        # lookups, the preservation comparison. A non-string (or
+        # unhashable) key is not a shape complaint, it is a row this
+        # tool cannot act on at all.
+        if not isinstance(entry.get("key"), str):
+            raise CensusError(
+                f"{what} entry {position} has no string `key` "
+                f"({entry.get('key')!r})")
     return entries
 
 
@@ -296,10 +304,29 @@ def migrate_document(document) -> dict:
     return result
 
 
-def _archive_current(census: dict) -> None:
+def _appendable(census: dict, field: str, probe: str) -> list:
+    """A stored append-only list, or the refusal that it is not one.
+
+    `history` and `attempts` are appended to by every operation that
+    touches a record. A stored value that is not a list is a structural
+    error this operation cannot perform through — a controlled refusal,
+    not a traceback and not a silent replacement of the stored value.
+    """
+    value = census.get(field)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise CensusError(
+            f"probe {probe!r}: `{field}` must be a list to append to, got "
+            f"{type(value).__name__}")
+    return list(value)
+
+
+def _archive_current(census: dict, probe: str) -> None:
     """Move the current cohort into history. Never discards one."""
     if census.get("current") is not None:
-        census["history"] = list(census.get("history") or []) + [census["current"]]
+        census["history"] = _appendable(census, "history", probe) + [
+            census["current"]]
         census["current"] = None
 
 
@@ -337,7 +364,7 @@ def reconcile_inventory(document: dict) -> dict:
         if entry["classification"] == CI_ELIGIBLE and isinstance(
                 entry.get("census"), dict):
             census = _deep_copy(entry["census"])
-            _archive_current(census)
+            _archive_current(census, key)
             entry["census"] = census
     for key, script, _purpose in run_probes.PROBES:
         if key in present:
@@ -520,11 +547,11 @@ def ingest_result(document: dict, result) -> tuple[dict, str]:
         if sample is not None:
             current = census.get("current")
             if not isinstance(current, dict) or current.get("commit_sha") != commit:
-                _archive_current(census)
+                _archive_current(census, probe)
                 census["current"] = {"commit_sha": commit, "samples": []}
-            census["current"]["samples"] = list(
-                census["current"].get("samples") or []) + [sample]
-        census["attempts"] = list(census.get("attempts") or []) + [attempt]
+            census["current"]["samples"] = _appendable(
+                census["current"], "samples", probe) + [sample]
+        census["attempts"] = _appendable(census, "attempts", probe) + [attempt]
         row["census"] = census
         break
     updated = dict(document)
@@ -982,8 +1009,22 @@ def update(path: Path, mutate) -> dict:
     path = Path(path)
     with _locked(path):
         before = read_for_update(path)
-        candidate, touched = mutate(before)
-        payload = render_manifest(candidate).encode("utf-8")
+        try:
+            candidate, touched = mutate(before)
+            payload = render_manifest(candidate).encode("utf-8")
+        except CensusError:
+            raise
+        except (TypeError, ValueError, KeyError, AttributeError,
+                IndexError) as error:
+            # The safety boundary the issue requires, at the ONE funnel
+            # every mutation passes through: a structural or type error
+            # met while performing the operation becomes a controlled
+            # refusal instead of a traceback. It is not schema
+            # validation — it reports only what actually blocked this
+            # operation, and #1492/#1493 still own finding the rest.
+            raise CensusError(
+                f"census {path} is structurally malformed for this operation "
+                f"({type(error).__name__}: {error})") from None
         # Compare against the bytes a later reader will see, not the
         # in-memory object that produced them.
         installed = json.loads(payload.decode("utf-8"))
