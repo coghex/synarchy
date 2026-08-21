@@ -746,8 +746,16 @@ python3 tools/probe_census.py --validate       # check the inventory
 python3 tools/probe_census.py --record R.json  # ingest one probe-flake-result/v1
 python3 tools/probe_census.py --probe KEY --set-acceptable-failures 2 \
     --justification "two known engine-side races"
+python3 tools/probe_census.py --probe KEY --set-acceptable-failures 7
+python3 tools/probe_census.py --probe KEY --set-acceptable-failures 7 \
+    --clear-justification
 python3 tools/probe_census.py --probe KEY --set-estimate 480
 ```
+
+An X update that omits `--justification` never clears the stored text —
+`--clear-justification` is the only thing that does, and it may not be combined
+with `--justification`. `--justification` stores its argument verbatim, so
+every literal (`keep`, `none`, text with surrounding whitespace) is storable.
 
 `--print` never touches the docs worktree. `--seed` is the ONLY operation that
 migrates: it creates an absent census, migrates a `probe-census/v1` one

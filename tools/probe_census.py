@@ -72,6 +72,11 @@ Usage:
   python3 tools/probe_census.py --record RESULT    # ingest one measurement
   python3 tools/probe_census.py --probe KEY --set-acceptable-failures 2 \
       --justification "two known engine-side races"
+  # X only. Omitting --justification NEVER clears the stored text.
+  python3 tools/probe_census.py --probe KEY --set-acceptable-failures 7
+  # The only way to clear it; may not be combined with --justification.
+  python3 tools/probe_census.py --probe KEY --set-acceptable-failures 7 \
+      --clear-justification
   python3 tools/probe_census.py --probe KEY --set-estimate 480
 """
 from __future__ import annotations
@@ -584,10 +589,11 @@ def set_policy(document: dict, probe: str, *,
                estimate=KEEP) -> tuple[dict, str]:
     """Store the supplied X / justification / estimate for one probe.
 
-    `KEEP` leaves a field alone; `None` clears it. Clearing
-    `acceptable_failures` also clears its justification, because a
-    justification with nothing to justify is not a state this record
-    can hold. Every unrelated policy field and all measurement history
+    `KEEP` leaves a field alone; `None` clears it. The two are
+    INDEPENDENT: clearing `acceptable_failures` does not touch its
+    justification, because the maintainer's typed rationale is durable
+    accumulated policy that no X update may destroy as a side effect
+    (#1479). Every unrelated policy field and all measurement history
     are left exactly as they were.
 
     This module stores the policy it is given: range and
@@ -595,8 +601,6 @@ def set_policy(document: dict, probe: str, *,
     """
     entries = _rows(document, "census")
     target_row(document, probe, "a policy update")
-    if acceptable_failures is not KEEP and acceptable_failures is None:
-        justification = None
     rows = [dict(entry) for entry in entries]
     for row in rows:
         if row.get("key") != probe:
@@ -1230,6 +1234,16 @@ def _companion_arguments(args) -> dict | None:
     if args.justification is not None and not setting_x:
         raise CensusError(
             "--justification is only valid with --set-acceptable-failures")
+    if args.clear_justification and not setting_x:
+        raise CensusError(
+            "--clear-justification is only valid with "
+            "--set-acceptable-failures")
+    # Requirements 2 and 3 prescribe contradictory writes together, so
+    # this pair is refused rather than silently resolved either way.
+    if args.justification is not None and args.clear_justification:
+        raise CensusError(
+            "--justification and --clear-justification write the same field; "
+            "use one per invocation")
     if not policy:
         return None
     if setting_x and setting_estimate:
@@ -1239,12 +1253,21 @@ def _companion_arguments(args) -> dict | None:
     if not args.probe:
         raise CensusError("--probe KEY is required for a policy update")
     if setting_x:
+        # The three cases are decided by which FLAG was supplied, never
+        # by what its text says: an in-band magic value would make some
+        # legitimate justification (`none`, `keep`) unstorable, which is
+        # the defect #1479 closes. `--justification` therefore stores
+        # its argument verbatim, whatever it spells.
+        if args.clear_justification:
+            justification = None
+        elif args.justification is None:
+            justification = KEEP
+        else:
+            justification = args.justification
         return {
             "acceptable_failures": _optional_int(
                 args.set_acceptable_failures, "--set-acceptable-failures"),
-            "justification": (KEEP if args.justification is None else
-                              (None if args.justification == "none"
-                               else args.justification)),
+            "justification": justification,
         }
     return {"estimate": _optional_number(args.set_estimate, "--set-estimate")}
 
@@ -1271,8 +1294,11 @@ def main(argv: list[str] | None = None) -> int:
                             "--probe (a number of seconds, or `none`)")
     ap.add_argument("--probe", help="the probe key a policy update acts on")
     ap.add_argument("--justification", default=None,
-                    help="the justification stored beside X (or `none` to "
-                         "clear it); omit to leave it unchanged")
+                    help="the justification stored beside X, verbatim; omit "
+                         "to leave the stored one exactly as it was")
+    ap.add_argument("--clear-justification", action="store_true",
+                    help="clear the stored justification; the only way to, "
+                         "and never implied by omitting --justification")
     args = ap.parse_args(argv)
 
     # Argument validation runs FIRST, for every operation. `--print`
