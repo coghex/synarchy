@@ -776,6 +776,59 @@ so a checkout with no docs worktree behaves identically.
 `python3 tools/test_probe_census.py` is its deterministic, engine-free
 self-test.
 
+### `probe_external_evidence.py` — the Codex `$test` record, read-only (#1432)
+
+The Codex `$test` skill independently records coordinated non-CI runs against
+this same probe set, with exact commit provenance and interpreted
+observations. This reports what it knows about ONE registered probe. The two
+systems run side by side and must not interact; this is strictly a reader.
+
+```bash
+python3 tools/probe_external_evidence.py --probe role
+python3 tools/probe_external_evidence.py --probe transfer_order --json
+python3 tools/test_probe_external_evidence.py   # the synthetic self-test
+```
+
+State lives at `<git-common-dir>/codex-test`, resolved with `git rev-parse
+--git-common-dir` — in a linked worktree `.git` is a pointer file, so a
+literal `.git/codex-test` would be wrong. That tree is untracked and
+machine-local: it is ABSENT on a fresh clone, on another machine, and wherever
+Codex is not installed, and its absence is a normal "no external evidence"
+result (exit 0, no diagnostic). An existing but unreadable or malformed
+registry or report is different — a non-fatal diagnostic beside whatever could
+still be read.
+
+It never writes, never takes a `$test` lock, and never invokes the `$test`
+coordinator at all. That last part is not squeamishness: every one of the
+issue's four permitted read subcommands (`list`, `show`, `proposal-list`,
+`value-status`) goes through the coordinator's `read_registry` ->
+`locked_registry`, which takes the exclusive `registry.lock` flock, `mkdir`s
+the state tree and rewrites `registry.json` with a fresh `updated_at`. Reading
+the JSON directly is the only way to honour the permission boundary — and the
+only way that works when the machine-local coordinator is not installed.
+
+A `run_probes.PROBES` key maps to a `$test` run id by underscores-to-hyphens
+under the `probe:` namespace (`transfer_order` -> `probe:transfer-order`),
+derived from the KEY and never from the script filename —
+`persistence_contract_sweep.py` has no `_probe` suffix to strip. Matching is
+EXACT, and a key the registry does not carry is a controlled unknown-key
+rejection (exit 2), not a "no external evidence" answer.
+
+Per matching run it reports the run id and state, the tested commit, the
+MECHANICAL execution outcome (from the registry's own `execution_status` /
+`test_exit_code`, never inferred from the report's interpretation), the
+recorded duration and the observation status. A value the record does not
+carry reads as unavailable, never as a fabricated `false` or `0`, so active
+and legacy runs are surfaced rather than dropped. The whole known history is
+reported; there is no limit option and no default truncation. Report reads are
+confined to resolved `*.test-result.md` files directly beneath the state
+tree's own `reports/`, so a recorded path can never widen read scope.
+
+External `$test` evidence is PRESENTATION-ONLY. A run appearing, passing,
+failing or recording observations changes no census sample, no statistic, no
+schedule and no skip decision — one interpreted `$test` run is context, not a
+measurement in the lab's statistics.
+
 ### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets selection
 
 Selects the three expensive CI gates that are conditional on pull requests:

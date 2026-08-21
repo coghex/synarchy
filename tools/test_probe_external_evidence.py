@@ -1,0 +1,712 @@
+#!/usr/bin/env python3
+"""Focused self-test for the read-only Codex `$test` evidence reader (#1432).
+
+Deterministic, engine-free, GPU-free and offline. Every case runs
+against a synthetic `codex-test` tree in a throwaway temporary
+directory: a synthetic `registry.json` shaped like the real
+`codex-test-coordinator/v1` document plus synthetic
+`*.test-result.md` reports. Nothing here boots an engine, runs a
+registered probe, or touches the developer's real machine-local `$test`
+state. The real `tools/probe_external_evidence.py` is imported and
+driven, so this exercises the shipped code paths rather than a copy.
+
+The central contract under test is NON-INTERACTION, and it is proved
+mechanically rather than inferred from the reader's output:
+
+* every file under the synthetic tree is digested before and after each
+  read, and the digests (and the path set) must be identical — registry,
+  reports and lock files alike;
+* `subprocess.run` / `subprocess.Popen` are replaced with tripwires, so
+  a coordinator invocation of ANY subcommand — permitted or mutating —
+  fails the test rather than passing quietly;
+* `fcntl.flock` is replaced with a tripwire, so taking any `$test` lock
+  fails the test.
+
+The one case that legitimately shells out (`git rev-parse
+--git-common-dir` for state resolution) builds its own scratch
+repository with a real linked worktree and runs outside the tripwires.
+
+Usage:
+  python3 tools/test_probe_external_evidence.py
+Exit codes: 0 = all tests passed, 1 = one or more failed.
+"""
+from __future__ import annotations
+
+import fcntl
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import probe_external_evidence as evidence  # noqa: E402
+import run_probes  # noqa: E402
+
+FAILURES: list[str] = []
+PASSED = 0
+
+SENTINEL = "SENTINEL-OUT-OF-SCOPE-CONTENT-MUST-NEVER-BE-READ"
+
+
+# --------------------------------------------------------------------------
+# Harness
+# --------------------------------------------------------------------------
+
+def check(condition: bool, label: str, detail: str = "") -> None:
+    global PASSED
+    if condition:
+        PASSED += 1
+        return
+    FAILURES.append(f"{label}{': ' + detail if detail else ''}")
+
+
+def check_equal(actual: object, expected: object, label: str) -> None:
+    check(actual == expected, label, f"expected {expected!r}, got {actual!r}")
+
+
+class Tripwire(AssertionError):
+    """Raised when the reader reaches a forbidden interaction."""
+
+
+class RecordReads:
+    """Record every file path the reader actually opens for reading.
+
+    The confinement contract cannot be proved from the reader's output
+    alone: it extracts only an interpretation status and a section
+    count, so an out-of-scope file could be read without a byte of it
+    surfacing. This records the reads themselves.
+    """
+
+    def __init__(self) -> None:
+        self.paths: list[Path] = []
+        self._saved: dict[str, object] = {}
+
+    def __enter__(self) -> "RecordReads":
+        recorder = self
+
+        def record(name: str, original):
+            def wrapper(self_path, *args, **kwargs):
+                recorder.paths.append(Path(self_path))
+                return original(self_path, *args, **kwargs)
+            return wrapper
+
+        self._saved = {
+            "read_text": Path.read_text,
+            "read_bytes": Path.read_bytes,
+            "open": Path.open,
+        }
+        Path.read_text = record("read_text", self._saved["read_text"])   # type: ignore[assignment]
+        Path.read_bytes = record("read_bytes", self._saved["read_bytes"])  # type: ignore[assignment]
+        Path.open = record("open", self._saved["open"])                  # type: ignore[assignment]
+        return self
+
+    def __exit__(self, *exc_info: object) -> bool:
+        Path.read_text = self._saved["read_text"]      # type: ignore[assignment]
+        Path.read_bytes = self._saved["read_bytes"]    # type: ignore[assignment]
+        Path.open = self._saved["open"]                # type: ignore[assignment]
+        return False
+
+
+class NonInteraction:
+    """Forbid subprocesses and locks, and pin every byte under `root`."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.before: dict[str, str] = {}
+        self._saved: dict[str, object] = {}
+
+    def _digest_tree(self) -> dict[str, str]:
+        digests: dict[str, str] = {}
+        for path in sorted(self.root.rglob("*")):
+            relative = str(path.relative_to(self.root))
+            if path.is_symlink():
+                digests[relative] = "symlink:" + os.readlink(path)
+            elif path.is_dir():
+                digests[relative] = "dir"
+            else:
+                try:
+                    digests[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+                except OSError as exc:
+                    digests[relative] = f"unreadable:{exc.errno}"
+        return digests
+
+    def __enter__(self) -> "NonInteraction":
+        self.before = self._digest_tree()
+
+        def forbidden_subprocess(*args: object, **kwargs: object) -> None:
+            raise Tripwire(f"the reader invoked a subprocess: {args!r}")
+
+        def forbidden_flock(*args: object, **kwargs: object) -> None:
+            raise Tripwire("the reader took a lock")
+
+        self._saved = {
+            "run": subprocess.run,
+            "Popen": subprocess.Popen,
+            "call": subprocess.call,
+            "check_output": subprocess.check_output,
+            "flock": fcntl.flock,
+            "lockf": fcntl.lockf,
+        }
+        subprocess.run = forbidden_subprocess            # type: ignore[assignment]
+        subprocess.Popen = forbidden_subprocess          # type: ignore[assignment]
+        subprocess.call = forbidden_subprocess           # type: ignore[assignment]
+        subprocess.check_output = forbidden_subprocess   # type: ignore[assignment]
+        fcntl.flock = forbidden_flock                    # type: ignore[assignment]
+        fcntl.lockf = forbidden_flock                    # type: ignore[assignment]
+        return self
+
+    def __exit__(self, *exc_info: object) -> bool:
+        subprocess.run = self._saved["run"]               # type: ignore[assignment]
+        subprocess.Popen = self._saved["Popen"]           # type: ignore[assignment]
+        subprocess.call = self._saved["call"]             # type: ignore[assignment]
+        subprocess.check_output = self._saved["check_output"]  # type: ignore[assignment]
+        fcntl.flock = self._saved["flock"]                # type: ignore[assignment]
+        fcntl.lockf = self._saved["lockf"]                # type: ignore[assignment]
+        return False
+
+    def assert_untouched(self, label: str) -> None:
+        after = self._digest_tree()
+        check_equal(sorted(after), sorted(self.before), f"{label}: path set unchanged")
+        changed = [p for p in after if p in self.before and after[p] != self.before[p]]
+        check(not changed, f"{label}: bytes unchanged", f"changed: {changed}")
+
+
+# --------------------------------------------------------------------------
+# Synthetic state
+# --------------------------------------------------------------------------
+
+def make_run(test_id: str, run_id: str, **overrides: object) -> dict:
+    """A synthetic registry record shaped like a real completed run."""
+    record = {
+        "area": "synthetic",
+        "claimed_at": "2026-08-12T17:41:35Z",
+        "completed_at": "2026-08-12T17:47:26Z",
+        "elapsed_seconds": 288.783,
+        "execution_status": "passed",
+        "interpretation_outcome": "clean",
+        "revision": "8f995f395dd1748f67ffcaeedc5cf8d7c2e9e430",
+        "revision_committed_at": "2026-08-12T10:33:25-07:00",
+        "revision_subject": "Document audio system design",
+        "run_id": run_id,
+        "status": "completed",
+        "test_exit_code": 0,
+        "test_id": test_id,
+    }
+    record.update(overrides)
+    return {k: v for k, v in record.items() if v is not None or k in overrides}
+
+
+def report_text(run_id: str, test_id: str, interpretation: str,
+                observations: int) -> str:
+    lines = [
+        "---",
+        'schema: "codex-test-result/v1"',
+        f'run_id: "{run_id}"',
+        f'test_id: "{test_id}"',
+        f'execution_status: "passed"',
+        f'interpretation_status: "{interpretation}"',
+        "---",
+        "",
+        f"# Test result: {test_id}",
+        "",
+        "## Observations",
+        "",
+    ]
+    if observations == 0:
+        lines.append("No reportable observations.")
+    for index in range(1, observations + 1):
+        lines.append(f"### OBS-{index:03d} — synthetic observation {index}")
+        lines.append("")
+        lines.append("- **Category:** gameplay")
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def build_state(root: Path, runs: list[dict], reports: dict[str, tuple[str, int]],
+                *, schema: str = evidence.COORDINATOR_SCHEMA) -> Path:
+    """Write a synthetic `codex-test` tree and return its root."""
+    state = root / evidence.STATE_DIRNAME
+    (state / evidence.REPORTS_DIRNAME).mkdir(parents=True, exist_ok=True)
+    (state / "logs").mkdir(parents=True, exist_ok=True)
+    (state / "registry.lock").write_text("", encoding="utf-8")
+    (state / "base.lock").write_text("", encoding="utf-8")
+    for run_id, (interpretation, count) in reports.items():
+        test_id = next((r["test_id"] for r in runs if r.get("run_id") == run_id), "probe:x")
+        path = state / evidence.REPORTS_DIRNAME / (run_id + evidence.REPORT_SUFFIX)
+        path.write_text(report_text(run_id, test_id, interpretation, count),
+                        encoding="utf-8")
+    document = {
+        "schema": schema,
+        "updated_at": "2026-08-12T17:47:26Z",
+        "snapshots": [],
+        "proposals": [],
+        "runs": runs,
+    }
+    (state / evidence.REGISTRY_FILENAME).write_text(
+        json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return state
+
+
+def report_path(state: Path, run_id: str) -> str:
+    return str(state / evidence.REPORTS_DIRNAME / (run_id + evidence.REPORT_SUFFIX))
+
+
+def read(state: Path | str, probe: str) -> dict:
+    return evidence.read_probe_evidence(probe, state_root=state)
+
+
+# --------------------------------------------------------------------------
+# Cases
+# --------------------------------------------------------------------------
+
+def test_identity_mapping() -> None:
+    """Keys map to `$test` ids by key, not by stripping a script suffix."""
+    check_equal(evidence.test_id_for_probe("transfer_order"), "probe:transfer-order",
+                "transfer_order maps to probe:transfer-order")
+    check_equal(evidence.test_id_for_probe("persistence_contract_sweep"),
+                "probe:persistence-contract-sweep",
+                "persistence_contract_sweep maps by key")
+    check_equal(evidence.probe_script("persistence_contract_sweep"),
+                "persistence_contract_sweep.py",
+                "persistence_contract_sweep has no _probe suffix to strip")
+    check_equal(evidence.probe_script("transfer_order"), "transfer_order_probe.py",
+                "transfer_order's registered script")
+
+    keys = evidence.probe_keys()
+    check_equal(keys, [k for k, _s, _p in run_probes.PROBES],
+                "probe_keys mirrors run_probes.PROBES order")
+    ids = [evidence.test_id_for_probe(k) for k in keys]
+    check_equal(len(set(ids)), len(ids), "every registered key maps to a distinct id")
+    check(all(i.startswith("probe:") and "_" not in i for i in ids),
+          "every mapped id is a hyphenated probe: id")
+
+
+def test_unknown_key_is_rejected() -> None:
+    """An unregistered key is a rejection, not a no-evidence answer."""
+    with tempfile.TemporaryDirectory() as tmp:
+        state = build_state(Path(tmp), [], {})
+        try:
+            read(state, "definitely_not_a_probe")
+            check(False, "unknown key raises EvidenceRejected")
+        except evidence.EvidenceRejected as exc:
+            check("definitely_not_a_probe" in str(exc),
+                  "the rejection names the offending key", str(exc))
+            check("run_probes.PROBES" in str(exc),
+                  "the rejection names the authoritative registry", str(exc))
+
+        code = evidence.main(["--probe", "definitely_not_a_probe"])
+        check_equal(code, evidence.EXIT_REJECTED, "CLI exits 2 on an unknown key")
+        check_equal(evidence.main(["--probe", "role", "--state-root", str(state)]),
+                    evidence.EXIT_OK, "CLI exits 0 on a registered key")
+
+
+def test_exact_matching() -> None:
+    """Only the exactly-mapped `$test` id matches."""
+    with tempfile.TemporaryDirectory() as tmp:
+        runs = [
+            make_run("probe:transfer-order", "exact"),
+            make_run("probe:transfer-order-extra", "prefixed"),
+            make_run("probe:transfer_order", "underscored"),
+            make_run("gameplay:transfer-order", "other-namespace"),
+            make_run("probe:transfer", "shorter"),
+            make_run("PROBE:TRANSFER-ORDER", "uppercased"),
+        ]
+        state = build_state(Path(tmp), runs, {})
+        with NonInteraction(state) as guard:
+            result = read(state, "transfer_order")
+            guard.assert_untouched("exact matching")
+        check_equal([r["run_id"] for r in result["runs"]], ["exact"],
+                    "only the exact test id matches")
+        check_equal(result["state"], evidence.STATE_PRESENT, "state reported present")
+        check_equal(result["diagnostics"], [], "an exact-match read is diagnostic-free")
+
+
+def test_clean_and_observed_reports() -> None:
+    """Observation status distinguishes clean, observed and not-yet-known."""
+    with tempfile.TemporaryDirectory() as tmp:
+        runs = [
+            make_run("probe:role", "clean-run", claimed_at="2026-08-12T10:00:00Z",
+                     interpretation_outcome="clean",
+                     report_path=None),
+            make_run("probe:role", "observed-run", claimed_at="2026-08-13T10:00:00Z",
+                     interpretation_outcome="observations"),
+        ]
+        state = build_state(Path(tmp), runs,
+                            {"clean-run": ("clean", 0), "observed-run": ("observations", 2)})
+        for record in runs:
+            record["report_path"] = report_path(state, record["run_id"])
+        build_state(Path(tmp), runs,
+                    {"clean-run": ("clean", 0), "observed-run": ("observations", 2)})
+
+        with NonInteraction(state) as guard:
+            result = read(state, "role")
+            guard.assert_untouched("clean and observed reports")
+
+        by_id = {r["run_id"]: r for r in result["runs"]}
+        check_equal([r["run_id"] for r in result["runs"]], ["observed-run", "clean-run"],
+                    "runs are ordered newest-claimed first")
+        check_equal(by_id["clean-run"]["observations"], evidence.OBSERVATIONS_NONE,
+                    "a clean run records no observations")
+        check_equal(by_id["clean-run"]["report"]["observation_count"], 0,
+                    "a clean report has zero OBS sections")
+        check_equal(by_id["clean-run"]["report"]["status"], evidence.REPORT_AVAILABLE,
+                    "a clean report is readable")
+        check_equal(by_id["observed-run"]["observations"], evidence.OBSERVATIONS_RECORDED,
+                    "an observed run records observations")
+        check_equal(by_id["observed-run"]["report"]["observation_count"], 2,
+                    "both OBS sections are counted")
+        check_equal(by_id["observed-run"]["report"]["interpretation_status"], "observations",
+                    "the report's own interpretation status is surfaced")
+        check_equal(result["diagnostics"], [], "readable reports produce no diagnostic")
+
+
+def test_incomplete_run_reports_unavailable_not_false() -> None:
+    """An active or partially recorded run is surfaced, with nulls."""
+    with tempfile.TemporaryDirectory() as tmp:
+        active = make_run(
+            "probe:role", "active-run", status="running",
+            execution_status="not-run", interpretation_outcome="pending",
+            completed_at=None, elapsed_seconds=None, test_exit_code=None,
+        )
+        del active["completed_at"], active["elapsed_seconds"], active["test_exit_code"]
+        legacy = make_run("probe:role", "legacy-run", claimed_at="2026-08-01T00:00:00Z")
+        for field in ("execution_status", "interpretation_outcome", "elapsed_seconds",
+                      "revision_subject", "test_exit_code"):
+            del legacy[field]
+        state = build_state(Path(tmp), [active, legacy], {})
+        active["report_path"] = report_path(state, "active-run")   # not written yet
+        build_state(Path(tmp), [active, legacy], {})
+
+        with NonInteraction(state) as guard:
+            result = read(state, "role")
+            guard.assert_untouched("incomplete runs")
+
+        by_id = {r["run_id"]: r for r in result["runs"]}
+        run = by_id["active-run"]
+        check_equal(run["run_state"], "running", "an active run keeps its state")
+        check_equal(run["execution_status"], "not-run", "its mechanical status is surfaced")
+        check_equal(run["duration_seconds"], None, "an unrecorded duration is None")
+        check_equal(run["exit_code"], None, "an unrecorded exit code is None")
+        check_equal(run["observations"], evidence.OBSERVATIONS_UNAVAILABLE,
+                    "a pending interpretation is unavailable, not 'none'")
+        check_equal(run["report"]["status"], evidence.REPORT_ABSENT,
+                    "a report that does not exist yet is absent")
+
+        old = by_id["legacy-run"]
+        check_equal(old["execution_status"], None, "a missing mechanical status is None")
+        check_equal(old["exit_code"], None, "a missing exit code is None")
+        check_equal(old["duration_seconds"], None, "a missing duration is None")
+        check_equal(old["tested_commit"], active["revision"],
+                    "a legacy record still reports its provenance")
+        check_equal(old["observations"], evidence.OBSERVATIONS_UNAVAILABLE,
+                    "a missing interpretation is unavailable")
+        check_equal(old["report"]["status"], evidence.REPORT_NOT_RECORDED,
+                    "a record with no report_path records no report")
+        check_equal(result["diagnostics"], [],
+                    "an incomplete record is data, not damage")
+
+
+def test_mechanical_outcome_is_not_inferred_from_interpretation() -> None:
+    """Execution status comes from the registry, never from the report."""
+    with tempfile.TemporaryDirectory() as tmp:
+        failed = make_run("probe:role", "failed-but-clean-report",
+                          execution_status="failed", test_exit_code=1,
+                          interpretation_outcome="observations")
+        state = build_state(Path(tmp), [failed],
+                            {"failed-but-clean-report": ("clean", 0)})
+        failed["report_path"] = report_path(state, "failed-but-clean-report")
+        build_state(Path(tmp), [failed], {"failed-but-clean-report": ("clean", 0)})
+
+        with NonInteraction(state) as guard:
+            result = read(state, "role")
+            guard.assert_untouched("mechanical vs interpreted")
+
+        run = result["runs"][0]
+        check_equal(run["execution_status"], "failed",
+                    "the mechanical outcome is the registry's, not the report's")
+        check_equal(run["exit_code"], 1, "the recorded exit code is surfaced")
+        check_equal(run["report"]["interpretation_status"], "clean",
+                    "the report's disagreeing interpretation is reported beside it")
+        check_equal(run["observations"], evidence.OBSERVATIONS_RECORDED,
+                    "the registry's interpretation drives observation status")
+
+
+def test_missing_and_malformed_reports_are_non_fatal() -> None:
+    """Damaged report state diagnoses; it never fails or drops the run."""
+    with tempfile.TemporaryDirectory() as tmp:
+        runs = [
+            make_run("probe:role", "unreadable-run", claimed_at="2026-08-14T00:00:00Z"),
+            make_run("probe:role", "headless-run", claimed_at="2026-08-13T00:00:00Z"),
+        ]
+        state = build_state(Path(tmp), runs, {"headless-run": ("clean", 0)})
+        for record in runs:
+            record["report_path"] = report_path(state, record["run_id"])
+        build_state(Path(tmp), runs, {"headless-run": ("clean", 0)})
+
+        # A report with no frontmatter at all, and one that is not UTF-8.
+        Path(report_path(state, "headless-run")).write_text(
+            "# Test result\n\n### OBS-001 — one\n", encoding="utf-8")
+        Path(report_path(state, "unreadable-run")).write_bytes(b"\xff\xfe\x00 not utf-8")
+
+        with NonInteraction(state) as guard:
+            result = read(state, "role")
+            guard.assert_untouched("damaged reports")
+
+        by_id = {r["run_id"]: r for r in result["runs"]}
+        check_equal(len(result["runs"]), 2, "both runs are still reported")
+        check_equal(by_id["unreadable-run"]["report"]["status"], evidence.REPORT_UNREADABLE,
+                    "a non-decodable report is unreadable")
+        check_equal(by_id["unreadable-run"]["execution_status"], "passed",
+                    "a damaged report does not disturb the mechanical fields")
+        check_equal(by_id["headless-run"]["report"]["status"], evidence.REPORT_AVAILABLE,
+                    "a frontmatter-less report is still read")
+        check_equal(by_id["headless-run"]["report"]["observation_count"], 1,
+                    "its OBS section is still counted")
+        check_equal(by_id["headless-run"]["report"]["interpretation_status"], None,
+                    "it carries no interpretation status")
+        check(any("unreadable-run" in d for d in result["diagnostics"]),
+              "the unreadable report is diagnosed", str(result["diagnostics"]))
+        check(any("frontmatter" in d for d in result["diagnostics"]),
+              "the frontmatter-less report is diagnosed", str(result["diagnostics"]))
+
+
+def test_report_reads_are_confined_to_the_reports_directory() -> None:
+    """A recorded path never widens read scope."""
+    with tempfile.TemporaryDirectory() as tmp:
+        outside = Path(tmp) / "outside.test-result.md"
+        outside.write_text(SENTINEL + "\n### OBS-001 — leaked\n", encoding="utf-8")
+
+        runs = [
+            make_run("probe:role", "absolute-escape", claimed_at="2026-08-15T00:00:00Z"),
+            make_run("probe:role", "traversal-escape", claimed_at="2026-08-14T00:00:00Z"),
+            make_run("probe:role", "symlink-escape", claimed_at="2026-08-13T00:00:00Z"),
+            make_run("probe:role", "wrong-suffix", claimed_at="2026-08-12T00:00:00Z"),
+            make_run("probe:role", "nested", claimed_at="2026-08-11T00:00:00Z"),
+        ]
+        state = build_state(Path(tmp), runs, {})
+        reports = state / evidence.REPORTS_DIRNAME
+        os.symlink(outside, reports / ("symlink-escape" + evidence.REPORT_SUFFIX))
+        (reports / "wrong-suffix.md").write_text(SENTINEL, encoding="utf-8")
+        (reports / "nested").mkdir()
+        (reports / "nested" / ("nested" + evidence.REPORT_SUFFIX)).write_text(
+            SENTINEL, encoding="utf-8")
+
+        paths = {
+            "absolute-escape": str(outside),
+            "traversal-escape": str(reports / ".." / ".." / "outside.test-result.md"),
+            "symlink-escape": report_path(state, "symlink-escape"),
+            "wrong-suffix": str(reports / "wrong-suffix.md"),
+            "nested": str(reports / "nested" / ("nested" + evidence.REPORT_SUFFIX)),
+        }
+        for record in runs:
+            record["report_path"] = paths[record["run_id"]]
+        build_state(Path(tmp), runs, {})
+
+        with NonInteraction(state) as guard:
+            with RecordReads() as reads:
+                result = read(state, "role")
+            guard.assert_untouched("confined report reads")
+
+        scope = reports.resolve()
+        escaped = [p for p in reads.paths
+                   if p.resolve() != (state / evidence.REGISTRY_FILENAME).resolve()
+                   and p.resolve().parent != scope]
+        check(not escaped, "no file outside reports/ is opened at all",
+              str([str(p) for p in escaped]))
+        check(outside.resolve() not in [p.resolve() for p in reads.paths],
+              "the out-of-scope target is never opened")
+        rendered = evidence.render(result) + json.dumps(result)
+        check(SENTINEL not in rendered,
+              "no out-of-scope file content reaches the output")
+        for run in result["runs"]:
+            check_equal(run["report"]["status"], evidence.REPORT_OUT_OF_SCOPE,
+                        f"{run['run_id']} is refused as out of scope")
+            check_equal(run["report"]["observation_count"], None,
+                        f"{run['run_id']} contributes no observation count")
+        check_equal(len(result["diagnostics"]), len(runs),
+                    "each refusal is diagnosed exactly once")
+
+
+def test_absent_state_is_success_not_error() -> None:
+    """An absent `codex-test` tree is the normal no-evidence result."""
+    with tempfile.TemporaryDirectory() as tmp:
+        missing = Path(tmp) / "no-such-state"
+        result = read(missing, "role")
+        check_equal(result["state"], evidence.STATE_ABSENT, "the state reads as absent")
+        check_equal(result["runs"], [], "no runs are reported")
+        check_equal(result["diagnostics"], [], "absence is not a diagnostic")
+        check_equal(result["test_id"], "probe:role", "the mapped id is still reported")
+        check(not missing.exists(), "resolving absent state creates nothing")
+        check_equal(evidence.main(["--probe", "role", "--state-root", str(missing)]),
+                    evidence.EXIT_OK, "the CLI exits 0 on absent state")
+        check("no external evidence" in evidence.render(result),
+              "the rendering says so plainly")
+
+
+def test_damaged_registry_is_non_fatal() -> None:
+    """A malformed or missing registry diagnoses; it never raises."""
+    with tempfile.TemporaryDirectory() as tmp:
+        state = build_state(Path(tmp), [make_run("probe:role", "run")], {})
+        (state / evidence.REGISTRY_FILENAME).write_text("{ not json", encoding="utf-8")
+        with NonInteraction(state) as guard:
+            result = read(state, "role")
+            guard.assert_untouched("malformed registry")
+        check_equal(result["state"], evidence.STATE_PRESENT, "the state is still present")
+        check_equal(result["runs"], [], "an unparseable registry yields no runs")
+        check(any("cannot parse" in d for d in result["diagnostics"]),
+              "the parse failure is diagnosed", str(result["diagnostics"]))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state = build_state(Path(tmp), [], {})
+        (state / evidence.REGISTRY_FILENAME).unlink()
+        result = read(state, "role")
+        check(any("does not" in d for d in result["diagnostics"]),
+              "a missing registry beside present state is diagnosed",
+              str(result["diagnostics"]))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state = build_state(Path(tmp), [make_run("probe:role", "run")], {},
+                            schema="codex-test-coordinator/v99")
+        result = read(state, "role")
+        check(any("v99" in d for d in result["diagnostics"]),
+              "an unexpected schema is diagnosed", str(result["diagnostics"]))
+        check_equal([r["run_id"] for r in result["runs"]], ["run"],
+                    "an unexpected schema is still read best-effort")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state = build_state(Path(tmp), [], {})
+        document = json.loads((state / evidence.REGISTRY_FILENAME).read_text())
+        document["runs"] = ["not-an-object", make_run("probe:role", "good")]
+        (state / evidence.REGISTRY_FILENAME).write_text(json.dumps(document))
+        result = read(state, "role")
+        check_equal([r["run_id"] for r in result["runs"]], ["good"],
+                    "a malformed record is skipped, the good one kept")
+        check(any("not an object" in d for d in result["diagnostics"]),
+              "the malformed record is diagnosed", str(result["diagnostics"]))
+
+
+def test_full_history_is_never_truncated() -> None:
+    """No default limit silently drops known history."""
+    with tempfile.TemporaryDirectory() as tmp:
+        runs = [
+            make_run("probe:role", f"run-{index:03d}",
+                     claimed_at=f"2026-08-{(index % 28) + 1:02d}T{index % 24:02d}:00:00Z")
+            for index in range(60)
+        ]
+        runs.append(make_run("probe:chop", "unrelated"))
+        state = build_state(Path(tmp), runs, {})
+        with NonInteraction(state) as guard:
+            result = read(state, "role")
+            guard.assert_untouched("full history")
+        check_equal(len(result["runs"]), 60, "every matching run is reported")
+        claimed = [r["claimed_at"] for r in result["runs"]]
+        check_equal(claimed, sorted(claimed, reverse=True),
+                    "the whole history stays newest-first")
+
+
+def test_presentation_only() -> None:
+    """The reader is not wired into the lab's statistics."""
+    source = Path(evidence.__file__).read_text(encoding="utf-8")
+    check("import probe_census" not in source,
+          "the reader does not import the census")
+    check("import probe_flake" not in source,
+          "the reader does not import the flake harness")
+    check(not hasattr(evidence, "probe_census"),
+          "the reader exposes no census handle")
+    for forbidden in ("write_text", "write_bytes", "mkdir", "os.replace", "flock"):
+        check(f"{forbidden}(" not in source,
+              f"the reader contains no {forbidden} call")
+
+
+def test_state_root_resolves_through_the_common_git_dir() -> None:
+    """A linked worktree resolves to the MAIN checkout's git directory."""
+    if shutil.which("git") is None:                       # pragma: no cover
+        check(False, "git is available for the resolution case")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        main = Path(tmp) / "main"
+        main.mkdir()
+        env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
+
+        def git(*args: str, cwd: Path = main) -> None:
+            subprocess.run(["git", "-C", str(cwd), *args], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+
+        git("init", "-q", "-b", "main")
+        git("config", "user.email", "test@example.com")
+        git("config", "user.name", "Test")
+        (main / "file.txt").write_text("x\n", encoding="utf-8")
+        git("add", "file.txt")
+        git("commit", "-qm", "seed")
+        linked = Path(tmp) / "linked"
+        git("worktree", "add", "-q", "--detach", str(linked))
+
+        expected = (main / ".git" / evidence.STATE_DIRNAME).resolve()
+        check_equal(evidence.resolve_state_root(main).resolve(), expected,
+                    "the main checkout resolves to its own git dir")
+        check_equal(evidence.resolve_state_root(linked).resolve(), expected,
+                    "a linked worktree resolves to the MAIN git dir")
+        check(not (linked / ".git").is_dir(),
+              "the linked worktree's .git is a pointer file, not a directory")
+        check(not expected.exists(), "resolution creates no state tree")
+
+        outside = Path(tmp) / "not-a-repo"
+        outside.mkdir()
+        try:
+            evidence.resolve_state_root(outside)
+            check(False, "a non-repository is rejected")
+        except evidence.EvidenceRejected as exc:
+            check("common directory" in str(exc),
+                  "the rejection explains what could not be resolved", str(exc))
+
+
+def test_render_is_total() -> None:
+    """Every field renders, including when all of them are unavailable."""
+    with tempfile.TemporaryDirectory() as tmp:
+        bare = {"test_id": "probe:role", "run_id": "bare", "status": "claimed"}
+        state = build_state(Path(tmp), [bare], {})
+        result = read(state, "role")
+        text = evidence.render(result)
+        check("bare" in text, "the run id renders")
+        check(text.count("unavailable") >= 4,
+              "every unavailable field renders as unavailable", text)
+        check("presentation only" in text, "the presentation-only note renders")
+        json.dumps(result)  # raises if a value is not JSON-serializable
+        check(True, "the evidence document is JSON-serializable")
+
+
+def main() -> int:
+    cases = [
+        test_identity_mapping,
+        test_unknown_key_is_rejected,
+        test_exact_matching,
+        test_clean_and_observed_reports,
+        test_incomplete_run_reports_unavailable_not_false,
+        test_mechanical_outcome_is_not_inferred_from_interpretation,
+        test_missing_and_malformed_reports_are_non_fatal,
+        test_report_reads_are_confined_to_the_reports_directory,
+        test_absent_state_is_success_not_error,
+        test_damaged_registry_is_non_fatal,
+        test_full_history_is_never_truncated,
+        test_presentation_only,
+        test_state_root_resolves_through_the_common_git_dir,
+        test_render_is_total,
+    ]
+    for case in cases:
+        try:
+            case()
+        except Exception as exc:                          # noqa: BLE001
+            FAILURES.append(f"{case.__name__} raised {type(exc).__name__}: {exc}")
+    print(f"probe_external_evidence self-test: {PASSED} checks passed, "
+          f"{len(FAILURES)} failed")
+    for failure in FAILURES:
+        print(f"  FAIL {failure}")
+    return 1 if FAILURES else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
