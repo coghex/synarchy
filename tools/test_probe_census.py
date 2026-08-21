@@ -993,6 +993,24 @@ def test_cli() -> None:
             expect(all(row["census"] == probe_census.empty_census()
                        for row in document["probes"]),
                    "--print gives every row an empty census record")
+            # Returning early must not be a hole in the companion-flag
+            # rules: a misused flag is an error for EVERY operation.
+            code, out, err = cli("--print", "--probe", "alpha")
+            expect(code == 1 and "--probe" in err and out == "",
+                   "--print --probe is an argument error, not a silent print")
+            code, out, err = cli("--print", "--probe", "")
+            expect(code == 1 and "--probe" in err and out == "",
+                   "an empty --probe is still a supplied --probe")
+            code, out, err = cli("--print", "--justification", "x")
+            expect(code == 1 and "--justification" in err and out == "",
+                   "--print --justification is an argument error")
+            code, _, err = cli("--validate", "--justification", "x")
+            expect(code == 1 and "--justification" in err,
+                   "--validate --justification is an argument error, checked "
+                   "before the docs worktree is resolved")
+            code, _, err = cli("--record", "/nonexistent.json", "--probe", "a")
+            expect(code == 1 and "--probe" in err,
+                   "--record takes no --probe: it names its row itself")
         except AssertionError as error:
             expect(False, str(error))
         finally:
@@ -1083,7 +1101,7 @@ def test_cli() -> None:
         code, _, err = cli("--set-acceptable-failures", "2", "--justification",
                            "none", "--probe", "")
         expect(code == 1 and "--probe" in err,
-               "an empty --probe is no --probe at all")
+               "an empty --probe is no --probe at all for a policy update")
         code, _, err = cli("--record", str(good), "--justification", "x")
         expect(code == 1 and "--justification" in err,
                "--justification without --set-acceptable-failures exits 1")

@@ -1080,21 +1080,32 @@ def _optional_number(text: str, what: str) -> float | int | None:
     return value
 
 
-def _policy_fields(args) -> dict:
-    """The `set_policy` keywords the CLI arguments select.
+def _companion_arguments(args) -> dict | None:
+    """The `set_policy` keywords the CLI arguments select, or None.
 
-    Every argument-combination error lands here, before the census is
-    read or written.
+    EVERY argument-combination error lands here, and this runs before
+    any operation dispatches — including `--print`, which would
+    otherwise let `--probe`/`--justification` through unchecked simply
+    by returning early. Nothing here reads or writes the census, and
+    nothing here resolves the docs worktree.
     """
     setting_x = args.set_acceptable_failures is not None
     setting_estimate = args.set_estimate is not None
+    policy = setting_x or setting_estimate
+    # `is not None`, not truthiness: `--probe ""` was still supplied.
+    if args.probe is not None and not policy:
+        raise CensusError(
+            "--probe is only used by --set-acceptable-failures and "
+            "--set-estimate")
+    if args.justification is not None and not setting_x:
+        raise CensusError(
+            "--justification is only valid with --set-acceptable-failures")
+    if not policy:
+        return None
     if setting_x and setting_estimate:
         raise CensusError(
             "--set-acceptable-failures and --set-estimate update different "
             "policy fields; use one per invocation")
-    if args.justification is not None and not setting_x:
-        raise CensusError(
-            "--justification is only valid with --set-acceptable-failures")
     if not args.probe:
         raise CensusError("--probe KEY is required for a policy update")
     if setting_x:
@@ -1134,23 +1145,21 @@ def main(argv: list[str] | None = None) -> int:
                          "clear it); omit to leave it unchanged")
     args = ap.parse_args(argv)
 
+    # Argument validation runs FIRST, for every operation. `--print`
+    # returns without touching the filesystem, but it must not be a hole
+    # through which a misused companion flag passes unreported.
+    try:
+        fields = _companion_arguments(args)
+    except CensusError as error:
+        print(f"probe_census: {error}", file=sys.stderr)
+        return 1
+
     # `--print` must never require, read or create the docs worktree:
     # that is what lets a fresh checkout run it.
     if args.do_print:
         sys.stdout.write(render_manifest())
         return 0
     try:
-        policy = (args.set_acceptable_failures is not None
-                  or args.set_estimate is not None)
-        if args.probe and not policy:
-            raise CensusError(
-                "--probe is only used by --set-acceptable-failures and "
-                "--set-estimate")
-        if args.justification is not None and not policy:
-            raise CensusError(
-                "--justification is only valid with --set-acceptable-failures")
-        fields = _policy_fields(args) if policy else None
-
         path = manifest_path()
         if args.seed:
             document = ensure_document(path)
