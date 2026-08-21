@@ -1,11 +1,22 @@
 -- test/Spec.hs
+--
+-- BUILD-ONLY IN AUTOMATED GATES (#1153). Both CI
+-- (`.github/workflows/ci.yml`) and `make ci` (`tools/ci-local.sh`)
+-- COMPILE this suite and never run it: `main` below calls `GLFW.init`
+-- and creates a real window, `error`ing on either failure, before
+-- `hspec` is ever reached — so on a machine with no display it produces
+-- no assertions at all, not a partial run. Running it by hand on a
+-- graphics-capable desktop still works and is the only way it executes.
+--
+-- Every spec that needs no display now lives in
+-- `synarchy-test-headless`, which every CI run does execute:
+-- `Test.Headless.UPrelude`, `Test.Headless.Core.Queue` and
+-- `Test.Headless.Input.State`. Do not add a GPU-free spec here — it
+-- would be hostage to the display this suite requires.
 module Main where
 
 import UPrelude
 import Test.Hspec
-import qualified Test.UPrelude as UPrelude
-import qualified Test.Engine.Core.Queue as CoreQueue
-import qualified Test.Engine.Input.State as InputState
 import qualified Test.Engine.Graphics.Window.GLFW as TestGLFW
 import qualified Test.Engine.Graphics.Vulkan.Instance as VulkanInstance
 import qualified Test.Engine.Graphics.Vulkan.Surface as VulkanSurface
@@ -53,11 +64,10 @@ main = do
         _ → error "Failed to create GLFW window"
 
     hspec $ do
-        -- Core tests (no graphics dependencies)
-        describe "Core Tests" $ do
-            describe "UPrelude" UPrelude.spec
-            describe "Engine.Core.Queue" CoreQueue.spec
-            describe "Engine.Input.State" InputState.spec
+        -- Every spec below needs the GLFW window created above: the
+        -- GLFW specs query it, and the Vulkan surface/device specs pass
+        -- it to `createWindowSurface`. The GPU-free specs moved to
+        -- `synarchy-test-headless` in #1153.
         -- GLFW tests
         describe "GLFW Tests" $ TestGLFW.spec env initialState
         -- Vulkan tests
