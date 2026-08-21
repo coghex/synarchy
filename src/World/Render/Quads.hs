@@ -289,7 +289,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                           i = zSlice - ctStartZ col
                           hasTile = i ≥ 0
                                   ∧ i < VU.length (ctMats col)
-                                  ∧ ctMats col VU.! i ≠ 0
+                                  ∧ ctMats col VU.! i ≢ 0
                     , not hasTile
                     , let (gx, gy) = chunkToGlobal coord lx ly
                           (rawX, rawY) = gridToScreen facing gx gy
@@ -471,13 +471,13 @@ structureFrontWallClear facing worldSize zSlice structLookup gx gy =
                 (la, lb) = applyFacing facing (wgx + 1) (wgy + 1)
                 localDepth = la + lb
             if spriteDepth < localDepth   -- sprite is NOT fully in front
-               ∨ scDepth ≠ localDepth     -- frames disagree (E/W seam)
+               ∨ scDepth ≢ localDepth     -- frames disagree (E/W seam)
                then Nothing
                else Just (fromIntegral scDepth
                           + fromIntegral (spdGridZ spd - zSlice) * 0.001
                           + tieB)
         cands = [ wallKeyAt (gx + dx) (gy + dy) tag tieB
-                | dx ← [-2 .. 2], dy ← [-2 .. 2], (dx, dy) ≠ (0, 0)
+                | dx ← [-2 .. 2], dy ← [-2 .. 2], (dx, dy) ≢ (0, 0)
                 , (tag, tieB) ← [(seTag, 0.0006 ∷ Float), (swTag, 0.0005)] ]
     in case [ k | Just k ← cands ] of
          [] → Nothing

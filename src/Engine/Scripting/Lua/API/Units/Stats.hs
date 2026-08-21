@@ -421,7 +421,7 @@ unitAddModifierFn env = do
                             let existing = HM.lookupDefault []
                                               name (uiModifiers inst)
                                 -- Drop any prior entry from the same source.
-                                others = filter (\m → smSource m ≠ src)
+                                others = filter (\m → smSource m ≢ src)
                                                 existing
                                 newList = mod' : others
                                 inst' = inst { uiModifiers =
@@ -458,7 +458,7 @@ unitRemoveModifierFn env = do
                                               (\m → smSource m ≡ src) ms)
                                           | ms ← HM.elems mods ]
                                 pruned = HM.map (filter
-                                            (\m → smSource m ≠ src)) mods
+                                            (\m → smSource m ≢ src)) mods
                                 -- Drop now-empty entries to keep the
                                 -- map tidy.
                                 pruned' = HM.filter (not . null) pruned

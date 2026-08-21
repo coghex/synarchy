@@ -74,7 +74,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
         handoff  = toRenderHandoffCapability env
         (worldSize, placeCount) =
             normalizeWorldGenInputs rawWorldSize rawPlaceCount
-    when (worldSize ≠ rawWorldSize ∨ placeCount ≠ rawPlaceCount) $ do
+    when (worldSize ≢ rawWorldSize ∨ placeCount ≢ rawPlaceCount) $ do
         let msg = "Normalized worldgen inputs: worldSize "
                 <> T.pack (show rawWorldSize) <> " → "
                 <> T.pack (show worldSize) <> ", plateCount "

@@ -138,7 +138,7 @@ computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles
         -- downhill neighbour is flat-topped and stays blocky) and the
         -- jaggedness intensity.
         drops = [ z - nz | nz ← [neighN, neighE, neighS, neighW]
-                         , nz ≠ minBound, nz < z ]
+                         , nz ≢ minBound, nz < z ]
         maxDrop = if null drops then 0 else maximum drops
     in if myHasFluid
        -- Wet tiles (river bed / basin floor) keep the existing rule
@@ -173,7 +173,7 @@ slopeBit myHasFluid myZ neighborZ nlx nly coord fluidMap _neighborLookup =
         -- re-runs this border strip, so the slope always reflects the
         -- currently loaded set — not the load order. Cross-SEAM neighbours
         -- resolve correctly because that recompute wraps the lookup coord.
-        neighborLoaded = neighborZ ≠ minBound
+        neighborLoaded = neighborZ ≢ minBound
 
         -- Dry land keeps the strict single-step terrace rule (a neighbour
         -- exactly one lower). A WET tile additionally slopes toward any

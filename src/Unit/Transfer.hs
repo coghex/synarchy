@@ -791,7 +791,7 @@ commitBatch scene batch = go scene (tbEntries batch) [] []
   where
     go _  []       es cs = (batch { tbEntries = reverse es }, reverse cs)
     go sc (q : qs) es cs
-        | qtState q ≠ TransferReadyToCommit = go sc qs (q : es) cs
+        | qtState q ≢ TransferReadyToCommit = go sc qs (q : es) cs
         | otherwise =
             case commitItem sc (tbSource batch) (tbDestination batch)
                              (qtItem q) of

@@ -125,7 +125,7 @@ clearConstructSlope (gx, gy) cd lc
     | otherwise =
         let mask = digSlopeMask (constructCorners (cdProgress cd))
         in case constructSlopeAt (gx, gy) (cdZ cd) lc of
-            Just cur | cur ≡ mask ∧ mask ≠ 0 →
+            Just cur | cur ≡ mask ∧ mask ≢ 0 →
                 applyCornerSlopeToChunk (gx, gy) (cdZ cd)
                     (1.0, 1.0, 1.0, 1.0) lc
             _ → lc

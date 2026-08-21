@@ -195,7 +195,7 @@ composeFluidMap params coord terrainMap =
                -- floods into water, so a conflict here means a
                -- shoreline tile both tables claim — lava wins and
                -- the shell mask downstream turns the rim to basalt.
-               else if lvSurf ≠ minBound ∧ lvSurf ≥ terrZ
+               else if lvSurf ≢ minBound ∧ lvSurf ≥ terrZ
                     then Just (FluidCell Lava lvSurf)
                else if isOcean
                     then Just (FluidCell Ocean seaLevel)
@@ -203,9 +203,9 @@ composeFluidMap params coord terrainMap =
                       -- River > Lake. By construction river tiles
                       -- aren't inside any lake, but defensive priority
                       -- keeps the picture consistent at edges.
-                      if rvSurf ≠ minBound ∧ rvSurf ≥ terrZ
+                      if rvSurf ≢ minBound ∧ rvSurf ≥ terrZ
                       then Just (FluidCell River rvSurf)
-                      else if lkSurf ≠ minBound ∧ lkSurf ≥ terrZ
+                      else if lkSurf ≢ minBound ∧ lkSurf ≥ terrZ
                            then Just (FluidCell Lake lkSurf)
                            else Nothing
 
@@ -291,7 +291,7 @@ lavaShellMask params coord terrAt fluid =
                 ly = idx `div` chunkSize
             in or [ adjNonLava (lx + dx) (ly + dy)
                   | dx ← [-1, 0, 1], dy ← [-1, 0, 1]
-                  , (dx, dy) ≠ (0, 0)
+                  , (dx, dy) ≢ (0, 0)
                   ]
         _ → False
     -- Within-chunk: read local fluid (authoritative, sees pools).
@@ -337,7 +337,7 @@ poolSurfAtGlobal params gx gy =
 isLavaAtGlobal ∷ WorldGenParams → Int → Int → Maybe Int → Bool
 isLavaAtGlobal params gx gy mExactTerr =
     let tz = case mExactTerr of
-            Just z | z ≠ minBound → z
+            Just z | z ≢ minBound → z
             _ → fst (elevationAtGlobal (wgpSeed params)
                                        (wgpPlates params)
                                        (wgpWorldSize params) gx gy)
@@ -381,14 +381,14 @@ poolRimCaps params coord terrAt = HM.fromList
           gy = baseGY + ly
           mTz = terrAt lx ly
     , Just tz ← [mTz]
-    , tz ≠ minBound
+    , tz ≢ minBound
     , Just surf ← [poolSurfAtGlobal params gx gy]
     , surf ≥ tz                      -- pool actually places lava here
     , any (\(dx, dy) →
             not (isLavaAtGlobal params (gx + dx) (gy + dy)
                                  (terrAt (lx + dx) (ly + dy))))
           [ (dx, dy) | dx ← [-1, 0, 1], dy ← [-1, 0, 1]
-                     , (dx, dy) ≠ (0, 0) ]
+                     , (dx, dy) ≢ (0, 0) ]
     ]
   where
     ChunkCoord cx cy = coord
@@ -440,7 +440,7 @@ applyLavaShell shell terrain isOceanic fluid
     clear idx cell
         | shell VU.! idx =
             let terrZ = terrain VU.! idx
-            in if isOceanic ∧ terrZ ≤ seaLevel ∧ terrZ ≠ minBound
+            in if isOceanic ∧ terrZ ≤ seaLevel ∧ terrZ ≢ minBound
                then Just (FluidCell Ocean seaLevel)
                else Nothing
         | otherwise = cell

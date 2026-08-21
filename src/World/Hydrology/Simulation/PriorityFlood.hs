@@ -121,7 +121,7 @@ fillDepressions grid =
                         pure (if rk1 < sk1 ∨ (rk1 ≡ sk1 ∧ rk2 < sk2)
                               then right else smallest1)
                     else pure smallest1
-                when (smallest2 ≠ i) $ do
+                when (smallest2 ≢ i) $ do
                     -- Swap
                     ik1 ← VUM.read heapK1 i
                     ik2 ← VUM.read heapK2 i
