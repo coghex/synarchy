@@ -74,7 +74,6 @@ import World.Types
     ( WorldCommand(..), WorldManager(wmWorlds)
     , WorldState(wsGenParamsRef, wsTimeScaleRef) )
 import World.Page.Types (WorldPageId(..))
-import World.Thread.Helpers (unWorldPageId)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import qualified Data.Set as Set
 import Engine.Save.Barrier

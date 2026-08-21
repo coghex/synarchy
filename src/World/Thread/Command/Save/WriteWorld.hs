@@ -40,7 +40,6 @@ import World.Save.Payload (LuaComponentSpec(..))
 import Unit.Types (UnitManager(..), unitsOnPage)
 import Building.Types (BuildingManager(bmNextId))
 import Unit.Sim.Types (UnitThreadState(..))
-import World.Thread.Helpers (unWorldPageId)
 import Engine.PlayerEvent.Emit (emitEvent)
 import Engine.Save.Barrier
     (releaseCaptureLock, finishSave, failSave, readSaveStatus, ssRequestId)

@@ -167,9 +167,6 @@ renderIntegrityReport report =
         \finding(s) omitted (see World.Save.Integrity.integrityErrorCap)"
        | irOmitted report > 0 ]
 
-pidText ∷ WorldPageId → Text
-pidText (WorldPageId t) = t
-
 -- | The generic same-page/global/permitted-cross-page decision
 --   (requirement 4). Given the scope a field declares, the page the
 --   referencing record lives on, and EVERY page the target actually
@@ -208,12 +205,12 @@ refEdgeError cid ver path kind scope sourcePage foundPages val =
     mkErr p = IntegrityError
         { ieComponent = cid, ieVersion = ver, iePath = path
         , ieRefKind = kind, ieRefValue = val
-        , ieExpectedScope = "same page ('" <> pidText sourcePage <> "')"
-        , ieActual = "found on page '" <> pidText p <> "'"
+        , ieExpectedScope = "same page ('" <> unWorldPageId sourcePage <> "')"
+        , ieActual = "found on page '" <> unWorldPageId p <> "'"
         , ieCode = "wrong-page"
         , ieMessage = refKindText kind <> " " <> val
-            <> " referenced from page '" <> pidText sourcePage
-            <> "' resolves only on page '" <> pidText p <> "'"
+            <> " referenced from page '" <> unWorldPageId sourcePage
+            <> "' resolves only on page '" <> unWorldPageId p <> "'"
         }
 
 -- | Every NEW structural integrity check this issue adds over a fully
@@ -253,7 +250,7 @@ sessionIntegrityErrors snap = concat
         [ err
         | (pid, page) ← HM.toList pages
         , (bid, bill) ← HM.toList (cbsBills (pgsCraftBills page))
-        , let path = "craft-bills[page=" <> pidText pid <> ",bill="
+        , let path = "craft-bills[page=" <> unWorldPageId pid <> ",bill="
                      <> T.pack (show (unBillId bid)) <> "].station"
         , Just err ← [ refEdgeError craftBillsComponentId 2 path RefBuilding
                          ScopeSamePage pid (buildingPages (cbStation bill))
@@ -265,7 +262,7 @@ sessionIntegrityErrors snap = concat
         | (pid, page) ← HM.toList pages
         , (bid, bill) ← HM.toList (cbsBills (pgsCraftBills page))
         , Just uid ← [ cbClaimant bill ]
-        , let path = "craft-bills[page=" <> pidText pid <> ",bill="
+        , let path = "craft-bills[page=" <> unWorldPageId pid <> ",bill="
                      <> T.pack (show (unBillId bid)) <> "].claimant"
         , Just err ← [ refEdgeError craftBillsComponentId 2 path RefUnit
                          ScopeSamePage pid (unitPages uid)
@@ -276,7 +273,7 @@ sessionIntegrityErrors snap = concat
         [ err
         | (pid, page) ← HM.toList pages
         , (nid, node) ← HM.toList (pnsNodes (pgsPowerNodes page))
-        , let path = "power-nodes[page=" <> pidText pid <> ",node="
+        , let path = "power-nodes[page=" <> unWorldPageId pid <> ",node="
                      <> T.pack (show (unPowerNodeId nid)) <> "].building"
         , Just err ← [ refEdgeError powerNodesComponentId 2 path RefBuilding
                          ScopeSamePage pid (buildingPages (pnBuilding node))
@@ -324,7 +321,7 @@ transferOrderRefs ∷ WorldPageId → TransferOrders → [OrderRef]
 transferOrderRefs pid orders = concatMap orderRefs (transferOrderList orders)
   where
     orderRefs o =
-        let at field = "transfer-orders[page=" <> pidText pid <> ",order="
+        let at field = "transfer-orders[page=" <> unWorldPageId pid <> ",order="
                        <> T.pack (show (unTransferOrderId (troId o))) <> "]."
                        <> field
         in endpointRef (at "unit") (EndpointUnit (troUnit o))
@@ -440,11 +437,11 @@ danglingOrderRefErrors pid entities orders =
         , iePath          = orfPath r
         , ieRefKind       = orfKind r
         , ieRefValue      = orfValue r
-        , ieExpectedScope = "same page ('" <> pidText pid <> "')"
+        , ieExpectedScope = "same page ('" <> unWorldPageId pid <> "')"
         , ieActual        = "not found in the loaded session"
         , ieCode          = "dangling-reference"
         , ieMessage       = refKindText (orfKind r) <> " " <> orfValue r
-            <> " referenced by a transfer order on page '" <> pidText pid
+            <> " referenced by a transfer order on page '" <> unWorldPageId pid
             <> "' does not resolve (tolerated: the order is retained)"
         }
     | r ← transferOrderRefs pid orders
@@ -507,7 +504,7 @@ duplicateGlobalIdErrors snap = concat
         | (val, ps) ← HM.toList (HM.fromListWith (++)
                           [ (v, [pid]) | (pid, v) ← entries ])
         , length ps > 1
-        , let pagesText = T.intercalate ", " (map pidText (L.sort ps))
+        , let pagesText = T.intercalate ", " (map unWorldPageId (L.sort ps))
         ]
 
 -- Lua reference validation --------------------------------------------

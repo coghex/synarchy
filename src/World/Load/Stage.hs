@@ -63,7 +63,6 @@ import Unit.Types (UnitManager(..), UnitId, UnitDef)
 import Unit.Faction (fallbackFaction, factionTag)
 import Unit.Sim.Types (UnitSimState)
 import World.Material (MaterialRegistry)
-import World.Thread.Helpers (unWorldPageId)
 import World.Thread.ChunkLoading (locationStampsFor)
 
 newtype StageError = StageError Text deriving (Eq, Show)

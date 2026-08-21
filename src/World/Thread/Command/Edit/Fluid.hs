@@ -17,7 +17,6 @@ import World.Generate.Coordinates (globalToChunk)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
 import World.Thread.Command.Edit.Sync (syncEditToSim)
-import World.Thread.Helpers (unWorldPageId)
 
 -- | Place one tile of fluid on top of the column at (gx, gy). Records
 --   the edit in the world's log; in-memory mutation uses the same

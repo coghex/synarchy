@@ -23,7 +23,6 @@ import Unit.Command.Types (UnitCommand(..))
 import Building.Command.Types (BuildingCommand(..))
 import Engine.Core.Log (logInfo, logDebug, LogCategory(..), LoggerState)
 import World.Types
-import World.Thread.Helpers (unWorldPageId)
 import World.Blood.Teardown (enqueueBloodDisposalForPage, enqueueBloodDisposalAll)
 
 handleWorldTickCommand ∷ EngineEnv → LoggerState → Double → IO ()

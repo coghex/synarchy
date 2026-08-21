@@ -15,9 +15,8 @@ import Engine.Core.Capability.WorldSim
 import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv)
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
-import World.Types (WorldPageId)
+import World.Types (WorldPageId(..))
 import World.Generate.Coordinates (localizeTileToAnchor)
-import World.Thread.Helpers (unWorldPageId)
 
 -- | Cap on the designation rectangle's side length. Guards against a
 --   misclick across the map turning into a 100k-tile designation.

@@ -21,7 +21,6 @@ import World.Generate.Coordinates (globalToChunk)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
 import Structure.Types (emptyChunkStructures)
-import World.Thread.Helpers (unWorldPageId)
 
 -- | Place a structure piece (floor/wall/post/ceiling) at (gx,gy,slot-tag) via
 --   the WeSetStructure edit path: live-apply to the loaded chunk's structure

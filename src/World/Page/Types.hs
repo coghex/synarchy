@@ -18,9 +18,21 @@ import Language.Semantic.Types (NameExpr)
 -- | 'Serialize' is derived from the underlying 'Text' (instance in
 --   UPrelude) so world-page ids can be persisted in saves — each page's
 --   id plus the active/visible-page lists land in 'SaveData' (#215).
-newtype WorldPageId = WorldPageId Text
-    deriving (Show, Eq, Ord)
+newtype WorldPageId = WorldPageId { unWorldPageId ∷ Text }
+    deriving (Eq, Ord)
     deriving newtype (Hashable, Serialize)
+
+-- | Written by hand rather than derived so the field label added in
+--   #1091 does NOT change what a 'WorldPageId' prints as. The stock
+--   record-syntax instance would render
+--   @WorldPageId {unWorldPageId = "main_world"}@, but this
+--   representation is load-bearing: 'Sim.Thread' and the
+--   'World.Save.Component' validation diagnostics render page ids
+--   through 'tshow', so that cleanup would have been behaviour-changing.
+--   This reproduces the pre-#1091 stock non-record derivation exactly.
+instance Show WorldPageId where
+    showsPrec d (WorldPageId t) =
+        showParen (d > 10) $ showString "WorldPageId " . showsPrec 11 t
 
 -- | Optional, immutable player-facing identity of a world page (#707):
 --   a non-empty display name plus an optional English gloss. This is

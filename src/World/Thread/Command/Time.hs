@@ -11,7 +11,6 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import World.Types
-import World.Thread.Helpers (unWorldPageId)
 
 handleWorldSetTimeCommand ∷ WorldSimCapability → LoggerState → WorldPageId → Int → Int → IO ()
 handleWorldSetTimeCommand wsc logger pageId hour minute = do
