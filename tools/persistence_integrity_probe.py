@@ -266,12 +266,36 @@ def main() -> int:
         # work outstanding; assert that rather than assuming it, so a
         # def change that made this instant-built fails loudly here
         # instead of making the whole scenario vacuous.
-        appearing = poll_until(20.0, lambda: send(args.port,
-            f"return tostring(building.getActivity({bid})) .. ',' .. "
-            f"tostring(building.getBuildRequired({bid}))").strip('"'))
-        if not appearing or not appearing.startswith("appearing,"):
-            sys.exit(f"FAIL (setup): building #{bid} is {appearing!r}, expected "
-                      f"an appearing site with build work outstanding")
+        #
+        # `building.spawn` only QUEUES a BuildingSpawn, so until the
+        # building thread drains it both accessors answer nil -- and
+        # "nil,nil" is a perfectly truthy Python string. Poll on the
+        # WANTED shape rather than on any answer at all, or the very
+        # first sample ends the wait and the assertion below aborts a
+        # setup that was merely not ready yet.
+        def site_state() -> str:
+            return send(args.port,
+                f"return tostring(building.getActivity({bid})) .. ',' .. "
+                f"tostring(building.getBuildRequired({bid}))").strip('"')
+
+        def site_is_a_build_target() -> str | None:
+            """`site_state()` once it reads "appearing,<work>" with the
+            work above zero -- the exact shape `findNearestUnbuilt`
+            accepts -- and None on every other answer, so the wait keeps
+            going instead of ending on the first sample."""
+            v = site_state()
+            activity, _, work = v.partition(",")
+            if activity != "appearing":
+                return None
+            try:
+                return v if float(work) > 0 else None
+            except ValueError:
+                return None
+
+        appearing = poll_until(20.0, site_is_a_build_target)
+        if not appearing:
+            sys.exit(f"FAIL (setup): building #{bid} is {site_state()!r}, "
+                      f"expected an appearing site with build work outstanding")
         # Bind to a local first: getTerrainAt yields more than one value,
         # and only the first (surface z) is wanted here.
         bz = int(float(send(args.port,
