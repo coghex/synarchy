@@ -725,24 +725,54 @@ pre-execution rejections (2), port exhaustion (3) and harness errors (4) — a
 malformed, truncated, duplicate, out-of-order or unclassifiable protocol
 event, which is never reported as a probe pass.
 
-### `probe_census.py` — the probe migration inventory (#1425)
+### `probe_census.py` — the probe census (#1425, #1428)
 
-Builds and validates `docs/probe_census.json`: every registered probe exactly
-once, with its script, its CI-eligible/manual-only classification and its
-protocol status (`legacy` or `probe-result/v1`). The manifest lives in the
+Builds, validates and updates `docs/probe_census.json`, now
+`probe-census/v2`: every registered probe exactly once, with its script, its
+CI-eligible/manual-only classification, its protocol status (`legacy` or
+`probe-result/v1`) and one census record holding the acceptable-failure
+policy, the estimated worst-case duration, the current commit cohort, the
+archived cohorts and an append-only attempt log. The census lives in the
 worktree whose branch is `docs-wip`, resolved BY BRANCH the way
 `tools/docs_land.sh` does — never a hard-coded path and never the primary
 checkout.
 
 ```bash
-python3 tools/probe_census.py --print       # what the live registry implies
-python3 tools/probe_census.py --seed        # write it into the docs worktree
-python3 tools/probe_census.py --validate    # check the seeded copy
+python3 tools/probe_census.py --print          # what the live registry implies
+python3 tools/probe_census.py --seed           # create/migrate in docs-wip
+python3 tools/probe_census.py --validate       # check the inventory
+python3 tools/probe_census.py --record R.json  # ingest one probe-flake-result/v1
+python3 tools/probe_census.py --probe KEY --set-acceptable-failures 2 \
+    --justification "two known engine-side races"
+python3 tools/probe_census.py --probe KEY --set-estimate 480
 ```
+
+`--print` never touches the docs worktree. `--seed` is the ONLY operation that
+migrates: it creates an absent census, migrates a `probe-census/v1` one
+losslessly, and reconciles inventory drift — appending newly registered
+probes, refreshing inventory metadata, retaining a row whose probe left the
+registry for a person to dispose of, and archiving a `current` cohort when a
+probe becomes CI-eligible. It never regenerates accumulated census data.
+`--record` and both policy operations refuse, naming `--seed`, when the census
+is absent or still v1.
+
+Every mutation is one locked read-modify-write: a cross-process `flock` keyed
+by the resolved target, held from the read through serialization and the
+preservation checks to a same-filesystem `os.replace`. Any failure before the
+replacement leaves the old bytes exactly as they were. Only summarized
+outcomes and external artifact references are stored — no stdout, no protocol
+stream, no engine log. Exit codes: 2 for a missing or unusable docs worktree,
+1 for inventory drift and every controlled refusal.
+
+Declared schema validation (`jsonschema`) is #1492 and the cross-field
+invariants are #1493; this tool reads only the fields its own operations need.
 
 Nothing at runtime reads it: `probe_flake.py` takes protocol status from its
 own in-repo `PROTOCOL_PROBES` and check identity from each probe's descriptor,
 so a checkout with no docs worktree behaves identically.
+
+`python3 tools/test_probe_census.py` is its deterministic, engine-free
+self-test.
 
 ### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets selection
 

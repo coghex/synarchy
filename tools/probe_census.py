@@ -4,33 +4,42 @@
 `docs/probe_census.json` is the de-flake lab's durable record. #1425
 seeded it as an INVENTORY — every registered probe exactly once, with
 its script, its CI-eligible/manual-only classification, and its protocol
-status (`legacy` or `probe-result/v1`). #1428 extends that SAME file
-with the measurements the lab accumulates. There is deliberately no
-second file and no 75-entry variant: the inventory covers every
-registered probe, and only manual-only entries carry current samples.
+status (`legacy` or `probe-result/v1`). #1428 extends that SAME file to
+`probe-census/v2` by adding the measurements the lab accumulates. There
+is deliberately no second file and no manual-only-subset variant: the
+inventory covers every registered probe, and only manual-only entries
+accumulate current samples.
 
 What a census record holds, for each probe:
 
 * `acceptable_failures` — X, the nullable acceptable-failure count for a
   commit cohort, with an optional justification. This module STORES the
-  supplied policy value; choosing it is somebody else's job.
+  supplied policy value; choosing it is #1430's job.
 * `estimated_worst_case_seconds` — supplied metadata, deliberately
   distinct from the OBSERVED `worst_elapsed_seconds` of a sample.
 * `current` — the current commit cohort: the cohort of the most recently
   accepted measurement commit. Another measurement for the SAME commit
   appends to it; a different commit archives the whole prior cohort into
-  `history` first. No history entry is ever overwritten or discarded.
+  `history` first. No cohort or sample is ever overwritten or discarded.
 * `history` — archived cohorts, append-only, retained forever. A probe
   promoted to CI eligibility keeps its history; it just stops receiving
   current samples.
 * `attempts` — an append-only log of well-formed ingestion attempts. A
   well-formed harness-error result is logged but contributes no sample
-  and no aggregate. Malformed input is REJECTED without touching the
-  census, so it cannot be logged here either.
+  and no aggregate.
 
 Only summarized outcomes and external artifact references live here.
 Raw stdout, protocol event streams and engine logs stay in the
 harness's artifact tree, outside every worktree.
+
+DECLARED SCHEMA VALIDATION IS NOT HERE. This module reads only the
+fields its own operations need, and refuses in a controlled way — no
+traceback, authoritative bytes untouched — when it cannot safely perform
+the requested action. Comprehensive shape/enum/range checking is #1492
+(a declared JSON Schema through `jsonschema`) and the cross-field
+invariants are #1493; a hand-edited document with a field removed,
+retyped, or made cross-field-inconsistent is deliberately NOT this
+module's problem.
 
 The census lives in the worktree whose branch is `docs-wip` and is NOT
 published as part of this work, so it is resolved BY BRANCH the way
@@ -44,19 +53,23 @@ identically.
 
 Every mutation is one locked read-modify-write. The lock is a real
 cross-process `flock`, keyed by the RESOLVED target path so two
-processes writing the same census always contend, and it is held from
-the initial read through candidate validation to the replacement.
-Replacement writes a same-filesystem temporary file and `os.replace`s
-it, so every observer sees either the complete old document or the
-complete validated new one — never a partial write, and never a stale
-temporary promoted to authoritative.
+processes writing the same census always contend and two different
+censuses never do, and it is held from the initial read through
+serialization and the preservation checks to the replacement.
+Replacement writes a same-filesystem staging file and `os.replace`s it,
+so every observer sees either the complete old document or the complete
+new one — never a partial write, and never a stale staging file
+promoted to authoritative.
+
+Exit codes: 0 success; 2 a missing or unusable docs worktree (carrying
+its actionable `git worktree add` message) and argparse's own usage
+errors; 1 inventory drift and every controlled refusal.
 
 Usage:
   python3 tools/probe_census.py --print            # the manifest, to stdout
   python3 tools/probe_census.py --seed             # create/migrate in docs-wip
   python3 tools/probe_census.py --validate         # check the docs-wip copy
   python3 tools/probe_census.py --record RESULT    # ingest one measurement
-  python3 tools/probe_census.py --show --probe KEY
   python3 tools/probe_census.py --probe KEY --set-acceptable-failures 2 \
       --justification "two known engine-side races"
   python3 tools/probe_census.py --probe KEY --set-estimate 480
@@ -68,26 +81,22 @@ import fcntl
 import json
 import math
 import os
-import re
 import stat
 import subprocess
 import sys
 import tempfile
 from contextlib import contextmanager
-from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ci_probes  # noqa: E402
 import probe_flake  # noqa: E402
-import probe_protocol  # noqa: E402
 import run_probes  # noqa: E402
 
 CENSUS_SCHEMA = "probe-census/v2"
 SEED_SCHEMA = "probe-census/v1"
-# `MANIFEST_SCHEMA` is the schema this module writes today. It is
-# deliberately the same name #1425 used: the inventory half of the
-# document did not change, only the version it is carried in.
+# The schema `--print`, `--seed` and `--validate` speak. Kept under the
+# #1425 name too, because that is what the manifest helpers are called.
 MANIFEST_SCHEMA = CENSUS_SCHEMA
 MIGRATABLE_SCHEMAS = (SEED_SCHEMA, CENSUS_SCHEMA)
 
@@ -98,79 +107,43 @@ CI_ELIGIBLE = "ci-eligible"
 MANUAL_ONLY = "manual-only"
 LEGACY = "legacy"
 
-# The result documents this census ingests.
 RESULT_SCHEMA = probe_flake.RESULT_SCHEMA
 RESULT_STATUSES = ("ok", "harness-error")
-RUN_OUTCOMES = (probe_flake.RUN_PASS, probe_flake.RUN_FAIL,
-                probe_flake.RUN_TIMEOUT)
-CHECK_OUTCOMES = (probe_protocol.PASS, probe_protocol.FAIL,
-                  probe_protocol.MISSING)
-# The only protocol strings an entry may carry. A measurement is
-# ingestible only for the CURRENT version, so an unknown or corrupted
-# string can never read as "not legacy, therefore measurable".
-KNOWN_PROTOCOLS = (LEGACY, probe_protocol.PROTOCOL_VERSION)
 
-# Every census record is a CLOSED schema. That is what makes "raw stdout,
-# protocol streams and engine logs never enter the census" enforceable
-# rather than merely true of what this module writes: a hand-pasted
-# `stdout` payload is refused at read time instead of being carried
-# forward by the next policy edit or seed. Each set is exactly what the
-# corresponding builder below emits.
-DOCUMENT_FIELDS = ("schema", "probes")
-ENTRY_FIELDS = ("key", "script", "classification", "protocol", "census")
-CENSUS_FIELDS = ("acceptable_failures", "acceptable_failures_justification",
-                 "estimated_worst_case_seconds", "current", "history",
-                 "attempts")
-COHORT_FIELDS = ("commit_sha", "samples")
-SAMPLE_FIELDS = ("timestamp_utc", "commit_sha", "requested_runs",
-                 "completed_runs", "runs", "check_counts", "failure_count",
-                 "failure_rate", "timeout_count", "worst_elapsed_seconds",
-                 "total_elapsed_seconds", "rts_capabilities",
-                 "peak_concurrency", "retained_artifacts")
-SAMPLE_RUN_FIELDS = ("index", "outcome", "elapsed_seconds", "artifact_dir")
-ATTEMPT_FIELDS = ("timestamp_utc", "commit_sha", "status", "accepted",
-                  "requested_runs", "completed_runs", "error",
-                  "retained_artifacts")
-
-# A full hexadecimal commit hash: sha1 today, sha256 if the repository
-# ever migrates. An abbreviated hash is refused — a cohort key has to be
-# unambiguous.
-COMMIT_RE = re.compile(r"\A[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
-TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
-
-# Locks and staging files both sit BESIDE the target. The staging file
-# has to, because `os.replace` is only atomic within one filesystem. The
-# lock does not have to, but a `/tmp` lock would be exposed to the
-# platform's temp reaper: unlinking a HELD lock file lets the next
-# writer create a fresh inode, lock that, and lose an update. A sibling
-# in the census's own directory has no reaper, and inherits exactly the
-# target's ownership and permissions.
 LOCK_SUFFIX = ".lock"
 LOCK_NOTE = (b"tools/probe_census.py holds a cross-process flock on this "
-             b"file while it rewrites the census beside it. It is never "
-             b"unlinked and never committed.\n")
+             b"file while it rewrites docs/probe_census.json. It is "
+             b"untracked scratch state; deleting it while no writer is "
+             b"running is harmless.\n")
 STAGING_PREFIX = ".probe_census."
 STAGING_SUFFIX = ".tmp"
 
-# `reconcile_inventory` and `seed` may add or refresh entries; a
-# measurement update may not. `TOUCH_ANY` is how the former says so.
+# `mutate` returns the probe keys it is allowed to have changed, or this
+# sentinel for an inventory-wide operation (`--seed`), which may append
+# rows but still may not reorder or drop one.
 TOUCH_ANY = object()
+# Distinguishes "leave this policy field alone" from "clear it to null".
+KEEP = object()
 
 
 class CensusError(Exception):
-    """Malformed census state, or input this census refuses to ingest."""
+    """A controlled refusal: exit non-zero, leave the census bytes alone."""
 
 
+class DocsWorktreeMissing(Exception):
+    """No worktree is on `docs-wip`; the caller must create one."""
+
+
+# ==========================================================================
+# The record
+# ==========================================================================
 def classification(key: str) -> str:
     """The authoritative CI classification, read from `tools/ci_probes.py`."""
     return CI_ELIGIBLE if key in ci_probes.CI_ELIGIBLE else MANUAL_ONLY
 
 
-# ==========================================================================
-# The document
-# ==========================================================================
 def empty_census() -> dict:
-    """A probe's census record before anything has been measured."""
+    """A census record that has never been measured or given a policy."""
     return {
         "acceptable_failures": None,
         "acceptable_failures_justification": None,
@@ -182,13 +155,9 @@ def empty_census() -> dict:
 
 
 def build_manifest() -> dict:
-    """The manifest the live registry currently implies, census empty.
-
-    This is the FRESH-SEED shape. It is never written over a document
-    that already exists — see `ensure_document`.
-    """
+    """The census the live registry currently implies, with empty records."""
     return {
-        "schema": MANIFEST_SCHEMA,
+        "schema": CENSUS_SCHEMA,
         "probes": [
             {
                 "key": key,
@@ -203,30 +172,38 @@ def build_manifest() -> dict:
 
 
 def render_manifest(manifest: dict | None = None) -> str:
-    # `is None`, not falsiness: the write path renders a CANDIDATE here,
-    # and an empty one must serialize as the empty document it is rather
-    # than quietly becoming a freshly generated inventory.
-    document = build_manifest() if manifest is None else manifest
-    return json.dumps(document, indent=2, sort_keys=True) + "\n"
+    """The one deterministic, byte-stable serialization of a census.
+
+    `sort_keys` is what makes the bytes a pure function of the content:
+    the record blocks in #1428 enumerate required keys and their empty
+    values, never a serialized key order.
+    """
+    try:
+        return json.dumps(manifest if manifest is not None else build_manifest(),
+                          indent=2, sort_keys=True) + "\n"
+    except (TypeError, ValueError) as error:
+        raise CensusError(f"census is not serializable as JSON: {error}") from None
 
 
 def validate_manifest(manifest) -> list[str]:
-    """Every disagreement between `manifest` and the live registry.
+    """Every disagreement between `manifest`'s INVENTORY and the registry.
 
-    Rejects a missing, duplicate, or extra entry, and any row whose
-    classification or protocol status disagrees with `run_probes.PROBES`,
-    `tools/ci_probes.py`, and `probe_flake.PROTOCOL_PROBES`. An empty
-    list means the manifest is a faithful inventory. This is the
-    INVENTORY check only; `validate_structure` is the one the write path
-    runs, because a census must stay writable while the registry drifts.
+    Inventory drift only: a missing, duplicate or extra entry, and any
+    row whose script, classification or protocol status disagrees with
+    `run_probes.PROBES`, `tools/ci_probes.py` and
+    `probe_flake.PROTOCOL_PROBES`. Each row's `census` field is
+    deliberately tolerated and never inspected — census-record shape is
+    #1492's. A `probe-census/v1` document is reported here as schema
+    drift and is NOT migrated as a side effect; `--seed` is the only
+    operation that migrates.
     """
     problems: list[str] = []
     if not isinstance(manifest, dict):
         return [f"manifest must be a JSON object, got {type(manifest).__name__}"]
     schema = manifest.get("schema")
-    if schema != MANIFEST_SCHEMA:
+    if schema != CENSUS_SCHEMA:
         problems.append(
-            f"manifest schema is {schema!r}, expected {MANIFEST_SCHEMA!r}")
+            f"manifest schema is {schema!r}, expected {CENSUS_SCHEMA!r}")
     entries = manifest.get("probes")
     if not isinstance(entries, list):
         return problems + ["manifest `probes` must be a list"]
@@ -271,702 +248,51 @@ def validate_manifest(manifest) -> list[str]:
     return problems
 
 
-# --------------------------------------------------------------------------
-# Structural validation — what the write path checks
-# --------------------------------------------------------------------------
-# An artifact REFERENCE, not an artifact. A retained run directory is a
-# short absolute path; raw stdout, a protocol stream and an engine log
-# are none of those things, and a value that is any of them is what the
-# artifact boundary exists to keep out of a worktree.
-MAX_REFERENCE_CHARS = 4096
-
-# Free TEXT the census stores is a summary too, so it is bounded and
-# single-line for the same reason a reference is: an unbounded,
-# newline-carrying string is where a whole log gets in. A diagnostic is
-# generous because it is a real sentence; a name is short because it is
-# a name.
-MAX_DIAGNOSTIC_CHARS = 2000
-MAX_NAME_CHARS = 255
-
-# `probe_flake.measure` retains ONE kind of artifact: the per-run
-# directory `<invocation_dir>/run-NNN`. Holding references to exactly
-# that shape is what leaves nowhere to put a payload — a path-shaped
-# string is not a reference just because it is absolute.
-# `f"run-{index:03d}"` pads to a MINIMUM of three digits, so a long
-# measurement names its 1000th run `run-1000`. `--runs` has no upper
-# bound, and the exact per-index check below is what pins the number —
-# this only has to recognize the shape.
-RUN_DIR_RE = re.compile(r"\Arun-\d{3,}\Z")
-
-_WORKTREE_ROOTS: dict[str, tuple[Path, ...]] = {}
-
-
-def worktree_roots(repo_root: str | None = None) -> tuple[Path, ...]:
-    """Every checkout a probe artifact must stay OUT of, resolved once.
-
-    The repository root plus every registered worktree — the docs
-    worktree and any issue worktree included — because "raw stdout and
-    engine logs remain outside every worktree" is a rule about all of
-    them, not just the primary checkout. Enumerated lazily and cached
-    per root; a single checkout, or one where git cannot answer, is
-    simply the repository root alone.
-    """
-    root = str(repo_root or run_probes.REPO_ROOT)
-    cached = _WORKTREE_ROOTS.get(root)
-    if cached is not None:
-        return cached
-    roots = [Path(root).resolve()]
-    try:
-        done = subprocess.run(["git", "worktree", "list", "--porcelain"],
-                              cwd=root, text=True, capture_output=True,
-                              timeout=30)
-        if done.returncode == 0:
-            for line in done.stdout.splitlines():
-                if line.startswith("worktree "):
-                    roots.append(Path(line[len("worktree "):]).resolve())
-    except (OSError, subprocess.SubprocessError):
-        pass
-    _WORKTREE_ROOTS[root] = tuple(dict.fromkeys(roots))
-    return _WORKTREE_ROOTS[root]
-
-
-def _resolved(value: str) -> Path | None:
-    """`value` with every symlink component followed, or None.
-
-    Lexical normalization is not enough: an artifact root that is a
-    SYMLINK into a checkout looks like an unrelated `/tmp` path but puts
-    the artifacts themselves inside a worktree.
-    """
-    try:
-        return Path(value).resolve()
-    except (OSError, ValueError, RuntimeError):
-        return None
-
-
-def _containing_worktree(resolved: Path) -> Path | None:
-    for root in worktree_roots():
-        if resolved == root or root in resolved.parents:
-            return root
-    return None
-
-
-def _reference_problem(value, where: str, *, must_exist: bool = False,
-                       run_dir: bool = False) -> str | None:
-    """Why `value` is not an artifact reference, or None if it is.
-
-    `must_exist` is passed at INGESTION and nowhere else. A reference is
-    minted from a directory the harness has just written, so it has to
-    be real THEN; a stored sample must stay readable long after the
-    platform has swept its temp directory, or the census would rot into
-    unreadability the first time `/tmp` was cleaned.
-    """
-    if not isinstance(value, str) or not value:
-        return f"{where} must be a non-empty string"
-    if len(value) > MAX_REFERENCE_CHARS:
-        return (f"{where} is {len(value)} characters long: the census holds a "
-                f"reference TO an artifact, never the artifact")
-    if any(character < " " or character == "\x7f" for character in value):
-        return (f"{where} contains control characters: the census holds a "
-                f"reference TO an artifact, never its contents")
-    if not value.startswith("/"):
-        return f"{where} is not an absolute path: {value!r}"
-    resolved = _resolved(value)
-    if resolved is None:
-        return f"{where} cannot be resolved to a real path: {value[:120]!r}"
-    inside = _containing_worktree(resolved)
-    if inside is not None:
-        return (f"{where} points inside the worktree {inside}: probe "
-                f"artifacts stay outside every checkout")
-    if run_dir and not RUN_DIR_RE.match(Path(value).name):
-        return (f"{where} does not name a retained run directory "
-                f"(run-NNN): {Path(value).name[:80]!r}")
-    if must_exist:
-        try:
-            if not resolved.is_dir():
-                return (f"{where} names no directory on disk: an artifact "
-                        f"reference is minted from a directory the harness "
-                        f"just wrote, not composed as a string")
-        except OSError as error:
-            return f"{where} cannot be inspected ({error})"
-    return None
-
-
-def _text_problem(value, where: str, limit: int) -> str | None:
-    """Why `value` is not a bounded single-line summary, or None."""
-    if not isinstance(value, str) or not value:
-        return f"{where} must be a non-empty string"
-    if len(value) > limit:
-        return (f"{where} is {len(value)} characters long, over the {limit} a "
-                f"summary may use: the census records a summary, never the "
-                f"artifact it summarizes")
-    if any(character < " " or character == "\x7f" for character in value):
-        return (f"{where} contains control characters: the census records a "
-                f"summary, never raw artifact content")
-    return None
-
-
-def _check_references(values, where: str, **rules) -> list[str]:
-    if not isinstance(values, list):
-        return [f"{where} must be a list of artifact references"]
-    problems = []
-    for position, value in enumerate(values):
-        problem = _reference_problem(value, f"{where}[{position}]", **rules)
-        if problem:
-            problems.append(problem)
-    return problems
-
-
-def _float_safe(value: int) -> bool:
-    """Whether this module may do float arithmetic with a JSON integer.
-
-    JSON integers have unbounded precision, so `10**309` is perfectly
-    valid input — and `math.isfinite` and ordinary division both refuse
-    it with `OverflowError`. Bounding it HERE is what turns a
-    pathological number into a reported problem instead of a traceback
-    out of `validate_result` or `read_for_update`, which would be a
-    crash where the contract promises a safe refusal.
-    """
-    try:
-        float(value)
-    except OverflowError:
-        return False
-    return True
-
-
-def _is_number(value) -> bool:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return False
-    if isinstance(value, int):
-        return _float_safe(value)
-    return math.isfinite(value)
-
-
-def _is_count(value) -> bool:
-    return (isinstance(value, int) and not isinstance(value, bool)
-            and value >= 0 and _float_safe(value))
-
-
-def _closed(record, allowed, where: str) -> list[str]:
-    """Any field `where` has no business carrying."""
-    if not isinstance(record, dict):
-        return []
-    extra = sorted(set(record) - set(allowed))
-    if not extra:
-        return []
-    return [f"{where} carries unexpected field(s) {extra}: a census record "
-            f"holds summarized outcomes and artifact references only"]
-
-
-def _elapsed_tolerance(count: int) -> float:
-    """How far a serialized total may sit from the serialized runs' sum.
-
-    `probe_flake.Measurement.to_document` rounds each run's elapsed time
-    to three decimals INDEPENDENTLY of `total_elapsed_seconds`, which it
-    rounds from the UNROUNDED values. Each run therefore contributes up
-    to 0.0005 of drift, and the total another 0.0005. `--runs` has no
-    upper bound, so a fixed tolerance would reject a perfectly genuine
-    long measurement: 30 runs of 1.00049 s serialize as thirty 1.0 values
-    against a 30.015 total.
-    """
-    return 0.0005 * count + 0.0015
-
-
-def _check_run_series(runs, where: str) -> tuple[list[str], list[str], list[float]]:
-    """Per-run outcomes and elapsed times, plus every structural problem.
-
-    Shared by the incoming-result validator and the stored-sample one:
-    a sample that was accepted yesterday has to satisfy today the same
-    rules an arriving result does, or a hand-corrupted census would be
-    readable and rewritable.
-    """
-    problems: list[str] = []
-    outcomes: list[str] = []
-    elapsed: list[float] = []
-    indices: list[int] = []
-    for position, record in enumerate(runs):
-        if not isinstance(record, dict):
-            problems.append(f"{where} run {position} is not an object")
-            continue
-        index = record.get("index")
-        if not _is_count(index):
-            problems.append(f"{where} run {position} has no integer `index`")
-        else:
-            indices.append(index)
-        outcome = record.get("outcome")
-        if outcome not in RUN_OUTCOMES:
-            problems.append(f"{where} run {position} outcome {outcome!r} is "
-                            f"not one of {RUN_OUTCOMES}")
-        else:
-            outcomes.append(outcome)
-        value = record.get("elapsed_seconds")
-        if not _is_number(value) or value < 0:
-            problems.append(f"{where} run {position} `elapsed_seconds` must be "
-                            f"a finite non-negative number")
-        else:
-            elapsed.append(float(value))
-        artifact = record.get("artifact_dir")
-        if artifact is not None:
-            problem = _reference_problem(
-                artifact, f"{where} run {position} `artifact_dir`",
-                run_dir=True)
-            if problem:
-                problems.append(problem)
-    if indices and len(indices) == len(runs) \
-            and indices != list(range(1, len(indices) + 1)):
-        # `probe_flake.measure` numbers runs from 1 and stops at the
-        # first untrustworthy stream, so the valid runs are always a
-        # contiguous 1..completed prefix.
-        problems.append(f"{where} run indices {indices[:6]} are not the "
-                        f"contiguous 1..{len(indices)} sequence")
-    return problems, outcomes, elapsed
-
-
-def _check_aggregates(record, where: str, outcomes: list[str],
-                      elapsed: list[float], complete: bool) -> list[str]:
-    """The failure/timeout/rate/duration aggregates against the runs."""
-    problems: list[str] = []
-    failures = sum(1 for o in outcomes
-                   if o in (probe_flake.RUN_FAIL, probe_flake.RUN_TIMEOUT))
-    timeouts = sum(1 for o in outcomes if o == probe_flake.RUN_TIMEOUT)
-    for field, expected in (("failure_count", failures),
-                            ("timeout_count", timeouts)):
-        value = record.get(field)
-        # The TYPE is checked before the value: Python compares
-        # `False == 0` and `True == 1`, so a boolean count would
-        # otherwise satisfy an equality test and be recorded as a real
-        # tally.
-        if not _is_count(value):
-            problems.append(f"{where} `{field}` must be a non-negative "
-                            f"integer, got {value!r}")
-        elif value != expected:
-            problems.append(f"{where} reports {field}={value!r} but the runs "
-                            f"show {expected}")
-    tolerance = _elapsed_tolerance(len(elapsed))
-    for field, expected, slack in (
-            ("worst_elapsed_seconds", max(elapsed, default=0.0), 0.0015),
-            ("total_elapsed_seconds", sum(elapsed), tolerance)):
-        value = record.get(field)
-        if not _is_number(value) or value < 0:
-            problems.append(f"{where} `{field}` must be a finite non-negative "
-                            f"number")
-        elif complete and abs(value - expected) > slack:
-            problems.append(f"{where} reports {field}={value} but the runs "
-                            f"give {round(expected, 3)}")
-    return problems
-
-
-def _validate_sample(sample, where: str) -> list[str]:
-    """A STORED sample, held to the rules its result document met.
-
-    Nothing here is weaker than `validate_result`: a sample whose
-    timestamp, commit hash, run series or aggregates were corrupted
-    after the fact must fail to READ, so no later write can carry it
-    forward or rewrite the file around it.
-    """
-    if not isinstance(sample, dict):
-        return [f"{where} is not an object: {sample!r}"]
-    problems: list[str] = _closed(sample, SAMPLE_FIELDS, where)
-    commit = sample.get("commit_sha")
-    if not isinstance(commit, str) or not COMMIT_RE.match(commit):
-        problems.append(f"{where} `commit_sha` is not a full commit hash: "
-                        f"{commit!r}")
-    stamp = sample.get("timestamp_utc")
-    if not isinstance(stamp, str):
-        problems.append(f"{where} has no string `timestamp_utc`")
-    else:
-        try:
-            datetime.strptime(stamp, TIMESTAMP_FORMAT)
-        except ValueError:
-            problems.append(f"{where} `timestamp_utc` {stamp!r} is not "
-                            f"{TIMESTAMP_FORMAT}")
-    for field in ("requested_runs", "completed_runs"):
-        if not _is_count(sample.get(field)):
-            problems.append(f"{where} `{field}` must be a non-negative integer")
-    requested = sample.get("requested_runs")
-    completed = sample.get("completed_runs")
-    if _is_count(requested) and requested < 1:
-        problems.append(f"{where} `requested_runs` must be positive")
-    if _is_count(requested) and _is_count(completed) and completed != requested:
-        # A sample exists only because an `ok` result was accepted, and
-        # an `ok` result completes every run it requested. A stored
-        # partial is corruption, not a shorter measurement.
-        problems.append(f"{where} completed {completed} of {requested} "
-                        f"requested runs, but a stored sample always "
-                        f"completes all of them")
-    for field in ("rts_capabilities", "peak_concurrency"):
-        value = sample.get(field)
-        if not _is_count(value) or value < 1:
-            problems.append(f"{where} `{field}` must be a positive integer")
-    runs = sample.get("runs")
-    if not isinstance(runs, list):
-        problems.append(f"{where} `runs` must be a list")
-        runs = []
-    elif _is_count(completed) and len(runs) != completed:
-        problems.append(f"{where} lists {len(runs)} runs but reports "
-                        f"completed_runs={completed}")
-    series, outcomes, elapsed = _check_run_series(runs, where)
-    problems += series
-    for position, record in enumerate(runs):
-        problems += _closed(record, SAMPLE_RUN_FIELDS, f"{where} run {position}")
-    problems += _check_aggregates(sample, where, outcomes, elapsed,
-                                  complete=len(elapsed) == len(runs))
-    rate = sample.get("failure_rate")
-    if not (_is_number(rate) and 0.0 <= rate <= 1.0):
-        problems.append(f"{where} `failure_rate` must be a number in [0, 1]")
-    elif _is_count(requested) and requested and len(outcomes) == len(runs):
-        failures = sum(1 for o in outcomes
-                       if o in (probe_flake.RUN_FAIL, probe_flake.RUN_TIMEOUT))
-        if abs(rate - failures / requested) > 1e-6:
-            problems.append(f"{where} reports failure_rate={rate} but "
-                            f"{failures}/{requested} is "
-                            f"{round(failures / requested, 6)}")
-    counts = sample.get("check_counts")
-    if not isinstance(counts, dict) or not counts:
-        problems.append(f"{where} `check_counts` must be a non-empty object")
-    else:
-        for cid, tally in counts.items():
-            if not isinstance(cid, str) or not probe_protocol.CHECK_ID_RE.match(cid):
-                # The protocol's own stable-identifier rule, reused rather
-                # than restated — and the reason a payload cannot become
-                # a persisted `check_counts` key.
-                problems.append(
-                    f"{where} check key {cid[:80]!r} is not a stable check "
-                    f"identifier ({probe_protocol.CHECK_ID_RE.pattern})")
-                continue
-            if not isinstance(tally, dict):
-                problems.append(f"{where} check {cid!r} tally is not an object")
-                continue
-            problems += _closed(tally, CHECK_OUTCOMES,
-                                f"{where} check {cid!r} tally")
-            total = 0
-            usable = True
-            for outcome in CHECK_OUTCOMES:
-                if not _is_count(tally.get(outcome)):
-                    problems.append(f"{where} check {cid!r} has no "
-                                    f"non-negative `{outcome}` count")
-                    usable = False
-                else:
-                    total += tally[outcome]
-            # A stored sample keeps no per-run check results, so this is
-            # the surviving cross-check: every declared check was
-            # resolved exactly once per completed run.
-            if usable and _is_count(completed) and total != completed:
-                problems.append(f"{where} check {cid!r} tallies {total} "
-                                f"outcomes across {completed} completed runs")
-    problems += _check_references(sample.get("retained_artifacts"),
-                                  f"{where} `retained_artifacts`", run_dir=True)
-    # `Measurement.retained_artifacts()` is exactly the runs that kept
-    # one, in order, and a stored sample never has an error run — so the
-    # list is DERIVED, not free-form, and there is nowhere to add an
-    # entry that no run produced.
-    derived = [r["artifact_dir"] for r in runs
-               if isinstance(r, dict) and r.get("artifact_dir") is not None]
-    if isinstance(sample.get("retained_artifacts"), list) \
-            and sample["retained_artifacts"] != derived:
-        problems.append(
-            f"{where} `retained_artifacts` does not match the runs that "
-            f"retained one ({len(derived)} run director"
-            f"{'y' if len(derived) == 1 else 'ies'})")
-    return problems
-
-
-def _validate_cohort(cohort, where: str) -> list[str]:
-    if not isinstance(cohort, dict):
-        return [f"{where} is not an object: {cohort!r}"]
-    problems: list[str] = _closed(cohort, COHORT_FIELDS, where)
-    commit = cohort.get("commit_sha")
-    if not isinstance(commit, str) or not COMMIT_RE.match(commit):
-        problems.append(f"{where} `commit_sha` is not a full commit hash: "
-                        f"{commit!r}")
-    samples = cohort.get("samples")
-    if not isinstance(samples, list) or not samples:
-        problems.append(f"{where} `samples` must be a non-empty list")
-        return problems
-    for position, sample in enumerate(samples):
-        problems += _validate_sample(sample, f"{where} sample {position}")
-        if isinstance(sample, dict) and sample.get("commit_sha") != commit:
-            problems.append(
-                f"{where} sample {position} commit {sample.get('commit_sha')!r} "
-                f"does not belong to the cohort ({commit!r})")
-    return problems
-
-
-def _validate_attempt(attempt, where: str) -> list[str]:
-    if not isinstance(attempt, dict):
-        return [f"{where} is not an object: {attempt!r}"]
-    problems: list[str] = _closed(attempt, ATTEMPT_FIELDS, where)
-    if not isinstance(attempt.get("status"), str) or not attempt["status"]:
-        problems.append(f"{where} has no string `status`")
-    commit = attempt.get("commit_sha")
-    if not isinstance(commit, str) or not COMMIT_RE.match(commit):
-        problems.append(f"{where} `commit_sha` is not a full commit hash: "
-                        f"{commit!r}")
-    stamp = attempt.get("timestamp_utc")
-    if not isinstance(stamp, str):
-        problems.append(f"{where} has no string `timestamp_utc`")
-    else:
-        try:
-            datetime.strptime(stamp, TIMESTAMP_FORMAT)
-        except ValueError:
-            problems.append(f"{where} `timestamp_utc` {stamp!r} is not "
-                            f"{TIMESTAMP_FORMAT}")
-    if attempt.get("status") not in RESULT_STATUSES and isinstance(
-            attempt.get("status"), str):
-        problems.append(f"{where} status {attempt['status']!r} is not one of "
-                        f"{RESULT_STATUSES}")
-    if not isinstance(attempt.get("accepted"), bool):
-        problems.append(f"{where} `accepted` must be a boolean")
-    for field in ("requested_runs", "completed_runs"):
-        if not _is_count(attempt.get(field)):
-            problems.append(f"{where} `{field}` must be a non-negative integer")
-    requested, completed = attempt.get("requested_runs"), attempt.get("completed_runs")
-    if _is_count(requested) and requested < 1:
-        # An ingestion attempt exists only because a result was
-        # measured, and a result requesting no runs is refused, so a
-        # stored zero can only come from an edit.
-        problems.append(f"{where} `requested_runs` must be positive")
-    if _is_count(requested) and _is_count(completed) and completed > requested:
-        problems.append(f"{where} completed {completed} of {requested} "
-                        f"requested runs")
-    error = attempt.get("error")
-    if error is not None:
-        problem = _text_problem(error, f"{where} `error`", MAX_DIAGNOSTIC_CHARS)
-        if problem:
-            problems.append(problem)
-    # `accepted` is DERIVED from the status at ingestion, so the two can
-    # only disagree in a record somebody edited.
-    status = attempt.get("status")
-    accepted = attempt.get("accepted")
-    if isinstance(accepted, bool) and status in RESULT_STATUSES:
-        if accepted != (status == "ok"):
-            problems.append(f"{where} is {status!r} but accepted={accepted}")
-    if status == "ok":
-        if error is not None:
-            problems.append(f"{where} is ok but carries an `error`")
-        if _is_count(requested) and _is_count(completed) and completed != requested:
-            problems.append(f"{where} is ok but completed {completed} of "
-                            f"{requested} requested runs")
-    elif status == "harness-error":
-        if not isinstance(error, str) or not error:
-            problems.append(f"{where} is a harness error with no `error`")
-        if _is_count(requested) and _is_count(completed) and completed >= requested:
-            # The run that broke the stream is never one of the completed
-            # ones, so a harness error always stops short.
-            problems.append(f"{where} is a harness error but completed all "
-                            f"{requested} requested runs")
-    problems += _check_references(attempt.get("retained_artifacts"),
-                                  f"{where} `retained_artifacts`", run_dir=True)
-    return problems
-
-
-def _validate_census(census, where: str) -> list[str]:
-    if not isinstance(census, dict):
-        return [f"{where} `census` is not an object: {census!r}"]
-    problems: list[str] = _closed(census, CENSUS_FIELDS, f"{where} census")
-    # The mirror of `_closed`, and the reason it is not enough on its
-    # own: it rejects fields a census has no business CARRYING, but says
-    # nothing about the ones it must HOLD. Four census fields are
-    # nullable, and `.get()` cannot tell an explicit null from a deleted
-    # key -- so every `is not None` guard below silently passes an absent
-    # one. A hand-edited record with `current`, `acceptable_failures`,
-    # its justification, or the estimate REMOVED would validate clean,
-    # and the next `record_policy` or `--seed` would rewrite the file
-    # preserving the hole. Presence is therefore required for all of
-    # CENSUS_FIELDS; nullability is about a field's VALUE, never about
-    # whether it is there.
-    absent = sorted(set(CENSUS_FIELDS) - set(census))
-    if absent:
-        problems.append(
-            f"{where} census is missing required field(s) {absent}: a "
-            f"nullable census field must be present and null, never deleted")
-    x = census.get("acceptable_failures")
-    if x is not None and not _is_count(x):
-        problems.append(
-            f"{where} `acceptable_failures` must be null or a non-negative "
-            f"integer, got {x!r}")
-    justification = census.get("acceptable_failures_justification")
-    if justification is not None:
-        problem = _text_problem(justification,
-                                f"{where} `acceptable_failures_justification`",
-                                MAX_DIAGNOSTIC_CHARS)
-        if problem or not justification.strip():
-            problems.append(problem or
-                            f"{where} `acceptable_failures_justification` must "
-                            f"be null or a non-empty string")
-    estimate = census.get("estimated_worst_case_seconds")
-    if estimate is not None and (not _is_number(estimate) or estimate < 0):
-        problems.append(
-            f"{where} `estimated_worst_case_seconds` must be null or a finite "
-            f"non-negative number, got {estimate!r}")
-    current = census.get("current")
-    if current is not None:
-        problems += _validate_cohort(current, f"{where} current cohort")
-    history = census.get("history")
-    if not isinstance(history, list):
-        problems.append(f"{where} `history` must be a list")
-    else:
-        for position, cohort in enumerate(history):
-            problems += _validate_cohort(cohort, f"{where} history[{position}]")
-    attempts = census.get("attempts")
-    if not isinstance(attempts, list):
-        problems.append(f"{where} `attempts` must be a list")
-    else:
-        for position, attempt in enumerate(attempts):
-            problems += _validate_attempt(attempt, f"{where} attempts[{position}]")
-
-    # Cohorts and attempts are each well-formed on their own above, and
-    # that is not enough: they are two views of ONE history and a hand
-    # edit can leave them disagreeing. An accepted attempt is the LOG of
-    # a measurement that was ingested; the sample it produced is that
-    # measurement's retained form, in `current` or in `history`. So the
-    # two counts are the same number by construction, and any difference
-    # means state no run could have written.
-    #
-    # The direction that loses data is the one worth naming: clearing
-    # `current` and `history` while leaving the accepted attempts behind
-    # reads as "these measurements were taken" with the measurements
-    # gone, and the next record_policy()/--seed rewrite persists that
-    # loss. The opposite skew -- more samples than accepted attempts --
-    # is equally impossible, so both are reported rather than only the
-    # lossy one.
-    if isinstance(attempts, list) and isinstance(history, list):
-        accepted = sum(1 for attempt in attempts
-                       if isinstance(attempt, dict)
-                       and attempt.get("status") == "ok")
-        retained = 0
-        for cohort in [current] + history:
-            if isinstance(cohort, dict) and isinstance(cohort.get("samples"),
-                                                       list):
-                retained += len(cohort["samples"])
-        if accepted != retained:
-            problems.append(
-                f"{where} logs {accepted} accepted attempt(s) but retains "
-                f"{retained} sample(s) across `current` and `history`: every "
-                f"accepted attempt is one retained measurement, so these "
-                f"cannot disagree")
-    return problems
-
-
-def validate_structure(document, *, include_promotion: bool = True) -> list[str]:
-    """Everything the write path checks before installing a candidate.
-
-    Schema, the inventory row of EVERY entry, and every census record.
-    Deliberately independent of the live registry: the census must stay
-    writable while `run_probes.PROBES` drifts ahead of it — that drift is
-    `validate_manifest`'s report and `--seed`'s repair, not a reason to
-    refuse a measurement.
-
-    `include_promotion` is the one rule a READER relaxes: a stored
-    CI-eligible entry still carrying a manual-only current cohort is a
-    candidate this tool refuses to write, but reading it has to succeed
-    or `reconcile_inventory` — the designated repair — could never run.
-
-    DO NOT make this gate require a complete inventory. It reads like a
-    hole — a census missing a registered row is accepted and rewritten —
-    and it is a deliberate trade, re-raised in review on 2026-08-20 and
-    rejected with the project owner's explicit sign-off.
-
-    The reason is the direction the project is moving: probes are added
-    to `run_probes.PROBES` continuously (89 today, and many more
-    planned). Gating writes on a complete inventory — the natural
-    "require `--seed` first" repair — would make the census unwritable
-    the instant a probe is REGISTERED, so recording a finished
-    measurement for probe A would fail because unrelated probe B was
-    added that morning. A probe run costs minutes to tens of minutes;
-    discarding one at ingestion to punish an unrelated registry edit is
-    strictly worse than carrying a stale row that `validate_manifest`
-    already reports and `--seed` already repairs.
-
-    Drift is REPORTED, not fatal. Keep it that way.
-    """
+# ==========================================================================
+# Migration and inventory reconciliation
+# ==========================================================================
+def _rows(document, what: str) -> list:
+    """`document`'s entry list, or a controlled refusal."""
     if not isinstance(document, dict):
-        return [f"census must be a JSON object, got {type(document).__name__}"]
-    problems: list[str] = _closed(document, DOCUMENT_FIELDS, "census")
-    if document.get("schema") != CENSUS_SCHEMA:
-        problems.append(f"census schema is {document.get('schema')!r}, "
-                        f"expected {CENSUS_SCHEMA!r}")
+        raise CensusError(
+            f"{what} must be a JSON object, got {type(document).__name__}")
     entries = document.get("probes")
     if not isinstance(entries, list):
-        return problems + ["census `probes` must be a list"]
-    seen: set[str] = set()
+        raise CensusError(f"{what} `probes` must be a list")
     for position, entry in enumerate(entries):
         if not isinstance(entry, dict):
-            problems.append(f"entry {position} is not an object: {entry!r}")
-            continue
-        key = entry.get("key")
-        if not isinstance(key, str) or not key:
-            problems.append(f"entry {position} has no string `key`")
-            continue
-        if key in seen:
-            problems.append(f"duplicate entry for probe {key!r}")
-            continue
-        seen.add(key)
-        problems += _closed(entry, ENTRY_FIELDS, f"probe {key!r}")
-        for field, limit in (("key", MAX_NAME_CHARS),
-                             ("script", MAX_NAME_CHARS)):
-            problem = _text_problem(entry.get(field), f"probe {key[:80]!r} "
-                                    f"`{field}`", limit)
-            if problem:
-                problems.append(problem)
-        if entry.get("protocol") not in KNOWN_PROTOCOLS:
-            problems.append(
-                f"probe {key!r} protocol {entry.get('protocol')!r} is not one "
-                f"of {KNOWN_PROTOCOLS}")
-        if entry.get("classification") not in (CI_ELIGIBLE, MANUAL_ONLY):
-            problems.append(
-                f"probe {key!r} classification {entry.get('classification')!r} "
-                f"is not one of {(CI_ELIGIBLE, MANUAL_ONLY)}")
-        problems += _validate_census(entry.get("census"), f"probe {key!r}")
-        if (include_promotion
-                and entry.get("classification") == CI_ELIGIBLE
-                and isinstance(entry.get("census"), dict)
-                and entry["census"].get("current") is not None):
-            problems.append(
-                f"probe {key!r} is CI-eligible but still carries a current "
-                f"manual-only cohort")
-    return problems
+            raise CensusError(f"{what} entry {position} is not an object")
+    return entries
 
 
-# --------------------------------------------------------------------------
-# Migration and inventory reconciliation
-# --------------------------------------------------------------------------
 def migrate_document(document) -> dict:
     """A `probe-census/v1` or `/v2` document, as `/v2`.
 
-    The one-time migration adds an empty census record to every entry
-    that lacks one. It preserves the entry list exactly — same entries,
-    same order, same inventory columns — because the seeded document is
-    migration INPUT, never something to regenerate.
+    Lossless: every existing row survives, in the same order, with its
+    existing inventory values. The v1 migration adds the exact empty
+    census record; it never regenerates the inventory from the live
+    registry, because the seeded document is migration INPUT.
+
+    A v2 row missing its `census` field is left exactly as it is rather
+    than repaired: in a v2 document that is corruption for #1492 to
+    report, and silently inserting an empty record here would erase the
+    evidence on the next write.
     """
-    if not isinstance(document, dict):
-        raise CensusError(
-            f"census must be a JSON object, got {type(document).__name__}")
+    entries = _rows(document, "census")
     schema = document.get("schema")
     if schema not in MIGRATABLE_SCHEMAS:
         raise CensusError(
             f"census schema {schema!r} is not one this tool can read "
             f"(expected one of {MIGRATABLE_SCHEMAS})")
-    entries = document.get("probes")
-    if not isinstance(entries, list):
-        raise CensusError("census `probes` must be a list")
     migrated = []
-    for position, entry in enumerate(entries):
-        if not isinstance(entry, dict):
-            raise CensusError(f"census entry {position} is not an object")
+    for entry in entries:
         row = dict(entry)
         if schema == SEED_SCHEMA and "census" not in row:
-            # ONLY the v1 seed. In a v2 document a missing census record
-            # is corruption, not migration input, and inserting an empty
-            # one would repair it silently on the next write.
             row["census"] = empty_census()
         migrated.append(row)
     result = dict(document)
     result["schema"] = CENSUS_SCHEMA
     result["probes"] = migrated
-    problems = validate_structure(result, include_promotion=False)
-    if problems:
-        raise CensusError("migrated census is malformed: " +
-                          "; ".join(problems[:5]))
     return result
 
 
@@ -980,29 +306,37 @@ def _archive_current(census: dict) -> None:
 def reconcile_inventory(document: dict) -> dict:
     """Refresh the inventory columns without touching accumulated data.
 
-    Appends an entry for a probe registered since the document was
-    written, refreshes `script`/`classification`/`protocol` from the live
-    registry, and applies PROMOTION: an entry the live `ci_probes.py`
-    now classifies CI-eligible archives its current manual-only cohort
-    and stops carrying one, keeping its history and attempts. It never
-    deletes an entry and never rewrites a census record — a probe that
-    left `run_probes.PROBES` keeps its measurements and is reported by
-    `validate_manifest` as an extra entry, which is a decision for a
+    Migrates first, then: appends a row for every probe registered since
+    the document was written, in live registry order and with an empty
+    census record; refreshes `script`/`classification`/`protocol` from
+    the live registries; and applies PROMOTION — a row the live
+    `ci_probes.py` now classifies CI-eligible archives its current
+    manual-only cohort into `history` and stops carrying one, keeping
+    its history, attempts and policy fields.
+
+    The reverse transition is deliberately asymmetric: a row falling
+    back from `ci-eligible` to `manual-only` refreshes its
+    `classification` and nothing else — no cohort surgery at all.
+
+    It never deletes a row and never rewrites a census record. A probe
+    that left `run_probes.PROBES` keeps its measurements and is reported
+    by `validate_manifest` as an extra entry, which is a decision for a
     person.
     """
     result = migrate_document(document)
     live = {key: script for key, script, _purpose in run_probes.PROBES}
     entries = [dict(entry) for entry in result["probes"]]
-    present = {entry["key"] for entry in entries}
+    present = {entry.get("key") for entry in entries}
     for entry in entries:
-        key = entry["key"]
+        key = entry.get("key")
         if key not in live:
             continue
         entry["script"] = live[key]
         entry["protocol"] = probe_flake.protocol_status(key)
         entry["classification"] = classification(key)
-        if entry["classification"] == CI_ELIGIBLE:
-            census = dict(entry["census"])
+        if entry["classification"] == CI_ELIGIBLE and isinstance(
+                entry.get("census"), dict):
+            census = _deep_copy(entry["census"])
             _archive_current(census)
             entry["census"] = census
     for key, script, _purpose in run_probes.PROBES:
@@ -1022,458 +356,225 @@ def reconcile_inventory(document: dict) -> dict:
 # ==========================================================================
 # Ingesting a measurement
 # ==========================================================================
-def find_entry(document: dict, probe: str) -> dict | None:
-    for entry in document.get("probes") or []:
+def _deep_copy(value):
+    """A copy no later mutation of the original can reach through."""
+    return json.loads(json.dumps(value))
+
+
+def find_entry(document, probe: str) -> dict | None:
+    for entry in (document or {}).get("probes") or []:
         if isinstance(entry, dict) and entry.get("key") == probe:
             return entry
     return None
 
 
-def validate_result(result, document: dict) -> list[str]:
-    """Every reason `result` may not be ingested into `document`.
+def result_target(result) -> tuple[str, str]:
+    """The three fields `--record` must read to know what to do.
 
-    A `probe-flake-result/v1` document is checked whole before anything
-    is mutated: its probe must name an existing manual-only,
-    protocol-compatible entry, its commit must be a full hexadecimal
-    hash, its timestamp must parse as UTC, and its durations, run
-    indices, outcomes, per-check tallies and aggregates must all be
-    internally consistent. Any problem here leaves the census
-    byte-for-byte unchanged.
+    The top-level `schema`, the `probe` whose row it mutates — the
+    result document names its own row, which is why `--record` takes no
+    `--probe` and why the durable sample omits `probe` — and the
+    `status` that decides whether a sample is created. Any of the three
+    absent or unrecognized blocks the operation; in particular an
+    unrecognized `status` must NOT be logged as a non-accepted attempt.
+
+    These are discriminators the operation itself needs, not the
+    declared-schema validation surface deferred to #1492.
     """
-    problems: list[str] = []
     if not isinstance(result, dict):
-        return [f"result must be a JSON object, got {type(result).__name__}"]
-    if result.get("schema") != RESULT_SCHEMA:
-        problems.append(f"result schema is {result.get('schema')!r}, expected "
-                        f"{RESULT_SCHEMA!r}")
+        raise CensusError(
+            f"a {RESULT_SCHEMA} document must be a JSON object, got "
+            f"{type(result).__name__}")
+    schema = result.get("schema")
+    if schema != RESULT_SCHEMA:
+        raise CensusError(
+            f"result schema is {schema!r}, expected {RESULT_SCHEMA!r}")
     probe = result.get("probe")
     if not isinstance(probe, str) or not probe:
-        problems.append("result has no string `probe`")
-        return problems
-    entry = find_entry(document, probe)
-    if entry is None:
-        problems.append(f"probe {probe!r} has no census entry")
-    else:
-        if entry.get("classification") != MANUAL_ONLY:
-            problems.append(
-                f"probe {probe!r} is {entry.get('classification')!r} in the "
-                f"census, so it takes no current census samples")
-        if entry.get("protocol") != probe_protocol.PROTOCOL_VERSION:
-            problems.append(
-                f"probe {probe!r} is {entry.get('protocol')!r} in the census, "
-                f"not {probe_protocol.PROTOCOL_VERSION!r}, so it produces no "
-                f"trustworthy measurement")
-    # The LIVE classification is authoritative and wins over a stale
-    # census row: `tools/ci_probes.py` owns the CI/manual XOR.
-    if probe in ci_probes.CI_ELIGIBLE:
-        problems.append(
-            f"probe {probe!r} is CI-eligible per tools/ci_probes.py, so it "
-            f"takes no manual-only census samples")
-
+        raise CensusError(
+            f"result names no probe: `probe` is {probe!r}")
     status = result.get("status")
     if status not in RESULT_STATUSES:
-        problems.append(f"result status {status!r} is not one of "
-                        f"{RESULT_STATUSES}")
-    commit = result.get("commit_sha")
-    if not isinstance(commit, str) or not COMMIT_RE.match(commit):
-        problems.append(f"result `commit_sha` is not a full commit hash: "
-                        f"{commit!r}")
-    stamp = result.get("timestamp_utc")
-    if not isinstance(stamp, str):
-        problems.append("result has no string `timestamp_utc`")
-    else:
-        try:
-            datetime.strptime(stamp, TIMESTAMP_FORMAT)
-        except ValueError:
-            problems.append(
-                f"result `timestamp_utc` {stamp!r} is not {TIMESTAMP_FORMAT}")
-
-    requested = result.get("requested_runs")
-    completed = result.get("completed_runs")
-    if not _is_count(requested) or requested < 1:
-        problems.append("result `requested_runs` must be a positive integer")
-    if not _is_count(completed):
-        problems.append("result `completed_runs` must be a non-negative integer")
-    if _is_count(requested) and _is_count(completed) and completed > requested:
-        problems.append(
-            f"result completed {completed} of {requested} requested runs")
-
-    for field in ("rts_capabilities", "peak_concurrency"):
-        value = result.get(field)
-        if not _is_count(value) or value < 1:
-            problems.append(f"result `{field}` must be a positive integer")
-
-    runs = result.get("runs")
-    if not isinstance(runs, list):
-        problems.append("result `runs` must be a list")
-        runs = []
-    elif _is_count(completed) and len(runs) != completed:
-        problems.append(f"result lists {len(runs)} runs but reports "
-                        f"completed_runs={completed}")
-    declared: set = set()
-    declared_checks = result.get("checks")
-    if not isinstance(declared_checks, list) or not declared_checks:
-        problems.append("result `checks` must be a non-empty list of "
-                        "{id, label} objects")
-    else:
-        for position, check in enumerate(declared_checks):
-            if not isinstance(check, dict) or set(check) != {"id", "label"}:
-                problems.append(f"declared check {position} is not an "
-                                f"{{id, label}} object: {str(check)[:120]!r}")
-                continue
-            cid = check["id"]
-            if not isinstance(cid, str) or not probe_protocol.CHECK_ID_RE.match(cid):
-                problems.append(
-                    f"declared check {position} identifier {str(cid)[:80]!r} is "
-                    f"not stable ({probe_protocol.CHECK_ID_RE.pattern})")
-                continue
-            label_problem = _text_problem(check.get("label"),
-                                          f"declared check {cid!r} label",
-                                          MAX_NAME_CHARS)
-            if label_problem:
-                problems.append(label_problem)
-            if cid in declared:
-                problems.append(f"declared check {cid!r} appears twice")
-            declared.add(cid)
-    # The run series, its indices and the aggregates over it are checked
-    # by the SAME helpers a stored sample goes through, so a document
-    # this validator accepts cannot become a sample the reader rejects.
-    series, outcomes, elapsed_values = _check_run_series(runs, "result")
-    problems += series
-    for position, record in enumerate(runs):
-        if not isinstance(record, dict):
-            continue
-        checks = record.get("checks")
-        if not isinstance(checks, dict):
-            problems.append(f"run {position} `checks` must be an object")
-            continue
-        if declared and set(checks) != declared:
-            problems.append(
-                f"run {position} reports checks {sorted(checks)} but the "
-                f"descriptor declares {sorted(declared)}")
-        for cid, value in checks.items():
-            if value not in CHECK_OUTCOMES:
-                problems.append(
-                    f"run {position} check {cid!r} result {value!r} is not "
-                    f"one of {CHECK_OUTCOMES}")
-        # `probe_flake.reconcile` makes any failed check a failed run, so
-        # a PASS carrying one is a contradiction no measurement produced.
-        failed = sorted(cid for cid, value in checks.items()
-                        if value == probe_protocol.FAIL)
-        if failed and record.get("outcome") == probe_flake.RUN_PASS:
-            problems.append(
-                f"run {position} passed but reports failed check(s) {failed}: "
-                f"a failed check always fails its run")
-
-    counts = result.get("check_counts")
-    if not isinstance(counts, dict):
-        problems.append("result `check_counts` must be an object")
-    else:
-        if declared and set(counts) != declared:
-            problems.append(
-                f"result `check_counts` covers {sorted(counts)} but the "
-                f"descriptor declares {sorted(declared)}")
-        observed = {cid: {o: 0 for o in CHECK_OUTCOMES} for cid in counts}
-        for record in runs:
-            if not isinstance(record, dict):
-                continue
-            # `or {}` rescues a FALSY non-mapping (None, [], "") but
-            # passes a truthy one straight through to .items(). The loop
-            # above has already recorded "`checks` must be an object" for
-            # it and moved on, so reaching here with a non-empty list,
-            # string or True raised AttributeError and turned a malformed
-            # INPUT into a crash instead of the clean refusal every other
-            # malformed field gets. Aggregate mappings only; the problem
-            # is already reported.
-            checks = record.get("checks")
-            if not isinstance(checks, dict):
-                continue
-            for cid, value in checks.items():
-                if cid in observed and value in CHECK_OUTCOMES:
-                    observed[cid][value] += 1
-        for cid, tally in counts.items():
-            if not isinstance(tally, dict):
-                problems.append(f"check {cid!r} tally is not an object")
-                continue
-            for outcome in CHECK_OUTCOMES:
-                if not _is_count(tally.get(outcome)):
-                    problems.append(f"check {cid!r} has no non-negative "
-                                    f"`{outcome}` count")
-                elif tally[outcome] != observed[cid][outcome]:
-                    problems.append(
-                        f"check {cid!r} reports {tally[outcome]} {outcome} but "
-                        f"the runs show {observed[cid][outcome]}")
-
-    problems += _check_aggregates(result, "result", outcomes, elapsed_values,
-                                  complete=len(elapsed_values) == len(runs))
-    failures = sum(1 for o in outcomes
-                   if o in (probe_flake.RUN_FAIL, probe_flake.RUN_TIMEOUT))
-
-    rate = result.get("failure_rate")
-    if status == "ok":
-        if result.get("error") is not None:
-            problems.append("an ok result must carry no `error`")
-        if result.get("error_run") is not None:
-            problems.append("an ok result must carry no `error_run`")
-        if _is_count(requested) and _is_count(completed) and completed != requested:
-            problems.append(f"an ok result must complete all {requested} runs, "
-                            f"got {completed}")
-        if not _is_number(rate) or not 0.0 <= rate <= 1.0:
-            problems.append("an ok result must carry a `failure_rate` in [0, 1]")
-        elif _is_count(requested) and requested and abs(
-                rate - failures / requested) > 1e-6:
-            problems.append(
-                f"result reports failure_rate={rate} but {failures}/{requested} "
-                f"is {round(failures / requested, 6)}")
-    elif status == "harness-error":
-        problem = _text_problem(result.get("error"), "result `error`",
-                                MAX_DIAGNOSTIC_CHARS)
-        if problem:
-            problems.append(f"a harness-error result must carry a diagnostic: "
-                            f"{problem}")
-        if rate is not None:
-            problems.append("a harness-error result must carry no "
-                            "`failure_rate` — no trustworthy rate exists")
-        if _is_count(requested) and _is_count(completed) and completed >= requested:
-            problems.append(f"a harness-error result stops short, but this "
-                            f"one completed all {requested} requested runs")
-        problems += _validate_error_run(result.get("error_run"), declared,
-                                        completed, requested)
-    # A result additionally DECLARES where its artifacts live, so every
-    # reference in it must sit under that root. This is what makes the
-    # boundary tight rather than merely path-shaped: a pasted payload is
-    # not a path under the harness's own artifact root.
-    root = result.get("artifact_root")
-    root_problem = _reference_problem(root, "result `artifact_root`",
-                                      must_exist=True)
-    if root_problem:
-        problems.append(root_problem)
-        root = None
-    invocation = result.get("invocation_dir")
-    invocation_problem = _reference_problem(invocation,
-                                            "result `invocation_dir`",
-                                            must_exist=True)
-    if invocation_problem:
-        problems.append(invocation_problem)
-        invocation = None
-    problems += _check_references(result.get("retained_artifacts"),
-                                  "result `retained_artifacts`",
-                                  must_exist=True, run_dir=True)
-    # Every retained directory is `<invocation_dir>/run-NNN` for the run
-    # that produced it, and `retained_artifacts` is exactly those, in
-    # order, with the error run last. All of it is DERIVED by
-    # `Measurement.retained_artifacts()`, so checking it here leaves no
-    # free-form slot a payload could occupy.
-    derived: list[str] = []
-    for record, index_label in ([(r, f"run {position}")
-                                 for position, r in enumerate(runs)]
-                                + [(result.get("error_run"), "`error_run`")]):
-        if not isinstance(record, dict) or record.get("artifact_dir") is None:
-            continue
-        artifact = record["artifact_dir"]
-        derived.append(artifact)
-        problem = _reference_problem(artifact, f"{index_label} `artifact_dir`",
-                                     must_exist=True, run_dir=True)
-        if problem:
-            problems.append(problem)
-            continue
-        if isinstance(invocation, str) and _is_count(record.get("index")):
-            expected = f"{invocation}/run-{record['index']:03d}"
-            if artifact != expected:
-                problems.append(
-                    f"{index_label} `artifact_dir` is {artifact[:120]!r}, not "
-                    f"the {expected!r} its own index names")
-    if isinstance(result.get("retained_artifacts"), list) \
-            and result["retained_artifacts"] != derived:
-        problems.append(
-            f"result `retained_artifacts` does not match the runs that "
-            f"retained one ({len(derived)} run director"
-            f"{'y' if len(derived) == 1 else 'ies'})")
-    references_to_root = []
-    if isinstance(result.get("retained_artifacts"), list):
-        references_to_root += [
-            (value, f"result `retained_artifacts`[{position}]")
-            for position, value in enumerate(result["retained_artifacts"])]
-    references_to_root.append((result.get("invocation_dir"),
-                               "result `invocation_dir`"))
-    for position, artifact in enumerate(derived):
-        references_to_root.append((artifact, f"retained artifact {position}"))
-    base = _resolved(root) if isinstance(root, str) else None
-    if base is not None:
-        for value, label in references_to_root:
-            if not isinstance(value, str):
-                continue
-            # Resolved on BOTH sides, so a symlinked root and a symlinked
-            # reference are compared as the places they actually are.
-            resolved = _resolved(value)
-            if resolved is None or (resolved != base
-                                    and base not in resolved.parents):
-                problems.append(
-                    f"{label} is not under the declared artifact root "
-                    f"{root!r}: {value[:120]!r}")
-    return problems
+        raise CensusError(
+            f"result status {status!r} is not one of {RESULT_STATUSES}")
+    return probe, status
 
 
-def _validate_error_run(record, declared: set, completed, requested) -> list[str]:
-    """The one run whose protocol stream could not be trusted.
+def _field(result, name: str):
+    """One field the durable record is built from, or a refusal."""
+    if name not in result:
+        raise CensusError(
+            f"a {RESULT_SCHEMA} document with no {name!r} cannot be recorded")
+    return result[name]
 
-    `probe_flake.measure` ALWAYS records this run on a harness error —
-    it is what stops the result reading as "nothing went wrong, nothing
-    retained" — so its absence is malformed input, not a lighter kind of
-    harness error. It is deliberately not one of the completed runs, so
-    it sits at exactly the next index.
-    """
-    if record is None:
-        return ["a harness-error result must carry its `error_run`"]
-    if not isinstance(record, dict):
-        return [f"`error_run` is not an object: {record!r}"]
-    problems: list[str] = []
-    if record.get("outcome") != probe_flake.RUN_HARNESS_ERROR:
-        problems.append(f"`error_run` outcome {record.get('outcome')!r} is not "
-                        f"{probe_flake.RUN_HARNESS_ERROR!r}")
-    index = record.get("index")
-    if not _is_count(index):
-        problems.append("`error_run` has no integer `index`")
-    elif _is_count(completed) and index != completed + 1:
-        problems.append(f"`error_run` index {index} is not the run after the "
-                        f"{completed} completed ones")
-    elif _is_count(requested) and index > requested:
-        problems.append(f"`error_run` index {index} exceeds the {requested} "
-                        f"requested runs")
-    value = record.get("elapsed_seconds")
-    if not _is_number(value) or value < 0:
-        problems.append("`error_run` `elapsed_seconds` must be a finite "
-                        "non-negative number")
-    if record.get("artifact_dir") is not None and not isinstance(
-            record["artifact_dir"], str):
-        problems.append("`error_run` `artifact_dir` must be a string or null")
-    checks = record.get("checks")
-    if not isinstance(checks, dict):
-        problems.append("`error_run` `checks` must be an object")
-    else:
-        if declared and set(checks) != declared:
-            problems.append(f"`error_run` reports checks {sorted(checks)} but "
-                            f"the descriptor declares {sorted(declared)}")
-        for cid, outcome in checks.items():
-            if outcome not in CHECK_OUTCOMES:
-                problems.append(f"`error_run` check {cid!r} result {outcome!r} "
-                                f"is not one of {CHECK_OUTCOMES}")
-    return problems
+
+def _artifact_list(result):
+    values = _field(result, "retained_artifacts")
+    if not isinstance(values, list):
+        raise CensusError(
+            f"`retained_artifacts` must be a list, got "
+            f"{type(values).__name__}")
+    return list(values)
 
 
 def summarize_sample(result: dict) -> dict:
     """The durable record of one accepted measurement.
 
-    Summarized outcomes and artifact REFERENCES only: no stdout, no
-    protocol stream, no engine log ever enters the census.
+    Summarized outcomes and artifact REFERENCES only: the producer-only
+    fields `Measurement.to_document` adds — `port`, the per-run `checks`
+    map, the `checks` descriptor labels, `error_run`, `artifact_root`
+    and `invocation_dir` — are deliberately dropped, and no stdout, no
+    protocol stream and no engine log ever enters the census.
     """
+    runs = _field(result, "runs")
+    if not isinstance(runs, list):
+        raise CensusError(f"`runs` must be a list, got {type(runs).__name__}")
+    summarized = []
+    for position, run in enumerate(runs):
+        if not isinstance(run, dict):
+            raise CensusError(f"run {position} is not an object")
+        try:
+            summarized.append({
+                "index": run["index"],
+                "outcome": run["outcome"],
+                "elapsed_seconds": run["elapsed_seconds"],
+                "artifact_dir": run.get("artifact_dir"),
+            })
+        except KeyError as error:
+            raise CensusError(
+                f"run {position} has no {error.args[0]!r} field") from None
+    counts = _field(result, "check_counts")
+    if not isinstance(counts, dict):
+        raise CensusError(
+            f"`check_counts` must be an object, got {type(counts).__name__}")
     return {
-        "timestamp_utc": result["timestamp_utc"],
-        "commit_sha": result["commit_sha"],
-        "requested_runs": result["requested_runs"],
-        "completed_runs": result["completed_runs"],
-        "runs": [{"index": r["index"], "outcome": r["outcome"],
-                  "elapsed_seconds": r["elapsed_seconds"],
-                  "artifact_dir": r.get("artifact_dir")}
-                 for r in result["runs"]],
-        "check_counts": json.loads(json.dumps(result["check_counts"])),
-        "failure_count": result["failure_count"],
-        "failure_rate": result["failure_rate"],
-        "timeout_count": result["timeout_count"],
-        "worst_elapsed_seconds": result["worst_elapsed_seconds"],
-        "total_elapsed_seconds": result["total_elapsed_seconds"],
-        "rts_capabilities": result["rts_capabilities"],
-        "peak_concurrency": result["peak_concurrency"],
-        "retained_artifacts": list(result["retained_artifacts"]),
+        "timestamp_utc": _field(result, "timestamp_utc"),
+        "commit_sha": _field(result, "commit_sha"),
+        "requested_runs": _field(result, "requested_runs"),
+        "completed_runs": _field(result, "completed_runs"),
+        "runs": summarized,
+        "check_counts": _deep_copy(counts),
+        "failure_count": _field(result, "failure_count"),
+        "failure_rate": _field(result, "failure_rate"),
+        "timeout_count": _field(result, "timeout_count"),
+        "worst_elapsed_seconds": _field(result, "worst_elapsed_seconds"),
+        "total_elapsed_seconds": _field(result, "total_elapsed_seconds"),
+        "rts_capabilities": _field(result, "rts_capabilities"),
+        "peak_concurrency": _field(result, "peak_concurrency"),
+        "retained_artifacts": _artifact_list(result),
     }
 
 
 def summarize_attempt(result: dict, accepted: bool) -> dict:
+    """The durable record of one well-formed ingestion attempt."""
     return {
-        "timestamp_utc": result["timestamp_utc"],
-        "commit_sha": result["commit_sha"],
-        "status": result["status"],
+        "timestamp_utc": _field(result, "timestamp_utc"),
+        "commit_sha": _field(result, "commit_sha"),
+        "status": _field(result, "status"),
         "accepted": accepted,
-        "requested_runs": result["requested_runs"],
-        "completed_runs": result["completed_runs"],
+        "requested_runs": _field(result, "requested_runs"),
+        "completed_runs": _field(result, "completed_runs"),
         "error": result.get("error"),
-        "retained_artifacts": list(result["retained_artifacts"]),
+        "retained_artifacts": _artifact_list(result),
     }
 
 
 def ingest_result(document: dict, result) -> tuple[dict, str]:
-    """`document` with `result` recorded, plus the probe it touched.
+    """`document` with `result` recorded, plus the probe row it touched.
 
-    Raises `CensusError` — leaving `document` untouched — for anything
-    `validate_result` rejects. A well-formed harness-error result is
-    logged as a failed attempt and contributes no sample and no
-    aggregate. An accepted measurement appends to the current cohort
-    when it names the same commit, and otherwise archives the whole
-    prior cohort before opening a new one.
+    A `status: "ok"` measurement appends one durable sample and one
+    accepted attempt; a well-formed harness error appends only a
+    non-accepted attempt and touches neither `current` nor any
+    aggregate. An accepted measurement naming the same commit as
+    `current` appends to that cohort; a different commit archives the
+    complete prior cohort into `history` first.
+
+    Deliberately NOT idempotent: recording the same document twice
+    appends a second sample and a second attempt. The record is
+    append-only and this slice introduces no deduplication key.
     """
-    problems = validate_result(result, document)
-    if problems:
-        raise CensusError(f"refusing {RESULT_SCHEMA} document: " +
-                          "; ".join(problems[:5]))
-    probe = result["probe"]
-    entries = [dict(entry) for entry in document["probes"]]
-    for entry in entries:
-        if entry["key"] != probe:
+    probe, status = result_target(result)
+    entries = _rows(document, "census")
+    target = find_entry(document, probe)
+    if target is None:
+        # Distinct from the inventory-parity rule: an unrelated missing,
+        # added or stale row never refuses a finished measurement. Only
+        # the absence of the row being written refuses, because there is
+        # nowhere to append without fabricating inventory `--seed` owns.
+        raise CensusError(
+            f"probe {probe!r} has no census row; reconcile the inventory "
+            f"with `python3 tools/probe_census.py --seed`")
+    if not isinstance(target.get("census"), dict):
+        raise CensusError(
+            f"probe {probe!r} has no census record to append to")
+    accepted = status == "ok"
+    sample = summarize_sample(result) if accepted else None
+    attempt = summarize_attempt(result, accepted)
+    commit = attempt["commit_sha"]
+
+    rows = [dict(entry) for entry in entries]
+    for row in rows:
+        if row.get("key") != probe:
             continue
-        census = json.loads(json.dumps(entry["census"]))
-        accepted = result["status"] == "ok"
-        if accepted:
+        census = _deep_copy(row["census"])
+        if sample is not None:
             current = census.get("current")
-            if current is None or current.get("commit_sha") != result["commit_sha"]:
+            if not isinstance(current, dict) or current.get("commit_sha") != commit:
                 _archive_current(census)
-                census["current"] = {"commit_sha": result["commit_sha"],
-                                     "samples": []}
-            census["current"]["samples"].append(summarize_sample(result))
-        census["attempts"] = list(census.get("attempts") or []) + [
-            summarize_attempt(result, accepted)]
-        entry["census"] = census
+                census["current"] = {"commit_sha": commit, "samples": []}
+            census["current"]["samples"] = list(
+                census["current"].get("samples") or []) + [sample]
+        census["attempts"] = list(census.get("attempts") or []) + [attempt]
+        row["census"] = census
         break
     updated = dict(document)
-    updated["probes"] = entries
+    updated["probes"] = rows
     return updated, probe
 
 
 def set_policy(document: dict, probe: str, *,
-               acceptable_failures="keep", justification="keep",
-               estimate="keep") -> tuple[dict, str]:
+               acceptable_failures=KEEP, justification=KEEP,
+               estimate=KEEP) -> tuple[dict, str]:
     """Store the supplied X / justification / estimate for one probe.
 
-    `"keep"` leaves a field alone; `None` clears it. This module stores
-    the policy it is given and never chooses one.
+    `KEEP` leaves a field alone; `None` clears it. Clearing
+    `acceptable_failures` also clears its justification, because a
+    justification with nothing to justify is not a state this record
+    can hold. Every unrelated policy field and all measurement history
+    are left exactly as they were.
+
+    This module stores the policy it is given: range and
+    justification-policy enforcement are #1430's and #1492's.
     """
-    entry = find_entry(document, probe)
-    if entry is None:
-        raise CensusError(f"probe {probe!r} has no census entry")
-    entries = [dict(row) for row in document["probes"]]
-    for row in entries:
-        if row["key"] != probe:
+    entries = _rows(document, "census")
+    target = find_entry(document, probe)
+    if target is None:
+        raise CensusError(f"probe {probe!r} has no census row")
+    if not isinstance(target.get("census"), dict):
+        raise CensusError(f"probe {probe!r} has no census record to update")
+    if acceptable_failures is not KEEP and acceptable_failures is None:
+        justification = None
+    rows = [dict(entry) for entry in entries]
+    for row in rows:
+        if row.get("key") != probe:
             continue
-        census = json.loads(json.dumps(row["census"]))
-        if acceptable_failures != "keep":
+        census = _deep_copy(row["census"])
+        if acceptable_failures is not KEEP:
             census["acceptable_failures"] = acceptable_failures
-        if justification != "keep":
+        if justification is not KEEP:
             census["acceptable_failures_justification"] = justification
-        if estimate != "keep":
+        if estimate is not KEEP:
             census["estimated_worst_case_seconds"] = estimate
         row["census"] = census
         break
     updated = dict(document)
-    updated["probes"] = entries
+    updated["probes"] = rows
     return updated, probe
 
 
 # ==========================================================================
 # The docs worktree
 # ==========================================================================
-class DocsWorktreeMissing(Exception):
-    """No worktree is on `docs-wip`; the caller must create one."""
-
-
 def resolve_docs_worktree(repo_root: str | None = None) -> Path:
     """The worktree whose branch is `docs-wip`, resolved BY BRANCH.
 
@@ -1532,20 +633,55 @@ def lock_path(target: Path) -> Path:
     return resolved.parent / f".{resolved.name}{LOCK_SUFFIX}"
 
 
+def _refuse_substituted(path: Path, what: str) -> None:
+    """A symlinked, hard-linked or non-regular census path is refused.
+
+    All three resolved paths get this — the census target, its
+    directory, and the lock — not the lock alone. `os.replace` replaces
+    the LINK, so following a symlinked `probe_census.json` would write
+    the census wherever the link points (the primary checkout included),
+    and replacing a hard-linked target silently strands the other name
+    on the old bytes. Either defeats "leave the old authoritative bytes
+    unchanged".
+    """
+    if path.parent.is_symlink():
+        raise CensusError(
+            f"refusing to use {path.parent}: the {what} directory may not be "
+            f"a symlink")
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise CensusError(f"could not stat the {what} {path} ({error})") from None
+    if stat.S_ISLNK(info.st_mode):
+        raise CensusError(
+            f"refusing to use {path}: the {what} may not be a symlink")
+    if not stat.S_ISREG(info.st_mode):
+        raise CensusError(
+            f"refusing to use {path}: the {what} must be a regular file "
+            f"(got mode {stat.S_IFMT(info.st_mode):#o})")
+    if info.st_nlink != 1:
+        raise CensusError(
+            f"refusing to use {path}: the {what} must have exactly one link "
+            f"(got {info.st_nlink})")
+
+
 @contextmanager
 def _locked(target: Path):
-    _refuse_symlink(Path(target))
+    _refuse_substituted(Path(target), "census")
     guard = lock_path(target)
+    _refuse_substituted(guard, "census lock")
     try:
         # The census directory is created here rather than at
         # replacement time so the lock exists for the very first writer
         # too. Reaching this point already means a `docs-wip` worktree
         # resolved, so nothing is created anywhere else.
         guard.parent.mkdir(parents=True, exist_ok=True)
-        # O_NOFOLLOW because the lock is a THIRD path, beside the target
-        # and its directory: a lock path replaced with a symlink must
-        # fail rather than be followed, or the note written below would
-        # land wherever it points — the primary checkout included.
+        # O_NOFOLLOW closes the race between the lstat above and this
+        # open: a lock path swapped for a symlink in between must fail
+        # rather than be followed, or the note below would land wherever
+        # it points — the primary checkout included.
         fd = os.open(str(guard), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     except OSError as error:
         raise CensusError(
@@ -1623,6 +759,14 @@ def _atomic_replace(target: Path, payload: bytes) -> None:
                                   prefix=STAGING_PREFIX, suffix=STAGING_SUFFIX)
     staged_path = Path(staged)
     try:
+        # `mkstemp` creates with O_EXCL, so the staging path cannot be a
+        # pre-planted symlink; assert the resulting inode anyway, since
+        # this is the third path the substitution rule names.
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise CensusError(
+                f"refusing to use {staged_path}: the census staging file must "
+                f"be a regular file with exactly one link")
         with os.fdopen(fd, "wb") as handle:
             handle.write(payload)
             handle.flush()
@@ -1642,8 +786,11 @@ def _atomic_replace(target: Path, payload: bytes) -> None:
         os.close(dir_fd)
 
 
+# ==========================================================================
+# The preservation contract
+# ==========================================================================
 def _entry_map(document) -> dict:
-    return {entry["key"]: entry for entry in document.get("probes") or []
+    return {entry["key"]: entry for entry in (document or {}).get("probes") or []
             if isinstance(entry, dict) and isinstance(entry.get("key"), str)}
 
 
@@ -1658,127 +805,208 @@ def _sample_total(census) -> int:
                if isinstance(c, dict))
 
 
+POLICY_FIELDS = ("acceptable_failures", "acceptable_failures_justification",
+                 "estimated_worst_case_seconds")
+MEASUREMENT_FIELDS = ("current", "history", "attempts")
+INVENTORY_FIELDS = ("key", "script", "classification", "protocol")
+
+
+def _census_of(entry) -> dict:
+    census = (entry or {}).get("census")
+    return census if isinstance(census, dict) else {}
+
+
+def _append_only(key: str, was: dict, now: dict) -> list[str]:
+    """`history` and `attempts` grew by appending, and nothing was lost."""
+    problems: list[str] = []
+    for field in ("history", "attempts"):
+        previous = was.get(field) or []
+        current = now.get(field) or []
+        if current[:len(previous)] != previous:
+            problems.append(
+                f"probe {key!r} `{field}` is append-only, but the candidate "
+                f"rewrote or discarded an existing entry")
+    # Archiving MOVES a cohort out of `current` into `history`, so the
+    # append-only check above cannot see a cohort that was dropped
+    # instead. Retained measurements only ever grow.
+    if _sample_total(now) < _sample_total(was):
+        problems.append(
+            f"probe {key!r} lost retained measurements "
+            f"({_sample_total(was)} before, {_sample_total(now)} after)")
+    return problems
+
+
 def _check_preserved(before, after, touched) -> list[str]:
     """Every way a candidate disturbed what it had no business touching.
 
     JSON serialization necessarily rewrites the whole file, so this is
-    what makes "changes only the affected probe's record" real: every
-    unrelated entry must be deeply equal and in the same position, and
-    the touched entry's history and attempts must have grown by
-    appending — never by rewriting or discarding.
+    what makes "changes only the affected probe's record" real. It
+    compares the candidate against the document it would replace and
+    knows nothing about field shapes — this is the issue's preservation
+    contract, not the schema validation deferred to #1492.
+
+    `touched` maps a probe key to the aspects its operation may change
+    (`"policy"`, `"measurements"`), or is `TOUCH_ANY` for `--seed`.
+    Everything else must come through untouched: an unrelated row
+    deeply equal and in the same position, a measurement leaving policy
+    alone, a policy update leaving every cohort, sample and attempt
+    alone, and no operation at all shrinking the retained measurements.
     """
     if before is None:
         return []
     problems: list[str] = []
-    before_keys = [e.get("key") for e in before.get("probes") or []]
-    after_keys = [e.get("key") for e in after.get("probes") or []]
-    if touched is TOUCH_ANY:
+    inventory = touched is TOUCH_ANY
+    before_keys = [e.get("key") for e in (before.get("probes") or [])
+                   if isinstance(e, dict)]
+    after_keys = [e.get("key") for e in (after.get("probes") or [])
+                  if isinstance(e, dict)]
+    if inventory:
+        # `--seed` may APPEND newly registered probes; it may not
+        # reorder or drop one.
         if after_keys[:len(before_keys)] != before_keys:
-            problems.append("the candidate reordered or dropped existing "
-                            "inventory entries")
-        return problems
-    if after_keys != before_keys:
-        problems.append(
-            f"the candidate changed the inventory order or membership "
-            f"({len(before_keys)} entries before, {len(after_keys)} after)")
-        return problems
-    names = set(touched)
+            return ["the candidate reordered or dropped existing inventory "
+                    "entries"]
+    elif after_keys != before_keys:
+        return [f"the candidate changed the inventory order or membership "
+                f"({len(before_keys)} entries before, {len(after_keys)} after)"]
+
     old = _entry_map(before)
     new = _entry_map(after)
     for key, entry in old.items():
-        if key not in names:
-            if new.get(key) != entry:
+        candidate = new.get(key)
+        if candidate is None:
+            problems.append(f"the candidate dropped probe {key!r}")
+            continue
+        was, now = _census_of(entry), _census_of(candidate)
+        if inventory:
+            # Reconciliation refreshes inventory columns and may archive
+            # a cohort on CI promotion. It never touches policy and
+            # never loses a measurement.
+            problems += _append_only(key, was, now)
+            for field in POLICY_FIELDS:
+                if now.get(field) != was.get(field):
+                    problems.append(
+                        f"probe {key!r}: reconciliation changed policy field "
+                        f"`{field}`")
+            continue
+        allowed = set(touched.get(key) or ())
+        if not allowed:
+            if candidate != entry:
                 problems.append(
                     f"the candidate modified unrelated probe {key!r}")
             continue
-        was = (entry.get("census") or {})
-        now = (new.get(key, {}).get("census") or {})
-        for field in ("history", "attempts"):
-            previous = was.get(field) or []
-            current = now.get(field) or []
-            if current[:len(previous)] != previous:
+        for field in INVENTORY_FIELDS:
+            if candidate.get(field) != entry.get(field):
                 problems.append(
-                    f"probe {key!r} `{field}` is append-only, but the "
-                    f"candidate rewrote or discarded an existing entry")
-        # Archiving MOVES a cohort out of `current` into `history`, so
-        # the append-only check above cannot see a cohort that was
-        # dropped instead. Retained measurements only ever grow.
-        if _sample_total(now) < _sample_total(was):
-            problems.append(
-                f"probe {key!r} lost retained measurements "
-                f"({_sample_total(was)} before, {_sample_total(now)} after)")
+                    f"probe {key!r}: the candidate changed inventory field "
+                    f"`{field}`, which only --seed may refresh")
+        if "policy" not in allowed:
+            for field in POLICY_FIELDS:
+                if now.get(field) != was.get(field):
+                    problems.append(
+                        f"probe {key!r}: the candidate changed policy field "
+                        f"`{field}`")
+        if "measurements" in allowed:
+            problems += _append_only(key, was, now)
+        else:
+            for field in MEASUREMENT_FIELDS:
+                if now.get(field) != was.get(field):
+                    problems.append(
+                        f"probe {key!r}: the candidate changed `{field}`, "
+                        f"which a policy update may not touch")
     return problems
 
 
-def _refuse_symlink(path: Path) -> None:
-    """A symlinked target or directory is refused, never followed.
+def read_for_update(path: Path):
+    """The census exactly as stored, or None when it does not exist.
 
-    `os.replace` replaces the LINK, so following one would write the
-    census wherever the link points — the primary checkout included,
-    which is exactly what this tool must never touch.
+    Unreadable or non-JSON state is a controlled refusal here rather
+    than something the writer repairs, and the document is returned
+    UNMIGRATED so each operation can decide for itself: only `--seed`
+    migrates.
     """
-    for candidate in (path, path.parent):
-        if candidate.is_symlink():
-            raise CensusError(
-                f"refusing to use {candidate}: a census path may not be a "
-                f"symlink")
-
-
-def read_for_update(path: Path) -> dict | None:
-    """The current census as `probe-census/v2`, or None if absent.
-
-    Malformed state is a `CensusError` here rather than something the
-    writer repairs: a census nobody can read is a stop, and the primary
-    checkout is never involved either way.
-    """
-    _refuse_symlink(path)
+    _refuse_substituted(Path(path), "census")
     if not path.exists():
         return None
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except OSError as error:
         raise CensusError(f"census {path} is unreadable ({error})") from None
     except ValueError as error:
         raise CensusError(
             f"census {path} is not valid JSON: {error}") from None
-    return migrate_document(document)
+
+
+def require_current_schema(document, path: Path) -> dict:
+    """The census as a v2 document, or the refusal that names `--seed`.
+
+    `--record` and the policy operations never migrate and never seed:
+    an absent or still-v1 census is a controlled stop naming the one
+    operation that fixes it. No measurement is lost by the refusal —
+    `probe_flake --result PATH` writes the result document to an
+    external path, so the operator seeds and re-runs `--record` on the
+    same file.
+    """
+    if document is None:
+        raise CensusError(
+            f"census {path} does not exist yet; create it with "
+            f"`python3 tools/probe_census.py --seed`")
+    if not isinstance(document, dict):
+        raise CensusError(
+            f"census {path} must be a JSON object, got "
+            f"{type(document).__name__}")
+    schema = document.get("schema")
+    if schema != CENSUS_SCHEMA:
+        raise CensusError(
+            f"census {path} is {schema!r}, not {CENSUS_SCHEMA!r}; migrate it "
+            f"in place with `python3 tools/probe_census.py --seed`, which "
+            f"never overwrites census data")
+    return document
 
 
 def update(path: Path, mutate) -> dict:
     """One locked read-modify-write of the census at `path`.
 
-    `mutate` receives the migrated document (or None when the target does
-    not exist yet) and returns `(candidate, touched)`, where `touched` is
-    the set of probe keys it is allowed to have changed or `TOUCH_ANY`
-    for an inventory operation. The lock is held from the read through
-    validation to the replacement, and the bytes that are validated are
-    exactly the bytes installed.
+    `mutate` receives the stored document (or None when the target does
+    not exist yet) and returns `(candidate, touched)`, where `touched`
+    is the set of probe keys it is allowed to have changed or
+    `TOUCH_ANY` for an inventory operation. The lock is held from the
+    read through serialization and the preservation checks to the
+    replacement, and the bytes that are checked are exactly the bytes
+    installed.
+
+    Any failure before `os.replace` — a refusing mutation, an
+    unserializable candidate, a preservation violation, a staging write
+    that dies — leaves the old authoritative bytes untouched.
     """
     path = Path(path)
     with _locked(path):
         before = read_for_update(path)
         candidate, touched = mutate(before)
         payload = render_manifest(candidate).encode("utf-8")
-        # Validate the SERIALIZED bytes: what a later reader will see,
-        # not the in-memory object that produced them.
+        # Compare against the bytes a later reader will see, not the
+        # in-memory object that produced them.
         installed = json.loads(payload.decode("utf-8"))
-        problems = validate_structure(installed)
-        problems += _check_preserved(before, installed, touched)
+        problems = _check_preserved(before, installed, touched)
         if problems:
-            raise CensusError("refusing to install a malformed census: " +
+            raise CensusError("refusing to install a census that loses data: " +
                               "; ".join(problems[:5]))
         _clear_staging(path.parent)
+        if path.exists() and path.read_bytes() == payload:
+            # A drift-free `--seed` is genuinely a no-op: leave the file,
+            # its inode and its mtime exactly as they are.
+            return installed
         _atomic_replace(path, payload)
         return installed
 
 
 def ensure_document(path: Path) -> dict:
-    """Create, migrate, or refresh the census at `path`, losing nothing.
+    """Create, migrate, or reconcile the census at `path`, losing nothing.
 
-    An ABSENT target gets a fresh seed. An existing one is migrated to
-    the current schema and reconciled against the live registry — never
-    regenerated, so accumulated census data cannot be overwritten by a
-    freshly generated inventory.
+    An ABSENT target gets a fresh v2 seed. An existing one is migrated
+    to the current schema and reconciled against the live registry —
+    never regenerated, so accumulated census data cannot be overwritten
+    by a freshly generated inventory.
     """
     def mutate(before):
         if before is None:
@@ -1792,32 +1020,25 @@ def record_result(path: Path, result) -> str:
     touched: list[str] = []
 
     def mutate(before):
-        if before is None:
-            raise CensusError(
-                f"census {path} does not exist yet; seed it first with "
-                f"`python3 tools/probe_census.py --seed`")
-        candidate, probe = ingest_result(before, result)
+        document = require_current_schema(before, path)
+        candidate, probe = ingest_result(document, result)
         touched.append(probe)
-        return candidate, {probe}
+        return candidate, {probe: {"measurements"}}
     update(path, mutate)
     return touched[0]
 
 
 def record_policy(path: Path, probe: str, **fields) -> str:
     def mutate(before):
-        if before is None:
-            raise CensusError(
-                f"census {path} does not exist yet; seed it first with "
-                f"`python3 tools/probe_census.py --seed`")
-        candidate, key = set_policy(before, probe, **fields)
-        return candidate, {key}
+        document = require_current_schema(before, path)
+        candidate, key = set_policy(document, probe, **fields)
+        return candidate, {key: {"policy"}}
     update(path, mutate)
     return probe
 
 
-# Kept for callers of #1425's seeding entry point. It no longer
-# regenerates over an existing document.
 def seed(repo_root: str | None = None) -> Path:
+    """#1425's entry point. It no longer regenerates over an existing file."""
     path = manifest_path(repo_root)
     ensure_document(path)
     return path
@@ -1826,30 +1047,65 @@ def seed(repo_root: str | None = None) -> Path:
 # ==========================================================================
 # CLI
 # ==========================================================================
-def _parse_optional_int(text: str, what: str) -> int | None:
-    if text.lower() in ("none", "null", ""):
+def _optional_int(text: str, what: str) -> int | None:
+    """`none`, or an integer. Range policy is #1430's, not this tool's."""
+    if text == "none":
         return None
     try:
-        value = int(text)
+        return int(text)
     except ValueError:
-        raise CensusError(f"{what} must be an integer or `none`, got "
-                          f"{text!r}") from None
-    if value < 0:
-        raise CensusError(f"{what} must not be negative, got {value}")
-    return value
+        raise CensusError(
+            f"{what} takes an integer or the literal `none`, got "
+            f"{text!r}") from None
 
 
-def _parse_optional_float(text: str, what: str) -> float | None:
-    if text.lower() in ("none", "null", ""):
+def _optional_number(text: str, what: str) -> float | int | None:
+    """`none`, or a finite number. An integral token stays an integer."""
+    if text == "none":
         return None
+    try:
+        return int(text)
+    except ValueError:
+        pass
     try:
         value = float(text)
     except ValueError:
-        raise CensusError(f"{what} must be a number or `none`, got "
-                          f"{text!r}") from None
-    if not math.isfinite(value) or value < 0:
-        raise CensusError(f"{what} must be finite and non-negative, got {text!r}")
+        raise CensusError(
+            f"{what} takes a number or the literal `none`, got "
+            f"{text!r}") from None
+    if not math.isfinite(value):
+        # JSON has no NaN or Infinity, so storing one would make the
+        # census unreadable to every other reader.
+        raise CensusError(f"{what} must be finite, got {text!r}")
     return value
+
+
+def _policy_fields(args) -> dict:
+    """The `set_policy` keywords the CLI arguments select.
+
+    Every argument-combination error lands here, before the census is
+    read or written.
+    """
+    setting_x = args.set_acceptable_failures is not None
+    setting_estimate = args.set_estimate is not None
+    if setting_x and setting_estimate:
+        raise CensusError(
+            "--set-acceptable-failures and --set-estimate update different "
+            "policy fields; use one per invocation")
+    if args.justification is not None and not setting_x:
+        raise CensusError(
+            "--justification is only valid with --set-acceptable-failures")
+    if not args.probe:
+        raise CensusError("--probe KEY is required for a policy update")
+    if setting_x:
+        return {
+            "acceptable_failures": _optional_int(
+                args.set_acceptable_failures, "--set-acceptable-failures"),
+            "justification": (KEEP if args.justification is None else
+                              (None if args.justification == "none"
+                               else args.justification)),
+        }
+    return {"estimate": _optional_number(args.set_estimate, "--set-estimate")}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1858,31 +1114,43 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     group = ap.add_mutually_exclusive_group(required=True)
     group.add_argument("--print", dest="do_print", action="store_true",
-                       help="print the manifest the live registry implies")
+                       help="print the census the live registry implies")
     group.add_argument("--seed", action="store_true",
                        help=f"create or migrate {MANIFEST_RELPATH} in the "
-                            f"{DOCS_BRANCH} worktree, never overwriting census "
-                            f"data")
+                            f"{DOCS_BRANCH} worktree, never overwriting "
+                            f"census data")
     group.add_argument("--validate", action="store_true",
-                       help=f"validate the {DOCS_BRANCH} worktree's census")
+                       help=f"check the {DOCS_BRANCH} worktree's inventory")
     group.add_argument("--record", metavar="RESULT",
-                       help=f"ingest a {RESULT_SCHEMA} document")
-    group.add_argument("--show", action="store_true",
-                       help="print one probe's census record")
+                       help=f"ingest one {RESULT_SCHEMA} document")
     group.add_argument("--set-acceptable-failures", metavar="N",
                        help="store X for --probe (an integer, or `none`)")
     group.add_argument("--set-estimate", metavar="SECONDS",
                        help="store the estimated worst-case duration for "
                             "--probe (a number of seconds, or `none`)")
-    ap.add_argument("--probe", help="the probe key --show and --set-* act on")
+    ap.add_argument("--probe", help="the probe key a policy update acts on")
     ap.add_argument("--justification", default=None,
-                    help="the optional justification stored beside X")
+                    help="the justification stored beside X (or `none` to "
+                         "clear it); omit to leave it unchanged")
     args = ap.parse_args(argv)
 
+    # `--print` must never require, read or create the docs worktree:
+    # that is what lets a fresh checkout run it.
     if args.do_print:
         sys.stdout.write(render_manifest())
         return 0
     try:
+        policy = (args.set_acceptable_failures is not None
+                  or args.set_estimate is not None)
+        if args.probe and not policy:
+            raise CensusError(
+                "--probe is only used by --set-acceptable-failures and "
+                "--set-estimate")
+        if args.justification is not None and not policy:
+            raise CensusError(
+                "--justification is only valid with --set-acceptable-failures")
+        fields = _policy_fields(args) if policy else None
+
         path = manifest_path()
         if args.seed:
             document = ensure_document(path)
@@ -1891,9 +1159,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.record:
             try:
-                result = json.loads(Path(args.record).read_text(encoding="utf-8"))
+                result = json.loads(
+                    Path(args.record).read_text(encoding="utf-8"))
             except OSError as error:
-                raise CensusError(f"cannot read {args.record} ({error})") from None
+                raise CensusError(
+                    f"cannot read {args.record} ({error})") from None
             except ValueError as error:
                 raise CensusError(
                     f"{args.record} is not valid JSON: {error}") from None
@@ -1901,41 +1171,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"recorded a {result.get('status')} measurement for "
                   f"{probe} in {path}")
             return 0
-        if args.show or args.set_acceptable_failures is not None \
-                or args.set_estimate is not None:
-            if not args.probe:
-                raise CensusError("--probe is required for this operation")
-            if args.show:
-                document = read_for_update(path)
-                if document is None:
-                    raise CensusError(f"census {path} does not exist yet")
-                entry = find_entry(document, args.probe)
-                if entry is None:
-                    raise CensusError(
-                        f"probe {args.probe!r} has no census entry")
-                sys.stdout.write(json.dumps(entry, indent=2, sort_keys=True)
-                                 + "\n")
-                return 0
-            fields: dict = {}
-            if args.set_acceptable_failures is not None:
-                fields["acceptable_failures"] = _parse_optional_int(
-                    args.set_acceptable_failures, "--set-acceptable-failures")
-                fields["justification"] = args.justification
-            if args.set_estimate is not None:
-                fields["estimate"] = _parse_optional_float(
-                    args.set_estimate, "--set-estimate")
+        if fields is not None:
             record_policy(path, args.probe, **fields)
             print(f"updated the census record for {args.probe} in {path}")
             return 0
-
-        document = load(path)
-        if isinstance(document, dict) and document.get("schema") == SEED_SCHEMA:
-            raise CensusError(
-                f"{path} is still {SEED_SCHEMA}; migrate it in place with "
-                f"`python3 tools/probe_census.py --seed`, which never "
-                f"overwrites census data")
-        problems = validate_structure(document)
-        problems += validate_manifest(document)
+        problems = validate_manifest(load(path))
     except DocsWorktreeMissing as error:
         print(f"probe_census: {error}", file=sys.stderr)
         return 2

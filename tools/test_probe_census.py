@@ -1,1257 +1,1120 @@
 #!/usr/bin/env python3
 """Focused self-test for the probe census record and its writer (#1428).
 
-Deterministic, engine-free, GPU-free and fast: no probe is ever run and
-no world is generated. Every case drives the shipped
-`tools/probe_census.py` against a census file in a throwaway temp
-directory, with `run_probes.PROBES`, `ci_probes.CI_ELIGIBLE` and
-`probe_flake.PROTOCOL_PROBES` pointed at a synthetic registry where the
-case needs one — never against the real `docs/probe_census.json`, which
-lives only in a `docs-wip` worktree and is deliberately never published.
+Deterministic, engine-free, GPU-free and offline: every case runs
+against synthetic documents in a throwaway temporary tree. Nothing here
+boots an engine, runs a registered probe, touches the developer's real
+`docs-wip` worktree, or shells out to anything but `git` (to build a
+two-worktree scratch repository the CLI cases can resolve) and this same
+interpreter (for the independent-process contention case).
 
-The measurement fixture is built from the REAL
-`probe_flake.Measurement`/`RunRecord` classes rather than a hand-written
-dictionary, so `validate_result` is checked against the document the
-harness actually emits. Mutation coverage is then the point: every
-validation rule is exercised from both sides, because a validator that
-only ever sees valid input proves nothing.
+The real `tools/probe_census.py` is imported and driven — with
+`run_probes.PROBES`, `run_probes.REPO_ROOT`, `ci_probes.CI_ELIGIBLE` and
+`probe_flake.PROTOCOL_PROBES` pointed at a synthetic registry — so this
+exercises the shipped code paths rather than a copy.
 
-The concurrency case uses independent PROCESSES, not threads: the
-contract is a cross-process lock, and a thread-only test would pass
-against a lock that does not exist.
+What is deliberately NOT covered: comprehensive schema, required-field,
+enum, range and finite-number validation (#1492) and the cross-field
+census/measurement invariants (#1493). This slice owns the record, the
+operations, and the atomic write path, and its safety promise is a
+CONTROLLED refusal — no traceback, authoritative bytes unchanged — when
+an operation cannot be performed, not the discovery of every possible
+corruption in a hand-edited document.
 
 Usage:
   python3 tools/test_probe_census.py
-Exit codes: 0 = all cases passed, 1 = one or more failed.
+Exit codes: 0 = all tests passed, 1 = one or more failed.
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
-import textwrap
+from contextlib import contextmanager
 from pathlib import Path
 
-TOOLS = Path(__file__).resolve().parent
-sys.path.insert(0, str(TOOLS))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ci_probes  # type: ignore  # noqa: E402
 import probe_census  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
-import probe_protocol  # type: ignore  # noqa: E402
 import run_probes  # type: ignore  # noqa: E402
 
 FAILURES: list[str] = []
 
-CHECKS = [("alpha", "the first check"), ("beta", "the second check")]
 COMMIT_A = "a" * 40
 COMMIT_B = "b" * 40
-PROBE = "censusprobe"
-OTHER = "otherprobe"
-CIPROBE = "ciprobe"
-# A REAL artifact tree, created per registry and outside every checkout:
-# a reference is minted from a directory the harness wrote, so the
-# fixture writes them too rather than composing plausible strings.
-ARTIFACT_ROOT = ""
-INVOCATION = ""
-
-
-def stamp(index: int) -> str:
-    """A distinct UTC timestamp, the field that tells samples apart."""
-    return f"2026-08-20T{index // 3600:02d}:{index // 60 % 60:02d}:{index % 60:02d}Z"
 
 
 def expect(cond: bool, msg: str) -> None:
     if not cond:
         FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
+    print(f"  {'ok  ' if cond else 'FAIL'} {msg}")
 
 
-def expect_raises(exc, fn, msg: str, substring: str | None = None) -> None:
+def expect_refusal(call, msg: str, *fragments: str) -> None:
+    """`call` refuses with a `CensusError` naming each fragment."""
     try:
-        fn()
-    except exc as error:
-        if substring is not None and substring not in str(error):
-            FAILURES.append(f"{msg} (raised {exc.__name__} but not about "
-                            f"{substring!r}: {error})")
-            print(f"  FAIL: {msg} — wrong message: {error}")
-            return
-        print(f"  OK:   {msg}")
+        call()
+    except probe_census.CensusError as error:
+        text = str(error)
+        missing = [f for f in fragments if f not in text]
+        if missing:
+            expect(False, f"{msg} (message {text!r} is missing {missing})")
+        else:
+            expect(True, msg)
         return
-    except Exception as error:  # noqa: BLE001 - a wrong exception is a failure
-        FAILURES.append(f"{msg} (raised {type(error).__name__}: {error})")
-        print(f"  FAIL: {msg} — raised {type(error).__name__}: {error}")
+    except Exception as error:  # noqa: BLE001 - an uncontrolled failure IS the bug
+        expect(False, f"{msg} (raised {type(error).__name__}: {error})")
         return
-    FAILURES.append(f"{msg} (nothing raised)")
-    print(f"  FAIL: {msg} — nothing raised")
+    expect(False, f"{msg} (nothing was raised)")
 
 
 # ==========================================================================
 # Fixtures
 # ==========================================================================
-class SyntheticRegistry:
-    """`run_probes.PROBES`, `ci_probes.CI_ELIGIBLE` and
-    `probe_flake.PROTOCOL_PROBES` pointed at a small invented registry.
+SYNTHETIC = [
+    ("alpha", "alpha_probe.py", "the first synthetic probe"),
+    ("beta", "beta_probe.py", "the second synthetic probe"),
+    ("gamma", "gamma_probe.py", "the third synthetic probe"),
+]
 
-    Restored on exit, because the real ones are module-level globals the
-    rest of this file's cases read."""
 
-    def __init__(self, probes=None, ci=None, protocol=None):
-        self.probes = probes if probes is not None else [
-            (PROBE, f"{PROBE}_probe.py", "the measured probe"),
-            (OTHER, f"{OTHER}_probe.py", "an unrelated probe"),
-            (CIPROBE, f"{CIPROBE}_probe.py", "a CI-eligible probe"),
-        ]
-        self.ci = set(ci if ci is not None else {CIPROBE})
-        self.protocol = dict(protocol if protocol is not None else {
-            PROBE: probe_protocol.PROTOCOL_VERSION,
-            OTHER: probe_protocol.PROTOCOL_VERSION,
-            CIPROBE: probe_protocol.PROTOCOL_VERSION,
-        })
-
-    def __enter__(self):
-        self.saved = (run_probes.PROBES, ci_probes.CI_ELIGIBLE,
-                      probe_flake.PROTOCOL_PROBES)
-        run_probes.PROBES = self.probes
-        ci_probes.CI_ELIGIBLE = self.ci
-        probe_flake.PROTOCOL_PROBES = self.protocol
-        self.root = Path(tempfile.mkdtemp(prefix="probe-census-test-"))
-        global ARTIFACT_ROOT, INVOCATION
-        self.artifacts = Path(tempfile.mkdtemp(prefix="probe-census-art-"))
-        ARTIFACT_ROOT = str(self.artifacts)
-        INVOCATION = f"{ARTIFACT_ROOT}/inv"
-        Path(INVOCATION).mkdir(parents=True, exist_ok=True)
-        return self
-
-    def __exit__(self, *exc):
+@contextmanager
+def registry(probes=None, ci_eligible=(), protocol=None):
+    """The live registries, pointed at a synthetic set for one case."""
+    saved = (run_probes.PROBES, ci_probes.CI_ELIGIBLE,
+             probe_flake.PROTOCOL_PROBES)
+    run_probes.PROBES = list(SYNTHETIC if probes is None else probes)
+    ci_probes.CI_ELIGIBLE = set(ci_eligible)
+    probe_flake.PROTOCOL_PROBES = dict(protocol or {})
+    try:
+        yield
+    finally:
         (run_probes.PROBES, ci_probes.CI_ELIGIBLE,
-         probe_flake.PROTOCOL_PROBES) = self.saved
-        shutil.rmtree(self.root, ignore_errors=True)
-        shutil.rmtree(self.artifacts, ignore_errors=True)
-        return False
-
-    @property
-    def census(self) -> Path:
-        return self.root / "docs" / "probe_census.json"
+         probe_flake.PROTOCOL_PROBES) = saved
 
 
-def build_result(probe: str = PROBE, *, commit: str = COMMIT_A,
-                 outcomes=("PASS", "FAIL"), harness_error: bool = False,
-                 requested: int | None = None, at: str | None = None,
-                 elapsed=None) -> dict:
-    """One `probe-flake-result/v1` document, built by the real harness types.
+@contextmanager
+def scratch(prefix="probe-census-test-"):
+    root = Path(tempfile.mkdtemp(prefix=prefix))
+    try:
+        yield root
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
-    `probe_flake.Measurement.to_document` is the producer the census has
-    to accept, so the fixture is that object rather than a hand-rolled
-    dictionary that could drift away from it silently.
+
+def v1_document() -> dict:
+    """A `probe-census/v1` seed exactly as #1425 writes one."""
+    return {
+        "schema": "probe-census/v1",
+        "probes": [
+            {"key": "alpha", "script": "alpha_probe.py",
+             "classification": "manual-only", "protocol": "legacy"},
+            {"key": "beta", "script": "beta_probe.py",
+             "classification": "ci-eligible", "protocol": "probe-result/v1"},
+        ],
+    }
+
+
+def result_document(probe="alpha", status="ok", commit=COMMIT_A, **overrides):
+    """A realistic `probe-flake-result/v1` document.
+
+    It carries every producer-only field `Measurement.to_document` adds,
+    so the exclusion case has something real to prove.
     """
-    descriptor = probe_protocol.build_descriptor(probe, CHECKS)
-    runs = len(outcomes) if requested is None else requested
-    measurement = probe_flake.Measurement(
-        probe, descriptor, runs, 4, Path(ARTIFACT_ROOT), Path(INVOCATION))
-    measurement.commit_sha = commit
-    measurement.timestamp = at or "2026-08-20T12:00:00Z"
-    for index, outcome in enumerate(outcomes, start=1):
-        checks = {"alpha": probe_protocol.PASS,
-                  "beta": probe_protocol.PASS if outcome == "PASS"
-                  else probe_protocol.FAIL}
-        keep = outcome in ("FAIL", "TIMEOUT")
-        if keep:
-            Path(f"{INVOCATION}/run-{index:03d}").mkdir(parents=True,
-                                                        exist_ok=True)
-        measurement.runs.append(probe_flake.RunRecord(
-            index, 8100 + index, outcome,
-            1.5 * index if elapsed is None else elapsed, checks,
-            Path(f"{INVOCATION}/run-{index:03d}") if keep else None))
-    if harness_error:
-        Path(f"{INVOCATION}/run-{len(outcomes) + 1:03d}").mkdir(
-            parents=True, exist_ok=True)
-        measurement.status = "harness-error"
-        measurement.error = "run 3: the protocol event stream was malformed"
-        measurement.error_run = probe_flake.RunRecord(
-            len(outcomes) + 1, 8199, probe_flake.RUN_HARNESS_ERROR, 0.5,
-            {"alpha": probe_protocol.PASS, "beta": probe_protocol.MISSING},
-            Path(f"{INVOCATION}/run-{len(outcomes) + 1:03d}"))
-    return measurement.to_document()
+    document = {
+        "schema": probe_census.RESULT_SCHEMA,
+        "probe": probe,
+        "status": status,
+        "error": None if status == "ok" else "run 2 emitted a duplicate event",
+        "requested_runs": 2,
+        "completed_runs": 2,
+        "runs": [
+            {"index": 1, "port": 9100, "outcome": "PASS",
+             "elapsed_seconds": 12.5,
+             "checks": {"first": "PASS", "second": "PASS"},
+             "artifact_dir": None},
+            {"index": 2, "port": 9101, "outcome": "FAIL",
+             "elapsed_seconds": 13.25,
+             "checks": {"first": "PASS", "second": "FAIL"},
+             "artifact_dir": "/tmp/artifacts/run-002"},
+        ],
+        "error_run": None,
+        "checks": [{"id": "first", "label": "the first check"},
+                   {"id": "second", "label": "the second check"}],
+        "check_counts": {"first": {"PASS": 2, "FAIL": 0, "MISSING": 0},
+                         "second": {"PASS": 1, "FAIL": 1, "MISSING": 0}},
+        "failure_count": 1,
+        "failure_rate": 0.5,
+        "timeout_count": 0,
+        "worst_elapsed_seconds": 13.25,
+        "total_elapsed_seconds": 25.75,
+        "timestamp_utc": "2026-08-21T05:00:00Z",
+        "commit_sha": commit,
+        "rts_capabilities": 4,
+        "peak_concurrency": 1,
+        "artifact_root": "/tmp/artifacts",
+        "invocation_dir": "/home/dev/synarchy",
+        "retained_artifacts": ["/tmp/artifacts/run-002"],
+    }
+    document.update(overrides)
+    return document
 
 
-def seeded(reg: SyntheticRegistry) -> dict:
-    return probe_census.ensure_document(reg.census)
+def seeded(path: Path) -> dict:
+    """A fresh v2 census on disk, from the synthetic registry."""
+    return probe_census.ensure_document(path)
+
+
+def unchanged(path: Path, before: bytes, msg: str) -> None:
+    expect(path.read_bytes() == before, msg)
+
+
+def staging_residue(directory: Path) -> list[str]:
+    """Staging files by the writer's own rule — the lock is not one."""
+    return sorted(p.name for p in directory.iterdir()
+                  if p.name.startswith(probe_census.STAGING_PREFIX)
+                  and p.name.endswith(probe_census.STAGING_SUFFIX))
 
 
 # ==========================================================================
-# Cases
+def test_record_shape() -> None:
+    print("\n-- the record, and byte-stable serialization --")
+    empty = probe_census.empty_census()
+    expect(empty == {
+        "acceptable_failures": None,
+        "acceptable_failures_justification": None,
+        "estimated_worst_case_seconds": None,
+        "current": None,
+        "history": [],
+        "attempts": [],
+    }, "an empty census record is exactly the six specified fields")
+    expect(probe_census.empty_census() is not empty
+           and probe_census.empty_census()["history"] is not empty["history"],
+           "each empty record is a fresh object, never a shared default")
+
+    with registry(ci_eligible={"beta"}, protocol={"beta": "probe-result/v1"}):
+        document = probe_census.build_manifest()
+        expect(document["schema"] == "probe-census/v2",
+               "a freshly built census is probe-census/v2")
+        expect([row["key"] for row in document["probes"]]
+               == ["alpha", "beta", "gamma"],
+               "rows are built in live registry order")
+        expect(all(row["census"] == probe_census.empty_census()
+                   for row in document["probes"]),
+               "every row carries the exact empty census record")
+        expect(all(set(row) == {"key", "script", "classification",
+                                "protocol", "census"}
+                   for row in document["probes"]),
+               "a row is exactly the four inventory fields plus its census")
+
+        text = probe_census.render_manifest(document)
+        expect(text.endswith("}\n") and text.count("\n") > 1,
+               "the serialization ends with exactly one trailing newline")
+        expect(text == probe_census.render_manifest(json.loads(text)),
+               "the document round-trips byte-for-byte")
+        expect(probe_census.render_manifest(json.loads(text))
+               == probe_census.render_manifest(
+                   json.loads(json.dumps(json.loads(text)))),
+               "serialization is a pure function of content, not key order")
+        shuffled = {"probes": document["probes"], "schema": document["schema"]}
+        expect(probe_census.render_manifest(shuffled) == text,
+               "a document built with its top-level keys in another order "
+               "serializes identically")
+
+    expect_refusal(lambda: probe_census.render_manifest({"probes": {1, 2}}),
+                   "an unserializable candidate is a controlled refusal",
+                   "not serializable")
+
+
 # ==========================================================================
 def test_migration() -> None:
-    print("\n-- migration of the #1425 seeded manifest --")
-    with SyntheticRegistry() as reg:
-        # Exactly #1425's shape: v1, no census key anywhere.
-        v1 = {
-            "schema": probe_census.SEED_SCHEMA,
+    print("\n-- lossless v1 -> v2 migration --")
+    with registry(ci_eligible={"beta"}, protocol={"beta": "probe-result/v1"}):
+        source = v1_document()
+        # An inventory field this tool does not know about must survive.
+        source["probes"][0]["note"] = "kept by migration"
+        original = copy.deepcopy(source)
+        migrated = probe_census.migrate_document(source)
+
+        expect(source == original,
+               "migration does not mutate the document it was given")
+        expect(migrated["schema"] == "probe-census/v2",
+               "the migrated document is probe-census/v2")
+        expect([row["key"] for row in migrated["probes"]] == ["alpha", "beta"],
+               "row order is preserved exactly")
+        expect(len(migrated["probes"]) == 2,
+               "migration does not append the newly registered `gamma`; it is "
+               "migration, not reconciliation")
+        for before, after in zip(original["probes"], migrated["probes"]):
+            expect(all(after[k] == v for k, v in before.items()),
+                   f"every existing value of {before['key']!r} survives, "
+                   f"including unknown fields")
+        expect(migrated["probes"][0]["note"] == "kept by migration",
+               "an unknown inventory field is carried through")
+        expect(all(row["census"] == probe_census.empty_census()
+                   for row in migrated["probes"]),
+               "every migrated row gains the exact empty census record")
+
+        # v2 in, v2 out, untouched.
+        with_data = copy.deepcopy(migrated)
+        with_data["probes"][0]["census"]["acceptable_failures"] = 3
+        expect(probe_census.migrate_document(with_data) == with_data,
+               "migrating an already-v2 document changes nothing")
+
+        # A v2 row with no census is NOT silently repaired: that is
+        # corruption for #1492 to report, and inserting an empty record
+        # would erase the evidence.
+        damaged = copy.deepcopy(migrated)
+        del damaged["probes"][1]["census"]
+        expect("census" not in probe_census.migrate_document(
+            damaged)["probes"][1],
+            "a v2 row missing its census record is left alone, not repaired")
+
+        expect_refusal(
+            lambda: probe_census.migrate_document({"schema": "probe-census/v9",
+                                                   "probes": []}),
+            "an unknown schema is a controlled refusal",
+            "probe-census/v9")
+        expect_refusal(lambda: probe_census.migrate_document([]),
+                       "a non-object census is a controlled refusal",
+                       "must be a JSON object")
+        expect_refusal(
+            lambda: probe_census.migrate_document({"schema": "probe-census/v1",
+                                                   "probes": "no"}),
+            "a non-list `probes` is a controlled refusal", "must be a list")
+        expect_refusal(
+            lambda: probe_census.migrate_document({"schema": "probe-census/v1",
+                                                   "probes": [7]}),
+            "a non-object row is a controlled refusal", "entry 0")
+
+
+# ==========================================================================
+def test_seed_and_noop() -> None:
+    print("\n-- fresh seed, and a drift-free --seed changing nothing --")
+    with registry(), scratch() as root:
+        path = root / "docs" / "probe_census.json"
+        document = seeded(path)
+        expect(path.exists(), "an absent census is created")
+        expect(document["schema"] == "probe-census/v2",
+               "the fresh census is probe-census/v2")
+        expect([row["key"] for row in document["probes"]]
+               == ["alpha", "beta", "gamma"],
+               "the fresh census lists the live registry in order")
+
+        before = path.read_bytes()
+        stamp = path.stat()
+        again = probe_census.ensure_document(path)
+        expect(again == document, "a second seed produces the same document")
+        unchanged(path, before, "a drift-free --seed leaves the bytes alone")
+        after = path.stat()
+        expect((after.st_ino, after.st_mtime_ns)
+               == (stamp.st_ino, stamp.st_mtime_ns),
+               "a drift-free --seed does not even rewrite the file")
+
+        # Seeding a v1 document migrates in place rather than regenerating.
+        legacy = root / "legacy.json"
+        legacy.write_text(json.dumps(v1_document()), encoding="utf-8")
+        migrated = probe_census.ensure_document(legacy)
+        expect(migrated["schema"] == "probe-census/v2",
+               "seeding a v1 census migrates it")
+        expect([row["key"] for row in migrated["probes"]]
+               == ["alpha", "beta", "gamma"],
+               "the migrated v1 rows keep their order and gain the new probe")
+
+
+# ==========================================================================
+def test_reconciliation() -> None:
+    print("\n-- inventory reconciliation --")
+    with scratch() as root:
+        path = root / "probe_census.json"
+        # A census written when `retired` was registered and `gamma` was
+        # not, with real accumulated data on two rows.
+        document = {
+            "schema": "probe-census/v2",
             "probes": [
-                {"key": OTHER, "script": f"{OTHER}_probe.py",
-                 "classification": "manual-only", "protocol": "legacy"},
-                {"key": PROBE, "script": f"{PROBE}_probe.py",
-                 "classification": "manual-only", "protocol": "legacy"},
+                {"key": "retired", "script": "retired_probe.py",
+                 "classification": "manual-only", "protocol": "legacy",
+                 "census": {**probe_census.empty_census(),
+                            "acceptable_failures": 1,
+                            "current": {"commit_sha": COMMIT_A,
+                                        "samples": [{"tag": "kept"}]}}},
+                {"key": "alpha", "script": "stale_name.py",
+                 "classification": "manual-only", "protocol": "legacy",
+                 "census": {**probe_census.empty_census(),
+                            "acceptable_failures": 2,
+                            "acceptable_failures_justification": "two races",
+                            "estimated_worst_case_seconds": 480,
+                            "current": {"commit_sha": COMMIT_A,
+                                        "samples": [{"tag": "alpha-1"}]},
+                            "history": [{"commit_sha": COMMIT_B,
+                                         "samples": [{"tag": "old"}]}],
+                            "attempts": [{"tag": "attempt-1"}]}},
+                {"key": "beta", "script": "beta_probe.py",
+                 "classification": "manual-only", "protocol": "legacy",
+                 "census": {**probe_census.empty_census(),
+                            "acceptable_failures": 9,
+                            "current": {"commit_sha": COMMIT_A,
+                                        "samples": [{"tag": "beta-1"}]},
+                            "attempts": [{"tag": "beta-attempt"}]}},
             ],
         }
-        reg.census.parent.mkdir(parents=True, exist_ok=True)
-        reg.census.write_text(json.dumps(v1, indent=2) + "\n", encoding="utf-8")
+        path.write_text(json.dumps(document), encoding="utf-8")
 
-        migrated = probe_census.migrate_document(v1)
-        expect(migrated["schema"] == probe_census.CENSUS_SCHEMA,
-               "a v1 document migrates to probe-census/v2")
-        expect([e["key"] for e in migrated["probes"]] == [OTHER, PROBE],
-               "migration preserves the seeded entries in their own order")
-        expect(all(e["census"] == probe_census.empty_census()
-                   for e in migrated["probes"]),
-               "migration gives every entry an empty census record")
-        expect(migrated["probes"][0]["protocol"] == "legacy",
-               "migration alone does not touch the inventory columns")
-        expect(v1["probes"][0].get("census") is None,
-               "migration does not mutate its input document")
+        # `beta` has since been promoted to CI eligibility; `alpha` has a
+        # corrected script name and a migrated protocol; `gamma` is new.
+        with registry(ci_eligible={"beta"},
+                      protocol={"alpha": "probe-result/v1"}):
+            result = probe_census.ensure_document(path)
 
-        installed = seeded(reg)
-        keys = [e["key"] for e in installed["probes"]]
-        expect(keys[:2] == [OTHER, PROBE],
-               "seeding an existing census keeps its entries in place")
-        expect(CIPROBE in keys and len(keys) == 3,
-               "a probe registered since the seed is appended, not regenerated")
-        expect(installed["probes"][1]["protocol"] == probe_protocol.PROTOCOL_VERSION,
-               "reconciliation refreshes the protocol column from the registry")
-        expect(probe_census.validate_manifest(installed) == [],
-               "the reconciled census agrees with the live registry")
+        rows = {row["key"]: row for row in result["probes"]}
+        expect([row["key"] for row in result["probes"]]
+               == ["retired", "alpha", "beta", "gamma"],
+               "existing rows keep their order and new probes are appended")
+        expect(rows["retired"] == document["probes"][0],
+               "a row for a probe that left the registry is retained "
+               "untouched, for a person to dispose of")
+        expect(rows["alpha"]["script"] == "alpha_probe.py"
+               and rows["alpha"]["protocol"] == "probe-result/v1",
+               "a still-registered row's inventory metadata is refreshed")
+        expect(rows["alpha"]["census"] == document["probes"][1]["census"],
+               "refreshing inventory metadata preserves the census exactly")
+        expect(rows["gamma"]["census"] == probe_census.empty_census()
+               and rows["gamma"]["classification"] == "manual-only",
+               "a newly registered probe is appended with an empty record")
 
-        expect_raises(probe_census.CensusError,
-                      lambda: probe_census.migrate_document(
-                          {"schema": "probe-census/v9", "probes": []}),
-                      "an unreadable future schema is refused", "v9")
-        expect_raises(probe_census.CensusError,
-                      lambda: probe_census.migrate_document({"schema": "probe-census/v1"}),
-                      "a document with no probes list is refused", "must be a list")
+        promoted = rows["beta"]["census"]
+        expect(rows["beta"]["classification"] == "ci-eligible",
+               "promotion is read from tools/ci_probes.py")
+        expect(promoted["current"] is None,
+               "promotion clears the current manual-only cohort")
+        expect(promoted["history"] == [{"commit_sha": COMMIT_A,
+                                        "samples": [{"tag": "beta-1"}]}],
+               "the promoted cohort is ARCHIVED into history, never dropped")
+        expect(promoted["attempts"] == [{"tag": "beta-attempt"}]
+               and promoted["acceptable_failures"] == 9,
+               "promotion keeps attempts and policy fields")
 
-
-def test_inventory_preservation() -> None:
-    print("\n-- every real inventory entry survives migration --")
-    total = len(run_probes.PROBES)
-    with SyntheticRegistry(probes=run_probes.PROBES, ci=ci_probes.CI_ELIGIBLE,
-                           protocol=probe_flake.PROTOCOL_PROBES) as reg:
-        current = probe_census.build_manifest()
-        v1 = {"schema": probe_census.SEED_SCHEMA,
-              "probes": [{k: v for k, v in e.items() if k != "census"}
-                         for e in current["probes"]]}
-        reg.census.parent.mkdir(parents=True, exist_ok=True)
-        reg.census.write_text(json.dumps(v1, indent=2) + "\n", encoding="utf-8")
-        installed = seeded(reg)
-        expect(len(installed["probes"]) == total,
-               f"all {total} inventory entries survive the migration")
-        expect([e["key"] for e in installed["probes"]] ==
-               [e["key"] for e in v1["probes"]],
-               "the manifest array order is preserved exactly")
-        expect(all(isinstance(e.get("census"), dict) for e in installed["probes"]),
-               "every entry gains a census record")
-        expect(probe_census.validate_structure(installed) == [],
-               "the installed census validates structurally")
-        expect(probe_census.validate_manifest(installed) == [],
-               "the installed census still agrees with the live registry")
+        # The reverse transition refreshes the classification only.
+        with registry(ci_eligible=set(), protocol={"alpha": "probe-result/v1"}):
+            back = probe_census.ensure_document(path)
+        beta = [row for row in back["probes"] if row["key"] == "beta"][0]
+        expect(beta["classification"] == "manual-only",
+               "a probe falling back to manual-only is reclassified")
+        expect(beta["census"] == promoted,
+               "the reverse transition performs NO cohort surgery")
 
 
-def test_measurement_update() -> None:
-    print("\n-- one manual-only measurement update --")
-    with SyntheticRegistry() as reg:
-        before = seeded(reg)
-        probe_census.record_result(reg.census, build_result())
-        after = probe_census.read_for_update(reg.census)
+# ==========================================================================
+def test_ingest_accepted() -> None:
+    print("\n-- accepted measurement ingestion --")
+    with registry(), scratch() as root:
+        path = root / "probe_census.json"
+        seeded(path)
 
-        entry = probe_census.find_entry(after, PROBE)
-        census = entry["census"]
-        expect(census["current"]["commit_sha"] == COMMIT_A,
-               "the accepted measurement opens a cohort for its own commit")
-        expect(len(census["current"]["samples"]) == 1,
-               "the cohort holds exactly the one accepted sample")
+        probe_census.record_result(path, result_document())
+        document = json.loads(path.read_text(encoding="utf-8"))
+        rows = {row["key"]: row for row in document["probes"]}
+        census = rows["alpha"]["census"]
+        expect(census["current"]["commit_sha"] == COMMIT_A
+               and len(census["current"]["samples"]) == 1,
+               "an accepted measurement opens the current cohort with one sample")
+        expect(len(census["attempts"]) == 1
+               and census["attempts"][0]["accepted"] is True
+               and census["attempts"][0]["status"] == "ok",
+               "it also appends exactly one accepted attempt")
+        expect(rows["beta"]["census"] == probe_census.empty_census()
+               and rows["gamma"]["census"] == probe_census.empty_census(),
+               "no unrelated row is touched")
+
         sample = census["current"]["samples"][0]
-        expect([r["outcome"] for r in sample["runs"]] == ["PASS", "FAIL"],
-               "the sample keeps the per-run outcomes")
-        expect(sample["check_counts"]["beta"] == {"PASS": 1, "FAIL": 1,
-                                                  "MISSING": 0},
-               "the sample keeps the per-check counts")
-        expect(sample["timestamp_utc"] == "2026-08-20T12:00:00Z"
-               and sample["commit_sha"] == COMMIT_A,
-               "the sample keeps its timestamp and commit hash")
-        expect(sample["rts_capabilities"] == 4 and sample["peak_concurrency"] >= 1,
-               "the sample keeps the RTS capability and concurrency values")
-        expect(len(census["attempts"]) == 1 and census["attempts"][0]["accepted"],
-               "the attempt log records the accepted ingestion")
-        expect(all(k not in sample for k in ("stdout", "events", "engine_log")),
-               "no raw stream is copied into the census")
+        expect(set(sample) == {
+            "timestamp_utc", "commit_sha", "requested_runs", "completed_runs",
+            "runs", "check_counts", "failure_count", "failure_rate",
+            "timeout_count", "worst_elapsed_seconds", "total_elapsed_seconds",
+            "rts_capabilities", "peak_concurrency", "retained_artifacts",
+        }, "the durable sample is exactly the specified fields")
+        expect(all(set(run) == {"index", "outcome", "elapsed_seconds",
+                                "artifact_dir"} for run in sample["runs"]),
+               "each durable run is exactly the four specified fields")
+        expect(set(census["attempts"][0]) == {
+            "timestamp_utc", "commit_sha", "status", "accepted",
+            "requested_runs", "completed_runs", "error", "retained_artifacts",
+        }, "the durable attempt is exactly the specified fields")
+        expect(sample["retained_artifacts"] == ["/tmp/artifacts/run-002"],
+               "artifact REFERENCES are retained")
 
-        # Only the affected probe changed, and only by appending.
-        old = {e["key"]: e for e in before["probes"]}
-        new = {e["key"]: e for e in after["probes"]}
-        expect([e["key"] for e in before["probes"]] ==
-               [e["key"] for e in after["probes"]],
-               "the update leaves the inventory order untouched")
-        expect(all(old[k] == new[k] for k in old if k != PROBE),
-               "every unrelated entry is deeply equal after the update")
-        expect(old[PROBE]["script"] == new[PROBE]["script"]
-               and old[PROBE]["classification"] == new[PROBE]["classification"],
-               "the touched entry keeps its inventory columns")
+        # Producer-only fields and every raw stream stay out.
+        serialized = json.dumps(document)
+        for leaked in ("port", "error_run", "artifact_root", "invocation_dir",
+                       "the first check"):
+            expect(leaked not in serialized,
+                   f"the producer-only {leaked!r} never enters the census")
+        expect("checks" not in sample and
+               all("checks" not in run for run in sample["runs"]),
+               "the per-run check map and descriptor labels are dropped")
+        expect(sample["check_counts"]
+               == {"first": {"PASS": 2, "FAIL": 0, "MISSING": 0},
+                   "second": {"PASS": 1, "FAIL": 1, "MISSING": 0}},
+               "the summarized per-check tallies are kept")
 
-        # Policy fields are stored, not chosen.
-        probe_census.record_policy(reg.census, PROBE, acceptable_failures=2,
-                                   justification="two known engine races")
-        probe_census.record_policy(reg.census, PROBE, estimate=480.0)
-        census = probe_census.find_entry(
-            probe_census.read_for_update(reg.census), PROBE)["census"]
-        expect(census["acceptable_failures"] == 2
-               and census["acceptable_failures_justification"] ==
-               "two known engine races",
-               "X and its justification are stored verbatim")
-        expect(census["estimated_worst_case_seconds"] == 480.0,
-               "the estimated worst-case duration is stored beside the "
-               "observed one")
-        expect(census["current"]["samples"][0]["worst_elapsed_seconds"] == 3.0,
-               "the observed worst elapsed time stays a separate, measured "
-               "field")
+        # Same commit appends; a different commit archives first.
+        probe_census.record_result(path, result_document())
+        census = json.loads(path.read_text(encoding="utf-8"))["probes"][0]["census"]
+        expect(len(census["current"]["samples"]) == 2 and census["history"] == [],
+               "a second measurement of the SAME commit appends to the cohort")
+        expect(len(census["attempts"]) == 2,
+               "--record is deliberately not idempotent: the same document "
+               "twice appends twice")
 
-
-def test_cohorts() -> None:
-    print("\n-- commit cohorts and the attempt log --")
-    with SyntheticRegistry() as reg:
-        seeded(reg)
-        probe_census.record_result(reg.census, build_result(commit=COMMIT_A, at=stamp(1)))
-        probe_census.record_result(reg.census, build_result(commit=COMMIT_A, at=stamp(2)))
-        census = probe_census.find_entry(
-            probe_census.read_for_update(reg.census), PROBE)["census"]
-        expect(len(census["current"]["samples"]) == 2 and not census["history"],
-               "a second measurement for the same commit appends to the "
-               "current cohort")
-
-        probe_census.record_result(reg.census, build_result(commit=COMMIT_B, at=stamp(3)))
-        census = probe_census.find_entry(
-            probe_census.read_for_update(reg.census), PROBE)["census"]
+        probe_census.record_result(path, result_document(commit=COMMIT_B))
+        census = json.loads(path.read_text(encoding="utf-8"))["probes"][0]["census"]
         expect(census["current"]["commit_sha"] == COMMIT_B
                and len(census["current"]["samples"]) == 1,
                "a different commit opens a new current cohort")
         expect(len(census["history"]) == 1
                and census["history"][0]["commit_sha"] == COMMIT_A
                and len(census["history"][0]["samples"]) == 2,
-               "the complete prior cohort is archived, not discarded")
+               "the COMPLETE prior cohort is archived, not truncated")
 
-        # A well-formed harness error is logged, but contributes nothing.
+
+# ==========================================================================
+def test_ingest_harness_error() -> None:
+    print("\n-- harness-error ingestion --")
+    with registry(), scratch() as root:
+        path = root / "probe_census.json"
+        seeded(path)
+        probe_census.record_result(path, result_document())
+        with_sample = json.loads(path.read_text(encoding="utf-8"))
+
         probe_census.record_result(
-            reg.census, build_result(commit=COMMIT_B, harness_error=True,
-                                     requested=5, at=stamp(4)))
-        census = probe_census.find_entry(
-            probe_census.read_for_update(reg.census), PROBE)["census"]
-        expect(len(census["current"]["samples"]) == 1,
-               "a harness-error result contributes no sample")
-        expect(len(census["attempts"]) == 4
-               and census["attempts"][-1]["accepted"] is False
-               and census["attempts"][-1]["status"] == "harness-error",
-               "a harness-error result is logged as a refused attempt")
-        retained = census["attempts"][-1]["retained_artifacts"]
-        expect(retained == [f"{INVOCATION}/run-002", f"{INVOCATION}/run-003"],
-               f"the attempt log keeps the artifact references — the failed "
-               f"run's and the broken one's — not the artifacts (got {retained})")
+            path, result_document(status="harness-error", commit=COMMIT_B))
+        census = json.loads(path.read_text(encoding="utf-8"))["probes"][0]["census"]
+        before = with_sample["probes"][0]["census"]
+        expect(len(census["attempts"]) == 2
+               and census["attempts"][1]["accepted"] is False
+               and census["attempts"][1]["status"] == "harness-error",
+               "a well-formed harness error appends one non-accepted attempt")
+        expect(census["attempts"][1]["error"]
+               == "run 2 emitted a duplicate event",
+               "the attempt carries the harness's own diagnostic")
+        expect(census["current"] == before["current"],
+               "it creates no sample and does not touch the current cohort")
+        expect(census["history"] == before["history"],
+               "and it archives nothing")
 
 
-def test_ci_eligible_entries() -> None:
-    print("\n-- CI-eligible entries take no current samples --")
-    with SyntheticRegistry() as reg:
-        seeded(reg)
-        before = reg.census.read_bytes()
-        expect_raises(probe_census.CensusError,
-                      lambda: probe_census.record_result(
-                          reg.census, build_result(CIPROBE)),
-                      "a CI-eligible probe's measurement is refused",
-                      "CI-eligible")
-        expect(reg.census.read_bytes() == before,
-               "the refused CI-eligible sample left the census byte-identical")
+# ==========================================================================
+def test_policy() -> None:
+    print("\n-- policy set, keep and explicit clear --")
+    with registry(), scratch() as root:
+        path = root / "probe_census.json"
+        seeded(path)
+        probe_census.record_result(path, result_document())
+        measured = json.loads(path.read_text(encoding="utf-8"))["probes"][0]["census"]
 
-        # Promotion: the live classification flips under an entry that
-        # already has a cohort, history and attempts.
-        probe_census.record_result(reg.census, build_result(commit=COMMIT_A))
-        probe_census.record_result(reg.census, build_result(commit=COMMIT_B))
-        ci_probes.CI_ELIGIBLE = {CIPROBE, PROBE}
-        promoted = probe_census.ensure_document(reg.census)
-        census = probe_census.find_entry(promoted, PROBE)["census"]
-        expect(probe_census.find_entry(promoted, PROBE)["classification"]
-               == "ci-eligible",
-               "promotion updates the classification from tools/ci_probes.py")
-        expect(census["current"] is None,
-               "promotion clears the current-sample field")
-        expect(len(census["history"]) == 2
-               and [c["commit_sha"] for c in census["history"]] ==
-               [COMMIT_A, COMMIT_B],
-               "promotion archives the manual-only cohort and retains history")
-        expect(len(census["attempts"]) == 2,
-               "promotion retains the attempt log")
-        expect_raises(probe_census.CensusError,
-                      lambda: probe_census.record_result(
-                          reg.census, build_result(PROBE)),
-                      "a promoted probe takes no further current samples",
-                      "CI-eligible")
+        def census_of(key="alpha"):
+            rows = json.loads(path.read_text(encoding="utf-8"))["probes"]
+            return {row["key"]: row["census"] for row in rows}[key]
 
+        probe_census.record_policy(path, "alpha", acceptable_failures=2,
+                                   justification="two engine-side races")
+        record = census_of()
+        expect(record["acceptable_failures"] == 2
+               and record["acceptable_failures_justification"]
+               == "two engine-side races",
+               "--set-acceptable-failures stores X and its justification")
+        expect(record["estimated_worst_case_seconds"] is None,
+               "an unrelated policy field is untouched")
+        expect(record["current"] == measured["current"]
+               and record["attempts"] == measured["attempts"],
+               "a policy update leaves every measurement alone")
 
-def test_result_validation() -> None:
-    print("\n-- result validation, from both sides --")
-    with SyntheticRegistry() as reg:
-        document = seeded(reg)
-        valid = build_result()
-        expect(probe_census.validate_result(valid, document) == [],
-               "the document probe_flake actually emits is accepted")
+        probe_census.record_policy(path, "alpha", acceptable_failures=5)
+        record = census_of()
+        expect(record["acceptable_failures"] == 5
+               and record["acceptable_failures_justification"]
+               == "two engine-side races",
+               "omitting --justification LEAVES the existing one unchanged")
 
-        def mutated(fn):
-            doc = json.loads(json.dumps(valid))
-            fn(doc)
-            return probe_census.validate_result(doc, document)
+        probe_census.record_policy(path, "alpha", justification=None,
+                                   acceptable_failures=5)
+        expect(census_of()["acceptable_failures_justification"] is None
+               and census_of()["acceptable_failures"] == 5,
+               "--justification none clears the justification only")
 
-        cases = [
-            ("schema", lambda d: d.update({"schema": "probe-flake-result/v9"})),
-            ("no census entry", lambda d: d.update({"probe": "ghost"})),
-            ("commit hash", lambda d: d.update({"commit_sha": "abc123"})),
-            ("commit hash", lambda d: d.update({"commit_sha": "z" * 40})),
-            ("timestamp_utc", lambda d: d.update({"timestamp_utc": "yesterday"})),
-            ("requested_runs", lambda d: d.update({"requested_runs": 0})),
-            ("completed", lambda d: d.update({"completed_runs": 99})),
-            ("rts_capabilities", lambda d: d.update({"rts_capabilities": 0})),
-            ("peak_concurrency", lambda d: d.update({"peak_concurrency": 0})),
-            ("elapsed_seconds", lambda d: d["runs"][0].update(
-                {"elapsed_seconds": -1})),
-            ("elapsed_seconds", lambda d: d["runs"][0].update(
-                {"elapsed_seconds": float("inf")})),
-            ("outcome", lambda d: d["runs"][0].update({"outcome": "MAYBE"})),
-            ("contiguous", lambda d: d["runs"][0].update({"index": 7})),
-            ("descriptor declares", lambda d: d["runs"][0]["checks"].pop("alpha")),
-            ("is not one of", lambda d: d["runs"][0]["checks"].update(
-                {"alpha": "MAYBE"})),
-            ("the runs show", lambda d: d["check_counts"]["alpha"].update(
-                {"PASS": 9})),
-            ("failure_count", lambda d: d.update({"failure_count": 9})),
-            ("timeout_count", lambda d: d.update({"timeout_count": 9})),
-            ("worst_elapsed_seconds", lambda d: d.update(
-                {"worst_elapsed_seconds": 99.0})),
-            ("total_elapsed_seconds", lambda d: d.update(
-                {"total_elapsed_seconds": 99.0})),
-            ("failure_rate", lambda d: d.update({"failure_rate": 0.99})),
-            ("no `error`", lambda d: d.update({"error": "surprise"})),
-            ("retained_artifacts", lambda d: d.update(
-                {"retained_artifacts": [7]})),
-            # A JSON integer has unbounded precision, so these are valid
-            # input that float arithmetic refuses with OverflowError.
-            # They must REPORT, not raise.
-            ("requested_runs", lambda d: d.update({"requested_runs": 10 ** 309})),
-            ("peak_concurrency",
-             lambda d: d.update({"peak_concurrency": 10 ** 309})),
-            ("worst_elapsed_seconds",
-             lambda d: d.update({"worst_elapsed_seconds": 10 ** 309})),
-            ("elapsed_seconds", lambda d: d["runs"][0].update(
-                {"elapsed_seconds": 10 ** 309})),
-            ("failure_count", lambda d: d.update({"failure_count": 10 ** 309})),
-            # The same "valid input must REPORT, not raise" shape one
-            # level down. A run's `checks` is reported by the per-run
-            # loop and skipped, but the check_counts aggregation pass
-            # then reached it again through an `or {}` fallback, which
-            # rescues a FALSY non-mapping and passes a TRUTHY one
-            # straight to .items(). A non-empty list/string/True/int
-            # there raised AttributeError, turning malformed input into
-            # a crash instead of the clean refusal every other malformed
-            # field gets.
-            ("`checks` must be an object",
-             lambda d: d["runs"][0].update({"checks": ["alpha"]})),
-            ("`checks` must be an object",
-             lambda d: d["runs"][0].update({"checks": "alpha"})),
-            ("`checks` must be an object",
-             lambda d: d["runs"][0].update({"checks": True})),
-            ("`checks` must be an object",
-             lambda d: d["runs"][0].update({"checks": 5})),
-            # The falsy ones the `or {}` DID rescue, kept so a later
-            # simplification cannot quietly drop half the guard.
-            ("`checks` must be an object",
-             lambda d: d["runs"][0].update({"checks": []})),
-            ("`checks` must be an object",
-             lambda d: d["runs"][0].update({"checks": None})),
-            ("non-empty list", lambda d: d.update({"checks": []})),
-            ("{id, label} object", lambda d: d["checks"].append({"id": 7})),
-            ("appears twice", lambda d: d["checks"].append(d["checks"][0])),
-        ]
-        for substring, mutate in cases:
-            problems = mutated(mutate)
-            expect(any(substring in p for p in problems),
-                   f"a mutated result is rejected for {substring!r} "
-                   f"(got {problems[:1]})")
+        probe_census.record_policy(path, "alpha", estimate=480)
+        record = census_of()
+        expect(record["estimated_worst_case_seconds"] == 480
+               and record["acceptable_failures"] == 5,
+               "--set-estimate stores the estimate and keeps X")
 
-        broken = build_result(harness_error=True, requested=5)
-        expect(probe_census.validate_result(broken, document) == [],
-               "a well-formed harness-error result is accepted for logging")
+        probe_census.record_policy(path, "alpha",
+                                   justification="restored", acceptable_failures=5)
+        probe_census.record_policy(path, "alpha", acceptable_failures=None)
+        record = census_of()
+        expect(record["acceptable_failures"] is None
+               and record["acceptable_failures_justification"] is None,
+               "clearing X clears its justification too")
+        expect(record["estimated_worst_case_seconds"] == 480,
+               "clearing X leaves the estimate alone")
 
-        def broken_mutation(fn):
-            doc = json.loads(json.dumps(broken))
-            fn(doc)
-            return probe_census.validate_result(doc, document)
+        probe_census.record_policy(path, "alpha", estimate=None)
+        expect(census_of()["estimated_worst_case_seconds"] is None,
+               "--set-estimate none clears the estimate")
+        expect(census_of()["current"] == measured["current"],
+               "no policy command ever disturbed the measurements")
+        expect(census_of("beta") == probe_census.empty_census(),
+               "no policy command ever disturbed an unrelated row")
 
-        for substring, mutate in (
-                ("failure_rate", lambda d: d.update({"failure_rate": 0.5})),
-                ("must carry its `error_run`",
-                 lambda d: d.update({"error_run": None})),
-                ("outcome", lambda d: d["error_run"].update({"outcome": "FAIL"})),
-                ("index", lambda d: d["error_run"].update({"index": 9})),
-                ("descriptor declares",
-                 lambda d: d["error_run"]["checks"].pop("alpha")),
-                ("is not one of",
-                 lambda d: d["error_run"]["checks"].update({"alpha": "MAYBE"})),
-                ("elapsed_seconds",
-                 lambda d: d["error_run"].update({"elapsed_seconds": -1})),
-                ("stops short", lambda d: d.update({"requested_runs": 2})),
-                # `True == 1` and `False == 0`, so a boolean aggregate
-                # satisfies an equality test. Each of these matches the
-                # real tally numerically and must still be refused.
-                ("failure_count", lambda d: d.update({"failure_count": True})),
-                ("timeout_count",
-                 lambda d: d.update({"timeout_count": False}))):
-            expect(any(substring in p for p in broken_mutation(mutate)),
-                   f"a mutated harness-error result is rejected for "
-                   f"{substring!r} (got {broken_mutation(mutate)[:1]})")
-
-        # `probe_flake.reconcile` makes any failed check a failed run, so
-        # a PASS carrying one is a contradiction no measurement produced.
-        # Everything else about this document stays consistent, so it is
-        # the reconciliation alone that must catch it.
-        contradiction = json.loads(json.dumps(valid))
-        contradiction["runs"][0]["checks"]["beta"] = probe_protocol.FAIL
-        contradiction["check_counts"]["beta"] = {"PASS": 0, "FAIL": 2,
-                                                 "MISSING": 0}
-        reported = probe_census.validate_result(contradiction, document)
-        expect(len(reported) == 1 and "passed but reports failed check" in reported[0],
-               f"a PASS run carrying a FAIL check is the only complaint "
-               f"(got {reported})")
-        before_bytes = reg.census.read_bytes()
-        expect_raises(probe_census.CensusError,
-                      lambda: probe_census.record_result(reg.census,
-                                                         contradiction),
-                      "the contradictory run is refused at ingestion")
-        expect(reg.census.read_bytes() == before_bytes,
-               "the refused contradiction left the census unchanged")
-
-        # A protocol string that is merely "not legacy" must not read as
-        # measurable — the entry has to name the CURRENT version.
-        for status in ("probe-result/v2", "legacy", "", None):
-            stale = json.loads(json.dumps(document))
-            probe_census.find_entry(stale, PROBE)["protocol"] = status
-            expect(any("trustworthy measurement" in p for p in
-                       probe_census.validate_result(valid, stale)),
-                   f"a {status!r} protocol column takes no measurement")
-            if status not in probe_census.KNOWN_PROTOCOLS:
-                expect(any("protocol" in p for p in
-                           probe_census.validate_structure(stale)),
-                       f"a {status!r} protocol column fails structural "
-                       f"validation")
-
-        expect(probe_census.validate_result([], document) != [],
-               "a non-object result is rejected")
-
-        # The attempt log takes only WELL-FORMED harness errors, so a
-        # boolean-aggregate one must be refused at ingestion, not logged.
-        boolean = json.loads(json.dumps(broken))
-        boolean["failure_count"] = True
-        before_bytes = reg.census.read_bytes()
-        expect_raises(probe_census.CensusError,
-                      lambda: probe_census.record_result(reg.census, boolean),
-                      "a boolean-aggregate harness error is never logged",
-                      "failure_count")
-        expect(reg.census.read_bytes() == before_bytes,
-               "the refused harness error left the census unchanged")
+        before = path.read_bytes()
+        expect_refusal(lambda: probe_census.record_policy(
+            path, "nosuch", acceptable_failures=1),
+            "a --probe naming no census row is refused",
+            "nosuch", "no census row")
+        unchanged(path, before, "a refused policy update changes no bytes")
 
 
-def test_long_run_rounding() -> None:
-    print("\n-- a long measurement's independent rounding is not corruption --")
-    with SyntheticRegistry() as reg:
-        document = seeded(reg)
-        runs = 40
-        # `Measurement.to_document` rounds each run to three decimals and
-        # the TOTAL from the unrounded values, so 40 runs of 1.00049 s
-        # serialize as forty 1.0 values against a 40.02 total. That is a
-        # genuine harness result, and `--runs` has no upper bound.
-        result = build_result(outcomes=("PASS",) * runs, elapsed=1.00049)
-        drift = abs(result["total_elapsed_seconds"]
-                    - sum(r["elapsed_seconds"] for r in result["runs"]))
-        expect(drift > 0.01,
-               f"the fixture really does drift past a fixed tolerance "
-               f"({drift:.4f}s over {runs} runs)")
-        expect(probe_census.validate_result(result, document) == [],
-               "the long measurement is accepted despite the rounding drift")
-        probe_census.record_result(reg.census, result)
-        stored = probe_census.find_entry(
-            probe_census.read_for_update(reg.census), PROBE)["census"]
-        expect(len(stored["current"]["samples"][0]["runs"]) == runs,
-               "it round-trips into the census and reads back")
-        # The tolerance still scales with the run count rather than
-        # waving through an arbitrary total.
-        wrong = json.loads(json.dumps(result))
-        wrong["total_elapsed_seconds"] = 99.0
-        expect(any("total_elapsed_seconds" in p for p in
-                   probe_census.validate_result(wrong, document)),
-               "a total that is simply wrong is still rejected")
+# ==========================================================================
+def test_refusals() -> None:
+    print("\n-- controlled refusals leave the bytes alone --")
+    with registry(), scratch() as root:
+        path = root / "probe_census.json"
+        seeded(path)
+        before = path.read_bytes()
+
+        # Malformed authoritative state.
+        broken = root / "broken.json"
+        broken.write_text("{not json", encoding="utf-8")
+        broken_bytes = broken.read_bytes()
+        expect_refusal(lambda: probe_census.record_result(broken,
+                                                          result_document()),
+                       "a census that is not valid JSON is refused",
+                       "not valid JSON")
+        unchanged(broken, broken_bytes,
+                  "the malformed census is left byte-for-byte alone")
+
+        # An absent or unmigrated census names --seed and never migrates.
+        absent = root / "absent.json"
+        expect_refusal(lambda: probe_census.record_result(absent,
+                                                          result_document()),
+                       "recording into an absent census names --seed", "--seed")
+        expect(not absent.exists(),
+               "the refusal did NOT seed the census as a side effect")
+        legacy = root / "legacy.json"
+        legacy.write_text(json.dumps(v1_document()) + "\n", encoding="utf-8")
+        legacy_bytes = legacy.read_bytes()
+        expect_refusal(lambda: probe_census.record_result(legacy,
+                                                          result_document()),
+                       "recording into a v1 census names --seed",
+                       "probe-census/v1", "--seed")
+        expect_refusal(lambda: probe_census.record_policy(
+            legacy, "alpha", acceptable_failures=1),
+            "a policy update on a v1 census names --seed", "--seed")
+        unchanged(legacy, legacy_bytes,
+                  "a v1 census is not migrated as a side effect of a refusal")
+
+        # The three discriminating fields of a result document.
+        for mutation, fragment, why in (
+            ({"schema": "probe-flake-result/v9"}, "probe-flake-result/v9",
+             "an unrecognized result schema"),
+            ({"probe": None}, "names no probe", "a result naming no probe"),
+            ({"status": "weird"}, "weird", "an unrecognized status"),
+        ):
+            expect_refusal(
+                lambda m=mutation: probe_census.record_result(
+                    path, result_document(**m)),
+                f"{why} is refused", fragment)
+        expect_refusal(lambda: probe_census.record_result(path, [1, 2]),
+                       "a result that is not an object is refused",
+                       "must be a JSON object")
+        after = json.loads(path.read_text(encoding="utf-8"))
+        expect(all(row["census"]["attempts"] == []
+                   for row in after["probes"]),
+               "an unrecognized status is NOT logged as a failed attempt")
+
+        # A result naming a probe with no row.
+        expect_refusal(lambda: probe_census.record_result(
+            path, result_document(probe="ghost")),
+            "a result naming no census row is refused", "ghost", "--seed")
+
+        # Structural/type errors that block building the durable record.
+        for mutation, fragment, why in (
+            ({"runs": "no"}, "`runs` must be a list", "a non-list `runs`"),
+            ({"runs": [{"index": 1}]}, "'outcome'", "a run missing a field"),
+            ({"check_counts": []}, "`check_counts` must be an object",
+             "a non-object `check_counts`"),
+            ({"retained_artifacts": "one"}, "must be a list",
+             "a non-list `retained_artifacts`"),
+        ):
+            expect_refusal(
+                lambda m=mutation: probe_census.record_result(
+                    path, result_document(**m)),
+                f"{why} is refused", fragment)
+        missing = result_document()
+        del missing["worst_elapsed_seconds"]
+        expect_refusal(lambda: probe_census.record_result(path, missing),
+                       "a result missing a summarized field is refused",
+                       "worst_elapsed_seconds")
+        unchanged(path, before, "not one refusal changed the census bytes")
+
+        # CLI value parsing.
+        expect_refusal(lambda: probe_census._optional_int("2.5", "--x"),
+                       "a non-integer X is refused", "integer", "none")
+        expect_refusal(lambda: probe_census._optional_number("soon", "--e"),
+                       "a non-numeric estimate is refused", "number", "none")
+        expect_refusal(lambda: probe_census._optional_number("nan", "--e"),
+                       "a non-finite estimate is refused (JSON has no NaN)",
+                       "finite")
+        expect(probe_census._optional_int("none", "--x") is None
+               and probe_census._optional_number("none", "--e") is None,
+               "the literal `none` clears a nullable field")
+        expect(probe_census._optional_number("480", "--e") == 480
+               and isinstance(probe_census._optional_number("480", "--e"), int),
+               "an integral estimate stays an integer")
+        expect(probe_census._optional_number("12.5", "--e") == 12.5,
+               "a fractional estimate is stored as a float")
 
 
-def test_corrupt_stored_records() -> None:
-    print("\n-- a corrupted stored sample or attempt fails to read --")
-    with SyntheticRegistry() as reg:
-        seeded(reg)
-        probe_census.record_result(reg.census, build_result(at=stamp(31)))
-        healthy = json.loads(reg.census.read_text())
+# ==========================================================================
+def test_path_substitution() -> None:
+    print("\n-- symlink, hard-link and non-regular path refusal --")
+    with registry(), scratch() as root:
+        good = root / "real.json"
+        seeded(good)
+        payload = good.read_bytes()
 
-        def corrupt(fn, label, substring):
-            document = json.loads(json.dumps(healthy))
-            fn(probe_census.find_entry(document, PROBE)["census"])
-            reg.census.write_text(json.dumps(document, indent=2) + "\n",
-                                  encoding="utf-8")
-            snapshot = reg.census.read_bytes()
-            expect(any(substring in p for p in
-                       probe_census.validate_structure(document)),
-                   f"validation reports {label}")
-            expect_raises(probe_census.CensusError,
-                          lambda: probe_census.read_for_update(reg.census),
-                          f"reading a census with {label} is a clean stop")
-            for op, name in (
-                    (lambda: probe_census.record_policy(
-                        reg.census, PROBE, estimate=1.0), "record_policy"),
-                    (lambda: probe_census.ensure_document(reg.census), "--seed"),
-                    (lambda: probe_census.record_result(
-                        reg.census, build_result()), "--record")):
-                expect_raises(probe_census.CensusError, op,
-                              f"{name} refuses a census with {label}")
-            expect(reg.census.read_bytes() == snapshot,
-                   f"nothing rewrote the census carrying {label}")
+        # A symlinked census target must never be followed: `os.replace`
+        # replaces the LINK, so following one writes the census wherever
+        # it points.
+        linked = root / "linked.json"
+        linked.symlink_to(good)
+        expect_refusal(lambda: probe_census.record_result(linked,
+                                                          result_document()),
+                       "a symlinked census target is refused", "symlink")
+        unchanged(good, payload, "the symlink's target is left alone")
 
-        corrupt(lambda c: c["current"]["samples"][0].update(
-            {"timestamp_utc": "not-a-time"}),
-            "a malformed stored timestamp", "timestamp_utc")
-        corrupt(lambda c: c["current"]["samples"][0].update(
-            {"commit_sha": "abc123"}),
-            "an abbreviated stored commit hash", "commit hash")
-        corrupt(lambda c: c["current"]["samples"][0].update(
-            {"failure_count": 9}),
-            "a stored aggregate the runs contradict", "failure_count")
-        corrupt(lambda c: c["current"]["samples"][0].update(
-            {"failure_count": True}),
-            "a stored boolean aggregate", "must be a non-negative integer")
-        corrupt(lambda c: c["current"]["samples"][0].update(
-            {"rts_capabilities": 10 ** 309}),
-            "a stored integer beyond the float range",
-            "must be a positive integer")
-        corrupt(lambda c: c["current"]["samples"][0].update(
-            {"total_elapsed_seconds": 10 ** 309}),
-            "a stored duration beyond the float range",
-            "total_elapsed_seconds")
-        corrupt(lambda c: c.update(
-            {"estimated_worst_case_seconds": 10 ** 309}),
-            "a stored estimate beyond the float range",
-            "estimated_worst_case_seconds")
-        corrupt(lambda c: c["current"]["samples"][0]["check_counts"]["alpha"]
-                .update({"PASS": 9}),
-            "a stored check tally that outnumbers the runs", "tallies")
-        corrupt(lambda c: c["current"]["samples"][0]["runs"][0].update(
-            {"index": 7}),
-            "a stored run index gap", "contiguous")
-        corrupt(lambda c: c["attempts"][0].update({"commit_sha": "nope"}),
-            "a malformed stored attempt hash", "commit hash")
-        corrupt(lambda c: c["current"]["samples"][0].update(
-            {"requested_runs": 3, "failure_rate": round(1 / 3, 6)}),
-            "a stored sample that never finished", "completes all of them")
-        corrupt(lambda c: c["attempts"][0].update({"accepted": False}),
-            "an accepted flag disagreeing with its status", "accepted=False")
-        corrupt(lambda c: c["attempts"][0].update(
-            {"status": "harness-error", "error": "invented"}),
-            "an ok attempt relabelled a harness error", "accepted=True")
-        corrupt(lambda c: c["attempts"][0].update(
-            {"requested_runs": 0, "completed_runs": 0}),
-            "an attempt that requested no runs", "must be positive")
-        # The artifact boundary is a CLOSED schema, not just a habit of
-        # the writer: a pasted raw payload must fail to read.
-        corrupt(lambda c: c["current"]["samples"][0].update(
-            {"stdout": "engine boot log line 1\nline 2\n"}),
-            "a raw stdout payload pasted into a sample", "unexpected field")
-        corrupt(lambda c: c["current"]["samples"][0]["runs"][0].update(
-            {"events": "{\"kind\": \"check\"}"}),
-            "a protocol stream pasted into a stored run", "unexpected field")
-        corrupt(lambda c: c["attempts"][0].update({"engine_log": "..."}),
-            "an engine log pasted into an attempt", "unexpected field")
-        corrupt(lambda c: c.update({"notes": "scratch"}),
-            "an unknown census field", "unexpected field")
-        corrupt(lambda c: c["current"].update({"stdout": "..."}),
-            "an unknown cohort field", "unexpected field")
-        # Cohorts and attempts are two views of ONE history, so a hand
-        # edit can leave them disagreeing even though each validates
-        # cleanly alone. The lossy direction is the one that matters:
-        # clearing the retained measurements while leaving the accepted
-        # attempts reads as "these runs happened" with the runs gone, and
-        # the next record_policy()/--seed persists that loss. Both skews
-        # are corruption, so both are covered.
-        corrupt(lambda c: (c.update({"current": None, "history": []})),
-                "accepted attempts whose retained samples were deleted",
-                "accepted attempt")
-        corrupt(lambda c: c["attempts"].clear(),
-                "retained samples whose accepted attempts were deleted",
-                "accepted attempt")
-        # ...and the mirror of the closed schema: a DELETED census field.
-        # Four of the six are nullable, so `.get()` cannot distinguish
-        # "explicitly null" from "removed by hand" -- every `is not None`
-        # guard in _validate_census skips an absent key. Without a
-        # presence check such a record reads clean and the next
-        # record_policy()/--seed rewrite preserves the hole, which is
-        # exactly the malformed-state-survives-a-write shape the closed
-        # schema above exists to prevent. One case per field, because a
-        # presence check that covered only the obvious `current` would
-        # pass a three-quarters-empty policy just as silently.
-        for field in ("current", "acceptable_failures",
-                      "acceptable_failures_justification",
-                      "estimated_worst_case_seconds", "history", "attempts"):
-            corrupt(lambda c, f=field: c.pop(f),
-                    f"a census record with `{field}` deleted",
-                    "missing required field")
+        # A hard-linked target: replacing it would silently strand the
+        # other name on the old bytes.
+        hard = root / "hard.json"
+        os.link(good, hard)
+        expect_refusal(lambda: probe_census.record_result(hard,
+                                                          result_document()),
+                       "a hard-linked census target is refused", "one link")
+        hard.unlink()
 
-        # Corruption at the document and entry levels, where the census
-        # record itself is not the thing that was edited.
-        for label, mutate, substring in (
-                ("an unknown document field",
-                 lambda d: d.update({"stdout": "..."}), "unexpected field"),
-                ("an unknown entry field",
-                 lambda d: probe_census.find_entry(d, PROBE).update(
-                     {"engine_log": "..."}), "unexpected field"),
-                # A v2 entry with no census record is malformed state, not
-                # a v1 row waiting to be migrated: inserting an empty
-                # record would repair it silently on the next write.
-                ("a v2 entry with no census record",
-                 lambda d: probe_census.find_entry(d, PROBE).pop("census"),
-                 "`census` is not an object")):
-            document = json.loads(json.dumps(healthy))
-            mutate(document)
-            reg.census.write_text(json.dumps(document, indent=2) + "\n",
-                                  encoding="utf-8")
-            snapshot = reg.census.read_bytes()
-            expect(any(substring in p for p in
-                       probe_census.validate_structure(document)),
-                   f"validation reports {label}")
-            expect_raises(probe_census.CensusError,
-                          lambda: probe_census.read_for_update(reg.census),
-                          f"reading a census with {label} is a clean stop")
-            for op, name in (
-                    (lambda: probe_census.ensure_document(reg.census), "--seed"),
-                    (lambda: probe_census.record_policy(
-                        reg.census, PROBE, estimate=1.0), "record_policy")):
-                expect_raises(probe_census.CensusError, op,
-                              f"{name} refuses a census with {label}")
-            expect(reg.census.read_bytes() == snapshot,
-                   f"nothing rewrote the census carrying {label}")
+        # A non-regular target.
+        directory = root / "adirectory.json"
+        directory.mkdir()
+        expect_refusal(lambda: probe_census.record_result(directory,
+                                                          result_document()),
+                       "a census target that is not a regular file is refused",
+                       "regular file")
+
+        # A symlinked census DIRECTORY.
+        elsewhere = root / "elsewhere"
+        elsewhere.mkdir()
+        via_link = root / "vialink"
+        via_link.symlink_to(elsewhere)
+        expect_refusal(lambda: probe_census.record_result(
+            via_link / "probe_census.json", result_document()),
+            "a symlinked census directory is refused", "symlink")
+
+        # The lock path is the THIRD path the rule covers.
+        locked_root = root / "locked"
+        locked_root.mkdir()
+        target = locked_root / "probe_census.json"
+        seeded(target)
+        stamp = target.read_bytes()
+        guard = probe_census.lock_path(target)
+        # `seeded` above already created the lock; replace it with each
+        # substitution in turn.
+        guard.unlink()
+        guard.symlink_to(good)
+        expect_refusal(lambda: probe_census.record_result(target,
+                                                          result_document()),
+                       "a symlinked lock path is refused", "symlink")
+        guard.unlink()
+        unchanged(good, payload,
+                  "the symlinked lock's target was never written through")
+
+        os.link(good, guard)
+        expect_refusal(lambda: probe_census.record_result(target,
+                                                          result_document()),
+                       "a hard-linked lock path is refused", "one link")
+        guard.unlink()
+
+        guard.mkdir()
+        expect_refusal(lambda: probe_census.record_result(target,
+                                                          result_document()),
+                       "a lock path that is not a regular file is refused",
+                       "regular file")
+        guard.rmdir()
+        unchanged(target, stamp, "no lock-path refusal changed the census")
+
+        # And with a clean lock path the same call succeeds, so the
+        # refusals above are the substitution and nothing else.
+        probe_census.record_result(target, result_document())
+        expect(target.read_bytes() != stamp,
+               "with an unsubstituted lock path the same write succeeds")
+        expect(probe_census.lock_path(target).exists(),
+               "the lock file is left in place rather than unlinked")
 
 
-def test_artifact_boundary() -> None:
-    print("\n-- the census holds references, never artifacts --")
-    with SyntheticRegistry() as reg:
-        document = seeded(reg)
-        valid = build_result()
-        expect(probe_census.validate_result(valid, document) == [],
-               "a real artifact reference is accepted")
+# ==========================================================================
+def test_atomicity() -> None:
+    print("\n-- atomic replacement and injected failure --")
+    with registry(), scratch() as root:
+        path = root / "probe_census.json"
+        seeded(path)
+        probe_census.record_result(path, result_document())
+        before = path.read_bytes()
 
-        raw_stdout = ("[synarchy] boot\nVK_LAYER loaded\n" * 40)
-        engine_log = "x" * (probe_census.MAX_REFERENCE_CHARS + 1)
-        in_worktree = str(Path(run_probes.REPO_ROOT) / "docs" / "run-001")
-        elsewhere = "/tmp/somewhere-else/run-001"
+        expect(staging_residue(path.parent) == [],
+               "a completed replacement leaves no staging residue")
 
-        def rejected(fn, label, substring):
-            doc = json.loads(json.dumps(valid))
-            fn(doc)
-            problems = probe_census.validate_result(doc, document)
-            expect(any(substring in p for p in problems),
-                   f"{label} is refused (got {problems[:1]})")
-            before_bytes = reg.census.read_bytes()
-            expect_raises(probe_census.CensusError,
-                          lambda: probe_census.record_result(reg.census, doc),
-                          f"{label} is never recorded")
-            expect(reg.census.read_bytes() == before_bytes,
-                   f"{label} left the census unchanged")
+        # Fail AFTER serialization and the preservation checks, but
+        # before the replacement.
+        original = probe_census._atomic_replace
+        calls: list[bytes] = []
 
-        rejected(lambda d: d.update({"retained_artifacts": [raw_stdout]}),
-                 "a raw stdout payload in retained_artifacts",
-                 "control characters")
-        rejected(lambda d: d.update({"retained_artifacts": [engine_log]}),
-                 "an engine log in retained_artifacts", "characters long")
-        rejected(lambda d: d.update({"retained_artifacts": ["run-001"]}),
-                 "a relative artifact reference", "absolute path")
-        rejected(lambda d: d.update({"retained_artifacts": [in_worktree]}),
-                 "an artifact reference inside a worktree",
-                 "inside the worktree")
-        rejected(lambda d: d.update({"retained_artifacts": [elsewhere]}),
-                 "a reference outside the declared artifact root",
-                 "not under the declared artifact root")
-        rejected(lambda d: d["runs"][1].update({"artifact_dir": raw_stdout}),
-                 "a raw payload as a run's artifact_dir", "control characters")
-        # The case a path-SHAPE check alone would miss: one line, absolute,
-        # under the declared root, and pure payload.
-        rejected(lambda d: d.update({
-            "retained_artifacts": [f"{INVOCATION}/engine booted, 3 warnings, "
-                                   f"exit 0 after 12.4s"]}),
-            "a one-line payload dressed as a path",
-            "does not name a retained run directory")
-        rejected(lambda d: d.update({
-            "retained_artifacts": [f"{INVOCATION}/run-777"]}),
-            "a run directory that was never written", "names no directory")
-        rejected(lambda d: d["runs"][1].update(
-            {"artifact_dir": f"{INVOCATION}/run-901"}),
-            "a run pointing at someone else's directory", "names no directory")
+        def exploding(target, payload):
+            calls.append(payload)
+            raise OSError("injected: the machine died before the rename")
 
-        # `f"{index:03d}"` pads to a MINIMUM of three digits, so a long
-        # measurement's 1000th run is `run-1000`. `--runs` has no upper
-        # bound, and that artifact is as real as any other.
-        long_run = build_result(outcomes=("PASS",) * 999 + ("FAIL",),
-                                at=stamp(41))
-        expect(long_run["retained_artifacts"] == [f"{INVOCATION}/run-1000"],
-               f"the 1000th run's artifact is named run-1000 (got "
-               f"{long_run['retained_artifacts']})")
-        expect(probe_census.validate_result(long_run, document) == [],
-               f"a four-digit run artifact is accepted "
-               f"({probe_census.validate_result(long_run, document)[:1]})")
-        probe_census.record_result(reg.census, long_run)
-        recorded = probe_census.find_entry(
-            probe_census.read_for_update(reg.census), PROBE)["census"]
-        expect(any(sample["timestamp_utc"] == stamp(41)
-                   for sample in recorded["current"]["samples"]),
-               "the 1000-run measurement is recorded and reads back")
-        rejected(lambda d: d["runs"][1].update({"artifact_dir": elsewhere}),
-                 "a run artifact_dir outside the artifact root",
-                 "not under the declared artifact root")
-        rejected(lambda d: d.update({"artifact_root": in_worktree,
-                                     "invocation_dir": in_worktree,
-                                     "retained_artifacts": []}),
-                 "an artifact root inside a worktree", "inside the worktree")
-
-        # The same rule binds what is already PERSISTED.
-        probe_census.record_result(reg.census, valid)
-        healthy = json.loads(reg.census.read_text())
-        for label, mutate, substring in (
-                ("a raw payload in a stored sample",
-                 lambda c: c["current"]["samples"][0].update(
-                     {"retained_artifacts": [raw_stdout]}),
-                 "control characters"),
-                ("a worktree path in a stored run",
-                 lambda c: c["current"]["samples"][0]["runs"][1].update(
-                     {"artifact_dir": in_worktree}), "inside the worktree"),
-                ("a raw payload in a stored attempt",
-                 lambda c: c["attempts"][0].update(
-                     {"retained_artifacts": [raw_stdout]}),
-                 "control characters")):
-            corrupted = json.loads(json.dumps(healthy))
-            mutate(probe_census.find_entry(corrupted, PROBE)["census"])
-            reg.census.write_text(json.dumps(corrupted, indent=2) + "\n",
-                                  encoding="utf-8")
-            snapshot = reg.census.read_bytes()
-            expect(any(substring in p for p in
-                       probe_census.validate_structure(corrupted)),
-                   f"validation reports {label}")
-            expect_raises(probe_census.CensusError,
-                          lambda: probe_census.ensure_document(reg.census),
-                          f"--seed refuses a census with {label}")
-            expect(reg.census.read_bytes() == snapshot,
-                   f"nothing rewrote the census carrying {label}")
-
-        # A symlinked artifact root is the case lexical normalization
-        # misses: it looks like an unrelated /tmp path while the
-        # artifacts themselves sit in a checkout.
-        link = reg.root / "artifacts-link"
-        link.symlink_to(Path(run_probes.REPO_ROOT) / "docs")
-        rejected(lambda d: d.update({
-            "artifact_root": str(link),
-            "invocation_dir": f"{link}/inv",
-            "retained_artifacts": [f"{link}/inv/run-001"]}),
-            "an artifact root symlinked into a worktree",
-            "inside the worktree")
-        rejected(lambda d: d.update({
-            "retained_artifacts": [f"{link}/inv/run-001"]}),
-            "a reference symlinked into a worktree", "inside the worktree")
-
-        # Free TEXT is the other way raw content gets in. The harness
-        # error diagnostic, the descriptor's identifiers and labels, and
-        # the inventory row's own strings are all bounded and
-        # single-line.
-        broken = build_result(harness_error=True, requested=5)
-        expect(probe_census.validate_result(broken, document) == [],
-               "a real harness-error diagnostic is accepted")
-        for label, mutate, substring in (
-                ("a multiline diagnostic",
-                 lambda d: d.update({"error": raw_stdout}),
-                 "control characters"),
-                ("an engine log as the diagnostic",
-                 lambda d: d.update({"error": "x" * 2001}),
-                 "characters long")):
-            doc = json.loads(json.dumps(broken))
-            mutate(doc)
-            problems = probe_census.validate_result(doc, document)
-            expect(any(substring in p for p in problems),
-                   f"{label} is refused (got {problems[:1]})")
-            before_bytes = reg.census.read_bytes()
-            expect_raises(probe_census.CensusError,
-                          lambda: probe_census.record_result(reg.census, doc),
-                          f"{label} is never logged")
-            expect(reg.census.read_bytes() == before_bytes,
-                   f"{label} left the census unchanged")
-
-        rejected(lambda d: (
-            d["checks"].__setitem__(0, {"id": raw_stdout, "label": "x"}),
-            d["runs"][0]["checks"].__setitem__(raw_stdout,
-                                               d["runs"][0]["checks"].pop("alpha")),
-            d["runs"][1]["checks"].__setitem__(raw_stdout,
-                                               d["runs"][1]["checks"].pop("alpha")),
-            d["check_counts"].__setitem__(raw_stdout,
-                                          d["check_counts"].pop("alpha"))),
-            "a raw payload used as a check identifier", "is not stable")
-        rejected(lambda d: d["checks"][0].__setitem__("label", raw_stdout),
-                 "an engine log used as a check label", "characters long")
-        rejected(lambda d: d["checks"][0].__setitem__("label", "two\nlines"),
-                 "a multiline check label", "control characters")
-
-        # The same closure binds a PERSISTED identifier and the policy
-        # justification a person types. Each corruption above was written
-        # to disk and refused, so put the healthy census back first.
-        reg.census.write_text(json.dumps(healthy, indent=2) + "\n",
-                              encoding="utf-8")
-        probe_census.record_result(reg.census, build_result(at=stamp(12)))
-        base = json.loads(reg.census.read_text())
-        for label, mutate, substring in (
-                ("a raw payload as a stored check key",
-                 lambda c: c["current"]["samples"][0]["check_counts"].__setitem__(
-                     raw_stdout,
-                     c["current"]["samples"][0]["check_counts"].pop("alpha")),
-                 "is not a stable check identifier"),
-                ("a raw payload as a stored justification",
-                 lambda c: c.update(
-                     {"acceptable_failures_justification": raw_stdout}),
-                 "control characters")):
-            corrupted = json.loads(json.dumps(base))
-            mutate(probe_census.find_entry(corrupted, PROBE)["census"])
-            reg.census.write_text(json.dumps(corrupted, indent=2) + "\n",
-                                  encoding="utf-8")
-            snapshot = reg.census.read_bytes()
-            expect(any(substring in p for p in
-                       probe_census.validate_structure(corrupted)),
-                   f"validation reports {label}")
-            expect_raises(probe_census.CensusError,
-                          lambda: probe_census.ensure_document(reg.census),
-                          f"--seed refuses a census with {label}")
-            expect(reg.census.read_bytes() == snapshot,
-                   f"nothing rewrote the census carrying {label}")
-        reg.census.write_text(json.dumps(base, indent=2) + "\n",
-                              encoding="utf-8")
-
-        expect(Path(run_probes.REPO_ROOT).resolve() in
-               probe_census.worktree_roots(),
-               "the repository root is one of the checkouts artifacts avoid")
-
-        # Every REGISTERED worktree is covered, proven against a
-        # repository this case creates rather than against whatever
-        # worktrees happen to exist where the suite runs.
-        scratch = Path(tempfile.mkdtemp(prefix="probe-census-wt-"))
+        probe_census._atomic_replace = exploding
         try:
-            main_repo = scratch / "main"
-            main_repo.mkdir()
-            git = ["git", "-c", "user.email=t@t", "-c", "user.name=t",
-                   "-C", str(main_repo)]
-            subprocess.run(["git", "init", "-q", str(main_repo)], check=True,
-                           capture_output=True)
-            (main_repo / "seed.txt").write_text("seed\n", encoding="utf-8")
-            subprocess.run(git + ["add", "seed.txt"], check=True,
-                           capture_output=True)
-            subprocess.run(git + ["commit", "-qm", "seed"], check=True,
-                           capture_output=True)
-            second = scratch / "second"
-            subprocess.run(git + ["worktree", "add", "-q", "--detach",
-                                  str(second)], check=True, capture_output=True)
-            roots = probe_census.worktree_roots(str(main_repo))
-            expect(main_repo.resolve() in roots and second.resolve() in roots,
-                   f"both the repository and its second worktree are covered "
-                   f"(got {[str(r) for r in roots]})")
+            raised = None
+            try:
+                probe_census.record_result(path, result_document(commit=COMMIT_B))
+            except OSError as error:
+                raised = error
+            expect(raised is not None and "injected" in str(raised),
+                   "the injected failure propagates rather than being swallowed")
+            expect(len(calls) == 1 and b"probe-census/v2" in calls[0],
+                   "the candidate had been fully serialized before the failure")
         finally:
-            shutil.rmtree(scratch, ignore_errors=True)
+            probe_census._atomic_replace = original
+        unchanged(path, before,
+                  "a failure before replacement leaves the OLD census intact")
+        expect(json.loads(path.read_text(encoding="utf-8"))["schema"]
+               == "probe-census/v2",
+               "and the old census is still a complete, readable document")
 
-
-def test_malformed_state_and_recovery() -> None:
-    print("\n-- malformed state, interrupted write, stale staging --")
-    with SyntheticRegistry() as reg:
-        seeded(reg)
-        probe_census.record_result(reg.census, build_result(at=stamp(21)))
-        good = reg.census.read_bytes()
-
-        # Malformed input never touches the census.
-        expect_raises(probe_census.CensusError,
-                      lambda: probe_census.record_result(
-                          reg.census, {"schema": "nope"}),
-                      "a malformed result document is refused")
-        expect(reg.census.read_bytes() == good,
-               "the refused result left the census byte-for-byte unchanged")
-        census = probe_census.find_entry(
-            probe_census.read_for_update(reg.census), PROBE)["census"]
-        expect(len(census["attempts"]) == 1,
-               "a malformed result is not written to the attempt log")
-
-        # An interrupted replacement leaves the previous census whole.
-        real_replace = probe_census.os.replace
-
-        def exploding(*args, **kwargs):
-            raise OSError("simulated crash between fsync and rename")
-        probe_census.os.replace = exploding
-        try:
-            expect_raises(OSError,
-                          lambda: probe_census.record_result(
-                              reg.census, build_result(at=stamp(22))),
-                          "a failure before the rename propagates")
-        finally:
-            probe_census.os.replace = real_replace
-        expect(reg.census.read_bytes() == good,
-               "the interrupted write left the previous census unchanged")
-        expect(probe_census.validate_structure(
-            probe_census.read_for_update(reg.census)) == [],
-               "the previous census is still valid after the interruption")
-
-        # A stale staging file — what a killed writer leaves behind — is
-        # never authoritative and is cleared by the next writer.
-        stale = reg.census.parent / f"{probe_census.STAGING_PREFIX}zz" \
-            f"{probe_census.STAGING_SUFFIX}"
+        # Stale staging residue from a killed writer is never
+        # authoritative, and the next writer clears it.
+        stale = path.parent / (probe_census.STAGING_PREFIX + "killed"
+                               + probe_census.STAGING_SUFFIX)
         stale.write_text("{ truncated", encoding="utf-8")
-        probe_census.record_result(reg.census, build_result(at=stamp(23)))
-        expect(not stale.exists(),
-               "the next writer removes the stale staging file")
-        census = probe_census.find_entry(
-            probe_census.read_for_update(reg.census), PROBE)["census"]
-        stamps = [s["timestamp_utc"] for s in census["current"]["samples"]]
-        expect(stamps == [stamp(21), stamp(23)],
-               "the stale staging file never became the census")
-
-        # Malformed census STATE is a clean stop, not a silent repair.
-        for bad in ("{ not json",
-                    json.dumps({"schema": "probe-census/v9", "probes": []}),
-                    json.dumps({"schema": "probe-census/v2", "probes": [
-                        {"key": PROBE, "script": "p.py",
-                         "classification": "manual-only", "protocol": "legacy",
-                         "census": {"history": "not a list"}}]})):
-            reg.census.write_text(bad, encoding="utf-8")
-            snapshot = reg.census.read_bytes()
-            expect_raises(probe_census.CensusError,
-                          lambda: probe_census.record_result(
-                              reg.census, build_result()),
-                          f"malformed census state is refused ({bad[:24]!r})")
-            expect(reg.census.read_bytes() == snapshot,
-                   "the refused write left the malformed file untouched")
+        probe_census.record_result(path, result_document(commit=COMMIT_B))
+        expect(not stale.exists(), "the next writer clears stale staging files")
+        document = json.loads(path.read_text(encoding="utf-8"))
+        expect(document["probes"][0]["census"]["current"]["commit_sha"]
+               == COMMIT_B,
+               "and the real write went through, ignoring the residue")
+        expect(staging_residue(path.parent) == [],
+               "no staging file survives a successful replacement")
 
 
-def test_missing_docs_worktree() -> None:
-    print("\n-- a missing docs-wip worktree stops, touching nothing --")
-    scratch = Path(tempfile.mkdtemp(prefix="probe-census-git-"))
-    try:
-        subprocess.run(["git", "init", "-q", str(scratch)], check=True,
-                       capture_output=True)
-        expect_raises(probe_census.DocsWorktreeMissing,
-                      lambda: probe_census.manifest_path(str(scratch)),
-                      "with no docs-wip worktree the census path is an "
-                      "actionable stop", "git worktree add")
-        expect(not (scratch / "docs").exists(),
-               "nothing was created in the checkout that lacks the worktree")
-        primary = Path(run_probes.REPO_ROOT) / probe_census.MANIFEST_RELPATH
-        expect(not primary.exists(),
-               "the primary checkout never receives the census file")
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+# ==========================================================================
+def test_preservation_guard() -> None:
+    print("\n-- the preservation contract refuses to lose data --")
+    with registry(), scratch() as root:
+        path = root / "probe_census.json"
+        seeded(path)
+        probe_census.record_result(path, result_document())
+        probe_census.record_policy(path, "alpha", acceptable_failures=2,
+                                   justification="kept")
+        probe_census.record_result(path, result_document(commit=COMMIT_B))
+        before = path.read_bytes()
+
+        def refuses(mutation, msg, *fragments):
+            def mutate(document):
+                candidate = copy.deepcopy(document)
+                mutation(candidate)
+                return candidate, {"alpha": {"measurements"}}
+            expect_refusal(lambda: probe_census.update(path, mutate),
+                           msg, *fragments)
+            unchanged(path, before, f"...and changes no bytes ({msg})")
+
+        def row(document, key="alpha"):
+            return [r for r in document["probes"] if r["key"] == key][0]
+
+        refuses(lambda d: row(d)["census"].__setitem__("history", []),
+                "dropping an archived cohort is refused", "append-only")
+        refuses(lambda d: row(d)["census"]["current"]["samples"].clear(),
+                "dropping the current cohort's samples is refused",
+                "lost retained measurements")
+        refuses(lambda d: row(d)["census"].__setitem__("attempts", []),
+                "dropping the attempt log is refused", "append-only")
+        refuses(lambda d: row(d)["census"]["attempts"].insert(0, {"x": 1}),
+                "prepending to the attempt log is refused", "append-only")
+        refuses(lambda d: row(d)["census"].__setitem__(
+            "acceptable_failures", None),
+            "a measurement clearing a policy field is refused",
+            "changed policy field")
+        refuses(lambda d: row(d, "beta")["census"].__setitem__(
+            "acceptable_failures", 7),
+            "touching an unrelated row is refused", "unrelated probe 'beta'")
+        refuses(lambda d: d["probes"].pop(1),
+                "dropping a row is refused", "order or membership")
+        refuses(lambda d: d["probes"].reverse(),
+                "reordering the inventory is refused", "order or membership")
+        refuses(lambda d: row(d).__setitem__("script", "renamed.py"),
+                "a measurement renaming its own row's script is refused",
+                "inventory field")
+
+        # A policy update may not touch measurements either.
+        def policy_mutate(document):
+            candidate = copy.deepcopy(document)
+            row(candidate)["census"]["attempts"].append({"forged": True})
+            return candidate, {"alpha": {"policy"}}
+        expect_refusal(lambda: probe_census.update(path, policy_mutate),
+                       "a policy update appending an attempt is refused",
+                       "which a policy update may not touch")
+        unchanged(path, before, "...and changes no bytes")
+
+        # Reconciliation may not silently lose a measurement either.
+        def seed_mutate(document):
+            candidate = copy.deepcopy(document)
+            row(candidate)["census"]["history"] = []
+            row(candidate)["census"]["current"] = None
+            return candidate, probe_census.TOUCH_ANY
+        expect_refusal(lambda: probe_census.update(path, seed_mutate),
+                       "reconciliation losing a cohort is refused",
+                       "append-only")
+        unchanged(path, before, "...and changes no bytes")
 
 
-CONCURRENT_WORKER = textwrap.dedent('''\
-    import json, sys
-    sys.path.insert(0, {tools!r})
-    import probe_census
-
-    census, template, worker, count = sys.argv[1:5]
-    base = json.loads(open(template).read())
-    for i in range(int(count)):
-        result = json.loads(json.dumps(base))
-        index = int(worker) * 100 + i
-        result["timestamp_utc"] = "2026-08-21T{{:02d}}:{{:02d}}:{{:02d}}Z".format(
-            index // 3600, index // 60 % 60, index % 60)
-        probe_census.record_result(census, result)
-''')
+# ==========================================================================
+CONTENDER = """
+import json, sys
+sys.path.insert(0, {tools!r})
+import probe_census
+probe_census.record_result({path!r}, json.loads(sys.argv[1]))
+"""
 
 
-def test_concurrent_writers() -> None:
-    print("\n-- concurrent independent processes, no lost update --")
-    workers, per_worker = 6, 4
-    with SyntheticRegistry() as reg:
-        seeded(reg)
-        template = reg.root / "result.json"
-        template.write_text(json.dumps(build_result()), encoding="utf-8")
-        script = reg.root / "worker.py"
-        script.write_text(
-            CONCURRENT_WORKER.format(tools=str(TOOLS)),
-            encoding="utf-8")
+def test_independent_process_contention() -> None:
+    print("\n-- independent-process contention --")
+    with registry(), scratch() as root:
+        path = root / "probe_census.json"
+        seeded(path)
+        program = CONTENDER.format(tools=str(Path(__file__).resolve().parent),
+                                   path=str(path))
 
-        children = [
-            subprocess.Popen(
-                [sys.executable, str(script), str(reg.census), str(template),
-                 str(w), str(per_worker)],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            for w in range(workers)
+        # Two SEPARATE processes, each appending to the SAME probe. A
+        # thread-only test would not exercise the cross-process flock at
+        # all; a lost update here means one of the two disappears.
+        documents = [
+            json.dumps(result_document(commit=COMMIT_A,
+                                       timestamp_utc="2026-08-21T05:00:00Z")),
+            json.dumps(result_document(commit=COMMIT_A,
+                                       timestamp_utc="2026-08-21T06:00:00Z")),
         ]
-        failed = []
-        for child in children:
-            _out, err = child.communicate(timeout=300)
-            if child.returncode != 0:
-                failed.append(err.strip().splitlines()[-1:] or ["(no output)"])
-        expect(not failed, f"every writer process succeeded ({failed[:2]})")
+        processes = [subprocess.Popen([sys.executable, "-c", program, doc],
+                                      stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE, text=True)
+                     for doc in documents]
+        outcomes = [(p.wait(timeout=120), p.communicate()) for p in processes]
+        expect(all(code == 0 for code, _ in outcomes),
+               f"both writers succeeded ({[o[1][1][-200:] for o in outcomes]})")
 
-        document = probe_census.read_for_update(reg.census)
-        expect(probe_census.validate_structure(document) == [],
-               "the census is still structurally valid after the contention")
-        census = probe_census.find_entry(document, PROBE)["census"]
-        markers = {s["timestamp_utc"] for s in census["current"]["samples"]}
-        want = {f"2026-08-21T{(w * 100 + i) // 3600:02d}:"
-                f"{(w * 100 + i) // 60 % 60:02d}:{(w * 100 + i) % 60:02d}Z"
-                for w in range(workers) for i in range(per_worker)}
-        expect(markers == want,
-               f"all {workers * per_worker} concurrent appends survived "
-               f"(missing {sorted(want - markers)[:3]}, "
-               f"extra {sorted(markers - want)[:3]})")
-        expect(len(census["attempts"]) == workers * per_worker,
-               "every concurrent attempt is in the append-only log exactly once")
-        expect(len(probe_census.find_entry(document, OTHER)["census"]["attempts"])
-               == 0,
-               "the unrelated probe was never touched by any writer")
+        census = json.loads(path.read_text(encoding="utf-8"))["probes"][0]["census"]
+        stamps = sorted(s["timestamp_utc"] for s in census["current"]["samples"])
+        expect(stamps == ["2026-08-21T05:00:00Z", "2026-08-21T06:00:00Z"],
+               f"both concurrent samples survive, neither lost ({stamps})")
+        expect(len(census["attempts"]) == 2,
+               f"both attempts survive ({len(census['attempts'])})")
+        expect(len(census["current"]["samples"]) == 2
+               and census["history"] == [],
+               "both landed in the one shared commit cohort")
 
 
-def test_write_path_refuses_data_loss() -> None:
-    print("\n-- the writer refuses a candidate that loses data --")
-    with SyntheticRegistry() as reg:
-        seeded(reg)
-        probe_census.record_result(reg.census, build_result(commit=COMMIT_A))
-        probe_census.record_result(reg.census, build_result(commit=COMMIT_B))
-        good = reg.census.read_bytes()
-
-        def drop_history(before):
-            candidate = json.loads(json.dumps(before))
-            probe_census.find_entry(candidate, PROBE)["census"]["history"] = []
-            return candidate, {PROBE}
-
-        def touch_a_stranger(before):
-            candidate = json.loads(json.dumps(before))
-            probe_census.find_entry(candidate, OTHER)["census"][
-                "acceptable_failures"] = 9
-            return candidate, {PROBE}
-
-        def reorder(before):
-            candidate = json.loads(json.dumps(before))
-            candidate["probes"].reverse()
-            return candidate, {PROBE}
-
-        for label, mutate, substring in (
-                ("discarded history", drop_history, "lost retained"),
-                ("an unrelated entry", touch_a_stranger, "unrelated probe"),
-                ("a reordered manifest", reorder, "order or membership")):
-            expect_raises(probe_census.CensusError,
-                          lambda m=mutate: probe_census.update(reg.census, m),
-                          f"the writer refuses {label}", substring)
-            expect(reg.census.read_bytes() == good,
-                   f"the refused candidate ({label}) changed nothing on disk")
-
-
-def test_lock_identity() -> None:
-    print("\n-- one stable lock identity per resolved target --")
-    with SyntheticRegistry() as reg:
-        reg.census.parent.mkdir(parents=True, exist_ok=True)
-        direct = probe_census.lock_path(reg.census)
-        indirect = probe_census.lock_path(
-            reg.census.parent / ".." / "docs" / "probe_census.json")
-        expect(direct == indirect,
-               "two spellings of one target resolve to the same lock")
-        other = probe_census.lock_path(reg.root / "docs" / "other.json")
-        expect(direct != other,
-               "a different target gets a different lock")
-        expect(direct.parent == reg.census.parent.resolve()
-               and direct.name.endswith(probe_census.LOCK_SUFFIX),
-               "the lock is a sibling of its target, out of reach of a "
-               "temp reaper")
-
-        # The lock is a THIRD path beside the target and its directory,
-        # so it needs its own no-follow guard: writing the lock note
-        # through a planted symlink would land outside docs-wip.
-        seeded(reg)
-        outside = reg.root / "outside.txt"
-        outside.write_text("", encoding="utf-8")
-        direct.unlink()
-        direct.symlink_to(outside)
-        expect_raises(probe_census.CensusError,
-                      lambda: probe_census.record_result(
-                          reg.census, build_result()),
-                      "a symlinked lock path is refused, not followed")
-        expect(outside.read_text() == "",
-               "nothing was written through the planted lock symlink")
-        direct.unlink()
-
-        # A HARD link is the same inode as a file elsewhere, so
-        # O_NOFOLLOW does not stop it — the link count does.
-        os.link(outside, direct)
-        expect_raises(probe_census.CensusError,
-                      lambda: probe_census.record_result(
-                          reg.census, build_result()),
-                      "a hard-linked lock path is refused", "one link")
-        expect(outside.read_text() == "",
-               "nothing was written through the planted hard link")
-        direct.unlink()
-
-        # A non-regular lock path is refused too, on the same grounds.
-        os.mkfifo(direct)
+# ==========================================================================
+@contextmanager
+def cli_repo():
+    """A scratch git repository with a real `docs-wip` worktree."""
+    with scratch("probe-census-cli-") as root:
+        main_wt = root / "main"
+        docs_wt = root / "docs-worktree"
+        env = {**os.environ, "GIT_CONFIG_GLOBAL": str(root / "gitconfig"),
+               "GIT_CONFIG_SYSTEM": "/dev/null"}
+        run = lambda *a, **k: subprocess.run(  # noqa: E731
+            a, cwd=str(k.pop("cwd", main_wt)), env=env, check=True,
+            capture_output=True, text=True)
+        subprocess.run(["git", "init", "-q", "-b", "master", str(main_wt)],
+                       env=env, check=True, capture_output=True)
+        run("git", "config", "user.email", "test@example.invalid")
+        run("git", "config", "user.name", "Census Test")
+        run("git", "commit", "-q", "--allow-empty", "-m", "root")
+        run("git", "worktree", "add", "-q", str(docs_wt), "-b", "docs-wip")
+        saved = run_probes.REPO_ROOT
+        run_probes.REPO_ROOT = str(main_wt)
         try:
-            expect_raises(probe_census.CensusError,
-                          lambda: probe_census.record_result(
-                              reg.census, build_result()),
-                          "a non-regular lock path is refused")
+            yield main_wt, docs_wt / probe_census.MANIFEST_RELPATH
         finally:
-            direct.unlink()
+            run_probes.REPO_ROOT = saved
 
 
-def test_seed_never_overwrites() -> None:
-    print("\n-- seeding never overwrites accumulated census data --")
-    with SyntheticRegistry() as reg:
-        seeded(reg)
-        probe_census.record_result(reg.census, build_result(at=stamp(31)))
-        probe_census.record_policy(reg.census, PROBE, acceptable_failures=1,
-                                   justification="one known race")
-        before = probe_census.read_for_update(reg.census)
-        seeded(reg)
-        after = probe_census.read_for_update(reg.census)
-        expect(before == after,
-               "re-seeding an existing census is a no-op for its content")
-        census = probe_census.find_entry(after, PROBE)["census"]
-        expect(census["current"]["samples"][0]["timestamp_utc"] == stamp(31)
-               and census["acceptable_failures"] == 1,
-               "the accumulated sample and policy survive re-seeding")
+def cli(*argv):
+    """`main(argv)` with its streams captured. Returns (code, out, err).
 
-        # A fresh seed is only ever written to an ABSENT target.
-        reg.census.unlink()
-        fresh = seeded(reg)
-        expect(all(e["census"] == probe_census.empty_census()
-                   for e in fresh["probes"]),
-               "an absent target receives a fresh, empty seed")
+    argparse's own usage errors raise `SystemExit`; they are a non-zero
+    exit like any other, so they are reported as one here.
+    """
+    import io
+    from contextlib import redirect_stdout, redirect_stderr
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with redirect_stdout(out), redirect_stderr(err):
+            code = probe_census.main(list(argv))
+    except SystemExit as exit_code:
+        code = exit_code.code if isinstance(exit_code.code, int) else 1
+    return code, out.getvalue(), err.getvalue()
 
 
+def test_cli() -> None:
+    print("\n-- the CLI contract --")
+    with registry(ci_eligible={"beta"}):
+        # `--print` must not require, read or create the docs worktree.
+        saved = probe_census.manifest_path
+        probe_census.manifest_path = lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("--print resolved the docs worktree"))
+        try:
+            code, out, _ = cli("--print")
+            document = json.loads(out)
+            expect(code == 0 and document["schema"] == "probe-census/v2",
+                   "--print emits the v2 census the live registry implies")
+            expect(all(row["census"] == probe_census.empty_census()
+                       for row in document["probes"]),
+                   "--print gives every row an empty census record")
+        except AssertionError as error:
+            expect(False, str(error))
+        finally:
+            probe_census.manifest_path = saved
+
+        # A repository with no docs-wip worktree: exit 2, actionable.
+        with scratch() as bare:
+            subprocess.run(["git", "init", "-q", str(bare / "solo")],
+                           check=True, capture_output=True)
+            was = run_probes.REPO_ROOT
+            run_probes.REPO_ROOT = str(bare / "solo")
+            try:
+                code, _, err = cli("--validate")
+                expect(code == 2 and "git worktree add" in err,
+                       "a missing docs worktree exits 2 with its repair")
+            finally:
+                run_probes.REPO_ROOT = was
+
+    with registry(ci_eligible={"beta"}), cli_repo() as (_root, path):
+        code, out, _ = cli("--seed")
+        expect(code == 0 and path.exists() and "probe-census/v2" in out,
+               "--seed creates the census in the docs worktree")
+        code, _, _ = cli("--validate")
+        expect(code == 0, "--validate accepts the freshly seeded v2 census")
+
+        holding = Path(tempfile.mkdtemp(prefix="probe-census-results-"))
+        good = holding / "result.json"
+        good.write_text(json.dumps(result_document()), encoding="utf-8")
+
+        # A v1 document is reported as schema drift, and NOT migrated.
+        path.write_text(json.dumps(v1_document()) + "\n", encoding="utf-8")
+        legacy = path.read_bytes()
+        code, _, err = cli("--validate")
+        expect(code == 1 and "probe-census/v1" in err and "schema" in err,
+               "--validate reports a v1 census as schema drift, exit 1")
+        expect(path.read_bytes() == legacy,
+               "--validate did not migrate it as a side effect")
+        code, _, err = cli("--record", str(good))
+        expect(code == 1 and "--seed" in err,
+               "--record on an unmigrated census names --seed, exit 1")
+        expect(path.read_bytes() == legacy, "...and changes no bytes")
+        code, _, err = cli("--probe", "alpha", "--set-estimate", "5")
+        expect(code == 1 and "--seed" in err,
+               "a policy update on an unmigrated census names --seed, exit 1")
+        expect(path.read_bytes() == legacy, "...and changes no bytes")
+        cli("--seed")
+
+        # Drift is reported, not repaired, by --validate.
+        with registry(probes=SYNTHETIC + [("delta", "delta_probe.py", "new")],
+                      ci_eligible={"beta"}):
+            code, _, err = cli("--validate")
+            expect(code == 1 and "delta" in err,
+                   "--validate reports a newly registered probe as drift")
+            code, _, _ = cli("--seed")
+            expect(code == 0, "--seed reconciles that drift")
+            code, _, _ = cli("--validate")
+            expect(code == 0, "...and --validate then agrees")
+
+        try:
+            code, out, _ = cli("--record", str(good))
+            expect(code == 0 and "alpha" in out,
+                   "--record ingests a measurement, naming the probe itself")
+            census = json.loads(path.read_text(encoding="utf-8"))["probes"][0]["census"]
+            expect(len(census["current"]["samples"]) == 1,
+                   "...and the sample landed")
+
+            code, _, err = cli("--record", str(holding / "nothing.json"))
+            expect(code == 1 and "cannot read" in err,
+                   "an unreadable result file is a controlled refusal")
+            bad = holding / "bad.json"
+            bad.write_text("{oops", encoding="utf-8")
+            code, _, err = cli("--record", str(bad))
+            expect(code == 1 and "not valid JSON" in err,
+                   "a malformed result file is a controlled refusal")
+            expect("Traceback" not in err,
+                   "no refusal prints a traceback")
+        finally:
+            shutil.rmtree(holding, ignore_errors=True)
+
+        before = path.read_bytes()
+        code, _, err = cli("--probe", "alpha", "--set-acceptable-failures", "2",
+                           "--justification", "two races")
+        expect(code == 0, "a policy update through the CLI succeeds")
+        stored = path.read_bytes()
+        code, _, err = cli("--set-acceptable-failures", "2")
+        expect(code == 1 and "--probe" in err,
+               "a policy flag with no --probe exits 1")
+        code, _, err = cli("--set-acceptable-failures", "2", "--justification",
+                           "none", "--probe", "")
+        expect(code == 1 and "--probe" in err,
+               "an empty --probe is no --probe at all")
+        code, _, err = cli("--record", str(good), "--justification", "x")
+        expect(code == 1 and "--justification" in err,
+               "--justification without --set-acceptable-failures exits 1")
+        code, _, err = cli("--seed", "--probe", "alpha")
+        expect(code == 1 and "--probe" in err,
+               "--probe is exclusive to the policy operations")
+        code, _, err = cli("--probe", "alpha", "--set-estimate", "soon")
+        expect(code == 1 and "number" in err,
+               "a non-numeric estimate exits 1")
+        code, _, _ = cli("--probe", "alpha", "--set-acceptable-failures", "2",
+                         "--set-estimate", "5")
+        expect(code != 0,
+               "the two --set-* flags together are rejected, non-zero")
+        code, _, _ = cli()
+        expect(code != 0, "no operation at all is rejected, non-zero")
+        expect(path.read_bytes() == stored,
+               "no argument-combination error read or wrote the census")
+        after = json.loads(path.read_text(encoding="utf-8"))["probes"][0]["census"]
+        expect(after["acceptable_failures"] == 2
+               and after["acceptable_failures_justification"] == "two races",
+               "and the stored policy is exactly what was set")
+
+
+# ==========================================================================
 def main() -> int:
-    for test in (test_migration, test_inventory_preservation,
-                 test_measurement_update, test_cohorts,
-                 test_ci_eligible_entries, test_result_validation,
-                 test_long_run_rounding, test_corrupt_stored_records,
-                 test_artifact_boundary, test_malformed_state_and_recovery,
-                 test_missing_docs_worktree, test_concurrent_writers,
-                 test_write_path_refuses_data_loss,
-                 test_lock_identity, test_seed_never_overwrites):
+    for test in (test_record_shape, test_migration, test_seed_and_noop,
+                 test_reconciliation, test_ingest_accepted,
+                 test_ingest_harness_error, test_policy, test_refusals,
+                 test_path_substitution, test_atomicity,
+                 test_preservation_guard,
+                 test_independent_process_contention, test_cli):
         test()
     print()
     if FAILURES:
