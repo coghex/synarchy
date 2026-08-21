@@ -257,9 +257,10 @@ PROBES = [
     ("role", "role_probe.py",
      "derived unit-role hysteresis/demotion/work-XP growth (#265)"),
     ("save_compat_migration", "save_compat_migration_probe.py",
-     "fresh-process migration probe: a tracked pre-#760 B1 fixture loads, "
-     "publishes, dwells paused, re-saves current-format, and reloads "
-     "cleanly across a real process restart (#766)"),
+     "fresh-process migration probe: EVERY complete-session fixture the "
+     "save-compat manifest declares loads, publishes, dwells paused, "
+     "re-saves current-format, and reloads cleanly across a real process "
+     "restart (#766, #1485)"),
     ("autosave", "autosave_probe.py",
      "interval autosave (#913): default-off dwell, a real one-minute interval "
      "firing, pause/time-scale restoration and its player-intent suppression, "
