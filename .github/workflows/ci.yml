@@ -623,7 +623,12 @@ jobs:
       # -> value, invalid JSON -> text) against a real socket speaking
       # the console protocol, and fails if a probe grows a private JSON
       # console wrapper again — the twenty-two-copy duplication #1160
-      # removed.
+      # removed. test_probe_flake is the only automated gate
+      # probe_protocol.py, probe_flake.py and probe_census.py have —
+      # mutation-covering all three parsers from both sides, engine-free
+      # and GPU-free — and every #1426 protocol migration extends it
+      # with another standalone case, so each of those migrations shipped
+      # with a gate nothing ran until #1475.
       - name: probe runner self-tests
         run: |
           python3 tools/ci_probes.py --self-test
@@ -633,6 +638,7 @@ jobs:
           python3 tools/test_persistence_contract_sweep.py
           python3 tools/test_action_outcome_probe.py
           python3 tools/test_probelib.py
+          python3 tools/test_probe_flake.py
 
       # Cheap, no-engine guard (#1355): fails if a `python3 tools/*.py`
       # check runs in this job and not in tools/ci-local.sh, or the other
@@ -640,7 +646,8 @@ jobs:
       # path selectors, which `make ci` has nothing to select for, and the
       # engine-booting probe sweep). CLAUDE.md promises `make ci` predicts
       # this job's result; nothing enforced that and it had already
-      # drifted -- the five probe-runner self-tests above ran only here.
+      # drifted -- the original five of the probe-runner self-tests above
+      # ran only here.
       - name: CI/local gate parity audit
         run: |
           python3 tools/ci_parity_audit.py --self-test

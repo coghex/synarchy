@@ -87,6 +87,31 @@ def skip(msg: str) -> None:
     print(f"  SKIP: {msg}")
 
 
+# uid 0 is exempt from `_check_shared_dir`'s ownership rule BY DESIGN
+# (a root-owned namespace is the case /tmp itself is), and everything
+# root creates it also owns — so under root the "owned by a third
+# party" scenario cannot be built the way an unprivileged run builds
+# it, by asking about a directory we own as if we were someone else.
+# Root can chown, though, so it is built the other way round rather
+# than skipped: hand the directory to an account that is neither root
+# nor us, and ask as ourselves. CI's container runs as root (#1475),
+# which is the only place that branch is taken.
+THIRD_PARTY_UID = 65534
+
+
+def hand_to_third_party(path: Path) -> int:
+    """Leave `path` owned by neither root nor the uid this returns.
+
+    The returned uid is the one to ask `_check_shared_dir` with, so the
+    same two assertions exercise the same rejection under either
+    privilege level.
+    """
+    if os.getuid() == 0:
+        os.chown(path, THIRD_PARTY_UID, -1)
+        return os.getuid()
+    return os.getuid() + 1
+
+
 # ==========================================================================
 # Synthetic protocol probe
 # ==========================================================================
@@ -1099,9 +1124,10 @@ def test_lease_root_is_tmpdir_independent() -> None:
         sticky.chmod(0o1777)
         expect(probe_flake._check_shared_dir(sticky, uid=os.getuid()) == sticky,
                "a sticky directory this user owns is accepted")
+        asker = hand_to_third_party(sticky)
         expect_raises(probe_flake.Rejection,
                       lambda: probe_flake._check_shared_dir(
-                          sticky, uid=os.getuid() + 1),
+                          sticky, uid=asker),
                       "a sticky directory owned by ANOTHER unprivileged user "
                       "is refused, because its owner could replace a held "
                       "lease pathname",
@@ -1186,9 +1212,10 @@ def test_lease_root_is_tmpdir_independent() -> None:
                     lease.release()
         finally:
             probe_flake.LEASE_ROOT = saved_root
+        asker = hand_to_third_party(owned)
         expect_raises(probe_flake.Rejection,
                       lambda: probe_flake._check_shared_dir(
-                          owned, uid=os.getuid() + 1),
+                          owned, uid=asker),
                       "so such a directory is refused for anyone who does not "
                       "own it", "neither root nor this user")
 
@@ -1450,17 +1477,25 @@ def test_artifacts() -> None:
                                "--artifact-root", "/dev/null/probe-artifacts"])
         expect(rc == probe_flake.EXIT_REJECTED,
                "an uncreatable artifact root exits with the rejection code")
-        unwritable = tree.artifact_root / "readonly"
-        unwritable.mkdir()
-        unwritable.chmod(0o500)
-        try:
-            expect_raises(probe_flake.Rejection,
-                          lambda: probe_flake.check_artifact_root(
-                              unwritable / "under"),
-                          "an unwritable artifact root is rejected",
-                          "cannot be created")
-        finally:
-            unwritable.chmod(0o700)
+        # Unlike the ownership cases above, this one cannot be rebuilt
+        # for root at all: no mode makes a directory unwritable to uid
+        # 0, so there is nothing to construct and the check under test
+        # is correct to let it through. A clear skip, never a failure.
+        if os.getuid() == 0:
+            skip("running as root, so no directory mode can make an "
+                 "artifact root unwritable to us")
+        else:
+            unwritable = tree.artifact_root / "readonly"
+            unwritable.mkdir()
+            unwritable.chmod(0o500)
+            try:
+                expect_raises(probe_flake.Rejection,
+                              lambda: probe_flake.check_artifact_root(
+                                  unwritable / "under"),
+                              "an unwritable artifact root is rejected",
+                              "cannot be created")
+            finally:
+                unwritable.chmod(0o700)
 
 
 def test_no_tmpdir_default() -> None:
