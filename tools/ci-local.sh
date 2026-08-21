@@ -66,59 +66,59 @@ fi
 # needs to be injected here.
 printf 'package synarchy\n  ghc-options: -fforce-recomp\n' > "$LOCAL"
 
-echo "==> [1/19] build (library + executable, -Werror)"
+echo "==> [1/20] build (library + executable, -Werror)"
 cabal build all
 
-echo "==> [2/19] build test suites"
+echo "==> [2/20] build test suites"
 cabal build synarchy-test-headless
 cabal build synarchy-test-graphical
 
-echo "==> [3/19] headless hspec suite"
+echo "==> [3/20] headless hspec suite"
 cabal test synarchy-test-headless --test-show-details=direct
 
-echo "==> [4/19] test audit"
+echo "==> [4/20] test audit"
 python3 tools/test_audit.py
 
-echo "==> [5/19] lua module line budget"
+echo "==> [5/20] lua module line budget"
 python3 tools/lua_module_budget.py
 
-echo "==> [6/19] lua duplicate function audit"
+echo "==> [6/20] lua duplicate function audit"
 python3 tools/test_lua_duplicate_function_audit.py
 python3 tools/lua_duplicate_function_audit.py
 
-echo "==> [7/19] haskell module line budget"
+echo "==> [7/20] haskell module line budget"
 python3 tools/test_haskell_module_budget.py
 python3 tools/haskell_module_budget.py
 
-echo "==> [8/19] unicode operator audit"
+echo "==> [8/20] unicode operator audit"
 python3 tools/test_unicode_operator_audit.py
 python3 tools/unicode_operator_audit.py
 
-echo "==> [9/19] persistence inventory audit"
+echo "==> [9/20] persistence inventory audit"
 python3 tools/test_persistence_inventory_audit.py
 python3 tools/persistence_inventory_audit.py
 
-echo "==> [10/19] EngineEnv capability inventory audit"
+echo "==> [10/20] EngineEnv capability inventory audit"
 python3 tools/test_engine_env_capability_audit.py
 python3 tools/engine_env_capability_audit.py
 
-echo "==> [11/19] save compatibility audit"
+echo "==> [11/20] save compatibility audit"
 python3 tools/test_save_compat_audit.py
 python3 tools/save_compat_audit.py
 
-echo "==> [12/19] enum append-only audit"
+echo "==> [12/20] enum append-only audit"
 python3 tools/enum_append_only_audit.py --self-test
 python3 tools/enum_append_only_audit.py
 
-echo "==> [13/19] cabal library module inventory audit"
+echo "==> [13/20] cabal library module inventory audit"
 python3 tools/test_cabal_module_audit.py
 python3 tools/cabal_module_audit.py
 
-echo "==> [14/19] material id/name correspondence audit"
+echo "==> [14/20] material id/name correspondence audit"
 python3 tools/material_id_audit.py --self-test
 python3 tools/material_id_audit.py
 
-echo "==> [15/19] findings report status audit"
+echo "==> [15/20] findings report status audit"
 python3 tools/test_findings_report_audit.py
 python3 tools/findings_report_audit.py
 
@@ -126,11 +126,11 @@ python3 tools/findings_report_audit.py
 # comparison against a fresh regeneration, and #1262's image/slot and
 # resident-memory budgets. --strict is what makes a budget breach fail
 # rather than merely print.
-echo "==> [16/19] unit asset inventory, freshness and budget"
+echo "==> [16/20] unit asset inventory, freshness and budget"
 python3 tools/test_pack_atlas.py
 python3 tools/pack_atlas.py --validate-only --strict
 
-echo "==> [17/19] world_check --quick"
+echo "==> [17/20] world_check --quick"
 python3 tools/world_check.py --quick
 
 # Validate the probe-runner harness itself (cheap, no engine, no GPU) --
@@ -148,7 +148,7 @@ python3 tools/world_check.py --quick
 # (#1160); test_probe_flake covers probe_protocol.py, probe_flake.py and
 # probe_census.py -- the only automated gate those three have, and one
 # every #1426 protocol migration extends (#1475).
-echo "==> [18/19] probe runner self-tests"
+echo "==> [18/20] probe runner self-tests"
 python3 tools/ci_probes.py --self-test
 python3 tools/ci_expensive_gates.py --self-test
 python3 tools/ci_docs_fast_path.py --self-test
@@ -158,12 +158,23 @@ python3 tools/test_action_outcome_probe.py
 python3 tools/test_probelib.py
 python3 tools/test_probe_flake.py
 
+# Cheap, no-engine self-test of CI's cache-outcome report (#1358). The
+# report itself runs only in CI -- `make ci` restores no GitHub Actions
+# cache, so it has no outcome to classify -- but its classification and
+# the ci.yml wiring that classification reads are checked here, because a
+# mis-wired reporter is indistinguishable from a healthy cache: reverting
+# either cache step to the combined `actions/cache` action would empty
+# `cache-matched-key` and turn every prefix hit into a reported cold
+# cache, with nothing failing.
+echo "==> [19/20] CI cache report self-test"
+python3 tools/ci_cache_report.py --self-test
+
 # The gate that keeps this file honest (#1355): fails if a
 # `python3 tools/*.py` check runs in ci.yml's build-test job and not
 # here, or here and not there, outside the audit's hard-coded exemption
 # list. Without it the two drift silently, and they already had --- the
 # original five of the probe-runner self-tests above ran only in CI.
-echo "==> [19/19] CI/local gate parity audit"
+echo "==> [20/20] CI/local gate parity audit"
 python3 tools/ci_parity_audit.py --self-test
 python3 tools/ci_parity_audit.py
 
