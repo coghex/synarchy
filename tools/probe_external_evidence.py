@@ -61,9 +61,17 @@ skill's own contract.
 That tree is untracked and machine-local. It is absent on a fresh clone,
 on another machine, and wherever Codex is not installed. **Absence is a
 normal "no external evidence" result** — exit 0, an empty run list, no
-diagnostic. Damage is different: an existing but unreadable or malformed
-registry or report produces a non-fatal DIAGNOSTIC. Neither condition
-fails the read, suppresses the probe, or reclassifies anything.
+diagnostic. Damage is different: a state root that exists but is not a
+directory, and an existing but unreadable or malformed registry or
+report, each produce a non-fatal DIAGNOSTIC. Neither condition fails the
+read, suppresses the probe, or reclassifies anything.
+
+Absence and damage are told apart with `lstat`/`stat` directly rather
+than `Path.exists` / `.is_dir` / `.is_file`, which swallow `OSError` and
+answer False — under those an unstattable state root reads exactly like
+one that was never created, and a consumer failing closed on unreadable
+active-run state would never learn the difference. `entry_state` below
+is that shared primitive.
 
 Identity
 --------
@@ -136,6 +144,7 @@ import argparse
 import json
 import math
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -231,6 +240,38 @@ class DiagnosticLog:
 # would turn one malformed record into a traceback that aborts the whole
 # read and takes every later valid run with it.
 PATH_ERRORS = (OSError, ValueError)
+
+
+def entry_state(path: Path) -> tuple[bool, int | None, str | None]:
+    """`(present, resolved st_mode, stat failure)` for one path.
+
+    The shared primitive for every "what kind of thing is at this path?"
+    question in the de-flake lab, including
+    `tools/probe_inflight.py`'s. It exists because `Path.exists`,
+    `Path.is_dir` and `Path.is_file` all SWALLOW `OSError` and answer
+    False, which makes a path that cannot be examined — a denied
+    directory, a parent that is not a directory, an I/O error —
+    indistinguishable from one that is simply not there. Anything that
+    fails closed on damage but tolerates absence must be able to tell
+    those apart, so this asks with `lstat`/`stat` directly and keeps
+    THREE answers distinct: absent, present-and-of-this-kind, and could
+    not be examined.
+
+    `lstat` runs first so a symlink is judged as itself: one whose target
+    is gone is PRESENT and of no usable kind, not absent.
+    """
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return False, None, None
+    except PATH_ERRORS as exc:
+        return True, None, str(exc)
+    try:
+        return True, os.stat(path).st_mode, None
+    except FileNotFoundError:
+        return True, None, None                       # a dangling symlink
+    except PATH_ERRORS as exc:
+        return True, None, str(exc)
 
 
 # --------------------------------------------------------------------------
@@ -485,13 +526,13 @@ def resolve_reports_scope(root: Path, diagnostics: DiagnosticLog) -> Path | None
     if refusal is not None:
         diagnostics.add(SCOPE_REPORT, f"refused to read any report: {refusal}")
         return None
-    try:
-        misplaced = scope.exists() and not scope.is_dir()
-    except PATH_ERRORS as exc:
+    present, mode, failure = entry_state(scope)
+    if failure is not None:
         diagnostics.add(
-            SCOPE_REPORT, f"refused to read any report: cannot stat {scope}: {exc}")
+            SCOPE_REPORT,
+            f"refused to read any report: cannot stat {scope}: {failure}")
         return None
-    if misplaced:
+    if present and (mode is None or not stat.S_ISDIR(mode)):
         diagnostics.add(
             SCOPE_REPORT,
             f"refused to read any report: {root / REPORTS_DIRNAME} exists but is "
@@ -551,14 +592,13 @@ def _read_report(record: dict, scope: Path | None, diagnostics: DiagnosticLog) -
     # been written yet, or was cleaned up. A path that EXISTS but is not
     # a regular file — a directory named `*.test-result.md`, a socket, a
     # device — is damaged external state, and damage is diagnosed.
-    try:
-        exists = resolved.exists()
-        is_file = resolved.is_file()
-    except PATH_ERRORS as exc:
+    exists, mode, failure = entry_state(resolved)
+    if failure is not None:
         report["status"] = REPORT_UNREADABLE
-        diagnostics.add(SCOPE_REPORT, f"{run_id}: cannot stat report {resolved}: {exc}")
+        diagnostics.add(SCOPE_REPORT,
+                        f"{run_id}: cannot stat report {resolved}: {failure}")
         return report
-    if not is_file:
+    if mode is None or not stat.S_ISREG(mode):
         if not exists:
             report["status"] = REPORT_ABSENT
             return report
@@ -643,13 +683,11 @@ def _reject_json_constant(token: str) -> None:
 
 def _load_runs(registry_path: Path, diagnostics: DiagnosticLog) -> list[dict]:
     """The registry's run list, or [] with a diagnostic when unusable."""
-    try:
-        exists = registry_path.exists()
-        is_file = registry_path.is_file()
-    except PATH_ERRORS as exc:
-        diagnostics.add(SCOPE_REGISTRY, f"cannot stat {registry_path}: {exc}")
+    exists, mode, failure = entry_state(registry_path)
+    if failure is not None:
+        diagnostics.add(SCOPE_REGISTRY, f"cannot stat {registry_path}: {failure}")
         return []
-    if not is_file:
+    if mode is None or not stat.S_ISREG(mode):
         if not exists:
             diagnostics.add(
                 SCOPE_REGISTRY,
@@ -721,15 +759,27 @@ def read_probe_evidence(probe_key: str,
         "diagnostics": [],
         "diagnostics_detail": [],
     }
-    try:
-        present = root.is_dir()
-    except PATH_ERRORS as exc:
-        raise EvidenceRejected(f"cannot stat the $test state root {root}: {exc}") from exc
+    present, mode, failure = entry_state(root)
+    if failure is not None:
+        raise EvidenceRejected(
+            f"cannot stat the $test state root {root}: {failure}")
     if not present:
         return evidence
 
     evidence["state"] = STATE_PRESENT
     diagnostics = DiagnosticLog()
+    if mode is None or not stat.S_ISDIR(mode):
+        # It is THERE but is not a state tree. That is damage, not
+        # absence, and it must not read as "no external evidence" — a
+        # consumer that fails closed on unreadable active-run state has
+        # to see it, so it is scoped to the registry.
+        diagnostics.add(
+            SCOPE_REGISTRY,
+            f"the $test state root {root} exists but is not a directory, so no "
+            f"run state could be read from it")
+        evidence["diagnostics"] = diagnostics.messages()
+        evidence["diagnostics_detail"] = list(diagnostics.entries)
+        return evidence
     registry_path = resolve_registry_path(root, diagnostics)
     records = _load_runs(registry_path, diagnostics) if registry_path else []
     scope = resolve_reports_scope(root, diagnostics)

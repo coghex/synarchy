@@ -839,33 +839,22 @@ def parse_report(text: str, family: str, where: str) -> list[dict]:
 def _report_file_state(path: Path, where: str) -> tuple[bool, bool]:
     """`(present, usable)` for a report path, failing closed on anything else.
 
-    `os.path.lexists`, `Path.exists` and `Path.is_file` all SWALLOW
+    `evidence.entry_state` is the shared primitive, deliberately not a
+    second copy: `Path.exists` / `.is_dir` / `.is_file` all SWALLOW
     `OSError` and answer False, so an unstattable path — a denied
-    directory, a path whose parent is not a directory, an I/O error —
-    would read exactly like a file that is simply not there, and the
-    optional docs-wip scope would skip it and go on to answer `clear`.
-    Only `FileNotFoundError` means absent; every other stat failure is a
-    source error naming the path.
+    directory, a parent that is not a directory, an I/O error — reads
+    exactly like a file that is simply not there, and the optional
+    docs-wip scope would then skip it and go on to answer `clear`. Two
+    hand-rolled copies of that rule would be two chances to drift back.
 
-    `lstat` first so a symlink is examined as itself: a symlink whose
-    target is gone is PRESENT and unusable, not absent. The follow-up
-    `stat` then answers whether the resolved entry is a regular file.
+    Only true absence is absence here; every stat failure is a source
+    error naming the path, and a symlink whose target is gone is PRESENT
+    and unusable rather than missing.
     """
-    try:
-        os.lstat(path)
-    except FileNotFoundError:
-        return False, False
-    except (OSError, ValueError) as exc:
-        raise SourceError(
-            f"{where} could not be examined at {path}: {exc}") from None
-    try:
-        info = os.stat(path)
-    except FileNotFoundError:
-        return True, False                      # a symlink with no target
-    except (OSError, ValueError) as exc:
-        raise SourceError(
-            f"{where} could not be examined at {path}: {exc}") from None
-    return True, stat.S_ISREG(info.st_mode)
+    present, mode, failure = evidence.entry_state(path)
+    if failure is not None:
+        raise SourceError(f"{where} could not be examined at {path}: {failure}")
+    return present, mode is not None and stat.S_ISREG(mode)
 
 
 def _read_report(path: Path, family: str, where: str) -> list[dict]:

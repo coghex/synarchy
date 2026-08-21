@@ -719,6 +719,37 @@ def test_absent_versus_damaged_test_state() -> None:
         check_equal(document["result"], inflight.RESULT_SOURCE_ERROR,
                     "a non-object run record fails closed")
 
+    # A state root that EXISTS but is not a state tree is damage, not
+    # the normal "Codex is not installed here" absence, and it must not
+    # be able to answer `clear` — the kind predicates would have called
+    # every one of these absent.
+    for label, build in (
+            ("a regular file", lambda p: p.write_text("not a state tree")),
+            ("a dangling symlink", lambda p: p.symlink_to(p.parent / "gone"))):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = build_reports(Path(tmp) / "repo")
+            state = Path(tmp) / evidence.STATE_DIRNAME
+            build(state)
+            document = evaluate("injury_log", state_root=state, repo_root=root)
+            check_equal(document["result"], inflight.RESULT_SOURCE_ERROR,
+                        f"{label} at the $test state root fails closed")
+            check_equal(document["sources"][inflight.SOURCE_TEST_RUN], "error",
+                        f"{label} marks the $test source in error")
+            check("is not a directory" in document["source_errors"][0]["detail"],
+                  f"{label} is diagnosed actionably",
+                  document["source_errors"][0]["detail"])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = build_reports(Path(tmp) / "repo")
+        blocker = Path(tmp) / "blocker"
+        blocker.write_text("a file where a directory belongs", encoding="utf-8")
+        document = evaluate("injury_log", state_root=blocker / "nested" / "codex-test",
+                            repo_root=root)
+        check_equal(document["result"], inflight.RESULT_SOURCE_ERROR,
+                    "an unstattable $test state root fails closed")
+        check("could not be read" in document["source_errors"][0]["detail"],
+              "and is diagnosed", document["source_errors"][0]["detail"])
+
     # A damaged REPORT belongs to a finished run's interpretation, not to
     # active-run state, and must not fail the scan.
     with tempfile.TemporaryDirectory() as tmp:

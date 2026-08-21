@@ -40,6 +40,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -413,6 +414,92 @@ def test_the_heartbeat_is_reported_raw() -> None:
                     "recorded_fields is sorted")
         check(all("claimed_at" in r["recorded_fields"] for r in result["runs"]),
               "every synthetic run records claimed_at")
+
+
+def test_a_damaged_state_root_is_not_an_absent_one() -> None:
+    """A state root that is THERE but unusable is damage, never absence.
+
+    `Path.is_dir()` swallows `OSError` and answers False, so a regular
+    file, a dangling symlink and an unstattable path at the state root
+    all used to read as the normal "Codex is not installed here" result
+    — an empty run list with NO diagnostic, which a consumer failing
+    closed on unreadable active-run state would accept as a clean read.
+    """
+    for label, build in (
+            ("a regular file", lambda p: p.write_text("not a state tree")),
+            ("a dangling symlink", lambda p: p.symlink_to(p.parent / "gone"))):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / evidence.STATE_DIRNAME
+            build(root)
+            with NonInteraction(Path(tmp)) as guard:
+                result = read(root, "role")
+                guard.assert_untouched(f"{label} at the state root")
+            check_equal(result["state"], evidence.STATE_PRESENT,
+                        f"{label} at the state root is present, not absent")
+            check_equal(result["runs"], [], f"{label} yields no runs")
+            check_equal([d["scope"] for d in result["diagnostics_detail"]],
+                        [evidence.SCOPE_REGISTRY],
+                        f"{label} is diagnosed as active-run state, so a "
+                        f"fail-closed consumer sees it")
+            check(any("is not a directory" in d for d in result["diagnostics"]),
+                  f"{label} says what is wrong", str(result["diagnostics"]))
+
+    # A path that cannot be examined at all is the reader's rejection.
+    with tempfile.TemporaryDirectory() as tmp:
+        blocker = Path(tmp) / evidence.STATE_DIRNAME
+        blocker.write_text("a file where a directory belongs", encoding="utf-8")
+        try:
+            read(blocker / "nested" / evidence.STATE_DIRNAME, "role")
+            check(False, "an unstattable state root is rejected")
+        except evidence.EvidenceRejected as exc:
+            check("cannot stat the $test state root" in str(exc),
+                  "and says so", str(exc))
+
+    # A genuinely absent root is still the normal, diagnostic-free result.
+    with tempfile.TemporaryDirectory() as tmp:
+        result = read(Path(tmp) / "nothing-here", "role")
+        check_equal(result["state"], evidence.STATE_ABSENT, "absence is absence")
+        check_equal(result["diagnostics"], [], "and carries no diagnostic")
+
+
+def test_entry_state_separates_absent_from_unexaminable() -> None:
+    """The shared primitive keeps three answers apart, not two."""
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        regular = base / "file"
+        regular.write_text("x", encoding="utf-8")
+        directory = base / "dir"
+        directory.mkdir()
+        dangling = base / "dangling"
+        dangling.symlink_to(base / "gone")
+        good_link = base / "link"
+        good_link.symlink_to(regular)
+
+        present, mode, failure = evidence.entry_state(regular)
+        check((present, failure), (True, None), "a regular file is present")
+        check(mode is not None and stat.S_ISREG(mode), "and reports S_ISREG")
+
+        present, mode, failure = evidence.entry_state(directory)
+        check(mode is not None and stat.S_ISDIR(mode), "a directory reports S_ISDIR")
+
+        present, mode, failure = evidence.entry_state(good_link)
+        check(mode is not None and stat.S_ISREG(mode),
+              "a symlink is judged by its target's kind")
+
+        present, mode, failure = evidence.entry_state(dangling)
+        check_equal((present, mode, failure), (True, None, None),
+                    "a dangling symlink is PRESENT with no usable kind")
+
+        present, mode, failure = evidence.entry_state(base / "missing")
+        check_equal((present, mode, failure), (False, None, None),
+                    "a missing path is absent, with no failure")
+
+        present, mode, failure = evidence.entry_state(regular / "child")
+        check(present and failure is not None,
+              "a path under a non-directory is a stat FAILURE, not an absence",
+              f"{present!r} {failure!r}")
+        check(not os.path.lexists(regular / "child"),
+              "which is exactly what lexists cannot tell you")
 
 
 def test_diagnostics_carry_the_state_they_concern() -> None:
@@ -1242,6 +1329,8 @@ def main() -> int:
         test_a_measurement_run_is_the_same_probes_work,
         test_the_heartbeat_is_reported_raw,
         test_diagnostics_carry_the_state_they_concern,
+        test_a_damaged_state_root_is_not_an_absent_one,
+        test_entry_state_separates_absent_from_unexaminable,
         test_unknown_key_is_rejected,
         test_exact_matching,
         test_clean_and_observed_reports,

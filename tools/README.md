@@ -802,9 +802,14 @@ State lives at `<git-common-dir>/codex-test`, resolved with `git rev-parse
 literal `.git/codex-test` would be wrong. That tree is untracked and
 machine-local: it is ABSENT on a fresh clone, on another machine, and wherever
 Codex is not installed, and its absence is a normal "no external evidence"
-result (exit 0, no diagnostic). An existing but unreadable or malformed
-registry or report is different — a non-fatal diagnostic beside whatever could
-still be read. A recorded report path that is simply not there is data (a run
+result (exit 0, no diagnostic). A state root that EXISTS but is not a directory,
+and an existing but unreadable or malformed registry or report, are different —
+each a non-fatal diagnostic beside whatever could still be read. Absence and
+damage are told apart with `lstat`/`stat` directly through the shared
+`entry_state` helper, never with `Path.exists` / `.is_dir` / `.is_file`, which
+swallow `OSError` and answer False: under those an unstattable state root reads
+exactly like one that was never created, and a consumer failing closed on
+unreadable active-run state would never learn the difference. A recorded report path that is simply not there is data (a run
 has not written it yet); one that EXISTS but is not a regular file is damage,
 and damage is diagnosed. So is a registry carrying JSON's non-standard
 `NaN`/`Infinity` constants, which Python's `json` would otherwise read and
