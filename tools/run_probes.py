@@ -233,7 +233,9 @@ PROBES = [
      "(nonexistent/containment/directory) for simple items (#886), units (#887), and "
      "flora/buildings/structures items (#888); mode-incompatible flags (#1012/CH-58); and "
      "present-but-malformed values for every numeric flag, --dump= layer selection and --size, "
-     "with omission still defaulting (#1191)"),
+     "with omission still defaulting (#1191); and every malformed --region shape "
+     "(non-numeric/too few/too many/partially numeric/no operand) rejected pre-boot with the "
+     "omitted-flag default still reachable (#1481, CH-67)"),
     ("remote_warning_page_guard", "remote_warning_page_guard_probe.py",
      "remote-warning establishHere() revalidation guard against an active-world switch (#844)"),
     ("repair_item", "repair_item_probe.py",

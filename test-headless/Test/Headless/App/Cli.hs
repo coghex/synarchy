@@ -18,12 +18,13 @@
 --   precedence regression can no longer show up as those two
 --   disagreeing at runtime.
 --
---   @--region@ is deliberately absent from this module:
---   @docs\/code_health_findings.md@ CH-67 tracks 'parseRegion'\'s
---   identical silent default, sequenced after #1081's named-region
---   type, and #1191 leaves its behavior untouched. That named type
---   landed and has its own cases in "Test.Headless.App.ChunkRegion";
---   the silent default it still applies is asserted there.
+--   @--region@ is covered by the same contract, in its own module:
+--   #1191 left 'parseRegion' out, sequenced behind #1081's named-region
+--   type, and #1481 then closed @docs\/code_health_findings.md@ CH-67
+--   by giving it the @'Either' 'CliError' ('Maybe' a)@ shape every
+--   parser here already had. Its four outcomes are asserted in
+--   "Test.Headless.App.ChunkRegion", beside the region-geometry cases
+--   they belong with.
 module Test.Headless.App.Cli (spec) where
 
 import UPrelude

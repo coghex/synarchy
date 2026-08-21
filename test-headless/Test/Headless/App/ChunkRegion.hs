@@ -14,52 +14,97 @@
 --   'chunkRegionCoords' and must agree tile for tile: the JSON is
 --   emitted for whatever the queue loaded.
 --
---   Behavior is deliberately unchanged. In particular a malformed
---   @--region@ still silently becomes 'defaultChunkRegion' — that is
---   @docs\/code_health_findings.md@ CH-67, sequenced after this type
---   and out of scope for #1081, so it is asserted here as the CURRENT
---   contract rather than left unstated.
+--   #1481 then closed @docs\/code_health_findings.md@ CH-67 here, so
+--   these cases now pin the OPPOSITE of what they originally asserted:
+--   'parseRegion' was the last typed-value parser under #1191's
+--   contract still answering "absent" and "present, nonsense" with the
+--   same 'defaultChunkRegion', and a typo in a long dump produced a
+--   full, valid, WRONG region at exit 0. All four outcomes are checked
+--   below — absent, valid, malformed, missing operand — plus the
+--   first-occurrence precedence that keeps a malformed value from being
+--   skipped past in search of a later well-formed one. That those
+--   errors reach stderr with exit 1 before anything boots, and that the
+--   mode-compatibility rejection still outranks them, is
+--   @tools\/preview_cli_probe.py@'s job.
 module Test.Headless.App.ChunkRegion (spec) where
 
 import UPrelude
 import Test.Hspec
+import Data.List (isInfixOf)
 import App.Cli
-  ( ChunkRegion(..), defaultChunkRegion, parseRegion, chunkRegionCoords )
+  ( ChunkRegion(..), defaultChunkRegion, parseRegion, chunkRegionCoords
+  , CliError(..), cliErrorMessage )
 
 -- | A region's four coordinates in flag order, so a swapped pair is a
 --   failing list rather than a passing one under different names.
 corners ∷ ChunkRegion → [Int]
 corners r = [crX1 r, crY1 r, crX2 r, crY2 r]
 
+-- | The four coordinates of a region a parse was expected to ACCEPT.
+--   A 'Left' or a 'Right' 'Nothing' fails as a distinguishable list
+--   rather than as a pattern-match error.
+parsedCorners ∷ [String] → Either String [Int]
+parsedCorners args = case parseRegion args of
+    Right (Just r) → Right (corners r)
+    Right Nothing  → Left "absent"
+    Left err       → Left ("rejected: " ⧺ show err)
+
 spec ∷ Spec
-spec = describe "App.Cli chunk region (#1081)" $ do
+spec = describe "App.Cli chunk region (#1081, #1481)" $ do
 
   describe "parseRegion" $ do
     it "lands each --region coordinate in its own named field, in flag \
        \order -- four DISTINCT values, so exchanging any two fails" $
-      corners (parseRegion ["--region", "1,2,3,4"]) `shouldBe` [1, 2, 3, 4]
+      parsedCorners ["--region", "1,2,3,4"] `shouldBe` Right [1, 2, 3, 4]
 
-    it "keeps the historical default when --region is absent" $ do
-      parseRegion [] `shouldBe` defaultChunkRegion
-      parseRegion ["--dump", "--seed", "42"] `shouldBe` defaultChunkRegion
+    it "answers absence with Right Nothing, so the CALLER applies the \
+       \historical default (#1481)" $ do
+      parseRegion [] `shouldBe` Right Nothing
+      parseRegion ["--dump", "--seed", "42"] `shouldBe` Right Nothing
       corners defaultChunkRegion `shouldBe` [-8, -8, 8, 8]
 
-    it "still substitutes that default for a malformed value -- CH-67, \
-       \deliberately untouched here" $ do
-      parseRegion ["--region", "bogus"] `shouldBe` defaultChunkRegion
-      parseRegion ["--region", "1,2,3"] `shouldBe` defaultChunkRegion
-      parseRegion ["--region", "1,2,3,4,5"] `shouldBe` defaultChunkRegion
-      parseRegion ["--region", "1,2,3,x"] `shouldBe` defaultChunkRegion
-      parseRegion ["--region"] `shouldBe` defaultChunkRegion
+    it "REJECTS every malformed shape that used to become the default \
+       \silently -- CH-67, closed by #1481" $ do
+      parseRegion ["--region", "bogus"]
+        `shouldBe` Left (BadRegionValue "bogus")
+      parseRegion ["--region", "1,2,3"]
+        `shouldBe` Left (BadRegionValue "1,2,3")
+      parseRegion ["--region", "1,2,3,4,5"]
+        `shouldBe` Left (BadRegionValue "1,2,3,4,5")
+      parseRegion ["--region", "1,2,3,x"]
+        `shouldBe` Left (BadRegionValue "1,2,3,x")
+
+    it "reports a bare trailing --region as a flag missing its value, \
+       \NOT as absence" $
+      parseRegion ["--dump", "--region"]
+        `shouldBe` Left (MissingFlagValue "--region")
+
+    it "names --region and the offending token exactly as typed" $ do
+      let msg = cliErrorMessage (BadRegionValue "1,2,3,x")
+      msg `shouldSatisfy` isInfixOf "--region"
+      msg `shouldSatisfy` isInfixOf "1,2,3,x"
+      cliErrorMessage (MissingFlagValue "--region")
+        `shouldSatisfy` isInfixOf "--region"
+
+    it "lets the FIRST occurrence decide, so a malformed one is an \
+       \error rather than something to skip past" $ do
+      parseRegion ["--region", "bogus", "--region", "1,2,3,4"]
+        `shouldBe` Left (BadRegionValue "bogus")
+      parsedCorners ["--region", "1,2,3,4", "--region", "5,6,7,8"]
+        `shouldBe` Right [1, 2, 3, 4]
 
     it "parses negative coordinates, which is the ordinary case" $
-      corners (parseRegion ["--dump", "--region", "-4,-3,4,3"])
-        `shouldBe` [-4, -3, 4, 3]
+      parsedCorners ["--dump", "--region", "-4,-3,4,3"]
+        `shouldBe` Right [-4, -3, 4, 3]
+
+    it "accepts a reversed corner pair: only the SHAPE is validated, \
+       \and a directed region covering nothing is well-formed" $
+      parsedCorners ["--region", "2,3,0,1"] `shouldBe` Right [2, 3, 0, 1]
 
     it "does not require --region to be first" $
-      corners (parseRegion ["--dump", "--worldSize", "32"
-                           , "--region", "0,1,2,3"])
-        `shouldBe` [0, 1, 2, 3]
+      parsedCorners ["--dump", "--worldSize", "32"
+                    , "--region", "0,1,2,3"]
+        `shouldBe` Right [0, 1, 2, 3]
 
   describe "chunkRegionCoords" $ do
     it "enumerates x outer and y inner, both ranges inclusive -- the \
