@@ -272,7 +272,9 @@ it is recorded on the turn (`stuck: true`) before the session ends.
 Completed model sessions also rebuild a local, unversioned Markdown ledger at
 the shared Git directory's `codex-test/playtest-usage.md`. It scans durable
 `codex-test/artifacts/` traces and records date, run, player, turns, stop reason,
-compact token use, and budget. `--usage-log` selects another destination.
+compact token use, and budget. `--usage-log` selects another output destination;
+artifact discovery remains anchored to the shared Git directory, so a custom
+destination does not discard historical rows.
 
 ## The critic (H2, #648)
 

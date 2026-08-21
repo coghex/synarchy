@@ -42,6 +42,7 @@ PLAYER_PROFILES = {
 }
 DEFAULT_PLAYER_PROFILE = "codex-luna"
 DEFAULT_DECISION_TIMEOUT = 90.0
+CLAUDE_SCREENSHOT_READ_RULE = "Read(./screenshot.png)"
 
 
 class DecisionTimeout(RuntimeError):
@@ -229,7 +230,8 @@ def _build_claude_command(claude_bin: str, workspace: str,
 
     Safe mode disables local customizations while the fresh cwd contains only
     the copied screenshot. Read is the sole tool because Claude Code has no
-    image-attachment flag in print mode; it uses Read to view that one file.
+    image-attachment flag in print mode; its permission rule names that one
+    relative path exactly, so a guessed absolute repository path is denied.
     """
     profile = profile or PLAYER_PROFILES["claude-sonnet"]
     return [
@@ -241,7 +243,7 @@ def _build_claude_command(claude_bin: str, workspace: str,
         "--model", profile["model"],
         "--effort", profile["effort"],
         "--tools", "Read",
-        "--allowedTools", "Read",
+        "--allowedTools", CLAUDE_SCREENSHOT_READ_RULE,
         "--permission-mode", "dontAsk",
         "--strict-mcp-config",
         "--mcp-config", '{"mcpServers":{}}',

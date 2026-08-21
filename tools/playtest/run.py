@@ -52,8 +52,8 @@ sys.path.insert(0, os.path.dirname(HERE))
 from engine import EngineCrash, FakeEngine, PlaytestEngine, translate_action  # noqa: E402
 from personas import load_persona  # noqa: E402
 from trace import SessionTrace, load_meta, load_replay, load_turns  # noqa: E402
-from usage import (compact_tokens, default_usage_log, update_usage_log,
-                   usage_total)  # noqa: E402
+from usage import (compact_tokens, default_artifacts_root, default_usage_log,
+                   update_usage_log, usage_total)  # noqa: E402
 import agent as agent_mod  # noqa: E402
 
 DEFAULT_PORT = 9308
@@ -1245,9 +1245,19 @@ def selftest() -> int:
               and "--no-session-persistence" in claude_cmd)
         check("Claude player can read only the isolated screenshot",
               claude_cmd[claude_cmd.index("--tools") + 1] == "Read"
-              and claude_cmd[claude_cmd.index("--allowedTools") + 1] == "Read"
+              and claude_cmd[claude_cmd.index("--allowedTools") + 1]
+              == "Read(./screenshot.png)"
               and "--strict-mcp-config" in claude_cmd
               and "--disable-slash-commands" in claude_cmd)
+        allowed_tool_values = [
+            claude_cmd[i + 1] for i, value in enumerate(claude_cmd[:-1])
+            if value == "--allowedTools"]
+        check("Claude permission allowlist excludes every alternate read path",
+              allowed_tool_values == ["Read(./screenshot.png)"]
+              and "Read" not in allowed_tool_values
+              and not any("**" in rule or "../" in rule
+                          for rule in allowed_tool_values),
+              str(allowed_tool_values))
         action_schema = agent_mod.TURN_SCHEMA["properties"]["action"]
         check("Codex strict action schema requires every declared field",
               set(action_schema["required"]) == set(action_schema["properties"])
@@ -1501,6 +1511,7 @@ def main() -> int:
         HERE, "sessions", time.strftime("%Y%m%d_%H%M%S") + f"_{os.path.basename(label)}"))
     from playtest import HARNESS_VERSION  # local package
     usage_log_path = args.usage_log or default_usage_log(os.getcwd())
+    usage_artifacts_root = default_artifacts_root(os.getcwd())
     meta = {
         "harness_version": HARNESS_VERSION,
         "mode": "replay" if replaying else args.agent,
@@ -1511,6 +1522,7 @@ def main() -> int:
         "time_budget_seconds": args.max_seconds,
         "player_token_budget": args.max_player_tokens,
         "usage_log_path": usage_log_path,
+        "usage_artifacts_root": usage_artifacts_root,
         "account_remaining_tokens": "unavailable from noninteractive CLI",
         "stuck_k": args.stuck_k,
         "memory_turns": args.memory_turns,
@@ -1532,7 +1544,8 @@ def main() -> int:
             "effort": profile["effort"],
             "decision_timeout_seconds": args.decision_timeout,
             "session_persistence": "ephemeral",
-            "tools": "disabled",
+            "tools": ("disabled" if profile["backend"] == "codex-cli" else
+                      agent_mod.CLAUDE_SCREENSHOT_READ_RULE + " only"),
         }
 
     if replaying:
@@ -1605,9 +1618,7 @@ def main() -> int:
             print(f"  [warn] could not write inspection plan: {e}")
         if usage_log_path:
             try:
-                artifacts_root = os.path.join(
-                    os.path.dirname(usage_log_path), "artifacts")
-                update_usage_log(usage_log_path, artifacts_root,
+                update_usage_log(usage_log_path, usage_artifacts_root,
                                  extra_trace_dir=trace_dir)
                 print(f"playtest: usage ledger at {usage_log_path}")
             except Exception as e:

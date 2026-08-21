@@ -48,8 +48,8 @@ def compact_tokens(value: int | None) -> str:
     return str(n)
 
 
-def default_usage_log(repo_cwd: str) -> str | None:
-    """Resolve the shared-Git local ledger used by coordinated test runs."""
+def _shared_codex_test_dir(repo_cwd: str) -> str | None:
+    """Resolve the shared-Git directory that owns coordinated test state."""
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -58,7 +58,19 @@ def default_usage_log(repo_cwd: str) -> str | None:
         return None
     if result.returncode != 0 or not result.stdout.strip():
         return None
-    return os.path.join(result.stdout.strip(), "codex-test", "playtest-usage.md")
+    return os.path.join(result.stdout.strip(), "codex-test")
+
+
+def default_usage_log(repo_cwd: str) -> str | None:
+    """Resolve the shared-Git local ledger used by coordinated test runs."""
+    root = _shared_codex_test_dir(repo_cwd)
+    return os.path.join(root, "playtest-usage.md") if root else None
+
+
+def default_artifacts_root(repo_cwd: str) -> str | None:
+    """Resolve durable playtest artifacts independently of ledger output."""
+    root = _shared_codex_test_dir(repo_cwd)
+    return os.path.join(root, "artifacts") if root else None
 
 
 def _row(meta_path: str, ledger_path: str) -> dict | None:
@@ -119,7 +131,7 @@ def _row(meta_path: str, ledger_path: str) -> dict | None:
     }
 
 
-def update_usage_log(ledger_path: str, artifacts_root: str,
+def update_usage_log(ledger_path: str, artifacts_root: str | None,
                      extra_trace_dir: str | None = None) -> None:
     """Rebuild the Markdown ledger atomically from durable trace metadata."""
     ledger_path = os.path.abspath(ledger_path)
@@ -127,8 +139,10 @@ def update_usage_log(ledger_path: str, artifacts_root: str,
     lock_path = ledger_path + ".lock"
     with open(lock_path, "a+", encoding="utf-8") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        paths = set(glob.glob(os.path.join(os.path.abspath(artifacts_root),
-                                           "**", "meta.json"), recursive=True))
+        paths = set()
+        if artifacts_root:
+            paths.update(glob.glob(os.path.join(os.path.abspath(artifacts_root),
+                                                "**", "meta.json"), recursive=True))
         if extra_trace_dir:
             paths.add(os.path.join(os.path.abspath(extra_trace_dir), "meta.json"))
         rows = [r for p in paths if (r := _row(p, ledger_path)) is not None]
@@ -194,11 +208,14 @@ def selftest() -> int:
                                  "effort": "medium"},
                 "usage_totals": {"input_tokens": 1400, "output_tokens": 100},
             }, f)
-        ledger = os.path.join(tmp, "playtest-usage.md")
+        # The output deliberately lives away from artifacts: choosing a custom
+        # ledger destination must not change which historical runs are found.
+        custom_output = os.path.join(tmp, "custom-output")
+        ledger = os.path.join(custom_output, "usage.md")
         update_usage_log(ledger, artifacts)
         with open(ledger, encoding="utf-8") as f:
             text = f.read()
-        check("ledger collates trace metadata",
+        check("custom ledger destination still collates artifact history",
               "run-one" in text and "1.5K" in text and "200K" in text)
         legacy = os.path.join(artifacts, "legacy-run")
         os.makedirs(legacy)
