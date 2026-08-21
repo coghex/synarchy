@@ -2623,6 +2623,65 @@ def test_cohort_semantic_refusals() -> None:
             "a stored cohort with no samples has no statistic and refuses",
             "no samples")
 
+        # The append-or-archive decision READS the stored cohort, so an
+        # unusable one refuses the whole ingestion rather than being
+        # quietly extended (same commit) or archived into history
+        # (different commit). Before this, a valid measurement landed
+        # and only the later READ failed.
+        for damage, why in (
+                ({"commit_sha": "unknown"}, "keyed by the placeholder"),
+                ({"samples": 0, "field": "commit_sha", "value": "unknown"},
+                 "holding a placeholder sample"),
+                ({"samples": 0, "field": "timestamp_utc",
+                  "value": "2026-08-21 05:00:00"},
+                 "holding an unreadable sample timestamp"),
+                ({"samples": 0, "field": "requested_runs", "value": -1},
+                 "holding a negative sample run count")):
+            with scratch() as damaged_root:
+                damaged_path = damaged_root / "probe_census.json"
+                seeded(damaged_path)
+                probe_census.record_result(damaged_path,
+                                           measurement(COMMIT_A, age_days=3))
+                stored = json.loads(damaged_path.read_text(encoding="utf-8"))
+                cohort = stored["probes"][0]["census"]["current"]
+                if "field" in damage:
+                    cohort["samples"][damage["samples"]][damage["field"]] = \
+                        damage["value"]
+                else:
+                    cohort.update(damage)
+                damaged_path.write_text(json.dumps(stored), encoding="utf-8")
+                damaged_before = damaged_path.read_bytes()
+                for follow_up, kind in ((COMMIT_A, "same-commit"),
+                                        (COMMIT_B, "different-commit")):
+                    expect_refusal(
+                        lambda follow_up=follow_up:
+                            probe_census.record_result(
+                                damaged_path,
+                                measurement(follow_up, age_days=0)),
+                        f"a {kind} measurement onto a stored cohort {why} "
+                        f"refuses")
+                    unchanged(damaged_path, damaged_before,
+                              f"...and that {kind} refusal wrote nothing")
+
+        # A harness error never reads the current cohort, so a damaged
+        # one does not stop the attempt log from recording the failure.
+        with scratch() as damaged_root:
+            damaged_path = damaged_root / "probe_census.json"
+            seeded(damaged_path)
+            probe_census.record_result(damaged_path,
+                                       measurement(COMMIT_A, age_days=3))
+            stored = json.loads(damaged_path.read_text(encoding="utf-8"))
+            stored["probes"][0]["census"]["current"]["commit_sha"] = "unknown"
+            damaged_path.write_text(json.dumps(stored), encoding="utf-8")
+            probe_census.record_result(damaged_path, result_document(
+                status="harness-error", commit=COMMIT_B))
+            after = json.loads(
+                damaged_path.read_text(encoding="utf-8"))["probes"][0]["census"]
+            expect(len(after["attempts"]) == 2
+                   and after["attempts"][-1]["accepted"] is False,
+                   "a harness error still logs against a damaged stored "
+                   "cohort, which it never reads")
+
         # The evaluation time and the horizon are inputs, and an
         # unusable one is a refusal rather than a substituted default.
         good = json.loads(path.read_text(encoding="utf-8"))
@@ -2711,6 +2770,11 @@ def test_summary_cli() -> None:
         expect(code == 0 and "alpha" in out and "unmeasured" in out
                and "%" in out,
                "the default rendering is a human table")
+        expect(COMMIT_A in out,
+               "the table reports the EXACT commit, not an abbreviation")
+        expect(all(COMMIT_A[:8] not in line or COMMIT_A in line
+                   for line in out.splitlines()),
+               "and no row abbreviates it")
 
         # The evaluation time and horizon are validated like every other
         # input, and the three new flags belong to --summary alone.

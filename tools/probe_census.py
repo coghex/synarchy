@@ -788,7 +788,10 @@ def ingest_result(document: dict, result) -> tuple[dict, str]:
 
     An accepted measurement must first pass #1429's semantic gate
     (`require_measurement_semantics`); an unusable commit identity,
-    timestamp or count refuses and writes nothing at all.
+    timestamp or count refuses and writes nothing at all. The STORED
+    current cohort is held to the same standard, because the
+    append-or-archive decision reads it: an unusable one refuses the
+    ingestion instead of being extended or archived.
 
     Deliberately NOT idempotent: recording the same document twice
     appends a second sample and a second attempt. The record is
@@ -818,6 +821,16 @@ def ingest_result(document: dict, result) -> tuple[dict, str]:
         census = _deep_copy(row["census"])
         if sample is not None:
             current = census.get("current")
+            if current is not None:
+                # The append-or-archive decision READS the stored
+                # cohort, so #1429's semantic checks apply to it too:
+                # an unusable one refuses the whole ingestion rather
+                # than being silently extended or archived into
+                # history. Without this a legacy or hand-edited cohort
+                # keyed by (or containing) `unknown` would accept a
+                # valid measurement and only fail later, on read.
+                cohort_statistic(
+                    current, f"probe {probe!r} stored current cohort")
             if not isinstance(current, dict) or current.get("commit_sha") != commit:
                 _archive_current(census, probe)
                 census["current"] = {"commit_sha": commit, "samples": []}
@@ -1915,13 +1928,20 @@ def _rate_text(summary: dict) -> str:
 
 
 def render_summary(summaries: list[dict]) -> str:
-    """The human table. `--json` is the machine-readable form."""
-    header = (f"{'probe':<34}{'commit':<10}{'measured (UTC)':<22}"
-              f"{'age':>9}{'runs':>7}{'fail':>6}{'rate':>8}  state")
+    """The human table. `--json` is the machine-readable form.
+
+    The commit is printed IN FULL and sits last, where the widest
+    column costs the fixed ones no alignment: a selection-facing row
+    reports the exact hash the statistic was measured on, and an
+    abbreviation is not that hash.
+    """
+    header = (f"{'probe':<34}{'measured (UTC)':<22}"
+              f"{'age':>9}{'runs':>7}{'fail':>6}{'rate':>8}"
+              f"  {'state':<18}commit")
     lines = [header, "-" * len(header)]
     for summary in summaries:
         if summary["measured"]:
-            commit = summary["commit_sha"][:8]
+            commit = summary["commit_sha"]
             measured_at = summary["measured_at"]
             age = f"{summary['age_seconds'] / SECONDS_PER_DAY:.1f}d"
             runs = str(summary["requested_runs"])
@@ -1932,9 +1952,9 @@ def render_summary(summaries: list[dict]) -> str:
         else:
             commit = measured_at = age = runs = fails = "-"
             state = "unmeasured"
-        lines.append(f"{summary['key']:<34}{commit:<10}{measured_at:<22}"
+        lines.append(f"{summary['key']:<34}{measured_at:<22}"
                      f"{age:>9}{runs:>7}{fails:>6}{_rate_text(summary):>8}"
-                     f"  {state}")
+                     f"  {state:<18}{commit}")
     return "\n".join(lines) + "\n"
 
 

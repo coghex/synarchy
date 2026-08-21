@@ -784,16 +784,23 @@ inclusive, and age is clamped at zero so a future-anchored cohort is fresh
 rather than negatively old. Each row reports `measured`, the exact commit, the
 latest measurement, the nonnegative age, the stale flag, and the combined
 run/failure counts and rate; every measurement field of an UNMEASURED probe is
-null, so a zero failure rate can only ever mean an observed zero.
+null, so a zero failure rate can only ever mean an observed zero. The table
+prints the commit IN FULL, in its last column: a selection-facing row reports
+the exact hash the statistic was measured on, and an abbreviation is not that
+hash.
 
 Semantic validation is narrow and fails closed at BOTH boundaries. Before a
 `status: "ok"` sample changes a cohort, and again when an already-stored cohort
 is read, the commit must be a real 40-character lowercase-hex identity — not
 `probe_flake`'s `unknown` placeholder, which is a well-formed and schema-valid
 result field but names no commit — the timestamp must parse as UTC, and the
-aggregation counts must be usable nonnegative integers. Each refusal is
-controlled and writes nothing. A harness error is deliberately NOT gated: it
-contributes to no cohort, and unmeasurable provenance is exactly what the
+aggregation counts must be usable nonnegative integers. The STORED current
+cohort is held to the same standard on the INGESTION side too, because the
+append-or-archive decision reads it: a legacy or hand-edited cohort that cannot
+be summarized refuses the measurement outright rather than being extended or
+archived and only failing on a later read. Each refusal is controlled and
+writes nothing. A harness error is deliberately NOT gated: it reads no cohort
+and contributes to none, and unmeasurable provenance is exactly what the
 attempt log retains. The CROSS-FIELD invariants remain #1493's.
 
 `--print` never touches the docs worktree. `--seed` is the ONLY operation that
@@ -851,8 +858,9 @@ same-commit batches (which an unweighted mean would report as 0.30 instead of
 0.17), an A → B → A sequence, HEAD moving with no measurement, the inclusive
 staleness boundary from both sides, a future anchor, an unmeasured probe beside
 a real zero rate and a cohort with no denominator, a promoted probe whose
-statistic lives in `history[-1]`, and the placeholder/malformed refusals at both
-the ingestion and the stored-read boundary.
+statistic lives in `history[-1]`, the placeholder/malformed refusals at the
+incoming, stored-cohort-on-ingest and stored-read boundaries alike, and the
+exact commit in the rendered table.
 
 ### `probe_external_evidence.py` — the Codex `$test` record, read-only (#1432)
 
