@@ -128,14 +128,7 @@ end
 -- Helpers / data
 -----------------------------------------------------------
 
-local function formatGameTimeHMS(t)
-    local secs = math.floor(t or 0)
-    if secs < 0 then secs = 0 end
-    local hh = math.floor(secs / 3600)
-    local mm = math.floor((secs % 3600) / 60)
-    local ss = secs % 60
-    return string.format("%02d:%02d:%02d", hh, mm, ss)
-end
+local formatGameTimeHMS = require("scripts.lib.game_time").formatHMS
 
 local DISPLAY_NAMES = {
     bear_brown = "the brown bear",

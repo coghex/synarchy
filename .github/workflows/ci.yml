@@ -306,6 +306,8 @@ jobs:
             sed 's/^/graphical=/' >> "$GITHUB_OUTPUT"
           printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate unit-assets | \
             sed 's/^/unit-assets=/' >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat | \
+            sed 's/^/save-compat=/' >> "$GITHUB_OUTPUT"
 
       # plan.json exists after --dry-run; its hash keys the store cache.
       # The store path is static because the image pins CABAL_DIR (#671).
@@ -496,16 +498,51 @@ jobs:
           python3 tools/test_engine_env_capability_audit.py
           python3 tools/engine_env_capability_audit.py
 
-      # Cheap, no-engine guard (issue #766, save-overhaul C4 requirement
-      # 14): fails if a tracked save-compatibility fixture drifts, goes
-      # missing, or the frozen-DTO/envelope-framing fingerprints recorded
-      # in docs/save_compat/manifest.json disagree with the current
-      # source. See tools/save_compat_audit.py's module docstring for
-      # exactly what this does and does not guarantee.
+      # Guard (issue #766, save-overhaul C4 requirement 14): fails if a
+      # tracked save-compatibility fixture drifts, goes missing, or the
+      # frozen-DTO/envelope-framing fingerprints recorded in
+      # docs/save_compat/manifest.json disagree with the current source.
+      # See tools/save_compat_audit.py's module docstring for exactly
+      # what this does and does not guarantee.
+      #
+      # Both commands here stay unconditional and blocking on every pull
+      # request. --without-reproducibility (#1360) removes exactly ONE
+      # member of the self-test module -- the one that spawns its own
+      # `cabal repl` to build two timestamp variants -- which the next
+      # step runs path-selectively instead. Every other member still
+      # runs, and so does the whole real audit.
+      #
+      # Note this step is NOT cabal-free even so, and was never meant to
+      # become so: save_compat_audit.py's real-manifest run decodes the
+      # tracked fixtures' envelope descriptors through a `cabal repl` of
+      # its own (verify_fixture_descriptors -> dump_fixture_descriptors),
+      # and test_real_manifest_passes_the_audit runs that same audit. The
+      # saving here is one ADDITIONAL repl, not all of them.
       - name: Save compatibility audit
         run: |
-          python3 tools/test_save_compat_audit.py
+          python3 tools/test_save_compat_audit.py --without-reproducibility
           python3 tools/save_compat_audit.py
+
+      # The one cabal-repl member of that module, split out and selected
+      # by changed paths (#1360). It proves --generate-session's output
+      # is independent of when the command ran, by encoding two envelopes
+      # differing only in smTimestamp and showing normalize_fixture_
+      # timestamp collapses them to identical bytes. That exercises
+      # fixture GENERATION, which only a save-format, fixture,
+      # save-tooling or Cabal change can move -- so an unrelated pull
+      # request no longer pays its ~26 s.
+      #
+      # Path-selective on PRs; unconditional after a merge to master, so
+      # a path tools/ci_expensive_gates.py's save-compat table does not
+      # list can never leave this coverage unrun on master. The gate's
+      # own --self-test pins both directions, and
+      # tools/ci_parity_audit.py pins that `make ci` selects it from the
+      # same decision.
+      - name: Save compatibility fixture reproducibility
+        if: >-
+          github.event_name != 'pull_request'
+          || steps.expensive-gates.outputs.save-compat == 'true'
+        run: python3 tools/test_save_compat_audit.py --only-reproducibility
 
       # Cheap, no-engine guard (issue #1145): fails if a
       # positionally-serialized (`Generic`-derived `Serialize`) sum type's

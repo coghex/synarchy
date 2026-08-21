@@ -70,7 +70,14 @@ CI_ELIGIBLE = {
     # to boot without their one control surface. Deterministic (no AI, no
     # world, no GPU — every failing boot dies before the engine action),
     # broad (both required modes, both failure kinds, plus the --dump #46
-    # sentinel and the successful-bind regressions), and ~13 s.
+    # sentinel and the successful-bind regressions).
+    #
+    # Since #1365 it ALSO owns the widget-kit gate below: its check 8 boots
+    # normally three more times to prove the 28 `scripts.ui.*` modules a
+    # non-preview headless boot loads really loaded, and that the gate fails
+    # when one of them doesn't. Those boots load no world and no GPU either,
+    # and cost ~2 s together — the probe stays in the seconds range that
+    # makes it CI-eligible.
     "debug_console_boot",
     "medic_coord",
     "persistence_contract",
@@ -511,6 +518,30 @@ FEATURE_RULES: list[tuple[list[str], set[str]]] = [
      # consumable_effects builds a kitchen; repair builds a furnace +
      # workbench (#722).
      {"craft", "consumable_effects", "repair"}),
+    # The Lua widget kit (#1365). Before this rule a widget-module change
+    # matched nothing and fell through to the fail-safe full set, paying
+    # every CI-eligible probe for a change none of them exercise.
+    #
+    # `debug_console_boot` is selected because its check 8 VERIFIES normal-
+    # boot widget-module loading: it boots headless, reads back which
+    # `scripts.ui.*` modules `package.loaded` actually holds, and fails both
+    # when a covered module is missing and when the boot logged a Lua
+    # load/init failure — each half proven load-bearing by its own negative
+    # regression against a real broken boot. It keeps its separate #1190
+    # listener-policy and #1283 console-lifecycle checks alongside that.
+    #
+    # So this is NOT a "nothing covers it" empty set, and must not be
+    # reduced to one: emptying it would silently drop the only CI coverage
+    # a widget-kit change has. Narrowing it further needs equivalent
+    # failure-sensitive coverage supplied first.
+    #
+    # The trailing slash is load-bearing. `fnmatch` is unanchored, so the
+    # glob `scripts/ui*` would also swallow every `scripts/ui_manager*.lua`
+    # module — top-level gameplay/UI wiring that is deliberately out of
+    # scope (#1365) and still selects the full set. `_self_test`'s
+    # `scripts/ui_manager.lua` case is the guard that proves it.
+    (["scripts/ui/*"],
+     {"debug_console_boot"}),
 ]
 
 
@@ -888,6 +919,32 @@ def _self_test() -> int:
         (["tools/ci_probes.py"], sorted(CI_ELIGIBLE), "this mapping -> full"),
         (["tools/world_check.py"], sorted(CI_ELIGIBLE),
          "an unrecognized tools/ path still falls through to full"),
+        # #1365 requirement 1: a widget-kit change selects exactly the one
+        # probe that verifies normal-boot widget-module loading — neither
+        # the full set (the pre-#1365 fallthrough) nor nothing at all.
+        (["scripts/ui/slider.lua"], ["debug_console_boot"],
+         "a widget module -> the boot smoke alone"),
+        (["scripts/ui/item_list.lua", "scripts/ui/registry.lua"],
+         ["debug_console_boot"],
+         "several widget modules -> still the boot smoke alone"),
+        # #1365 requirement 5: a mixed change is the UNION of what each path
+        # contributes, so the UI rule can only ever ADD debug_console_boot to
+        # what the production path already selected.
+        (["scripts/ui/slider.lua", "data/items/coffee_pot.yaml"],
+         sorted({"debug_console_boot", "cargo_capacity", "repair_item",
+                 "consumable_effects", "repair", "content_registry"}),
+         "widget + items -> the items set plus the boot smoke"),
+        (["scripts/ui/slider.lua", "src/SomethingNew/X.hs"], sorted(CI_ELIGIBLE),
+         "#1365 req 6: widget + unclassified production -> still full"),
+        # #1365 requirement 7: top-level scripts are OUT of scope, and the
+        # rule's glob is anchored with a trailing slash so `fnmatch`'s
+        # unanchored `*` cannot capture the `scripts/ui_manager*` family.
+        (["scripts/ui_manager.lua"], sorted(CI_ELIGIBLE),
+         "ui_manager is not a widget module -> full"),
+        (["scripts/ui_manager_boot.lua"], sorted(CI_ELIGIBLE),
+         "no ui_manager submodule is captured either -> full"),
+        (["scripts/hud.lua"], sorted(CI_ELIGIBLE),
+         "hud is not a widget module -> full"),
     ]
     for files, expect, name in cases:
         got, reason = select(files)

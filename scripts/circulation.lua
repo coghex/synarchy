@@ -24,7 +24,7 @@ local SEPSIS_PENALTY = 0.5       -- septic shock: × (1 − this·sepsis)
 local HR_FACTOR_MIN  = 0.5       -- floor on the bradycardia perfusion penalty
 local CIRC_MIN   = 0.05
 
-local function clamp(x, lo, hi) return math.max(lo, math.min(hi, x)) end
+local clamp = require("scripts.lib.numeric").clamp
 
 -- Compute circulation 0..1 for a unit, given its current core temperature
 -- (passed in so this stays independent of the thermo module).

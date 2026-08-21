@@ -19,10 +19,12 @@ records everything into a replayable **session trace** for the critic
 ## Usage
 
 ```bash
-# Full session with the naive LLM player (needs the Codex CLI and an
-# existing Codex login; verify once with `codex login status`)
+# Full session with the default Luna player (needs an existing Codex login)
 python3 tools/playtest/run.py
-python3 tools/playtest/run.py --persona impatient_imogen --turns 60 --dt 3
+python3 tools/playtest/run.py --persona impatient_imogen --dt 3
+
+# Sonnet 5 medium through an existing Claude Code subscription login
+python3 tools/playtest/run.py --player claude-sonnet
 
 # Same session, but unattended: windowless offscreen render (#650) —
 # no focus steal, and several sessions can run in parallel on
@@ -41,13 +43,21 @@ python3 tools/playtest/run.py --replay tools/playtest/sessions/<dir>
 python3 tools/playtest/run.py --selftest
 ```
 
-Defaults: port **9308** (never the GUI's 8008), 40 turns, `dt` 2.0 s,
-the per-turn player hard-pinned through Codex to **`gpt-5.6-luna` at
-medium reasoning effort**, a 120-second per-decision timeout, and stuck
-detection after 3 identical no-change turns. The model and effort are
-deliberately not CLI options: all naive-player sessions use the same
-cost-conscious configuration. `--decision-timeout` changes only the
-timeout; `--help` lists everything.
+Defaults: port **9308** (never the GUI's 8008), **12 turns**, 600 seconds
+wall-clock, `dt` 2.0 s, a 90-second decision timeout, a **200K**
+input-plus-output player-token ceiling, and stuck detection after 3 identical
+no-change turns. `--player` selects one complete audited medium-effort profile:
+`codex-luna` (the default, `gpt-5.6-luna`) or `claude-sonnet`
+(`claude-sonnet-5`). Arbitrary provider/model/effort strings are not accepted.
+
+After every decision the console shows compact `K`/`M`/`G` values for tokens
+used that turn, cumulative player tokens, and remaining session budget. The
+harness reserves the observed average cost before starting another turn that
+would likely cross the ceiling, and stops if usage is unavailable. One response
+can still cross the remaining ceiling because the CLIs report usage only after
+it completes. Neither noninteractive CLI exposes a trustworthy whole-plan
+remaining-token count, so account remaining is shown as unavailable, not
+guessed.
 
 ## The lockstep loop
 
@@ -90,11 +100,12 @@ surfacing ground truth would destroy the naive-perception premise.
 This is enforced structurally: `agent.build_system_prompt(persona,
 manual, fb_size)` has no parameter oracle data could arrive through
 (the selftest asserts the signature), and `PlayerAgent.decide()` takes
-the screenshot path + memory only. Each decision runs as an ephemeral
-`codex exec` in a fresh empty directory with shell, web search, plugins,
-skills, image generation, and multi-agent tools disabled, so Codex cannot
-inspect the repository or acquire context beyond the prompt and attached
-screenshot. The **critic** (H2) reads the oracle from the trace instead.
+the screenshot path + memory only. Each decision runs in a fresh empty
+directory. Codex uses ephemeral `codex exec` with its information-acquiring
+tools disabled. Claude Code uses safe mode, no persisted session, no MCP or
+skills, and only `Read`; the directory contains only a copy of the screenshot.
+Neither profile can inspect the repository or acquire other context. The
+**critic** (H2) reads the oracle from the trace instead.
 
 The prompt casts the model as a *confused new player narrating their
 experience and taking notes* — explicitly not a QA tester. Per turn it
@@ -172,8 +183,11 @@ gitignored):
 - `meta.json` — persona, goal, player model + settings, `dt`, budgets,
   harness version, timestamps, `stop_reason`
   (`goal_reached_claimed` / `turn_budget_exhausted` /
-  `time_budget_exhausted` / `stuck_loop` / `engine_crash` /
-  `interrupted`), crash detail + engine log tail when applicable.
+  `time_budget_exhausted` / `decision_timeout` /
+  `token_budget_reserved` / `token_budget_exhausted` /
+  `usage_unavailable` / `stuck_loop` / `engine_crash` / `interrupted`),
+  cumulative `usage_totals` (input + output), crash detail + engine log tail
+  when applicable.
 - `turns.jsonl` — per turn: screenshot path, the player's structured
   output (observation/action/expectation/note + raw + token usage),
   the exact injected `input.*` calls and their acks (**executed calls
@@ -218,6 +232,9 @@ gitignored):
 - `engine.log` — engine output, copied at session end (an engine crash
   mid-session is a **finding**: the partial trace + logs are retained
   and `stop_reason` is `engine_crash`).
+- `inspection-plan.json` — deterministic, LLM-free selection of bookends and
+  turns implicated by notes, bad outcomes, stuck detection, or a crash. It is
+  an inspection queue, not a verdict; listed images still need direct review.
 
 Notes on trace contents:
 - **World seed:** `world.getSeed()` (added with this harness) is
@@ -245,11 +262,19 @@ Notes on trace contents:
 
 ## Stop conditions
 
-Turn budget (`--turns`), wall-clock budget (`--max-seconds`), the
-player claiming its goal (`done`), or a **stuck loop**: the same action
-with byte-identical frames `--stuck-k` times in a row. A
+Turn budget (`--turns`), wall-clock budget (`--max-seconds`), decision timeout,
+player-token budget (`--max-player-tokens`), missing provider usage, the player
+claiming its goal (`done`), or a **stuck loop**: the same action with
+byte-identical frames `--stuck-k` times in a row. A
 repeat-with-no-change loop is itself a strong missing-feedback signal —
 it is recorded on the turn (`stuck: true`) before the session ends.
+
+Completed model sessions also rebuild a local, unversioned Markdown ledger at
+the shared Git directory's `codex-test/playtest-usage.md`. It scans durable
+`codex-test/artifacts/` traces and records date, run, player, turns, stop reason,
+compact token use, and budget. `--usage-log` selects another output destination;
+artifact discovery remains anchored to the shared Git directory, so a custom
+destination does not discard historical rows.
 
 ## The critic (H2, #648)
 
@@ -313,14 +338,15 @@ clean and additive.
   of the loop, trace write, replay, stuck detection, trace phase
   fidelity (#698: terminal/stuck/interrupted turns record and replay
   without an invented step or post call), and the oracle-blind prompt
-  shape plus the pinned Codex/Luna/medium invocation (FakeEngine +
-  scripted agent; no window, no build, no model call).
+  shape plus both pinned medium-effort provider invocations, normalized usage,
+  and projected token reserve (FakeEngine + scripted agent; no window, no
+  build, no model call).
 - `python3 tools/playtest/run.py --smoke` — few-turn scripted session
   against a real instance (windowed by default; add
   `--render-mode offscreen` for the windowless #650 substrate —
   verifies F1/F2/F3 wiring end to end either way).
-- A real LLM session is the acceptance run; needs a GPU and an API
-  key (plus focus only in windowed mode).
+- A real LLM session is the acceptance run; needs a GPU and the selected CLI's
+  existing login (plus focus only in windowed mode).
 - `python3 tools/playtest/critic.py --selftest` — offline critic
   pipeline check (canned trace, fake critic, no key);
   `--eval` is the real-model acceptance run against the planted trace.

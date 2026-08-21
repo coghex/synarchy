@@ -416,7 +416,7 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `craft_probe.py` | #325, #326, #343, #327 | arena | `craft.*` API: catalogue, execute, work stations, crafter-derived quality, smelting. |
 | `craft_bill_probe.py` | #329 | arena | Craft-bill backend (`craft.addBill`/claim/progress/complete verbs) + `craft_job` AI: claim a bill, source inputs from the ground and from cargo storage, work the built station, the fresh output instances laid down at the station (a carried same-def item stays carried), knowledge gate. |
 | `crop_probe.py` | #334 | worldgen (isolated resource root) | Row-crop natural placement (`tomato_plant`) + groundcover `world.plantCropAt` (`wheat`) into a `CropPlot`, growth under the real clock, harvest, refusal for a row_crop species, save/load round-trip. |
-| `debug_console_boot_probe.py` | #1190 | none (every failing boot dies before the engine action — no world, no GPU, ~13 s) | Required-debug-console boot contract for the two windowless modes. `--headless`/`--offscreen` must FAIL when their only interactive control surface never comes up: port 0 (issue #46's "no TCP listener" sentinel, which belongs to `--dump` alone) is refused before a socket is touched, and a real `Left` from the listener — both an invalid service (`--port -1`) and a genuine `EADDRINUSE` against a port the probe itself holds — aborts the boot. Each case must exit non-zero on its own inside a bounded timeout, print NO `READY` marker on stdout, name the selected mode / effective port / specific cause on stderr, and leave cleanup EVIDENCE rather than a bare vanished process: the pre-thread Lua state's close and the exact worker count torn down (0 for headless, whose first worker is Lua; 1 for offscreen, which starts the input thread first) are each announced by the step that performs them, and offscreen must never reach its engine action, so Vulkan is never initialized. Also pins the two unchanged behaviours: `--dump` still exits 0 with valid JSON and its `READY port=0` marker, and a successful headless bind still reaches `engine.quit()` over the console and exits 0. |
+| `debug_console_boot_probe.py` | #1190, #1365 | none (no world and no GPU in any boot: every failing boot dies before the engine action, and the four normal boots quit as soon as they have answered — seconds in total) | Required-debug-console boot contract for the two windowless modes. `--headless`/`--offscreen` must FAIL when their only interactive control surface never comes up: port 0 (issue #46's "no TCP listener" sentinel, which belongs to `--dump` alone) is refused before a socket is touched, and a real `Left` from the listener — both an invalid service (`--port -1`) and a genuine `EADDRINUSE` against a port the probe itself holds — aborts the boot. Each case must exit non-zero on its own inside a bounded timeout, print NO `READY` marker on stdout, name the selected mode / effective port / specific cause on stderr, and leave cleanup EVIDENCE rather than a bare vanished process: the pre-thread Lua state's close and the exact worker count torn down (0 for headless, whose first worker is Lua; 1 for offscreen, which starts the input thread first) are each announced by the step that performs them, and offscreen must never reach its engine action, so Vulkan is never initialized. Also pins the two unchanged behaviours: `--dump` still exits 0 with valid JSON and its `READY port=0` marker, and a successful headless bind still reaches `engine.quit()` over the console and exits 0 — its FIRST post-READY command staying that quit (#1283), which is why the widget check below boots separately rather than querying it first. Since #1365 it is also the blocking CI gate for `scripts/ui/*`, and check 8 is what earns that: a normal headless boot is asked, over its own console, which `scripts.ui.*` modules `package.loaded` actually holds, and the gate fails both when one of the 28 modules a non-preview boot loads is absent AND when the boot logged any Lua load/init failure — because `callModuleFunction` and `engine.loadScript` both log and DISCARD a Lua error, so READY plus a clean exit is no evidence at all that the widget kit loaded. Each half of that signal has its own negative regression against a really-broken boot on an alternate resource root: a `focus_indicator` that raises after it has already self-registered into `package.loaded` (a live partial table the presence half cannot see, caught and NAMED by the log half), and a covered module no longer required anywhere in the boot (absent with nothing logged at all, which only the presence half sees). |
 | `disarm_probe.py` | #193 | arena | Disabled-hand auto-drop must re-fire. |
 | `etymology_probe.py` | #1104 | worldgen (size 16, one offscreen boot) | Name etymology through the REAL in-game UI, windowless: a world named through the genuine `world.suggestName` -> `world.init` path (so its stored name really was rendered from the expression stored beside it), then all three entry points — the world's own name, a discovered location, and a river reached by selecting one of its visible segments through `world.getRiverAt`'s stable-identity resolution — opening ONE panel, retargeted rather than duplicated. Every control is located through the name plate's and the panel's own `dump()` oracles and clicked with `input.click` at its real interactive bounds, never a hardcoded coordinate. Asserts populated content (stored name, whole gloss, morpheme rows carrying concept/role/realized spelling/canonical free spelling/English lemma) and re-derives #1104 requirement 3 ITSELF — the reported surface tokens must concatenate back to the stored name — rather than trusting the engine's own claim that they do; that a bound form reports its free spelling as ONE morpheme; that a recurrence entry leaks nothing beyond an entity kind and an already-visible name; the honest unavailable state for a CUSTOM-named world (stored name still shown, reason `custom`, no invented morphemes); and that a resize keeps the panel valid and pointed at the same entity while close leaves no rows or stale viewport handle. |
 | `expedition_loop_probe.py` | #923 | worldgen (two real engine boots, isolated resource root) | **The expedition arc's final integrated gate** — the whole first expedition as ONE session, from an empty world to a reloaded save: `prepare -> travel -> discover -> extract -> return -> invest`. Eight independently-reported stages (`setup`, `prepare`, `travel`, `extract`, `return`, `save`, `load`, `control`), so a failure names which part of the loop broke. A real `acolyte_portal` placed through `building.canPlaceAt` delivers its OWN six-unit roster (`scripts/building_spawn.lua`); one acolyte secures water by its own `getVisibleTiles` FOV scan, completing the shipped `first_session` tree to its exact expected latched set; a traveller is provisioned off the technomule through `unit.transferItemToUnit`. Two travellers then share ONE identical ~30-tile leg — mustered to a single staging tile and held there by the pause (`unit.setFrozen` is render-only and would report stale positions while the sim kept walking them), then the same verb (`commandMove`) to the same destination, issued in one paused window from the same seeded hunger deficit, both verified inside their carrying capacity — and are measured together once BOTH are at the ruin in **one coherent snapshot** (a single paired read, revalidated with the simulation stopped, with the control's metrics taken inside that same stopped window — two separate `unit.getInfo` round trips would let a pair that was never inside together satisfy the test), differing ONLY in the food they carried (the canteen is left FULL on both: a dry one puts `refill_canteen` at its 7.5 peak, above `follow_command`, so an unwatered traveller correctly abandons the leg and walks to the lake the scout radioed about — a behavioural difference rather than the supply being measured). Five things that would otherwise leak into the comparison are levelled deliberately: the origin (a shared destination is not a shared journey — hunger drains with time on the road, and an early run departed from 36.4 vs 31.5 tiles out — and a shared *distance* is not enough either, since a radial band is satisfied anywhere on a circle, so the departure check asserts how far apart the two stand as well as how far each must walk; each is pinned on arrival by the pause, which remains valid and is now belt-and-braces: since #1216 a completed PLAYER move order holds position, so an arrived traveller no longer drifts on its own — but the pause is still what makes the paired read a single coherent instant, and a survival interrupt can still carry a held unit off its anchor mid-measurement), the verb (`commandMove` walks at `ordered` = comfort x 1.15 while `pickup_ground` walks at `comfort`, so the prepared traveller's retrieval order is issued only AFTER the measurement), encumbrance (an over-encumbered acolyte crawls and its order stall-times-out — calibration observation E1), the observation point (simultaneous containment: the two travellers arrive at different times, and the first one's hold can still be interrupted by its own physiology before the second lands), and the control's own loot target (see below). The prepared one eats en route through the ordinary AI — watched live as a real `eat_from_inventory` action, so the delta is attributed to a mechanism rather than inferred from a number — and the **unprepared control is measurably worse off at the same observation point** (a predetermined adverse delta in stomach fraction — the metric `docs/expedition_survival_calibration.md` measured actually goes live on a trip this length; water is reported as evidence rather than gated, see the module docstring), so the gate proves preparation matters rather than proving a walk succeeds. The control carries no retrieval target of its own — handing it the ruin's second loot roll would put the loot TABLE inside the experiment, since a ruin can roll food and a control that eats what it finds destroys the measurement. Approach promotes the location instance to `discovered` exactly once with one player event, and per-unit knowledge only for the units that went (the never-went-there control is eligibility-based rather than held: a stay-at-home colonist counts only if it was never observed at the ruin during the leg and is away from it at check time, so one that genuinely wanders to the ruin is excluded rather than read as a leak); the carrier picks up the ruin's OWN seed-stable loot roll (nothing is staged), walks home, and banks it in colony storage from an adjacent tile. A FRESH process then reloads and re-checks every durable identity — the same `(page, instance id)` still `discovered` with `contents_spawned`, the traveller's location knowledge, the exact completed objective-ID set, and the recovered item's instance id / definition / mutable properties / storage ownership — before a different colonist withdraws that exact instance, proving the recovered loot is ordinary colony stock. Never calls `world.setLocationLifecycle` (the expected end state is `discovered`; nothing in the shipped game drives an instance past it) and never stages an item. Prints a `FINGERPRINT` line (ruin instance, anchor, rolled loot, target, colony and water tiles, objective set, per-stage outcomes) so two consecutive fixed-seed runs can be diffed for identity AND result, not just compared on exit status; sampled measurements are printed separately and kept out of it. An unexpected operational failure (dead engine, socket timeout) is recorded against the stage it interrupted, so no run can traceback its way past a PASS summary. |
@@ -873,15 +873,17 @@ failing or recording observations changes no census sample, no statistic, no
 schedule and no skip decision — one interpreted `$test` run is context, not a
 measurement in the lab's statistics.
 
-### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets selection
+### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets/save-compat selection
 
-Selects the three expensive CI gates that are conditional on pull requests:
+Selects the four expensive gates that are conditional on pull requests:
 quick worldgen-output regression checking, graphical test-suite compilation,
-and the unit-asset inventory pair (`test_pack_atlas.py` +
-`pack_atlas.py --validate-only --strict`, #1257). All three run
-unconditionally after a merge to master. The mapping is intentionally
-explicit; add a relevant glob when introducing a new worldgen output,
-graphics entry point, or unit-asset input.
+the unit-asset inventory pair (`test_pack_atlas.py` +
+`pack_atlas.py --validate-only --strict`, #1257), and the save-compat
+fixture-reproducibility test (`test_save_compat_audit.py
+--only-reproducibility`, #1360). All four run unconditionally after a merge
+to master. The mapping is intentionally explicit; add a relevant glob when
+introducing a new worldgen output, graphics entry point, unit-asset input, or
+save-format/fixture/save-tooling path.
 
 Patterns are matched with `fnmatch`, where `*` crosses `/` and `**` carries no
 special meaning — write `dir/*` for a whole subtree. `--gate` names are
@@ -891,8 +893,37 @@ raises instead of silently inheriting another gate's globs.
 ```bash
 python3 tools/ci_expensive_gates.py --changed src/World/Geology/Timeline.hs --gate worldgen
 python3 tools/ci_expensive_gates.py --changed data/units/acolyte.yaml --gate unit-assets
+python3 tools/ci_expensive_gates.py --changed src/World/Save/Envelope/Codec.hs --gate save-compat
 python3 tools/ci_expensive_gates.py --self-test
 ```
+
+**`save-compat` is the one gate `make ci` also selects with** (#1360), so it
+is the one that needs a LOCAL notion of "what changed":
+
+```bash
+python3 tools/ci_expensive_gates.py --local-changed-paths \
+  | python3 tools/ci_expensive_gates.py --stdin --gate save-compat
+```
+
+`--local-changed-paths` prints every TRACKED path differing from the merge
+base with the checked-out default branch — commits on the branch, staged and
+unstaged edits alike — which is the local counterpart of CI's
+`git diff --name-only <pr-base> HEAD`. If no default branch or merge base
+resolves, it prints a conservative sentinel that selects EVERY gate: a local
+gate that cannot tell what changed runs the coverage rather than skipping it.
+
+`tools/ci-local.sh` calls it at the **top** of the script, before writing its
+own temporary `cabal.project.local`, and that order is load-bearing rather than
+incidental: that file is not gitignored, so a change can track one and cabal
+applies it in CI (hence `cabal.project*` in the gate's table) — resolving after
+the write would report this gate's own scratch edit as the candidate's.
+`ci_parity_audit.py` checks the ordering. The decision itself still goes
+through the same
+`--stdin --gate` command CI runs, so there is one matcher and one answer;
+`tools/ci_parity_audit.py` fails if the two files stop agreeing about which
+gate decides the reproducibility member or which command it guards, and it
+proves the local half by EXECUTING `ci-local.sh`'s marked selection block
+against a positive and a negative sample rather than reading it.
 
 ## Manual gameplay scenarios (`gameplay_scenarios.py`, #925)
 
@@ -1187,7 +1218,7 @@ tools/
 ├── world_baseline.py       (capture reference outputs)
 ├── world_check.py          (regression suite runner)
 ├── test_audit.py           (unit tests)
-├── ci_expensive_gates.py   (path selector for CI's worldgen/graphical/unit-assets gates)
+├── ci_expensive_gates.py   (path selector for the worldgen/graphical/unit-assets/save-compat gates)
 ├── lua_module_budget.py    (Lua module split line-budget guard)
 ├── action_outcome_coverage.py (F4 action-outcome verb instrumentation self-audit)
 ├── language_report.py      (generated-language native-name report/check, #710/#1094/#1095/#1096)

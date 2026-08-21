@@ -32,10 +32,15 @@ full story behind a contract stated tersely here.
   files' tool invocations in both directions and fails on any difference
   outside its hard-coded, reason-carrying exemption list, so the set
   cannot silently drift; the full enumeration and the CI-only exemptions
-  live in `docs/engine_contracts.md` §The `make ci` gate set. It uses
-  the prod profile and your warm `dist-newstyle`. It is NOT an iteration
-  loop and must not be run automatically before opening a PR — only on
-  an explicit user request for full local CI validation.
+  live in `docs/engine_contracts.md` §The `make ci` gate set. One member
+  of that set is path-selective on BOTH sides (#1360): the save-compat
+  self-test's `cabal repl` reproducibility test runs only when the
+  working tree's own changes select `ci_expensive_gates.py`'s
+  `save-compat` gate — everything else, `save_compat_audit.py` and every
+  other member of that module included, still runs unconditionally. It
+  uses the prod profile and your warm `dist-newstyle`. It is NOT an
+  iteration loop and must not be run automatically before opening a PR —
+  only on an explicit user request for full local CI validation.
 - **Debug output:** `ENGINE_DEBUG=Vulkan,Graphics,...` environment variable
 
 ## Testing Tiers
@@ -61,6 +66,7 @@ seconds and the expensive gates at the end.
    | `test_audit.py` | `world_audit.py` / `world_check.py` |
    | `test_run_probes.py` (~15 s, GPU-free) | `run_probes.py` |
    | `test_persistence_contract_sweep.py` (pure, no engine, <1 s) | `persistence_contract_sweep.py`'s `SELECTABLE_CROSS_REFERENCED_PROBE_KEYS` or `run_probes.PROBES` |
+   | `test_save_compat_audit.py --only-reproducibility` (~26 s, spawns a `cabal repl`) | the save format, the tracked fixture corpus, `save_compat_audit.py`, or a Cabal path — `ci_expensive_gates.py --gate save-compat` is the authority; `--without-reproducibility` covers the rest of the module and is cheap |
    | `findings_report_audit.py` | a findings report |
    | unit-asset gate (`test_pack_atlas.py` + `pack_atlas.py --validate-only --strict`, ~2 s) | `assets/textures/units/` (source frames or generated `atlas/`), `data/units/`, `tools/unit_texture_budget.json`, `src/Unit/Atlas/`, or the unit-YAML / preview / registration decoders |
 

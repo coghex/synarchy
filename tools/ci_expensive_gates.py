@@ -2,18 +2,32 @@
 """Select path-relevant expensive CI gates.
 
 On pull requests, this retains the full blocking Hspec suite while skipping
-the graphical test-suite compilation, the quick worldgen-output check, and
-the unit-asset inventory validation when their inputs were untouched.
-Pushes to master run all of them as a post-merge backstop.
+the graphical test-suite compilation, the quick worldgen-output check, the
+unit-asset inventory validation, and the save-compat fixture
+reproducibility test when their inputs were untouched. Pushes to master run
+all of them as a post-merge backstop.
 
 Patterns are matched with ``fnmatch``, where ``*`` crosses ``/`` and
 ``**`` carries no special meaning — write ``dir/*`` for a whole subtree.
+
+``--local-changed-paths`` (issue #1360) prints the changed-path list
+``tools/ci-local.sh`` feeds back into ``--stdin``, so `make ci` reaches a
+gate decision through the very same command CI runs rather than through a
+second, separately-drifting matcher. It is the local counterpart of CI's
+``git diff --name-only <pr-base> HEAD``: paths changed relative to the
+merge base with the checked-out default branch, TRACKED working-tree edits
+included, and — when no merge base can be established — the sentinel that
+makes every gate select, because a local gate that cannot tell what
+changed must be conservative rather than silently skip coverage.
 """
 from __future__ import annotations
 
 import argparse
 import fnmatch
+import subprocess
 import sys
+from collections.abc import Callable
+from pathlib import Path
 
 
 WORLDGEN_GLOBS = [
@@ -126,6 +140,71 @@ UNIT_ASSET_GLOBS = [
     "tools/preview_probe.py",
 ]
 
+# The save-compat gate (#1360): the ONE member of
+# tools/test_save_compat_audit.py that spawns a `cabal repl` --
+# test_normalize_fixture_timestamp_makes_generation_reproducible, reached
+# by `--only-reproducibility`. Everything else in that module, and the
+# whole of tools/save_compat_audit.py, stays unconditional on every pull
+# request; only this member is selected here.
+#
+# The test decodes a tracked fixture through the real envelope codec,
+# rewrites its `metadata` payload's smTimestamp, re-encodes, and proves
+# normalize_fixture_timestamp collapses the two variants to identical
+# bytes. So the inputs that can move its result are: the audit tooling
+# that owns normalize_fixture_timestamp, the fixture corpus and manifest
+# it reads, the Haskell modules its GHCi setup imports, and the build
+# definition that decides what `cabal repl test:synarchy-test-headless`
+# even loads.
+#
+# NB these are fnmatch patterns, not globs: `*` crosses `/`.
+SAVE_COMPAT_GLOBS = [
+    # The audit and its self-test. normalize_fixture_timestamp lives in
+    # the first; the reproducibility member and its GHCi setup script
+    # live in the second.
+    "tools/save_compat_audit.py", "tools/test_save_compat_audit.py",
+    # The manifest the audit reads, and the tracked fixture corpus the
+    # test decodes. `_CURRENT_FORMAT_FIXTURE_PATH` points into the
+    # second, and is re-pointed whenever the metadata component's
+    # version is bumped, so the whole directory is in scope rather than
+    # one file that would silently stop being the current one.
+    "docs/save_compat/*", "test-headless/data/save-compat/*",
+    # The save format itself. Whole subtree plus any future
+    # src/World/Save.hs facade: the GHCi setup imports
+    # World.Save.Envelope.Codec/.Types, World.Save.Envelope,
+    # World.Save.Component and World.Save.Types directly, and the
+    # frozen compat mirrors under Compat/ decide which fixtures still
+    # decode at all.
+    "src/World/Save*",
+    # The build definition. `cabal repl test:synarchy-test-headless`
+    # resolves its module set, dependency bounds and options from the
+    # cabal file and EVERY cabal.project file cabal applies, so any of
+    # them can change whether the repl loads or what it loads.
+    # `cabal.project*` covers the whole family on purpose, including
+    # `.local`: that file is NOT gitignored, so a change can legitimately
+    # track one, and cabal would then apply it in CI. What keeps
+    # tools/ci-local.sh's own TEMPORARY cabal.project.local from
+    # selecting the gate is not this pattern but the ORDER over in that
+    # script -- it resolves its changed-path list before it writes the
+    # scratch file -- plus local_changed_paths listing tracked paths
+    # only.
+    "synarchy.cabal", "cabal.project*",
+    # The CI toolchain image: the GHC/cabal versions and the pinned
+    # index snapshot the repl actually runs against. BOTH files that
+    # define it -- the image tag is a hash of the reusable workflow's
+    # own bytes concatenated with the Dockerfile's, so an edit to the
+    # build recipe alone (context, options, validation) mints a new
+    # image just as a Dockerfile edit does, and can move what the repl
+    # runs under.
+    ".github/ci/Dockerfile", ".github/workflows/ci-image.yml",
+    # The wiring that selects and runs this gate on both sides, and the
+    # audit that keeps those two sides honest. An edit to any of them
+    # can change WHEN the coverage runs, so it has to face the coverage
+    # itself.
+    "tools/ci_expensive_gates.py", "tools/ci_parity_audit.py",
+    "tools/ci-local.sh", "Makefile", ".github/workflows/ci.yml",
+]
+
+
 # Every selectable gate. A dict rather than a chain of conditionals on
 # purpose: the previous two-way `A if gate == "worldgen" else B` made an
 # unrecognised gate name silently inherit GRAPHICAL_GLOBS, so a new gate
@@ -134,12 +213,22 @@ GATE_GLOBS: dict[str, list[str]] = {
     "worldgen": WORLDGEN_GLOBS,
     "graphical": GRAPHICAL_GLOBS,
     "unit-assets": UNIT_ASSET_GLOBS,
+    "save-compat": SAVE_COMPAT_GLOBS,
 }
 
 
 # The names the CLI accepts. Kept beside GATE_GLOBS and cross-checked in
 # the self-test so the two can never drift apart.
-GATE_CHOICES = ("worldgen", "graphical", "unit-assets")
+GATE_CHOICES = ("worldgen", "graphical", "unit-assets", "save-compat")
+
+
+#: Emitted by ``--local-changed-paths`` when no merge base with the
+#: default branch can be established, and understood by ``selected`` as
+#: selecting EVERY gate. A local gate that cannot tell what changed must
+#: run the coverage, not skip it; a sentinel says that out loud instead
+#: of relying on some path that happens to match every pattern table.
+#: Deliberately not a legal path, so a real changed file can never be it.
+CONSERVATIVE_SENTINEL = "!!ci-expensive-gates:unresolved-base!!"
 
 
 def selected(gate: str, changed_files: list[str]) -> bool:
@@ -148,8 +237,215 @@ def selected(gate: str, changed_files: list[str]) -> bool:
         patterns = GATE_GLOBS[gate]
     except KeyError:
         raise ValueError(f"unknown gate: {gate!r}") from None
+    # Checked AFTER the gate name, so an unknown gate still raises rather
+    # than being answered `True` by a conservative caller.
+    if CONSERVATIVE_SENTINEL in changed_files:
+        return True
     return any(any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
                for path in changed_files)
+
+
+def _git(args: list[str], cwd: Path | str) -> tuple[int, str]:
+    try:
+        proc = subprocess.run(["git", *args], cwd=str(cwd),
+                              capture_output=True, text=True)
+    except (OSError, FileNotFoundError):
+        return 1, ""
+    return proc.returncode, proc.stdout
+
+
+def default_branch_ref(cwd: Path | str) -> str | None:
+    """The checked-out clone's default branch, as a rev git can resolve.
+
+    `origin/HEAD` is the honest answer when the clone records one; the
+    ordered fallbacks cover a clone that never fetched it and a worktree
+    of a repository whose remote is named something else.
+    """
+    code, out = _git(["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+                     cwd)
+    if code == 0 and out.strip().startswith("refs/remotes/"):
+        return out.strip()[len("refs/remotes/"):]
+    for candidate in ("origin/master", "origin/main", "master", "main"):
+        code, _ = _git(["rev-parse", "--verify", "--quiet",
+                        candidate + "^{commit}"], cwd)
+        if code == 0:
+            return candidate
+    return None
+
+
+def local_changed_paths(cwd: Path | str = ".") -> list[str]:
+    """The changed-path list `make ci` feeds back into ``--stdin``.
+
+    The local counterpart of CI's ``git diff --name-only <pr-base> HEAD``:
+    every TRACKED path differing from the merge base with the default
+    branch, which covers commits made on the branch, staged edits and
+    unstaged edits in one diff. Untracked files are deliberately absent —
+    that is what keeps ``tools/ci-local.sh``'s temporary, untracked
+    ``cabal.project.local`` from selecting a gate.
+
+    ``--no-renames`` makes a rename the delete+add pair, so moving a file
+    OUT of a gate's path table still selects that gate. Returns
+    ``[CONSERVATIVE_SENTINEL]`` — which selects every gate — when the
+    default branch or the merge base cannot be resolved.
+    """
+    base = default_branch_ref(cwd)
+    if base is None:
+        return [CONSERVATIVE_SENTINEL]
+    code, out = _git(["merge-base", "HEAD", base], cwd)
+    merge_base = out.strip()
+    if code != 0 or not merge_base:
+        return [CONSERVATIVE_SENTINEL]
+    code, out = _git(["diff", "--no-renames", "--name-only", merge_base], cwd)
+    if code != 0:
+        return [CONSERVATIVE_SENTINEL]
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def _local_changed_paths_failures() -> list[str]:
+    """Behavioural checks for ``--local-changed-paths`` (#1360).
+
+    Run against throwaway git repositories rather than this checkout, so
+    the result does not depend on what the developer happens to have
+    uncommitted. Requirement 7's local semantics are exactly these three
+    cases: a committed branch edit is seen, an unstaged and an untracked
+    working-tree file are treated differently, a TRACKED
+    cabal.project.local edit is seen (cabal applies it, so CI selects on
+    it), and an unresolvable base runs everything.
+    """
+    def run(args: list[str], cwd: str) -> None:
+        subprocess.run(["git", *args], cwd=cwd, check=True,
+                       capture_output=True, text=True)
+
+    def new_repo(tmp: str) -> None:
+        # `git init` then an explicit symbolic-ref rather than
+        # `--initial-branch`: the flag needs git >= 2.28, and a machine
+        # with `init.defaultBranch` set to something else would
+        # otherwise give these fixtures a branch name
+        # default_branch_ref does not look for.
+        run(["init", "--quiet", "."], tmp)
+        run(["symbolic-ref", "HEAD", "refs/heads/master"], tmp)
+        run(["config", "user.email", "gate@example.invalid"], tmp)
+        run(["config", "user.name", "gate self-test"], tmp)
+        # A developer's global commit hooks have nothing to do with
+        # these throwaway repositories and must not be able to fail them.
+        run(["config", "core.hooksPath", str(Path(tmp) / "no-hooks")], tmp)
+
+    try:
+        return _local_changed_paths_cases(new_repo, run)
+    except subprocess.CalledProcessError as error:
+        return [f"--local-changed-paths self-test could not drive git: "
+                f"{error.cmd} exited {error.returncode}: "
+                f"{(error.stderr or '').strip()}"]
+    except OSError as error:
+        return [f"--local-changed-paths self-test could not drive git: "
+                f"{error}"]
+
+
+def _local_changed_paths_cases(
+        new_repo: Callable[[str], None],
+        run: Callable[[list[str], str], None]) -> list[str]:
+    """The three cases, factored out so their git errors are catchable."""
+    import tempfile
+
+    failures: list[str] = []
+
+    with tempfile.TemporaryDirectory() as tmp:
+        new_repo(tmp)
+        Path(tmp, "README.md").write_text("base\n", encoding="utf-8")
+        run(["add", "README.md"], tmp)
+        run(["commit", "--quiet", "--no-verify", "-m", "base"], tmp)
+        run(["checkout", "--quiet", "-b", "feature"], tmp)
+        Path(tmp, "tools").mkdir()
+        Path(tmp, "tools/save_compat_audit.py").write_text("x\n",
+                                                           encoding="utf-8")
+        run(["add", "tools/save_compat_audit.py"], tmp)
+        run(["commit", "--quiet", "--no-verify", "-m",
+             "committed branch edit"], tmp)
+        # An unstaged edit to a TRACKED file, and an UNTRACKED scratch
+        # file standing in for tools/ci-local.sh's cabal.project.local.
+        Path(tmp, "README.md").write_text("edited\n", encoding="utf-8")
+        Path(tmp, "cabal.project.local").write_text("scratch\n",
+                                                    encoding="utf-8")
+        paths = local_changed_paths(tmp)
+        if "tools/save_compat_audit.py" not in paths:
+            failures.append(
+                "--local-changed-paths missed a path committed on the "
+                f"branch: {paths}")
+        if "README.md" not in paths:
+            failures.append(
+                "--local-changed-paths missed an unstaged edit to a tracked "
+                f"file: {paths}")
+        if "cabal.project.local" in paths:
+            failures.append(
+                "--local-changed-paths listed an UNTRACKED scratch file; "
+                "tools/ci-local.sh's own cabal.project.local would then "
+                f"select gates: {paths}")
+        if not selected("save-compat", paths):
+            failures.append(
+                "a save-touching local change did not select the "
+                f"save-compat gate: {paths}")
+        if selected("worldgen", paths):
+            failures.append(
+                "a save-only local change selected the worldgen gate: "
+                f"{paths}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        new_repo(tmp)
+        Path(tmp, "scripts").mkdir()
+        Path(tmp, "scripts/unit_ai.lua").write_text("-- base\n",
+                                                    encoding="utf-8")
+        run(["add", "scripts/unit_ai.lua"], tmp)
+        run(["commit", "--quiet", "--no-verify", "-m", "base"], tmp)
+        run(["checkout", "--quiet", "-b", "feature"], tmp)
+        Path(tmp, "scripts/unit_ai.lua").write_text("-- edited\n",
+                                                    encoding="utf-8")
+        paths = local_changed_paths(tmp)
+        if selected("save-compat", paths):
+            failures.append(
+                "an unrelated local change selected the save-compat gate, "
+                f"so `make ci` would still pay for the repl: {paths}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # cabal.project.local is not gitignored, so a change CAN track
+        # one -- and cabal applies it, so CI's save-compat gate selects
+        # on it. A TRACKED edit to it must therefore be listed here too.
+        # This is exactly why tools/ci-local.sh resolves its changed
+        # paths BEFORE writing its own scratch copy: after the write,
+        # this listing could not tell the candidate's edit from the
+        # gate's own.
+        new_repo(tmp)
+        Path(tmp, "cabal.project.local").write_text("-- base\n",
+                                                    encoding="utf-8")
+        run(["add", "cabal.project.local"], tmp)
+        run(["commit", "--quiet", "--no-verify", "-m", "base"], tmp)
+        run(["checkout", "--quiet", "-b", "feature"], tmp)
+        Path(tmp, "cabal.project.local").write_text("-- edited\n",
+                                                    encoding="utf-8")
+        paths = local_changed_paths(tmp)
+        if "cabal.project.local" not in paths:
+            failures.append(
+                "--local-changed-paths dropped a TRACKED cabal.project.local "
+                f"edit, which cabal would apply in CI: {paths}")
+        if not selected("save-compat", paths):
+            failures.append(
+                "a tracked cabal.project.local edit did not select the "
+                f"save-compat gate: {paths}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # No commits at all, and therefore no default branch to diff
+        # against: the conservative answer is to run everything.
+        new_repo(tmp)
+        paths = local_changed_paths(tmp)
+        if paths != [CONSERVATIVE_SENTINEL]:
+            failures.append(
+                "an unresolvable base did not yield the conservative "
+                f"sentinel: {paths}")
+        elif not selected("save-compat", paths):
+            failures.append(
+                "the conservative sentinel did not select the save-compat "
+                "gate")
+
+    return failures
 
 
 def self_test() -> int:
@@ -265,6 +561,94 @@ def self_test() -> int:
         ("graphical", ["src/World/Thread/Command/Init.hs"], False),
         ("unit-assets", ["src/Sim/Thread.hs"], False),
         ("unit-assets", ["src/World/Thread/Command/Init.hs"], False),
+        # save-compat (#1360). Requirement 8: both directions pinned --
+        # a save-touching change selects the reproducibility member, an
+        # unrelated change does not. The positives walk the whole
+        # trigger-path table, so narrowing any entry fails here.
+        ("save-compat", ["tools/save_compat_audit.py"], True),
+        ("save-compat", ["tools/test_save_compat_audit.py"], True),
+        ("save-compat", ["docs/save_compat/manifest.json"], True),
+        ("save-compat", ["docs/save_compat/enum_baseline.json"], True),
+        ("save-compat",
+         ["test-headless/data/save-compat/f1-autosave-classification.bin"],
+         True),
+        ("save-compat",
+         ["test-headless/data/save-compat/k1-new-fixture.expected.json"],
+         True),
+        # The Haskell the GHCi setup imports: the envelope codec and its
+        # types, the component registry, the metadata DTO, and the
+        # frozen compat mirrors. A facade module added beside the
+        # directory later must match too, which is why the pattern is
+        # `src/World/Save*` rather than `src/World/Save/*`.
+        ("save-compat", ["src/World/Save/Envelope/Codec.hs"], True),
+        ("save-compat", ["src/World/Save/Envelope/Types.hs"], True),
+        ("save-compat", ["src/World/Save/Envelope.hs"], True),
+        ("save-compat", ["src/World/Save/Component.hs"], True),
+        ("save-compat", ["src/World/Save/Component/Session.hs"], True),
+        ("save-compat", ["src/World/Save/Types.hs"], True),
+        ("save-compat", ["src/World/Save/Compat/SessionV90.hs"], True),
+        ("save-compat", ["src/World/Save.hs"], True),
+        # The build definition the repl target resolves from.
+        ("save-compat", ["synarchy.cabal"], True),
+        ("save-compat", ["cabal.project"], True),
+        ("save-compat", ["cabal.project.freeze"], True),
+        # cabal.project.local is not gitignored, so a change CAN track
+        # one, and cabal applies it in CI -- it has to select. The gate
+        # this script's own scratch copy would otherwise trip is closed
+        # by tools/ci-local.sh capturing its changed-path list BEFORE it
+        # writes that file, not by excluding the path here.
+        ("save-compat", ["cabal.project.local"], True),
+        ("save-compat", [".github/ci/Dockerfile"], True),
+        # The reusable image workflow is the OTHER half of the image
+        # identity hash, so a PR editing only it still changes the
+        # toolchain the repl runs under.
+        ("save-compat", [".github/workflows/ci-image.yml"], True),
+        # The wiring on both sides, and the parity audit over it.
+        ("save-compat", ["tools/ci_expensive_gates.py"], True),
+        ("save-compat", ["tools/ci_parity_audit.py"], True),
+        ("save-compat", ["tools/ci-local.sh"], True),
+        ("save-compat", ["Makefile"], True),
+        ("save-compat", [".github/workflows/ci.yml"], True),
+        # ...and the negatives, so the gate cannot be trivially
+        # always-true. An unrelated PR -- gameplay Lua, worldgen, unit
+        # art, a doc -- must not pay for the repl.
+        ("save-compat", ["scripts/unit_ai.lua"], False),
+        ("save-compat", ["src/World/Geology/Timeline.hs"], False),
+        ("save-compat", ["src/World/Thread/Command/Init.hs"], False),
+        ("save-compat", ["src/Unit/Atlas/Digest.hs"], False),
+        ("save-compat", ["data/units/acolyte.yaml"], False),
+        ("save-compat", ["docs/persistence_contract.md"], False),
+        ("save-compat", ["docs/code_health_findings.md"], False),
+        ("save-compat", ["tools/world_check.py"], False),
+        # ...and the workflows that are NOT the toolchain: naming
+        # ci-image.yml exactly rather than .github/workflows/* keeps
+        # these out.
+        ("save-compat", [".github/workflows/ntfy-notify.yml"], False),
+        ("save-compat", [".github/workflows/review-gate.yml"], False),
+        ("save-compat", ["tools/pack_atlas.py"], False),
+        # The save-adjacent Haskell that is NOT the format: the world
+        # thread's save command and the barrier live outside
+        # src/World/Save, and a save PROBE is not the fixture corpus.
+        ("save-compat", ["src/World/Thread/Command/Save.hs"], False),
+        ("save-compat", ["src/Engine/Save/Barrier.hs"], False),
+        ("save-compat", ["tools/save_storage_probe.py"], False),
+        # A path selecting one gate must not drag in the others, in
+        # either direction.
+        ("worldgen", ["tools/test_save_compat_audit.py"], False),
+        ("worldgen", ["src/World/Save/Envelope/Codec.hs"], False),
+        ("unit-assets", ["src/World/Save/Envelope/Codec.hs"], False),
+        ("unit-assets", ["docs/save_compat/manifest.json"], False),
+        ("save-compat", ["assets/textures/units/acolyte/atlas/idle.png"],
+         False),
+        # The unresolved-base sentinel selects EVERY gate (#1360): a
+        # local gate that cannot tell what changed runs the coverage.
+        ("save-compat", [CONSERVATIVE_SENTINEL], True),
+        ("worldgen", [CONSERVATIVE_SENTINEL], True),
+        ("graphical", [CONSERVATIVE_SENTINEL], True),
+        ("unit-assets", [CONSERVATIVE_SENTINEL], True),
+        # ...and it is a sentinel, not a pattern: a path that merely
+        # resembles it must not select anything.
+        ("save-compat", ["!!ci-expensive-gates:something-else!!"], False),
     ]
     failures = []
     for gate, files, expected in cases:
@@ -298,6 +682,18 @@ def self_test() -> int:
         failures.append(
             "an unknown gate name did not raise — it silently inherited "
             "another gate's patterns")
+    # ...including when the conservative sentinel is present: "run
+    # everything" must not become "accept any gate name".
+    try:
+        selected("no-such-gate", [CONSERVATIVE_SENTINEL])
+    except ValueError:
+        pass
+    else:
+        failures.append(
+            "an unknown gate name was answered True by the conservative "
+            "sentinel instead of raising")
+
+    failures.extend(_local_changed_paths_failures())
 
     if failures:
         for failure in failures:
@@ -313,11 +709,27 @@ def main() -> int:
     parser.add_argument("--changed", nargs="*", default=[])
     parser.add_argument("--stdin", action="store_true")
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument(
+        "--local-changed-paths", action="store_true",
+        help="print the changed paths `make ci` should judge itself by, "
+             "one per line, for piping back into --stdin (#1360).")
     args = parser.parse_args()
     if args.self_test:
         return self_test()
+    if args.local_changed_paths:
+        if args.gate:
+            parser.error(
+                "--local-changed-paths prints paths; pipe them into a "
+                "separate --stdin --gate run rather than combining the two, "
+                "so `make ci` reaches its decision through the same command "
+                "CI runs.")
+        for path in local_changed_paths():
+            print(path)
+        return 0
     if not args.gate:
-        parser.error("--gate is required unless --self-test is used")
+        parser.error(
+            "--gate is required unless --self-test or "
+            "--local-changed-paths is used")
     files = list(args.changed)
     if args.stdin:
         files.extend(line.strip() for line in sys.stdin if line.strip())
