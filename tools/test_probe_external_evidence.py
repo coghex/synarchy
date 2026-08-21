@@ -762,6 +762,88 @@ def test_the_registry_is_confined_to_the_state_root() -> None:
                     "a real registry resolves to itself")
 
 
+def test_a_malformed_report_path_never_aborts_the_read() -> None:
+    """An unusable path STRING is one run's diagnostic, not a traceback.
+
+    A registry field is arbitrary external text. A path built from a
+    string containing an embedded NUL raises `ValueError` — not
+    `OSError` — from `resolve` and `stat`, so catching only `OSError`
+    would let one malformed record abort the whole read and take every
+    later valid run with it.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        runs = [
+            make_run("probe:role", "nul-run", claimed_at="2026-08-15T00:00:00Z"),
+            make_run("probe:role", "long-run", claimed_at="2026-08-14T00:00:00Z"),
+            make_run("probe:role", "good-run", claimed_at="2026-08-13T00:00:00Z"),
+        ]
+        state = build_state(Path(tmp), runs, {"good-run": ("observations", 2)})
+        paths = {
+            "nul-run": report_path(state, "nul-run").replace("nul-run", "nul\x00run"),
+            "long-run": report_path(state, "n" * 4096),
+            "good-run": report_path(state, "good-run"),
+        }
+        for record in runs:
+            record["report_path"] = paths[record["run_id"]]
+        document = json.loads((state / evidence.REGISTRY_FILENAME).read_text())
+        document["runs"] = runs
+        (state / evidence.REGISTRY_FILENAME).write_text(json.dumps(document))
+
+        with NonInteraction(state) as guard:
+            result = read(state, "role")
+            guard.assert_untouched("malformed report path")
+
+        by_id = {r["run_id"]: r for r in result["runs"]}
+        check_equal(len(result["runs"]), 3, "no run is lost to the malformed one")
+        check_equal(by_id["nul-run"]["report"]["status"], evidence.REPORT_UNREADABLE,
+                    "an unusable path string is unreadable evidence")
+        check_equal(by_id["nul-run"]["execution_status"], "passed",
+                    "the malformed run's mechanical fields survive")
+        check(any("nul-run" in d for d in result["diagnostics"]),
+              "the malformed path is diagnosed", str(result["diagnostics"]))
+
+        # The LATER, valid run is still read in full — this is the half
+        # a bare traceback would have destroyed.
+        check_equal(by_id["good-run"]["report"]["status"], evidence.REPORT_AVAILABLE,
+                    "a later valid report is still read")
+        check_equal(by_id["good-run"]["report"]["observation_count"], 2,
+                    "and its observations are still counted")
+        check(by_id["long-run"]["report"]["status"] in (
+                  evidence.REPORT_UNREADABLE, evidence.REPORT_ABSENT),
+              "an over-long path is handled without raising",
+              str(by_id["long-run"]["report"]["status"]))
+
+        check_equal(evidence.main(["--probe", "role", "--json",
+                                   "--state-root", str(state)]),
+                    evidence.EXIT_OK, "the CLI still exits 0")
+
+    # An unusable STATE ROOT is controlled too — a rejection naming it,
+    # or the ordinary absent-state answer, but never a traceback.
+    # (`Path.is_dir` swallows the NUL itself on CPython and answers
+    # False; the reader's own guard covers platforms where it does not.)
+    try:
+        result = read("/tmp/nul\x00root", "role")
+        check_equal(result["state"], evidence.STATE_ABSENT,
+                    "an unstattable state root reads as absent")
+        check_equal(result["runs"], [], "and contributes no runs")
+    except evidence.EvidenceRejected as exc:
+        check("state root" in str(exc),
+              "the rejection names the state root", str(exc))
+        check(True, "and is a controlled rejection")
+    except ValueError as exc:                              # pragma: no cover
+        check(False, "an unusable state root never raises ValueError", repr(exc))
+        check(False, "an unusable state root never raises ValueError", repr(exc))
+
+    # And so is one that git cannot resolve for the same reason.
+    try:
+        evidence.resolve_state_root("/tmp/nul\x00repo")
+        check(False, "an unusable repo path raises EvidenceRejected")
+    except evidence.EvidenceRejected as exc:
+        check(True, "resolve_state_root rejects it")
+    except ValueError as exc:                              # pragma: no cover
+        check(False, "resolve_state_root raises EvidenceRejected", repr(exc))
+
+
 def test_absent_state_is_success_not_error() -> None:
     """An absent `codex-test` tree is the normal no-evidence result."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -972,6 +1054,7 @@ def main() -> int:
         test_a_symlinked_reports_directory_refuses_every_read,
         test_a_misplaced_reports_directory_refuses_every_read,
         test_the_registry_is_confined_to_the_state_root,
+        test_a_malformed_report_path_never_aborts_the_read,
         test_absent_state_is_success_not_error,
         test_damaged_registry_is_non_fatal,
         test_non_finite_numbers_never_reach_the_output,

@@ -151,6 +151,15 @@ class EvidenceRejected(Exception):
     """A controlled rejection: bad input or an unusable environment."""
 
 
+# Every filesystem call below catches `ValueError` beside `OSError`. A
+# registry field is arbitrary external text, and a path built from a
+# string containing an embedded NUL raises `ValueError` — not `OSError`
+# — from `resolve`, `stat` and `subprocess`. Catching only `OSError`
+# would turn one malformed record into a traceback that aborts the whole
+# read and takes every later valid run with it.
+PATH_ERRORS = (OSError, ValueError)
+
+
 # --------------------------------------------------------------------------
 # Identity
 # --------------------------------------------------------------------------
@@ -211,7 +220,7 @@ def resolve_state_root(repo: str | os.PathLike[str] | None = None) -> Path:
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             check=False,
         )
-    except OSError as exc:                                  # no git binary
+    except PATH_ERRORS as exc:                              # no git binary, bad path
         raise EvidenceRejected(f"cannot run git to locate $test state: {exc}") from exc
     if completed.returncode != 0:
         detail = completed.stderr.strip() or f"git exited {completed.returncode}"
@@ -322,7 +331,7 @@ def _confined_child(root: Path, name: str) -> tuple[Path | None, str | None]:
     try:
         root_resolved = root.resolve()
         resolved = (root / name).resolve()
-    except OSError as exc:
+    except PATH_ERRORS as exc:
         return None, f"cannot resolve {root / name}: {exc}"
     if resolved.parent != root_resolved or resolved.name != name:
         return None, (f"{root / name} resolves to {resolved}, which is not an "
@@ -358,7 +367,7 @@ def resolve_reports_scope(root: Path, diagnostics: list[str]) -> Path | None:
         return None
     try:
         misplaced = scope.exists() and not scope.is_dir()
-    except OSError as exc:
+    except PATH_ERRORS as exc:
         diagnostics.append(
             f"refused to read any report: cannot stat {scope}: {exc}")
         return None
@@ -396,12 +405,12 @@ def _read_report(record: dict, scope: Path | None, diagnostics: list[str]) -> di
         return report
 
     run_id = _text_or_none(record.get("run_id")) or "<unidentified run>"
-    candidate = Path(recorded)
-    if not candidate.is_absolute():
-        candidate = scope / candidate
     try:
+        candidate = Path(recorded)
+        if not candidate.is_absolute():
+            candidate = scope / candidate
         resolved = candidate.resolve()
-    except OSError as exc:
+    except PATH_ERRORS as exc:
         report["status"] = REPORT_UNREADABLE
         diagnostics.append(f"{run_id}: cannot resolve report path {recorded!r}: {exc}")
         return report
@@ -422,7 +431,7 @@ def _read_report(record: dict, scope: Path | None, diagnostics: list[str]) -> di
     try:
         exists = resolved.exists()
         is_file = resolved.is_file()
-    except OSError as exc:
+    except PATH_ERRORS as exc:
         report["status"] = REPORT_UNREADABLE
         diagnostics.append(f"{run_id}: cannot stat report {resolved}: {exc}")
         return report
@@ -439,7 +448,7 @@ def _read_report(record: dict, scope: Path | None, diagnostics: list[str]) -> di
 
     try:
         text = resolved.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
+    except (*PATH_ERRORS, UnicodeDecodeError) as exc:
         report["status"] = REPORT_UNREADABLE
         diagnostics.append(f"{run_id}: cannot read report {resolved}: {exc}")
         return report
@@ -494,7 +503,7 @@ def _load_runs(registry_path: Path, diagnostics: list[str]) -> list[dict]:
     try:
         exists = registry_path.exists()
         is_file = registry_path.is_file()
-    except OSError as exc:
+    except PATH_ERRORS as exc:
         diagnostics.append(f"cannot stat {registry_path}: {exc}")
         return []
     if not is_file:
@@ -509,7 +518,7 @@ def _load_runs(registry_path: Path, diagnostics: list[str]) -> list[dict]:
         return []
     try:
         text = registry_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
+    except (*PATH_ERRORS, UnicodeDecodeError) as exc:
         diagnostics.append(f"cannot read {registry_path}: {exc}")
         return []
     try:
@@ -559,7 +568,11 @@ def read_probe_evidence(probe_key: str,
         "runs": [],
         "diagnostics": [],
     }
-    if not root.is_dir():
+    try:
+        present = root.is_dir()
+    except PATH_ERRORS as exc:
+        raise EvidenceRejected(f"cannot stat the $test state root {root}: {exc}") from exc
+    if not present:
         return evidence
 
     evidence["state"] = STATE_PRESENT

@@ -800,7 +800,10 @@ still be read. A recorded report path that is simply not there is data (a run
 has not written it yet); one that EXISTS but is not a regular file is damage,
 and damage is diagnosed. So is a registry carrying JSON's non-standard
 `NaN`/`Infinity` constants, which Python's `json` would otherwise read and
-write straight back out, making `--json` invalid JSON.
+write straight back out, making `--json` invalid JSON. Every filesystem call
+catches `ValueError` beside `OSError`, because a registry field is arbitrary
+external text: a path string with an embedded NUL raises the former, and one
+malformed record must cost its own run a diagnostic, never the whole read.
 
 It never writes, never takes a `$test` lock, and never invokes the `$test`
 coordinator at all. That last part is not squeamishness: every one of the
