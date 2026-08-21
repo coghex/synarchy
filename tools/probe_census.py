@@ -389,10 +389,41 @@ def _deep_copy(value):
 
 
 def find_entry(document, probe: str) -> dict | None:
+    """The first row named `probe`, or None. A plain lookup."""
     for entry in (document or {}).get("probes") or []:
         if isinstance(entry, dict) and entry.get("key") == probe:
             return entry
     return None
+
+
+def target_row(document, probe: str, what: str) -> dict:
+    """The ONE row an operation may mutate, or a controlled refusal.
+
+    `--probe KEY` and a result document's own `probe` each identify
+    exactly one census row. Zero matches is a refusal because there is
+    nowhere to append without fabricating inventory `--seed` owns; two
+    or more is a refusal because writing the first and leaving the
+    second is a silent, undetectable half-update.
+
+    This is the TARGET rule and nothing wider: unrelated missing, added,
+    stale or even duplicated rows never refuse a finished measurement —
+    only ambiguity about the row being written does.
+    """
+    matches = [entry for entry in (document or {}).get("probes") or []
+               if isinstance(entry, dict) and entry.get("key") == probe]
+    if not matches:
+        raise CensusError(
+            f"probe {probe!r} has no census row; reconcile the inventory "
+            f"with `python3 tools/probe_census.py --seed`")
+    if len(matches) > 1:
+        raise CensusError(
+            f"probe {probe!r} has {len(matches)} census rows, so {what} "
+            f"cannot say which one to write; the census must name each "
+            f"probe exactly once")
+    if not isinstance(matches[0].get("census"), dict):
+        raise CensusError(
+            f"probe {probe!r} has no census record to append to")
+    return matches[0]
 
 
 def result_target(result) -> tuple[str, str]:
@@ -522,18 +553,7 @@ def ingest_result(document: dict, result) -> tuple[dict, str]:
     """
     probe, status = result_target(result)
     entries = _rows(document, "census")
-    target = find_entry(document, probe)
-    if target is None:
-        # Distinct from the inventory-parity rule: an unrelated missing,
-        # added or stale row never refuses a finished measurement. Only
-        # the absence of the row being written refuses, because there is
-        # nowhere to append without fabricating inventory `--seed` owns.
-        raise CensusError(
-            f"probe {probe!r} has no census row; reconcile the inventory "
-            f"with `python3 tools/probe_census.py --seed`")
-    if not isinstance(target.get("census"), dict):
-        raise CensusError(
-            f"probe {probe!r} has no census record to append to")
+    target_row(document, probe, "--record")
     accepted = status == "ok"
     sample = summarize_sample(result) if accepted else None
     attempt = summarize_attempt(result, accepted)
@@ -574,11 +594,7 @@ def set_policy(document: dict, probe: str, *,
     justification-policy enforcement are #1430's and #1492's.
     """
     entries = _rows(document, "census")
-    target = find_entry(document, probe)
-    if target is None:
-        raise CensusError(f"probe {probe!r} has no census row")
-    if not isinstance(target.get("census"), dict):
-        raise CensusError(f"probe {probe!r} has no census record to update")
+    target_row(document, probe, "a policy update")
     if acceptable_failures is not KEEP and acceptable_failures is None:
         justification = None
     rows = [dict(entry) for entry in entries]

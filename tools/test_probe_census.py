@@ -789,6 +789,60 @@ def test_malformed_rows_refuse_cleanly() -> None:
 
 
 # ==========================================================================
+def test_duplicate_target_rows() -> None:
+    """A target key must name exactly one row (#1503)."""
+    print("\n-- duplicate target rows --")
+
+    def row(key, census=None):
+        return {"key": key, "script": f"{key}_probe.py",
+                "classification": "manual-only", "protocol": "legacy",
+                "census": probe_census.empty_census() if census is None
+                else census}
+
+    with registry(), scratch() as root:
+        duped = root / "duplicate-target.json"
+        duped.write_text(json.dumps({
+            "schema": "probe-census/v2",
+            "probes": [row("alpha"), row("beta"), row("alpha")]}),
+            encoding="utf-8")
+        before = duped.read_bytes()
+        expect_refusal(lambda: probe_census.record_result(duped,
+                                                          result_document()),
+                       "--record refuses a probe with two census rows",
+                       "2 census rows", "--record")
+        unchanged(duped, before, "...and changes no bytes")
+        expect_refusal(lambda: probe_census.record_policy(
+            duped, "alpha", acceptable_failures=1),
+            "a policy update refuses a probe with two census rows",
+            "2 census rows", "a policy update")
+        unchanged(duped, before, "...and changes no bytes")
+        # Writing the first and leaving the second is exactly the silent
+        # half-update the refusal exists to prevent.
+        stored = json.loads(duped.read_text(encoding="utf-8"))
+        expect(all(r["census"]["attempts"] == [] for r in stored["probes"]),
+               "neither duplicate row was half-written")
+
+        # The rule is about the TARGET row only. An UNRELATED duplicate
+        # is inventory drift, and the parity rule says drift must never
+        # discard a finished measurement.
+        elsewhere = root / "unrelated-duplicate.json"
+        elsewhere.write_text(json.dumps({
+            "schema": "probe-census/v2",
+            "probes": [row("alpha"), row("beta"), row("beta")]}),
+            encoding="utf-8")
+        probe_census.record_result(elsewhere, result_document())
+        stored = json.loads(elsewhere.read_text(encoding="utf-8"))
+        expect(len(stored["probes"][0]["census"]["current"]["samples"]) == 1,
+               "an unrelated duplicate row does not refuse the measurement")
+        expect([r["key"] for r in stored["probes"]]
+               == ["alpha", "beta", "beta"],
+               "and the duplicate rows are preserved verbatim for a person")
+        expect(all(r["census"] == probe_census.empty_census()
+                   for r in stored["probes"][1:]),
+               "neither unrelated row was touched")
+
+
+# ==========================================================================
 def test_path_substitution() -> None:
     print("\n-- symlink, hard-link and non-regular path refusal --")
     with registry(), scratch() as root:
@@ -1338,6 +1392,7 @@ def main() -> int:
                  test_reconciliation, test_ingest_accepted,
                  test_ingest_harness_error, test_policy, test_refusals,
                  test_malformed_rows_refuse_cleanly,
+                 test_duplicate_target_rows,
                  test_path_substitution, test_atomicity,
                  test_preservation_guard,
                  test_independent_process_contention,
