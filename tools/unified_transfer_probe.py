@@ -118,6 +118,14 @@ Stages, in order:
               exactly once, while the session is gone and both units it
               held are free.
 
+Both engines are also an oracle for PERSISTENCE INTEGRITY (#1487).
+Each one's log is inspected once its process is gone, and any
+unexpected `integrity diagnostic` line fails the run — engine A's
+against the `save` stage, engine B's against `load`, so the eight-stage
+report names the boundary that produced it. These are the non-blocking
+dangling-reference warnings the save deliberately tolerates and
+therefore only LOGS; nothing else in this file would notice one.
+
 Known-flaky neighbours: `tools/expedition_retrieval_probe.py` and
 `tools/repair_ai_probe.py` are the arc-adjacent AI probes with recorded
 intermittent failures; this one is deliberately built to avoid their
@@ -157,10 +165,41 @@ from probelib import (boot, camera_state, capture_request_id, centred_within,
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-LOG_A = "/tmp/synarchy_unified_transfer_a.log"
-LOG_B = "/tmp/synarchy_unified_transfer_b.log"
-
 SLOT = "probe_unified_transfer"
+
+# --------------------------------------------------------------------------
+# Persistence integrity oracle (#1487)
+# --------------------------------------------------------------------------
+# Both engines were already booted with their own log file and neither
+# log was ever read, so a save or a load could report a dangling
+# persisted reference and the run would still print PASS. It did: the
+# approved assessment run passed 333 checks while these logs carried
+# three dangling-reference warnings at save and the same three at load.
+#
+# This exact substring is what the engine writes for the TOLERATED,
+# non-blocking half of the shared integrity graph (#764/#1246), from all
+# four emitting sites — `World.Thread.Command.Save.WriteWorld` (the
+# Lua-reference pass at :287 and the `sessionIntegrityWarnings` pass at
+# :304), `Engine.Scripting.Lua.API.Save` (:892) and `World.Load.Stage`'s
+# transfer-order pass (:286). The BLOCKING half aborts the save instead
+# of logging, so a line carrying this needle is precisely the class that
+# would otherwise pass unnoticed.
+INTEGRITY_NEEDLE = "integrity diagnostic"
+
+# Diagnostics a FIXTURE genuinely intends, as (substring, why) pairs.
+# Empty, and meant to stay that way: a member must name ONE specific
+# reference — the id or the field expected to dangle — and say why that
+# fixture means it. `INTEGRITY_NEEDLE` itself, a message prefix, a save
+# name or anything else matching a CLASS of diagnostics is not
+# admissible, and neither is an engine defect: the dangling `buildTarget`
+# references this oracle currently surfaces are #1484's to fix at their
+# source, never to expect away here.
+EXPECTED_INTEGRITY_DIAGNOSTICS: tuple[tuple[str, str], ...] = ()
+
+assert all(INTEGRITY_NEEDLE not in substring
+           for substring, _ in EXPECTED_INTEGRITY_DIAGNOSTICS), \
+    ("an expectation must name one specific reference, never the whole "
+     "diagnostic class")
 
 STAGES = ["setup", "knowledge", "modeB", "modeA", "batch", "widget",
           "save", "load"]
@@ -326,6 +365,29 @@ class Checks:
             self.failed += 1
         return cond
 
+    def ok_at(self, stage: str, cond: bool, label: str,
+              detail: str = "") -> bool:
+        """Record a check against a stage other than the current one.
+
+        The boundary-log oracle (#1487) runs on the TEARDOWN path, where
+        the current stage is whichever one raised, and must be attributed
+        to the boundary it inspects so the eight-stage report names it.
+
+        A PASS deliberately does not mark an unreached stage as reached:
+        a session that never got as far as `save` saved nothing, so a
+        clean log certifies nothing about that stage and it must keep
+        reporting NOT REACHED. A FAIL always surfaces there.
+        """
+        assert stage in STAGES, stage
+        previous, was_reached = self.stage, stage in self.reached
+        self.stage = stage
+        try:
+            return self.ok(cond, label, detail)
+        finally:
+            if bool(cond) and not was_reached and stage in self.reached:
+                self.reached.remove(stage)
+            self.stage = previous
+
     def outcomes(self) -> dict[str, str]:
         """Per-stage pass/fail, for the run fingerprint. Deliberately
         outcomes only and no measurements: two runs of the same seed must
@@ -400,6 +462,78 @@ def boot_offscreen(root: str, port: int, size: str, log: str, label: str):
     return boot(port, log=log, label=label, ready_timeout=240,
                 mode=("--offscreen",),
                 args=["--size", size, "--resource-root", root])
+
+
+def integrity_diagnostics(path: str) -> tuple[list[str], str | None]:
+    """Every unexpected `INTEGRITY_NEEDLE` line in one engine log.
+
+    Returns `(lines, error)`. A missing or unreadable log is an ERROR,
+    never an empty match list: a boundary whose log cannot be read has
+    not been SHOWN to be clean, and collapsing that to "no diagnostics"
+    is exactly what would let this oracle pass vacuously. (The adjacent
+    `tools/transfer_order_probe.py:log_lines` — the model for the needle
+    and the reporting — does collapse it, which is the one thing not
+    copied from it.)
+    """
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            lines = [ln.rstrip("\n") for ln in handle
+                     if INTEGRITY_NEEDLE in ln]
+    except OSError as exc:
+        return [], f"{type(exc).__name__}: {exc}"
+    return ([ln for ln in lines
+             if not any(substring in ln
+                        for substring, _ in EXPECTED_INTEGRITY_DIAGNOSTICS)],
+            None)
+
+
+def check_boundary_log(chk: Checks, stage: str, label: str, path: str,
+                       proc) -> None:
+    """Fail the run on any unexpected persistence integrity diagnostic
+    one engine logged (#1487).
+
+    Called from the SAME `finally` that quits that engine, so a stage
+    which raised or returned early still gets its boundary inspected;
+    the checks are attributed to `stage` rather than to whatever stage
+    was current when it broke, because what they name is the BOUNDARY
+    that produced the diagnostic.
+
+    `quit_engine` is the flush barrier: it waits for the process to
+    terminate (killing and waiting if it must), and the engine's stdout
+    IS this file, so once the process is gone everything it wrote has
+    landed. That is re-confirmed rather than assumed — a log still being
+    written to has not been shown to be complete, and a diagnostic
+    emitted late in the boundary is the case this whole check exists
+    for.
+
+    Records checks and never raises: this runs on a teardown path, where
+    an exception would replace the failure that got us here.
+    """
+    try:
+        alive = proc is not None and proc.poll() is None
+        chk.ok_at(stage, not alive,
+                  f"{label}: the engine process is gone, so everything it "
+                  f"wrote is in its log before the log is read",
+                  f"pid {proc.pid if proc else '?'} was still running after "
+                  f"quit_engine returned, so {path} may be truncated")
+        lines, error = integrity_diagnostics(path)
+        if error is not None:
+            # Not "no diagnostics": a boundary whose log cannot be read
+            # has not been shown to be clean.
+            chk.ok_at(stage, False,
+                      f"{label}: the boundary log is readable, so the "
+                      f"boundary can be shown to be clean",
+                      f"{path}: {error}")
+            return
+        chk.ok_at(stage, not lines,
+                  f"{label}: no unexpected persistence integrity diagnostic "
+                  f"at this boundary",
+                  f"{len(lines)} in {path}: {lines[:3]!r}")
+    except Exception as exc:  # noqa: BLE001
+        chk.ok_at(stage, False,
+                  f"{label}: the boundary log could be inspected for "
+                  f"persistence integrity diagnostics",
+                  f"unexpected {type(exc).__name__}: {exc}")
 
 
 # --------------------------------------------------------------------------
@@ -2642,7 +2776,18 @@ def main() -> int:
     ledger = ViewLedger()
     base = tempfile.mkdtemp(prefix="synarchy_unified_transfer_")
     root = make_isolated_root(base)
+    # Each run owns its two engine logs (#1487). They used to be one
+    # fixed pair of `/tmp` names shared by every invocation, which was
+    # harmless while nothing read them and is not now that they are this
+    # run's integrity ORACLE: two invocations on different `--port`
+    # values would write the same two files, and whichever finished last
+    # would decide what the other one inspected. Siting them beside the
+    # throwaway resource root makes each pair demonstrably this
+    # invocation's; `--keep-root` is what preserves them afterwards.
+    log_a = os.path.join(base, "engine_a.log")
+    log_b = os.path.join(base, "engine_b.log")
     print(f"isolated resource root: {root}", flush=True)
+    print(f"engine logs: {log_a} / {log_b}", flush=True)
     fp: dict = {"seed": args.seed, "worldSize": args.world_size,
                 "plates": args.plates}
     port = args.port
@@ -2650,7 +2795,7 @@ def main() -> int:
 
     try:
         # ============ engine A: the whole scenario, then a save =========
-        proc = boot_offscreen(root, port, args.size, LOG_A, "engine A")
+        proc = boot_offscreen(root, port, args.size, log_a, "engine A")
         try:
             chk.enter("setup", "a fixed-seed world and the three endpoint "
                                "classes")
@@ -2681,17 +2826,19 @@ def main() -> int:
             state = stage_save(chk, port, ids, fp, vp)
         finally:
             quit_engine(port, proc)
+            check_boundary_log(chk, "save", "engine A", log_a, proc)
 
         # ============ engine B: a genuinely fresh process ===============
         chk.enter("load", "a fresh process re-checks every durable identity")
         if state is None:
             chk.ok(False, "load: the save stage produced nothing to reload")
         else:
-            proc = boot_offscreen(root, port, args.size, LOG_B, "engine B")
+            proc = boot_offscreen(root, port, args.size, log_b, "engine B")
             try:
                 stage_load(chk, port, fp, base, state, args)
             finally:
                 quit_engine(port, proc)
+                check_boundary_log(chk, "load", "engine B", log_b, proc)
     except SetupError as exc:
         chk.ok(False, f"the scenario could not reach the state it tests: {exc}")
     except SystemExit as exc:
