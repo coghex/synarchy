@@ -191,9 +191,12 @@ python3 tools/world_check.py --quick
 # checked without that probe's own ~8-minute real engine;
 # test_probelib pins probelib.send_json's result contract against a real
 # socket and fails if a probe grows a private JSON console wrapper again
-# (#1160); test_probe_flake covers probe_protocol.py, probe_flake.py and
-# probe_census.py -- the only automated gate those three have, and one
-# every #1426 protocol migration extends (#1475).
+# (#1160); test_probe_flake mutation-covers probe_protocol.py,
+# probe_flake.py and probe_census.py's parsers, and every #1426 protocol
+# migration extends it (#1475); test_probe_census is the census's own
+# self-test -- the record, its atomic writer, the declared schema, and
+# #1429's cohort, freshness and staleness semantics -- against synthetic
+# documents in throwaway temporary trees, touching no docs worktree.
 echo "==> [18/20] probe runner self-tests"
 python3 tools/ci_probes.py --self-test
 python3 tools/ci_expensive_gates.py --self-test
@@ -203,6 +206,7 @@ python3 tools/test_persistence_contract_sweep.py
 python3 tools/test_action_outcome_probe.py
 python3 tools/test_probelib.py
 python3 tools/test_probe_flake.py
+python3 tools/test_probe_census.py
 
 # Cheap, no-engine self-test of CI's cache-outcome report (#1358). The
 # report itself runs only in CI -- `make ci` restores no GitHub Actions

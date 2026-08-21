@@ -132,11 +132,13 @@ Exit codes:
      errors
 
 Gate: `python3 tools/test_probe_external_evidence.py` (deterministic,
-synthetic, offline). Like the rest of the de-flake lab's self-tests
-(`test_probe_census.py`, `test_probe_flake.py`) it is run on demand and
-is deliberately not a CI step: everything it covers is optional,
-machine-local state that CI does not have. A live parse against a real
-registry is manual PR evidence, not a portable gate.
+synthetic, offline). It is run on demand and is deliberately not a CI
+step: everything it covers is optional, machine-local state that CI does
+not have. A live parse against a real registry is manual PR evidence,
+not a portable gate. That is this component's own situation, not a lab
+convention — `test_probe_flake.py` and, since #1429, `test_probe_census.py`
+are both unconditional CI steps, because what they cover is synthetic
+and portable.
 """
 from __future__ import annotations
 
