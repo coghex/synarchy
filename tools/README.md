@@ -793,9 +793,10 @@ and stays dependency-free so a fresh checkout can run it.
 The CROSS-FIELD invariants are CODE (#1493), because rules that span fields
 cannot be declared: accepted attempts reconcile against the samples retained
 across `current` and `history`; `accepted` agrees with `status`; a harness
-error never reports completing every requested run; `check_counts` is the
-tally `runs` shows; a PASS run carries no FAIL check; and a cohort holds one
-commit's samples. Each rejects state no real run could have written, and each
+error never reports completing every requested run; `check_counts` is keyed by
+exactly the descriptor's declared checks and each entry is the tally `runs`
+shows; a PASS run carries no FAIL check; and a cohort holds one commit's
+samples. Each rejects state no real run could have written, and each
 runs on both sides of a mutation exactly as the schema does — so an
 inconsistent census stops `--record`, the policy updates, `--seed` and
 `--validate` alike instead of being rewritten and made durable.

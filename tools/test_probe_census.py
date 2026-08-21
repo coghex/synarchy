@@ -1392,6 +1392,26 @@ def harness_error_result() -> dict:
     return result_document(status="harness-error")
 
 
+def _no_runs_result() -> dict:
+    """A harness error on the very FIRST run, so nothing completed.
+
+    `measure` creates the run directory, launches, and returns through
+    `stop_with_harness_error` before anything joins `runs` — so
+    `check_counts` is the descriptor's ids seeded to all zeros, exactly
+    what `Measurement.check_counts()` starts from.
+    """
+    return result_document(
+        status="harness-error", error="run 1: unreadable event stream",
+        requested_runs=3, completed_runs=0, runs=[],
+        error_run={"index": 1, "port": 9100, "outcome": "HARNESS_ERROR",
+                   "elapsed_seconds": 0.5, "checks": {},
+                   "artifact_dir": "/tmp/artifacts/run-001"},
+        check_counts={"first": {"PASS": 0, "FAIL": 0, "MISSING": 0},
+                      "second": {"PASS": 0, "FAIL": 0, "MISSING": 0}},
+        worst_elapsed_seconds=0.0, total_elapsed_seconds=0.0,
+        retained_artifacts=["/tmp/artifacts/run-001"])
+
+
 def test_declared_schema() -> None:
     """The schema file itself, and what it now refuses (#1492).
 
@@ -2401,6 +2421,34 @@ def _wrong_tally(result: dict) -> None:
 
 
 def _untallied_check(result: dict) -> None:
+    """A check a run reports that `check_counts` has no entry for.
+
+    Undeclared on BOTH sides, so the descriptor-coverage rule sees a map
+    still keyed by exactly the declared checks and stays silent: the
+    tally rule is the only one that can notice the run.
+    """
+    result["runs"][0]["checks"]["ghost"] = "PASS"
+
+
+def _undeclared_tally(result: dict) -> None:
+    """An entry for a check the descriptor never declared.
+
+    Its tally is all zero, which is precisely what the per-entry
+    comparison accepts — no run shows anything for it, so the numbers
+    agree. Only the keying rule can reject it.
+    """
+    result["check_counts"]["ghost"] = {"PASS": 0, "FAIL": 0, "MISSING": 0}
+
+
+def _untallied_declared_check(result: dict) -> None:
+    """A declared check with no entry, in a measurement with NO runs.
+
+    A harness error on the very first run completes nothing, so every
+    entry is all zero and the runs show nothing at all — which is what
+    leaves the tally rule with nothing to say and isolates the loss of
+    the key itself.
+    """
+    result.update(_no_runs_result())
     del result["check_counts"]["second"]
 
 
@@ -2428,6 +2476,14 @@ RESULT_CASES = (
      "a check tallied in the runs with no entry",
      "but has no entry",
      _untallied_check),
+    (probe_census._rule_check_counts_cover_the_descriptor,
+     "an all-zero tally for a check the descriptor never declared",
+     "the probe's own descriptor does not declare it",
+     _undeclared_tally),
+    (probe_census._rule_check_counts_cover_the_descriptor,
+     "a declared check with no tally at all",
+     "declared check 'second' has no tally",
+     _untallied_declared_check),
     (probe_census._rule_result_leaves_a_run_uncompleted,
      "a harness error that completed every requested run",
      "reports completing 2 of 2 requested run(s)",
@@ -2588,17 +2644,37 @@ def test_cross_field_invariants() -> None:
             lambda: probe_census.record_result(path, timed_out.to_document()),
             "a TIMEOUT run carrying a FAIL check is accepted")
 
-        # A harness error on the very FIRST run completes nothing.
+        # A harness error on the very FIRST run completes nothing, so
+        # `check_counts` is the descriptor seeded to all zeros — the one
+        # legitimate shape in which an entry counts nothing, and the
+        # reason the keying rule cannot be inferred from the tallies.
         nothing_ran = measurement(3)
         nothing_ran.status = "harness-error"
         nothing_ran.error = "run 1 emitted a duplicate event"
         nothing_ran.error_run = probe_flake.RunRecord(
             1, 9101, probe_flake.RUN_HARNESS_ERROR, 0.5, {},
             Path("/tmp/artifacts/alpha-1/run-001"))
+        produced = nothing_ran.to_document()
         expect_valid(
-            lambda: probe_census.record_result(path,
-                                               nothing_ran.to_document()),
+            lambda: probe_census.record_result(path, produced),
             "a harness error that completed no run at all is accepted")
+        expect(set(produced["check_counts"])
+               == {check["id"] for check in produced["checks"]}
+               and all(sum(tally.values()) == 0
+                       for tally in produced["check_counts"].values()),
+               "the producer keys check_counts by exactly its descriptor, "
+               "all zero when no run completed")
+        expect(set(_no_runs_result()["check_counts"])
+               == set(produced["check_counts"]),
+               "...and this file's no-runs fixture is keyed the same way")
+        expect_valid(lambda: probe_census.validate_result(_no_runs_result()),
+                     "...so the fixture the keying case builds on is itself "
+                     "consistent")
+
+        # And the same keying holds once runs DO complete.
+        expect(set(result_document()["check_counts"])
+               == {check["id"] for check in result_document()["checks"]},
+               "a completed measurement is keyed by its descriptor too")
 
         # Two measurements of ONE commit accumulate in a single cohort;
         # a third naming another commit rolls that whole cohort into

@@ -51,10 +51,11 @@ CROSS-FIELD INVARIANTS ARE CODE, NOT SCHEMA (#1493). The rules that span
 fields cannot be declared, so `census_invariants` and `result_invariants`
 state them directly: accepted attempts reconcile against retained
 samples; `accepted` agrees with `status`; a harness error never reports
-completing every requested run; `check_counts` is the tally `runs`
-shows; a PASS run carries no FAIL check; and a cohort holds one commit's
-samples. Each rejects state no real run could have written, and each
-runs on both sides of a mutation exactly as the schema does.
+completing every requested run; `check_counts` is keyed by exactly the
+descriptor's checks and each entry is the tally `runs` shows; a PASS run
+carries no FAIL check; and a cohort holds one commit's samples. Each
+rejects state no real run could have written, and each runs on both
+sides of a mutation exactly as the schema does.
 
 What is deliberately still absent: any requirement that the census agree
 with the live probe registry, which stays `validate_manifest`'s report
@@ -464,12 +465,40 @@ def _rule_pass_run_has_no_failed_check(result) -> list[str]:
     return problems
 
 
-def _rule_check_counts_tally_runs(result) -> list[str]:
-    """`check_counts` is the tally `runs` shows, in both directions.
+def _rule_check_counts_cover_the_descriptor(result) -> list[str]:
+    """`check_counts` is keyed by exactly the descriptor's check ids.
 
-    It is DERIVED rather than reported, so any disagreement is an edit:
-    a stored tally that is not what the runs show, and a check tallied
-    in the runs with no entry at all, are each impossible.
+    `Measurement.check_counts()` SEEDS the map from `descriptor.ids` and
+    then only increments; it never adds a key and never drops one. So
+    the keys are that id set exactly, whatever the runs did — including
+    a measurement with no completed runs at all, whose entries are all
+    zero. That is the half the per-entry tally cannot see: an id the
+    descriptor never declared, carrying an all-zero tally, agrees with
+    the runs (which show nothing for it) while being state no
+    measurement could have produced.
+    """
+    declared = set(result["check_counts"])
+    described = {check["id"] for check in result["checks"]}
+    problems: list[str] = []
+    for check_id in sorted(declared - described):
+        problems.append(
+            f"at $.check_counts.{check_id}, check {check_id!r} is tallied but "
+            f"the probe's own descriptor does not declare it; `check_counts` "
+            f"is keyed by exactly the declared checks")
+    for check_id in sorted(described - declared):
+        problems.append(
+            f"at $.check_counts, declared check {check_id!r} has no tally; "
+            f"`check_counts` is keyed by exactly the declared checks")
+    return problems
+
+
+def _rule_check_counts_tally_runs(result) -> list[str]:
+    """Each entry is the tally `runs` shows, in both directions.
+
+    The counts are DERIVED rather than reported, so any disagreement is
+    an edit: a stored tally that is not what the runs show, and a check
+    tallied in the runs with no entry at all, are each impossible.
+    Keying is the neighbouring rule's; this one owns the numbers.
     """
     problems: list[str] = []
     observed = observed_check_counts(result["runs"])
@@ -499,9 +528,14 @@ def _rule_result_leaves_a_run_uncompleted(result) -> list[str]:
         "$")
 
 
-# The intake rules, in report order.
+# The intake rules, in report order. The two `check_counts` rules are
+# separate because they answer separate questions — which checks the map
+# is keyed by, and what each entry counts — and neither implies the
+# other: an undeclared all-zero entry satisfies the tally, and a wrong
+# tally sits under a perfectly well-declared key.
 RESULT_RULES = (
     _rule_pass_run_has_no_failed_check,
+    _rule_check_counts_cover_the_descriptor,
     _rule_check_counts_tally_runs,
     _rule_result_leaves_a_run_uncompleted,
 )
