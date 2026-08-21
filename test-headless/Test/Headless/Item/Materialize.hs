@@ -24,7 +24,8 @@ import Test.Hspec
 import Control.Exception (finally)
 import Data.Char (isAlphaNum)
 import Control.Monad (filterM)
-import Data.IORef (newIORef, readIORef, atomicModifyIORef')
+import Data.IORef
+    (newIORef, readIORef, writeIORef, modifyIORef', atomicModifyIORef')
 import Data.List (isPrefixOf, nub, sort)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
@@ -41,7 +42,7 @@ import Engine.Asset.YamlUnits
     ( UnitYamlDef(..), UnitYamlInventoryEntry(..), loadUnitYaml )
 import Engine.Core.Log
     ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
-    , LoggerState )
+    , LogCategory(..), LogEntry(..), LogLevel(..), LoggerState(..) )
 import Engine.Scripting.Lua.API.Items.Defs (itemDefFromYaml)
 import Item.Materialize
     ( ItemOverrides(..), materializeItem, pristineItem
@@ -119,25 +120,54 @@ newAllocator = do
 -- | Materialise against the fixture registry with a pinned generator.
 mint ∷ ItemOverrides → Text → IO (Maybe ItemInstance, Word64)
 mint ovr name = do
+    logger ← silentLogger
     rng ← newIORef (mkStdGen 90210)
     (alloc, spent) ← newAllocator
-    inst ← materializeItem testItems rng alloc ovr name
+    inst ← materializeItem testItems logger rng alloc ovr name
     n ← spent
     pure (inst, n)
 
 mintWith ∷ ItemManager → ItemOverrides → Text → IO (Maybe ItemInstance)
 mintWith mgr ovr name = do
+    logger ← silentLogger
     rng ← newIORef (mkStdGen 90210)
     (alloc, _) ← newAllocator
-    materializeItem mgr rng alloc ovr name
+    materializeItem mgr logger rng alloc ovr name
+
+-- | 'mintWith' against a CAPTURING logger: the instance, the instance
+--   ids spent, and every entry the mint logged, in order. The cycle
+--   cases below assert on the whole list rather than on a match, which
+--   is what makes "reported once, by nobody unwinding" testable.
+mintLogged ∷ ItemManager → Text
+           → IO (Maybe ItemInstance, Word64, [LogEntry])
+mintLogged mgr name = do
+    entriesRef ← newIORef []
+    logger ← initLogger defaultLogConfig
+        { lcBackend = LogToCallback (\e → modifyIORef' entriesRef (⧺ [e])) }
+    -- initLogger honours ENGINE_LOG_LEVEL, so pin the threshold: a
+    -- developer running with it set to `error` would otherwise watch
+    -- every warning assertion below quietly stop asserting anything.
+    writeIORef (lsMinLevel logger) LevelDebug
+    rng ← newIORef (mkStdGen 90210)
+    (alloc, spent) ← newAllocator
+    inst ← materializeItem mgr logger rng alloc pristineItem name
+    n ← spent
+    entries ← readIORef entriesRef
+    pure (inst, n, entries)
 
 -- | The fixture registry with one definition's default contents
 --   replaced, so the three-way composition rule can be authored on a
 --   PARENT and observed on its child.
 withDefaults ∷ Text → [ItemContentEntry] → ItemManager
-withDefaults name entries =
-    ItemManager $ HM.adjust (\d → d { idDefaultContents = entries })
-                            name (imDefs testItems)
+withDefaults name entries = withManyDefaults [(name, entries)]
+
+-- | The same, for several definitions at once — which is what a cycle
+--   ACROSS definitions needs.
+withManyDefaults ∷ [(Text, [ItemContentEntry])] → ItemManager
+withManyDefaults edits = ItemManager $ foldl' one (imDefs testItems) edits
+  where
+    one m (name, entries) =
+        HM.adjust (\d → d { idDefaultContents = entries }) name m
 
 -- * YAML fixtures
 
@@ -391,6 +421,127 @@ spec = do
             (inst, spent) ← mint pristineItem "no_such_item"
             (isNothing inst, spent) `shouldBe` (True, 0)
 
+    describe "cyclic default contents (#1420)" $ do
+        -- Default contents recurse by definition NAME, so a definition
+        -- listing itself — or two listing each other — used to recurse
+        -- forever and hang the minting thread silently. Every case here
+        -- asserts the WHOLE captured log, not a match against it: the
+        -- rule is "one warning per rejected back edge, from the frame
+        -- that rejected it", and an unwinding frame or a caller adding
+        -- a second one has to fail.
+        let logged es = [ (leLevel e, leCategory e, leMessage e) | e ← es ]
+            childNames = map iiDefName ∘ iiContents
+            cycleWarning names repeated =
+                ( LevelWarn, CatAsset
+                , "Item default contents: cyclic contents graph "
+                    <> T.intercalate " → " [ "'" <> n <> "'" | n ← names ]
+                    <> " — dropping the repeated '" <> repeated
+                    <> "' entry" )
+
+        it "terminates on a self-referential definition, keeping the \
+           \instance and its other contents" $ do
+            (inst, spent, es) ← mintLogged
+                (withDefaults "kit" [entry "kit" 1, entry "bandage" 2])
+                "kit"
+            (childNames <$> inst) `shouldBe` Just ["bandage", "bandage"]
+            -- The dropped back edge is a skip, not a truncation: the
+            -- sibling AFTER it still materialises, and the entry that
+            -- went nowhere spends no instance id.
+            spent `shouldBe` 3
+            logged es `shouldBe` [cycleWarning ["kit", "kit"] "kit"]
+
+        it "terminates on a mutually-referential pair, keeping the outer \
+           \instance and the nested one, minus only the back edge" $ do
+            (inst, _, es) ← mintLogged
+                (withManyDefaults
+                    [ ("kit",   [entry "pouch" 1])
+                    , ("pouch", [entry "bandage" 1, entry "kit" 1]) ])
+                "kit"
+            case inst of
+                Nothing → expectationFailure "kit did not materialize"
+                Just k → do
+                    childNames k `shouldBe` ["pouch"]
+                    map childNames (iiContents k) `shouldBe` [["bandage"]]
+            logged es
+                `shouldBe` [cycleWarning ["kit", "pouch", "kit"] "kit"]
+
+        it "names every definition ON the cycle and nothing that merely \
+           \led to it" $ do
+            -- gem → kit → pouch → bandage → kit. `gem` is an acyclic
+            -- prefix, not a participant, and reporting it would point
+            -- the author at a definition that is not the problem.
+            (_, _, es) ← mintLogged
+                (withManyDefaults
+                    [ ("gem",     [entry "kit" 1])
+                    , ("kit",     [entry "pouch" 1])
+                    , ("pouch",   [entry "bandage" 1])
+                    , ("bandage", [entry "kit" 1]) ])
+                "gem"
+            logged es `shouldBe`
+                [cycleWarning ["kit", "pouch", "bandage", "kit"] "kit"]
+            [ m | (_, _, m) ← logged es, "gem" `T.isInfixOf` m ]
+                `shouldBe` []
+
+        it "reports ONE authoring mistake once, however many copies the \
+           \cyclic entry\'s count asks for" $ do
+            (_, _, es) ← mintLogged
+                (withDefaults "kit" [entry "kit" 5]) "kit"
+            logged es `shouldBe` [cycleWarning ["kit", "kit"] "kit"]
+
+        it "leaves an acyclic graph that REUSES one definition in \
+           \separate branches completely alone — detection is scoped to \
+           \the current path, never a global visited set" $ do
+            (inst, _, es) ← mintLogged
+                (withManyDefaults
+                    [ ("kit",     [entry "pouch" 2, entry "bandage" 1])
+                    , ("pouch",   [entry "bandage" 1, entry "bottle" 1]) ])
+                "kit"
+            case inst of
+                Nothing → expectationFailure "kit did not materialize"
+                Just k → sort (allNames k) `shouldBe` sort
+                    [ "kit", "pouch", "bandage", "bottle"
+                    , "pouch", "bandage", "bottle", "bandage" ]
+            logged es `shouldBe` []
+
+        it "is not triggered by an entry authoring its OWN contents: a \
+           \kit holding a kit is legal nesting, not a cycle" $ do
+            -- Such an entry never consults the named definition\'s
+            -- defaults, so it is a finite authored subtree that
+            -- terminates on its own. Rejecting it would drop contents an
+            -- author explicitly wrote.
+            (inst, _, es) ← mintLogged
+                (withDefaults "kit"
+                    [ (entry "kit" 1)
+                        { iceContents = Just [entry "bandage" 1] } ])
+                "kit"
+            case inst of
+                Nothing → expectationFailure "kit did not materialize"
+                Just k → do
+                    childNames k `shouldBe` ["kit"]
+                    map childNames (iiContents k) `shouldBe` [["bandage"]]
+            logged es `shouldBe` []
+
+        it "still catches a back edge one level UNDER such an authored \
+           \nesting" $ do
+            (inst, _, es) ← mintLogged
+                (withDefaults "kit"
+                    [ (entry "kit" 1)
+                        { iceContents = Just [entry "kit" 1] } ])
+                "kit"
+            (map childNames ∘ iiContents <$> inst) `shouldBe` Just [[]]
+            logged es `shouldBe` [cycleWarning ["kit", "kit"] "kit"]
+
+        it "materialises the acyclic fixture and the SHIPPED first-aid \
+           \kit silently, to the depth and contents they always had" $ do
+            (fixture, _, fixtureLog) ← mintLogged testItems "kit"
+            mgr ← shippedItems
+            (shipped, _, shippedLog) ← mintLogged mgr "first_aid_kit"
+            (sort ∘ allNames <$> fixture) `shouldBe` Just (sort
+                [ "kit", "bandage", "bandage"
+                , "pouch", "bandage", "bottle" ])
+            (length ∘ allInstances <$> shipped) `shouldBe` Just 30
+            (logged fixtureLog, logged shippedLog) `shouldBe` ([], [])
+
     describe "the three-way nested composition rule (requirement 6)" $ do
         let childrenOfPouch mgr = do
                 inst ← mintWith mgr pristineItem "kit"
@@ -481,9 +632,11 @@ spec = do
             -- Same generator, same order, same end state — so the shared
             -- stat stream is left exactly where the hand-written mint
             -- sites left it for every later consumer.
+            logger ← silentLogger
             rngA ← newIORef (mkStdGen 4242)
             (alloc, _) ← newAllocator
-            minted ← materializeItem testItems rngA alloc pristineItem "gem"
+            minted ← materializeItem testItems logger rngA alloc
+                                     pristineItem "gem"
             endA ← readIORef rngA
             rngB ← newIORef (mkStdGen 4242)
             let gemDef = fromMaybe (error "gem fixture missing")

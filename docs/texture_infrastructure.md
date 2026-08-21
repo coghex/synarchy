@@ -57,7 +57,8 @@ filesystem-first rather than YAML-first, so it covers the complete corpus of 7
 unit trees, 116 animations and 4,620 frames, and it exits 0 with zero warnings.
 Every committed animation PNG is owned by exactly one animation-frame
 declaration, with no directory- or glob-level exemption mechanism. See
-**Unit asset inventory** in `CLAUDE.md` for the enforced contract.
+**Unit animation art** in `CLAUDE.md` (and `docs/engine_contracts.md`
+§Unit animation art) for the enforced contract.
 
 The legacy plan also predates the current asset contract. Unit animation metadata
 now lives in `data/units/*.yaml`, not a separate `animations.yaml`, and some

@@ -7,9 +7,10 @@ import UPrelude
 import Test.Hspec
 import Engine.Core.State
 import Engine.Core.Monad
-import Data.IORef (newIORef)
+import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef)
 import Engine.Graphics.Base
 import Engine.Graphics.Vulkan.Instance
+import Test.Engine.Graphics.Vulkan.Helpers (withTestInstance)
 import Vulkan.Core10
 import Vulkan.Extensions.VK_EXT_debug_utils
   (pattern EXT_DEBUG_UTILS_EXTENSION_NAME)
@@ -29,10 +30,10 @@ spec env state = do
                 let config = defaultGraphicsConfig 
                         { gcDebugMode = False
                         , gcAppName = "VulkanTest" }
-                (inst, dbgMessenger) <- createVulkanInstance config InstanceForWindow
-                liftIO $ do
-                    instanceHandle inst `shouldNotBe` nullPtr
-                    dbgMessenger `shouldBe` Nothing
+                withTestInstance config InstanceForWindow $ \(inst, dbgMessenger) ->
+                    liftIO $ do
+                        instanceHandle inst `shouldNotBe` nullPtr
+                        dbgMessenger `shouldBe` Nothing
 
         -- Production enables VK_EXT_debug_utils only when the driver
         -- offers it (#1402), so the messenger tracks observed
@@ -45,24 +46,39 @@ spec env state = do
                         { gcDebugMode = True
                         , gcAppName = "VulkanTest" }
                 exts <- getAvailableExtensions
-                (inst, dbgMessenger) <- createVulkanInstance config InstanceForWindow
-                liftIO $ do
-                    instanceHandle inst `shouldNotBe` nullPtr
-                    isJust dbgMessenger `shouldBe`
-                        (EXT_DEBUG_UTILS_EXTENSION_NAME `elem` exts)
+                withTestInstance config InstanceForWindow $ \(inst, dbgMessenger) ->
+                    liftIO $ do
+                        instanceHandle inst `shouldNotBe` nullPtr
+                        isJust dbgMessenger `shouldBe`
+                            (EXT_DEBUG_UTILS_EXTENSION_NAME `elem` exts)
 
+        -- Cycles, not nesting: each 'withTestInstance' owns its own
+        -- continuation, so cycle n's instance is destroyed before cycle
+        -- n+1 creates one (#1401). The counters assert that rather than
+        -- leaving it to be read off the structure -- @liveRef@ is
+        -- raised inside the scope and lowered after it, so the peak it
+        -- records would be 3 if the brackets nested instead of cycling,
+        -- and it is checked without any dependence on a finalizer, on
+        -- GC, or on process exit.
         it "can create and destroy instance multiple times" $ do
-            runEngineTest env state $ do
-                let config = defaultGraphicsConfig 
-                        { gcDebugMode = False
-                        , gcAppName = "VulkanTest" }
-                -- First creation
-                (inst1, _dbg1) <- createVulkanInstance config InstanceForWindow
-                liftIO $ instanceHandle inst1 `shouldNotBe` nullPtr
-                -- Second creation
-                (inst2, _dbg2) <- createVulkanInstance config InstanceForWindow
-                liftIO $ instanceHandle inst2 `shouldNotBe` nullPtr
-                pure ()
+            let config = defaultGraphicsConfig 
+                    { gcDebugMode = False
+                    , gcAppName = "VulkanTest" }
+            liveRef   <- newIORef (0 :: Int)
+            peakRef   <- newIORef (0 :: Int)
+            cyclesRef <- newIORef (0 :: Int)
+            runEngineTest env state $ forM_ [1 .. 3 :: Int] $ \_ -> do
+                withTestInstance config InstanceForWindow $ \(inst, _dbg) ->
+                    liftIO $ do
+                        live <- atomicModifyIORef' liveRef $ \n -> (n + 1, n + 1)
+                        modifyIORef' peakRef $ max live
+                        instanceHandle inst `shouldNotBe` nullPtr
+                liftIO $ do
+                    modifyIORef' liveRef (subtract 1)
+                    modifyIORef' cyclesRef (+ 1)
+            readIORef cyclesRef `shouldReturn` 3
+            readIORef peakRef `shouldReturn` 1
+            readIORef liveRef `shouldReturn` 0
 
     where
         -- Helper functions

@@ -3,8 +3,8 @@
 `CLAUDE.md` is auto-loaded into every session, so it carries the rules
 that prevent damage: what you must not undo, and which gate proves it.
 This file carries the layer below that — the as-built mechanics behind
-those rules, extracted from CLAUDE.md on 2026-08-18 to keep the
-always-loaded file navigable.
+those rules, extracted from CLAUDE.md in two passes (2026-08-18 and
+2026-08-20) to keep the always-loaded file navigable.
 
 **This is not a design document.** The design docs
 (`docs/texture_infrastructure.md`, `docs/unified_item_transfers.md`,
@@ -21,23 +21,41 @@ exactly why the detail could move out of the always-loaded file.
 
 ## Contents
 
+**Build & CI**
+
+- [The `make ci` gate set](#the-make-ci-gate-set)
+
 **Assets and rendering**
 
 - [Unit animation art: inventory structural invariants](#unit-animation-art-inventory-structural-invariants)
+- [Unit atlas compiler: output and index invariants (#1258)](#unit-atlas-compiler-output-and-index-invariants-1258)
 - [Unit animation atlas runtime: index validation and digests](#unit-animation-atlas-runtime-index-validation-and-digests)
 - [Preview mode: the two viewers and the dump contract](#preview-mode-the-two-viewers-and-the-dump-contract)
 
 **UI**
 
+- [UI input routing (#742-#749)](#ui-input-routing-742-749)
 - [Container window stack: panes, widget naming, teardown reasons](#container-window-stack-panes-widget-naming-teardown-reasons)
+- [Responsive UI lifecycle (#748/#750)](#responsive-ui-lifecycle-748750)
+
+**Scripting**
+
+- [Lua random streams (#1330)](#lua-random-streams-1330)
 
 **World and naming**
 
+- [World identity and language provenance (#707/#1092/#1101)](#world-identity-and-language-provenance-70710921101)
+- [Location and river naming (#1101/#1102)](#location-and-river-naming-11011102)
 - [Name etymology: internals (#1104)](#name-etymology-internals-1104)
+- [Location instances (#911)](#location-instances-911)
+- [Location discovery, map icons, and per-unit knowledge (#780/#781/#915)](#location-discovery-map-icons-and-per-unit-knowledge-780781915)
 
 **Gameplay systems**
 
+- [Tile-coordinate seam frame (#1175/#1230)](#tile-coordinate-seam-frame-11751230)
+- [Position hold (#1216)](#position-hold-1216)
 - [Player transfers: the three player-facing modes](#player-transfers-the-three-player-facing-modes)
+- [Commanded-order stall budget (#920/#1291)](#commanded-order-stall-budget-9201291)
 - [The expedition loop: the unprepared control](#the-expedition-loop-the-unprepared-control)
 
 **Persistence**
@@ -45,15 +63,71 @@ exactly why the detail could move out of the always-loaded file.
 - [Autosave: staging, rotation order, and the intent mutex](#autosave-staging-rotation-order-and-the-intent-mutex)
 - [Save/load transaction: phases and failure semantics](#saveload-transaction-phases-and-failure-semantics)
 - [Enum append-only audit: baseline and payload normalization](#enum-append-only-audit-baseline-and-payload-normalization)
+- [Config-writing tests: the isolation fixture (#1357)](#config-writing-tests-the-isolation-fixture-1357)
 
-**CLI**
+**CLI and boot modes**
 
 - [CLI value validation (#1191)](#cli-value-validation-1191)
+- [Debug-console listener policy (#1190)](#debug-console-listener-policy-1190)
 
 **Process gates**
 
 - [Findings-report lane split: why it matters](#findings-report-lane-split-why-it-matters)
 - [Docs landing: docs-wip, autostash, and the protected-ref warning](#docs-landing-docs-wip-autostash-and-the-protected-ref-warning)
+
+---
+
+## The `make ci` gate set
+
+CLAUDE.md states the rule: `make ci` runs the same gate SET as `ci.yml`'s
+`build-test` job, `tools/ci_parity_audit.py` keeps the two from drifting,
+and the gate is never an iteration loop. This is the enumeration and the
+exemptions.
+
+The set: warning-clean (`-Werror`) build of library/exe + both test
+suites, the headless hspec suite, `test_audit.py`, the Lua/Haskell
+module-budget guards, the Lua duplicate-function audit, the
+Unicode-operator audit, the persistence-inventory / EngineEnv-capability
+/ save-compat / enum-append-only / cabal-library-module-inventory /
+material-id / findings-report-status audits (each with its own
+self-test), the unit-asset inventory gate (`test_pack_atlas.py` +
+`pack_atlas.py --validate-only --strict`), `world_check.py --quick`, the
+six probe-runner self-tests (`ci_probes.py --self-test`,
+`ci_expensive_gates.py --self-test`, `ci_docs_fast_path.py --self-test`,
+`test_run_probes.py`, `test_persistence_contract_sweep.py`,
+`test_action_outcome_probe.py`), and the parity audit itself.
+
+**Same gate SET, not the same conditional control flow:** CI
+path-selects the graphical suite build, the unit-asset gate and
+`world_check` on PRs, while `make ci` runs all three unconditionally.
+Since #1490 CI also has a **docs-only fast path on master pushes**: when
+every path in the complete pushed range is documentation — under
+`docs/`, a plain add or modify, and never
+`docs/save_compat/manifest.json`, the one doc a Haskell target reads at
+runtime — the cabal build, both test-suite builds, the headless hspec
+suite and `world_check` are skipped. **Every Python audit still runs,
+self-tests included.** That asymmetry is the point rather than an
+oversight: #1490's cause was a docs-only push breaking
+`test_findings_report_audit.py`, so a fast path that skipped the audits
+would hide the very failure it was built for. `make ci` has no push
+range and so has no fast path; it always runs everything.
+Two families are CI-only, by name: CI's path SELECTORS
+(`ci_expensive_gates.py --stdin --gate …`, `ci_probes.py --stdin`,
+`ci_docs_fast_path.py --stdin --explain`), which have nothing to select
+for locally, and `run_probes.py`, the engine-booting probe sweep
+CLAUDE.md keeps opt-in. Everything else must
+run on both sides — `tools/ci_parity_audit.py` (#1355, CI + `make ci`,
+with its own `--self-test`) compares the two files' `python3 tools/*.py`
+invocations at command-and-arguments granularity in both directions and
+fails on any difference outside that hard-coded, reason-carrying
+exemption list, so this enumeration cannot go stale silently.
+Environment preparation and cache actions are not part of the audited
+gate set.
+
+Mechanics: it uses the prod profile and your warm `dist-newstyle`.
+`-Werror` is checked into `synarchy.cabal`'s warning policy (not
+injected by this gate), so `tools/ci-local.sh` only scopes a temporary
+`-fforce-recomp` via `cabal.project.local`, restored on exit.
 
 ---
 
@@ -150,6 +224,56 @@ imported lazily, which now only spares a run with no declared frames. The
 content pass adds roughly half a second over the whole 4,620-frame corpus
 (~1 s structural, ~1.5 s total), so it is unconditional rather than
 hidden behind a flag.
+
+---
+
+## Unit atlas compiler: output and index invariants (#1258)
+
+Enforced by `python3 tools/test_pack_atlas.py` (fixture-based, isolated
+temp trees, never touching shipped assets) plus the strict
+`pack_atlas.py --validate-only --strict` run. CLAUDE.md keeps the
+one-atlas-per-animation shape and the index-aware validation rule; these
+are the exact invariants.
+
+- **Rows** are the AUTHORED directions in `ATLAS_DIRECTION_ORDER` — the
+  engine's own `Unit.Direction` order `S, SW, W, NW, N, NE, E, SE` —
+  five for `flip: true`, eight for `flip: false` (D-4), each row index
+  recorded explicitly so nothing downstream re-derives the order.
+- **Columns** are the max authored frame count. Unequal per-direction
+  lengths are real (D-5): the index records each direction's TRUE count,
+  shorter rows are padded with transparent RGBA8 zero cells, and no
+  padding cell is addressable — `frame_count` is the sole authority.
+- **Cells are exact integers**: frame `c` of row `r` at
+  `(c*cell_width, r*cell_height)`. A size mismatch is a compile error,
+  never an implicit rescale (D-6). Each cell is a byte-for-byte copy of
+  its source frame's decoded RGBA8 SAMPLES, alpha included.
+- **The index** carries `schema_version` (the format the runtime parses)
+  separately from `tool_version`, a documented `direction_order`, and
+  per animation its storage format and path, atlas/cell dimensions,
+  columns, rows, per-direction row and frame count, `flip`/`fps`/`loop`
+  as the engine will hold them (`fps` narrowed to 32-bit), and two
+  `sha256` digests: a PER-ANIMATION `source_digest` over that
+  animation's own declarations and decoded pixels, and an `atlas_digest`
+  over the atlas's decoded CONTENT rather than its file bytes.
+  Per-animation is the point — one animation's edit must not invalidate
+  an unrelated atlas (D-12).
+- **Determinism and locality.** A clean rebuild under an unchanged
+  toolchain is byte-identical; an incremental run writes only on a real
+  content difference (an mtime-only touch changes nothing); obsolete
+  atlases are removed from that unit's `atlas/` and nowhere else.
+- **`--validate-only` is index-aware.** A unit with NO index is valid to
+  THIS tool (an uncompiled tree is a legitimate working-copy state) but
+  not to the ENGINE. Where an index exists it is REGENERATED from
+  sources and compared, so a stale digest, a hand-edited index, a
+  missing atlas and tampered pixels all report — and a tampered index
+  cannot certify a tampered atlas. Compilation refuses outright on an
+  invalid inventory.
+
+Corpus numbers, kept out of CLAUDE.md because prose counts drift: 116
+committed atlas PNGs + seven `index.json`, all tracked; 6.93 MiB of
+animation sources → 4.88 MiB of atlases = **0.70x** against D-12's 2x
+on-disk ceiling (animation sources only), so the
+choose-a-distribution-strategy clause is not reached.
 
 ---
 
@@ -404,6 +528,91 @@ not previewManager's self-reported bookkeeping.
 
 ---
 
+## UI input routing (#742-#749)
+
+Enforced by hspec `Test.Headless.UI.*` (InputOwnership, Clipping,
+PopupPlacement, InteractiveBounds). CLAUDE.md keeps the on-sight digest;
+these are the six contracts in full.
+
+**Layers + modal boundary (#742).** Pages live on six `UILayer`s,
+painted bottom-to-top `LayerHUD < LayerOverlay < LayerMenu < LayerModal
+< LayerTooltip < LayerDebug`; `uiLayerBand` is the single paint-order
+source of truth shared by hit-testing and rendering. Whether a page
+BLOCKS pointer input is the separate per-page `upInputExclusive` flag —
+`LayerModal` defaults exclusive, everything else pass-through. The
+topmost visible exclusive page owns the modal boundary: input that misses
+every control on or above it is consumed (empty modal space blocks).
+Stacking-only modal pages opt out via `UI.setPageInputExclusive(page,
+false)`. `LayerDebug` is pass-through above any modal.
+`UI.isInputBlocked()` reflects the boundary; `ui_manager.lua`'s
+`isGameplayInputActive()` folds it in; Escape's dismiss cascade
+(`init_keys.lua`) deliberately runs before that gate. Raw handlers that
+iterate widget instances outside `routePointer` use
+`UI.isPageInScope(pageHandle)`.
+
+**Per-element input policies (#743).** Three independent policies —
+fires a click callback, blocks pointer (`UI.setPointerBlocking`),
+captures scroll (`UI.setScrollCapture`); query via
+`UI.isPointerBlocking`/`isScrollCapturing`. A click callback still implies
+pointer-blocking by default; a blocking element with no relevant callback
+consumes the press (`RouteBlocked`) across all three buttons. Wheel
+routing (`routeScroll`) picks the topmost in-scope scroll-capturing
+surface via the same `topHitBy` paint-order walk — never the click
+machinery.
+
+**Scroll dispatch (#744).** Plain and Shift wheel go through the
+IDENTICAL pipeline (`Engine.Input.Thread.Scroll`): a capturing element
+wins first (`LuaUIScrollEvent`, carrying the Shift flag), else a visible
+modal boundary consumes, and only past both does Shift select z-slice vs
+camera zoom. Don't reintroduce `UI.isInputBlocked()` self-gates in the
+Lua handlers — the engine decides once, upstream.
+
+**Control activation + keyboard focus (#745).** A press on a discrete
+control records `UI.ControlActivation.PendingActivation` (firing
+`LuaUIPressBeginEvent`); the release re-runs `routePointer` and only
+activates if it still resolves to the same element. Interruptions
+reverted before release are caught by epochs: global `upmPageEpoch`
+(bumped ONLY by `hidePage`/`showPage`) + per-element `ueRouteEpoch`
+(bumped by `setVisible`/`setClickable`/detach on THAT element, only on a
+real value change); `PendingActivation` snapshots the pressed element's
+and every ancestor's epoch and cancels on mismatch. Unrelated
+sibling/child churn (hover highlights, focus-ring attach) must never
+cancel an activation — that constraint shaped this design; don't
+"simplify" it back to a global counter. Sliders/scrollbar thumbs opt out
+via `UI.setDragActivation`. Keyboard CONTROL focus (`upmControlFocus`,
+`UI.FocusNavigation`) is independent of text focus: Tab/Shift+Tab
+traverse in-scope focusables (a modal traps traversal like pointers;
+`LayerDebug` stays reachable), Enter/Space fire the real
+`LuaUIClickEvent`, arrows step `ueSteppable` controls (`LuaUIStepEvent`);
+consumed keys are withheld from `inpKeyStates`. `UI.getElementInfo`'s
+`focused` stays text-only; control focus reports as `controlFocused`.
+
+**Clipping + popup placement (#747).** `UI.setClipChildren(el, true)`
+clips DESCENDANTS to the container's live bounds (overflow:hidden; nested
+clips intersect; recomputed fresh, nothing cached).
+`UI.Clipping.effectiveClip` is the ONE helper both rendering (`clipQuadUV`
+— partial quads, not all-or-nothing culling) and hit-testing
+(`UI.Manager.Query.isPointInElement`) consult, so paint and hit-test
+can't drift. Floating root-mounted content is unaffected — clipping walks
+real ancestors only. `UI.placePopup(anchorX, anchorY, anchorW, anchorH,
+contentW, contentH, direction)` (`"below"/"above"/"right"/"left"/
+"anchored"`) is the one placement algorithm for floating content (pass
+the FULL interactive size incl. scrollbar); `UI.fitVisibleRows` backs
+oversized-list row reduction. Tooltips keep their own cursor-relative
+clamp.
+
+**Interactive bounds (#749).** Three rects per element — LOGICAL
+(`uePosition`+`ueSize`), VISUAL (overflow-expanded render rect), and
+INTERACTIVE (what all hit-testing uses,
+`UI.InteractiveBounds.interactiveRect`). A box opts its visible border
+into interaction via `UI.setInteractiveOverflow`; overflow alone never
+enlarges a target. Overflow is clamped: non-finite → 0, astronomically
+large → capped, inverting → zero-extent, non-hittable AND non-rendering.
+`UI.getElementInfo` adds `interactiveOverflow` + `interactiveBounds`
+(`x/y/width/height` stay content bounds).
+
+---
+
 ## Container window stack: panes, widget naming, teardown reasons
 
 A world-page panel is reopened after a resize through its own real entry
@@ -463,6 +672,142 @@ passed only by that resize snapshot/restore pass and by
 `onClose`; every other teardown does. That distinction is what lets an
 escort session (and the unit it holds) survive a resize while a zoom-band
 change, a HUD hide, Escape, or another container replacing it all end it.
+
+---
+
+## Responsive UI lifecycle (#748/#750)
+
+Enforced by hspec `Test.Headless.UI.ResponsiveMenus` /
+`ResponsiveGameplay`. CLAUDE.md keeps the registry split and the
+one-line resize rules; these are the numbers and the full rules.
+
+`scripts/ui/responsive.lua` owns the supported envelope — bands
+(inclusive): framebuffer height 600-900 @ 0.5-1x UI scale, 901-1200 @
+0.75-2x, 1201-1600 @ 1-3x, 1601-2160 @ 1.5-4x; formal minimum 800x600.
+`responsive.classify` is introspection only — out-of-envelope
+combinations degrade best-effort (never crash, never invalid geometry,
+fixed actions stay reachable), typically via `math.max(20, ...)` floors
+and `math.min(panelW, fbW)` caps. Menu screens register via
+`responsive.register(name, mod)` + `responsive.notifyResize(w, h)`
+(0x0-minimize-guarded; re-notify with the SAME size = scale-only change).
+Gameplay surfaces stay OFF that registry: they're reached either through
+`ui_manager_boot.lua`'s manual forward or the engine's automatic
+`broadcastToModules` resize — registering a broadcast-reached module
+DOUBLE-FIRES it. Scale-only changes reach gameplay via
+`uiManager.notifyGameplayRescale`.
+
+Rules that keep resizes correct — follow them for any new screen/panel:
+
+- A geometry rebuild must preserve state a semantic re-entry may reset:
+  pending settings edits, scroll offsets, in-progress text, selected
+  tabs, open-panel targets. `hud.createUI()` snapshots each world-page
+  panel's "open for" state before the `view_teardown.lua` `"resize"`
+  sweep and reopens via each panel's real entry point; restores must not
+  re-fire `onChange`/`onSelect` (use the widgets' `silent` params,
+  `toggle.restoreSlotIdentity`, `list.setSelectedIndex` — never
+  `selectItem`). A surface with NESTING restores the whole nesting path.
+- Keyboard control focus survives rebuilds by NAME:
+  `responsive.snapshotControlFocusName()`/`restoreControlFocusName()`
+  around any destroy+recreate; restore only after pages are re-shown.
+- Fixed-size widgets fit via a LOCAL effective uiscale
+  (`responsive.fitScale` against the reserved column/row/panel width);
+  row labels reserve a `LABEL_COLUMN_FRACTION` 0.35 column. Shrink a
+  box's font together with its box, never separately.
+- Panels sized as `BASE * uiscale` must cap width/height to the
+  framebuffer, and their content must derive from the panel's REAL bounds
+  (`panel.getContentBounds()`), never an independently recomputed value
+  that can drift. `scripts/ui/reserved_regions.lua` (pure) keeps popups
+  clear of toolbar clusters (`hud.getToolbarRects()`, `avoidReserved`,
+  `maxAvailableWidth`, `maxRightAnchoredWidth`, `findEscapes`).
+- zIndex ACCUMULATES through the parent chain (`elementPaintKey` sums up
+  `ueParent`) — leave wrapper/viewport elements at zIndex 0.
+- Resize ordering: hud rebuilds first; dependent surfaces (`popup`,
+  `unit_info_v2`) expose a separate `reflow()` called after it so they
+  never read stale hud geometry.
+
+---
+
+## Lua random streams (#1330)
+
+Enforced by hspec `--match "random stream ownership"`, which pairs
+behavioural isolation and per-instance-entropy cases with two source
+guards. CLAUDE.md keeps the two rules (no `math.randomseed` under
+`scripts/`; non-gameplay code keeps its own stream); this is the story
+behind them.
+
+A Lua state has exactly one `math.random` stream, and eleven gameplay
+modules draw from it (AI cadence, thoughts, mental state, wildlife,
+sleep, water scanning, location rolls). Its entropy is established once
+per state by `Lua.openlibs` in
+`Engine.Scripting.Lua.Thread.createLuaBackendState`, before
+`scripts/init.lua` loads. Reseeding replaces per-state entropy (clock
+AND state address) with the caller's choice, and two engines launched in
+the same second then share one simulation. `scripts/ui/randbox.lua` did
+exactly that, and also spent eight gameplay draws per suggested world
+seed, so clicking randomize shifted every later simulation decision.
+`scripts/ui/random.lua` (SplitMix64, seeded from the same time+address
+recipe Lua's own auto-seed uses) is the UI widget kit's own stream.
+
+---
+
+## World identity and language provenance (#707/#1092/#1101)
+
+`world.init(pageId, seed, worldSize, plateCount [, displayName[, gloss[,
+languageSeed[, languageVersion]]]])`. The optional identity (#707) is
+display text, immutable per page, persisted in saves, independent of
+pageId and save-slot name; `world.getIdentity(pageId)` reads it;
+`engine.listSaves()` exposes `worldName`/`worldGloss`.
+
+A name supplied with no languageSeed is a CUSTOM name and has NO
+language provenance (#1092) — `world.getLanguageProvenance(pageId)`
+returns nil for it, and `{ seed = "<decimal string>", version = N }`
+only for an identity built through the generated-name path (the seed is
+a STRING: a Word64 has no lossless Lua number). `languageSeed` (#1101)
+is that path: it states that displayName/gloss were RENDERED from that
+language, and is what makes the page's placed locations named in the
+same one. It is a decimal string; `languageVersion` defaults to the
+current generator. Provenance is never inferred: with no displayName
+there is no identity to attach it to, and a malformed seed or an
+unconstructible version is refused with a warning, leaving an ordinary
+custom name.
+
+---
+
+## Location and river naming (#1101/#1102)
+
+Enforced by hspec `--match "Location naming"` / `"River naming"` /
+`"River identity"`; `tools/river_naming_probe.py`,
+`tools/location_content_probe.py`. CLAUDE.md keeps the write-once rule,
+the no-invented-language rule and the checked-identity rule; this is
+the rest.
+
+A LOCATION's concept pools are DATA (`ldNaming`'s ordered, nonempty
+`heads`/`modifiers`, validated against `data/language/concepts.yaml` at
+load — an unknown id rejects the whole file rather than degrading to
+`ldLabel`); the engine has no `ldType`→concept mapping. RIVERS have no
+definition file, so their pools are in code (`riverHeadConcepts`:
+`RIVER`, `FORD`, `CROSSING`, `BAY`, `VALE`, `HOLLOW` — a NARROW head
+pool against a WIDE modifier pool of every catalogue concept with a
+modifier form, which is what makes a head morpheme recur across a map
+and in the world's own name). The expression is always `Modifier
+modifier head`, chosen deterministically from the entity's own stable id
+plus the language seed/version, never from hashmap order.
+
+River identity is `(WorldPageId, GeoFeatureId)`, reusing the id the
+timeline already allocated. `World.River.Identity` is the ONE place
+events are paired with features, and the pairing is CHECKED against
+source/mouth/flow before it is trusted — a violated invariant yields no
+id rather than a wrong one. Names live in a per-page `wgpRiverNames`
+keyed by `GeoFeatureId`, deliberately NOT on `PersistentFeature` (whose
+`GeoTimeline` is positionally serialized worldgen OUTPUT).
+`world.getRiverAt` is the minimal selected-segment→identity resolution.
+
+UI: `scripts/etymology_panel.lua` is the ONE panel all three entry
+points open, hosted by `scripts/name_plate.lua` on `hud.global_page`
+(NOT `world_page` — a plate on a band-swapped page is unhittable in the
+zoom map). `Language.Suggest` (#1106) is the one remaining copy of the
+profile+roots+catalogue resolution — fold it in rather than adding a
+fourth.
 
 ---
 
@@ -562,6 +907,151 @@ decodes with the source ABSENT, never inferred.
 
 ---
 
+## Location instances (#911)
+
+Enforced by hspec `--match "Location instance identity"` and
+`tools/location_content_probe.py`. CLAUDE.md keeps the
+placement-time-id, read-the-stored-values and one-way-lifecycle rules;
+this is the rest.
+
+An instance stores definition id, anchor, resolved absolute bounds,
+display name + optional gloss, a one-time content-spawn flag, and
+lifecycle `unknown → hinted → discovered → active → cleared → depleted`.
+`wgpLocationStamped` stays chunk-keyed (#424). Nothing drives an
+instance past `discovered`; `hinted` is deliberately unreachable but
+must NOT be deleted (the enum is positionally serialized and
+append-only).
+
+Queries: `world.listPlacedLocations([pageId])` (extended, not
+repurposed — `id` is still the DEFINITION id), `getLocationInstance`,
+`setLocationLifecycle`, `markLocationContentsSpawnedById`
+(`instance_id`/`lifecycle`/`name`/`contents_spawned` are the new
+fields); the coordinate-addressed `hasSpawnedLocationContents`/
+`markLocationContentsSpawned` remain compatibility wrappers resolving to
+the chunk's first instance.
+
+Persistence: `world-pages` v7, with a frozen v1 DTO whose per-chunk
+flags decode PENDING and resolve against the registry at the load path's
+content-validation stage (`resolveLegacyLocations`).
+
+---
+
+## Location discovery, map icons, and per-unit knowledge (#780/#781/#915)
+
+Enforced by `tools/location_content_probe.py`,
+`tools/location_embark_probe.py`,
+`tools/location_map_icon_asset_check.py`; hspec
+`--match "Location discovery"` / `"Location map icons"` /
+`"Unit.LineOfSight"` / `"unit location knowledge"`. Detail behind
+CLAUDE.md's entries:
+
+**Discovery (#780, sight-based since #1230).** Sight is
+`Unit.LineOfSight.visibleTilesOnPage` — the SAME calculation
+`unit.getVisibleTiles` runs (perception radius scaled by the page-local
+`nightPerceptionFactor`, 120° facing cone, terrain-Z occlusion) minus
+that query's `wmVisible` gate, which keeps reveal working on a
+loaded-but-hidden page while `unitVisibleTiles` still reports `[]`
+there. Terrain, clock and world size come from the RESOLVED page's own
+refs, never `activeWorldSizeChunks`. The two known distance-sensitive
+consumers that must pin the clock (a night-scaled radius is
+intentionally shorter): `scripts/unit_ai_water.lua`'s `scanForWater` and
+`tools/tutorial_probe.py`'s `sees_water`.
+
+**Map icons (#781/#1230).** The shared unknown icon is registered once
+under `locationUnknownIconTextureName`, independently of every
+definition; `cleared`/`depleted` darken RGB via `clearedIconTint` with
+the zoom-fade alpha preserved exactly in all six lifecycle cases. The
+dark tint is an explicit, enumerated exception to the no-tinting rule
+(`docs/expedition_gameplay_loop.md` D-16), confined to the icon quad's
+own `Vec4`.
+
+**Per-unit knowledge (#915).** Global lifecycle = "the player has
+mapped it"; `aiState[uid].knownLocations` = "this acolyte knows where it
+is". Both layers come from ONE containment enumeration in
+`Location.Discovery` (`findDiscoveries`/`findAwareness`), so they cannot
+drift; awareness additionally reports EVERY qualifying unit and ignores
+lifecycle, so a unit arriving at an already-mapped ruin still learns it.
+`world.getLocationAwareness()` walks every loaded page;
+`scripts/unit_ai.lua` ingests it BEFORE its pause guard. A memory whose
+`(page, id)` no longer resolves is a non-blocking diagnostic, scrubbed
+at reconcile. Radio sharing/range deliberately deferred.
+
+---
+
+## Tile-coordinate seam frame (#1175/#1230)
+
+Enforced by hspec `--match "World.Render.PickSeam"` /
+`"World.DesignationSeam"` / `"a seam-frame unit"`. The contract is also
+stated in full on `World.Render.HitTest`. CLAUDE.md keeps the
+canonical-coords rule, the rectangle exception and the lookup-wrap rule;
+this is the full enumeration.
+
+Chunks are STORED u-wrapped, so one physical tile has two names near
+the seam. Picking (`pickWorldTile` and every Lua caller it backs —
+`world.pickTile`/`pickPos`/`getHoverTile`/`getHoverPos`), designation
+maps, and every point read / mutation / cancellation — including the
+verbs a worker FINISHES a job with (`world.getDigInfoAt`/`digTile`,
+`harvestFlora`, `setVegAt`, `plantCropAt`/`plantRowCropAt`,
+`structure.place`/`hasAt`/`floorZAt`/`clear`, and
+`building.spawn`/`canPlaceAt`, whose footprint walk resolves each tile)
+— use CANONICAL coords and accept any alias, so pre-#1175 saved job
+coords need no migration.
+
+RECTANGLES are the exception: canonical is a STORAGE frame, not a
+geometry one, so a drag's second endpoint is re-expressed in the
+anchor's local alias frame (`localizeTileToAnchor`, shared by
+`World.Thread.Command.Cursor.Common.designateRect` and the `CursorQuads`
+previews; Lua `world.localizeTile` for `build_tool.lua`'s wire snap /
+occupancy scan) BEFORE any clamp/`min`/`max`, canonicalising per
+enumerated tile at lookup/storage only. Job-SELECTION ranges need that
+frame too — `construction.getPendingJobs` reports `lx`/`ly` beside
+canonical `x`/`y`, and `unit_ai_construct.lua` measures with those.
+Canonicalising one end alone MEASURED worse than seam-blind behaviour;
+don't.
+
+Terrain LOOKUPS take the same frame: `World.Tile.Types.lookupChunk`
+wraps nothing, so any consumer must `wrapChunkCoordU` first —
+`Unit.LineOfSight.tileTerrainZ` now does — a miss reads as "not loaded
+→ assume flat", which for occlusion means "nothing blocks". The
+chunk-init queue is wrapped at the drain. Where a tile is DRAWN is the
+separate `bestWrapOffset` axis (#1176). Away from the seam, and in
+arenas, every step is the identity. `world-activity` v1/v2 payloads are
+re-keyed on load.
+
+---
+
+## Position hold (#1216)
+
+Enforced by hspec `--match "position hold"` and
+`tools/position_hold_probe.py` (manual-only). CLAUDE.md keeps the
+trade-off statement, the one-constant rule and the create/clear summary;
+this is the full mechanism.
+
+`scripts/unit_ai_hold.lua`'s `hold_position` (anchored on
+`s.holdAnchor`) scores EXACTLY `unit_ai_combat.lua`'s
+`FOLLOW_COMMAND_UTILITY`, so the #306 ladder is reused rather than
+restated — every interrupt that could preempt the order (dire self
+survival, combat, treatment, a mental break) still preempts the hold and
+the unit walks BACK to its anchor afterwards, and everything the order
+outranked (wander, work entry and its in-progress locks, situational
+goals) still loses. Don't add a second constant.
+
+Only an ARRIVAL creates a hold — a `TASK_TIMEOUT_SEC` stall creates
+none — and only a PLAYER-intent move does: `commandMove(uid, x, y,
+speed, internal)`'s `internal` flag is what keeps
+`scripts/building_spawn.lua`'s portal walk-out from pinning a fresh
+acolyte. Only an ACCEPTED, EXPLICIT player command clears one
+(`commandMove`, a COMMITTED `commandAttack`, an accepted
+`commandPickup`/`commandTransferOrder`, a Mode A session, or
+`unitAi.releaseHold`) — a refused pickup and the AI's own emergent
+engage leave it standing. The walk home is charged against the same
+eligible-time stall budget the order was (§Commanded-order stall
+budget), so an unreachable anchor expires instead of re-pathing forever.
+Persisted via `lua.unit_ai` v6; v1-v5 decode as not-holding, never
+inferred.
+
+---
+
 ## Player transfers: the three player-facing modes
 
 Design authority for the *decisions* is
@@ -649,7 +1139,85 @@ stays `isPlayerCommandable` of the live faction, never a def allowlist.
   being a target is player-commandability and nothing else, so
   `escort_hold` is auto-prepended to EVERY species by
   `registerActions`. Every teardown path is the same coupled,
-  idempotent one, extended to the pair; only a resize is exempt.
+  idempotent one, extended to the pair; only a resize is exempt — the
+  full trigger list is the next subsection.
+
+### Mode A session failures (#1254, UIT-5B)
+
+Every way a session can be interrupted ends it through that ONE coupled
+teardown, and the module's job is to NOTICE each of them. The noticing
+splits by phase: while the pair is open the container window's own
+per-tick `stillThere` hook closes the level (and with it the session) on
+an endpoint that vanished, but a session spends its whole APPROACH with
+no window at all, so `transfer_session.update` — a real 0.2 s script
+tick, the cadence the container window already runs at — is the
+canonical liveness check and covers BOTH phases. Its rule is
+`staleReason`: either endpoint gone, the contract's own `eligible` gone
+(a demolished building, a unit that left the player's factions), or a
+UNIT endpoint whose pose is `dead` or `collapsed`. That last one cannot
+come from the contract — `Unit.Transfer.endpointEligible` is
+`uevCommandable` alone, so a corpse is a perfectly eligible endpoint by
+its lights — so it is tested here rather than widened there, and the
+RECOVERABLE poses (crawling, sleeping) are deliberately excluded: a
+session sits those out.
+
+A **new player order to a held unit** ends the session and then
+proceeds (signed off 2026-08-11 — player intent wins), through the one
+shared `notePlayerOrder` boundary called from the player's own ingress
+sites and NOWHERE else (`init_mouse.lua`'s right-click move order,
+`init_context_menu.lua`'s Attack / Pick up / Move here) — never from
+inside `unitAi.commandMove`/`commandAttack`/`commandPickup`, which
+`building_spawn.lua` and `unit_ai_combat.lua` also call for scripted and
+autonomous behaviour, and never from the escort's own approach. It runs
+BEFORE the command, since the teardown stops every unit it held.
+
+A zoom-band change or a HUD hide reaches the session through
+`scripts/ui/view_teardown.lua` (#156) rather than a one-off call —
+which is what covers the approach, where the container window's own
+entry has no window to close — while `"resize"` stays exempt. Exit to
+Menu keeps calling `clear` BEFORE `world.destroyAll`, so the release
+still reaches live entities. The SUCCESSFUL-load reset is the one path
+that stops neither unit, because its recorded uids no longer name those
+units — a durable Mode B order the unit is carrying survives every
+release untouched, since stopping is all a release does to either end.
+The teardown itself is step-isolated: the panels close first and each
+held unit is released independently, so a missing FIRST endpoint costs
+neither the other endpoint its release nor either panel its close.
+#1254's requirement 7 is per-REQUEST atomicity and nothing wider: a
+session owns no transaction, so ending one never rolls back a commit
+that already succeeded and can only ever land between two whole
+requests. Deliberately NOT added: a stall timer, and any handling of an
+endpoint that is merely unreachable or drifted — both are live and
+commandable, so neither is a session failure. Gate coverage: hspec
+`--match "Transfer context menu"` includes the escort session with the
+two-sided hold and every failure trigger above.
+
+---
+
+## Commanded-order stall budget (#920/#1291)
+
+Enforced by hspec `--match "commanded order stall budget"` and
+`tools/expedition_retrieval_probe.py` (manual-only). CLAUDE.md keeps
+the stall-not-trip-budget rule; this is the accounting.
+
+`pickup_timeout`/`TASK_TIMEOUT_SEC` reset on a new closest approach.
+Don't restore the from-`issuedAt`/`startedAt` shape — it capped ordered
+retrieval at ~21 tiles. Since #1291 they are spent in ELIGIBLE time only
+(`unit_ai_stall.lua`, which owns the accounting and `maintainTask`): an
+interval another action won (the #306 ladder's
+eating/drinking/refill/combat/`treat_ally`, or a `forage` that walks the
+unit AWAY), or one the AI never ticked through at all (collapse, an
+engine animation, a mental break, a load boundary — seen as a gap longer
+than `MAX_CHARGED_INTERVAL`), costs a pending order nothing, while the
+budget still ACCUMULATES across interruptions so no order becomes
+immortal.
+
+That state (`stalledFor`/`stallSeenAt` on the order) arrived in
+`lua.unit_ai` v5 (the component is at v6 since #1216, and every version
+from v1 is still an accepted input); a v1–v4 order carries the old
+absolute `progressAt` and is seeded from it on its first tick. The
+position-hold walk home (#1216) is charged against the same budget, so
+an unreachable anchor expires instead of re-pathing forever.
 
 ---
 
@@ -809,6 +1377,41 @@ frozen-DTO boundary's and `save_compat_audit.py`'s.
 
 ---
 
+## Config-writing tests: the isolation fixture (#1357)
+
+Enforced by hspec `--match "Settings Defaults keybind persistence"`
+(the isolation boundary itself, plus the player-facing Defaults
+write-through it must not weaken). CLAUDE.md keeps the rule — wrap
+`Test.Headless.Harness.Isolation.withIsolatedResourceRoot` AROUND
+`withHeadlessEngine`, outside never inside; this is why the fixture is
+built the way it is.
+
+It points the process cwd at a scratch root that symlinks every
+top-level checkout entry but owns a real COPY of `config/` — the one
+family production code writes into — so every cwd-relative write lands
+in a temp dir. Outside, never inside: engine init is itself a writer
+(`migrateLegacyConfig`, the notification-overrides materializer), so a
+fixture that intervened after the engine came up would already be too
+late. The checkout is only ever READ, so no crash can leave developer
+state half-restored.
+
+Two properties keep the fixture from deleting the wrong thing: the root
+is created FRESH and EXCLUSIVELY per invocation under a random name via
+`createDirectory` (a fixed path could already hold a symlink, and
+`doesDirectoryExist` follows one, so teardown would enumerate and
+recursively delete the TARGET's children), and "am I isolated?" is
+`isInsideIsolatedResourceRoot` — fixture-owned state checked against
+the real cwd, never a marker file, which any same-named file on disk
+could forge into skipping isolation entirely.
+
+The two suites that need it (`UI.ResponsiveMenus`,
+`UI.ResponsiveGameplay`, both reaching the write-through
+`settingsMenu.onDefaults()`) each carry a one-line in-suite guard
+asserting they run under it, because every other assertion in them
+passed while the developer's bindings were being replaced.
+
+---
+
 ## CLI value validation (#1191)
 
 Enforced by hspec `--match "App.Cli"` and `tools/preview_cli_probe.py`
@@ -827,6 +1430,30 @@ selected mode would ever consume the value.
 
 **`--region`'s exclusion** is deliberate and tracked: its identical silent
 default is `docs/code_health_findings.md` CH-67, sequenced after #1081.
+
+---
+
+## Debug-console listener policy (#1190)
+
+Enforced by hspec `--match "debug-console listener policy"` and
+`tools/debug_console_boot_probe.py` (CI-eligible). CLAUDE.md keeps the
+rule — `--headless`/`--offscreen` ABORT when the listener can't start;
+this is the detail.
+
+Those two modes have no window, so the console is their only
+interactive control surface. If the listener can't start — an occupied
+or unbindable port, or `--port 0` (issue #46's "no TCP listener at all"
+sentinel, which belongs to `--dump` alone) — the boot exits non-zero,
+prints no `READY` marker, names the mode / effective port / cause on
+stderr, and tears down what it had already built (the pre-thread Lua
+state, plus offscreen's input worker), each cleanup step announcing
+itself on stderr. `--dump`, `--graphical` and `--preview` keep their
+existing tolerance unchanged, port-0 behavior included.
+
+The per-mode decision is
+`Engine.Scripting.Lua.DebugServer.debugConsolePolicy`, keyed on
+`EngineConfig`'s `ecBootMode` — `ecHeadless` can't tell dump from
+headless and is `False` for offscreen.
 
 ---
 
@@ -852,7 +1479,18 @@ costs an open PR its approval.
 The rule — the primary checkout stays CLEAN, uncommitted work lives in
 the docs worktree, land with `tools/docs_land.sh` — stays in CLAUDE.md.
 
-`--autostash` is required there, not decorative. Should ITS restore
+The manual fallback, if the script itself is ever unusable:
+
+```bash
+cd "$DOCS_WT" && git add -- <paths> && git commit -m "…" \
+  && git fetch origin && git rebase --autostash origin/master \
+  && git push origin docs-wip:master
+```
+
+Landing ONE document while others are still half-written is the normal
+case, so the rebase must tolerate a dirty tree — a plain `git rebase`
+aborts with "cannot rebase: You have unstaged changes" and strands the
+landing. `--autostash` is required there, not decorative. Should ITS restore
 conflict, the damage is confined to this worktree and surfaces
 immediately in front of you — it cannot wedge the drainer, which is the
 whole point of doing the work here.

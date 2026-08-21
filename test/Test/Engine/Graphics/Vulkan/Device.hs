@@ -12,6 +12,7 @@ import Engine.Graphics.Vulkan.Device
 import Engine.Core.State
 import Engine.Core.Defaults
 import Engine.Core.Monad
+import Test.Engine.Graphics.Vulkan.Helpers (withTestInstance)
 import Data.IORef (newIORef)
 import Engine.Graphics.Window.Types
 import Vulkan.Core10
@@ -43,18 +44,22 @@ spec ∷ EngineEnv → EngineState → Spec
 spec env state = do
     describe "Vulkan Device" $ do
         it "can create a Vulkan device" $ do
-            runEngineTest env state $ do
-                (inst, _) ← createVulkanInstance defaultGraphicsConfig InstanceForWindow
-                (_, physDevs) ← enumeratePhysicalDevices inst
-                liftIO $ V.length physDevs `shouldSatisfy` (> 0)
-                
-                let physDev = V.head physDevs
-                
-                -- Create a surface for device creation
-                let win = case glfwWindow (graphicsState state) of
-                        Just (Window w) → w
-                        Nothing → error "Device spec: no GLFW window in state"
-                surface ← GLFW.createWindowSurface (Window win) inst
-                
-                (device, _) ← createVulkanDevice inst physDev (Just surface)
-                liftIO $ device `shouldSatisfy` (/= zero)
+            runEngineTest env state $
+                -- The instance scope encloses the surface and device
+                -- scopes, both of which register their own destruction
+                -- with allocResource, so the unwind is device, then
+                -- surface, then instance.
+                withTestInstance defaultGraphicsConfig InstanceForWindow $ \(inst, _) → do
+                    (_, physDevs) ← enumeratePhysicalDevices inst
+                    liftIO $ V.length physDevs `shouldSatisfy` (> 0)
+
+                    let physDev = V.head physDevs
+
+                    -- Create a surface for device creation
+                    let win = case glfwWindow (graphicsState state) of
+                            Just (Window w) → w
+                            Nothing → error "Device spec: no GLFW window in state"
+                    surface ← GLFW.createWindowSurface (Window win) inst
+
+                    (device, _) ← createVulkanDevice inst physDev (Just surface)
+                    liftIO $ device `shouldSatisfy` (/= zero)

@@ -149,6 +149,7 @@ python3 tools/world_check.py --quick
 echo "==> [18/19] probe runner self-tests"
 python3 tools/ci_probes.py --self-test
 python3 tools/ci_expensive_gates.py --self-test
+python3 tools/ci_docs_fast_path.py --self-test
 python3 tools/test_run_probes.py
 python3 tools/test_persistence_contract_sweep.py
 python3 tools/test_action_outcome_probe.py

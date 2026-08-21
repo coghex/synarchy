@@ -1,4 +1,12 @@
 {-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
+-- | Types the zoom RENDERER owns: baked render-ready entries, the quad
+--   cache and its camera snapshot, the atlas description, and the
+--   save-persisted map mode.
+--
+--   "World.ZoomMap.Cache" and its siblings BUILD the zoom cache at
+--   world-init time; this tree ("World.Render.Zoom.*") RENDERS from it.
+--   The cache's own output types live in "World.ZoomMap.Types" and are
+--   re-exported here unchanged for existing consumers.
 module World.Render.Zoom.Types
     ( ZoomChunkEntry(..)
     , ZoomCameraSnapshot(..)
@@ -13,11 +21,11 @@ module World.Render.Zoom.Types
 import UPrelude
 import GHC.Generics (Generic)
 import Data.Serialize (Serialize)
-import Control.DeepSeq (NFData(..))
 import qualified Data.Vector as V
 import Engine.Scene.Types.Batch (SortableQuad(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..))
 import Engine.Asset.Handle (TextureHandle(..))
+import World.ZoomMap.Types (ZoomChunkEntry(..), zoomTileSize)
 
 data ZoomMapMode = ZMDefault | ZMTemp | ZMSeaTemp | ZMPressure | ZMHumidity
                  | ZMPrecipitation | ZMPrecipType | ZMEvaporation
@@ -32,24 +40,6 @@ textToMapMode "map_preciptype" = ZMPrecipType
 textToMapMode "map_evaporation" = ZMEvaporation
 textToMapMode "map_seatemp" = ZMSeaTemp
 textToMapMode _          = ZMDefault
-
-data ZoomChunkEntry = ZoomChunkEntry
-    { zceChunkX   ∷ !Int       -- ^ Canonical chunk X
-    , zceChunkY   ∷ !Int       -- ^ Canonical chunk Y
-    , zceBaseGX   ∷ !Int
-    , zceBaseGY   ∷ !Int
-    , zceTexIndex ∷ !Word8     -- ^ Material ID (used to pick texture at render time)
-    , zceElev     ∷ !Int       -- ^ Elevation (used to pick texture at render time)
-    , zceIsOcean  ∷ !Bool      -- ^ Whether this chunk is ocean
-    , zceHasLava  ∷ !Bool      -- ^ Whether this chunk has lava (for zoom rendering)
-    , zceVegCategory ∷ !Word8  -- ^ Vegetation density category (0=none,1=sparse,2=medium,3=dense,4=marsh)
-    , zceHasIce  ∷ !Bool      -- ^ Whether this chunk has ice cover
-    } deriving (Show, Eq)
-instance NFData ZoomChunkEntry where
-    rnf (ZoomChunkEntry x y bgX bgY tex elev ocean lava veg ice) =
-        rnf x `seq` rnf y `seq` rnf bgX `seq` rnf bgY `seq`
-        rnf tex `seq` rnf elev `seq` rnf ocean `seq` rnf lava `seq`
-        rnf veg `seq` rnf ice
 
 data ZoomCameraSnapshot = ZoomCameraSnapshot
     { zcsPosition ∷ !(Float, Float)
@@ -89,9 +79,3 @@ data ZoomAtlasInfo = ZoomAtlasInfo
     , zaiHeight      ∷ !Int             -- ^ Atlas height in pixels
     , zaiChunksPerRow ∷ !Int            -- ^ Number of chunk tiles per atlas row
     } deriving (Show, Eq)
-
--- | Pixel size of each chunk tile in the zoom atlas.
---   Larger than chunkSize (16) to accommodate the isometric
---   diamond shape within a square texture tile.
-zoomTileSize ∷ Int
-zoomTileSize = 32
