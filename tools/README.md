@@ -727,7 +727,7 @@ pre-execution rejections (2), port exhaustion (3) and harness errors (4) — a
 malformed, truncated, duplicate, out-of-order or unclassifiable protocol
 event, which is never reported as a probe pass.
 
-### `probe_census.py` — the probe census (#1425, #1428)
+### `probe_census.py` — the probe census (#1425, #1428, #1492)
 
 Builds, validates and updates `docs/probe_census.json`, now
 `probe-census/v2`: every registered probe exactly once, with its script, its
@@ -774,15 +774,38 @@ outcomes and external artifact references are stored — no stdout, no protocol
 stream, no engine log. Exit codes: 2 for a missing or unusable docs worktree,
 1 for inventory drift and every controlled refusal.
 
-Declared schema validation (`jsonschema`) is #1492 and the cross-field
-invariants are #1493; this tool reads only the fields its own operations need.
+Shape validation is DECLARED, in `tools/probe_census_schema.json` — a JSON
+Schema 2020-12 document, self-checked against that draft when it loads, that
+describes the v1 seed, the v2 census and the incoming `probe-flake-result/v1`
+document alike. Every object in it is closed (`required` plus
+`additionalProperties: false`, with a nullable field REQUIRED and
+null-inclusive rather than optional), so a deleted field is a violation rather
+than an absence. The stored census is checked before any operation transforms
+it, an incoming result before one nested field of it is read, and the complete
+candidate immediately before the atomic replacement; each refusal names the
+offending JSON path and changes no bytes. `jsonschema` is therefore a required
+dependency, pinned in `tools/requirements-assets.txt` and repeated in
+`.github/ci/Dockerfile`: an absent one is a single loud error naming the
+install command, never a skipped check. `--print` is the exception that proves
+it validates nothing — it renders the live registry, reads and writes nothing,
+and stays dependency-free so a fresh checkout can run it.
+
+Still deliberately absent: the CROSS-FIELD invariants (#1493), and any
+requirement that the census AGREE with the live registry — complete-inventory
+drift stays `--validate`'s report and `--seed`'s repair, never a write
+precondition.
 
 Nothing at runtime reads it: `probe_flake.py` takes protocol status from its
 own in-repo `PROTOCOL_PROBES` and check identity from each probe's descriptor,
 so a checkout with no docs worktree behaves identically.
 
 `python3 tools/test_probe_census.py` is its deterministic, engine-free
-self-test.
+self-test. It drives the real checked-in schema — a valid census and result
+against every declared definition, each nullable field deleted, non-object
+per-run `checks` including truthy values, unexpected properties in every
+representative nested object, invalid enum/range/length values, non-finite
+numbers, and an environment where `jsonschema` is genuinely unimportable —
+asserting for each refusal that nothing was written.
 
 ### `probe_external_evidence.py` — the Codex `$test` record, read-only (#1432)
 

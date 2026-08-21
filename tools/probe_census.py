@@ -32,14 +32,27 @@ Only summarized outcomes and external artifact references live here.
 Raw stdout, protocol event streams and engine logs stay in the
 harness's artifact tree, outside every worktree.
 
-DECLARED SCHEMA VALIDATION IS NOT HERE. This module reads only the
-fields its own operations need, and refuses in a controlled way — no
-traceback, authoritative bytes untouched — when it cannot safely perform
-the requested action. Comprehensive shape/enum/range checking is #1492
-(a declared JSON Schema through `jsonschema`) and the cross-field
-invariants are #1493; a hand-edited document with a field removed,
-retyped, or made cross-field-inconsistent is deliberately NOT this
-module's problem.
+SHAPE VALIDATION IS DECLARED, NOT HAND-ROLLED (#1492). Every document
+this module reads or writes is checked against
+`tools/probe_census_schema.json`, a JSON Schema 2020-12 document that is
+itself self-checked against that draft on load: the stored census before
+any operation transforms it, the incoming `probe-flake-result/v1`
+document before one nested field of it is read, and the complete
+candidate census immediately before the atomic replacement installs it.
+The schema owns presence, closure, primitive type, enum, length and
+representable range; `_reject_non_finite` covers the one thing JSON
+Schema's numeric keywords cannot (`json.loads` accepts `NaN` and
+`Infinity`, and no comparison with a NaN is ever true). A violation is a
+controlled refusal naming the offending JSON path — never a traceback,
+never a partial write — and an absent `jsonschema` is ONE loud error
+carrying the install command, never a silently skipped check.
+
+What is deliberately still absent: the CROSS-FIELD invariants (#1493),
+and any requirement that the census agree with the live probe registry,
+which stays `validate_manifest`'s report and `--seed`'s repair. This is
+not an exhaustive corruption detector either — a hand-edited census is
+not an adversarial input class, and malformed state must fail SAFELY
+rather than exhaustively.
 
 The census lives in the worktree whose branch is `docs-wip` and is NOT
 published as part of this work, so it is resolved BY BRANCH the way
@@ -113,7 +126,24 @@ MANUAL_ONLY = "manual-only"
 LEGACY = "legacy"
 
 RESULT_SCHEMA = probe_flake.RESULT_SCHEMA
-RESULT_STATUSES = ("ok", "harness-error")
+# The admissible result statuses are the schema's `result_status`
+# definition, not a second constant here: `ingest_result` asks only
+# whether a validated status is the accepted one.
+ACCEPTED_STATUS = "ok"
+
+# The declared schema (#1492), beside this module rather than in the
+# docs worktree: it is the tool's own contract, and `--print` on a fresh
+# checkout must be able to reach it.
+SCHEMA_PATH = Path(__file__).resolve().parent / "probe_census_schema.json"
+INSTALL_HINT = "python3 -m pip install --user -r tools/requirements-assets.txt"
+# Each declared schema string, and the `$defs` entry that describes it.
+# The definitions cannot simply BE the schema strings: a JSON Pointer
+# treats `/` as a separator, so `#/$defs/probe-census/v2` names nothing.
+SCHEMA_DEFINITIONS = {
+    SEED_SCHEMA: "census_v1",
+    CENSUS_SCHEMA: "census_v2",
+    RESULT_SCHEMA: "flake_result_v1",
+}
 
 LOCK_SUFFIX = ".lock"
 LOCK_NOTE = (b"tools/probe_census.py holds a cross-process flock on this "
@@ -137,6 +167,226 @@ class CensusError(Exception):
 
 class DocsWorktreeMissing(Exception):
     """No worktree is on `docs-wip`; the caller must create one."""
+
+
+# ==========================================================================
+# Declared schema validation (#1492)
+# ==========================================================================
+#
+# One data file replaces the type, presence, closure, enum, length and
+# range checking a census validator would otherwise accumulate by hand.
+# The lesson is #1309's, recorded in CLAUDE.md after fourteen review
+# rounds on a hand-rolled format parser: depend on a library, or narrow
+# the promise. #1428 narrowed; this depends.
+#
+# Nothing here is cached across a missing dependency:
+# `_require_jsonschema` runs at every entry point BEFORE the caches are
+# consulted, so an environment without the library produces the same
+# loud refusal every time rather than a validator that, having once
+# worked, quietly enforces nothing.
+_SCHEMA_CACHE: dict = {}
+
+
+def _require_jsonschema():
+    """The validator library, or the one loud error that names its install.
+
+    A skipped check that prints a clean run is worse than no check at
+    all, so this is a hard failure with an actionable command — the rule
+    `pack_atlas.py` already applies to Pillow.
+    """
+    try:
+        import jsonschema  # noqa: PLC0415 - deliberately imported at use
+    except ImportError as error:
+        raise CensusError(
+            f"jsonschema is required to validate the census and could not be "
+            f"imported ({error}). Install the pinned toolchain with:\n"
+            f"  {INSTALL_HINT}") from None
+    return jsonschema
+
+
+def load_schema() -> dict:
+    """`tools/probe_census_schema.json`, parsed and self-checked.
+
+    The document must NAME its draft (`$schema`) and pass that draft's
+    own meta-schema check, so a schema edit that is not a valid schema
+    fails here rather than silently validating nothing: an unrecognized
+    `$schema` would otherwise fall back to whichever draft the installed
+    library happens to consider newest.
+
+    Every step is ordered so the NEXT one is safe to take. The root is
+    proved to be an object and its `$schema` proved to be a string
+    before `validator_for` is asked anything, because that helper
+    subscripts what it is given: a valid-JSON schema file that is a list
+    or a scalar would raise out of the library rather than refuse here,
+    and this module's whole promise is that it does not do that.
+    """
+    jsonschema = _require_jsonschema()
+    cached = _SCHEMA_CACHE.get("document")
+    if cached is not None:
+        return cached
+    try:
+        document = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    except OSError as error:
+        raise CensusError(
+            f"the census schema {SCHEMA_PATH} is unreadable ({error})") from None
+    except ValueError as error:
+        raise CensusError(
+            f"the census schema {SCHEMA_PATH} is not valid JSON: "
+            f"{error}") from None
+    if not isinstance(document, dict):
+        raise CensusError(
+            f"the census schema {SCHEMA_PATH} must be a JSON object, got "
+            f"{type(document).__name__}")
+    declared = document.get("$schema")
+    if not isinstance(declared, str):
+        raise CensusError(
+            f"the census schema {SCHEMA_PATH} does not identify a JSON Schema "
+            f"draft (`$schema` is {declared!r})")
+    factory = jsonschema.validators.validator_for(document, default=None)
+    if factory is None:
+        raise CensusError(
+            f"the census schema {SCHEMA_PATH} names {declared!r}, which is not "
+            f"a draft this jsonschema implements")
+    try:
+        factory.check_schema(document)
+    except jsonschema.exceptions.SchemaError as error:
+        raise CensusError(
+            f"the census schema {SCHEMA_PATH} is not a valid {declared} "
+            f"schema: {error.message}") from None
+    _SCHEMA_CACHE["document"] = document
+    return document
+
+
+def _validator(definition: str):
+    """A validator for one `$defs` entry, resolving `$ref`s in the file.
+
+    The whole schema document is kept as the resource — only a root
+    `$ref` is added — so every internal `#/$defs/...` reference still
+    resolves against the same base.
+    """
+    jsonschema = _require_jsonschema()
+    cached = _SCHEMA_CACHE.get(definition)
+    if cached is not None:
+        return cached
+    document = load_schema()
+    if definition not in (document.get("$defs") or {}):
+        raise CensusError(
+            f"the census schema {SCHEMA_PATH} declares no {definition!r} "
+            f"definition")
+    rooted = dict(document)
+    rooted["$ref"] = f"#/$defs/{definition}"
+    validator = jsonschema.validators.validator_for(document)(rooted)
+    _SCHEMA_CACHE[definition] = validator
+    return validator
+
+
+def _non_finite_paths(node, prefix: str = "$") -> list[str]:
+    """Every JSON path in `node` holding a NaN or an Infinity.
+
+    `isinstance(True, float)` is False, so booleans are not walked as
+    numbers.
+    """
+    if isinstance(node, float) and not math.isfinite(node):
+        return [prefix]
+    if isinstance(node, dict):
+        found: list[str] = []
+        for key, value in node.items():
+            found += _non_finite_paths(value, f"{prefix}.{key}")
+        return found
+    if isinstance(node, list):
+        found = []
+        for index, value in enumerate(node):
+            found += _non_finite_paths(value, f"{prefix}[{index}]")
+        return found
+    return []
+
+
+def _reject_non_finite(document, what: str) -> None:
+    """The one numeric hazard the declared bounds cannot express.
+
+    `json.loads` accepts Python's non-standard `NaN`, `Infinity` and
+    `-Infinity` spellings, so a hand-edited census really can hold one.
+    JSON Schema's `minimum`/`maximum` do not catch a NaN either — every
+    comparison with it is false, so it passes both bounds. The schema
+    therefore owns MAGNITUDE and this owns REPRESENTABILITY; together
+    they are what a `_float_safe` helper would have been, and
+    `render_manifest`'s `allow_nan=False` is the matching guarantee on
+    the way out.
+    """
+    offenders = _non_finite_paths(document)
+    if offenders:
+        raise CensusError(
+            f"{what} holds a non-finite number at {offenders[0]}; JSON has no "
+            f"NaN or Infinity, so it could never be read back")
+
+
+def validate_document(document, schema_name: str, what: str) -> None:
+    """`document` against one declared schema, or a controlled refusal.
+
+    The refusal names the offending JSON path and the violated rule, and
+    reports how many further violations were found without listing them:
+    a hand-edited census is not an adversarial input, so the first
+    actionable location is the useful diagnostic.
+    """
+    jsonschema = _require_jsonschema()
+    definition = SCHEMA_DEFINITIONS.get(schema_name)
+    if definition is None:
+        raise CensusError(
+            f"there is no declared schema named {schema_name!r} "
+            f"(expected one of {tuple(SCHEMA_DEFINITIONS)})")
+    _reject_non_finite(document, what)
+    validator = _validator(definition)
+    try:
+        errors = list(validator.iter_errors(document))
+    except Exception as error:  # noqa: BLE001 - see below
+        # A checked-in schema that PARSES and self-checks but cannot be
+        # APPLIED — an internal `$ref` naming nothing is the realistic
+        # way — is a repository defect, and this module's promise is a
+        # controlled refusal rather than a traceback out of a CI gate.
+        # The library raises this through its reference resolver, whose
+        # exception type is not part of its public surface, so the catch
+        # is by position rather than by class. `test_probe_census.py`
+        # applies every declared schema to a valid document, so the
+        # shipped schema cannot reach here unnoticed.
+        raise CensusError(
+            f"the census schema {SCHEMA_PATH} could not be applied to "
+            f"{what} ({type(error).__name__}: {error})") from None
+    if not errors:
+        return
+    # `best_match` weighs the violations rather than reporting whichever
+    # the walk reached first, so a document broken in several places
+    # names the most specific one.
+    best = jsonschema.exceptions.best_match(errors) or errors[0]
+    more = ("" if len(errors) == 1
+            else f" (and {len(errors) - 1} further violation(s))")
+    raise CensusError(
+        f"{what} does not match the declared {schema_name} schema: at "
+        f"{best.json_path}, {best.message}{more}")
+
+
+def validate_result(result) -> None:
+    """One `probe-flake-result/v1` document, before any field is read."""
+    validate_document(result, RESULT_SCHEMA, f"a {RESULT_SCHEMA} document")
+
+
+def validate_census(document, what: str) -> None:
+    """A STORED census, against the definition its own `schema` declares.
+
+    Both readable schemas are declared, so a v1 seed validates as a v1
+    seed and is then reported as schema drift (`--validate`) or answered
+    with `--seed` (every other operation) — never as corruption. The
+    discriminator itself cannot be a schema keyword: which definition
+    applies is the question the schema answers, not one it asks.
+    """
+    if not isinstance(document, dict):
+        raise CensusError(
+            f"{what} must be a JSON object, got {type(document).__name__}")
+    declared = document.get("schema")
+    if declared not in MIGRATABLE_SCHEMAS:
+        raise CensusError(
+            f"{what} declares schema {declared!r}, which is not one this tool "
+            f"can read (expected one of {MIGRATABLE_SCHEMAS})")
+    validate_document(document, declared, what)
 
 
 # ==========================================================================
@@ -176,16 +426,25 @@ def build_manifest() -> dict:
     }
 
 
-def render_manifest(manifest: dict | None = None) -> str:
+def render_manifest(manifest: dict | None = None,
+                    what: str = "the census") -> str:
     """The one deterministic, byte-stable serialization of a census.
 
     `sort_keys` is what makes the bytes a pure function of the content:
     the record blocks in #1428 enumerate required keys and their empty
     values, never a serialized key order.
+
+    `allow_nan=False` is the outbound half of `_reject_non_finite`: no
+    candidate may be written with a `NaN` or `Infinity` literal, which
+    every other JSON reader would reject. The explicit walk runs first
+    only to name the offending path, which the encoder's own message
+    does not.
     """
+    document = manifest if manifest is not None else build_manifest()
+    _reject_non_finite(document, what)
     try:
-        return json.dumps(manifest if manifest is not None else build_manifest(),
-                          indent=2, sort_keys=True) + "\n"
+        return json.dumps(document, indent=2, sort_keys=True,
+                          allow_nan=False) + "\n"
     except (TypeError, ValueError) as error:
         raise CensusError(f"census is not serializable as JSON: {error}") from None
 
@@ -197,10 +456,11 @@ def validate_manifest(manifest) -> list[str]:
     row whose script, classification or protocol status disagrees with
     `run_probes.PROBES`, `tools/ci_probes.py` and
     `probe_flake.PROTOCOL_PROBES`. Each row's `census` field is
-    deliberately tolerated and never inspected — census-record shape is
-    #1492's. A `probe-census/v1` document is reported here as schema
-    drift and is NOT migrated as a side effect; `--seed` is the only
-    operation that migrates.
+    deliberately never inspected here: record SHAPE is the declared
+    schema's, which `--validate` applies separately, and the two answer
+    different questions about the same file. A `probe-census/v1`
+    document is reported here as schema drift and is NOT migrated as a
+    side effect; `--seed` is the only operation that migrates.
     """
     problems: list[str] = []
     if not isinstance(manifest, dict):
@@ -287,9 +547,9 @@ def migrate_document(document) -> dict:
     registry, because the seeded document is migration INPUT.
 
     A v2 row missing its `census` field is left exactly as it is rather
-    than repaired: in a v2 document that is corruption for #1492 to
-    report, and silently inserting an empty record here would erase the
-    evidence on the next write.
+    than repaired: in a v2 document that is a declared-schema violation
+    for the validator to report, and silently inserting an empty record
+    here would erase the evidence on the next write.
     """
     entries = _rows(document, "census")
     schema = document.get("schema")
@@ -432,52 +692,18 @@ def target_row(document, probe: str, what: str) -> dict:
 
 
 def result_target(result) -> tuple[str, str]:
-    """The three fields `--record` must read to know what to do.
+    """The two fields `--record` dispatches on, from a VALIDATED result.
 
-    The top-level `schema`, the `probe` whose row it mutates — the
-    result document names its own row, which is why `--record` takes no
-    `--probe` and why the durable sample omits `probe` — and the
-    `status` that decides whether a sample is created. Any of the three
-    absent or unrecognized blocks the operation; in particular an
-    unrecognized `status` must NOT be logged as a non-accepted attempt.
-
-    These are discriminators the operation itself needs, not the
-    declared-schema validation surface deferred to #1492.
+    The `probe` whose row it mutates — the result document names its own
+    row, which is why `--record` takes no `--probe` and why the durable
+    sample omits `probe` — and the `status` that decides whether a
+    sample is created. That both are present, are strings, and spell
+    something recognized is the declared schema's promise (#1492), which
+    `record_result` has already required; an unrecognized `status`
+    therefore refuses before anything is logged, rather than being
+    logged as a non-accepted attempt.
     """
-    if not isinstance(result, dict):
-        raise CensusError(
-            f"a {RESULT_SCHEMA} document must be a JSON object, got "
-            f"{type(result).__name__}")
-    schema = result.get("schema")
-    if schema != RESULT_SCHEMA:
-        raise CensusError(
-            f"result schema is {schema!r}, expected {RESULT_SCHEMA!r}")
-    probe = result.get("probe")
-    if not isinstance(probe, str) or not probe:
-        raise CensusError(
-            f"result names no probe: `probe` is {probe!r}")
-    status = result.get("status")
-    if status not in RESULT_STATUSES:
-        raise CensusError(
-            f"result status {status!r} is not one of {RESULT_STATUSES}")
-    return probe, status
-
-
-def _field(result, name: str):
-    """One field the durable record is built from, or a refusal."""
-    if name not in result:
-        raise CensusError(
-            f"a {RESULT_SCHEMA} document with no {name!r} cannot be recorded")
-    return result[name]
-
-
-def _artifact_list(result):
-    values = _field(result, "retained_artifacts")
-    if not isinstance(values, list):
-        raise CensusError(
-            f"`retained_artifacts` must be a list, got "
-            f"{type(values).__name__}")
-    return list(values)
+    return result["probe"], result["status"]
 
 
 def summarize_sample(result: dict) -> dict:
@@ -489,56 +715,39 @@ def summarize_sample(result: dict) -> dict:
     and `invocation_dir` — are deliberately dropped, and no stdout, no
     protocol stream and no engine log ever enters the census.
     """
-    runs = _field(result, "runs")
-    if not isinstance(runs, list):
-        raise CensusError(f"`runs` must be a list, got {type(runs).__name__}")
-    summarized = []
-    for position, run in enumerate(runs):
-        if not isinstance(run, dict):
-            raise CensusError(f"run {position} is not an object")
-        try:
-            summarized.append({
-                "index": run["index"],
-                "outcome": run["outcome"],
-                "elapsed_seconds": run["elapsed_seconds"],
-                "artifact_dir": run.get("artifact_dir"),
-            })
-        except KeyError as error:
-            raise CensusError(
-                f"run {position} has no {error.args[0]!r} field") from None
-    counts = _field(result, "check_counts")
-    if not isinstance(counts, dict):
-        raise CensusError(
-            f"`check_counts` must be an object, got {type(counts).__name__}")
     return {
-        "timestamp_utc": _field(result, "timestamp_utc"),
-        "commit_sha": _field(result, "commit_sha"),
-        "requested_runs": _field(result, "requested_runs"),
-        "completed_runs": _field(result, "completed_runs"),
-        "runs": summarized,
-        "check_counts": _deep_copy(counts),
-        "failure_count": _field(result, "failure_count"),
-        "failure_rate": _field(result, "failure_rate"),
-        "timeout_count": _field(result, "timeout_count"),
-        "worst_elapsed_seconds": _field(result, "worst_elapsed_seconds"),
-        "total_elapsed_seconds": _field(result, "total_elapsed_seconds"),
-        "rts_capabilities": _field(result, "rts_capabilities"),
-        "peak_concurrency": _field(result, "peak_concurrency"),
-        "retained_artifacts": _artifact_list(result),
+        "timestamp_utc": result["timestamp_utc"],
+        "commit_sha": result["commit_sha"],
+        "requested_runs": result["requested_runs"],
+        "completed_runs": result["completed_runs"],
+        "runs": [{"index": run["index"],
+                  "outcome": run["outcome"],
+                  "elapsed_seconds": run["elapsed_seconds"],
+                  "artifact_dir": run["artifact_dir"]}
+                 for run in result["runs"]],
+        "check_counts": _deep_copy(result["check_counts"]),
+        "failure_count": result["failure_count"],
+        "failure_rate": result["failure_rate"],
+        "timeout_count": result["timeout_count"],
+        "worst_elapsed_seconds": result["worst_elapsed_seconds"],
+        "total_elapsed_seconds": result["total_elapsed_seconds"],
+        "rts_capabilities": result["rts_capabilities"],
+        "peak_concurrency": result["peak_concurrency"],
+        "retained_artifacts": list(result["retained_artifacts"]),
     }
 
 
 def summarize_attempt(result: dict, accepted: bool) -> dict:
     """The durable record of one well-formed ingestion attempt."""
     return {
-        "timestamp_utc": _field(result, "timestamp_utc"),
-        "commit_sha": _field(result, "commit_sha"),
-        "status": _field(result, "status"),
+        "timestamp_utc": result["timestamp_utc"],
+        "commit_sha": result["commit_sha"],
+        "status": result["status"],
         "accepted": accepted,
-        "requested_runs": _field(result, "requested_runs"),
-        "completed_runs": _field(result, "completed_runs"),
-        "error": result.get("error"),
-        "retained_artifacts": _artifact_list(result),
+        "requested_runs": result["requested_runs"],
+        "completed_runs": result["completed_runs"],
+        "error": result["error"],
+        "retained_artifacts": list(result["retained_artifacts"]),
     }
 
 
@@ -559,7 +768,7 @@ def ingest_result(document: dict, result) -> tuple[dict, str]:
     probe, status = result_target(result)
     entries = _rows(document, "census")
     target_row(document, probe, "--record")
-    accepted = status == "ok"
+    accepted = status == ACCEPTED_STATUS
     sample = summarize_sample(result) if accepted else None
     attempt = summarize_attempt(result, accepted)
     commit = attempt["commit_sha"]
@@ -596,8 +805,8 @@ def set_policy(document: dict, probe: str, *,
     (#1479). Every unrelated policy field and all measurement history
     are left exactly as they were.
 
-    This module stores the policy it is given: range and
-    justification-policy enforcement are #1430's and #1492's.
+    This module stores the policy it is given, within the ranges the
+    declared schema admits; CHOOSING a value is #1430's.
     """
     entries = _rows(document, "census")
     target_row(document, probe, "a policy update")
@@ -889,11 +1098,12 @@ def _entry_map(document) -> dict:
 def _sample_total(census) -> int:
     """Every retained sample a census record holds, current and archived.
 
-    Counts only what is countable and never raises: this runs on STORED
-    state, and a cohort whose `samples` is not a list is a shape for
-    #1492 to report, not something the preservation check should crash
-    on. Tolerating it costs nothing — a list that BECOMES uncountable
-    still reads as a drop from its old length, which is reported.
+    Counts only what is countable and never raises. The declared schema
+    now refuses a cohort whose `samples` is not a list before this ever
+    sees one, so the tolerance is no longer load-bearing for STORED
+    state — but it is kept, because this also runs over the CANDIDATE,
+    which the schema has not yet checked at that point, and a list that
+    BECOMES uncountable still reads as a drop from its old length.
     """
     if not isinstance(census, dict):
         return 0
@@ -959,8 +1169,9 @@ def _check_preserved(before, after, touched) -> list[str]:
     JSON serialization necessarily rewrites the whole file, so this is
     what makes "changes only the affected probe's record" real. It
     compares the candidate against the document it would replace and
-    knows nothing about field shapes — this is the issue's preservation
-    contract, not the schema validation deferred to #1492.
+    knows nothing about field shapes — this is the preservation
+    contract, a different question from the declared schema validation
+    that brackets it.
 
     `touched` maps a probe key to the aspects its operation may change
     (`"policy"`, `"measurements"`), or is `TOUCH_ANY` for `--seed`.
@@ -1092,16 +1303,26 @@ def update(path: Path, mutate) -> dict:
     replacement, and the bytes that are checked are exactly the bytes
     installed.
 
-    Any failure before `os.replace` — a refusing mutation, an
-    unserializable candidate, a preservation violation, a staging write
-    that dies — leaves the old authoritative bytes untouched.
+    Declared schema validation (#1492) brackets the mutation: the stored
+    document is checked BEFORE `mutate` transforms it, and the complete
+    candidate is checked immediately before the replacement — against
+    the serialized bytes, so what is validated is exactly what a later
+    reader will parse.
+
+    Any failure before `os.replace` — a schema violation on either side,
+    a refusing mutation, an unserializable candidate, a preservation
+    violation, a staging write that dies — leaves the old authoritative
+    bytes untouched.
     """
     path = Path(path)
     with _locked(path):
         before = read_for_update(path)
+        if before is not None:
+            validate_census(before, f"census {path}")
         try:
             candidate, touched = mutate(before)
-            payload = render_manifest(candidate).encode("utf-8")
+            payload = render_manifest(
+                candidate, f"the candidate census for {path}").encode("utf-8")
             # Compare against the bytes a later reader will see, not the
             # in-memory object that produced them.
             installed = json.loads(payload.decode("utf-8"))
@@ -1117,14 +1338,25 @@ def update(path: Path, mutate) -> dict:
             # state reaches all three. A structural or type error met
             # while performing the operation becomes a controlled
             # refusal instead of a traceback. It is not schema
-            # validation — it reports only what actually blocked this
-            # operation, and #1492/#1493 still own finding the rest.
+            # validation — the declared schema owns shape on both
+            # sides of this, and #1493 owns the cross-field invariants;
+            # this reports only what actually blocked the operation.
             raise CensusError(
                 f"census {path} is structurally malformed for this operation "
                 f"({type(error).__name__}: {error})") from None
         if problems:
             raise CensusError("refusing to install this candidate census: " +
                               "; ".join(problems[:5]))
+        # The last gate before the replacement. It runs AFTER the
+        # preservation comparison so a candidate that both loses data
+        # and violates the schema reports the loss, which is the more
+        # actionable of the two, and it validates the SERIALIZED bytes
+        # rather than the object that produced them. A candidate is
+        # always the CURRENT schema whatever the stored document was, so
+        # the definition is named rather than rediscovered from the
+        # candidate's own field.
+        validate_document(installed, CENSUS_SCHEMA,
+                          f"the candidate census for {path}")
         _clear_staging(path.parent)
         if path.exists() and path.read_bytes() == payload:
             # A drift-free `--seed` is genuinely a no-op: leave the file,
@@ -1150,7 +1382,15 @@ def ensure_document(path: Path) -> dict:
 
 
 def record_result(path: Path, result) -> str:
-    """Ingest one `probe-flake-result/v1` document. Returns the probe."""
+    """Ingest one `probe-flake-result/v1` document. Returns the probe.
+
+    The result is validated against its declared schema HERE — before
+    the census is locked, and so before one nested ingestion field is
+    read. That ordering is what makes `runs[i].checks` safe to reach at
+    all: a truthy non-object there used to raise from inside the
+    transaction rather than refuse in front of it.
+    """
+    validate_result(result)
     touched: list[str] = []
 
     def mutate(before):
@@ -1340,7 +1580,12 @@ def main(argv: list[str] | None = None) -> int:
             record_policy(path, args.probe, **fields)
             print(f"updated the census record for {args.probe} in {path}")
             return 0
-        problems = validate_manifest(load(path))
+        document = load(path)
+        # Shape first, then inventory: a document that is not a census
+        # at all should say so, rather than being reported as ninety
+        # missing probes.
+        validate_census(document, f"census {path}")
+        problems = validate_manifest(document)
     except DocsWorktreeMissing as error:
         print(f"probe_census: {error}", file=sys.stderr)
         return 2

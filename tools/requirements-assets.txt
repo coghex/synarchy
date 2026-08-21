@@ -1,8 +1,16 @@
-# Pinned Python toolchain for the unit-asset tools (#1257 inventory
-# validator, #1258 atlas compiler, #1311 frame-content validation) —
-# tools/pack_atlas.py. BOTH pins are required to validate, not only to
-# compile: since #1311 the inventory gate decodes every declared frame,
-# and an absent Pillow is a reported error rather than a skipped check.
+# Pinned Python toolchain for the repository's Python gates. It began as
+# the unit-asset toolchain (#1257 inventory validator, #1258 atlas
+# compiler, #1311 frame-content validation) and now covers the probe
+# census as well (#1492), so it is the shared dependency inventory
+# rather than one tool's.
+#
+# Nothing here is optional at run time. PyYAML and Pillow are both
+# required to VALIDATE, not only to compile: since #1311 the inventory
+# gate decodes every declared frame, and an absent Pillow is a reported
+# error rather than a skipped check. jsonschema is the same rule for
+# tools/probe_census.py — a validator that quietly enforces nothing is
+# worse than no validator, so its absence is one loud error naming this
+# file rather than a clean run.
 #
 # `docs/texture_infrastructure.md` P-3 requires the compiler's versions
 # to be pinned and reproducible from a fresh checkout, because compiled
@@ -13,9 +21,9 @@
 # exactly these pins, and tools/test_pack_atlas.py fails if the two ever
 # disagree — so there is one place to change a version, not two.
 #
-# Validation does NOT require this exact toolchain. It decodes rather
-# than encodes, and every digest the index records is over canonical
-# decoded RGBA8 samples rather than encoded file bytes, so any
+# ASSET validation does NOT require this exact toolchain. It decodes
+# rather than encodes, and every digest the index records is over
+# canonical decoded RGBA8 samples rather than encoded file bytes, so any
 # reasonably recent Pillow verifies a committed atlas correctly; the
 # pin is about reproducing bytes, not about trusting them.
 #
@@ -23,3 +31,4 @@
 #
 PyYAML==6.0.2
 Pillow==11.3.0
+jsonschema==4.26.0

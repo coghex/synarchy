@@ -1,0 +1,307 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/coghex/synarchy/blob/master/tools/probe_census_schema.json",
+  "title": "The probe census and the flake-harness result it ingests",
+  "$comment": "The three ROOT definitions are `census_v1`, `census_v2` and `flake_result_v1`; tools/probe_census.py maps each declared schema string to one of them. They are deliberately not named after the schema strings themselves, because a JSON Pointer treats `/` as a separator and `#/$defs/probe-census/v2` would name nothing.",
+  "description": "The declared shape of every document tools/probe_census.py reads or writes (#1492). It replaces hand-rolled type, presence, closed-object, enum, length and range checking; it deliberately declares NO cross-field invariant (#1493) and no parity with the live probe registry, which stays validate_manifest's report and --seed's repair. Every object here is closed: explicit `required` plus `additionalProperties: false`, with a nullable field REQUIRED and null-inclusive rather than optional, so deleting one is a violation rather than an absence. Enums are spelled as one-element `enum` rather than `const` on purpose: the library's const message names only the value it EXPECTED, while enum names the offending one.",
+
+  "$defs": {
+    "census_v1": {
+      "$comment": "#1425's seed: the inventory alone, with no census record. Declared so --seed can validate what it migrates FROM, and so a stored v1 census is reported as schema drift rather than as corruption.",
+      "type": "object",
+      "required": ["schema", "probes"],
+      "additionalProperties": false,
+      "properties": {
+        "schema": {"enum": ["probe-census/v1"]},
+        "probes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "script", "classification", "protocol"],
+            "additionalProperties": false,
+            "properties": {
+              "key": {"$ref": "#/$defs/probe_key"},
+              "script": {"$ref": "#/$defs/script_name"},
+              "classification": {"$ref": "#/$defs/classification"},
+              "protocol": {"$ref": "#/$defs/protocol_status"}
+            }
+          }
+        }
+      }
+    },
+
+    "census_v2": {
+      "$comment": "#1428's record: the same inventory, each row carrying its census.",
+      "type": "object",
+      "required": ["schema", "probes"],
+      "additionalProperties": false,
+      "properties": {
+        "schema": {"enum": ["probe-census/v2"]},
+        "probes": {"type": "array", "items": {"$ref": "#/$defs/inventory_row"}}
+      }
+    },
+
+    "inventory_row": {
+      "type": "object",
+      "required": ["key", "script", "classification", "protocol", "census"],
+      "additionalProperties": false,
+      "properties": {
+        "key": {"$ref": "#/$defs/probe_key"},
+        "script": {"$ref": "#/$defs/script_name"},
+        "classification": {"$ref": "#/$defs/classification"},
+        "protocol": {"$ref": "#/$defs/protocol_status"},
+        "census": {"$ref": "#/$defs/census_record"}
+      }
+    },
+
+    "census_record": {
+      "$comment": "Exactly the six fields probe_census.empty_census() writes.",
+      "type": "object",
+      "required": ["acceptable_failures", "acceptable_failures_justification",
+                   "estimated_worst_case_seconds", "current", "history",
+                   "attempts"],
+      "additionalProperties": false,
+      "properties": {
+        "acceptable_failures": {
+          "$comment": "X. Nullable until a maintainer sets one; choosing it is #1430's.",
+          "type": ["integer", "null"], "minimum": 0, "maximum": 1000000
+        },
+        "acceptable_failures_justification": {
+          "type": ["string", "null"], "maxLength": 4000
+        },
+        "estimated_worst_case_seconds": {
+          "$comment": "Supplied metadata, distinct from a sample's OBSERVED worst_elapsed_seconds.",
+          "type": ["number", "null"], "minimum": 0, "maximum": 1000000000
+        },
+        "current": {
+          "$comment": "The current commit cohort, or null when nothing has been measured. Spelled as if/else rather than oneOf so a malformed cohort reports the field that is actually wrong instead of `is not valid under any of the given schemas`.",
+          "if": {"type": "null"},
+          "then": true,
+          "else": {"$ref": "#/$defs/cohort"}
+        },
+        "history": {"type": "array", "items": {"$ref": "#/$defs/cohort"}},
+        "attempts": {"type": "array", "items": {"$ref": "#/$defs/attempt"}}
+      }
+    },
+
+    "cohort": {
+      "$comment": "One commit's accumulated samples. Append-only; the writer never rewrites one.",
+      "type": "object",
+      "required": ["commit_sha", "samples"],
+      "additionalProperties": false,
+      "properties": {
+        "commit_sha": {"$ref": "#/$defs/commit_sha"},
+        "samples": {"type": "array", "items": {"$ref": "#/$defs/sample"}}
+      }
+    },
+
+    "sample": {
+      "$comment": "Exactly what probe_census.summarize_sample() keeps: summarized outcomes and artifact REFERENCES. Every producer-only field is absent by closure, not by an exclusion list.",
+      "type": "object",
+      "required": ["timestamp_utc", "commit_sha", "requested_runs",
+                   "completed_runs", "runs", "check_counts", "failure_count",
+                   "failure_rate", "timeout_count", "worst_elapsed_seconds",
+                   "total_elapsed_seconds", "rts_capabilities",
+                   "peak_concurrency", "retained_artifacts"],
+      "additionalProperties": false,
+      "properties": {
+        "timestamp_utc": {"$ref": "#/$defs/timestamp_utc"},
+        "commit_sha": {"$ref": "#/$defs/commit_sha"},
+        "requested_runs": {"$ref": "#/$defs/count"},
+        "completed_runs": {"$ref": "#/$defs/count"},
+        "runs": {"type": "array", "items": {"$ref": "#/$defs/sample_run"}},
+        "check_counts": {"$ref": "#/$defs/check_counts"},
+        "failure_count": {"$ref": "#/$defs/count"},
+        "failure_rate": {"$ref": "#/$defs/rate"},
+        "timeout_count": {"$ref": "#/$defs/count"},
+        "worst_elapsed_seconds": {"$ref": "#/$defs/seconds"},
+        "total_elapsed_seconds": {"$ref": "#/$defs/seconds"},
+        "rts_capabilities": {"$ref": "#/$defs/capabilities"},
+        "peak_concurrency": {"$ref": "#/$defs/capabilities"},
+        "retained_artifacts": {"$ref": "#/$defs/artifact_paths"}
+      }
+    },
+
+    "sample_run": {
+      "$comment": "One run as the census keeps it: the producer's `port` and per-run `checks` map are dropped.",
+      "type": "object",
+      "required": ["index", "outcome", "elapsed_seconds", "artifact_dir"],
+      "additionalProperties": false,
+      "properties": {
+        "index": {"$ref": "#/$defs/count"},
+        "outcome": {"$ref": "#/$defs/run_outcome"},
+        "elapsed_seconds": {"$ref": "#/$defs/seconds"},
+        "artifact_dir": {"$ref": "#/$defs/artifact_path_or_null"}
+      }
+    },
+
+    "attempt": {
+      "$comment": "Exactly what probe_census.summarize_attempt() keeps: one well-formed ingestion attempt, accepted or not.",
+      "type": "object",
+      "required": ["timestamp_utc", "commit_sha", "status", "accepted",
+                   "requested_runs", "completed_runs", "error",
+                   "retained_artifacts"],
+      "additionalProperties": false,
+      "properties": {
+        "timestamp_utc": {"$ref": "#/$defs/timestamp_utc"},
+        "commit_sha": {"$ref": "#/$defs/commit_sha"},
+        "status": {"$ref": "#/$defs/result_status"},
+        "accepted": {"type": "boolean"},
+        "requested_runs": {"$ref": "#/$defs/count"},
+        "completed_runs": {"$ref": "#/$defs/count"},
+        "error": {"$ref": "#/$defs/error_text"},
+        "retained_artifacts": {"$ref": "#/$defs/artifact_paths"}
+      }
+    },
+
+    "flake_result_v1": {
+      "$comment": "The INGESTION document, exactly as probe_flake.Measurement.to_document() writes it. Declared here rather than in tools/probe_flake.py, which is out of scope for #1492: this is the consumer's intake contract.",
+      "type": "object",
+      "required": ["schema", "probe", "status", "error", "requested_runs",
+                   "completed_runs", "runs", "error_run", "checks",
+                   "check_counts", "failure_count", "failure_rate",
+                   "timeout_count", "worst_elapsed_seconds",
+                   "total_elapsed_seconds", "timestamp_utc", "commit_sha",
+                   "rts_capabilities", "peak_concurrency", "artifact_root",
+                   "invocation_dir", "retained_artifacts"],
+      "additionalProperties": false,
+      "properties": {
+        "schema": {"enum": ["probe-flake-result/v1"]},
+        "probe": {"$ref": "#/$defs/probe_key"},
+        "status": {"$ref": "#/$defs/result_status"},
+        "error": {"$ref": "#/$defs/error_text"},
+        "requested_runs": {"$ref": "#/$defs/count"},
+        "completed_runs": {"$ref": "#/$defs/count"},
+        "runs": {"type": "array", "items": {"$ref": "#/$defs/result_run"}},
+        "error_run": {
+          "$comment": "The one run whose protocol stream could not be trusted, or null. Never a member of `runs`, and never a fourth probe outcome. if/else for the same reason as `current`.",
+          "if": {"type": "null"},
+          "then": true,
+          "else": {"$ref": "#/$defs/harness_error_run"}
+        },
+        "checks": {
+          "$comment": "The probe's own check descriptor: ordered id/label pairs.",
+          "type": "array", "items": {"$ref": "#/$defs/check_descriptor"}
+        },
+        "check_counts": {"$ref": "#/$defs/check_counts"},
+        "failure_count": {"$ref": "#/$defs/count"},
+        "failure_rate": {"$ref": "#/$defs/rate"},
+        "timeout_count": {"$ref": "#/$defs/count"},
+        "worst_elapsed_seconds": {"$ref": "#/$defs/seconds"},
+        "total_elapsed_seconds": {"$ref": "#/$defs/seconds"},
+        "timestamp_utc": {"$ref": "#/$defs/timestamp_utc"},
+        "commit_sha": {"$ref": "#/$defs/commit_sha"},
+        "rts_capabilities": {"$ref": "#/$defs/capabilities"},
+        "peak_concurrency": {"$ref": "#/$defs/capabilities"},
+        "artifact_root": {"$ref": "#/$defs/artifact_path"},
+        "invocation_dir": {"$ref": "#/$defs/artifact_path"},
+        "retained_artifacts": {"$ref": "#/$defs/artifact_paths"}
+      }
+    },
+
+    "result_run": {
+      "$comment": "One valid run of the harness. `checks` is the per-run check map; declaring it an OBJECT is what refuses the truthy non-dict that used to raise AttributeError.",
+      "type": "object",
+      "required": ["index", "port", "outcome", "elapsed_seconds", "checks",
+                   "artifact_dir"],
+      "additionalProperties": false,
+      "properties": {
+        "index": {"$ref": "#/$defs/count"},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "outcome": {"$ref": "#/$defs/run_outcome"},
+        "elapsed_seconds": {"$ref": "#/$defs/seconds"},
+        "checks": {"$ref": "#/$defs/run_checks"},
+        "artifact_dir": {"$ref": "#/$defs/artifact_path_or_null"}
+      }
+    },
+
+    "harness_error_run": {
+      "$comment": "Structurally a run, but carrying the one outcome `runs` may never hold.",
+      "type": "object",
+      "required": ["index", "port", "outcome", "elapsed_seconds", "checks",
+                   "artifact_dir"],
+      "additionalProperties": false,
+      "properties": {
+        "index": {"$ref": "#/$defs/count"},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "outcome": {"enum": ["HARNESS_ERROR"]},
+        "elapsed_seconds": {"$ref": "#/$defs/seconds"},
+        "checks": {"$ref": "#/$defs/run_checks"},
+        "artifact_dir": {"$ref": "#/$defs/artifact_path_or_null"}
+      }
+    },
+
+    "check_descriptor": {
+      "type": "object",
+      "required": ["id", "label"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/$defs/check_id"},
+        "label": {"type": "string", "maxLength": 512}
+      }
+    },
+
+    "run_checks": {
+      "$comment": "check id -> that run's result for it.",
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/check_id"},
+      "additionalProperties": {"$ref": "#/$defs/check_result"}
+    },
+
+    "check_counts": {
+      "$comment": "check id -> its PASS/FAIL/MISSING tally across the measurement.",
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/check_id"},
+      "additionalProperties": {"$ref": "#/$defs/check_tally"}
+    },
+
+    "check_tally": {
+      "type": "object",
+      "required": ["PASS", "FAIL", "MISSING"],
+      "additionalProperties": false,
+      "properties": {
+        "PASS": {"$ref": "#/$defs/count"},
+        "FAIL": {"$ref": "#/$defs/count"},
+        "MISSING": {"$ref": "#/$defs/count"}
+      }
+    },
+
+    "probe_key": {"type": "string", "minLength": 1, "maxLength": 128},
+    "script_name": {"type": "string", "minLength": 1, "maxLength": 256},
+    "check_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "classification": {"enum": ["ci-eligible", "manual-only"]},
+    "protocol_status": {
+      "$comment": "probe_flake.protocol_status()'s two answers today. A future probe-result version is a deliberate edit here, not something to leave open.",
+      "enum": ["legacy", "probe-result/v1"]
+    },
+    "result_status": {"enum": ["ok", "harness-error"]},
+    "check_result": {"enum": ["PASS", "FAIL", "MISSING"]},
+    "run_outcome": {
+      "$comment": "The three outcomes a VALID run may report. HARNESS_ERROR is not one: it labels error_run alone.",
+      "enum": ["PASS", "FAIL", "TIMEOUT"]
+    },
+    "commit_sha": {
+      "$comment": "A 40-hex commit, or the literal `unknown` probe_flake records when git could not be consulted.",
+      "type": "string", "minLength": 1, "maxLength": 64
+    },
+    "timestamp_utc": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "count": {"type": "integer", "minimum": 0, "maximum": 1000000},
+    "capabilities": {
+      "$comment": "RTS capabilities and peak concurrency. Positive is what the producer guarantees: probe_flake refuses --rts-caps below 1 and --runs below 1, and the concurrency registry floors its own count at 1.",
+      "type": "integer", "minimum": 1, "maximum": 1024
+    },
+    "rate": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+    "seconds": {"type": "number", "minimum": 0, "maximum": 1000000000},
+    "error_text": {"type": ["string", "null"], "maxLength": 8000},
+    "artifact_path": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "artifact_path_or_null": {
+      "type": ["string", "null"], "minLength": 1, "maxLength": 4096
+    },
+    "artifact_paths": {
+      "type": "array", "items": {"$ref": "#/$defs/artifact_path"}
+    }
+  }
+}
