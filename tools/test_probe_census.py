@@ -28,6 +28,7 @@ Exit codes: 0 = all tests passed, 1 = one or more failed.
 from __future__ import annotations
 
 import copy
+import itertools
 import json
 import os
 import shutil
@@ -1091,6 +1092,207 @@ def test_preservation_guard() -> None:
 
 
 # ==========================================================================
+# The adversarial sweep
+# ==========================================================================
+DELETE = object()
+
+# Retyped to every JSON shape the field could plausibly be confused
+# with, plus removal. `inf`/`nan` are here because `json.loads` accepts
+# Python's non-standard spellings, so a census really can hold one.
+FUZZ_VALUES = (None, 0, 5, -1, 1.5, "", "x", True, [], {}, [5], {"a": 1},
+               [[]], float("inf"), float("nan"), DELETE)
+
+# Producer-only fields `Measurement.to_document` adds. None may ride
+# into an ACCEPTED census, whatever the rest of the document looks like.
+PRODUCER_ONLY = ("port", "error_run", "artifact_root", "invocation_dir",
+                 "label")
+
+
+def _locations(node, prefix=()):
+    """Every addressable location in a JSON document, depth first."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield prefix + (key,)
+            yield from _locations(value, prefix + (key,))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield prefix + (index,)
+            yield from _locations(value, prefix + (index,))
+
+
+def _replace(document, path, value):
+    """Set (or DELETE) one location. False when the path is unreachable."""
+    node = document
+    try:
+        for step in path[:-1]:
+            node = node[step]
+        if value is DELETE:
+            if isinstance(node, dict):
+                node.pop(path[-1], None)
+            else:
+                node.pop(path[-1])
+        else:
+            node[path[-1]] = value
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return False
+    return True
+
+
+def rich_census() -> dict:
+    """A v2 census with real accumulated data on its first row."""
+    sample = probe_census.summarize_sample(result_document())
+    attempt = probe_census.summarize_attempt(result_document(), True)
+
+    def row(key, census):
+        return {"key": key, "script": f"{key}_probe.py",
+                "classification": "manual-only", "protocol": "legacy",
+                "census": census}
+
+    return {
+        "schema": "probe-census/v2",
+        "probes": [
+            row("alpha", {"acceptable_failures": 2,
+                          "acceptable_failures_justification": "two races",
+                          "estimated_worst_case_seconds": 480,
+                          "current": {"commit_sha": COMMIT_A,
+                                      "samples": [copy.deepcopy(sample)]},
+                          "history": [{"commit_sha": COMMIT_B,
+                                       "samples": [copy.deepcopy(sample)]}],
+                          "attempts": [copy.deepcopy(attempt)]}),
+            row("beta", probe_census.empty_census()),
+            row("gamma", probe_census.empty_census()),
+        ],
+    }
+
+
+def test_adversarial_malformed_input() -> None:
+    """Retype and delete EVERY field of both input surfaces (#1503).
+
+    Five review rounds each surfaced one more parseable-but-malformed
+    input that crashed an operation or half-wrote through it, one field
+    at a time. This sweep is what closes the class rather than the
+    instance: it drives every operation over every location of a stored
+    census and of a result document, and holds all three promises at
+    once — no uncontrolled exception, no byte changed by a refusal, and
+    no producer-only field in an accepted record.
+
+    It is exhaustive rather than random, so it is fully deterministic:
+    the locations come from insertion-ordered dicts and the values from
+    a fixed tuple. What it does NOT assert is that a malformed document
+    is REJECTED — an accepted one is #1492's declared schema to catch,
+    and asserting it here would be reintroducing exactly the surface
+    this slice defers.
+    """
+    print("\n-- adversarial sweep over both input surfaces --")
+    with registry(ci_eligible={"beta"}), scratch() as root:
+        target = root / "probe_census.json"
+
+        operations = (
+            ("--seed", lambda p: probe_census.ensure_document(p)),
+            ("--record", lambda p: probe_census.record_result(
+                p, result_document(commit=COMMIT_B))),
+            ("--set-acceptable-failures", lambda p: probe_census.record_policy(
+                p, "alpha", acceptable_failures=1, justification="j")),
+            ("--set-estimate", lambda p: probe_census.record_policy(
+                p, "alpha", estimate=9)),
+            ("--validate", lambda p: probe_census.validate_manifest(
+                probe_census.load(p))),
+        )
+
+        uncontrolled: list[str] = []
+        disturbed: list[str] = []
+        runs = refused = accepted = 0
+        locations = list(_locations(rich_census()))
+        for path, value in itertools.product(locations, FUZZ_VALUES):
+            document = rich_census()
+            if not _replace(document, path, value):
+                continue
+            try:
+                text = json.dumps(document)
+            except (TypeError, ValueError):
+                continue          # not representable, so not reachable
+            where = ".".join(str(step) for step in path)
+            for name, operation in operations:
+                target.write_text(text, encoding="utf-8")
+                stored = target.read_bytes()
+                runs += 1
+                try:
+                    operation(target)
+                except (probe_census.CensusError,
+                        probe_census.DocsWorktreeMissing):
+                    refused += 1
+                    if target.read_bytes() != stored:
+                        disturbed.append(f"{name} on {where}={value!r}")
+                except BaseException as error:  # noqa: BLE001 - the bug IS this
+                    uncontrolled.append(
+                        f"{name} on {where}={value!r} raised "
+                        f"{type(error).__name__}: {error}")
+                else:
+                    accepted += 1
+
+        expect(runs > 5000,
+               f"the census sweep really ran ({runs} operations over "
+               f"{len(locations)} locations)")
+        expect(refused > 0 and accepted > 0,
+               f"it exercised both outcomes ({refused} refused, "
+               f"{accepted} accepted), so it cannot pass vacuously")
+        expect(uncontrolled == [],
+               f"no malformed census produces an uncontrolled exception "
+               f"({len(uncontrolled)}: {uncontrolled[:3]})")
+        expect(disturbed == [],
+               f"no refusal changes a byte of the census "
+               f"({len(disturbed)}: {disturbed[:3]})")
+
+        # -- the other surface: the result document `--record` consumes --
+        probe_census.ensure_document(target)
+        clean = target.read_bytes()
+        uncontrolled, disturbed, leaked = [], [], []
+        runs = refused = accepted = 0
+        for path, value in itertools.product(
+                list(_locations(result_document())), FUZZ_VALUES):
+            document = result_document()
+            if not _replace(document, path, value):
+                continue
+            try:
+                json.dumps(document, allow_nan=False)
+            except (TypeError, ValueError):
+                continue
+            where = ".".join(str(step) for step in path)
+            target.write_bytes(clean)
+            runs += 1
+            try:
+                probe_census.record_result(target, document)
+            except (probe_census.CensusError,
+                    probe_census.DocsWorktreeMissing):
+                refused += 1
+                if target.read_bytes() != clean:
+                    disturbed.append(f"{where}={value!r}")
+            except BaseException as error:  # noqa: BLE001
+                uncontrolled.append(f"{where}={value!r} raised "
+                                    f"{type(error).__name__}: {error}")
+            else:
+                accepted += 1
+                text = target.read_text(encoding="utf-8")
+                leaked += [f"{name!r} via {where}={value!r}"
+                           for name in PRODUCER_ONLY if f'"{name}"' in text]
+
+        expect(runs > 300,
+               f"the result sweep really ran ({runs} --record operations)")
+        expect(refused > 0 and accepted > 0,
+               f"it exercised both outcomes ({refused} refused, "
+               f"{accepted} accepted)")
+        expect(uncontrolled == [],
+               f"no malformed result produces an uncontrolled exception "
+               f"({len(uncontrolled)}: {uncontrolled[:3]})")
+        expect(disturbed == [],
+               f"no refused result changes a byte of the census "
+               f"({len(disturbed)}: {disturbed[:3]})")
+        expect(leaked == [],
+               f"no accepted result carries a producer-only field into the "
+               f"census ({len(leaked)}: {leaked[:3]})")
+
+
+# ==========================================================================
 CONTENDER = """
 import json, sys
 sys.path.insert(0, {tools!r})
@@ -1431,6 +1633,7 @@ def main() -> int:
                  test_ingest_harness_error, test_policy, test_refusals,
                  test_malformed_rows_refuse_cleanly,
                  test_duplicate_target_rows,
+                 test_adversarial_malformed_input,
                  test_path_substitution, test_atomicity,
                  test_preservation_guard,
                  test_independent_process_contention,
