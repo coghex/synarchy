@@ -1228,6 +1228,78 @@ def test_docs_worktree_absence_is_normal_but_damage_is_not() -> None:
                   f"but unusable, never as absent", detail)
             check(role in detail, f"and names the {role} scope", detail)
 
+    # An UNSTATTABLE path is not an absent one. The convenience
+    # predicates (`lexists`, `exists`, `is_file`) all swallow OSError and
+    # answer False, so without direct stat calls each of these would read
+    # exactly like a missing file and the optional docs-wip scope would
+    # skip it and answer `clear`.
+    #
+    # The first shape is real and needs no permissions, no root check and
+    # no patching: a regular FILE standing where `docs/` belongs makes
+    # every report path raise ENOTDIR rather than ENOENT.
+    for role in ("docs-wip", "checkout"):
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = build_reports(Path(tmp) / "checkout")
+            docs = build_reports(Path(tmp) / "docs-wip")
+            broken = (docs if role == "docs-wip" else checkout) / "docs"
+            for child in sorted(broken.iterdir()):
+                child.unlink()
+            broken.rmdir()
+            broken.write_text("a file where a directory belongs", encoding="utf-8")
+            document = evaluate("injury_log", repo_root=checkout, docs_root=docs,
+                                state_root=Path(tmp) / "none")
+            check_equal(document["result"], inflight.RESULT_SOURCE_ERROR,
+                        f"an unstattable {role} report path fails closed")
+            detail = document["source_errors"][0]["detail"]
+            check("could not be examined" in detail,
+                  f"an unstattable {role} report path is diagnosed, never "
+                  f"treated as absent", detail)
+
+    # The second shape is the permission denial itself. It is injected
+    # rather than chmod-ed so the case is deterministic everywhere,
+    # including as root and on filesystems that ignore mode bits — a
+    # chmod-based case would either flake or silently stop covering this.
+    for patched in ("lstat", "stat"):
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = build_reports(Path(tmp) / "checkout")
+            docs = build_reports(Path(tmp) / "docs-wip")
+            denied = docs / "docs" / "code_health_findings.md"
+            original = getattr(os, patched)
+
+            def guarded(path, *args, _original=original, **kwargs):
+                if str(path) == str(denied):
+                    raise PermissionError(13, "Permission denied")
+                return _original(path, *args, **kwargs)
+
+            setattr(os, patched, guarded)
+            try:
+                document = evaluate("injury_log", repo_root=checkout,
+                                    docs_root=docs,
+                                    state_root=Path(tmp) / "none")
+            finally:
+                setattr(os, patched, original)
+            check_equal(document["result"], inflight.RESULT_SOURCE_ERROR,
+                        f"a denied os.{patched} fails closed")
+            detail = document["source_errors"][0]["detail"]
+            check("Permission denied" in detail,
+                  f"a denied os.{patched} is diagnosed actionably", detail)
+            check("docs-wip" in detail, "and names the scope", detail)
+
+    # A symlink whose TARGET is gone is present and unusable, not absent —
+    # which is why the presence question is asked with lstat.
+    with tempfile.TemporaryDirectory() as tmp:
+        checkout = build_reports(Path(tmp) / "checkout")
+        docs = build_reports(Path(tmp) / "docs-wip")
+        dangling = docs / "docs" / "code_health_findings.md"
+        dangling.unlink()
+        dangling.symlink_to(Path(tmp) / "gone.md")
+        check(not os.path.exists(dangling) and os.path.lexists(dangling),
+              "the fixture really is a dangling symlink")
+        document = evaluate("injury_log", repo_root=checkout, docs_root=docs,
+                            state_root=Path(tmp) / "none")
+        check_equal(document["result"], inflight.RESULT_SOURCE_ERROR,
+                    "a dangling symlink is present-and-unusable, not absent")
+
     # The shipped by-branch resolution is the census's own idiom, and its
     # actionable-stop is downgraded to None here.
     with tempfile.TemporaryDirectory() as tmp:

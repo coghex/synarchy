@@ -211,6 +211,7 @@ import argparse
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -835,6 +836,38 @@ def parse_report(text: str, family: str, where: str) -> list[dict]:
     return findings
 
 
+def _report_file_state(path: Path, where: str) -> tuple[bool, bool]:
+    """`(present, usable)` for a report path, failing closed on anything else.
+
+    `os.path.lexists`, `Path.exists` and `Path.is_file` all SWALLOW
+    `OSError` and answer False, so an unstattable path — a denied
+    directory, a path whose parent is not a directory, an I/O error —
+    would read exactly like a file that is simply not there, and the
+    optional docs-wip scope would skip it and go on to answer `clear`.
+    Only `FileNotFoundError` means absent; every other stat failure is a
+    source error naming the path.
+
+    `lstat` first so a symlink is examined as itself: a symlink whose
+    target is gone is PRESENT and unusable, not absent. The follow-up
+    `stat` then answers whether the resolved entry is a regular file.
+    """
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return False, False
+    except (OSError, ValueError) as exc:
+        raise SourceError(
+            f"{where} could not be examined at {path}: {exc}") from None
+    try:
+        info = os.stat(path)
+    except FileNotFoundError:
+        return True, False                      # a symlink with no target
+    except (OSError, ValueError) as exc:
+        raise SourceError(
+            f"{where} could not be examined at {path}: {exc}") from None
+    return True, stat.S_ISREG(info.st_mode)
+
+
 def _read_report(path: Path, family: str, where: str) -> list[dict]:
     try:
         text = path.read_text(encoding="utf-8")
@@ -883,20 +916,14 @@ def evaluate_reports(probe_key: str, index, *, repo_root=None,
             path = root / relpath
             where = f"{role}:{relpath}"
             # ABSENT and PRESENT-BUT-UNUSABLE are different answers, and
-            # `is_file()` alone conflates them: a directory, a socket, a
-            # broken symlink and an unstattable path all read as "not a
-            # file". Only true absence may be no-evidence — anything that
-            # is THERE but not a readable regular file is damage, and
-            # damage fails closed even in the optional docs-wip scope.
-            # `lexists` rather than `exists` so a broken symlink counts as
-            # present rather than as nothing at all.
-            try:
-                present = os.path.lexists(path)
-                regular = path.is_file()
-            except (OSError, ValueError) as exc:
-                raise SourceError(
-                    f"{where} could not be examined at {path}: {exc}") from None
-            if not regular:
+            # the convenience predicates conflate them: a directory, a
+            # socket, a broken symlink and an unstattable path all read
+            # as "not a file". Only true absence may be no-evidence —
+            # anything that is THERE but not a readable regular file is
+            # damage, and damage fails closed even in the optional
+            # docs-wip scope.
+            present, usable = _report_file_state(path, where)
+            if not usable:
                 if present:
                     raise SourceError(
                         f"{where} exists at {path} but is not a readable "
