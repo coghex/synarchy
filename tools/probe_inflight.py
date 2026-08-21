@@ -154,8 +154,11 @@ The four sources
    checked-out reports are the required source and are always read. A
    resolved `docs-wip` worktree that simply does not contain one of the
    four reports is likewise no-evidence for that path. Only a `docs-wip`
-   report that is PRESENT and unreadable or unparseable is a
-   `source-error`.
+   report that is truly ABSENT is no-evidence: one that exists on the
+   filesystem but is not a readable, parseable regular file — a
+   directory, a broken symlink, an unstattable path — is a
+   `source-error`, because a broken source must never be read as an
+   absent one.
 
    Each report is parsed with its OWN native finding-key family — `NCT-`
    in `non_ci_test_audit_findings.md`, `CIT-` in
@@ -859,12 +862,14 @@ def evaluate_reports(probe_key: str, index, *, repo_root=None,
                      docs_root=_UNSET) -> list[dict]:
     """Matches among open findings in BOTH report worktrees.
 
-    The checked-out reports are REQUIRED: an unreadable or unparseable
-    one is a source error. The `docs-wip` copies are conservative extra
-    evidence: an absent worktree, and a present worktree that simply does
-    not carry one of the four reports, are both no-evidence. A `docs-wip`
-    report that IS present but unreadable or unparseable is a source
-    error, because a broken source cannot be read as an absent one.
+    The checked-out reports are REQUIRED: an absent, unreadable or
+    unparseable one is a source error. The `docs-wip` copies are
+    conservative extra evidence: an absent worktree, and a present
+    worktree that simply does not carry one of the four reports, are both
+    no-evidence. A `docs-wip` report that IS present but unreadable or
+    unparseable is a source error, because a broken source cannot be read
+    as an absent one — and "present" here means present on the
+    filesystem, not merely present as a readable regular file.
     """
     checkout = Path(repo_root or run_probes.REPO_ROOT)
     docs = resolve_docs_worktree(repo_root) if docs_root is _UNSET else docs_root
@@ -877,7 +882,25 @@ def evaluate_reports(probe_key: str, index, *, repo_root=None,
         for relpath, family in REPORTS:
             path = root / relpath
             where = f"{role}:{relpath}"
-            if not path.is_file():
+            # ABSENT and PRESENT-BUT-UNUSABLE are different answers, and
+            # `is_file()` alone conflates them: a directory, a socket, a
+            # broken symlink and an unstattable path all read as "not a
+            # file". Only true absence may be no-evidence — anything that
+            # is THERE but not a readable regular file is damage, and
+            # damage fails closed even in the optional docs-wip scope.
+            # `lexists` rather than `exists` so a broken symlink counts as
+            # present rather than as nothing at all.
+            try:
+                present = os.path.lexists(path)
+                regular = path.is_file()
+            except (OSError, ValueError) as exc:
+                raise SourceError(
+                    f"{where} could not be examined at {path}: {exc}") from None
+            if not regular:
+                if present:
+                    raise SourceError(
+                        f"{where} exists at {path} but is not a readable "
+                        f"regular file, so it could not be read completely.")
                 if required:
                     raise SourceError(
                         f"{where} is a required findings report but is not "

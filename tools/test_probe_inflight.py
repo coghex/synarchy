@@ -1203,6 +1203,31 @@ def test_docs_worktree_absence_is_normal_but_damage_is_not() -> None:
               "and says which worktree it came from",
               document["source_errors"][0]["detail"])
 
+    # A report path that is THERE but not a readable regular file is
+    # damage, not absence, and damage fails closed in BOTH scopes —
+    # `is_file()` alone would read every one of these as "absent".
+    for role, damage in (("docs-wip", "mkdir"), ("docs-wip", "broken-symlink"),
+                         ("checkout", "mkdir"), ("checkout", "broken-symlink")):
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = build_reports(Path(tmp) / "checkout")
+            docs = build_reports(Path(tmp) / "docs-wip")
+            target = (docs if role == "docs-wip" else checkout) / \
+                "docs" / "code_health_findings.md"
+            target.unlink()
+            if damage == "mkdir":
+                target.mkdir()
+            else:
+                target.symlink_to(Path(tmp) / "nowhere.md")
+            document = evaluate("injury_log", repo_root=checkout, docs_root=docs,
+                                state_root=Path(tmp) / "none")
+            check_equal(document["result"], inflight.RESULT_SOURCE_ERROR,
+                        f"a {damage} at a {role} report path fails closed")
+            detail = document["source_errors"][0]["detail"]
+            check("not a readable regular file" in detail,
+                  f"a {damage} at a {role} report path is diagnosed as present "
+                  f"but unusable, never as absent", detail)
+            check(role in detail, f"and names the {role} scope", detail)
+
     # The shipped by-branch resolution is the census's own idiom, and its
     # actionable-stop is downgraded to None here.
     with tempfile.TemporaryDirectory() as tmp:
