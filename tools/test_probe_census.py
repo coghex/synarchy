@@ -900,39 +900,72 @@ def test_acceptable_failure_threshold() -> None:
     N = probe_census.POLICY_RUN_COUNT
     for x in range(probe_census.MIN_ACCEPTABLE_FAILURES,
                    probe_census.MAX_ACCEPTABLE_FAILURES + 1):
-        expect(probe_census.tolerance_state(x, N, x)
+        expect(probe_census.tolerance_state(x, N, N, x)
                == probe_census.TOLERANCE_ACCEPTABLE,
                f"X={x}: exactly {x} failure(s) in {N} runs is acceptable")
-        expect(probe_census.tolerance_state(x, N, x + 1)
+        expect(probe_census.tolerance_state(x, N, N, x + 1)
                == probe_census.TOLERANCE_OVER,
                f"X={x}: {x + 1} failure(s) in {N} runs is over tolerance")
-    expect(probe_census.tolerance_state(0, N, 0)
+    expect(probe_census.tolerance_state(0, N, N, 0)
            == probe_census.TOLERANCE_ACCEPTABLE
-           and probe_census.tolerance_state(0, N, 1)
+           and probe_census.tolerance_state(0, N, N, 1)
            == probe_census.TOLERANCE_OVER,
            "X=0 means a clean sweep, and one failure breaches it")
-    expect(probe_census.tolerance_state(1, N, 0)
+    expect(probe_census.tolerance_state(1, N, N, 0)
            == probe_census.TOLERANCE_ACCEPTABLE
-           and probe_census.tolerance_state(1, N, 1)
+           and probe_census.tolerance_state(1, N, N, 1)
            == probe_census.TOLERANCE_ACCEPTABLE,
            "X=1 accepts both 10/10 and 9/10")
 
     # The basis is a COMPLETE fixed-N measurement, and nothing else.
     for runs, why in ((N - 1, "a shorter run"), (N + 1, "a longer run"),
                       (0, "no runs at all")):
-        expect(probe_census.tolerance_state(0, runs, 0)
+        expect(probe_census.tolerance_state(0, runs, runs, 0)
                == probe_census.TOLERANCE_NOT_COMPARABLE,
                f"{why} is not classified against a policy stated out of {N}")
+    expect(probe_census.tolerance_state(0, N, N - 1, 0)
+           == probe_census.TOLERANCE_NOT_COMPARABLE,
+           "and an INCOMPLETE ten-run measurement is not one either")
     for value, why in ((None, "a null X"), (True, "a boolean X"),
                        (2.5, "a fractional X"), (10, "an out-of-range X")):
-        expect(probe_census.tolerance_state(value, N, 0)
+        expect(probe_census.tolerance_state(value, N, N, 0)
                == probe_census.TOLERANCE_NOT_COMPARABLE,
                f"{why} classifies nothing")
-    expect(probe_census.tolerance_state(1, N, None)
+    expect(probe_census.tolerance_state(1, N, N, None)
            == probe_census.TOLERANCE_NOT_COMPARABLE
-           and probe_census.tolerance_state(1, N, -1)
+           and probe_census.tolerance_state(1, N, N, -1)
            == probe_census.TOLERANCE_NOT_COMPARABLE,
            "an unusable failure count classifies nothing either")
+
+    # The measurement it is asked about is ONE sample, never a cohort's
+    # pooled totals: two five-run measurements are not a ten-run one,
+    # and two ten-run measurements are not a twenty-run one.
+    def sized(runs, failures, mark):
+        return {"requested_runs": runs, "completed_runs": runs,
+                "failure_count": failures, "retained_artifacts": [mark]}
+
+    expect(probe_census.policy_sample({"samples": []}) is None
+           and probe_census.policy_sample({}) is None
+           and probe_census.policy_sample(None) is None,
+           "a cohort with no samples has no policy measurement")
+    expect(probe_census.policy_sample(
+        {"samples": [sized(5, 0, "a"), sized(5, 3, "b")]}) is None,
+        "two five-run samples do NOT add up to a ten-run measurement")
+    picked = probe_census.policy_sample(
+        {"samples": [sized(N, 0, "first"), sized(N, 4, "second")]})
+    expect(picked is not None and picked["retained_artifacts"] == ["second"],
+           "two ten-run samples stay comparable, and the LAST appended one "
+           "is the current measurement")
+    picked = probe_census.policy_sample(
+        {"samples": [sized(N, 0, "ten"), sized(3, 0, "three")]})
+    expect(picked is not None and picked["retained_artifacts"] == ["ten"],
+           "a later odd-sized run does not hide the newest ten-run one")
+    expect(probe_census.policy_sample(
+        {"samples": [{"requested_runs": N, "completed_runs": N - 1,
+                      "failure_count": 0}]}) is None,
+        "an incomplete ten-run sample is not a policy measurement")
+    expect(probe_census.policy_sample({"samples": [7, None]}) is None,
+           "and a malformed sample is skipped rather than raised on")
 
 
 def test_acceptable_failure_policy_cli() -> None:
@@ -983,6 +1016,64 @@ def test_acceptable_failure_policy_cli() -> None:
         code, out, _ = cli("--summary")
         expect(code == 0 and "tolerance" in out and "not-comparable" in out,
                "the human table carries the policy columns")
+
+    # End to end, through real ingested measurements: the classification
+    # is ONE sample's, never the cohort's pooled totals.
+    N = probe_census.POLICY_RUN_COUNT
+    with registry(), scratch() as root:
+        def tolerance(path):
+            return summary_of(path)["tolerance"]
+
+        # A single complete ten-run measurement, at X and at X+1.
+        for failures, expected in ((1, "acceptable"), (2, "over-tolerance")):
+            path = root / f"one-{failures}.json"
+            seeded(path)
+            probe_census.record_policy(path, "alpha", acceptable_failures=1,
+                                       justification="one known race")
+            probe_census.record_result(
+                path, measurement(runs=N, failures=failures, age_days=1))
+            expect(tolerance(path) == expected,
+                   f"a single {N}-run measurement with {failures} failure(s) "
+                   f"against X=1 is {expected}")
+
+        # Split: two five-run measurements on one commit pool to ten
+        # runs, and must NOT be read as a ten-run result.
+        path = root / "split.json"
+        seeded(path)
+        probe_census.record_policy(path, "alpha", acceptable_failures=1,
+                                   justification="one known race")
+        probe_census.record_result(path, measurement(runs=5, failures=0,
+                                                     age_days=2))
+        probe_census.record_result(path, measurement(runs=5, failures=3,
+                                                     age_days=1))
+        expect(summary_of(path)["requested_runs"] == 2 * 5,
+               "the cohort really does pool to ten runs")
+        expect(tolerance(path) == "not-comparable",
+               "...and two five-run measurements are still not a ten-run "
+               "result, so the policy does not classify them")
+
+        # Repeated: two complete ten-run measurements on one commit pool
+        # to twenty, which must not stop them being comparable.
+        path = root / "repeated.json"
+        seeded(path)
+        probe_census.record_policy(path, "alpha", acceptable_failures=1,
+                                   justification="one known race")
+        probe_census.record_result(path, measurement(runs=N, failures=0,
+                                                     age_days=2))
+        probe_census.record_result(path, measurement(runs=N, failures=5,
+                                                     age_days=1))
+        expect(summary_of(path)["requested_runs"] == 2 * N,
+               "the cohort pools to twenty runs")
+        expect(tolerance(path) == "over-tolerance",
+               "...and the newest ten-run measurement is what classifies, "
+               "rather than the pooled total falling out of the policy")
+
+        # An odd-sized run afterwards does not erase the last real one.
+        probe_census.record_result(path, measurement(runs=3, failures=0,
+                                                     age_days=0))
+        expect(tolerance(path) == "over-tolerance",
+               "a later three-run measurement leaves the newest ten-run "
+               "verdict standing")
 
 
 # ==========================================================================

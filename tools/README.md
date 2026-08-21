@@ -772,6 +772,15 @@ base-failing or scenario-heavy. `tools/probe_flake.py` accepts any positive
 `--runs`, and a measurement with another run count stays valid data this
 threshold reports as `not-comparable` rather than rescaling X into a rate.
 
+**One measurement, never a cohort's pooled totals.** A cohort accumulates
+same-commit runs, so its combined counts are the right basis for its `rate` and
+the wrong one for a fixed-N threshold: two five-run measurements are not a
+ten-run one, and two ten-run measurements are not a twenty-run one. The policy
+is therefore evaluated against the authoritative cohort's LAST-APPENDED
+complete ten-run sample — append order being what "newest" already means here,
+since commit hashes do not compare — and reports `not-comparable` when the
+cohort holds no such measurement.
+
 **X=0 is the default and every probe has one.** #1428 staged a nullable X while
 the policy was being chosen; there is no null X any more, and no
 `--set-acceptable-failures none`. A fresh seed, a `probe-census/v1` migration
@@ -825,9 +834,10 @@ rather than negatively old. Each row reports `measured`, the exact commit, the
 latest measurement, the nonnegative age, the stale flag, and the combined
 run/failure counts and rate; every measurement field of an UNMEASURED probe is
 null, so a zero failure rate can only ever mean an observed zero. Each row also
-carries its `acceptable_failures` and the `tolerance` its authoritative cohort
-sits at — `acceptable`, `over-tolerance`, or `not-comparable` when the cohort
-is not a complete ten-run measurement, an unmeasured probe included. The table
+carries its `acceptable_failures` and the `tolerance` of the authoritative
+cohort's newest complete ten-run measurement — `acceptable`, `over-tolerance`,
+or `not-comparable` when there is no such measurement to compare, an unmeasured
+probe included. The table
 prints the commit IN FULL, in its last column: a selection-facing row reports
 the exact hash the statistic was measured on, and an abbreviation is not that
 hash.

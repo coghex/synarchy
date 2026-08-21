@@ -86,7 +86,9 @@ but never on the stored side, because `--seed` has to be able to READ a
 null X in order to initialize it to 0. That single initialization is
 the only automatic policy repair there is: a malformed stored X stays
 visible rather than being silently corrected. `tolerance_state` applies
-the threshold, and only to a complete ten-run measurement.
+the threshold, and only to ONE complete ten-run measurement, which
+`policy_sample` picks out of a cohort — a cohort's pooled totals are the
+basis for its RATE, never for a fixed-N threshold.
 
 What is deliberately still absent: any requirement that the census agree
 with the live probe registry, which stays `validate_manifest`'s report
@@ -1070,20 +1072,25 @@ def _refuse_policy(problems: list[str], what: str) -> None:
         f"{what} violates the acceptable-failure policy: {problems[0]}{more}")
 
 
-def tolerance_state(acceptable_failures, requested_runs,
+def tolerance_state(acceptable_failures, requested_runs, completed_runs,
                     failure_count) -> str:
-    """Where one measurement sits against a record's X.
+    """Where ONE measurement sits against a record's X.
 
     Acceptable is `failures <= X` and over tolerance is `failures > X`,
     so an X of one accepts both 10/10 and 9/10 and rejects 8/10.
 
-    The comparison is made ONLY against a complete `POLICY_RUN_COUNT`-run
-    measurement, because that is the basis X is stated on.
-    `tools/probe_flake.py` deliberately accepts any positive `--runs`,
-    and a measurement with another run count remains valid data that
-    this simply does not classify — the alternative would be rescaling
-    X, which quietly turns "one failure in ten is acceptable" into a
-    rate the maintainer never agreed to.
+    The comparison is made ONLY against a single complete
+    `POLICY_RUN_COUNT`-run measurement, because that is the basis X is
+    stated on. `tools/probe_flake.py` deliberately accepts any positive
+    `--runs`, and a measurement with another run count remains valid
+    data that this simply does not classify — the alternative would be
+    rescaling X, which quietly turns "one failure in ten is acceptable"
+    into a rate the maintainer never agreed to.
+
+    The arguments are ONE measurement's own counts, never a cohort's
+    pooled totals: two five-run measurements are not a ten-run one, and
+    two ten-run measurements are not a twenty-run one. `policy_sample`
+    is what picks the measurement this is asked about.
 
     Nothing here is a judgement about the PROBE: `tools/ci_probes.py`
     classifies probes as flaky, base-failing or scenario-heavy, and a
@@ -1096,10 +1103,43 @@ def tolerance_state(acceptable_failures, requested_runs,
         return TOLERANCE_NOT_COMPARABLE
     if not _is_x(requested_runs) or requested_runs != POLICY_RUN_COUNT:
         return TOLERANCE_NOT_COMPARABLE
+    if not _is_x(completed_runs) or completed_runs != requested_runs:
+        return TOLERANCE_NOT_COMPARABLE
     if not _is_x(failure_count) or failure_count < 0:
         return TOLERANCE_NOT_COMPARABLE
     return (TOLERANCE_ACCEPTABLE if failure_count <= acceptable_failures
             else TOLERANCE_OVER)
+
+
+def policy_sample(cohort):
+    """The one measurement in `cohort` the policy is evaluated against.
+
+    The LAST-APPENDED complete `POLICY_RUN_COUNT`-run sample, or None
+    when the cohort holds no such measurement.
+
+    Append order is what "newest" already means everywhere in the
+    census: commit hashes do not compare, and #1429 picks the
+    authoritative cohort the same way. A same-commit cohort accumulates
+    runs, so it may hold several measurements or none of the policy's
+    size — and pooling them would answer a question nobody asked. Two
+    five-run measurements would become a ten-run verdict, and two
+    genuine ten-run measurements would total twenty and stop being
+    comparable at all, which is exactly backwards.
+    """
+    if not isinstance(cohort, dict):
+        return None
+    samples = cohort.get("samples")
+    if not isinstance(samples, list):
+        return None
+    for sample in reversed(samples):
+        if not isinstance(sample, dict):
+            continue
+        requested = sample.get("requested_runs")
+        completed = sample.get("completed_runs")
+        if (_is_x(requested) and requested == POLICY_RUN_COUNT
+                and _is_x(completed) and completed == requested):
+            return sample
+    return None
 
 
 # ==========================================================================
@@ -1733,10 +1773,13 @@ def summarize_entry(entry, *, now, stale_after_seconds) -> dict:
     there is, never negative, and a negative age would sort ahead of
     every real measurement.
 
-    `tolerance` reports the record's own X against the authoritative
-    cohort's combined counts (#1430) and is `not-comparable` unless
-    those counts are a complete `POLICY_RUN_COUNT`-run measurement — an
-    unmeasured probe included.
+    `tolerance` reports the record's own X against ONE measurement
+    (#1430) — the authoritative cohort's last-appended complete
+    `POLICY_RUN_COUNT`-run sample, never its pooled totals, which are
+    the right basis for `failure_rate` and the wrong one for a
+    fixed-N threshold. It is `not-comparable` when the record has no
+    usable X or that cohort holds no such measurement, an unmeasured
+    probe included.
     """
     if not isinstance(entry, dict):
         raise CensusError(
@@ -1780,8 +1823,15 @@ def summarize_entry(entry, *, now, stale_after_seconds) -> dict:
     summary["cohort"] = source
     summary["age_seconds"] = age
     summary["stale"] = age >= horizon
-    summary["tolerance"] = tolerance_state(
-        acceptable, statistic["requested_runs"], statistic["failure_count"])
+    # ONE measurement, never the cohort's pooled totals: X is stated
+    # against a complete ten-run run, so `statistic`'s combined counts
+    # are the wrong basis for it even though they are the right one for
+    # the rate beside it.
+    measurement = policy_sample(cohort)
+    if measurement is not None:
+        summary["tolerance"] = tolerance_state(
+            acceptable, measurement["requested_runs"],
+            measurement["completed_runs"], measurement["failure_count"])
     return summary
 
 
