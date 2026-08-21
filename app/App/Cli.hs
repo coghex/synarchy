@@ -98,6 +98,12 @@ data CliError
       --   dimensions positive. Its own constructor rather than a shared
       --   one carrying an expectation string: there is exactly one flag
       --   with this shape, and the message differs entirely.
+    | BadRegionValue !String
+      -- ^ @--region@'s own @cx1,cy1,cx2,cy2@ syntax. Like
+      --   'BadSizeValue' it gets its own constructor rather than
+      --   reusing 'BadNumericValue': the value is a LIST of whole
+      --   numbers, so "expected a whole number" would name neither the
+      --   count nor the separator the user got wrong.
     | EmptyDumpSelection
       -- ^ @--dump=@ with nothing after the @=@ at all.
     | EmptyDumpLayerName !Int
@@ -120,6 +126,10 @@ cliErrorMessage (BadNumericValue flag raw) =
 cliErrorMessage (BadSizeValue raw) =
     "--size: invalid value " ⧺ show raw
         ⧺ " (expected WxH with a positive width and height, e.g. 1280x720)"
+cliErrorMessage (BadRegionValue raw) =
+    "--region: invalid value " ⧺ show raw
+        ⧺ " (expected four comma-separated whole numbers, "
+        ⧺ "cx1,cy1,cx2,cy2, e.g. -2,-3,2,3)"
 cliErrorMessage EmptyDumpSelection =
     "--dump= requires at least one layer name" ⧺ expectedLayers
 cliErrorMessage (EmptyDumpLayerName i) =
@@ -240,8 +250,11 @@ data ChunkRegion = ChunkRegion
     , crY2 ∷ !Int
     } deriving (Eq, Show)
 
--- | The region a dump covers when @--region@ is absent — and, today,
---   when it is present but malformed (see 'parseRegion').
+-- | The region a dump covers when @--region@ is ABSENT, and only
+--   then (#1481). 'parseRegion' no longer applies it: a malformed
+--   value is a 'Left' now, and the default belongs to the caller that
+--   knows absence happened — the same split @parseArg@'s seed default
+--   and 'parseSize's video-config fallback already use.
 defaultChunkRegion ∷ ChunkRegion
 defaultChunkRegion = ChunkRegion
     { crX1 = -8
@@ -250,23 +263,32 @@ defaultChunkRegion = ChunkRegion
     , crY2 = 8
     }
 
--- | Parse @--region cx1,cy1,cx2,cy2@ from args.
+-- | Parse @--region cx1,cy1,cx2,cy2@ from args, on the #1191
+--   contract every other typed-value parser here already returns
+--   (#1481, @docs\/code_health_findings.md@ CH-67). This was the last
+--   of them to collapse absence and malformed presence onto one
+--   answer: @--region bogus@, @--region 1,2,3@, @--region 1,2,3,4,5@,
+--   @--region 1,2,3,x@ and a bare trailing @--region@ each produced
+--   'defaultChunkRegion' and exited 0 with a full, valid dump of the
+--   WRONG part of the world.
 --
---   Deliberately still collapses absence and malformed presence onto
---   'defaultChunkRegion' — that is @docs\/code_health_findings.md@
---   CH-67, sequenced after this type and explicitly out of scope for
---   #1081. Separating the two is a change of the RESULT type
---   ('Either' 'CliError' ('Maybe' 'ChunkRegion'), as every #1191
---   parser above already returns) around the same 'ChunkRegion', with
---   'defaultChunkRegion' moving to the caller.
-parseRegion ∷ [String] → ChunkRegion
-parseRegion [] = defaultChunkRegion
-parseRegion ("--region":s:_) =
-    case map reads (splitOn ',' s) of
-        [[(cx1,"")],[(cy1,"")],[(cx2,"")],[(cy2,"")]] →
+--   'Right' 'Nothing' is absence and nothing else, so the caller
+--   applies 'defaultChunkRegion'; 'Left' is a value the user typed
+--   that cannot mean four chunk coordinates. Like 'parseArg', the
+--   FIRST occurrence decides — a malformed one is an error rather
+--   than something to skip past in search of a later well-formed
+--   occurrence.
+--
+--   Only the SHAPE is validated. The two corners stay exactly as
+--   typed, unsorted and directed (see 'ChunkRegion'), so a reversed
+--   region is still well-formed and still covers no chunks.
+parseRegion ∷ [String] → Either CliError (Maybe ChunkRegion)
+parseRegion args = lookupFlagValue "--region" args ⌦ \case
+    Nothing  → Right Nothing
+    Just raw → case map reads (splitOn ',' raw) of
+        [[(cx1,"")],[(cy1,"")],[(cx2,"")],[(cy2,"")]] → Right ∘ Just $
             ChunkRegion { crX1 = cx1, crY1 = cy1, crX2 = cx2, crY2 = cy2 }
-        _ → defaultChunkRegion
-parseRegion (_:rest) = parseRegion rest
+        _ → Left (BadRegionValue raw)
 
 -- | Every chunk coordinate a region covers, as @(x, y)@ pairs, in the
 --   order the dump emits them: x outer, y inner, both ranges directed

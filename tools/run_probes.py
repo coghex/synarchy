@@ -233,7 +233,9 @@ PROBES = [
      "(nonexistent/containment/directory) for simple items (#886), units (#887), and "
      "flora/buildings/structures items (#888); mode-incompatible flags (#1012/CH-58); and "
      "present-but-malformed values for every numeric flag, --dump= layer selection and --size, "
-     "with omission still defaulting (#1191)"),
+     "with omission still defaulting (#1191); and every malformed --region shape "
+     "(non-numeric/too few/too many/partially numeric/no operand) rejected pre-boot with the "
+     "omitted-flag default still reachable (#1481, CH-67)"),
     ("remote_warning_page_guard", "remote_warning_page_guard_probe.py",
      "remote-warning establishHere() revalidation guard against an active-world switch (#844)"),
     ("repair_item", "repair_item_probe.py",
@@ -254,12 +256,18 @@ PROBES = [
      "the same geometry call over call, generated name/gloss with a recurring "
      "head, the no-language fallback, and both surviving save/fresh-load and "
      "regeneration (#1102)"),
+    ("retaliation_swap", "retaliation_swap_probe.py",
+     "mid-fight retaliation target swap (#1483): the attack_target branch "
+     "completes its tick on a live non-excluded recent attacker, the "
+     "next-ordered unit still gets its update, and a hit past the window "
+     "swaps nothing and raises nothing"),
     ("role", "role_probe.py",
      "derived unit-role hysteresis/demotion/work-XP growth (#265)"),
     ("save_compat_migration", "save_compat_migration_probe.py",
-     "fresh-process migration probe: a tracked pre-#760 B1 fixture loads, "
-     "publishes, dwells paused, re-saves current-format, and reloads "
-     "cleanly across a real process restart (#766)"),
+     "fresh-process migration probe: EVERY complete-session fixture the "
+     "save-compat manifest declares loads, publishes, dwells paused, "
+     "re-saves current-format, and reloads cleanly across a real process "
+     "restart (#766, #1485)"),
     ("autosave", "autosave_probe.py",
      "interval autosave (#913): default-off dwell, a real one-minute interval "
      "firing, pause/time-scale restoration and its player-intent suppression, "

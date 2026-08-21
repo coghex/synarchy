@@ -424,7 +424,7 @@ spec = aroundAll withSharedFixture $ do
             -- Labels/tooltips come straight from data/tutorials/first_session.yaml.
             ypFirstLabel probe `shouldBe` "Place portal"
             ypFirstTooltip probe `shouldBe`
-                "Deploy the acolyte portal to anchor your colony to this world."
+                "Zoom in for the build tool, then anchor your colony."
             -- Completing the root REVEALS its child and keeps the root
             -- itself active (its subtree is not done yet).
             ypSecondIds probe `shouldBe`
