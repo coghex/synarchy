@@ -61,14 +61,23 @@ controlled refusal naming the offending JSON path — never a traceback,
 never a partial write — and an absent `jsonschema` is ONE loud error
 carrying the install command, never a silently skipped check.
 
-What is deliberately still absent: the CROSS-FIELD invariants (#1493) —
-#1429's semantic checks are narrow, covering only the commit identity,
-timestamp and counts the cohort arithmetic itself consumes — and any
-requirement that the census agree with the live probe registry,
-which stays `validate_manifest`'s report and `--seed`'s repair. This is
-not an exhaustive corruption detector either — a hand-edited census is
-not an adversarial input class, and malformed state must fail SAFELY
-rather than exhaustively.
+CROSS-FIELD INVARIANTS ARE CODE, NOT SCHEMA (#1493). The rules that span
+fields cannot be declared, so `census_invariants` and `result_invariants`
+state them directly: accepted attempts reconcile against retained
+samples; `accepted` agrees with `status`; a harness error never reports
+completing every requested run; `check_counts` is keyed by exactly the
+descriptor's checks and each entry is the tally `runs` shows; a PASS run
+carries no FAIL check; and a cohort holds one commit's samples. Each
+rejects state no real run could have written, and each runs on both
+sides of a mutation exactly as the schema does. They are distinct from
+#1429's SEMANTIC checks, which stay narrow by design: only the commit
+identity, timestamp and counts the cohort arithmetic itself consumes.
+
+What is deliberately still absent: any requirement that the census agree
+with the live probe registry, which stays `validate_manifest`'s report
+and `--seed`'s repair. This is not an exhaustive corruption detector
+either — a hand-edited census is not an adversarial input class, and
+malformed state must fail SAFELY rather than exhaustively.
 
 The census lives in the worktree whose branch is `docs-wip` and is NOT
 published as part of this work, so it is resolved BY BRANCH the way
@@ -132,6 +141,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ci_probes  # noqa: E402
 import probe_flake  # noqa: E402
+import probe_protocol  # noqa: E402
 import run_probes  # noqa: E402
 
 CENSUS_SCHEMA = "probe-census/v2"
@@ -387,9 +397,352 @@ def validate_document(document, schema_name: str, what: str) -> None:
         f"{best.json_path}, {best.message}{more}")
 
 
+# ==========================================================================
+# The cross-field invariants (#1493)
+# ==========================================================================
+# The declared schema (#1492) checks each field in isolation, which is
+# what it is good at and what it cannot be extended past: the rules
+# below SPAN fields, so no keyword expresses them and they need real
+# code. Each rejects state no real run could have written — they are the
+# census's own consistency model, not defensive guesswork — and each is
+# grounded in a specific behaviour of the producer, `probe_flake.py`.
+#
+# They are deliberately not an exhaustive corruption detector. A
+# hand-edited census is not an adversarial input class; the promise is
+# that inconsistent state fails SAFELY, as a controlled refusal in front
+# of the operation, rather than being rewritten and so persisted. The
+# stored rules therefore run wherever a census is read
+# (`validate_census`, so `--validate`, `--record`, `--seed` and the
+# policy updates all stop on one) and again on the candidate, in the
+# same two places the declared schema is applied.
+
+
+def _zero_tally() -> dict:
+    """One check's empty tally, in the producer's own vocabulary."""
+    return {probe_protocol.PASS: 0, probe_protocol.FAIL: 0,
+            probe_protocol.MISSING: 0}
+
+
+def _render_tally(tally: dict) -> str:
+    """A tally as one readable token, in a fixed outcome order."""
+    return " ".join(f"{outcome}={tally.get(outcome, 0)}"
+                    for outcome in (probe_protocol.PASS, probe_protocol.FAIL,
+                                    probe_protocol.MISSING))
+
+
+def observed_check_counts(runs) -> dict:
+    """The check tally `runs` actually shows.
+
+    `Measurement.check_counts()` tallies `self.runs` and nothing else,
+    so `error_run` contributes nothing here either: it is not a member
+    of `runs`, and a harness error is not a fourth probe outcome.
+
+    Precondition: `runs` has already satisfied the declared schema, so
+    every `checks` value is one of the three declared outcomes.
+    """
+    counts: dict = {}
+    for run in runs:
+        for check_id, outcome in run["checks"].items():
+            counts.setdefault(check_id, _zero_tally())[outcome] += 1
+    return counts
+
+
+def _unfinished_measurement(status: str, completed: int, requested: int,
+                            where: str) -> list[str]:
+    """A non-accepted result may not claim it completed every run.
+
+    A harness error ENDS the measurement: `stop_with_harness_error`
+    returns before the broken run is appended to `runs`, so the run that
+    broke the stream is never one of the completed ones and at least one
+    requested run is always left uncompleted.
+    """
+    if completed < requested:
+        return []
+    return [f"at {where}, a {status!r} measurement reports completing "
+            f"{completed} of {requested} requested run(s); the run that broke "
+            f"the stream is never one of the completed ones, so a harness "
+            f"error always leaves one uncompleted"]
+
+
+def _rule_pass_run_has_no_failed_check(result) -> list[str]:
+    """A PASS run may not carry a FAIL check.
+
+    `reconcile` turns ANY failed check into a failing run — a FAIL check
+    and a nonzero exit both land on `RUN_FAIL` — so this pairing is a
+    contradiction no measurement produced. TIMEOUT is deliberately not
+    covered: a timeout wins outright, whatever partial checks had
+    already arrived, so a TIMEOUT run really can carry a FAIL.
+    """
+    problems: list[str] = []
+    for position, run in enumerate(result["runs"]):
+        if run["outcome"] != probe_flake.RUN_PASS:
+            continue
+        failed = sorted(check_id for check_id, outcome in run["checks"].items()
+                        if outcome == probe_protocol.FAIL)
+        if failed:
+            problems.append(
+                f"at $.runs[{position}].checks, run {run['index']} reports "
+                f"{probe_flake.RUN_PASS} while carrying a "
+                f"{probe_protocol.FAIL} check ({', '.join(failed)}); a failed "
+                f"check makes its run fail")
+    return problems
+
+
+def _rule_check_counts_cover_the_descriptor(result) -> list[str]:
+    """`check_counts` is keyed by exactly the descriptor's check ids.
+
+    `Measurement.check_counts()` SEEDS the map from `descriptor.ids` and
+    then only increments; it never adds a key and never drops one. So
+    the keys are that id set exactly, whatever the runs did — including
+    a measurement with no completed runs at all, whose entries are all
+    zero. That is the half the per-entry tally cannot see: an id the
+    descriptor never declared, carrying an all-zero tally, agrees with
+    the runs (which show nothing for it) while being state no
+    measurement could have produced.
+    """
+    declared = set(result["check_counts"])
+    described = {check["id"] for check in result["checks"]}
+    problems: list[str] = []
+    for check_id in sorted(declared - described):
+        problems.append(
+            f"at $.check_counts.{check_id}, check {check_id!r} is tallied but "
+            f"the probe's own descriptor does not declare it; `check_counts` "
+            f"is keyed by exactly the declared checks")
+    for check_id in sorted(described - declared):
+        problems.append(
+            f"at $.check_counts, declared check {check_id!r} has no tally; "
+            f"`check_counts` is keyed by exactly the declared checks")
+    return problems
+
+
+def _rule_check_counts_tally_runs(result) -> list[str]:
+    """Each entry is the tally `runs` shows, in both directions.
+
+    The counts are DERIVED rather than reported, so any disagreement is
+    an edit: a stored tally that is not what the runs show, and a check
+    tallied in the runs with no entry at all, are each impossible.
+    Keying is the neighbouring rule's; this one owns the numbers.
+    """
+    problems: list[str] = []
+    observed = observed_check_counts(result["runs"])
+    declared = result["check_counts"]
+    for check_id in sorted(set(observed) | set(declared)):
+        stored = declared.get(check_id)
+        seen = observed.get(check_id, _zero_tally())
+        if stored is None:
+            problems.append(
+                f"at $.check_counts, check {check_id!r} is tallied "
+                f"{_render_tally(seen)} in `runs` but has no entry; "
+                f"`check_counts` is the tally `runs` shows")
+        elif stored != seen:
+            problems.append(
+                f"at $.check_counts.{check_id}, the stored tally "
+                f"{_render_tally(stored)} is not the {_render_tally(seen)} "
+                f"`runs` shows")
+    return problems
+
+
+def _rule_result_leaves_a_run_uncompleted(result) -> list[str]:
+    """An incoming harness error never completed every requested run."""
+    if result["status"] == ACCEPTED_STATUS:
+        return []
+    return _unfinished_measurement(
+        result["status"], result["completed_runs"], result["requested_runs"],
+        "$")
+
+
+# The intake rules, in report order. The two `check_counts` rules are
+# separate because they answer separate questions — which checks the map
+# is keyed by, and what each entry counts — and neither implies the
+# other: an undeclared all-zero entry satisfies the tally, and a wrong
+# tally sits under a perfectly well-declared key.
+RESULT_RULES = (
+    _rule_pass_run_has_no_failed_check,
+    _rule_check_counts_cover_the_descriptor,
+    _rule_check_counts_tally_runs,
+    _rule_result_leaves_a_run_uncompleted,
+)
+
+
+def result_invariants(result) -> list[str]:
+    """Every cross-field violation in one intake document.
+
+    Precondition: `result` has already satisfied the declared
+    `probe-flake-result/v1` schema, so every field read here is present
+    and of the declared type.
+    """
+    problems: list[str] = []
+    for rule in RESULT_RULES:
+        problems += rule(result)
+    return problems
+
+
+# --------------------------------------------------------------------------
+# The stored record. Each rule takes the same `(census, where, name)` so
+# the set can be composed — and so one can be lifted out of it, which is
+# how `test_probe_census.py` proves each rule is the one doing the
+# rejecting rather than a neighbour catching the same fixture.
+# --------------------------------------------------------------------------
+def _cohorts(census) -> list[tuple[str, dict]]:
+    """The record's cohorts, labelled by where they are stored."""
+    current = census["current"]
+    cohorts = [] if current is None else [("current", current)]
+    return cohorts + [(f"history[{index}]", cohort)
+                      for index, cohort in enumerate(census["history"])]
+
+
+def _accepted_attempts(census) -> int:
+    """Attempts logging an INGESTED measurement, by their own status.
+
+    Counted from `status` rather than from `accepted` because that is
+    what `ingest_result` decides on; the two agreeing is a separate rule
+    and keeping them separate is what lets each fail on its own case.
+    """
+    return sum(1 for attempt in census["attempts"]
+               if attempt["status"] == ACCEPTED_STATUS)
+
+
+def _rule_attempts_reconcile_with_samples(census, where, name) -> list[str]:
+    """Accepted attempts and retained samples are one count.
+
+    An accepted attempt is the LOG of an ingested measurement, and the
+    sample is that measurement's retained form in `current` or in
+    `history`, so the two are equal by construction. The lossy direction
+    is the one worth naming — clearing the cohorts while leaving the
+    accepted attempts reads as "these measurements were taken" with the
+    measurements gone, and the next rewrite would persist that loss —
+    but the opposite skew is equally impossible, so both are reported.
+
+    Safe to enforce as an EQUALITY because nothing prunes or caps either
+    collection: `_archive_current` MOVES the current cohort into
+    `history`, `reconcile_inventory` promotes through that same move,
+    and no operation deletes a row, a cohort, a sample or an attempt.
+    """
+    accepted = _accepted_attempts(census)
+    retained = sum(len(cohort["samples"])
+                   for _label, cohort in _cohorts(census))
+    if accepted == retained:
+        return []
+    return [f"at {where}, {name} logs {accepted} accepted attempt(s) but "
+            f"retains {retained} sample(s) across `current` and `history`; "
+            f"every accepted attempt is one retained measurement, so these "
+            f"cannot disagree"]
+
+
+def _rule_accepted_derives_from_status(census, where, name) -> list[str]:
+    """`accepted` is computed from `status`, so it cannot disagree."""
+    problems: list[str] = []
+    for position, attempt in enumerate(census["attempts"]):
+        expected = attempt["status"] == ACCEPTED_STATUS
+        if attempt["accepted"] is not expected:
+            problems.append(
+                f"at {where}.attempts[{position}], `accepted` is "
+                f"{attempt['accepted']!r} beside status "
+                f"{attempt['status']!r}; `accepted` is derived from "
+                f"`status`, so it is {expected!r}")
+    return problems
+
+
+def _rule_attempt_leaves_a_run_uncompleted(census, where, name) -> list[str]:
+    """A logged harness error never completed every requested run."""
+    problems: list[str] = []
+    for position, attempt in enumerate(census["attempts"]):
+        if attempt["status"] == ACCEPTED_STATUS:
+            continue
+        problems += _unfinished_measurement(
+            attempt["status"], attempt["completed_runs"],
+            attempt["requested_runs"], f"{where}.attempts[{position}]")
+    return problems
+
+
+def _rule_cohort_holds_one_commit(census, where, name) -> list[str]:
+    """A cohort IS one commit's samples.
+
+    `ingest_result` opens a cohort named by the measurement's own commit
+    and appends to it only measurements naming that same commit; a
+    different commit archives the whole prior cohort first.
+    """
+    problems: list[str] = []
+    for label, cohort in _cohorts(census):
+        for position, sample in enumerate(cohort["samples"]):
+            if sample["commit_sha"] != cohort["commit_sha"]:
+                problems.append(
+                    f"at {where}.{label}.samples[{position}], a sample from "
+                    f"commit {sample['commit_sha']} sits in the "
+                    f"{cohort['commit_sha']} cohort; a cohort holds one "
+                    f"commit's samples")
+    return problems
+
+
+# The stored rules, in report order: the whole-record reconciliation
+# names data loss, so it leads.
+CENSUS_RULES = (
+    _rule_attempts_reconcile_with_samples,
+    _rule_accepted_derives_from_status,
+    _rule_attempt_leaves_a_run_uncompleted,
+    _rule_cohort_holds_one_commit,
+)
+
+
+def census_record_invariants(census, where: str, probe) -> list[str]:
+    """Every cross-field violation in one stored census record.
+
+    Precondition: `census` has already satisfied the declared
+    `census_record` schema.
+    """
+    name = f"probe {probe!r}" if probe is not None else "this record"
+    problems: list[str] = []
+    for rule in CENSUS_RULES:
+        problems += rule(census, where, name)
+    return problems
+
+
+def census_invariants(document) -> list[str]:
+    """Every cross-field violation in one stored census.
+
+    A v1 seed carries no census records at all, so nothing here applies
+    to one: its schema drift is `--validate`'s report and `--seed`'s
+    repair, never corruption.
+
+    Precondition: `document` has already satisfied the declared schema
+    its own `schema` field names.
+    """
+    problems: list[str] = []
+    for position, entry in enumerate(document.get("probes") or []):
+        census = entry.get("census")
+        if not isinstance(census, dict):
+            continue
+        problems += census_record_invariants(
+            census, f"$.probes[{position}].census", entry.get("key"))
+    return problems
+
+
+def _refuse_inconsistent(problems: list[str], what: str) -> None:
+    """A controlled refusal naming the first violation, or nothing.
+
+    Reported the way `validate_document` reports a schema violation: the
+    first actionable location, and a count of the rest. A hand-edited
+    census is not an adversarial input, so listing every one of them is
+    noise rather than diagnosis.
+    """
+    if not problems:
+        return
+    more = ("" if len(problems) == 1
+            else f" (and {len(problems) - 1} further violation(s))")
+    raise CensusError(
+        f"{what} is internally inconsistent: {problems[0]}{more}")
+
+
 def validate_result(result) -> None:
-    """One `probe-flake-result/v1` document, before any field is read."""
-    validate_document(result, RESULT_SCHEMA, f"a {RESULT_SCHEMA} document")
+    """One `probe-flake-result/v1` document, before any field is read.
+
+    Shape first, then the cross-field invariants (#1493) — which read
+    nested fields, so they may only run once the declared schema has
+    promised those fields are there and are what they claim to be.
+    """
+    what = f"a {RESULT_SCHEMA} document"
+    validate_document(result, RESULT_SCHEMA, what)
+    _refuse_inconsistent(result_invariants(result), what)
 
 
 def validate_census(document, what: str) -> None:
@@ -410,6 +763,7 @@ def validate_census(document, what: str) -> None:
             f"{what} declares schema {declared!r}, which is not one this tool "
             f"can read (expected one of {MIGRATABLE_SCHEMAS})")
     validate_document(document, declared, what)
+    _refuse_inconsistent(census_invariants(document), what)
 
 
 # ==========================================================================
@@ -1733,6 +2087,13 @@ def update(path: Path, mutate) -> dict:
         # candidate's own field.
         validate_document(installed, CENSUS_SCHEMA,
                           f"the candidate census for {path}")
+        # The cross-field invariants (#1493) on the same two sides the
+        # schema is applied to. The stored check above is what refuses
+        # to rewrite an inconsistent census; this one is what refuses to
+        # CREATE one, so no mutation can install state the next read
+        # would reject.
+        _refuse_inconsistent(census_invariants(installed),
+                             f"the candidate census for {path}")
         _clear_staging(path.parent)
         if path.exists() and path.read_bytes() == payload:
             # A drift-free `--seed` is genuinely a no-op: leave the file,
