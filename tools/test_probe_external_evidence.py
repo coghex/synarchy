@@ -288,6 +288,196 @@ def test_identity_mapping() -> None:
           "every mapped id is a hyphenated probe: id")
 
 
+def test_both_identities_map_to_one_probe() -> None:
+    """`probe:` and `probe-flake:` are two identities of the same probe."""
+    both = evidence.test_ids_for_probe("transfer_order")
+    check_equal(both, {"run": "probe:transfer-order",
+                       "flake": "probe-flake:transfer-order"},
+                "transfer_order's two stable identities")
+    check_equal(evidence.flake_test_id_for_probe("persistence_contract_sweep"),
+                "probe-flake:persistence-contract-sweep",
+                "the measurement identity is derived from the key too")
+
+    keys = evidence.probe_keys()
+    every = [i for k in keys for i in evidence.test_ids_for_probe(k).values()]
+    check_equal(len(set(every)), len(every),
+                "all identities across both namespaces stay distinct")
+    check(all("_" not in i for i in every), "every identity is hyphenated")
+
+    # The reverse mapping is by exact generated identity, never by
+    # undoing the hyphenation — which is what keeps `probe:transfer_order`
+    # from resolving onto the registered `transfer_order`.
+    check_equal(evidence.probe_for_test_id("probe:transfer-order"),
+                ("transfer_order", evidence.TEST_KIND_RUN),
+                "an ordinary id resolves to its probe and kind")
+    check_equal(evidence.probe_for_test_id("probe-flake:transfer-order"),
+                ("transfer_order", evidence.TEST_KIND_FLAKE),
+                "a measurement id resolves to the SAME probe, a different kind")
+    for rejected in ("probe:transfer_order", "probe-flake:transfer_order",
+                     "probe:transfer-order-extra", "gameplay:transfer-order",
+                     "PROBE:TRANSFER-ORDER", "probe:", "probe-flake:", "",
+                     "flake:transfer-order"):
+        check_equal(evidence.probe_for_test_id(rejected), None,
+                    f"{rejected!r} resolves to no probe")
+    for rejected in (None, 17, ["probe:transfer-order"]):
+        check_equal(evidence.probe_for_test_id(rejected), None,
+                    f"a non-string test id ({type(rejected).__name__}) resolves to none")
+
+    # Prefix families stay distinct across BOTH namespaces.
+    for shorter, longer in (("repair", "repair_ai"), ("repair", "repair_item"),
+                            ("power", "power_workshop"),
+                            ("persistence_contract", "persistence_contract_sweep")):
+        short_ids = set(evidence.test_ids_for_probe(shorter).values())
+        long_ids = set(evidence.test_ids_for_probe(longer).values())
+        check(not (short_ids & long_ids),
+              f"{shorter} and {longer} share no identity")
+
+
+def test_a_measurement_run_is_the_same_probes_work() -> None:
+    """A `probe-flake:` run matches, and stays labelled as a measurement."""
+    with tempfile.TemporaryDirectory() as tmp:
+        runs = [
+            make_run("probe:transfer-order", "ordinary",
+                     claimed_at="2026-08-12T10:00:00Z"),
+            make_run("probe-flake:transfer-order", "measurement",
+                     claimed_at="2026-08-13T10:00:00Z"),
+            make_run("probe-flake:transfer-order-extra", "prefixed"),
+            make_run("probe-flake:transfer_order", "underscored"),
+            make_run("probe-flake:role", "another-probe"),
+        ]
+        state = build_state(Path(tmp), runs, {})
+        with NonInteraction(state) as guard:
+            result = read(state, "transfer_order")
+            guard.assert_untouched("both-identity matching")
+
+        check_equal([r["run_id"] for r in result["runs"]],
+                    ["measurement", "ordinary"],
+                    "both identities match, newest first")
+        by_id = {r["run_id"]: r for r in result["runs"]}
+        check_equal(by_id["ordinary"]["test_id"], "probe:transfer-order",
+                    "the ordinary run reports its own id")
+        check_equal(by_id["ordinary"]["test_kind"], evidence.TEST_KIND_RUN,
+                    "and is labelled an ordinary run")
+        check_equal(by_id["measurement"]["test_id"], "probe-flake:transfer-order",
+                    "the measurement reports its own id")
+        check_equal(by_id["measurement"]["test_kind"], evidence.TEST_KIND_FLAKE,
+                    "and is labelled a measurement")
+        check_equal(result["test_id"], "probe:transfer-order",
+                    "the document's test_id stays the ordinary identity")
+        check_equal(result["test_ids"],
+                    {"run": "probe:transfer-order",
+                     "flake": "probe-flake:transfer-order"},
+                    "and test_ids carries both")
+        check_equal(result["diagnostics"], [], "the read is diagnostic-free")
+        rendered = evidence.render(result)
+        check("probe-flake:transfer-order" in rendered,
+              "the measurement identity renders", rendered)
+        check("(flake)" in rendered and "(run)" in rendered,
+              "each run renders its kind", rendered)
+
+
+def test_the_heartbeat_is_reported_raw() -> None:
+    """`heartbeat_at` is surfaced un-interpreted, as text or as None."""
+    with tempfile.TemporaryDirectory() as tmp:
+        runs = [
+            make_run("probe:role", "beating", status="running",
+                     claimed_at="2026-08-13T10:00:00Z",
+                     heartbeat_at="2026-08-13T10:04:00Z"),
+            make_run("probe:role", "silent", status="running",
+                     claimed_at="2026-08-12T10:00:00Z"),
+            make_run("probe:role", "malformed", status="running",
+                     claimed_at="2026-08-11T10:00:00Z", heartbeat_at=1234),
+        ]
+        state = build_state(Path(tmp), runs, {})
+        with NonInteraction(state) as guard:
+            result = read(state, "role")
+            guard.assert_untouched("heartbeat reporting")
+        by_id = {r["run_id"]: r for r in result["runs"]}
+        check_equal(by_id["beating"]["heartbeat_at"], "2026-08-13T10:04:00Z",
+                    "a recorded heartbeat is reported verbatim")
+        check_equal(by_id["silent"]["heartbeat_at"], None,
+                    "an absent heartbeat is unavailable, never fabricated")
+        check_equal(by_id["malformed"]["heartbeat_at"], None,
+                    "a non-string heartbeat is unavailable too")
+        check_equal(by_id["beating"]["run_state"], "running",
+                    "the raw run state is reported; activity is not decided here")
+
+        # `recorded_fields` separates "not recorded" from "recorded but
+        # unusable", which the normalized `null` alone cannot.
+        check("heartbeat_at" in by_id["malformed"]["recorded_fields"],
+              "a malformed heartbeat is still listed as recorded")
+        check("heartbeat_at" not in by_id["silent"]["recorded_fields"],
+              "an absent heartbeat is not listed as recorded")
+        check_equal(by_id["silent"]["recorded_fields"],
+                    sorted(by_id["silent"]["recorded_fields"]),
+                    "recorded_fields is sorted")
+        check(all("claimed_at" in r["recorded_fields"] for r in result["runs"]),
+              "every synthetic run records claimed_at")
+
+
+def test_diagnostics_carry_the_state_they_concern() -> None:
+    """Every diagnostic is scoped, so a consumer can fail closed precisely."""
+    # A damaged REGISTRY is active-run state.
+    with tempfile.TemporaryDirectory() as tmp:
+        state = build_state(Path(tmp), [make_run("probe:role", "run")], {})
+        (state / evidence.REGISTRY_FILENAME).write_text("{not json",
+                                                        encoding="utf-8")
+        with NonInteraction(state) as guard:
+            result = read(state, "role")
+            guard.assert_untouched("unparseable registry")
+        check_equal([d["scope"] for d in result["diagnostics_detail"]],
+                    [evidence.SCOPE_REGISTRY],
+                    "an unparseable registry is scoped `registry`")
+        check_equal(result["diagnostics"],
+                    [d["message"] for d in result["diagnostics_detail"]],
+                    "the flat list mirrors the detailed one, in order")
+
+    # A damaged RECORD is active-run state too.
+    with tempfile.TemporaryDirectory() as tmp:
+        state = build_state(Path(tmp), ["not-an-object",
+                                        make_run("probe:role", "run")], {})
+        with NonInteraction(state) as guard:
+            result = read(state, "role")
+            guard.assert_untouched("malformed record")
+        check_equal([d["scope"] for d in result["diagnostics_detail"]],
+                    [evidence.SCOPE_RECORD],
+                    "a non-object run record is scoped `record`")
+        check_equal([r["run_id"] for r in result["runs"]], ["run"],
+                    "the valid record is still read")
+
+    # A damaged REPORT is NOT active-run state.
+    with tempfile.TemporaryDirectory() as tmp:
+        runs = [make_run("probe:role", "run")]
+        state = build_state(Path(tmp), runs, {})
+        runs[0]["report_path"] = report_path(state, "run")
+        build_state(Path(tmp), runs, {})
+        # A DIRECTORY where the report belongs: it exists, so it is
+        # damage rather than a report that was simply never written.
+        (state / evidence.REPORTS_DIRNAME / ("run" + evidence.REPORT_SUFFIX)).mkdir()
+        with NonInteraction(state) as guard:
+            result = read(state, "role")
+            guard.assert_untouched("damaged report")
+        check_equal([d["scope"] for d in result["diagnostics_detail"]],
+                    [evidence.SCOPE_REPORT],
+                    "a damaged report is scoped `report`, never `registry`")
+
+    # A clean read carries neither list.
+    with tempfile.TemporaryDirectory() as tmp:
+        state = build_state(Path(tmp), [make_run("probe:role", "run")], {})
+        result = read(state, "role")
+        check_equal(result["diagnostics_detail"], [],
+                    "a clean read has no scoped diagnostics")
+
+    # The absent-state result still carries both keys.
+    with tempfile.TemporaryDirectory() as tmp:
+        result = read(Path(tmp) / "nothing-here", "role")
+        check_equal(result["state"], evidence.STATE_ABSENT, "absent state")
+        check_equal(result["diagnostics_detail"], [],
+                    "an absent state tree is not damage")
+        check_equal(result["test_ids"]["flake"], "probe-flake:role",
+                    "both identities are reported even with no state")
+
+
 def test_unknown_key_is_rejected() -> None:
     """An unregistered key is a rejection, not a no-evidence answer."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -646,19 +836,21 @@ def test_a_symlinked_reports_directory_refuses_every_read() -> None:
               "no relocated content reaches the output")
 
         # The scope helper says so directly, and creates nothing.
-        diagnostics: list[str] = []
+        diagnostics = evidence.DiagnosticLog()
         check_equal(evidence.resolve_reports_scope(state, diagnostics), None,
                     "resolve_reports_scope refuses the relocated directory")
-        check_equal(len(diagnostics), 1, "and diagnoses it exactly once")
+        check_equal(len(diagnostics.entries), 1, "and diagnoses it exactly once")
+        check_equal(diagnostics.scopes(), {evidence.SCOPE_REPORT},
+                    "and scopes it to the report, not to active-run state")
 
         # A real directory in the same place is trusted again.
         (state / evidence.REPORTS_DIRNAME).unlink()
         (state / evidence.REPORTS_DIRNAME).mkdir()
-        trusted: list[str] = []
+        trusted = evidence.DiagnosticLog()
         check_equal(evidence.resolve_reports_scope(state, trusted),
                     (state / evidence.REPORTS_DIRNAME).resolve(),
                     "a real reports directory is trusted")
-        check_equal(trusted, [], "and produces no diagnostic")
+        check_equal(trusted.entries, [], "and produces no diagnostic")
 
 
 def test_a_misplaced_reports_directory_refuses_every_read() -> None:
@@ -739,10 +931,12 @@ def test_the_registry_is_confined_to_the_state_root() -> None:
         check_equal(result["state"], evidence.STATE_PRESENT,
                     "the state is still present, just unusable")
 
-        diagnostics: list[str] = []
+        diagnostics = evidence.DiagnosticLog()
         check_equal(evidence.resolve_registry_path(state, diagnostics), None,
                     "resolve_registry_path refuses it directly")
-        check_equal(len(diagnostics), 1, "and diagnoses it exactly once")
+        check_equal(len(diagnostics.entries), 1, "and diagnoses it exactly once")
+        check_equal(diagnostics.scopes(), {evidence.SCOPE_REGISTRY},
+                    "and scopes it to the registry")
 
     with tempfile.TemporaryDirectory() as tmp:
         state = build_state(Path(tmp), [make_run("probe:role", "run")], {})
@@ -757,7 +951,7 @@ def test_the_registry_is_confined_to_the_state_root() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         state = build_state(Path(tmp), [make_run("probe:role", "run")], {})
-        resolved = evidence.resolve_registry_path(state, [])
+        resolved = evidence.resolve_registry_path(state, evidence.DiagnosticLog())
         check_equal(resolved, (state / evidence.REGISTRY_FILENAME).resolve(),
                     "a real registry resolves to itself")
 
@@ -1035,7 +1229,8 @@ def test_render_is_total() -> None:
         check("bare" in text, "the run id renders")
         check(text.count("unavailable") >= 4,
               "every unavailable field renders as unavailable", text)
-        check("presentation only" in text, "the presentation-only note renders")
+        check("makes no scheduling decision" in text,
+              "the read-only note renders")
         json.dumps(result)  # raises if a value is not JSON-serializable
         check(True, "the evidence document is JSON-serializable")
 
@@ -1043,6 +1238,10 @@ def test_render_is_total() -> None:
 def main() -> int:
     cases = [
         test_identity_mapping,
+        test_both_identities_map_to_one_probe,
+        test_a_measurement_run_is_the_same_probes_work,
+        test_the_heartbeat_is_reported_raw,
+        test_diagnostics_carry_the_state_they_concern,
         test_unknown_key_is_rejected,
         test_exact_matching,
         test_clean_and_observed_reports,
