@@ -836,10 +836,20 @@ install command, never a skipped check. `--print` is the exception that proves
 it validates nothing — it renders the live registry, reads and writes nothing,
 and stays dependency-free so a fresh checkout can run it.
 
-Still deliberately absent: the CROSS-FIELD invariants (#1493), and any
-requirement that the census AGREE with the live registry — complete-inventory
-drift stays `--validate`'s report and `--seed`'s repair, never a write
-precondition.
+The CROSS-FIELD invariants are CODE (#1493), because rules that span fields
+cannot be declared: accepted attempts reconcile against the samples retained
+across `current` and `history`; `accepted` agrees with `status`; a harness
+error never reports completing every requested run; `check_counts` is keyed by
+exactly the descriptor's declared checks and each entry is the tally `runs`
+shows; a PASS run carries no FAIL check; and a cohort holds one commit's
+samples. Each rejects state no real run could have written, and each
+runs on both sides of a mutation exactly as the schema does — so an
+inconsistent census stops `--record`, the policy updates, `--seed` and
+`--validate` alike instead of being rewritten and made durable.
+
+Still deliberately absent: any requirement that the census AGREE with the live
+registry — complete-inventory drift stays `--validate`'s report and `--seed`'s
+repair, never a write precondition.
 
 Nothing at runtime reads it: `probe_flake.py` takes protocol status from its
 own in-repo `PROTOCOL_PROBES` and check identity from each probe's descriptor,
@@ -852,15 +862,22 @@ census and result against every declared definition, each nullable field
 deleted, non-object per-run `checks` including truthy values, unexpected
 properties in every representative nested object, invalid enum/range/length
 values, non-finite numbers, and an environment where `jsonschema` is genuinely
-unimportable — asserting for each refusal that nothing was written. Its cohort
-cases inject a fixed evaluation time rather than reading a clock: unequal
-same-commit batches (which an unweighted mean would report as 0.30 instead of
-0.17), an A → B → A sequence, HEAD moving with no measurement, the inclusive
-staleness boundary from both sides, a future anchor, an unmeasured probe beside
-a real zero rate and a cohort with no denominator, a promoted probe whose
-statistic lives in `history[-1]`, the placeholder/malformed refusals at the
-incoming, stored-cohort-on-ingest and stored-read boundaries alike, and the
-exact commit in the rendered table.
+unimportable — asserting for each refusal that nothing was written. Every
+cross-field rule gets three cases: a rejecting fixture that is still
+SCHEMA-valid, so only that rule can reject it, driven through `--record`, a
+policy update, `--seed` and `--validate`; the legitimate flows it must not
+over-reject (an empty census, a TIMEOUT run carrying a FAIL check, a harness
+error that completed no run at all, cohort rollover, promotion); and a
+mutation check that lifts that one rule out of the production rule set and
+requires its own fixture to be accepted again. Its cohort cases inject a fixed
+evaluation time rather than reading a clock: unequal same-commit batches (which
+an unweighted mean would report as 0.30 instead of 0.17), an A → B → A
+sequence, HEAD moving with no measurement, the inclusive staleness boundary
+from both sides, a future anchor, an unmeasured probe beside a real zero rate
+and a cohort with no denominator, a promoted probe whose statistic lives in
+`history[-1]`, the placeholder/malformed refusals at the incoming,
+stored-cohort-on-ingest and stored-read boundaries alike, and the exact commit
+in the rendered table.
 
 ### `probe_external_evidence.py` — the Codex `$test` record, read-only (#1432)
 
