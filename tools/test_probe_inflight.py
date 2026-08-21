@@ -1583,6 +1583,31 @@ def test_an_unknown_probe_key_is_rejected() -> None:
     except inflight.InflightRejected as exc:
         check("timezone-aware" in str(exc), "and says why", str(exc))
 
+    # An identity index that does not own the key would answer "no
+    # occurrences" for every subject in every source — the one way a
+    # caller can make this component answer `clear` without looking at
+    # anything. It is refused rather than silently believed.
+    try:
+        inflight.evaluate_probe_inflight(
+            "injury_log", now=NOW, target_repository=REPOSITORY,
+            github=FakeGitHub(),
+            identity_index=inflight.build_identity_index(
+                [("something_else", "something_else_probe.py", "x")]))
+        check(False, "an index that does not own the probe is rejected")
+    except inflight.InflightRejected as exc:
+        check("registers no forms" in str(exc), "and says why", str(exc))
+
+    # An index that DOES own it is accepted.
+    document = inflight.evaluate_probe_inflight(
+        "injury_log", now=NOW, target_repository=REPOSITORY,
+        github=FakeGitHub(), state_root=Path("/nonexistent-state-root"),
+        docs_root=None, repo_root=run_probes.REPO_ROOT,
+        identity_index=inflight.build_identity_index())
+    check(document["result"] in (inflight.RESULT_CLEAR,
+                                 inflight.RESULT_IN_FLIGHT,
+                                 inflight.RESULT_SOURCE_ERROR),
+          "an index that owns the probe is accepted")
+
 
 def test_the_shipped_cli() -> None:
     """The CLI is exercised end to end, offline, on a scratch repository.

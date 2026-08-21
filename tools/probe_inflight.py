@@ -936,6 +936,17 @@ def resolve_docs_worktree(repo_root=None) -> Path | None:
     unusable docs worktree as an actionable stop, because it is about to
     write the census there. Here it is a normal no-evidence state — the
     checked-out reports are the required source and are always read.
+
+    "Unresolvable" deliberately covers every way that helper declines,
+    not only "no worktree is on that branch": a `prunable` registration,
+    a registered path that is not a usable checkout, and a failing `git
+    worktree list` all land here as no-evidence. That is the approved
+    contract for this component rather than an oversight — the docs
+    worktree is CONSERVATIVE EXTRA evidence, so its unavailability may
+    not block an evaluation the required checked-out reports can answer.
+    Note the boundary: this is about resolving the WORKTREE. Once one
+    resolves, a report inside it that is present but unexaminable is a
+    source error, not no-evidence (see `evaluate_reports`).
     """
     try:
         return probe_census.resolve_docs_worktree(repo_root)
@@ -1047,6 +1058,14 @@ def evaluate_probe_inflight(probe_key: str, *,
             "the evaluation time must be timezone-aware; a naive instant "
             "cannot be compared against the coordinator's UTC timestamps.")
     index = identity_index if identity_index is not None else build_identity_index()
+    if not any(probe_key in owners for owners in index.values()):
+        # An index that does not own the key would answer "no
+        # occurrences" for every subject in every source, which reads as
+        # a completely clean scan. That is the one way a caller can make
+        # this component answer `clear` without looking at anything.
+        raise InflightRejected(
+            f"the supplied identity index registers no forms for probe "
+            f"{probe_key!r}, so every subject would read as a non-match.")
     transport = github if github is not None else default_github_transport()
 
     document: dict = {
