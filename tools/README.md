@@ -825,9 +825,14 @@ State lives at `<git-common-dir>/codex-test`, resolved with `git rev-parse
 literal `.git/codex-test` would be wrong. That tree is untracked and
 machine-local: it is ABSENT on a fresh clone, on another machine, and wherever
 Codex is not installed, and its absence is a normal "no external evidence"
-result (exit 0, no diagnostic). An existing but unreadable or malformed
-registry or report is different — a non-fatal diagnostic beside whatever could
-still be read. A recorded report path that is simply not there is data (a run
+result (exit 0, no diagnostic). A state root that EXISTS but is not a directory,
+and an existing but unreadable or malformed registry or report, are different —
+each a non-fatal diagnostic beside whatever could still be read. Absence and
+damage are told apart with `lstat`/`stat` directly through the shared
+`entry_state` helper, never with `Path.exists` / `.is_dir` / `.is_file`, which
+swallow `OSError` and answer False: under those an unstattable state root reads
+exactly like one that was never created, and a consumer failing closed on
+unreadable active-run state would never learn the difference. A recorded report path that is simply not there is data (a run
 has not written it yet); one that EXISTS but is not a regular file is damage,
 and damage is diagnosed. So is a registry carrying JSON's non-standard
 `NaN`/`Infinity` constants, which Python's `json` would otherwise read and
@@ -845,12 +850,18 @@ the state tree and rewrites `registry.json` with a fresh `updated_at`. Reading
 the JSON directly is the only way to honour the permission boundary — and the
 only way that works when the machine-local coordinator is not installed.
 
-A `run_probes.PROBES` key maps to a `$test` run id by underscores-to-hyphens
-under the `probe:` namespace (`transfer_order` -> `probe:transfer-order`),
-derived from the KEY and never from the script filename —
+A `run_probes.PROBES` key maps to TWO `$test` run ids by
+underscores-to-hyphens: `probe:<hyphenated-key>` for an ordinary execution and
+`probe-flake:<hyphenated-key>` for a flakiness measurement, so `transfer_order`
+maps to both `probe:transfer-order` and `probe-flake:transfer-order`. Both name
+the same canonical probe and both are its evidence, while each matched run
+reports its own `test_id` and `test_kind` so the two stay distinct in history.
+Both are derived from the KEY and never from the script filename —
 `persistence_contract_sweep.py` has no `_probe` suffix to strip. Matching is
-EXACT, and a key the registry does not carry is a controlled unknown-key
-rejection (exit 2), not a "no external evidence" answer.
+EXACT against the generated ids (which is also how the reverse lookup works, so
+`probe:transfer_order` never resolves onto the registered `transfer_order`), and
+a key the registry does not carry is a controlled unknown-key rejection
+(exit 2), not a "no external evidence" answer.
 
 Per matching run it reports the run id and state, the tested commit, the
 MECHANICAL execution outcome (from the registry's own `execution_status` /
@@ -868,10 +879,56 @@ otherwise relocate what gets read while the name itself still looked right —
 and a regular file standing in for `reports/` would make every recorded report
 read as a silent `absent`.
 
-External `$test` evidence is PRESENTATION-ONLY. A run appearing, passing,
-failing or recording observations changes no census sample, no statistic, no
-schedule and no skip decision — one interpreted `$test` run is context, not a
-measurement in the lab's statistics.
+Every diagnostic is emitted twice: as free text in `diagnostics`, and in
+`diagnostics_detail` tagged with the state it concerns (`registry`, `record` or
+`report`). A consumer that must fail closed on unreadable ACTIVE-RUN state has
+to tell an unparseable `registry.json` apart from one finished run's missing
+report, and matching on diagnostic prose to do that would be a trap.
+
+**The reader itself makes no scheduling decision.** A run appearing, passing,
+failing or recording observations changes no census sample and no statistic —
+one interpreted `$test` run is context, not a measurement in the lab's
+statistics. What the read is FOR is wider than presentation: since #1433 its
+evidence is also consumed by `probe_inflight.py` below, which owns the
+active-run predicate and the eligibility verdict. The read-only boundary is
+unchanged and unconditional — no coordinator invocation, no lock, no state
+creation, no `registry.json` write, no report write.
+
+### `probe_inflight.py` — is other work already in flight for this probe? (#1433)
+
+Measuring a probe's flakiness costs ten or more runs and can take an hour. This
+answers, for ONE registered probe key, whether that work should start at all:
+
+```bash
+python3 tools/probe_inflight.py --probe injury_log
+python3 tools/probe_inflight.py --probe injury_log --json
+python3 tools/test_probe_inflight.py   # the synthetic, offline self-test
+```
+
+Exactly one of three results comes back. `clear` — every required source was
+read completely and nothing matched. `in-flight` — something matched, with
+inspectable evidence for every match. `source-error` — a required source could
+not be read or interpreted completely, with an actionable diagnostic. It is a
+point-in-time ELIGIBILITY SNAPSHOT: its consumer takes it immediately before
+selecting or claiming, and this component never polls or cancels a measurement
+already under way. Candidate iteration and ranking belong to #1435; claim
+acquisition and launch to #1434/#1436.
+
+Four sources are consulted: active `$test` runs (through
+`probe_external_evidence.py`, under both identities), every page of the target
+repository's open issues, every page of its open pull requests, and the four
+findings reports (`non_ci_test_audit_findings.md`, `ci_test_audit_findings.md`,
+`python_testing_findings.md`, `code_health_findings.md`) in BOTH the checked-out
+repository and a branch-resolved `docs-wip` worktree. Issues and PRs match on
+TITLES only; reports match on the full finding heading, with the heading marker
+authoritative for whether the finding is still open. Since the title is the
+whole subject, a tracker record whose title, number or state cannot be read is a
+`source-error`, not a non-match — "no tokens" and "no match" would otherwise be
+the same answer.
+
+It fails closed. A partial scan never returns `clear`, and the read-only
+boundary is absolute: no coordinator invocation, no lock, no state directory, no
+`registry.json` write, and not one byte written to any findings report.
 
 ### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets/save-compat selection
 

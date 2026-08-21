@@ -32,12 +32,23 @@ strictly a reader:
   directly beneath that validated `reports/`. A recorded path is data,
   never an authority to widen read scope.
 
-**External evidence is presentation-only.** A `$test` run appearing,
-disappearing, passing, failing or recording observations changes no
-census sample, no statistic, no schedule and no skip decision. This
-module imports `run_probes` only to validate a probe key, and imports
-`probe_census` not at all. One interpreted `$test` run is CONTEXT, not
-a measurement in the lab's statistics.
+**This reader itself makes no scheduling decision.** A `$test` run
+appearing, disappearing, passing, failing or recording observations
+changes no census sample and no statistic here: this module imports
+`run_probes` only to validate a probe key, and imports `probe_census`
+not at all. One interpreted `$test` run is CONTEXT, not a measurement in
+the lab's statistics, and that stays true however the read is used.
+
+What the read is FOR is wider than presentation. Since #1433 the
+evidence returned below is also consumed by `tools/probe_inflight.py`,
+which asks whether a probe already has an ACTIVE `$test` run and
+therefore must not have an expensive flakiness measurement started
+against it. That consumer owns the active-run predicate, the stale
+horizon and the eligibility verdict; this module still only reports what
+the record says. The read-only boundary is unchanged and unconditional
+— no coordinator invocation, no lock, no state creation, no
+`registry.json` write, no report write — and `$test` results still never
+become census samples or statistics.
 
 State location
 --------------
@@ -50,21 +61,40 @@ skill's own contract.
 That tree is untracked and machine-local. It is absent on a fresh clone,
 on another machine, and wherever Codex is not installed. **Absence is a
 normal "no external evidence" result** — exit 0, an empty run list, no
-diagnostic. Damage is different: an existing but unreadable or malformed
-registry or report produces a non-fatal DIAGNOSTIC. Neither condition
-fails the read, suppresses the probe, or reclassifies anything.
+diagnostic. Damage is different: a state root that exists but is not a
+directory, and an existing but unreadable or malformed registry or
+report, each produce a non-fatal DIAGNOSTIC. Neither condition fails the
+read, suppresses the probe, or reclassifies anything.
+
+Absence and damage are told apart with `lstat`/`stat` directly rather
+than `Path.exists` / `.is_dir` / `.is_file`, which swallow `OSError` and
+answer False — under those an unstattable state root reads exactly like
+one that was never created, and a consumer failing closed on unreadable
+active-run state would never learn the difference. `entry_state` below
+is that shared primitive.
 
 Identity
 --------
-`run_probes.PROBES` keys are the canonical input. A key maps to the
-`$test` run identifier by underscores-to-hyphens under the `probe:`
-namespace — `transfer_order` -> `probe:transfer-order`. It is derived
-from the KEY, never from the script filename: `persistence_contract_sweep`
-is registered as `persistence_contract_sweep.py`, with no `_probe`
-suffix to strip. Matching is EXACT; `probe:transfer-order-extra`,
-`probe:transfer_order` and `gameplay:transfer-order` are all non-matches,
-and a probe key that is not in `run_probes.PROBES` is a controlled
-unknown-key rejection, NOT a "no external evidence" answer.
+`run_probes.PROBES` keys are the canonical input. A key maps to its
+`$test` run identifiers by underscores-to-hyphens under two namespaces:
+
+* `probe:<hyphenated-key>` — an ORDINARY execution of the probe;
+* `probe-flake:<hyphenated-key>` — a FLAKINESS MEASUREMENT of it.
+
+`transfer_order` therefore maps to both `probe:transfer-order` and
+`probe-flake:transfer-order`. Both resolve to the same canonical probe,
+so a consumer asking "is this probe busy?" sees either, while the two
+stay DISTINCT in `$test` history and in every reported run — which is
+why each run carries its own `test_id` and `test_kind`.
+
+Both are derived from the KEY, never from the script filename:
+`persistence_contract_sweep` is registered as
+`persistence_contract_sweep.py`, with no `_probe` suffix to strip.
+Matching is EXACT against the two generated identifiers, so
+`probe:transfer-order-extra`, `probe:transfer_order`,
+`probe-flake:transfer_order` and `gameplay:transfer-order` are all
+non-matches, and a probe key that is not in `run_probes.PROBES` is a
+controlled unknown-key rejection, NOT a "no external evidence" answer.
 
 Reporting
 ---------
@@ -76,9 +106,18 @@ mechanical outcome comes from the registry's own `execution_status` /
 — the `$test` contract separates command execution from interpretation
 on purpose. Active, legacy and partially recorded runs are surfaced
 rather than dropped: a value the record does not carry is reported as
-UNAVAILABLE (`null` in JSON), never as a fabricated `false` or `0`. The
+UNAVAILABLE (`null` in JSON), never as a fabricated `false` or `0`, and
+each run also lists the field names its raw record actually carries, so
+a consumer can tell "not recorded" from "recorded but unusable". The
 full known history is reported, always; there is no limit option and no
 default truncation.
+
+Every diagnostic is emitted twice: once as free text in `diagnostics`,
+and once in `diagnostics_detail`, tagged with the state it concerns
+(`registry`, `record` or `report`). The tag exists because a consumer
+that must FAIL CLOSED on unreadable active-run state has to tell an
+unparseable `registry.json` apart from one completed run's missing
+report, and matching on diagnostic prose to do that would be a trap.
 
 Usage:
   python3 tools/probe_external_evidence.py --probe role
@@ -105,6 +144,7 @@ import argparse
 import json
 import math
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -122,10 +162,27 @@ REPORTS_DIRNAME = "reports"
 REPORT_SUFFIX = ".test-result.md"
 COORDINATOR_SCHEMA = "codex-test-coordinator/v1"
 
-# `probe:<key with hyphens>`. The `$test` skill also records
-# `gameplay:*` and `playtest:*` runs; those namespaces are never a
-# probe's evidence and never match.
+# `probe:<key with hyphens>` is an ordinary execution of the probe;
+# `probe-flake:<key with hyphens>` is a flakiness measurement of the
+# same probe. Both resolve to one canonical probe and both are that
+# probe's evidence. The `$test` skill also records `gameplay:*` and
+# `playtest:*` runs; those namespaces are never a probe's evidence and
+# never match.
 TEST_ID_NAMESPACE = "probe:"
+TEST_ID_NAMESPACE_FLAKE = "probe-flake:"
+
+# Which of the two identities a matched run was recorded under. Reported
+# per run so the two stay distinguishable in history even though they
+# exclude one another while active.
+TEST_KIND_RUN = "run"
+TEST_KIND_FLAKE = "flake"
+
+# What a diagnostic concerns. `registry` and `record` are active-run
+# state; `report` is one run's interpretation artifact and says nothing
+# about whether any run is active.
+SCOPE_REGISTRY = "registry"
+SCOPE_RECORD = "record"
+SCOPE_REPORT = "report"
 
 # Observation status, kept a tri-state on purpose: a run whose
 # interpretation has not happened yet must not read as "no observations".
@@ -151,6 +208,31 @@ class EvidenceRejected(Exception):
     """A controlled rejection: bad input or an unusable environment."""
 
 
+class DiagnosticLog:
+    """Non-fatal diagnostics, each tagged with the state it concerns.
+
+    The flat message list is what a human reads. The tag is what
+    `tools/probe_inflight.py` reads: it must fail closed when ACTIVE-RUN
+    state (`registry`, `record`) is unreadable, while a `report`
+    diagnostic — one finished run's interpretation artifact missing or
+    out of scope — says nothing about whether any run is active. Sorting
+    those two apart by matching on diagnostic prose would be a trap, so
+    the scope is recorded at the point the diagnostic is raised.
+    """
+
+    def __init__(self) -> None:
+        self.entries: list[dict] = []
+
+    def add(self, scope: str, message: str) -> None:
+        self.entries.append({"scope": scope, "message": message})
+
+    def messages(self) -> list[str]:
+        return [entry["message"] for entry in self.entries]
+
+    def scopes(self) -> set[str]:
+        return {entry["scope"] for entry in self.entries}
+
+
 # Every filesystem call below catches `ValueError` beside `OSError`. A
 # registry field is arbitrary external text, and a path built from a
 # string containing an embedded NUL raises `ValueError` — not `OSError`
@@ -158,6 +240,38 @@ class EvidenceRejected(Exception):
 # would turn one malformed record into a traceback that aborts the whole
 # read and takes every later valid run with it.
 PATH_ERRORS = (OSError, ValueError)
+
+
+def entry_state(path: Path) -> tuple[bool, int | None, str | None]:
+    """`(present, resolved st_mode, stat failure)` for one path.
+
+    The shared primitive for every "what kind of thing is at this path?"
+    question in the de-flake lab, including
+    `tools/probe_inflight.py`'s. It exists because `Path.exists`,
+    `Path.is_dir` and `Path.is_file` all SWALLOW `OSError` and answer
+    False, which makes a path that cannot be examined — a denied
+    directory, a parent that is not a directory, an I/O error —
+    indistinguishable from one that is simply not there. Anything that
+    fails closed on damage but tolerates absence must be able to tell
+    those apart, so this asks with `lstat`/`stat` directly and keeps
+    THREE answers distinct: absent, present-and-of-this-kind, and could
+    not be examined.
+
+    `lstat` runs first so a symlink is judged as itself: one whose target
+    is gone is PRESENT and of no usable kind, not absent.
+    """
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return False, None, None
+    except PATH_ERRORS as exc:
+        return True, None, str(exc)
+    try:
+        return True, os.stat(path).st_mode, None
+    except FileNotFoundError:
+        return True, None, None                       # a dangling symlink
+    except PATH_ERRORS as exc:
+        return True, None, str(exc)
 
 
 # --------------------------------------------------------------------------
@@ -178,12 +292,59 @@ def probe_script(probe_key: str) -> str | None:
 
 
 def test_id_for_probe(probe_key: str) -> str:
-    """The `$test` run identifier a registered probe key maps to.
+    """The ORDINARY `$test` run identifier a registered probe key maps to.
 
     Derived from the KEY, never the script filename — `_probe.py` is not
     a reliable suffix (`persistence_contract_sweep.py`).
     """
     return TEST_ID_NAMESPACE + probe_key.replace("_", "-")
+
+
+def flake_test_id_for_probe(probe_key: str) -> str:
+    """The FLAKINESS-MEASUREMENT `$test` identifier for the same key."""
+    return TEST_ID_NAMESPACE_FLAKE + probe_key.replace("_", "-")
+
+
+def test_ids_for_probe(probe_key: str) -> dict[str, str]:
+    """Both stable `$test` identities of one probe, by kind.
+
+    Both name the SAME canonical probe. A consumer deciding whether the
+    probe is busy treats either as that probe's work; a consumer
+    reporting history keeps them apart.
+    """
+    return {
+        TEST_KIND_RUN: test_id_for_probe(probe_key),
+        TEST_KIND_FLAKE: flake_test_id_for_probe(probe_key),
+    }
+
+
+def probe_for_test_id(test_id: object) -> tuple[str, str] | None:
+    """`(probe key, kind)` for a `$test` identifier, or None.
+
+    Resolved by GENERATING both identities for every registered key and
+    looking the value up, never by stripping a namespace and undoing the
+    hyphenation. The inverse mapping is not injective: reversing
+    `probe:transfer_order` by substitution would land on the registered
+    `transfer_order`, which the exact forward comparison correctly
+    refuses.
+    """
+    if not isinstance(test_id, str):
+        return None
+    return _test_id_index().get(test_id)
+
+
+_TEST_ID_INDEX: dict[str, tuple[str, str]] | None = None
+
+
+def _test_id_index() -> dict[str, tuple[str, str]]:
+    global _TEST_ID_INDEX
+    if _TEST_ID_INDEX is None:
+        index: dict[str, tuple[str, str]] = {}
+        for key in probe_keys():
+            for kind, identifier in test_ids_for_probe(key).items():
+                index[identifier] = (key, kind)
+        _TEST_ID_INDEX = index
+    return _TEST_ID_INDEX
 
 
 def require_known_probe(probe_key: str) -> None:
@@ -339,16 +500,16 @@ def _confined_child(root: Path, name: str) -> tuple[Path | None, str | None]:
     return resolved, None
 
 
-def resolve_registry_path(root: Path, diagnostics: list[str]) -> Path | None:
+def resolve_registry_path(root: Path, diagnostics: DiagnosticLog) -> Path | None:
     """The one registry file this reader may open, or None when untrusted."""
     resolved, refusal = _confined_child(root, REGISTRY_FILENAME)
     if refusal is not None:
-        diagnostics.append(f"refused to read the registry: {refusal}")
+        diagnostics.add(SCOPE_REGISTRY, f"refused to read the registry: {refusal}")
         return None
     return resolved
 
 
-def resolve_reports_scope(root: Path, diagnostics: list[str]) -> Path | None:
+def resolve_reports_scope(root: Path, diagnostics: DiagnosticLog) -> Path | None:
     """The ONE directory report reads may touch, or None when untrusted.
 
     Checking each recorded path against `<root>/reports` is not enough
@@ -363,16 +524,17 @@ def resolve_reports_scope(root: Path, diagnostics: list[str]) -> Path | None:
     """
     scope, refusal = _confined_child(root, REPORTS_DIRNAME)
     if refusal is not None:
-        diagnostics.append(f"refused to read any report: {refusal}")
+        diagnostics.add(SCOPE_REPORT, f"refused to read any report: {refusal}")
         return None
-    try:
-        misplaced = scope.exists() and not scope.is_dir()
-    except PATH_ERRORS as exc:
-        diagnostics.append(
-            f"refused to read any report: cannot stat {scope}: {exc}")
+    present, mode, failure = entry_state(scope)
+    if failure is not None:
+        diagnostics.add(
+            SCOPE_REPORT,
+            f"refused to read any report: cannot stat {scope}: {failure}")
         return None
-    if misplaced:
-        diagnostics.append(
+    if present and (mode is None or not stat.S_ISDIR(mode)):
+        diagnostics.add(
+            SCOPE_REPORT,
             f"refused to read any report: {root / REPORTS_DIRNAME} exists but is "
             f"not a directory"
         )
@@ -380,7 +542,7 @@ def resolve_reports_scope(root: Path, diagnostics: list[str]) -> Path | None:
     return scope
 
 
-def _read_report(record: dict, scope: Path | None, diagnostics: list[str]) -> dict:
+def _read_report(record: dict, scope: Path | None, diagnostics: DiagnosticLog) -> dict:
     """Read this run's report, if it is recorded and in scope.
 
     Read scope is confined to resolved regular files named
@@ -412,13 +574,15 @@ def _read_report(record: dict, scope: Path | None, diagnostics: list[str]) -> di
         resolved = candidate.resolve()
     except PATH_ERRORS as exc:
         report["status"] = REPORT_UNREADABLE
-        diagnostics.append(f"{run_id}: cannot resolve report path {recorded!r}: {exc}")
+        diagnostics.add(
+            SCOPE_REPORT, f"{run_id}: cannot resolve report path {recorded!r}: {exc}")
         return report
 
     in_scope = resolved.parent == scope and resolved.name.endswith(REPORT_SUFFIX)
     if not in_scope:
         report["status"] = REPORT_OUT_OF_SCOPE
-        diagnostics.append(
+        diagnostics.add(
+            SCOPE_REPORT,
             f"{run_id}: refused to read report {recorded!r}: it does not resolve to a "
             f"{REPORT_SUFFIX} file directly under {scope}"
         )
@@ -428,19 +592,19 @@ def _read_report(record: dict, scope: Path | None, diagnostics: list[str]) -> di
     # been written yet, or was cleaned up. A path that EXISTS but is not
     # a regular file — a directory named `*.test-result.md`, a socket, a
     # device — is damaged external state, and damage is diagnosed.
-    try:
-        exists = resolved.exists()
-        is_file = resolved.is_file()
-    except PATH_ERRORS as exc:
+    exists, mode, failure = entry_state(resolved)
+    if failure is not None:
         report["status"] = REPORT_UNREADABLE
-        diagnostics.append(f"{run_id}: cannot stat report {resolved}: {exc}")
+        diagnostics.add(SCOPE_REPORT,
+                        f"{run_id}: cannot stat report {resolved}: {failure}")
         return report
-    if not is_file:
+    if mode is None or not stat.S_ISREG(mode):
         if not exists:
             report["status"] = REPORT_ABSENT
             return report
         report["status"] = REPORT_UNREADABLE
-        diagnostics.append(
+        diagnostics.add(
+            SCOPE_REPORT,
             f"{run_id}: cannot read report {resolved}: it exists but is not a "
             f"regular file"
         )
@@ -450,12 +614,13 @@ def _read_report(record: dict, scope: Path | None, diagnostics: list[str]) -> di
         text = resolved.read_text(encoding="utf-8")
     except (*PATH_ERRORS, UnicodeDecodeError) as exc:
         report["status"] = REPORT_UNREADABLE
-        diagnostics.append(f"{run_id}: cannot read report {resolved}: {exc}")
+        diagnostics.add(SCOPE_REPORT, f"{run_id}: cannot read report {resolved}: {exc}")
         return report
 
     parsed = _parse_report(text)
     if not parsed["frontmatter_parsed"]:
-        diagnostics.append(
+        diagnostics.add(
+            SCOPE_REPORT,
             f"{run_id}: report {resolved} has no closed `---` frontmatter block; "
             f"reporting what could be read from it"
         )
@@ -465,10 +630,16 @@ def _read_report(record: dict, scope: Path | None, diagnostics: list[str]) -> di
     return report
 
 
-def _summarize_run(record: dict, scope: Path | None, diagnostics: list[str]) -> dict:
+def _summarize_run(record: dict, scope: Path | None, diagnostics: DiagnosticLog) -> dict:
     """One matching `$test` run, with every unavailable value as None."""
+    identity = probe_for_test_id(record.get("test_id"))
     return {
         "run_id": _text_or_none(record.get("run_id")),
+        # WHICH of the probe's two identities this run was recorded
+        # under. Both are the same probe's work, but a measurement and an
+        # ordinary execution stay distinguishable in history.
+        "test_id": _text_or_none(record.get("test_id")),
+        "test_kind": identity[1] if identity else None,
         "run_state": _text_or_none(record.get("status")),
         "area": _text_or_none(record.get("area")),
         "tested_commit": _text_or_none(record.get("revision")),
@@ -479,10 +650,22 @@ def _summarize_run(record: dict, scope: Path | None, diagnostics: list[str]) -> 
         "exit_code": _integer_or_none(record.get("test_exit_code")),
         "duration_seconds": _number_or_none(record.get("elapsed_seconds")),
         "claimed_at": _text_or_none(record.get("claimed_at")),
+        # Reported raw, un-interpreted: whether a heartbeat is recent
+        # enough for a claim to still count as active is the consuming
+        # eligibility component's judgement, not this reader's.
+        "heartbeat_at": _text_or_none(record.get("heartbeat_at")),
         "completed_at": _text_or_none(record.get("completed_at")),
         "observations": _observation_status(record),
         "interpretation_outcome": _text_or_none(record.get("interpretation_outcome")),
         "report": _read_report(record, scope, diagnostics),
+        # Which fields the raw record actually CARRIES. Every value above
+        # reads as `null` when it is unavailable, which deliberately
+        # conflates "not recorded" with "recorded but unusable". A
+        # consumer that must fail closed on a malformed value while
+        # tolerating an absent one — `tools/probe_inflight.py` and its
+        # `heartbeat_at` fallback to `claimed_at` — needs to tell those
+        # two apart, and inferring it from the value cannot.
+        "recorded_fields": sorted(str(name) for name in record),
     }
 
 
@@ -498,46 +681,49 @@ def _reject_json_constant(token: str) -> None:
     raise ValueError(f"non-standard JSON constant {token}")
 
 
-def _load_runs(registry_path: Path, diagnostics: list[str]) -> list[dict]:
+def _load_runs(registry_path: Path, diagnostics: DiagnosticLog) -> list[dict]:
     """The registry's run list, or [] with a diagnostic when unusable."""
-    try:
-        exists = registry_path.exists()
-        is_file = registry_path.is_file()
-    except PATH_ERRORS as exc:
-        diagnostics.append(f"cannot stat {registry_path}: {exc}")
+    exists, mode, failure = entry_state(registry_path)
+    if failure is not None:
+        diagnostics.add(SCOPE_REGISTRY, f"cannot stat {registry_path}: {failure}")
         return []
-    if not is_file:
+    if mode is None or not stat.S_ISREG(mode):
         if not exists:
-            diagnostics.append(
+            diagnostics.add(
+                SCOPE_REGISTRY,
                 f"$test state exists but {registry_path} does not; reporting no runs"
             )
         else:
-            diagnostics.append(
+            diagnostics.add(
+                SCOPE_REGISTRY,
                 f"cannot read {registry_path}: it exists but is not a regular file"
             )
         return []
     try:
         text = registry_path.read_text(encoding="utf-8")
     except (*PATH_ERRORS, UnicodeDecodeError) as exc:
-        diagnostics.append(f"cannot read {registry_path}: {exc}")
+        diagnostics.add(SCOPE_REGISTRY, f"cannot read {registry_path}: {exc}")
         return []
     try:
         document = json.loads(text, parse_constant=_reject_json_constant)
     except ValueError as exc:                  # JSONDecodeError is a ValueError
-        diagnostics.append(f"cannot parse {registry_path}: {exc}")
+        diagnostics.add(SCOPE_REGISTRY, f"cannot parse {registry_path}: {exc}")
         return []
     if not isinstance(document, dict):
-        diagnostics.append(f"{registry_path} is not a JSON object; reporting no runs")
+        diagnostics.add(
+            SCOPE_REGISTRY, f"{registry_path} is not a JSON object; reporting no runs")
         return []
     schema = document.get("schema")
     if schema != COORDINATOR_SCHEMA:
-        diagnostics.append(
+        diagnostics.add(
+            SCOPE_REGISTRY,
             f"{registry_path} declares schema {schema!r}, not {COORDINATOR_SCHEMA!r}; "
             f"reading it anyway, on a best-effort basis"
         )
     runs = document.get("runs")
     if not isinstance(runs, list):
-        diagnostics.append(f"{registry_path} has no `runs` list; reporting no runs")
+        diagnostics.add(
+            SCOPE_REGISTRY, f"{registry_path} has no `runs` list; reporting no runs")
         return []
     return runs
 
@@ -556,27 +742,44 @@ def read_probe_evidence(probe_key: str,
     """
     require_known_probe(probe_key)
     root = Path(state_root) if state_root is not None else resolve_state_root(repo)
-    test_id = test_id_for_probe(probe_key)
+    test_ids = test_ids_for_probe(probe_key)
+    wanted = set(test_ids.values())
 
     evidence: dict = {
         "schema": EVIDENCE_SCHEMA,
         "probe": probe_key,
         "script": probe_script(probe_key),
-        "test_id": test_id,
+        # `test_id` is the ORDINARY identity, kept under its original
+        # name. `test_ids` carries both, keyed by kind.
+        "test_id": test_ids[TEST_KIND_RUN],
+        "test_ids": dict(test_ids),
         "state_root": str(root),
         "state": STATE_ABSENT,
         "runs": [],
         "diagnostics": [],
+        "diagnostics_detail": [],
     }
-    try:
-        present = root.is_dir()
-    except PATH_ERRORS as exc:
-        raise EvidenceRejected(f"cannot stat the $test state root {root}: {exc}") from exc
+    present, mode, failure = entry_state(root)
+    if failure is not None:
+        raise EvidenceRejected(
+            f"cannot stat the $test state root {root}: {failure}")
     if not present:
         return evidence
 
     evidence["state"] = STATE_PRESENT
-    diagnostics: list[str] = evidence["diagnostics"]
+    diagnostics = DiagnosticLog()
+    if mode is None or not stat.S_ISDIR(mode):
+        # It is THERE but is not a state tree. That is damage, not
+        # absence, and it must not read as "no external evidence" — a
+        # consumer that fails closed on unreadable active-run state has
+        # to see it, so it is scoped to the registry.
+        diagnostics.add(
+            SCOPE_REGISTRY,
+            f"the $test state root {root} exists but is not a directory, so no "
+            f"run state could be read from it")
+        evidence["diagnostics"] = diagnostics.messages()
+        evidence["diagnostics_detail"] = list(diagnostics.entries)
+        return evidence
     registry_path = resolve_registry_path(root, diagnostics)
     records = _load_runs(registry_path, diagnostics) if registry_path else []
     scope = resolve_reports_scope(root, diagnostics)
@@ -584,9 +787,30 @@ def read_probe_evidence(probe_key: str,
     matches = []
     for index, record in enumerate(records):
         if not isinstance(record, dict):
-            diagnostics.append(f"registry run #{index} is not an object; skipped")
+            diagnostics.add(SCOPE_RECORD,
+                            f"registry run #{index} is not an object; skipped")
             continue
-        if record.get("test_id") != test_id:
+        identity = record.get("test_id")
+        if not isinstance(identity, str) or not identity.strip():
+            # A record whose identity cannot be read belongs to no probe
+            # and to every probe: nothing here can say whether it is this
+            # one's work, so it is DIAGNOSED rather than quietly skipped
+            # — a consumer that fails closed on unreadable active-run
+            # state has to see it. Checking the type first is also what
+            # keeps the comparison from crashing: `test_id` is arbitrary
+            # external JSON, and an unhashable value such as `[]` raises
+            # `TypeError` from a set membership test, taking the whole
+            # read with it.
+            diagnostics.add(
+                SCOPE_RECORD,
+                f"registry run #{index} "
+                f"({_text_or_none(record.get('run_id')) or 'unidentified'}) "
+                f"records no usable test_id ({identity!r}), so which probe it "
+                f"belongs to cannot be determined; skipped")
+            continue
+        # EXACT comparison against both generated identities. A run under
+        # either one is this probe's work.
+        if identity not in wanted:
             continue
         matches.append(record)
 
@@ -595,6 +819,8 @@ def read_probe_evidence(probe_key: str,
     matches.sort(key=lambda record: _text_or_none(record.get("claimed_at")) or "",
                  reverse=True)
     evidence["runs"] = [_summarize_run(r, scope, diagnostics) for r in matches]
+    evidence["diagnostics"] = diagnostics.messages()
+    evidence["diagnostics_detail"] = list(diagnostics.entries)
     return evidence
 
 
@@ -618,9 +844,11 @@ def _format_report(report: dict) -> str:
 
 def render(evidence: dict) -> str:
     """The human-readable rendering of one `read_probe_evidence` result."""
+    identities = evidence.get("test_ids") or {"run": evidence["test_id"]}
     lines = [
         f"$test evidence for probe {evidence['probe']} "
-        f"({evidence['script']}) -> {evidence['test_id']}",
+        f"({evidence['script']}) -> "
+        + ", ".join(identities[kind] for kind in sorted(identities)),
         f"  state root: {evidence['state_root']} [{evidence['state']}]",
     ]
     if evidence["state"] == STATE_ABSENT:
@@ -631,7 +859,11 @@ def render(evidence: dict) -> str:
     else:
         lines.append(f"  {len(evidence['runs'])} run(s), newest first:")
         for run in evidence["runs"]:
-            lines.append(f"    {run['run_id'] or 'unavailable'}  [{run['run_state'] or 'unavailable'}]")
+            lines.append(
+                f"    {run['run_id'] or 'unavailable'}  "
+                f"[{run['run_state'] or 'unavailable'}]"
+                f"  {run.get('test_id') or 'unavailable'}"
+                f" ({run.get('test_kind') or 'unavailable'})")
             lines.append(f"      tested commit:  {run['tested_commit'] or 'unavailable'}"
                          + (f"  {run['tested_commit_subject']}"
                             if run["tested_commit_subject"] else ""))
@@ -643,7 +875,8 @@ def render(evidence: dict) -> str:
                          f"  report: {_format_report(run['report'])}")
     for diagnostic in evidence["diagnostics"]:
         lines.append(f"  diagnostic: {diagnostic}")
-    lines.append("  (presentation only: $test evidence is never a census sample)")
+    lines.append("  (read-only: $test evidence is never a census sample, and this "
+                 "reader makes no scheduling decision)")
     return "\n".join(lines)
 
 
