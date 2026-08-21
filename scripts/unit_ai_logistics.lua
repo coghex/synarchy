@@ -27,7 +27,9 @@ local M = {}
 --
 -- State on s:
 --   storeTarget  = bid (cached during the walk so utility re-scans
---                  cheaply on subsequent ticks)
+--                  cheaply on subsequent ticks; cleared on a completed
+--                  deposit and, since #1484, whenever no cargo
+--                  resolves -- it is a PERSISTED reference)
 -----------------------------------------------------------
 
 -- Count items in the inventory whose def category is "Materials".
@@ -83,7 +85,14 @@ local function storeMaterialsUtility(uid, s, params)
 
     local target = findStorageTarget(info.gridX, info.gridY,
                                      params.store_scan_range)
-    if not target then return -math.huge end
+    -- No target resolves: drop the cached bid rather than leaving the
+    -- last one behind (#1484). The field is a PERSISTED building
+    -- reference (scripts/unit_ai_save_refs.lua's
+    -- AI_BUILDING_REF_FIELDS), so a stale id crosses the save boundary
+    -- as a dangling-reference diagnostic and -- after a load that
+    -- reuses the number -- reads as a live building that was never
+    -- targeted. Mirrors the completion clear after the deposit loop.
+    if not target then s.storeTarget = nil; return -math.huge end
 
     -- Fill fraction. carrying_capacity is a derived stat (body-mass
     -- driven); guard against zero in case eager-stats hasn't fired.
@@ -105,7 +114,7 @@ local function storeMaterialsExecute(uid, s, params)
     -- if the cached cargo got destroyed or filled up.
     local target = findStorageTarget(info.gridX, info.gridY,
                                      params.store_scan_range)
-    if not target then return end
+    if not target then s.storeTarget = nil; return end   -- #1484, as above
     s.storeTarget = target.bid
 
     local utx  = math.floor(info.gridX)
@@ -234,7 +243,12 @@ local function buildNearbyUtility(uid, s, params)
     if not info then return -math.huge end
     local target = findNearestUnbuilt(info.gridX, info.gridY,
                                       params.build_scan_range)
-    if not target then return -math.huge end
+    -- No site resolves: drop the cached bid (#1484). Same persisted-
+    -- reference hazard as storeTarget above, plus a live one --
+    -- countBuildersAt above and scripts/unit_ai_core.lua both compare
+    -- s.buildTarget against a bid, so a stale value that collides with
+    -- a real building inflates that site's worker count.
+    if not target then s.buildTarget = nil; return -math.huge end
 
     -- Cache for execute. (Execute re-resolves; this just lets
     -- countBuildersAt elsewhere see who's targeting what.)
@@ -267,7 +281,7 @@ local function buildNearbyExecute(uid, s, params)
 
     local target = findNearestUnbuilt(info.gridX, info.gridY,
                                       params.build_scan_range)
-    if not target then return end
+    if not target then s.buildTarget = nil; return end   -- #1484, as above
     s.buildTarget = target.bid
 
     local utx  = math.floor(info.gridX)

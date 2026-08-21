@@ -17,7 +17,7 @@ import Data.Time.Clock (getCurrentTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 
 isValidRef ∷ Lua.Reference → Bool
-isValidRef (Lua.Reference n) = n ≠ fromIntegral Lua.refnil
+isValidRef (Lua.Reference n) = n ≢ fromIntegral Lua.refnil
 isValidRef Lua.RefNil        = False
 
 -- | Count every entry in a Lua table (array part *and* associative

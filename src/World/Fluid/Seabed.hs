@@ -168,7 +168,7 @@ identifySeabed seed worldSize oceanDist worldLakes terrain =
         -- seabed) OR a clamped (sub-sea-surface) lake basin.
         subSea = buildSubSeaMask worldSize oceanDist worldLakes terrain
         distField = shoreDistField worldTiles
-                        (VU.map (≠ 0) subSea)
+                        (VU.map (≢ 0) subSea)
 
         chunkCoords = [ ChunkCoord cx cy
                       | cx ← [-halfChunks .. halfChunks - 1]
@@ -247,9 +247,9 @@ identifySeabed seed worldSize oceanDist worldLakes terrain =
         entries = map entryFor chunkCoords
     in SeabedTable
         { sbElevDelta   = HM.fromList
-            [ (cc, dv) | (cc, dv, _) ← entries, VU.any (≠ 0) dv ]
+            [ (cc, dv) | (cc, dv, _) ← entries, VU.any (≢ 0) dv ]
         , sbMatOverride = HM.fromList
-            [ (cc, mv) | (cc, _, mv) ← entries, VU.any (≠ 0) mv ]
+            [ (cc, mv) | (cc, _, mv) ← entries, VU.any (≢ 0) mv ]
         }
 
 -- | Seabed surface material by depth below sea level: sand across the
@@ -299,7 +299,7 @@ buildSubSeaMask worldSize oceanDist worldLakes terrain = runST $ do
                       ∧ gyOff ≥ 0 ∧ gyOff < worldTiles) $ do
                     let idx = gyOff * worldTiles + gxOff
                         t   = terrain VU.! idx
-                    when (t ≠ minBound ∧ t ≤ seaLevel) $ VUM.write m idx 1
+                    when (t ≢ minBound ∧ t ≤ seaLevel) $ VUM.write m idx 1
     -- Clamped sub-sea lakes (surface ≤ seaLevel). Marked 2 only where
     -- not already open sea, so chunk-oceanic basins keep full ramp.
     forM_ (HM.toList (wlByChunk worldLakes)) $ \(ChunkCoord cx cy, entries) →

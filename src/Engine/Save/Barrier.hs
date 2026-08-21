@@ -80,7 +80,7 @@ acknowledgeSave ∷ SaveBarrier → Int → SaveOwner → IO ()
 acknowledgeSave (SaveBarrier _ status) n owner = atomically $ do
     current ← readTVar status
     forM_ current $ \s → when (ssRequestId s ≡ n ∧ ssOutcome s ≡ Nothing
-            ∧ ssPhase s ≠ SaveSnapshotBoundary ∧ ssPhase s ≠ SaveEncoding
+            ∧ ssPhase s ≢ SaveSnapshotBoundary ∧ ssPhase s ≢ SaveEncoding
             ∧ Set.member owner (ssOwners s)) $ do
         let acks = Set.insert owner (ssAcknowledged s)
         if acks ≡ ssOwners s ∧ ssQuiescencePasses s + 1 < requiredQuiescencePasses

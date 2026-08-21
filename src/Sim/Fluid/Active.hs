@@ -221,7 +221,7 @@ reconcileSeams results
                                     cb ← MV.read mB ib
                                     let flow = seamFlow (terrA VU.! ia) ca
                                                         (terrB VU.! ib) cb
-                                    when (flow ≠ 0) $ do
+                                    when (flow ≢ 0) $ do
                                         moveSeam mA ia mB ib flow
                                         writeSTRef anyRef True
                                 didMove ← readSTRef anyRef
@@ -436,7 +436,7 @@ phaseWaterfall mv decoMv terrainV changedRef = do
                                     + fromIntegral (dirBit `mod` 4))
                             writeSTRef changedRef True
                 newFD ← readSTRef flowDirRef
-                when (newFD ≠ afcFlowDir afc) $ do
+                when (newFD ≢ afcFlowDir afc) $ do
                     cur ← MV.read mv idx
                     case cur of
                         Just c → MV.write mv idx (Just c { afcFlowDir = newFD })

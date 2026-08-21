@@ -162,7 +162,7 @@ publishToRender env utsRef = do
                                     resolveAnim def =
                                         let injK = "injured-" <> baseKey
                                             injR = resolveStateAnim def injK
-                                        in if injured ∧ injR ≠ injK
+                                        in if injured ∧ injR ≢ injK
                                               then injR
                                               else resolveStateAnim def baseKey
                                     stateAnim =

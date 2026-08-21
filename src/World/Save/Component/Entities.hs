@@ -1307,7 +1307,7 @@ validateCraftBills (CraftBillsDTO slices) = concat
            <> tshow (unBillId (bilId v)))
       | s      ← slices
       , (k, v) ← HM.toList (bqBills (pcbBills s))
-      , k ≠ bilId v
+      , k ≢ bilId v
       ]
     ]
 
@@ -1491,7 +1491,7 @@ validatePowerNodes (PowerNodesDTO slices) = concat
            <> tshow (unPowerNodeId (nodId v)))
       | s      ← slices
       , (k, v) ← HM.toList (regNodes (ppnNodes s))
-      , k ≠ nodId v
+      , k ≢ nodId v
       ]
     ]
 

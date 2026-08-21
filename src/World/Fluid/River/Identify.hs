@@ -178,7 +178,7 @@ traceRivers seed worldSize terrain lakeIdAt isSpillwayOf spillwayOf dir flow
             let t   = terrain VU.! i
                 lk  = lakeIdAt VU.! i
                 fl  = flow VU.! i
-            in t ≠ minBound ∧ lk < 0 ∧ t > seaLevel ∧ fl ≥ riverThreshold
+            in t ≢ minBound ∧ lk < 0 ∧ t > seaLevel ∧ fl ≥ riverThreshold
 
         -- Step 1b: extend each chain downstream via D4 until it reaches
         -- a terminus (ocean / lake / sink). Tiles whose own flow has been

@@ -106,7 +106,7 @@ nearFlat outElev terrain idx =
                 ly' = ly + dly
             in if lx' < 0 ∨ lx' ≥ chunkSize ∨ ly' < 0 ∨ ly' ≥ chunkSize
                then case outElev lx' ly' of
-                      Just z | z ≠ minBound → abs (tz - z)
+                      Just z | z ≢ minBound → abs (tz - z)
                       _                     → 0
                else abs (tz - terrain VU.! (ly' * chunkSize + lx'))
     in max (max (nbrD 1 0) (nbrD (-1) 0))
@@ -139,7 +139,7 @@ applyFluidWt fluid wtBase = VU.generate (chunkSize * chunkSize) $ \idx →
     in if wt0 ≡ minBound
        then wt0
        else case fluid V.! idx of
-            Just fc | fcType fc ≠ Lava → max wt0 (fcSurface fc)
+            Just fc | fcType fc ≢ Lava → max wt0 (fcSurface fc)
                     | otherwise        → wt0
             Nothing → case haloSurfs idx of
                         [] → wt0
