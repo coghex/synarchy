@@ -176,15 +176,18 @@ SAVE_COMPAT_GLOBS = [
     # decode at all.
     "src/World/Save*",
     # The build definition. `cabal repl test:synarchy-test-headless`
-    # resolves its module set and dependency bounds from the cabal file
-    # and the project's pinned index-state, so either one can change
-    # whether the repl loads or what it loads. Deliberately NOT the
-    # `cabal.project*` wildcard: tools/ci-local.sh writes a TEMPORARY
-    # cabal.project.local before the gates run, and that scratch file
-    # must never select this gate. It is untracked, so the local
-    # changed-path resolution below cannot list it either -- but naming
-    # the real files exactly means neither half has to be trusted alone.
-    "synarchy.cabal", "cabal.project", "cabal.project.freeze",
+    # resolves its module set, dependency bounds and options from the
+    # cabal file and EVERY cabal.project file cabal applies, so any of
+    # them can change whether the repl loads or what it loads.
+    # `cabal.project*` covers the whole family on purpose, including
+    # `.local`: that file is NOT gitignored, so a change can legitimately
+    # track one, and cabal would then apply it in CI. What keeps
+    # tools/ci-local.sh's own TEMPORARY cabal.project.local from
+    # selecting the gate is not this pattern but the ORDER over in that
+    # script -- it resolves its changed-path list before it writes the
+    # scratch file -- plus local_changed_paths listing tracked paths
+    # only.
+    "synarchy.cabal", "cabal.project*",
     # The CI toolchain image: the GHC/cabal versions and the pinned
     # index snapshot the repl actually runs against. BOTH files that
     # define it -- the image tag is a hash of the reusable workflow's
@@ -305,8 +308,9 @@ def _local_changed_paths_failures() -> list[str]:
     the result does not depend on what the developer happens to have
     uncommitted. Requirement 7's local semantics are exactly these three
     cases: a committed branch edit is seen, an unstaged and an untracked
-    working-tree file are treated differently, and an unresolvable base
-    runs everything.
+    working-tree file are treated differently, a TRACKED
+    cabal.project.local edit is seen (cabal applies it, so CI selects on
+    it), and an unresolvable base runs everything.
     """
     def run(args: list[str], cwd: str) -> None:
         subprocess.run(["git", *args], cwd=cwd, check=True,
@@ -400,6 +404,32 @@ def _local_changed_paths_cases(
             failures.append(
                 "an unrelated local change selected the save-compat gate, "
                 f"so `make ci` would still pay for the repl: {paths}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # cabal.project.local is not gitignored, so a change CAN track
+        # one -- and cabal applies it, so CI's save-compat gate selects
+        # on it. A TRACKED edit to it must therefore be listed here too.
+        # This is exactly why tools/ci-local.sh resolves its changed
+        # paths BEFORE writing its own scratch copy: after the write,
+        # this listing could not tell the candidate's edit from the
+        # gate's own.
+        new_repo(tmp)
+        Path(tmp, "cabal.project.local").write_text("-- base\n",
+                                                    encoding="utf-8")
+        run(["add", "cabal.project.local"], tmp)
+        run(["commit", "--quiet", "--no-verify", "-m", "base"], tmp)
+        run(["checkout", "--quiet", "-b", "feature"], tmp)
+        Path(tmp, "cabal.project.local").write_text("-- edited\n",
+                                                    encoding="utf-8")
+        paths = local_changed_paths(tmp)
+        if "cabal.project.local" not in paths:
+            failures.append(
+                "--local-changed-paths dropped a TRACKED cabal.project.local "
+                f"edit, which cabal would apply in CI: {paths}")
+        if not selected("save-compat", paths):
+            failures.append(
+                "a tracked cabal.project.local edit did not select the "
+                f"save-compat gate: {paths}")
 
     with tempfile.TemporaryDirectory() as tmp:
         # No commits at all, and therefore no default branch to diff
@@ -562,6 +592,12 @@ def self_test() -> int:
         ("save-compat", ["synarchy.cabal"], True),
         ("save-compat", ["cabal.project"], True),
         ("save-compat", ["cabal.project.freeze"], True),
+        # cabal.project.local is not gitignored, so a change CAN track
+        # one, and cabal applies it in CI -- it has to select. The gate
+        # this script's own scratch copy would otherwise trip is closed
+        # by tools/ci-local.sh capturing its changed-path list BEFORE it
+        # writes that file, not by excluding the path here.
+        ("save-compat", ["cabal.project.local"], True),
         ("save-compat", [".github/ci/Dockerfile"], True),
         # The reusable image workflow is the OTHER half of the image
         # identity hash, so a PR editing only it still changes the
@@ -596,11 +632,6 @@ def self_test() -> int:
         ("save-compat", ["src/World/Thread/Command/Save.hs"], False),
         ("save-compat", ["src/Engine/Save/Barrier.hs"], False),
         ("save-compat", ["tools/save_storage_probe.py"], False),
-        # tools/ci-local.sh writes this scratch file before the gates
-        # run (requirement 7's local semantics): it must never be what
-        # selects the gate. `cabal.project*` as a wildcard would have
-        # matched it, which is why the patterns name the tracked files.
-        ("save-compat", ["cabal.project.local"], False),
         # A path selecting one gate must not drag in the others, in
         # either direction.
         ("worldgen", ["tools/test_save_compat_audit.py"], False),

@@ -117,14 +117,20 @@ unconditional, so it needs its own local changed-path notion:
 differing from the merge base with the checked-out default branch
 (committed, staged and unstaged alike), and `tools/ci-local.sh` pipes
 that into the very same `--stdin --gate save-compat` command CI runs —
-one matcher, one answer, no second table to drift. Untracked files are
-absent by construction, which is what keeps `ci-local.sh`'s own
-temporary `cabal.project.local` from selecting the gate; the gate's
-pattern table names `cabal.project` exactly rather than
-`cabal.project*`, so neither half has to be trusted alone. When no
-default branch or merge base resolves, `--local-changed-paths` emits a
+one matcher, one answer, no second table to drift. When no default
+branch or merge base resolves, `--local-changed-paths` emits a
 conservative sentinel that selects EVERY gate: a local gate that cannot
 tell what changed runs the coverage rather than skipping it.
+
+**`ci-local.sh` resolves that list BEFORE it writes its own temporary
+`cabal.project.local`, and the order is load-bearing.** That file is not
+gitignored, so a change can legitimately track one — and cabal would
+apply it in CI, which is why `cabal.project*` (the `.local` member
+included) is in the gate's pattern table. Resolving after the write
+would report this gate's own scratch edit to a tracked file as if it
+were the candidate's. `ci_parity_audit.py` checks that ordering, and the
+marked block reads the already-resolved `$SAVE_COMPAT_PATHS` rather than
+re-deriving it, which would put the resolution back after the write.
 
 Two things stayed deliberately unconditional. `save_compat_audit.py`
 runs in full on every pull request, and so does every other member of

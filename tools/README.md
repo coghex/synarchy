@@ -885,12 +885,17 @@ python3 tools/ci_expensive_gates.py --local-changed-paths \
 `--local-changed-paths` prints every TRACKED path differing from the merge
 base with the checked-out default branch — commits on the branch, staged and
 unstaged edits alike — which is the local counterpart of CI's
-`git diff --name-only <pr-base> HEAD`. Untracked files are deliberately
-absent, which is what stops `tools/ci-local.sh`'s own temporary
-`cabal.project.local` from selecting a gate. If no default branch or merge
-base resolves, it prints a conservative sentinel that selects EVERY gate: a
-local gate that cannot tell what changed runs the coverage rather than
-skipping it. The decision itself still goes through the same
+`git diff --name-only <pr-base> HEAD`. If no default branch or merge base
+resolves, it prints a conservative sentinel that selects EVERY gate: a local
+gate that cannot tell what changed runs the coverage rather than skipping it.
+
+`tools/ci-local.sh` calls it at the **top** of the script, before writing its
+own temporary `cabal.project.local`, and that order is load-bearing rather than
+incidental: that file is not gitignored, so a change can track one and cabal
+applies it in CI (hence `cabal.project*` in the gate's table) — resolving after
+the write would report this gate's own scratch edit as the candidate's.
+`ci_parity_audit.py` checks the ordering. The decision itself still goes
+through the same
 `--stdin --gate` command CI runs, so there is one matcher and one answer;
 `tools/ci_parity_audit.py` fails if the two files stop agreeing about which
 gate decides the reproducibility member or which command it guards, and it

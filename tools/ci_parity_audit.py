@@ -546,6 +546,22 @@ SAVE_COMPAT_BARE_COMMAND = "python3 tools/test_save_compat_audit.py"
 SAVE_COMPAT_SELECTOR_COMMAND = (
     "python3 tools/ci_expensive_gates.py --stdin --gate " + SAVE_COMPAT_GATE)
 
+#: The local-only resolution that feeds it, and the scratch write it
+#: must precede. `cabal.project.local` is not gitignored, so a change can
+#: track one and CI's gate selects on it; if ci-local.sh resolved its
+#: changed paths AFTER writing its own temporary copy, that scratch edit
+#: to a tracked file would look like the candidate's. Order, not
+#: pattern, is what keeps the two apart -- so the order is checked.
+SAVE_COMPAT_LOCAL_PATHS_COMMAND = (
+    "python3 tools/ci_expensive_gates.py --local-changed-paths")
+SAVE_COMPAT_LOCAL_SCRATCH_WRITE = "printf 'package synarchy"
+
+#: The variable the marked block reads its changed-path list from. The
+#: audit exports it when executing that block, and requires the block to
+#: consume it rather than re-derive the list (which would put the
+#: resolution back after the scratch write).
+SAVE_COMPAT_PATHS_VAR = "SAVE_COMPAT_PATHS"
+
 #: The exact guard CI's reproducibility step carries. Pinned rather than
 #: parsed: `if:` is a GitHub expression, and a half-understood evaluator
 #: would be a worse check than an exact match. The
@@ -677,6 +693,13 @@ def run_local_block(block: str, changed_paths: list[str],
                    | stat.S_IXOTH)
         env = dict(os.environ)
         env["PATH"] = f"{shim_dir}{os.pathsep}{env.get('PATH', '')}"
+        # ci-local.sh resolves this at the top of the script, before its
+        # scratch cabal.project.local exists; the block only consumes it.
+        # Supplied here so the extracted block runs the same way, and so
+        # a block that re-derived it instead would still be exercised
+        # (the shim answers --local-changed-paths too).
+        env[SAVE_COMPAT_PATHS_VAR] = "".join(
+            path + "\n" for path in changed_paths)
         proc = subprocess.run(
             ["bash", "-euo", "pipefail", "-c", block], cwd=str(root),
             env=env, capture_output=True, text=True)
@@ -772,6 +795,33 @@ def audit_save_compat_reproducibility_wiring(
                 f"{label}: does not run `{SAVE_COMPAT_SELECTOR_COMMAND}`, "
                 "so it is not reaching its decision through the gate the "
                 "other side uses.")
+
+    if SAVE_COMPAT_LOCAL_PATHS_COMMAND not in local_commands:
+        problems.append(
+            f"{LOCAL_GATE_LABEL}: does not run "
+            f"`{SAVE_COMPAT_LOCAL_PATHS_COMMAND}`, so it has no local "
+            "changed-path list to reach the shared decision with.")
+    else:
+        resolve_at = shell_text.find(SAVE_COMPAT_LOCAL_PATHS_COMMAND)
+        scratch_at = shell_text.find(SAVE_COMPAT_LOCAL_SCRATCH_WRITE)
+        if scratch_at < 0:
+            problems.append(
+                f"{LOCAL_GATE_LABEL}: could not find the scratch "
+                f"`{SAVE_COMPAT_LOCAL_SCRATCH_WRITE}...` write, so this "
+                "audit cannot check that the changed-path resolution "
+                "still precedes it. If that write moved or changed shape, "
+                "update SAVE_COMPAT_LOCAL_SCRATCH_WRITE deliberately.")
+        elif resolve_at > scratch_at:
+            problems.append(
+                f"{LOCAL_GATE_LABEL}: resolves its changed paths AFTER "
+                "writing its own temporary cabal.project.local. That file "
+                "is not gitignored, so once a change tracks one, this "
+                "gate's own scratch edit would select the save-compat "
+                "gate on every run. Resolve before the write.")
+        if SAVE_COMPAT_PATHS_VAR not in shell_text:
+            problems.append(
+                f"{LOCAL_GATE_LABEL}: the marked block no longer reads "
+                f"${SAVE_COMPAT_PATHS_VAR}.")
 
     # --- local side, executed -----------------------------------------
     try:
@@ -1103,10 +1153,11 @@ def _self_test() -> list[str]:
 
 _WIRING_LOCAL_GOOD = """#!/usr/bin/env bash
 set -euo pipefail
+SAVE_COMPAT_PATHS="$(python3 tools/ci_expensive_gates.py --local-changed-paths)"
+printf 'package synarchy\\n  ghc-options: -fforce-recomp\\n' > "$LOCAL"
 python3 tools/test_save_compat_audit.py --without-reproducibility
 python3 tools/save_compat_audit.py
 # >>> save-compat reproducibility selection >>>
-SAVE_COMPAT_PATHS="$(python3 tools/ci_expensive_gates.py --local-changed-paths)"
 SAVE_COMPAT_REPRO="$(printf '%s\\n' "$SAVE_COMPAT_PATHS" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat)"
 if [ "$SAVE_COMPAT_REPRO" = true ]; then
   python3 tools/test_save_compat_audit.py --only-reproducibility
@@ -1229,6 +1280,35 @@ def _save_compat_wiring_self_test() -> list[str]:
             any("never writes" in p for p in problems(ci=unpublished)),
             f"an unpublished selector output should fail, "
             f"got {problems(ci=unpublished)}")
+
+    # (i2) Resolving the local changed paths AFTER the scratch
+    #      cabal.project.local write. Both commands still run, the sets
+    #      still match, and the block still guards correctly -- only the
+    #      ORDER is wrong, which is what would let this gate's own
+    #      scratch edit select the gate once a change tracks that file.
+    late_resolve = _WIRING_LOCAL_GOOD.replace(
+        'SAVE_COMPAT_PATHS="$(python3 tools/ci_expensive_gates.py '
+        '--local-changed-paths)"\n'
+        "printf 'package synarchy\\n  ghc-options: -fforce-recomp\\n' "
+        '> "$LOCAL"\n',
+        "printf 'package synarchy\\n  ghc-options: -fforce-recomp\\n' "
+        '> "$LOCAL"\n'
+        'SAVE_COMPAT_PATHS="$(python3 tools/ci_expensive_gates.py '
+        '--local-changed-paths)"\n')
+    _expect(failures,
+            any("AFTER" in p for p in problems(local=late_resolve)),
+            "resolving the changed paths after the scratch write should "
+            f"fail, got {problems(local=late_resolve)}")
+
+    # (i3) Dropping the local resolution entirely.
+    no_resolve = _WIRING_LOCAL_GOOD.replace(
+        'SAVE_COMPAT_PATHS="$(python3 tools/ci_expensive_gates.py '
+        '--local-changed-paths)"\n', "")
+    _expect(failures,
+            any("no local changed-path list" in p
+                for p in problems(local=no_resolve)),
+            "dropping the local changed-path resolution should fail, got "
+            f"{problems(local=no_resolve)}")
 
     # (i) A CI reproducibility step with no `if:` at all -- the exact
     #     "runs on every PR again" regression, from the other side.
