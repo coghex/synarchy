@@ -166,11 +166,12 @@ def local_json_console_wrappers(root: Path = TOOLS) -> list[str]:
     Structural, and name-agnostic on purpose -- `jget` was the spelling
     that proliferated, but a `getj`/`query`/`jsend` copy is the same
     defect. A function qualifies when it `json.loads` a `send` result
-    AND the Lua it hands `send` is one of its own PARAMETERS: that pair
-    is what makes it a general-purpose console decoder rather than a
-    query helper. Deliberately not keyed on `return`, so a copy that
-    guards the decode (`json.loads(raw) if raw else None`) or buries it
-    in a branch counts the same.
+    AND the Lua it hands `send` -- argument 2, or keyword `lua`, and
+    only that position -- is one of its own PARAMETERS: that pair is
+    what makes it a general-purpose console decoder rather than a query
+    helper. Deliberately not keyed on `return`, so a copy that guards
+    the decode (`json.loads(raw) if raw else None`) or buries it in a
+    branch counts the same.
 
     The parameter clause is what keeps this inside #1160's scope. A
     helper that decodes ONE fixed query it builds itself (`snap`,
@@ -195,15 +196,27 @@ def local_json_console_wrappers(root: Path = TOOLS) -> list[str]:
         return {p.arg for p in
                 (*a.posonlyargs, *a.args, *a.kwonlyargs)}
 
+    def lua_arg(call):
+        """The Lua `send` was handed: argument 2, or keyword `lua`.
+
+        Only that one position counts. Scanning every argument would
+        catch a fixed-query helper that merely forwards its own
+        `timeout` parameter, which is exactly the out-of-scope shape
+        below.
+        """
+        if len(call.args) > 1:
+            return call.args[1]
+        for kw in call.keywords:
+            if kw.arg == "lua":
+                return kw.value
+        return None
+
     def is_wrapper(fn) -> bool:
         params = param_names(fn)
         # `send` is handed one of this function's parameters as its Lua.
         parameterised = any(
-            any(isinstance(arg, ast.Name) and arg.id in params
-                for arg in call.args[1:])
-            or any(isinstance(kw.value, ast.Name) and kw.value.id in params
-                   for kw in call.keywords)
-            for call in send_calls(fn))
+            isinstance(lua, ast.Name) and lua.id in params
+            for lua in (lua_arg(call) for call in send_calls(fn)))
         if not parameterised:
             return False
         # ...and that reply is what gets JSON-decoded.
@@ -301,6 +314,30 @@ def query(port, lua):
 """
 
 
+KEYWORD_LUA_COPY = """
+import json
+from probelib import send
+
+
+def jsend(port, command):
+    raw = send(port, lua=command)
+    return json.loads(raw)
+"""
+
+
+TIMEOUT_FIXED_QUERY = """
+import json
+from probelib import send
+
+SNAP = "return debug.snapshot()"
+
+
+def snap(port, timeout=10.0):
+    raw = send(port, SNAP, timeout)
+    return json.loads(raw)
+"""
+
+
 def in_temp_tree(name: str, source: str):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -330,12 +367,28 @@ def test_a_guarded_copy_is_caught() -> None:
            f"expected the guarded copy to be flagged, got {found!r}")
 
 
+def test_a_keyword_lua_copy_is_caught() -> None:
+    print("\n-- a copy that names `send`'s Lua by keyword is caught")
+    found = in_temp_tree("keyword_probe.py", KEYWORD_LUA_COPY)
+    expect(len(found) == 1 and found[0].endswith("jsend"),
+           f"expected the keyword-lua copy to be flagged, got {found!r}")
+
+
 def test_a_fixed_query_helper_is_not_caught() -> None:
     print("\n-- a helper decoding ONE fixed query is left alone "
           "(out of #1160's scope)")
     found = in_temp_tree("fixed_query_probe.py", FIXED_QUERY_HELPER)
     expect(found == [],
            f"a fixed-query helper should not be flagged, got {found!r}")
+
+
+def test_a_timeout_forwarding_fixed_query_helper_is_not_caught() -> None:
+    print("\n-- a fixed-query helper that forwards its own timeout is left "
+          "alone (only `send`'s Lua position counts)")
+    found = in_temp_tree("timeout_query_probe.py", TIMEOUT_FIXED_QUERY)
+    expect(found == [],
+           f"forwarding a `timeout` parameter is not passing the Lua, so "
+           f"this should not be flagged, got {found!r}")
 
 
 def test_send_json_callers_import_it() -> None:
@@ -393,7 +446,9 @@ def main() -> int:
     test_a_reintroduced_jget_is_caught()
     test_a_renamed_copy_is_caught()
     test_a_guarded_copy_is_caught()
+    test_a_keyword_lua_copy_is_caught()
     test_a_fixed_query_helper_is_not_caught()
+    test_a_timeout_forwarding_fixed_query_helper_is_not_caught()
     test_send_json_callers_import_it()
     test_no_unused_send_json_import()
     if FAILURES:

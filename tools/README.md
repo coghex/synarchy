@@ -619,7 +619,9 @@ plus `idle` being reachable, the knob the copies hid.
 
 Its source guard is structural, not a name check: a `tools/` function
 qualifies as a copy when it `json.loads` a `send` result AND hands `send`
-one of its own PARAMETERS as the Lua. It is deliberately not keyed on
+one of its own PARAMETERS as the Lua — argument 2 or keyword `lua`, and
+only that position, so a helper merely forwarding its own `timeout` is
+not mistaken for one. It is deliberately not keyed on
 `return`, so a copy that guards the decode or buries it in a branch
 counts the same. That parameter clause is the scope line: a helper
 decoding ONE fixed query it builds itself (`snap`, `measure`, `msummary`,
