@@ -23,14 +23,14 @@ strictly a reader:
   issue forbids. Reading the JSON directly is the only way to honour the
   permission boundary, and it is also the only way that works when the
   machine-local coordinator is not installed.
-* It reads the registry and, for each matching run, at most the one
-  `*.test-result.md` report that run recorded — and only when that path
-  resolves to a regular file directly beneath the state tree's own
-  `reports/` directory, AND that directory itself resolves to an
-  immediate child of the resolved state root. Checking recorded paths
-  alone would not be enough: a symlinked `reports/` relocates the whole
-  scope while every individual path still passes. A recorded path is
-  data, never an authority to widen read scope.
+* Every entry it opens is confined to the state tree. `registry.json`
+  and `reports/` are each resolved and then required to still be an
+  immediate child of the RESOLVED state root, of the right kind — a
+  symlink at either fixed name would otherwise relocate what gets read
+  while the name still looked right. A report is then read only when its
+  own recorded path resolves to a regular `*.test-result.md` file
+  directly beneath that validated `reports/`. A recorded path is data,
+  never an authority to widen read scope.
 
 **External evidence is presentation-only.** A `$test` run appearing,
 disappearing, passing, failing or recording observations changes no
@@ -301,6 +301,37 @@ def _parse_report(text: str) -> dict:
     }
 
 
+def _confined_child(root: Path, name: str) -> tuple[Path | None, str | None]:
+    """Resolve `<root>/<name>`, confined to the RESOLVED state root.
+
+    Every entry this reader opens is a fixed, named child of the state
+    tree, so each one is resolved and then required to still BE that
+    child. Without this, a symlink at the fixed name silently relocates
+    what gets read while the name itself still looks right. Returns
+    `(path, None)` when the entry may be used, or `(None, refusal)`.
+    Non-existence is not a refusal — the callers below mean different
+    things by an absent registry and an absent reports directory.
+    """
+    try:
+        root_resolved = root.resolve()
+        resolved = (root / name).resolve()
+    except OSError as exc:
+        return None, f"cannot resolve {root / name}: {exc}"
+    if resolved.parent != root_resolved or resolved.name != name:
+        return None, (f"{root / name} resolves to {resolved}, which is not an "
+                      f"immediate child of the state root {root_resolved}")
+    return resolved, None
+
+
+def resolve_registry_path(root: Path, diagnostics: list[str]) -> Path | None:
+    """The one registry file this reader may open, or None when untrusted."""
+    resolved, refusal = _confined_child(root, REGISTRY_FILENAME)
+    if refusal is not None:
+        diagnostics.append(f"refused to read the registry: {refusal}")
+        return None
+    return resolved
+
+
 def resolve_reports_scope(root: Path, diagnostics: list[str]) -> Path | None:
     """The ONE directory report reads may touch, or None when untrusted.
 
@@ -308,20 +339,26 @@ def resolve_reports_scope(root: Path, diagnostics: list[str]) -> Path | None:
     on its own: if `reports` is ITSELF a symlink to somewhere else, that
     check keeps passing while the whole read scope has quietly moved out
     of the state tree. So the scope is trusted only when it resolves to
-    an immediate child of the RESOLVED state root, under its own name.
-    Anything else refuses every report read with one diagnostic.
+    an immediate child of the RESOLVED state root, under its own name,
+    and is a directory when it exists at all. Anything else refuses
+    every report read with one diagnostic. A reports directory that is
+    simply ABSENT is not a refusal: each recorded report then reports
+    itself absent, which is what a missing report means.
     """
+    scope, refusal = _confined_child(root, REPORTS_DIRNAME)
+    if refusal is not None:
+        diagnostics.append(f"refused to read any report: {refusal}")
+        return None
     try:
-        root_resolved = root.resolve()
-        scope = (root / REPORTS_DIRNAME).resolve()
+        misplaced = scope.exists() and not scope.is_dir()
     except OSError as exc:
         diagnostics.append(
-            f"refused to read any report: cannot resolve {root / REPORTS_DIRNAME}: {exc}")
+            f"refused to read any report: cannot stat {scope}: {exc}")
         return None
-    if scope.parent != root_resolved or scope.name != REPORTS_DIRNAME:
+    if misplaced:
         diagnostics.append(
-            f"refused to read any report: {root / REPORTS_DIRNAME} resolves to {scope}, "
-            f"which is not an immediate child of the state root {root_resolved}"
+            f"refused to read any report: {root / REPORTS_DIRNAME} exists but is "
+            f"not a directory"
         )
         return None
     return scope
@@ -435,10 +472,21 @@ def _summarize_run(record: dict, scope: Path | None, diagnostics: list[str]) -> 
 
 def _load_runs(registry_path: Path, diagnostics: list[str]) -> list[dict]:
     """The registry's run list, or [] with a diagnostic when unusable."""
-    if not registry_path.exists():
-        diagnostics.append(
-            f"$test state exists but {registry_path} does not; reporting no runs"
-        )
+    try:
+        exists = registry_path.exists()
+        is_file = registry_path.is_file()
+    except OSError as exc:
+        diagnostics.append(f"cannot stat {registry_path}: {exc}")
+        return []
+    if not is_file:
+        if not exists:
+            diagnostics.append(
+                f"$test state exists but {registry_path} does not; reporting no runs"
+            )
+        else:
+            diagnostics.append(
+                f"cannot read {registry_path}: it exists but is not a regular file"
+            )
         return []
     try:
         text = registry_path.read_text(encoding="utf-8")
@@ -497,7 +545,8 @@ def read_probe_evidence(probe_key: str,
 
     evidence["state"] = STATE_PRESENT
     diagnostics: list[str] = evidence["diagnostics"]
-    records = _load_runs(root / REGISTRY_FILENAME, diagnostics)
+    registry_path = resolve_registry_path(root, diagnostics)
+    records = _load_runs(registry_path, diagnostics) if registry_path else []
     scope = resolve_reports_scope(root, diagnostics)
 
     matches = []

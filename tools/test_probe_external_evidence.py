@@ -661,6 +661,107 @@ def test_a_symlinked_reports_directory_refuses_every_read() -> None:
         check_equal(trusted, [], "and produces no diagnostic")
 
 
+def test_a_misplaced_reports_directory_refuses_every_read() -> None:
+    """`reports/` must be a DIRECTORY, not merely correctly named.
+
+    A regular file sitting at `reports` passes the resolve-and-confine
+    check, and every recorded report then resolves to a path under it
+    that does not exist — so without a kind check each one would read as
+    a silent `absent` rather than as the damaged state it is.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        runs = [make_run("probe:role", "run")]
+        state = build_state(Path(tmp), runs, {})
+        runs[0]["report_path"] = report_path(state, "run")
+        document = json.loads((state / evidence.REGISTRY_FILENAME).read_text())
+        document["runs"] = runs
+        (state / evidence.REGISTRY_FILENAME).write_text(json.dumps(document))
+        shutil.rmtree(state / evidence.REPORTS_DIRNAME)
+        (state / evidence.REPORTS_DIRNAME).write_text(SENTINEL, encoding="utf-8")
+
+        with NonInteraction(state) as guard:
+            with RecordReads() as reads:
+                result = read(state, "role")
+            guard.assert_untouched("misplaced reports directory")
+
+        run = result["runs"][0]
+        check_equal(run["report"]["status"], evidence.REPORT_OUT_OF_SCOPE,
+                    "the report is refused, not reported absent")
+        check_equal(run["execution_status"], "passed",
+                    "the run's mechanical fields are still reported")
+        check(any("not a directory" in d for d in result["diagnostics"]),
+              "the misplaced reports path is diagnosed", str(result["diagnostics"]))
+        check_equal(len(result["diagnostics"]), 1,
+                    "one directory-level diagnostic, not one per run")
+        check((state / evidence.REPORTS_DIRNAME).resolve()
+              not in [p.resolve() for p in reads.paths],
+              "the file standing in for the directory is never opened")
+        check(SENTINEL not in evidence.render(result) + json.dumps(result),
+              "none of its content reaches the output")
+
+        # An ABSENT reports directory is not damage: the reports are
+        # simply not there, which each run already says for itself.
+        (state / evidence.REPORTS_DIRNAME).unlink()
+        clean = read(state, "role")
+        check_equal(clean["runs"][0]["report"]["status"], evidence.REPORT_ABSENT,
+                    "an absent reports directory makes each report absent")
+        check_equal(clean["diagnostics"], [],
+                    "and is not diagnosed as damage")
+
+
+def test_the_registry_is_confined_to_the_state_root() -> None:
+    """A symlinked or non-regular `registry.json` is refused, not followed."""
+    with tempfile.TemporaryDirectory() as tmp:
+        external = Path(tmp) / "planted.json"
+        external.write_text(json.dumps({
+            "schema": evidence.COORDINATOR_SCHEMA,
+            "runs": [make_run("probe:role", "planted-run",
+                              revision_subject=SENTINEL)],
+        }), encoding="utf-8")
+
+        state = build_state(Path(tmp), [make_run("probe:role", "real-run")], {})
+        (state / evidence.REGISTRY_FILENAME).unlink()
+        os.symlink(external, state / evidence.REGISTRY_FILENAME)
+
+        with NonInteraction(state) as guard:
+            with RecordReads() as reads:
+                result = read(state, "role")
+            guard.assert_untouched("symlinked registry")
+
+        check_equal(result["runs"], [], "a relocated registry contributes no runs")
+        check(external.resolve() not in [p.resolve() for p in reads.paths],
+              "the planted registry is never opened",
+              str([str(p) for p in reads.paths]))
+        check(SENTINEL not in evidence.render(result) + json.dumps(result),
+              "none of its content reaches the output")
+        check(any("refused to read the registry" in d for d in result["diagnostics"]),
+              "the relocated registry is diagnosed", str(result["diagnostics"]))
+        check_equal(result["state"], evidence.STATE_PRESENT,
+                    "the state is still present, just unusable")
+
+        diagnostics: list[str] = []
+        check_equal(evidence.resolve_registry_path(state, diagnostics), None,
+                    "resolve_registry_path refuses it directly")
+        check_equal(len(diagnostics), 1, "and diagnoses it exactly once")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state = build_state(Path(tmp), [make_run("probe:role", "run")], {})
+        (state / evidence.REGISTRY_FILENAME).unlink()
+        (state / evidence.REGISTRY_FILENAME).mkdir()
+        with NonInteraction(state) as guard:
+            result = read(state, "role")
+            guard.assert_untouched("non-regular registry")
+        check_equal(result["runs"], [], "a directory registry contributes no runs")
+        check(any("not a regular file" in d for d in result["diagnostics"]),
+              "a non-regular registry is diagnosed", str(result["diagnostics"]))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state = build_state(Path(tmp), [make_run("probe:role", "run")], {})
+        resolved = evidence.resolve_registry_path(state, [])
+        check_equal(resolved, (state / evidence.REGISTRY_FILENAME).resolve(),
+                    "a real registry resolves to itself")
+
+
 def test_absent_state_is_success_not_error() -> None:
     """An absent `codex-test` tree is the normal no-evidence result."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -821,6 +922,8 @@ def main() -> int:
         test_an_existing_non_regular_report_is_damage_not_absence,
         test_report_reads_are_confined_to_the_reports_directory,
         test_a_symlinked_reports_directory_refuses_every_read,
+        test_a_misplaced_reports_directory_refuses_every_read,
+        test_the_registry_is_confined_to_the_state_root,
         test_absent_state_is_success_not_error,
         test_damaged_registry_is_non_fatal,
         test_full_history_is_never_truncated,

@@ -824,10 +824,13 @@ carry reads as unavailable, never as a fabricated `false` or `0`, so active
 and legacy runs are surfaced rather than dropped. The whole known history is
 reported; there is no limit option and no default truncation. Report reads are
 confined to resolved `*.test-result.md` files directly beneath the state
-tree's own `reports/`, so a recorded path can never widen read scope — and
-`reports/` itself must resolve to an immediate child of the resolved state
-root, because a symlinked `reports/` would relocate the whole scope out of the
-tree while every individual recorded path still passed its own check.
+tree's own `reports/`, so a recorded path can never widen read scope. Both
+fixed names are confined the same way first: `registry.json` and `reports/`
+are each resolved and then required to still be an immediate child of the
+RESOLVED state root, of the right kind. A symlink at either name would
+otherwise relocate what gets read while the name itself still looked right —
+and a regular file standing in for `reports/` would make every recorded report
+read as a silent `absent`.
 
 External `$test` evidence is PRESENTATION-ONLY. A run appearing, passing,
 failing or recording observations changes no census sample, no statistic, no
