@@ -12,8 +12,9 @@
 --   the shipped data) across three deterministic profiles — frail
 --   (height 1.3, bulk 0.5, toughness 0.8), average (1.8, 1.0, 1.0), and
 --   extreme (2.3, 1.5, 1.2) — the exact clamp endpoints of that YAML's
---   `rollStat` ranges. See @docs/expedition_survival_calibration.md@'s
---   fall-calibration section for the full before/after record.
+--   `rollStat` ranges. The measured survival calibration lives beside
+--   the assertions that pin it — see the naive-exsanguination table at
+--   'frailNaive' below.
 module Test.Headless.Unit.Fall (spec) where
 
 import UPrelude
@@ -115,6 +116,50 @@ extremeH = 2.3; extremeB = 1.5; extremeT = 1.2
 bodyMass ∷ Float → Float → Float
 bodyMass h b = 22 * h * h * b
 
+-- | The MEASURED naive (untreated, unclotted) exsanguination time, in
+--   seconds, of each profile's 2-z fall on the shipped acolyte
+--   topology: whole-body blood divided by the aggregate bleed rate of
+--   every wound that fall inflicts.
+--
+--   > profile  | measured naive exsanguination
+--   > ---------|------------------------------
+--   > frail    | 133.34822  s
+--   > average  |  36.714085 s
+--   > extreme  |  45.690052 s
+--
+--   #1412: these are the CALIBRATION baselines, not lower bounds. Each
+--   profile's survival example pins its OWN value here to within
+--   'survivalTolerance' seconds, so a tuning change is reported against
+--   the profile it actually moved, with the failure printing the new
+--   value — which is what lets a later reader tell a deliberate retune
+--   from a regression. The three examples previously shared a 30-second
+--   floor, which the profiles cleared by 22%–344% and which no example
+--   name could honestly describe.
+--
+--   Two of the three are SUB-MINUTE, and frail — despite the name — is
+--   by far the safest on this topology (#998: mass drives impact
+--   energy, and frail's far lower mass outweighs its lower toughness).
+--   The numbers, not the intuition, are the contract; do not "restore"
+--   a minute-plus claim to any of them.
+--
+--   These values are unchanged by #1412: it retunes no physics, only
+--   what the tests assert. 'src/Unit/Fall.hs' and the shared
+--   `kindBleedFactor` / `bleedScale` constants are #916's territory.
+frailNaive, averageNaive, extremeNaive ∷ Float
+frailNaive   = 133.34822
+averageNaive =  36.714085
+extremeNaive =  45.690052
+
+-- | Half-width of the band each survival example below accepts around
+--   its own profile's measured value above. Loose enough that
+--   float-association differences can never trip it (0.5 s is 1.4% of
+--   the smallest baseline), tight enough that #1412's regression
+--   target — any profile falling to roughly 31 s — lands far outside
+--   every one of the three bands: the nearest edge is average's
+--   36.214085 s.
+survivalTolerance ∷ Float
+survivalTolerance = 0.5
+
 spec ∷ Spec
 spec = do
     bps ← runIO loadAcolyteBodyParts
@@ -153,12 +198,13 @@ spec = do
         it "is not the pathological many-wound result" $
             length (fall averageMass averageT 2) `shouldSatisfy` (< 15)
 
-        it "leaves well over a minute before a naive (untreated, unclotted) exsanguination" $ do
+        it "takes 36.714085 s (±0.5 s) to reach a naive (untreated, unclotted) exsanguination" $ do
             let injs = fall averageMass averageT 2
                 bleed = aggregateBleed averageMass injs
                 blood = averageMass * bloodMassRatio
             bleed `shouldSatisfy` (> 0)
-            (blood / bleed) `shouldSatisfy` (> 30)
+            (blood / bleed) `shouldSatisfy`
+                approx survivalTolerance averageNaive
 
     describe "2-z fall — extreme profile, tested independently (#998)" $ do
         it "is bruised, knocked down, with no fracture and no vital injury" $ do
@@ -172,11 +218,12 @@ spec = do
                 bleedExt = aggregateBleed extremeMass (fall extremeMass extremeT 2)
             bleedExt `shouldSatisfy` (> bleedAvg)
 
-        it "still leaves well over a minute before exsanguination" $ do
+        it "takes 45.690052 s (±0.5 s) to reach a naive exsanguination" $ do
             let injs = fall extremeMass extremeT 2
                 bleed = aggregateBleed extremeMass injs
                 blood = extremeMass * bloodMassRatio
-            (blood / bleed) `shouldSatisfy` (> 30)
+            (blood / bleed) `shouldSatisfy`
+                approx survivalTolerance extremeNaive
 
     describe "2-z fall — frail profile, tested independently (#998)" $ do
         it "is NOT the more-vulnerable case: lighter body means lower impact energy" $ do
@@ -193,11 +240,12 @@ spec = do
             -- than assume "frail" implies "dies first".
             bleedFrail `shouldSatisfy` (< bleedAvg)
 
-        it "leaves well over a minute before exsanguination" $ do
+        it "takes 133.34822 s (±0.5 s) to reach a naive exsanguination" $ do
             let injs = fall frailMass frailT 2
                 bleed = aggregateBleed frailMass injs
                 blood = frailMass * bloodMassRatio
-            (blood / bleed) `shouldSatisfy` (> 30)
+            (blood / bleed) `shouldSatisfy`
+                approx survivalTolerance frailNaive
 
     describe "fracture ladder (independently measured per profile, #998)" $ do
         it "average: no fracture through 4-z, first fracture at 5-z" $ do
