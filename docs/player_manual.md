@@ -20,9 +20,11 @@ at the default size. When it finishes, press **Continue** to enter the
 world (or **Regenerate** to roll a different one).
 
 You arrive zoomed all the way out, looking at a map of the whole
-world. There is no toolbar yet: the only controls on screen are the
-map-mode toggle in the bottom-right corner and the collapsed
-**"> Objectives"** checklist. Your colonists don't exist yet.
+world. Your colonists don't exist yet, and there is no toolbar in the
+bottom-left corner yet either — that toolbar belongs to the ground
+view. The map-mode toggle sits in the bottom-right corner, the log
+button in the top-left, and the tutorial checklist is the collapsed
+**"> Objectives"** box.
 
 **Zoom in** with the mouse wheel — several steps — until the map fades
 back to the ground view and a toolbar appears in the bottom-left
