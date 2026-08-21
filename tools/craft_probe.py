@@ -54,8 +54,8 @@ end-to-end:
 
 Usage: python3 tools/craft_probe.py [--port 9317]
 """
-import argparse, glob, json, socket, subprocess, sys, time
-from probelib import quit_engine, boot, send
+import argparse, glob, socket, subprocess, sys, time
+from probelib import quit_engine, boot, send, send_json
 
 SPROOT = "/tmp"
 TEST_YAML = f"{SPROOT}/craft_probe_recipes.yaml"
@@ -85,14 +85,6 @@ recipes:
     outputs:
       - item: steel_dagger
 """
-
-
-def jget(port, lua, timeout=10.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
 
 
 def bootstrap(port):
@@ -199,7 +191,7 @@ def count_item(port, uid, name):
 
 
 def instances_of(port, uid, name):
-    r = jget(port,
+    r = send_json(port,
         f"local out={{}}; for _,it in ipairs(unit.getInventory({uid}) or {{}}) do "
         f"if it.defName=='{name}' then out[#out+1]={{id=it.instanceId,"
         f"cond=it.condition or -1,sharp=it.sharpness,"
@@ -273,10 +265,10 @@ def main():
         time.sleep(1.0)
 
         # --- 1. Catalogue ---
-        names = jget(port, "return craft.getNames()")
+        names = send_json(port, "return craft.getNames()")
         ok = isinstance(names, list) and "forge_steel_dagger" in names
         passed = check(passed, ok, "getNames lists the shipped recipe", names)
-        r = jget(port, "return craft.get('forge_steel_dagger')")
+        r = send_json(port, "return craft.get('forge_steel_dagger')")
         ok = (isinstance(r, dict) and r.get("station") == "forge"
               and r.get("work") == 20
               and r.get("inputs") == [{"item": "steel_bar", "count": 2}]
@@ -344,7 +336,7 @@ def main():
                        f"ok={ok_e} {msg}")
 
         # --- 5. Work stations (#326) ---
-        defs = jget(port, "return building.listDefs()")
+        defs = send_json(port, "return building.listDefs()")
         names5 = {d["name"] for d in defs} if isinstance(defs, list) else set()
         passed = check(passed, {"furnace", "workbench"} <= names5,
                        "station defs loaded", sorted(names5))
@@ -359,7 +351,7 @@ def main():
         ok_e, msg = execute_at(port, uid, "craft_test_fuelled", bid_f)
         passed = check(passed, not ok_e and "not built" in msg,
                        "executeAt refused at unbuilt station", msg)
-        ops = jget(port, f"return building.getOperations({bid_f})")
+        ops = send_json(port, f"return building.getOperations({bid_f})")
         ok = isinstance(ops, list) and sorted(ops) == ["repair_condition", "smelt"]
         passed = check(passed, ok, "furnace advertises smelt+repair_condition", ops)
         send(port, f"building.addBuildProgress({bid_f}, 200); return 'ok'")
@@ -511,7 +503,7 @@ def main():
                        detail or f"qual={q}")
 
         # --- 7. Smelting tier (#327) ---
-        names7 = jget(port, "return craft.getNames()")
+        names7 = send_json(port, "return craft.getNames()")
         smelts = {"smelt_steel_lignite", "smelt_steel_bituminous",
                   "smelt_steel_anthracite", "smelt_bronze_lignite",
                   "smelt_bronze_bituminous", "smelt_bronze_anthracite"}
@@ -519,14 +511,14 @@ def main():
         passed = check(passed, ok, "all six smelt recipes in the catalogue",
                        sorted(smelts - set(names7)) if isinstance(names7, list)
                        else names7)
-        r = jget(port, "return craft.get('smelt_steel_anthracite')")
+        r = send_json(port, "return craft.get('smelt_steel_anthracite')")
         ok = (isinstance(r, dict) and r.get("station") == "smelt"
               and r.get("inputs") == [{"item": "iron_ore_chunk", "count": 1}]
               and r.get("fuel") == {"item": "anthracite_chunk", "count": 1}
               and r.get("outputs") == [{"item": "steel_bar", "count": 4}])
         passed = check(passed, ok, "steel smelt shape (ore + coal -> 4 bars)", r)
         def fuel_count(grade):
-            r7 = jget(port, f"return craft.get('smelt_steel_{grade}')")
+            r7 = send_json(port, f"return craft.get('smelt_steel_{grade}')")
             return r7.get("fuel", {}).get("count") if isinstance(r7, dict) else None
         ladder = {g: fuel_count(g)
                   for g in ("lignite", "bituminous", "anthracite")}
@@ -577,20 +569,20 @@ def main():
                        "furnace smelts bronze: copper+tin+coal -> 4 bars", msg)
 
         # --- 8. Fabrication tier (#328) ---
-        names8 = jget(port, "return craft.getNames()")
+        names8 = send_json(port, "return craft.getNames()")
         fabs = {"forge_pick_steel", "forge_shovel_steel", "forge_axe_steel",
                 "forge_steel_plate", "forge_steel_hardware"}
         ok = isinstance(names8, list) and fabs <= set(names8)
         passed = check(passed, ok, "all five fabrication recipes in the catalogue",
                        sorted(fabs - set(names8)) if isinstance(names8, list)
                        else names8)
-        r = jget(port, "return craft.get('forge_axe_steel')")
+        r = send_json(port, "return craft.get('forge_axe_steel')")
         ok = (isinstance(r, dict) and r.get("station") == "forge"
               and r.get("skill") == "smithing"
               and r.get("inputs") == [{"item": "steel_bar", "count": 2}]
               and r.get("outputs") == [{"item": "axe_steel", "count": 1}])
         passed = check(passed, ok, "axe shape (2 bars -> axe, smithing-tagged)", r)
-        r = jget(port, "return craft.get('forge_steel_plate')")
+        r = send_json(port, "return craft.get('forge_steel_plate')")
         ok = (isinstance(r, dict) and r.get("station") == "forge"
               and "skill" not in r
               and r.get("inputs") == [{"item": "steel_bar", "count": 1}]

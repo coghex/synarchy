@@ -63,13 +63,12 @@ from __future__ import annotations
 
 import argparse
 import glob
-import json
 import math
 import sys
 import time
 
 import probe_protocol
-from probelib import boot, init_arena, quit_engine, send, spawn_acolyte
+from probelib import boot, init_arena, quit_engine, send, send_json, spawn_acolyte
 
 LOG = "/tmp/position_hold_engine.log"
 PAGE = "arena"
@@ -141,14 +140,6 @@ CHECKS = [
 DESCRIPTOR = probe_protocol.build_descriptor(PROBE_KEY, CHECKS)
 
 
-def jget(port, lua, timeout=10.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
-
-
 def bootstrap(port):
     for pattern, fn in [
         ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
@@ -163,7 +154,7 @@ def bootstrap(port):
 
 def state(port, uid):
     """Position, current action, hold anchor and canteen water for `uid`."""
-    return jget(port, (
+    return send_json(port, (
         f"local ai={AI}; local i=unit.getInfo({uid}); "
         f"if not i then return {{gone=true}} end; "
         f"local s=ai.getState({uid}) or {{}}; local h=ai.getHold({uid}); "

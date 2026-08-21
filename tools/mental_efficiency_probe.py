@@ -45,11 +45,10 @@ Usage: python3 tools/mental_efficiency_probe.py [--port 9353]
 """
 import argparse
 import glob
-import json
 import sys
 import time
 
-from probelib import boot, quit_engine, send, spawn_acolyte, poll_until
+from probelib import boot, quit_engine, send, send_json, spawn_acolyte, poll_until
 
 SPROOT = "/tmp"
 TEST_YAML = f"{SPROOT}/mental_efficiency_probe_recipes.yaml"
@@ -72,14 +71,6 @@ recipes:
     outputs:
       - item: steel_dagger
 """
-
-
-def jget(port, lua, timeout=10.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
 
 
 def check(passed, ok, label, detail=""):
@@ -285,10 +276,10 @@ def craft_progress_via_ai(port, uid, sleep_s):
     if bill_id_raw in ("nil", ""):
         return None, None, None
     bill_id = int(float(bill_id_raw))
-    before = (jget(port, f"return craft.getBill({bill_id})") or {}).get("progress")
+    before = (send_json(port, f"return craft.getBill({bill_id})") or {}).get("progress")
     time.sleep(sleep_s)
     _craft_ai_tick(port, uid)   # phase "working" -> real progress pour
-    after = (jget(port, f"return craft.getBill({bill_id})") or {}).get("progress")
+    after = (send_json(port, f"return craft.getBill({bill_id})") or {}).get("progress")
     return bill_id, before, after
 
 
@@ -369,7 +360,7 @@ def combat_damage_sample(port, conc, euphoric, want, retries):
         pin(port, tgt, conc, euphoric)
         send(port, "combat.drainEvents(); return 'ok'")  # clear stale events
         send(port, f"combat.attack({atk}, {tgt}, 'quick'); return 'ok'")
-        evs = poll_until(3.0, lambda: jget(port, "return combat.drainEvents()") or None)
+        evs = poll_until(3.0, lambda: send_json(port, "return combat.drainEvents()") or None)
         for e in (evs or []):
             if e.get("kind") == "hit":
                 vals.append(float(e["payload"]["raw"]))

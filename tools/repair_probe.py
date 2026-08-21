@@ -33,18 +33,10 @@ the repair.* Lua API end-to-end:
 
 Usage: python3 tools/repair_probe.py [--port 9319]
 """
-import argparse, glob, json, socket, subprocess, sys, time
-from probelib import quit_engine, boot, send
+import argparse, glob, socket, subprocess, sys, time
+from probelib import quit_engine, boot, send, send_json
 
 SPROOT = "/tmp"
-
-
-def jget(port, lua, timeout=10.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
 
 
 def bootstrap(port):
@@ -127,7 +119,7 @@ def spawn_weapon(port, uid, cond=100.0, sharp=100.0):
     regardless of the roll, then a precise positive one from that known
     floor (unit.repairItem's delta is ADDITIVE + clamped, not a set)."""
     send(port, f"unit.addItem({uid}, 'axe_steel'); return 'ok'")
-    axes = jget(port,
+    axes = send_json(port,
         f"local out={{}}; for _,it in ipairs(unit.getInventory({uid}) or {{}}) do "
         f"if it.defName=='axe_steel' then out[#out+1]=it.instanceId end end; "
         f"return out")
@@ -138,7 +130,7 @@ def spawn_weapon(port, uid, cond=100.0, sharp=100.0):
 
 
 def axe_state(port, uid, iid):
-    r = jget(port,
+    r = send_json(port,
         f"for _,it in ipairs(unit.getInventory({uid}) or {{}}) do "
         f"if it.instanceId=={iid} then return {{cond=it.condition,"
         f"sharp=it.sharpness}} end end; return nil")
@@ -147,7 +139,7 @@ def axe_state(port, uid, iid):
 
 def repair_at(port, uid, recipe_id, iid, bid):
     """→ (result: dict|None, err: str)."""
-    raw = jget(port,
+    raw = send_json(port,
         f"local r,err = repair.repairAt({uid}, '{recipe_id}', {iid}, {bid}); "
         f"if r then return r end; return 'ERR:'..tostring(err)")
     if isinstance(raw, dict):
@@ -176,16 +168,16 @@ def main():
         time.sleep(1.0)
 
         # --- 1. Catalogue ---
-        names = jget(port, "return repair.getNames()")
+        names = send_json(port, "return repair.getNames()")
         ok = (isinstance(names, list)
               and set(names) == {"repair_condition", "repair_sharpness"})
         passed = check(passed, ok, "getNames lists only the repair recipes", names)
-        r = jget(port, "return repair.get('repair_condition')")
+        r = send_json(port, "return repair.get('repair_condition')")
         ok = (isinstance(r, dict) and r.get("station") == "repair_condition"
               and r.get("repairAxis") == "condition"
               and r.get("inputs") == [{"item": "lignite_chunk", "count": 1}])
         passed = check(passed, ok, "repair.get('repair_condition') shape", r)
-        r = jget(port, "return repair.get('repair_sharpness')")
+        r = send_json(port, "return repair.get('repair_sharpness')")
         ok = (isinstance(r, dict) and r.get("station") == "repair_sharpness"
               and r.get("repairAxis") == "sharpness"
               and r.get("inputs") == [{"item": "whetstone", "count": 1}])
@@ -193,13 +185,13 @@ def main():
         ok = send(port, "return repair.get('forge_steel_dagger') and 'yes' or 'nil'"
                   ).strip('"') == "nil"
         passed = check(passed, ok, "repair.get refuses an ordinary craft recipe")
-        r = jget(port, "return craft.get('repair_condition')")
+        r = send_json(port, "return craft.get('repair_condition')")
         ok = isinstance(r, dict) and "repairAxis" in r
         passed = check(passed, ok, "craft.get also exposes repairAxis", r)
 
         # --- 2. craft.execute/executeAt refuse repair recipes ---
         bars0 = count_item(port, uid, "lignite_chunk")
-        ok_e, msg = jget(port,
+        ok_e, msg = send_json(port,
             f"local ok,err = craft.execute({uid}, 'repair_condition'); "
             f"return {{ok, tostring(err)}}")
         ok = (ok_e is False and "repair recipe" in msg

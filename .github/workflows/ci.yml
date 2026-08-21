@@ -565,7 +565,12 @@ jobs:
       # branches are checked without the probe's own ~8-minute real
       # engine and 64-world generation. That probe itself stays
       # manual-only and out of the path-selective gate; only this
-      # engine-free companion runs here.
+      # engine-free companion runs here. test_probelib pins
+      # probelib.send_json's result contract (empty -> None, valid JSON
+      # -> value, invalid JSON -> text) against a real socket speaking
+      # the console protocol, and fails if a probe grows a private JSON
+      # console wrapper again — the twenty-two-copy duplication #1160
+      # removed.
       - name: probe runner self-tests
         run: |
           python3 tools/ci_probes.py --self-test
@@ -574,6 +579,7 @@ jobs:
           python3 tools/test_run_probes.py
           python3 tools/test_persistence_contract_sweep.py
           python3 tools/test_action_outcome_probe.py
+          python3 tools/test_probelib.py
 
       # Cheap, no-engine guard (#1355): fails if a `python3 tools/*.py`
       # check runs in this job and not in tools/ci-local.sh, or the other

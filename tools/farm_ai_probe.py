@@ -57,18 +57,10 @@ Checks:
 Usage: python3 tools/farm_ai_probe.py [--port 9336] [--seed 42]
        [--size 64] [--plates 3]
 """
-import argparse, glob, json, socket, subprocess, sys, time
-from probelib import clear_find_water, quit_engine, boot, send, wait_load_published
+import argparse, glob, socket, subprocess, sys, time
+from probelib import clear_find_water, quit_engine, boot, send, send_json, wait_load_published
 
 SPROOT = "/tmp"
-
-
-def jget(port, lua, timeout=10.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
 
 
 def bootstrap(port):
@@ -93,13 +85,13 @@ def find_tillable(port, cx=0, cy=0, span=4, exclude=None):
         for sy in range(cy - span * 16, cy + span * 16 + 1, 4):
             if (sx, sy) in exclude:
                 continue
-            slope = jget(port, f"return world.getSlopeAt({sx},{sy})")
+            slope = send_json(port, f"return world.getSlopeAt({sx},{sy})")
             if slope != 0:
                 continue
-            fluid = jget(port, f"return world.getFluidAt({sx},{sy})")
+            fluid = send_json(port, f"return world.getFluidAt({sx},{sy})")
             if isinstance(fluid, dict) and fluid.get("type"):
                 continue
-            flora = jget(port, f"return world.getFloraAt({sx},{sy})")
+            flora = send_json(port, f"return world.getFloraAt({sx},{sy})")
             if isinstance(flora, dict):
                 continue
             return sx, sy
@@ -111,7 +103,7 @@ def till_and_wait(port, page, gx, gy, z):
     isPlantable until it lands before designating/planting."""
     send(port, f"world.setVegAt('{page}', {gx}, {gy}, {z}, 77); return 'ok'")
     for _ in range(20):
-        if jget(port, f"return world.isPlantable({gx},{gy})") is True:
+        if send_json(port, f"return world.isPlantable({gx},{gy})") is True:
             return True
         time.sleep(0.2)
     sys.exit(f"setVegAt({gx},{gy}) never landed")
@@ -123,7 +115,7 @@ def set_date(port, page, y, mo, d):
     send(port, f"world.setDate('{page}', {y}, {mo}, {d}); return 'ok'")
     for _ in range(20):
         time.sleep(0.2)
-        got = jget(port, f"return world.getDate('{page}')")
+        got = send_json(port, f"return world.getDate('{page}')")
         if isinstance(got, dict) and got.get("year") == y \
            and got.get("month") == mo and got.get("day") == d:
             return got
@@ -131,7 +123,7 @@ def set_date(port, page, y, mo, d):
 
 
 def growth_entries(port, gx, gy, species):
-    t = jget(port, f"return world.getFloraGrowthAt({gx},{gy})")
+    t = send_json(port, f"return world.getFloraGrowthAt({gx},{gy})")
     if isinstance(t, list):
         return [e for e in t if e.get("id") == species]
     return []
@@ -163,18 +155,18 @@ def clear_wild_forage(port, cx, cy, radius=30, keep=None):
     plot itself before the unit ever gets a turn."""
     cleared = []
     for _ in range(50):
-        spot = jget(port, f"return world.findHarvestableFlora({cx},{cy},{radius})")
+        spot = send_json(port, f"return world.findHarvestableFlora({cx},{cy},{radius})")
         if not isinstance(spot, dict):
             return cleared
         if keep and (spot.get("gx"), spot.get("gy")) == tuple(keep):
             return cleared
-        jget(port, f"return world.harvestFlora({spot['gx']},{spot['gy']})")
+        send_json(port, f"return world.harvestFlora({spot['gx']},{spot['gy']})")
         cleared.append((spot.get("gx"), spot.get("gy"), spot.get("id")))
     return cleared
 
 
 def get_skill(port, uid, name):
-    v = jget(port, f"return unit.getSkill({uid},'{name}') or -1")
+    v = send_json(port, f"return unit.getSkill({uid},'{name}') or -1")
     return float(v) if isinstance(v, (int, float)) else -1.0
 
 
@@ -250,7 +242,7 @@ def main():
         print(f"  [{'PASS' if ok1 else 'FAIL'}] plantRowCropAt refused on "
               f"untilled soil: {after_refused}")
 
-        cz = jget(port, f"local sz=world.getSurfaceAt({cx},{cy}); return sz")
+        cz = send_json(port, f"local sz=world.getSurfaceAt({cx},{cy}); return sz")
         till_and_wait(port, "probe", cx, cy, cz)
 
         send(port, f"world.plantRowCropAt('probe',{cx},{cy},'wheat'); "
@@ -280,7 +272,7 @@ def main():
         #     tomato_plant's real annualCycle: fruiting@90..240). Its OWN
         #     tile (D) — a planted tile now refuses a second planting
         #     (see check 3b below), so this can't reuse C. ---
-        dz = jget(port, f"local sz=world.getSurfaceAt({dx},{dy}); return sz")
+        dz = send_json(port, f"local sz=world.getSurfaceAt({dx},{dy}); return sz")
         till_and_wait(port, "probe", dx, dy, dz)
         set_date(port, "probe", 2, 1, 5)
         send(port, f"world.plantRowCropAt('probe',{dx},{dy},'tomato_plant'); "
@@ -306,7 +298,7 @@ def main():
         #     cycle on a designation that was always going to fail. ---
         send(port, f"plant.designate('probe',{dx},{dy},'wheat'); return 'ok'")
         time.sleep(0.5)
-        d4c = jget(port, f"return plant.getDesignationAt('probe',{dx},{dy})")
+        d4c = send_json(port, f"return plant.getDesignationAt('probe',{dx},{dy})")
         ok4c = not isinstance(d4c, dict)
         passed &= ok4c
         print(f"  [{'PASS' if ok4c else 'FAIL'}] plant.designate refuses an "
@@ -329,8 +321,8 @@ def main():
         #     row-crop FloraInstance on it (tile C, above) — otherwise a
         #     CropPlot lands underneath the existing plant since
         #     isPlantable is tilled-soil-only and stays true either way. ---
-        cross_plant = jget(port, f"return world.plantCropAt({cx},{cy},'wheat')")
-        cross_plot = jget(port, f"return world.getCropPlotAt({cx},{cy})")
+        cross_plant = send_json(port, f"return world.plantCropAt({cx},{cy},'wheat')")
+        cross_plot = send_json(port, f"return world.getCropPlotAt({cx},{cy})")
         ok3c = cross_plant in (None, False) and cross_plot is None
         passed &= ok3c
         print(f"  [{'PASS' if ok3c else 'FAIL'}] plantCropAt refuses a tile "
@@ -340,15 +332,15 @@ def main():
         # --- 5. plant.getDesignationAt's category field (its own fresh,
         #     unoccupied tile F — C is already planted by this point,
         #     and an occupied tile now refuses designation, check 4b). ---
-        fz = jget(port, f"local sz=world.getSurfaceAt({fx},{fy}); return sz")
+        fz = send_json(port, f"local sz=world.getSurfaceAt({fx},{fy}); return sz")
         till_and_wait(port, "probe", fx, fy, fz)
         send(port, f"plant.designate('probe',{fx},{fy},'tomato_plant'); "
                    f"return 'ok'")
         time.sleep(0.5)
-        dcat_row = jget(port, f"return plant.getDesignationAt('probe',{fx},{fy})")
+        dcat_row = send_json(port, f"return plant.getDesignationAt('probe',{fx},{fy})")
         send(port, f"plant.designate('probe',{fx},{fy},'wheat'); return 'ok'")
         time.sleep(0.5)
-        dcat_ground = jget(port, f"return plant.getDesignationAt('probe',{fx},{fy})")
+        dcat_ground = send_json(port, f"return plant.getDesignationAt('probe',{fx},{fy})")
         ok5 = (isinstance(dcat_row, dict) and dcat_row.get("category") == "row_crop"
                and isinstance(dcat_ground, dict)
                and dcat_ground.get("category") == "groundcover_crop")
@@ -365,7 +357,7 @@ def main():
                    "return 'ok'")
         send(port, "engine.loadScript('scripts/unit_ai.lua', 0.1); "
                    "return 'ok'")
-        bz = jget(port, f"local sz=world.getSurfaceAt({bx},{by}); return sz")
+        bz = send_json(port, f"local sz=world.getSurfaceAt({bx},{by}); return sz")
         till_and_wait(port, "probe", bx, by, bz)
 
         uid = spawn_worker(port, ax + 2, ay)
@@ -382,7 +374,7 @@ def main():
         tilled = False
         while time.time() < deadline:
             time.sleep(2.0)
-            if jget(port, f"return world.isPlantable({ax},{ay})") is True:
+            if send_json(port, f"return world.isPlantable({ax},{ay})") is True:
                 tilled = True
                 break
         ok6a = tilled
@@ -400,7 +392,7 @@ def main():
         while time.time() < deadline:
             time.sleep(2.0)
             if not planted_a:
-                pa = jget(port, f"return world.getCropPlotAt({ax},{ay})")
+                pa = send_json(port, f"return world.getCropPlotAt({ax},{ay})")
                 if isinstance(pa, dict) and pa.get("id") == "wheat":
                     planted_a = True
             if not planted_b:
@@ -418,8 +410,8 @@ def main():
         print(f"  [{'PASS' if ok7 else 'FAIL'}] acolyte plants tomato_plant at "
               f"site B (world.plantRowCropAt): planted={planted_b}")
 
-        da = jget(port, f"return plant.getDesignationAt('probe',{ax},{ay})")
-        db = jget(port, f"return plant.getDesignationAt('probe',{bx},{by})")
+        da = send_json(port, f"return plant.getDesignationAt('probe',{ax},{ay})")
+        db = send_json(port, f"return plant.getDesignationAt('probe',{bx},{by})")
         ok7b = not isinstance(da, dict) and not isinstance(db, dict)
         passed &= ok7b
         print(f"  [{'PASS' if ok7b else 'FAIL'}] both plant designations "
@@ -449,7 +441,7 @@ def main():
         ripe_wheat = False
         while time.time() < deadline:
             time.sleep(1.0)
-            pw = jget(port, f"return world.getCropPlotAt({ax},{ay})")
+            pw = send_json(port, f"return world.getCropPlotAt({ax},{ay})")
             if isinstance(pw, dict) and pw.get("harvestable") is True:
                 ripe_wheat = True
                 break
@@ -463,7 +455,7 @@ def main():
         deadline = time.time() + 20.0
         while time.time() < deadline:
             time.sleep(1.0)
-            info = jget(port, f"return unit.getInfo({uid})")
+            info = send_json(port, f"return unit.getInfo({uid})")
             if isinstance(info, dict):
                 dx = info.get("gridX", 0) - ax
                 dy = info.get("gridY", 0) - ay
@@ -481,11 +473,11 @@ def main():
         while time.time() < deadline:
             time.sleep(0.5)
             clear_wild_forage(port, ax, ay, radius=60, keep=(ax, ay))
-            pw2 = jget(port, f"return world.getCropPlotAt({ax},{ay})")
+            pw2 = send_json(port, f"return world.getCropPlotAt({ax},{ay})")
             if pw2 is None:
                 harvested = True
                 break
-        ground = jget(port, "return item.listGround()")
+        ground = send_json(port, "return item.listGround()")
         has_grain = isinstance(ground, list) and any(
             g.get("defName") == "wheat_grain" for g in ground)
         ok9 = harvested and has_grain
@@ -511,7 +503,7 @@ def main():
             return 1
         used.add(tE)
         ex, ey = tE
-        ez = jget(port, f"local sz=world.getSurfaceAt({ex},{ey}); return sz")
+        ez = send_json(port, f"local sz=world.getSurfaceAt({ex},{ey}); return sz")
         till_and_wait(port, "probe", ex, ey, ez)
         send(port, f"plant.designate('probe',{ex},{ey},'wheat'); return 'ok'")
 
@@ -537,12 +529,12 @@ def main():
         redesignated_done = False
         while time.time() < deadline:
             time.sleep(2.0)
-            de = jget(port, f"return plant.getDesignationAt('probe',{ex},{ey})")
+            de = send_json(port, f"return plant.getDesignationAt('probe',{ex},{ey})")
             if not isinstance(de, dict):
                 redesignated_done = True
                 break
         planted_new = growth_entries(port, ex, ey, "tomato_plant")
-        planted_stale = jget(port, f"return world.getCropPlotAt({ex},{ey})")
+        planted_stale = send_json(port, f"return world.getCropPlotAt({ex},{ey})")
         ok10 = (redesignated_done and len(planted_new) >= 1
                 and planted_stale is None)
         passed &= ok10

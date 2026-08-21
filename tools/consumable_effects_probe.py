@@ -25,18 +25,10 @@ known qualities, same formula cooking_probe.py already gates), then checks:
 
 Usage: python3 tools/consumable_effects_probe.py [--port 9347]
 """
-import argparse, glob, json, socket, subprocess, sys, time
-from probelib import quit_engine, boot, send
+import argparse, glob, socket, subprocess, sys, time
+from probelib import quit_engine, boot, send, send_json
 
 SPROOT = "/tmp"
-
-
-def jget(port, lua, timeout=10.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
 
 
 def fget(port, lua, timeout=10.0):
@@ -76,7 +68,7 @@ def bootstrap(port):
 
 
 def instances_of(port, uid, name):
-    r = jget(port,
+    r = send_json(port,
         f"local out={{}}; for _,it in ipairs(unit.getInventory({uid}) or {{}}) do "
         f"if it.defName=='{name}' then out[#out+1]={{id=it.instanceId,"
         f"fill=it.currentFill or -1,qual=it.quality or -1}} end end; return out")
@@ -140,7 +132,7 @@ def brew(port, uid, mule, bid, skill, knowledge):
 
 
 def drink(port, uid):
-    r = jget(port, f"return require('scripts.consumable').drink({uid}, 'coffee_pot')")
+    r = send_json(port, f"return require('scripts.consumable').drink({uid}, 'coffee_pot')")
     return r if isinstance(r, dict) else None
 
 

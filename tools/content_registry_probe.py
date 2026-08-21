@@ -57,10 +57,15 @@ Usage: python3 tools/content_registry_probe.py [--port 9341]
 import argparse
 import glob
 import re
-import json
 import sys
 
-from probelib import boot, init_world, poll_until, quit_engine, send
+from probelib import boot, init_world, poll_until, quit_engine, send, send_json
+
+# This probe's console default. Its registry queries decode whole
+# catalogues, so they get longer than probelib.send_json's 10 s --
+# the same 15 s the local jget this file used to define had, and the
+# same one `num` below takes.
+QUERY_TIMEOUT = 15.0
 
 PROBE_SUBSTANCE_YAML = "/tmp/content_registry_probe_substances.yaml"
 
@@ -81,15 +86,7 @@ substances:
 """
 
 
-def jget(port, lua, timeout=15.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
-
-
-def num(port, lua, timeout=15.0):
+def num(port, lua, timeout=QUERY_TIMEOUT):
     raw = send(port, lua, timeout).strip().strip('"')
     try:
         return float(raw)
@@ -202,40 +199,49 @@ def main():
         # --- Phase 2: one public reader per registry -------------------
         print("\n-- phase 2: registry readers --")
 
-        names = jget(port, "return substance.getNames()")
-        steel = jget(port, "return substance.get('steel')")
+        names = send_json(port, "return substance.getNames()",
+                          timeout=QUERY_TIMEOUT)
+        steel = send_json(port, "return substance.get('steel')",
+                          timeout=QUERY_TIMEOUT)
         ok = (isinstance(names, list) and "steel" in names
               and isinstance(steel, dict) and steel.get("density", 0) > 0)
         passed = check(passed, ok, "substance.getNames/get",
                        f"names={names} steel={steel}")
 
-        item_defs = jget(port, "return item.listDefs()")
+        item_defs = send_json(port, "return item.listDefs()",
+                              timeout=QUERY_TIMEOUT)
         ok = (isinstance(item_defs, list) and len(item_defs) > 0
               and any(d.get("name") == "steel_bar" for d in item_defs))
         passed = check(passed, ok, "item.listDefs",
                        f"count={len(item_defs) if isinstance(item_defs, list) else item_defs}")
 
-        cls_names = jget(port, "return equipment.getClassNames()")
-        humanoid = jget(port, "return equipment.getClass('humanoid')")
+        cls_names = send_json(port, "return equipment.getClassNames()",
+                              timeout=QUERY_TIMEOUT)
+        humanoid = send_json(port, "return equipment.getClass('humanoid')",
+                             timeout=QUERY_TIMEOUT)
         ok = (isinstance(cls_names, list) and "humanoid" in cls_names
               and isinstance(humanoid, dict)
               and len(humanoid.get("slots", [])) > 0)
         passed = check(passed, ok, "equipment.getClassNames/getClass",
                        f"names={cls_names} slots={humanoid}")
 
-        inf_names = jget(port, "return infection.getNames()")
-        staph = jget(port, "return infection.get('staph')")
+        inf_names = send_json(port, "return infection.getNames()",
+                              timeout=QUERY_TIMEOUT)
+        staph = send_json(port, "return infection.get('staph')",
+                          timeout=QUERY_TIMEOUT)
         ok = (isinstance(inf_names, list) and "staph" in inf_names
               and isinstance(staph, dict) and staph.get("id") == "staph")
         passed = check(passed, ok, "infection.getNames/get",
                        f"count={len(inf_names) if isinstance(inf_names, list) else inf_names} staph={staph}")
 
-        recipe_names = jget(port, "return craft.getNames()")
+        recipe_names = send_json(port, "return craft.getNames()",
+                                 timeout=QUERY_TIMEOUT)
         ok = isinstance(recipe_names, list) and len(recipe_names) > 0
         passed = check(passed, ok, "craft.getNames", f"names={recipe_names}")
         if ok:
             one = recipe_names[0]
-            rec = jget(port, f"return craft.get('{one}')")
+            rec = send_json(port, f"return craft.get('{one}')",
+                            timeout=QUERY_TIMEOUT)
             ok2 = (isinstance(rec, dict) and rec.get("id") == one
                    and isinstance(rec.get("station"), str))
             passed = check(passed, ok2, "craft.get returns the full shape",
@@ -245,18 +251,21 @@ def main():
         # registry, and the one reader that also reaches the item
         # registry (repair.repairAt) — so it gates a second field of the
         # capability record from a second module.
-        repair_names = jget(port, "return repair.getNames()")
+        repair_names = send_json(port, "return repair.getNames()",
+                                 timeout=QUERY_TIMEOUT)
         ok = isinstance(repair_names, list) and len(repair_names) > 0
         passed = check(passed, ok, "repair.getNames (repair-tagged recipes)",
                        f"names={repair_names}")
         if ok:
-            rp = jget(port, f"return repair.get('{repair_names[0]}')")
+            rp = send_json(port, f"return repair.get('{repair_names[0]}')",
+                           timeout=QUERY_TIMEOUT)
             ok2 = isinstance(rp, dict) and rp.get("repairAxis") in (
                 "condition", "sharpness")
             passed = check(passed, ok2, "repair.get carries a repair axis",
                            f"{repair_names[0]} -> {rp}")
 
-        loc_defs = jget(port, "return engine.listLocationDefs()")
+        loc_defs = send_json(port, "return engine.listLocationDefs()",
+                             timeout=QUERY_TIMEOUT)
         ok = (isinstance(loc_defs, list) and len(loc_defs) > 0
               and all(isinstance(d.get("bounds"), dict) for d in loc_defs))
         passed = check(passed, ok, "engine.listLocationDefs",
@@ -277,7 +286,8 @@ def main():
         # field #890 had to pass alongside the capability record).
         entry_ids = set()
         for _ in range(12):
-            pick = jget(port, "return loot.roll('ruin_common')")
+            pick = send_json(port, "return loot.roll('ruin_common')",
+                             timeout=QUERY_TIMEOUT)
             if isinstance(pick, str) and pick not in ("null", "nil"):
                 entry_ids.add(pick)
         ok = len(entry_ids) > 0
@@ -331,8 +341,10 @@ def main():
         with open(PROBE_SUBSTANCE_YAML, "w") as f:
             f.write(PROBE_SUBSTANCE_TMPL.format(density=1111.0))
         n1 = num(port, f"return engine.loadSubstanceYaml('{PROBE_SUBSTANCE_YAML}')")
-        after1 = jget(port, "return substance.getNames()")
-        d1 = jget(port, "return substance.get('probe_alloy')")
+        after1 = send_json(port, "return substance.getNames()",
+                           timeout=QUERY_TIMEOUT)
+        d1 = send_json(port, "return substance.get('probe_alloy')",
+                       timeout=QUERY_TIMEOUT)
         ok = (n1 == 1 and isinstance(after1, list) and "probe_alloy" in after1
               and isinstance(d1, dict) and abs(d1.get("density", 0) - 1111.0) < 0.5)
         passed = check(passed, ok, "post-boot load registers a new substance",
@@ -341,8 +353,10 @@ def main():
         with open(PROBE_SUBSTANCE_YAML, "w") as f:
             f.write(PROBE_SUBSTANCE_TMPL.format(density=2222.0))
         n2 = num(port, f"return engine.loadSubstanceYaml('{PROBE_SUBSTANCE_YAML}')")
-        after2 = jget(port, "return substance.getNames()")
-        d2 = jget(port, "return substance.get('probe_alloy')")
+        after2 = send_json(port, "return substance.getNames()",
+                           timeout=QUERY_TIMEOUT)
+        d2 = send_json(port, "return substance.get('probe_alloy')",
+                       timeout=QUERY_TIMEOUT)
         ok = (n2 == 1
               and isinstance(after1, list) and isinstance(after2, list)
               and len(after2) == len(after1)          # replaced, not duplicated
@@ -356,16 +370,20 @@ def main():
         # A shipped file re-loaded on top of itself must leave its defs
         # intact too (the registries are not one-shot / frozen).
         num(port, "return engine.loadSubstanceYaml('data/substances/metals.yaml')")
-        steel2 = jget(port, "return substance.get('steel')")
-        after3 = jget(port, "return substance.getNames()")
+        steel2 = send_json(port, "return substance.get('steel')",
+                           timeout=QUERY_TIMEOUT)
+        after3 = send_json(port, "return substance.getNames()",
+                           timeout=QUERY_TIMEOUT)
         ok = (isinstance(steel2, dict) and steel2.get("density", 0) > 0
               and isinstance(after3, list) and len(after3) == len(after2))
         passed = check(passed, ok, "re-loading a shipped file keeps it queryable",
                        f"steel={steel2} count={len(after3) if isinstance(after3, list) else after3}")
 
-        n_recipes_before = jget(port, "return craft.getNames()")
+        n_recipes_before = send_json(port, "return craft.getNames()",
+                                     timeout=QUERY_TIMEOUT)
         load_all(port, "engine.loadRecipeYaml", "data/recipes/*.yaml")  # noqa: F841
-        n_recipes_after = jget(port, "return craft.getNames()")
+        n_recipes_after = send_json(port, "return craft.getNames()",
+                                    timeout=QUERY_TIMEOUT)
         ok = (isinstance(n_recipes_before, list) and isinstance(n_recipes_after, list)
               and len(n_recipes_after) == len(n_recipes_before))
         passed = check(passed, ok, "re-loading the recipe set does not duplicate ids",
@@ -388,8 +406,8 @@ def main():
         # placing >= 1 ruin_small is the same expectation
         # tools/location_overlay_probe.py's check 1 already relies on.
         def placements():
-            entries = jget(port, f"return world.listPlacedLocations('{page}')",
-                           timeout=30.0)
+            entries = send_json(port, f"return world.listPlacedLocations('{page}')",
+                                timeout=30.0)
             if not isinstance(entries, list):
                 return None
             known = [p for p in entries if p.get("id") in def_ids]
@@ -398,8 +416,8 @@ def main():
         found = poll_until(90, placements, interval=0.5)
         detail = ""
         if found is None:
-            last = jget(port, f"return world.listPlacedLocations('{page}')",
-                        timeout=30.0)
+            last = send_json(port, f"return world.listPlacedLocations('{page}')",
+                             timeout=30.0)
             detail = f"def_ids={sorted(def_ids)} last={last!r}"
         passed = check(passed, found is not None,
                        "world.listPlacedLocations reports >= 1 placement "
@@ -424,8 +442,8 @@ def main():
             active = poll_until(
                 30,
                 lambda: (lambda e: e if isinstance(e, list) and e else None)(
-                    jget(port, "return world.listPlacedLocations()",
-                         timeout=30.0)),
+                    send_json(port, "return world.listPlacedLocations()",
+                              timeout=30.0)),
                 interval=0.5)
             passed = check(passed, active is not None
                            and len(active) == len(placed),

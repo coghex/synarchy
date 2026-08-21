@@ -31,19 +31,11 @@ needs worldgen) and checks the DERIVED growth runtime end-to-end:
 Usage: python3 tools/flora_growth_probe.py [--port 9186] [--seed 42]
        [--size 64] [--plates 3]
 """
-import argparse, glob, json, socket, subprocess, sys, time
+import argparse, glob, socket, subprocess, sys, time
 from probelib import (FixtureNotRegistered, quit_engine, boot,
-                      load_fixture_yaml, send, wait_load_published)
+                      load_fixture_yaml, send, send_json, wait_load_published)
 
 SPROOT = "/tmp"
-
-
-def jget(port, lua, timeout=10.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
 
 
 PROBE_BERRY_YAML = """flora:
@@ -177,7 +169,7 @@ def set_date(port, page, y, mo, d):
     send(port, f"world.setDate('{page}', {y}, {mo}, {d}); return 'ok'")
     for _ in range(20):
         time.sleep(0.2)
-        got = jget(port, f"return world.getDate('{page}')")
+        got = send_json(port, f"return world.getDate('{page}')")
         if isinstance(got, dict) and got.get("year") == y \
            and got.get("month") == mo and got.get("day") == d:
             return got
@@ -229,7 +221,7 @@ def growth_entry(port, gx, gy, species):
     """Read the tile's FIRST-listed instance of `species` — matches
     find_species_tile's own selection above, so a caller tracks the
     same individual across both."""
-    t = jget(port, f"return world.getFloraGrowthAt({gx},{gy})")
+    t = send_json(port, f"return world.getFloraGrowthAt({gx},{gy})")
     if not isinstance(t, list):
         return None
     for e in t:
@@ -258,7 +250,7 @@ def main():
         send(port, "return world.waitForChunks(120)", timeout=125)
 
         # --- 1. The clock ticks: date advances under a cranked scale ---
-        d0 = jget(port, "return world.getDate('probe')")
+        d0 = send_json(port, "return world.getDate('probe')")
         ok = isinstance(d0, dict) and d0.get("absoluteDay") is not None
         passed &= ok
         print(f"  [{'PASS' if ok else 'FAIL'}] getDate reads the calendar: {d0}")
@@ -266,7 +258,7 @@ def main():
         send(port, "world.setTimeScale('probe', 3000); return 'ok'")
         time.sleep(3.0)
         send(port, "world.setTimeScale('probe', 1); return 'ok'")
-        d1 = jget(port, "return world.getDate('probe')")
+        d1 = send_json(port, "return world.getDate('probe')")
         ok1 = isinstance(d1, dict) and isinstance(d0, dict) \
             and d1["absoluteDay"] >= d0["absoluteDay"] + 3
         passed &= ok1
@@ -334,7 +326,7 @@ def main():
         # whatever else might be on the tile (rasp was found excluding
         # probe_clover above precisely so this is unambiguous).
         set_date(port, "probe", 2, 7, 21)
-        y = jget(port, f"return world.harvestFlora({rasp[0]},{rasp[1]})")
+        y = send_json(port, f"return world.harvestFlora({rasp[0]},{rasp[1]})")
         ok3d = isinstance(y, list) and len(y) >= 1 \
             and all(item.get("id") == "wild_berries" for item in y)
         passed &= ok3d
@@ -373,7 +365,7 @@ def main():
             print(f"  [FAIL] load transaction did not publish: {load_status}")
             return 1
         send(port, "world.show('probe'); return 'ok'")
-        d5 = jget(port, "return world.getDate('probe')")
+        d5 = send_json(port, "return world.getDate('probe')")
         ok5 = isinstance(d5, dict) and d5.get("year") == 3 \
             and d5.get("month") == 2 and d5.get("day") == 10
         passed &= ok5

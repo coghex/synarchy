@@ -68,7 +68,7 @@ machinery, then checks:
 Usage: python3 tools/craft_bill_probe.py [--port 9319]
 """
 import argparse, glob, json, socket, subprocess, sys, time
-from probelib import clear_find_water, quit_engine, boot, send
+from probelib import clear_find_water, quit_engine, boot, send, send_json
 
 SPROOT = "/tmp"
 TEST_YAML = f"{SPROOT}/craft_bill_probe_recipes.yaml"
@@ -103,14 +103,6 @@ recipes:
       - item: bronze_bar
         count: 2
 """
-
-
-def jget(port, lua, timeout=10.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
 
 
 def bootstrap(port):
@@ -311,7 +303,7 @@ def main():
         bill1, msg = add_bill(port, bid_f, "bill_probe_smelt", 3)
         passed = check(passed, bill1 is not None and bill1 >= 1,
                        "addBill ok returns an id", msg or f"id={bill1}")
-        shape = jget(port, f"return craft.getBill({bill1})")
+        shape = send_json(port, f"return craft.getBill({bill1})")
         ok = (isinstance(shape, dict) and shape.get("station") == bid_f
               and shape.get("recipe") == "bill_probe_smelt"
               and shape.get("remaining") == 3
@@ -319,8 +311,8 @@ def main():
               and "claimant" not in shape)
         passed = check(passed, ok, "getBill shape (pending, no claimant)",
                        shape)
-        allb = jget(port, "return craft.getBills()")
-        perb = jget(port, f"return craft.getBills({bid_f})")
+        allb = send_json(port, "return craft.getBills()")
+        perb = send_json(port, f"return craft.getBills({bid_f})")
         ok = (isinstance(allb, list) and isinstance(perb, list)
               and any(x.get("id") == bill1 for x in allb)
               and any(x.get("id") == bill1 for x in perb))
@@ -333,7 +325,7 @@ def main():
         ok = send(port, f"return craft.claimBill({bill1}, {uid2}, 30) "
                         f"and 'y' or 'n'").strip('"') == "n"
         passed = check(passed, ok, "rival claim against a fresh holder refused")
-        claimant = jget(port, f"return craft.getBill({bill1})").get("claimant")
+        claimant = send_json(port, f"return craft.getBill({bill1})").get("claimant")
         passed = check(passed, claimant == uid, "claimant observable via getBill",
                        f"claimant={claimant}")
         ok = send(port, f"return craft.claimBill({bill1}, {uid}, 30) "
@@ -344,28 +336,28 @@ def main():
                         f"and 'y' or 'n'").strip('"') == "y"
         passed = check(passed, ok, "expired claim taken over (timeout 0.1s)")
 
-        prog = jget(port, f"return craft.addBillProgress({bill1}, 0.6)")
+        prog = send_json(port, f"return craft.addBillProgress({bill1}, 0.6)")
         passed = check(passed, abs(float(prog) - 0.6) < 1e-6,
                        "addBillProgress 0.6", prog)
-        prog = jget(port, f"return craft.addBillProgress({bill1}, 0.6)")
+        prog = send_json(port, f"return craft.addBillProgress({bill1}, 0.6)")
         passed = check(passed, abs(float(prog) - 1.0) < 1e-6,
                        "progress clamps at 1.0", prog)
         ok = send(port, f"return craft.releaseBill({bill1}) and 'y' or 'n'"
                   ).strip('"') == "y"
-        after = jget(port, f"return craft.getBill({bill1})")
+        after = send_json(port, f"return craft.getBill({bill1})")
         ok = (ok and isinstance(after, dict) and "claimant" not in after
               and abs(after.get("progress", 0) - 1.0) < 1e-6)
         passed = check(passed, ok, "release keeps progress, clears claimant",
                        after)
 
-        rem = jget(port, f"return craft.completeBillCycle({bill1})")
+        rem = send_json(port, f"return craft.completeBillCycle({bill1})")
         passed = check(passed, rem == 2, "completeBillCycle → remaining 2", rem)
-        after = jget(port, f"return craft.getBill({bill1})")
+        after = send_json(port, f"return craft.getBill({bill1})")
         ok = (isinstance(after, dict) and after.get("remaining") == 2
               and after.get("progress") == 0)
         passed = check(passed, ok, "cycle reset progress + decremented", after)
-        jget(port, f"return craft.completeBillCycle({bill1})")
-        rem = jget(port, f"return craft.completeBillCycle({bill1})")
+        send_json(port, f"return craft.completeBillCycle({bill1})")
+        rem = send_json(port, f"return craft.completeBillCycle({bill1})")
         gone = send(port, f"return craft.getBill({bill1}) and 'y' or 'n'"
                     ).strip('"')
         passed = check(passed, rem == 0 and gone == "n",
@@ -373,7 +365,7 @@ def main():
                        f"rem={rem} exists={gone}")
 
         bill2, _ = add_bill(port, bid_f, "bill_probe_smelt")   # repeat mode
-        shape = jget(port, f"return craft.getBill({bill2})")
+        shape = send_json(port, f"return craft.getBill({bill2})")
         passed = check(passed,
                        isinstance(shape, dict) and shape.get("remaining") == -1,
                        "count omitted → repeat forever (-1)", shape)
@@ -413,11 +405,11 @@ def main():
         time.sleep(1.5)
         clear_find_water(port, uid)
 
-        claimed = poll(port, 30, lambda: jget(
+        claimed = poll(port, 30, lambda: send_json(
             port, f"return craft.getBill({bill3})") in ("nil", "", None, "null")
-            or jget(port,
-                    f"local b = craft.getBill({bill3}); "
-                    f"return b and b.claimant or -1") == uid)
+            or send_json(port,
+                         f"local b = craft.getBill({bill3}); "
+                         f"return b and b.claimant or -1") == uid)
         passed = check(passed, claimed, "AI claims the bill (or already done)")
 
         done = poll(port, 150, lambda: send(
@@ -605,7 +597,7 @@ def main():
         bill_u1, msg = add_until_bill(port, bid_f, "bill_probe_until", 5)
         passed = check(passed, bill_u1 is not None,
                        "#795 until-stock bill queued", msg)
-        shape = jget(port, f"return craft.getBill({bill_u1})")
+        shape = send_json(port, f"return craft.getBill({bill_u1})")
         ok = (isinstance(shape, dict) and shape.get("mode") == "until"
               and shape.get("target") == 5
               and shape.get("outputItem") == "bronze_bar"
@@ -624,7 +616,7 @@ def main():
         passed = check(passed, stock_at_target == 6,
                        "exactly 3 cycles run (2/cycle) -- stops at 6, not fewer/more",
                        f"stock={stock_at_target}")
-        idled = poll(port, 20, lambda: jget(
+        idled = poll(port, 20, lambda: send_json(
             port, f"return craft.getBill({bill_u1})").get("claimant") is None)
         passed = check(passed, idled,
                        "bill goes idle (claim released) once condition-satisfied")
@@ -658,7 +650,7 @@ def main():
         passed = check(passed, bill_u4 is not None,
                        "already-satisfied until-bill queued", msg)
         poll(port, 8, lambda: False)   # let the AI tick, unpaused
-        untouched = jget(port, f"return craft.getBill({bill_u4})")
+        untouched = send_json(port, f"return craft.getBill({bill_u4})")
         passed = check(passed,
                        isinstance(untouched, dict)
                        and untouched.get("claimant") is None,
@@ -687,8 +679,8 @@ def main():
         clear_find_water(port, uid7)
 
         def both_idle():
-            bA = jget(port, f"return craft.getBill({bill_u2})")
-            bB = jget(port, f"return craft.getBill({bill_u3})")
+            bA = send_json(port, f"return craft.getBill({bill_u2})")
+            bB = send_json(port, f"return craft.getBill({bill_u3})")
             return (isinstance(bA, dict) and bA.get("claimant") is None
                     and isinstance(bB, dict) and bB.get("claimant") is None)
 
@@ -754,7 +746,7 @@ def main():
         passed = check(passed, claimed == "not-claimed",
                        "claim (craftExecute) refuses the now-stale candidate",
                        claimed)
-        after = jget(port, f"return craft.getBill({bill_u5})")
+        after = send_json(port, f"return craft.getBill({bill_u5})")
         passed = check(passed,
                        isinstance(after, dict) and after.get("claimant") is None,
                        "the bill itself was never actually claimed engine-side",
