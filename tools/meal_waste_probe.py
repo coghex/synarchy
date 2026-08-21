@@ -71,12 +71,16 @@ from __future__ import annotations
 
 import argparse
 import glob
-import json
 import sys
 
-from probelib import boot, init_arena, quit_engine, send
+from probelib import boot, init_arena, quit_engine, send, send_json
 
 LOG = "/tmp/meal_waste_engine.log"
+
+# This probe's console default. Its one-line Lua batches drive whole
+# meal cycles, so they get longer than probelib.send_json's 10 s -- the
+# same 20 s the local jget this file used to define had.
+QUERY_TIMEOUT = 20.0
 
 RATION = "rations"
 SACK = "quinoa_sack"
@@ -129,14 +133,6 @@ def expected_feeds(max_hunger: float, start: float, rations: int) -> int:
         rations -= 1
         fed += 1
     return fed
-
-
-def jget(port: int, lua: str, timeout: float = 20.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
 
 
 def bootstrap(port: int) -> None:
@@ -214,7 +210,7 @@ def meal(port: int, uid: int, give: str, set_hunger: str):
         "maxHunger=mh, startHunger=start, "
         "hunger=unit.getStat(uid,'hunger')}"
     )
-    report = jget(port, lua, timeout=25.0)
+    report = send_json(port, lua, timeout=25.0)
     if not isinstance(report, dict):
         sys.exit(f"meal report was not a table: {report!r}")
     if not report.get("ok"):
@@ -332,7 +328,7 @@ def main() -> int:
         # the setStat and the read would move eatUtility off its formula.
         uid6 = spawn(port, 10, 0)
         frac = 0.2
-        gates = jget(port,
+        gates = send_json(port,
             f"local uid={uid6}; "
             "local mh=unit.getStat(uid,'max_hunger'); "
             f"unit.addItem(uid,'{RATION}'); "
@@ -343,7 +339,8 @@ def main() -> int:
             "local e=needs.eatUtility(uid,{},params); "
             "local f=needs.forageUtility(uid,{},params); "
             "return {eat=e, forageBlocked=(f==-math.huge), "
-            "expected=(1-h/mh)*params.eat_weight}")
+            "expected=(1-h/mh)*params.eat_weight}",
+            timeout=QUERY_TIMEOUT)
         ok6 = (isinstance(gates, dict)
                and gates.get("forageBlocked") is True
                and isinstance(gates.get("eat"), (int, float))

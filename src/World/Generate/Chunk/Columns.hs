@@ -202,5 +202,5 @@ generateExposedColumn lx ly surfaceZ exposeFrom lookupMat =
     [ ((lx, ly, z), Tile (unMaterialId mat) 0)
     | z ← [exposeFrom .. surfaceZ]
     , let mat = lookupMat z
-    , mat ≠ matAir
+    , mat ≢ matAir
     ]

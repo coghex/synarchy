@@ -247,7 +247,7 @@ spawnYieldItems env rngRef logger ws defName (gx, gy) n = do
                 "Dig yield: unknown item def '" <> defName
                   <> "' — dropping " <> T.pack (show n)
         Just _ → forM_ [1 .. n] $ \_ → do
-            mInst ← materializeItem itemMgr rngRef
+            mInst ← materializeItem itemMgr logger rngRef
                         (freshItemInstanceId env) pristineItem defName
             case mInst of
                 Nothing → pure ()

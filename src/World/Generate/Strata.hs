@@ -354,7 +354,7 @@ applyDelta queryZ elevBefore delta eventMat intrusion surfMat uplift zMat
             newZMat = if inSoil then eventMat else zMat
         in (newSurfMat, uplift, newZMat)
     | otherwise =
-        let newZMat = if queryZ ≡ elevBefore ∧ eventMat ≠ surfMat
+        let newZMat = if queryZ ≡ elevBefore ∧ eventMat ≢ surfMat
                       then eventMat
                       else zMat
         in (eventMat, uplift, newZMat)

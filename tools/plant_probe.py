@@ -46,9 +46,9 @@ exist yet).
 Usage: python3 tools/plant_probe.py [--port 9179] [--seed 42]
        [--size 64] [--plates 3]
 """
-import argparse, glob, json, os, shutil, socket, subprocess, sys, tempfile, time
+import argparse, glob, os, shutil, socket, subprocess, sys, tempfile, time
 from pathlib import Path
-from probelib import quit_engine, boot, send, wait_load_published
+from probelib import quit_engine, boot, send, send_json, wait_load_published
 
 SPROOT = "/tmp"
 REPO = Path(__file__).resolve().parent.parent
@@ -82,14 +82,6 @@ FACTOR_NAMES = {"temperature", "precipitation", "humidity", "altitude",
                 "slope", "soil"}
 
 
-def jget(port, lua, timeout=10.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
-
-
 def bootstrap(port):
     for pattern, fn in [
         ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
@@ -109,13 +101,13 @@ def find_tillable(port, span=4):
     flora-free tile; returns (gx, gy) or None."""
     for sx in range(-span * 16, span * 16 + 1, 4):
         for sy in range(-span * 16, span * 16 + 1, 4):
-            slope = jget(port, f"return world.getSlopeAt({sx},{sy})")
+            slope = send_json(port, f"return world.getSlopeAt({sx},{sy})")
             if slope != 0:
                 continue
-            fluid = jget(port, f"return world.getFluidAt({sx},{sy})")
+            fluid = send_json(port, f"return world.getFluidAt({sx},{sy})")
             if isinstance(fluid, dict) and fluid.get("type"):
                 continue
-            flora = jget(port, f"return world.getFloraAt({sx},{sy})")
+            flora = send_json(port, f"return world.getFloraAt({sx},{sy})")
             if isinstance(flora, dict):
                 continue
             return sx, sy
@@ -127,7 +119,7 @@ def till_and_wait(port, page, gx, gy, z):
     send, then poll isPlantable until it lands before designating."""
     send(port, f"world.setVegAt('{page}', {gx}, {gy}, {z}, 77); return 'ok'")
     for _ in range(20):
-        if jget(port, f"return world.isPlantable({gx},{gy})") is True:
+        if send_json(port, f"return world.isPlantable({gx},{gy})") is True:
             return True
         time.sleep(0.2)
     sys.exit(f"setVegAt({gx},{gy}) never landed")
@@ -135,7 +127,7 @@ def till_and_wait(port, page, gx, gy, z):
 
 def suitability_row(port, page, gx, gy, species):
     """world.getPlantSuitability(gx,gy) → the row for `species`, or None."""
-    rows = jget(port, f"return world.getPlantSuitability({gx},{gy})")
+    rows = send_json(port, f"return world.getPlantSuitability({gx},{gy})")
     if not isinstance(rows, list):
         return None
     return next((r for r in rows if r.get("name") == species), None)
@@ -204,7 +196,7 @@ def _run(port, proc, args, passed):
         # terrainZ, fluidType, fluidSurface), not a table — capture just
         # the first via a local (same quirk crop_probe.py's
         # find_dry_tile documents).
-        z = jget(port, f"local sz=world.getSurfaceAt({tx},{ty}); return sz")
+        z = send_json(port, f"local sz=world.getSurfaceAt({tx},{ty}); return sz")
         print(f"  candidate tile at ({tx},{ty}), surfaceZ={z}")
 
         # Force a known, species-preferred soil BEFORE any suitability
@@ -219,7 +211,7 @@ def _run(port, proc, args, passed):
 
         # --- 1. Suitability query lists every registered crop, with a
         #     6-factor breakdown per crop ---
-        rows = jget(port, f"return world.getPlantSuitability({tx},{ty})")
+        rows = send_json(port, f"return world.getPlantSuitability({tx},{ty})")
         by_name = {r["name"]: r for r in rows} if isinstance(rows, list) else {}
         ok1 = ("tomato_plant" in by_name and "wheat" in by_name
                and by_name["tomato_plant"]["category"] == "row_crop"
@@ -259,7 +251,7 @@ def _run(port, proc, args, passed):
         set_material_and_wait(port, "probe", tx, ty, z, LOAM_NAME, "wheat", 1.0)
 
         # --- 3. Designation refused on an untilled tile ---
-        pre = jget(port, f"return world.isPlantable({tx},{ty})")
+        pre = send_json(port, f"return world.isPlantable({tx},{ty})")
         ok2a = pre is False
         passed &= ok2a
         print(f"  [{'PASS' if ok2a else 'FAIL'}] isPlantable is false before "
@@ -268,7 +260,7 @@ def _run(port, proc, args, passed):
         send(port, f"plant.designate('probe',{tx},{ty},'wheat'); "
                    f"return 'ok'")
         time.sleep(0.5)
-        d0 = jget(port, f"return plant.getDesignationAt('probe',{tx},{ty})")
+        d0 = send_json(port, f"return plant.getDesignationAt('probe',{tx},{ty})")
         ok2 = not isinstance(d0, dict)
         passed &= ok2
         print(f"  [{'PASS' if ok2 else 'FAIL'}] designate refused on an "
@@ -280,7 +272,7 @@ def _run(port, proc, args, passed):
         send(port, f"plant.designate('probe',{tx},{ty},'not_a_real_crop'); "
                    f"return 'ok'")
         time.sleep(0.5)
-        d1 = jget(port, f"return plant.getDesignationAt('probe',{tx},{ty})")
+        d1 = send_json(port, f"return plant.getDesignationAt('probe',{tx},{ty})")
         ok3 = not isinstance(d1, dict)
         passed &= ok3
         print(f"  [{'PASS' if ok3 else 'FAIL'}] designate refused for an "
@@ -290,8 +282,8 @@ def _run(port, proc, args, passed):
         send(port, f"plant.designate('probe',{tx},{ty},'wheat'); "
                    f"return 'ok'")
         time.sleep(0.5)
-        n = jget(port, "return plant.getDesignationCount('probe')")
-        d2 = jget(port, f"return plant.getDesignationAt('probe',{tx},{ty})")
+        n = send_json(port, "return plant.getDesignationCount('probe')")
+        d2 = send_json(port, f"return plant.getDesignationAt('probe',{tx},{ty})")
         ok4 = (isinstance(n, (int, float)) and n >= 1
                and isinstance(d2, dict) and d2.get("crop") == "wheat"
                and isinstance(d2.get("z"), (int, float)))
@@ -302,8 +294,8 @@ def _run(port, proc, args, passed):
         # plant.nearestDesignation returns MULTIPLE Lua values (gx, gy,
         # dist), not a table — the debug console prints them
         # tab-separated on one line, so parse that directly instead of
-        # jget's JSON path (same multi-return quirk world.getSurfaceAt
-        # has, per crop_probe.py's find_dry_tile).
+        # send_json's JSON path (same multi-return quirk
+        # world.getSurfaceAt has, per crop_probe.py's find_dry_tile).
         near_raw = send(port,
             f"return plant.nearestDesignation('probe',{tx},{ty})")
         near_parts = near_raw.split()
@@ -316,7 +308,7 @@ def _run(port, proc, args, passed):
 
         send(port, f"plant.cancelDesignation({tx},{ty}); return 'ok'")
         time.sleep(0.5)
-        d3 = jget(port, f"return plant.getDesignationAt('probe',{tx},{ty})")
+        d3 = send_json(port, f"return plant.getDesignationAt('probe',{tx},{ty})")
         ok4c = not isinstance(d3, dict)
         passed &= ok4c
         print(f"  [{'PASS' if ok4c else 'FAIL'}] cancelDesignation clears "
@@ -327,7 +319,7 @@ def _run(port, proc, args, passed):
         send(port, f"plant.designate('probe',{tx},{ty},'tomato_plant'); "
                    f"return 'ok'")
         time.sleep(0.5)
-        d4 = jget(port, f"return plant.getDesignationAt('probe',{tx},{ty})")
+        d4 = send_json(port, f"return plant.getDesignationAt('probe',{tx},{ty})")
         ok5 = isinstance(d4, dict) and d4.get("crop") == "tomato_plant"
         passed &= ok5
         print(f"  [{'PASS' if ok5 else 'FAIL'}] designate accepts a "
@@ -337,7 +329,7 @@ def _run(port, proc, args, passed):
         send(port, f"plant.designate('probe',{tx},{ty},'wheat'); "
                    f"return 'ok'")
         time.sleep(0.5)
-        d5 = jget(port, f"return plant.getDesignationAt('probe',{tx},{ty})")
+        d5 = send_json(port, f"return plant.getDesignationAt('probe',{tx},{ty})")
         ok6 = isinstance(d5, dict) and d5.get("crop") == "wheat"
         passed &= ok6
         print(f"  [{'PASS' if ok6 else 'FAIL'}] re-designating the same "
@@ -356,8 +348,8 @@ def _run(port, proc, args, passed):
         send(port, "engine.setPaused(false); return 'ok'")
         send(port, "return world.loadChunksInRegion(-4, -4, 4, 4)", timeout=30)
         send(port, "return world.waitForChunks(120)", timeout=125)
-        d6 = jget(port,
-                  f"return plant.getDesignationAt('probe',{tx},{ty})")
+        d6 = send_json(port,
+                       f"return plant.getDesignationAt('probe',{tx},{ty})")
         ok7 = isinstance(d6, dict) and d6.get("crop") == "wheat"
         passed &= ok7
         print(f"  [{'PASS' if ok7 else 'FAIL'}] designation (with crop) "

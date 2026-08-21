@@ -155,6 +155,7 @@ mid-profile and truncate the `.prof`). Full recipe:
 | `≡` | equality (from Prelude.Unicode) | `==` |
 | `≢` | inequality (from Prelude.Unicode) | `/=` |
 | `∧` / `∨` | logical and/or (from Prelude.Unicode) | `&&` / `\|\|` |
+| `≠` | inequality — **prose only**, never an operator | use `≢` |
 
 Five of these are **enforced**: `.&.`, `.\|.`, `>>=`, `==`, and `/=` must
 not appear as Haskell operators in `src/`/`app/` outside
@@ -164,6 +165,13 @@ GLSL; the `Eq`/`Monad` instance method names, which must stay ASCII) —
 see issue #1005 / `docs/code_health_findings.md` CH-49. `fmap`'s two
 spellings, `<$>` and `⊚`, are a deliberate exception: **both are kept**,
 picked per call site by readability, not enforced either way.
+
+`≠` is **not** a second such exception. `Prelude.Unicode` exports it as
+the same `/=` at the same fixity, but this project spells inequality
+`≢` and nothing else: `≠` is allowed only inside comment prose —
+pseudocode or a maths formula — and never as an operator in
+`src/`/`app/`. The same audit enforces that (#1494), by its own
+single-code-point path, since its ASCII lexer cannot see `≠` at all.
 
 ## Architecture
 
@@ -418,6 +426,14 @@ DOCS_WT="$(git worktree list --porcelain \
 [ -n "$DOCS_WT" ] || { DOCS_WT=~/work/synarchy-docs
                        git worktree add "$DOCS_WT" -b docs-wip origin/master; }
 ```
+
+**An agent never lands docs on its own.** Landing is the user's call: either
+they ask for it explicitly, in which case use the tool below, or the work
+accumulates uncommitted in the `docs-wip` worktree until they batch it. Docs
+pile up there indefinitely by design — that is the worktree's whole job — and a
+push per edit is what floods master CI and makes the drainer re-check every
+open PR. There is no third option: never push `docs-wip`, never run
+`docs_land.sh` unasked, and never hand-roll an equivalent.
 
 Docs land on master by direct push, not a PR. **Use `tools/docs_land.sh`,
 not a hand-rolled sequence:**

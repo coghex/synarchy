@@ -325,7 +325,7 @@ buildStartingInventory env logger itemMgr entries = do
     return [i | Just i ← mInsts]
   where
     resolve (name, mFill, prio) = do
-        mi ← rollInstance env itemMgr name mFill
+        mi ← rollInstance env logger itemMgr name mFill
         case mi of
             Nothing → do
                 logWarn logger CatThread $
@@ -342,10 +342,10 @@ buildStartingInventory env logger itemMgr entries = do
 --   Since #1418 this is a thin adapter over "Item.Materialize", the ONE
 --   mint boundary; the caller's explicit fill is the single root-scoped
 --   override starting inventory contributes.
-rollInstance ∷ EngineEnv → ItemManager → Text → Maybe Float
+rollInstance ∷ EngineEnv → LoggerState → ItemManager → Text → Maybe Float
              → IO (Maybe ItemInstance)
-rollInstance env itemMgr name mFill =
-    materializeItem itemMgr
+rollInstance env logger itemMgr name mFill =
+    materializeItem itemMgr logger
                     (ucStatRNGRef (toUnitCombatCapability env))
                     (freshItemInstanceId env)
                     (filledItem mFill)
@@ -403,7 +403,7 @@ buildStartingEquipment env logger itemMgr mClass entries =
                                         <> esKind slot <> ") — skipping"
                                     return m
                                 | otherwise → do
-                                    mInst ← materializeItem itemMgr
+                                    mInst ← materializeItem itemMgr logger
                                               (ucStatRNGRef
                                                  (toUnitCombatCapability env))
                                               (freshItemInstanceId env)
@@ -465,7 +465,7 @@ buildStartingAccessories env logger itemMgr names = do
                 "starting_accessories: unknown item '" <> name
                 <> "' — skipping"
             return Nothing
-        Just _ → materializeItem itemMgr
+        Just _ → materializeItem itemMgr logger
                                  (ucStatRNGRef (toUnitCombatCapability env))
                                  (freshItemInstanceId env)
                                  pristineItem name

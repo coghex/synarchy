@@ -155,7 +155,7 @@ visibleTilesOnPage ws inst = do
 --   world-size (#797).
 unitAwareness ∷ EngineEnv → UnitInstance → UnitInstance → IO Float
 unitAwareness env defender attacker
-    | uiPage defender ≠ uiPage attacker = pure 0.0
+    | uiPage defender ≢ uiPage attacker = pure 0.0
     | otherwise = do
         wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
         if uiPage defender `notElem` wmVisible wm then pure 0.0
@@ -249,7 +249,7 @@ nightPerceptionFloor = 0.5
 --   removed from wmVisible by world.hide) must still come out blocked.
 losBlockedBetween ∷ EngineEnv → UnitInstance → UnitInstance → IO Bool
 losBlockedBetween env defender attacker
-    | uiPage defender ≠ uiPage attacker = pure True
+    | uiPage defender ≢ uiPage attacker = pure True
     | otherwise = do
         wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
         case wmWorlds wm of

@@ -44,21 +44,12 @@ Exit:  0 = every check passed
 """
 import argparse
 import glob
-import json
 import sys
 import time
 
-from probelib import boot, quit_engine, send
+from probelib import boot, quit_engine, send, send_json
 
 SPROOT = "/tmp"
-
-
-def jget(port, lua, timeout=10.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
 
 
 def bootstrap(port):
@@ -79,13 +70,13 @@ def find_mixed_box(port, span=6):
     generated terrain has some variety within 5 tiles of most points"."""
     for sx in range(-span * 8, span * 8 + 1, 3):
         for sy in range(-span * 8, span * 8 + 1, 3):
-            slope = jget(port, f"return world.getSlopeAt({sx},{sy})")
+            slope = send_json(port, f"return world.getSlopeAt({sx},{sy})")
             if slope != 0:
                 continue
-            fluid = jget(port, f"return world.getFluidAt({sx},{sy})")
+            fluid = send_json(port, f"return world.getFluidAt({sx},{sy})")
             if isinstance(fluid, dict) and fluid.get("type"):
                 continue
-            flora = jget(port, f"return world.getFloraAt({sx},{sy})")
+            flora = send_json(port, f"return world.getFloraAt({sx},{sy})")
             if isinstance(flora, dict):
                 continue
             # Candidate anchor is tillable. Check a 5x5 box around it for
@@ -96,9 +87,9 @@ def find_mixed_box(port, span=6):
                     if dx == 0 and dy == 0:
                         continue
                     gx, gy = sx + dx, sy + dy
-                    s2 = jget(port, f"return world.getSlopeAt({gx},{gy})")
-                    f2 = jget(port, f"return world.getFluidAt({gx},{gy})")
-                    fl2 = jget(port, f"return world.getFloraAt({gx},{gy})")
+                    s2 = send_json(port, f"return world.getSlopeAt({gx},{gy})")
+                    f2 = send_json(port, f"return world.getFluidAt({gx},{gy})")
+                    fl2 = send_json(port, f"return world.getFloraAt({gx},{gy})")
                     if s2 != 0 or (isinstance(f2, dict) and f2.get("type")) \
                        or isinstance(fl2, dict):
                         mixed = True
@@ -180,8 +171,8 @@ def find_chop_fixture(port):
     origins = chop_search_origins()
     for sx in origins:
         for sy in origins:
-            r = jget(port, f"return world.findHarvestableFlora("
-                           f"{sx},{sy},{FIND_RADIUS},'wood')")
+            r = send_json(port, f"return world.findHarvestableFlora("
+                                f"{sx},{sy},{FIND_RADIUS},'wood')")
             if not isinstance(r, dict):
                 continue
             gx, gy = r.get("gx"), r.get("gy")
@@ -206,7 +197,7 @@ def evaluate_chop_designation(port, cx, cy):
     send(port, "return debug.drainActionOutcomes()")  # clear noise
     send(port, f"chop.designate('probe',{cx - 2},{cy - 2},{cx + 2},{cy + 2},"
                f"'wood'); return 'ok'")
-    drained = jget(port, "return debug.drainActionOutcomes()")
+    drained = send_json(port, "return debug.drainActionOutcomes()")
     records = drained if isinstance(drained, list) else []
     rec = records[0] if records and isinstance(records[0], dict) else {}
     requested = rec.get("requested")
@@ -307,7 +298,7 @@ def active_building_ids(port):
     exist before", which a count alone cannot state: a simultaneous
     retire and spawn leaves the count unchanged, and a count also
     can't say WHICH id is new."""
-    ids = jget(port, "return building.getActiveIds()")
+    ids = send_json(port, "return building.getActiveIds()")
     if not isinstance(ids, list):
         return set()
     return {int(i) for i in ids
@@ -357,28 +348,28 @@ def main():
         # --- 1/2/3: the public recordOutcome/drainActionOutcomes contract ---
         send(port, "return debug.drainActionOutcomes()")  # clear any startup noise
 
-        bad = jget(port, 'return debug.recordOutcome{kind="x"}')  # no outcome
+        bad = send_json(port, 'return debug.recordOutcome{kind="x"}')  # no outcome
         ok1 = bad is False
         passed &= ok1
         print(f"  [{'PASS' if ok1 else 'FAIL'}] recordOutcome without "
               f"outcome returns false: {bad}")
 
-        after_bad = jget(port, "return debug.drainActionOutcomes()")
+        after_bad = send_json(port, "return debug.drainActionOutcomes()")
         ok1b = after_bad == {} or after_bad == []
         passed &= ok1b
         print(f"  [{'PASS' if ok1b else 'FAIL'}] the rejected call pushed "
               f"nothing: {after_bad}")
 
-        ok = jget(port, 'return debug.recordOutcome{kind="probe.verb", '
-                        'outcome="accepted", where={x=3,y=4}, target=7, '
-                        'requested=2, applied=2, dropped=0, '
-                        'reason="r", handler="h"}')
+        ok = send_json(port, 'return debug.recordOutcome{kind="probe.verb", '
+                             'outcome="accepted", where={x=3,y=4}, target=7, '
+                             'requested=2, applied=2, dropped=0, '
+                             'reason="r", handler="h"}')
         ok2 = ok is True
         passed &= ok2
         print(f"  [{'PASS' if ok2 else 'FAIL'}] full-field recordOutcome "
               f"returns true: {ok}")
 
-        drained = jget(port, "return debug.drainActionOutcomes()")
+        drained = send_json(port, "return debug.drainActionOutcomes()")
         rec = drained[0] if isinstance(drained, list) and drained else {}
         ok3 = (rec.get("kind") == "probe.verb" and rec.get("outcome") == "accepted"
                and rec.get("where") == {"x": 3, "y": 4} and rec.get("target") == 7
@@ -389,7 +380,7 @@ def main():
         print(f"  [{'PASS' if ok3 else 'FAIL'}] drained record has every "
               f"field intact: {drained}")
 
-        second = jget(port, "return debug.drainActionOutcomes()")
+        second = send_json(port, "return debug.drainActionOutcomes()")
         ok4 = second == {} or second == []
         passed &= ok4
         print(f"  [{'PASS' if ok4 else 'FAIL'}] second drain is empty "
@@ -402,9 +393,9 @@ def main():
         # a fractional click position (Layer A screen-space clicks, or
         # the playtest harness's deliberately non-integral injections)
         # must round-trip exactly.
-        ok_float = jget(port, 'return debug.recordOutcome{kind="float.where", '
-                               'outcome="accepted", where={x=1.5,y=2.25}}')
-        drained_float = jget(port, "return debug.drainActionOutcomes()")
+        ok_float = send_json(port, 'return debug.recordOutcome{kind="float.where", '
+                                    'outcome="accepted", where={x=1.5,y=2.25}}')
+        drained_float = send_json(port, "return debug.drainActionOutcomes()")
         rec_float = (drained_float[0]
                      if isinstance(drained_float, list) and drained_float
                      else {})
@@ -424,11 +415,11 @@ def main():
         send(port, 'engine.loadScript("scripts/wire.lua", 0.0); return "ok"')
         send(port, "return debug.drainActionOutcomes()")  # clear noise
         send(port, 'require("scripts.wire").place(0, 0); return "ok"')
-        drained_wire_reject = jget(port, "return debug.drainActionOutcomes()")
+        drained_wire_reject = send_json(port, "return debug.drainActionOutcomes()")
         wire_reject_rec = (drained_wire_reject[0]
                             if isinstance(drained_wire_reject, list) and drained_wire_reject
                             else {})
-        no_world_hasat = jget(port, 'return structure.hasAt(0, 0, "wire")')
+        no_world_hasat = send_json(port, 'return structure.hasAt(0, 0, "wire")')
         ok4b = bool(wire_reject_rec.get("kind") == "wire.place"
                     and wire_reject_rec.get("outcome") == "rejected"
                     and wire_reject_rec.get("reason")
@@ -453,11 +444,11 @@ def main():
         # reason even on success).
         send(port, "return debug.drainActionOutcomes()")  # clear noise
         send(port, 'require("scripts.wire").place(0, 0); return "ok"')
-        drained_wire_accept = jget(port, "return debug.drainActionOutcomes()")
+        drained_wire_accept = send_json(port, "return debug.drainActionOutcomes()")
         wire_accept_rec = (drained_wire_accept[0]
                             if isinstance(drained_wire_accept, list) and drained_wire_accept
                             else {})
-        placed_hasat = jget(port, 'return structure.hasAt(0, 0, "wire")')
+        placed_hasat = send_json(port, 'return structure.hasAt(0, 0, "wire")')
         ok4c = bool(wire_accept_rec.get("kind") == "wire.place"
                     and wire_accept_rec.get("outcome") == "accepted"
                     and wire_accept_rec.get("reason") is None
@@ -481,7 +472,7 @@ def main():
             send(port, "return debug.drainActionOutcomes()")  # clear noise
             send(port, f"till.designate('probe',{sx-2},{sy-2},{sx+2},{sy+2}); "
                        f"return 'ok'")
-            drained2 = jget(port, "return debug.drainActionOutcomes()")
+            drained2 = send_json(port, "return debug.drainActionOutcomes()")
             rec2 = drained2[0] if isinstance(drained2, list) and drained2 else {}
             requested = rec2.get("requested")
             applied = rec2.get("applied")
@@ -508,7 +499,7 @@ def main():
         send(port, "return debug.drainActionOutcomes()")  # clear noise
         send(port, "till.designate('probe',5000000,5000000,5000005,5000005); "
                    "return 'ok'")
-        drained3 = jget(port, "return debug.drainActionOutcomes()")
+        drained3 = send_json(port, "return debug.drainActionOutcomes()")
         rec3 = drained3[0] if isinstance(drained3, list) and drained3 else {}
         ok6 = bool(rec3.get("kind") == "till.designate"
                    and rec3.get("outcome") == "rejected"
@@ -524,7 +515,7 @@ def main():
         # call must still drain a rejected record.
         send(port, "return debug.drainActionOutcomes()")  # clear noise
         send(port, "till.designate('missing_page',0,0,2,2); return 'ok'")
-        drained4 = jget(port, "return debug.drainActionOutcomes()")
+        drained4 = send_json(port, "return debug.drainActionOutcomes()")
         rec4 = drained4[0] if isinstance(drained4, list) and drained4 else {}
         ok7 = bool(rec4.get("kind") == "till.designate"
                    and rec4.get("outcome") == "rejected" and rec4.get("reason"))
@@ -583,23 +574,23 @@ def main():
             send(port, "return world.loadChunksInRegion(-1, -1, 1, 1)")
             send(port, "return world.waitForChunks(30)", timeout=35)
             send(port, "camera.setPosition(0, 0); return 'ok'")
-            fb = jget(port, "return {engine.getFramebufferSize()}")
+            fb = send_json(port, "return {engine.getFramebufferSize()}")
             fb_w, fb_h = (fb if isinstance(fb, list) and len(fb) == 2
                           and all(isinstance(v, (int, float)) and v > 0
                                   for v in fb)
                           else (1920, 1080))
             cx, cy = fb_w / 2, fb_h / 2
-            picked = jget(port, f"return {{world.pickTile({cx}, {cy})}}")
+            picked = send_json(port, f"return {{world.pickTile({cx}, {cy})}}")
             # HUD/toolbar never initialise headless (no GPU) — stub the
             # one field handleMouseDown/enterPlacement actually read
             # (same technique as wire_probe.py's path-builder phase).
             send(port, "local bt = require('scripts.build_tool'); "
                        "bt.hud = { worldId = 'portal_probe' }; return 'ok'")
-            warn_ready = jget(port,
-                              "local ok, err = pcall(function() "
-                              "require('scripts.build_tool_remote_warning')"
-                              f".init(1, 2, 3, {fb_w}, {fb_h}) end); "
-                              "return {ok = ok, err = tostring(err)}")
+            warn_ready = send_json(port,
+                                   "local ok, err = pcall(function() "
+                                   "require('scripts.build_tool_remote_warning')"
+                                   f".init(1, 2, 3, {fb_w}, {fb_h}) end); "
+                                   "return {ok = ok, err = tostring(err)}")
             tile_ok = (isinstance(picked, list) and len(picked) >= 2
                        and all(isinstance(v, (int, float))
                                and not isinstance(v, bool)
@@ -629,20 +620,20 @@ def main():
                 # stage recorded presented and no commitPlacement" is a
                 # claim about the click's own records alone.
                 send(port, "return debug.drainActionOutcomes()")  # clear noise
-                click = jget(port,
-                             "local bt = require('scripts.build_tool'); "
-                             f"local ok, res = pcall(bt.handleMouseDown, 1, {cx}, {cy}); "
-                             "return {ok = ok, consumed = (res == true), "
-                             "err = (ok and '' or tostring(res))}")
-                drained_click = jget(port, "return debug.drainActionOutcomes()")
+                click = send_json(port,
+                                  "local bt = require('scripts.build_tool'); "
+                                  f"local ok, res = pcall(bt.handleMouseDown, 1, {cx}, {cy}); "
+                                  "return {ok = ok, consumed = (res == true), "
+                                  "err = (ok and '' or tostring(res))}")
+                drained_click = send_json(port, "return debug.drainActionOutcomes()")
                 click_records = (drained_click
                                  if isinstance(drained_click, list) else [])
-                armed = jget(port,
-                             "local bt = require('scripts.build_tool'); "
-                             "local w = require('scripts.build_tool_remote_warning'); "
-                             "return {mode = bt.state.mode, "
-                             "def = (bt.state.target and bt.state.target.def) or '', "
-                             "warningOpen = w.isOpen()}")
+                armed = send_json(port,
+                                  "local bt = require('scripts.build_tool'); "
+                                  "local w = require('scripts.build_tool_remote_warning'); "
+                                  "return {mode = bt.state.mode, "
+                                  "def = (bt.state.target and bt.state.target.def) or '', "
+                                  "warningOpen = w.isOpen()}")
                 mid_ids = active_building_ids(port)
 
                 if not (isinstance(click, dict) and click.get("ok") is True):
@@ -683,11 +674,11 @@ def main():
                     # is read off this stage's records rather than a
                     # buffer still holding stage 1's.
                     send(port, "return debug.drainActionOutcomes()")  # isolate
-                    confirm = jget(port,
-                                   "local w = require('scripts.build_tool_remote_warning'); "
-                                   "local ok, err = pcall(w.establishHere); "
-                                   "return {ok = ok, err = (ok and '' or tostring(err))}")
-                    drained_confirm = jget(port, "return debug.drainActionOutcomes()")
+                    confirm = send_json(port,
+                                        "local w = require('scripts.build_tool_remote_warning'); "
+                                        "local ok, err = pcall(w.establishHere); "
+                                        "return {ok = ok, err = (ok and '' or tostring(err))}")
+                    drained_confirm = send_json(port, "return debug.drainActionOutcomes()")
                     confirm_records = (drained_confirm
                                        if isinstance(drained_confirm, list)
                                        else [])
@@ -749,7 +740,7 @@ def main():
              "ds.deferClick(1, 'probe774_handler', 'accepted', 100, 50, nil); "
              "ds.onMouseUp(1, 100, 50, 'game'); "
              "return 'ok'")
-        drained_lua_scale = jget(port, "return debug.drainActionOutcomes()")
+        drained_lua_scale = send_json(port, "return debug.drainActionOutcomes()")
         send(port,
              "engine.getWindowSize = _G._probe774OrigWS; "
              "engine.getFramebufferSize = _G._probe774OrigFS; "

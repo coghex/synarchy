@@ -26,18 +26,10 @@ data/buildings, spawns an acolyte, then checks:
 
 Usage: python3 tools/cooking_probe.py [--port 9346]
 """
-import argparse, glob, json, socket, subprocess, sys, time
-from probelib import quit_engine, boot, send
+import argparse, glob, socket, subprocess, sys, time
+from probelib import quit_engine, boot, send, send_json
 
 SPROOT = "/tmp"
-
-
-def jget(port, lua, timeout=10.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
 
 
 def bootstrap(port):
@@ -80,7 +72,7 @@ def count_item(port, uid, name):
 
 
 def instances_of(port, uid, name):
-    r = jget(port,
+    r = send_json(port,
         f"local out={{}}; for _,it in ipairs(unit.getInventory({uid}) or {{}}) do "
         f"if it.defName=='{name}' then out[#out+1]={{id=it.instanceId,"
         f"fill=it.currentFill or -1,qual=it.quality or -1}} end end; return out")
@@ -144,10 +136,10 @@ def main():
         time.sleep(1.0)
 
         # --- 1. Content shape ---
-        names = jget(port, "return craft.getNames()")
+        names = send_json(port, "return craft.getNames()")
         ok = isinstance(names, list) and "brew_coffee" in names
         passed = check(passed, ok, "getNames lists brew_coffee", names)
-        r = jget(port, "return craft.get('brew_coffee')")
+        r = send_json(port, "return craft.get('brew_coffee')")
         ok = (isinstance(r, dict) and r.get("station") == "cooking"
               and r.get("skill") == "cooking"
               and r.get("knowledge") == "basic_cuisine"
@@ -169,7 +161,7 @@ def main():
         bid = spawn_station(port, uid, "kitchen", 3, 2,
                              {"granite_chunk": 4, "wood_log": 2,
                               "steel_hardware": 2})
-        ops = jget(port, f"return building.getOperations({bid})")
+        ops = send_json(port, f"return building.getOperations({bid})")
         ok = ops == ["cooking"]
         passed = check(passed, ok, "kitchen advertises cooking", ops)
         hit = send(port, "local b=building.findStation('cooking'); return b or -1")

@@ -334,7 +334,7 @@ findVisualCenterTile env facing cx cy zSlice = do
                                         colLen = VU.length (ctMats col)
                                     in if i < 0 ∨ i >= colLen
                                        then tryZ (z - 1)
-                                       else if ctMats col VU.! i ≠ 0
+                                       else if ctMats col VU.! i ≢ 0
                                             then Just (gx, gy, z)
                                             else tryZ (z - 1)
                 return (tryZ zSlice)

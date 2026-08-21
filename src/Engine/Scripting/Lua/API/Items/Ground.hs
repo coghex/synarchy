@@ -18,6 +18,8 @@ module Engine.Scripting.Lua.API.Items.Ground
 import UPrelude
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.Core
+    (CoreCapability(..), toCoreCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
@@ -116,7 +118,9 @@ itemSpawnGroundFn env = do
                     -- default contents it spawns holding.
                     quality ← Lua.liftIO $ rollGroundQuality iDef mQuality rng
                     condition ← Lua.liftIO $ rollGroundCondition mCondition rng
-                    mInst ← Lua.liftIO $ materializeItem im rng
+                    logger ← Lua.liftIO $
+                        readIORef (ccLoggerRef (toCoreCapability env))
+                    mInst ← Lua.liftIO $ materializeItem im logger rng
                         (freshItemInstanceId env)
                         pristineItem { ovFill      = mFill
                                      , ovQuality   = Just quality

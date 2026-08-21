@@ -89,6 +89,7 @@ cited lines.
 - [ ] EXPL-39. `World.Geology.Ore` says its caller is `World.Geology.Timeline.buildAge`; that module exports only `buildTimeline`
 - [ ] EXPL-40. `World.Save.Component.Types` says concrete components live in three modules; five define them, and the two omitted are the optional pair
 - [ ] EXPL-41. `World.Save.Component.Entities`' header omits the `core-session` dependency from two of its five components
+- [ ] EXPL-42. A haddock names `Building.Knowledge.SeedAtSpawn`; the constructor is `SeedWhenBuilt`, and "at spawn" is what the design rejects
 
 ---
 
@@ -3198,3 +3199,100 @@ runtime-state mirror list (`UnitSimStateDTO`, `CraftBillDTO`/`BillQueueDTO`,
 `PowerNodeDTO`/`NodeRegistryDTO`) is accurate, as is the note that a demolished
 station's lingering craft bill is tolerated so its dependency is for ordering
 rather than a hard orphan reject.
+
+---
+
+## Container-knowledge seeding
+
+### EXPL-42. A haddock names `Building.Knowledge.SeedAtSpawn`; the constructor is `SeedWhenBuilt`, and "at spawn" is what the design rejects
+
+`src/Engine/Scripting/Lua/API/Buildings/Progress.hs:158-167`:
+
+```haskell
+--   wrong. The trigger is the FIRST crossing of the completion
+--   threshold ('Building.Types.currentActivity''s worker-driven arm:
+--   'biBuildProgress' reaching 'bdBuildWork'), deliberately NOT
+--   @BuildingSpawn@, which creates a worker-built building at zero
+--   progress — and deliberately not anything a LOAD can re-trigger, so
+--   restoring an already-built container never masquerades as a new
+--   construction event. This arm covers exactly
+--   'Building.Knowledge.SeedAtBuildCompletion' defs; the INSTANT-BUILT
+--   class ('Building.Knowledge.SeedAtSpawn', which never calls this
+--   verb at all) is seeded by "Building.Thread.Command" at placement.
+```
+
+**`SeedAtSpawn` does not exist anywhere in the tree.** The type has exactly two
+constructors (`src/Building/Knowledge.hs:148-155`):
+
+```haskell
+    = SeedAtBuildCompletion
+      -- ^ WORKER-BUILT (@bdBuildWork > 0@): the building is created at
+      --   zero progress and only becomes Built when 'biBuildProgress'
+      --   reaches 'bdBuildWork'. Seeded by
+      --   @building.addBuildProgress@'s crossing of that threshold —
+      --   deliberately NOT at spawn, which would fire while the thing
+      --   is still a construction site.
+    | SeedWhenBuilt
+      -- ^ INSTANT-BUILT (@bdBuildWork == 0@, the portal/solar-panel
+      --   shape): there is no construction work at all, so
+      --   'Building.Types.currentActivity' carries it to Built on the
+      --   TIME-BASED arm [...]
+```
+
+The instant-built constructor is **`SeedWhenBuilt`**.
+
+**This is not a harmless misspelling, because "at spawn" is precisely what the
+surrounding paragraph exists to rule out.** Four lines above the bad reference,
+the same comment says the trigger is "deliberately NOT `@BuildingSpawn@`, which
+creates a worker-built building at zero progress", and `SeedAtBuildCompletion`'s
+own haddock repeats it: "deliberately NOT at spawn, which would fire while the
+thing is still a construction site." A reader who takes `SeedAtSpawn` at face
+value concludes that the instant-built class seeds on the SPAWN event — exactly
+the misreading the neighbouring sentences are written to prevent. The real
+constructor carries the name `SeedWhenBuilt` because its transition is observed
+on `currentActivity`'s TIME-BASED arm (once the appearing animation elapses),
+not at placement-as-spawn.
+
+The other half of the same sentence is correct and should be left alone:
+`SeedAtBuildCompletion` exists and is spelled right, and "which never calls this
+verb at all" matches `SeedWhenBuilt`'s own documentation ("Nothing calls the
+progress verb for this class").
+
+**Severity: low-medium.** No behaviour is involved. Above the nit tier because
+the invented name asserts a seeding trigger the design explicitly rejects, and
+it does so in the one comment whose job is to say which of the two classes this
+verb handles.
+
+#### Method note: the type-reference sweep, and its noise
+
+This finding came from a new sweep — the uppercase analogue of EXPL-27, looking
+for haddock references to a TYPE or CONSTRUCTOR in a module that does not define
+it. Recorded because the technique is much noisier than the function version and
+should not be re-run naively:
+
+- **168 raw hits.** Nearly all are plain MODULE references
+  (`'Engine.Input.Thread.Dispatch'`) that the pattern splits into a module plus
+  a capitalised tail, or facade re-exports (`'Unit.Types.UnitInstance'`, really
+  defined in `Unit.Types.Instance` and re-exported by the `Unit.Types` facade).
+- **26 candidates** survive excluding references whose full dotted name is
+  itself a module.
+- Hand-checking those 26 showed all but one really do exist — the detector's
+  constructor extraction misses `| Ctor` lines with interleaved haddock, so
+  `WorldLoadPublish`, `LuaUIClickEvent`, `FactionDebug`, `SimChunkLoaded`,
+  `BuildingDestroy` and `SeedWhenBuilt` were all false negatives.
+
+`SeedAtSpawn` is the single genuine dead type reference the sweep found.
+
+Also verified exact in this pass, and recorded so they are not re-checked:
+
+- `Engine.Graphics.Vulkan.Device`'s claim that "`scoreDevice` ranks every
+  bindless-capable candidate above every incapable one" is provably true:
+  `bindlessCapableBonus = 10000` against a maximum device-type base score of
+  1000 for a discrete GPU, so any capable device scores at least 10010 and any
+  incapable one at most 1000. The claim it justifies — that a usable best which
+  still fails the capability check means no usable device exists — therefore
+  holds. `findQueueFamilies`' offscreen note is also right: with no surface the
+  present family aliases the graphics family.
+- `World.Fluid.Lake.Types.packBitmask`'s documented layout — "bit @i@ (LSB = 0)
+  of byte @b@ encodes tile @b * 8 + i@", 32 `Word8`s for 256 elements, unused
+  trailing bits zero — is exactly what its `foldr` produces.

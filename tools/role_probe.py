@@ -33,10 +33,10 @@ Usage: python3 tools/role_probe.py [--port 9265] [--seed 42]
        [--size 64] [--plates 3]
        python3 tools/role_probe.py --describe   # no engine
 """
-import argparse, glob, json, socket, subprocess, sys, time
+import argparse, glob, socket, subprocess, sys, time
 
 import probe_protocol
-from probelib import clear_find_water, quit_engine, boot, send
+from probelib import clear_find_water, quit_engine, boot, send, send_json
 
 SPROOT = "/tmp"
 
@@ -65,14 +65,6 @@ CHECKS = [
 DESCRIPTOR = probe_protocol.build_descriptor(PROBE_KEY, CHECKS)
 
 
-def jget(port, lua, timeout=10.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
-
-
 def bootstrap(port):
     for pattern, fn in [
         ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
@@ -91,8 +83,8 @@ def find_wood(port, span=4):
     """Nearest wood-tagged harvestable tile; (gx, gy, species) or None."""
     for sx in range(-span * 16, span * 16 + 1, 32):
         for sy in range(-span * 16, span * 16 + 1, 32):
-            r = jget(port,
-                     f"return world.findHarvestableFlora({sx},{sy},64,'wood')")
+            r = send_json(port,
+                          f"return world.findHarvestableFlora({sx},{sy},64,'wood')")
             if isinstance(r, dict):
                 return r["gx"], r["gy"], r["id"]
     return None
@@ -156,7 +148,7 @@ def first_work_action(port, uid, seconds=45.0):
 
 
 def get_skill(port, uid, name):
-    v = jget(port, f"return unit.getSkill({uid},'{name}') or -1")
+    v = send_json(port, f"return unit.getSkill({uid},'{name}') or -1")
     return float(v) if isinstance(v, (int, float)) else -1.0
 
 
@@ -321,7 +313,7 @@ def _run(args, port, rep):
         felled = False
         while time.time() < deadline:
             time.sleep(2.0)
-            d = jget(port, f"return chop.getDesignationAt('probe',{tx},{ty})")
+            d = send_json(port, f"return chop.getDesignationAt('probe',{tx},{ty})")
             if not isinstance(d, dict):
                 felled = True
                 break

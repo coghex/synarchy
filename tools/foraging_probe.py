@@ -20,18 +20,10 @@ worldgen; the arena has no plants), then checks:
 Usage: python3 tools/foraging_probe.py [--port 9173] [--seed 42]
        [--size 64] [--plates 3]
 """
-import argparse, glob, json, socket, subprocess, sys, time
-from probelib import quit_engine, boot, send, wait_load_published
+import argparse, glob, socket, subprocess, sys, time
+from probelib import quit_engine, boot, send, send_json, wait_load_published
 
 SPROOT = "/tmp"
-
-
-def jget(port, lua, timeout=10.0):
-    raw = send(port, lua, timeout)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw.strip('"')
 
 
 def bootstrap(port):
@@ -53,7 +45,7 @@ def find_harvestable(port, span=4):
     harvestable tile; returns (gx, gy, species) or None."""
     for sx in range(-span * 16, span * 16 + 1, 32):
         for sy in range(-span * 16, span * 16 + 1, 32):
-            r = jget(port, f"return world.findHarvestableFlora({sx},{sy},64)")
+            r = send_json(port, f"return world.findHarvestableFlora({sx},{sy},64)")
             if isinstance(r, dict):
                 return r["gx"], r["gy"], r["id"]
     return None
@@ -85,7 +77,7 @@ def main():
                   "(seed/climate has no raspberry/clover here — try another seed)")
             return 1
         gx, gy, species = found
-        fl = jget(port, f"return world.getFloraAt({gx},{gy})")
+        fl = send_json(port, f"return world.getFloraAt({gx},{gy})")
         ok1 = isinstance(fl, dict) and fl.get("harvestable") is True \
               and fl.get("regrowthRemaining", -1) == 0
         passed &= ok1
@@ -93,10 +85,10 @@ def main():
               f"{species} at ({gx},{gy}) → {fl}")
 
         # --- 2. Harvest: yields spawn, tile flips, re-harvest refused ---
-        yields = jget(port, f"return world.harvestFlora({gx},{gy})")
+        yields = send_json(port, f"return world.harvestFlora({gx},{gy})")
         ok2 = isinstance(yields, list) and len(yields) >= 1 \
               and all("gid" in y and "id" in y for y in yields)
-        fl2 = jget(port, f"return world.getFloraAt({gx},{gy})")
+        fl2 = send_json(port, f"return world.getFloraAt({gx},{gy})")
         ok2b = isinstance(fl2, dict) and fl2.get("harvestable") is False \
                and fl2.get("regrowthRemaining", 0) > 0
         again = send(port, f"return world.harvestFlora({gx},{gy}) and 'yes' or 'nil'")
@@ -112,13 +104,13 @@ def main():
         send(port, "world.setTimeScale('probe', 3000); return 'ok'")
         time.sleep(3.0)
         send(port, "world.setTimeScale('probe', 1); return 'ok'")
-        fl3 = jget(port, f"return world.getFloraAt({gx},{gy})")
+        fl3 = send_json(port, f"return world.getFloraAt({gx},{gy})")
         ok3 = isinstance(fl3, dict) and fl3.get("harvestable") is True
         passed &= ok3
         print(f"  [{'PASS' if ok3 else 'FAIL'}] regrowth completes on the game clock: {fl3}")
 
         # --- 4. Save/load round-trip of a live timer ---
-        yields2 = jget(port, f"return world.harvestFlora({gx},{gy})")
+        yields2 = send_json(port, f"return world.harvestFlora({gx},{gy})")
         if not isinstance(yields2, list):
             print("  [FAIL] re-harvest for the save test failed")
             passed = False
@@ -136,7 +128,7 @@ def main():
         send(port, "engine.setPaused(false); return 'ok'")
         send(port, "return world.loadChunksInRegion(-4, -4, 4, 4)", timeout=30)
         send(port, "return world.waitForChunks(120)", timeout=125)
-        fl4 = jget(port, f"return world.getFloraAt({gx},{gy})")
+        fl4 = send_json(port, f"return world.getFloraAt({gx},{gy})")
         ok4 = isinstance(fl4, dict) and fl4.get("harvestable") is False \
               and fl4.get("regrowthRemaining", 0) > 0
         passed &= ok4
@@ -171,7 +163,7 @@ def main():
         foraged = eaten = False
         while time.time() < deadline:
             time.sleep(2.0)
-            fl5 = jget(port, f"return world.getFloraAt({fgx},{fgy})")
+            fl5 = send_json(port, f"return world.getFloraAt({fgx},{fgy})")
             if isinstance(fl5, dict) and not fl5.get("harvestable"):
                 foraged = True
             st = float(send(port, f"return unit.getStat({uid},'hunger') or -1"))
