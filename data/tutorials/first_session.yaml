@@ -42,7 +42,7 @@ objectives:
   - id: first_session_place_portal
     kind: full
     label: "Place portal"
-    tooltip: "Deploy the acolyte portal to anchor your colony to this world."
+    tooltip: "Zoom in for the build tool, then anchor your colony."
     evaluator: place_portal
     order: 1
     children:

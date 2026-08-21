@@ -19,8 +19,14 @@ first game. Press **Generate World**; generation takes a minute or two
 at the default size. When it finishes, press **Continue** to enter the
 world (or **Regenerate** to roll a different one).
 
-You arrive looking at an empty world with a toolbar in the bottom-left
-corner. Your colonists don't exist yet. Open the build tool, pick the
+You arrive zoomed all the way out, looking at a map of the whole
+world. There is no toolbar yet: the only controls on screen are the
+map-mode toggle in the bottom-right corner and the collapsed
+**"> Objectives"** checklist. Your colonists don't exist yet.
+
+**Zoom in** with the mouse wheel — several steps — until the map fades
+back to the ground view and a toolbar appears in the bottom-left
+corner. That toolbar is where the build tool lives. Open it, pick the
 **Acolyte Portal**, and hover a spot to place it — the ghost outline is
 translucent white on open ground and turns red over a spot that
 overlaps a mapped ruin or other location, which can't be built on.
