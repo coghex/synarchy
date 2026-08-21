@@ -25,20 +25,22 @@ turns.
 
 Usage:
   python3 tools/playtest/run.py                       # LLM player, defaults
-  python3 tools/playtest/run.py --persona impatient_imogen --turns 60
+  python3 tools/playtest/run.py --player claude-sonnet
   python3 tools/playtest/run.py --render-mode offscreen  # no window (#650)
   python3 tools/playtest/run.py --smoke               # 3 scripted turns, no LLM
   python3 tools/playtest/run.py --replay <trace_dir>  # re-inject a session
   python3 tools/playtest/run.py --selftest            # offline loop/trace check
 
-The player model runs through the installed Codex CLI using its existing
-login (`codex login status`); scripted/smoke/replay/selftest runs don't.
+The player uses one audited medium-effort profile through the installed Codex
+or Claude CLI and its existing subscription login (`codex login status` or
+`claude auth status`); scripted/smoke/replay/selftest runs don't.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import math
 import os
 import sys
 import time
@@ -50,9 +52,14 @@ sys.path.insert(0, os.path.dirname(HERE))
 from engine import EngineCrash, FakeEngine, PlaytestEngine, translate_action  # noqa: E402
 from personas import load_persona  # noqa: E402
 from trace import SessionTrace, load_meta, load_replay, load_turns  # noqa: E402
+from usage import (compact_tokens, default_usage_log, update_usage_log,
+                   usage_total)  # noqa: E402
 import agent as agent_mod  # noqa: E402
 
 DEFAULT_PORT = 9308
+DEFAULT_TURNS = 12
+DEFAULT_MAX_SECONDS = 600.0
+DEFAULT_PLAYER_TOKEN_BUDGET = 200_000
 DEFAULT_MANUAL = os.path.join(os.path.dirname(os.path.dirname(HERE)),
                               "docs", "player_manual.md")
 MANUAL_STUB = ("(No manual was provided. You know nothing about this game "
@@ -209,7 +216,8 @@ def _run_step(eng: PlaytestEngine, dt: float, phase: list) -> None:
 
 def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
                 turns: int, dt: float, max_seconds: float | None,
-                memory_turns: int, stuck_k: int, settle: float = 0.3) -> str:
+                memory_turns: int, stuck_k: int, settle: float = 0.3,
+                max_player_tokens: int | None = None) -> str:
     """The lockstep loop. Returns the stop reason."""
     memory: list[str] = []
     prev_sig = None
@@ -217,11 +225,25 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
     stuck_count = 0
     started = time.monotonic()
     stop_reason = "turn_budget_exhausted"
+    usage_turn_totals: list[int] = []
+    run_tokens = 0
+    llm_player = bool(getattr(player, "needs_llm", False))
 
     for turn in range(1, turns + 1):
-        if max_seconds is not None and time.monotonic() - started > max_seconds:
+        elapsed = time.monotonic() - started
+        if max_seconds is not None and elapsed >= max_seconds:
             stop_reason = "time_budget_exhausted"
             break
+        if llm_player and max_player_tokens is not None and usage_turn_totals:
+            projected = math.ceil(sum(usage_turn_totals)
+                                  / len(usage_turn_totals))
+            if run_tokens + projected > max_player_tokens:
+                print("  [budget] reserving the projected next-turn cost "
+                      f"({compact_tokens(projected)}); stopping at "
+                      f"{compact_tokens(run_tokens)} of "
+                      f"{compact_tokens(max_player_tokens)}")
+                stop_reason = "token_budget_reserved"
+                break
 
         # 1. ensure paused, 2. capture the frame
         eng.set_paused(True)
@@ -231,8 +253,28 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
         ts = time.time()
 
         # 3. the player decides — screenshot + its own memory ONLY
-        decision = player.decide(frame, fb_size, memory, turn)
+        remaining_seconds = (None if max_seconds is None else
+                             max(0.0, max_seconds - (time.monotonic() - started)))
+        bounded_by_session = (
+            remaining_seconds is not None
+            and remaining_seconds <= getattr(
+                player, "decision_timeout", remaining_seconds))
+        try:
+            decision = player.decide(
+                frame, fb_size, memory, turn,
+                timeout_seconds=remaining_seconds)
+        except agent_mod.DecisionTimeout as e:
+            print(f"  [budget] {e}")
+            stop_reason = ("time_budget_exhausted" if bounded_by_session
+                           else "decision_timeout")
+            break
         action = decision["action"]
+        turn_tokens = usage_total(decision.get("usage"))
+        usage_missing = llm_player and not trace.record_usage(
+            decision.get("usage"))
+        if turn_tokens is not None:
+            usage_turn_totals.append(turn_tokens)
+            run_tokens += turn_tokens
 
         # 4. translate + inject
         try:
@@ -301,6 +343,14 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
             note = decision.get("note") or ""
             print(f"  turn {turn:3d}: {action.get('do'):6s} "
                   f"{'' if not note else '— ' + note[:80]}")
+            if llm_player:
+                budget_left = (None if max_player_tokens is None else
+                               max(0, max_player_tokens - run_tokens))
+                print("             tokens: "
+                      f"{compact_tokens(turn_tokens)} this turn · "
+                      f"{compact_tokens(run_tokens)} run · "
+                      f"{compact_tokens(budget_left)} budget left · "
+                      "account left unavailable")
 
             # A done/stuck turn ends the session without a sim step, so
             # its post-step calls (a held key's keyUp) never run either.
@@ -356,6 +406,14 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
         if stuck:
             print(f"  [stuck] same action with no visible change x{stuck_k} — stopping")
             stop_reason = "stuck_loop"
+            break
+        if usage_missing:
+            print("  [budget] provider returned no token usage; stopping "
+                  "rather than continuing unmetered")
+            stop_reason = "usage_unavailable"
+            break
+        if max_player_tokens is not None and run_tokens >= max_player_tokens:
+            stop_reason = "token_budget_exhausted"
             break
 
         # rolling memory for the next turn (the player's own notes)
@@ -551,6 +609,46 @@ def selftest() -> int:
               f"{len(hold)} hold turn(s)")
         check("meta captured the oracle's world seed",
               meta.get("world_seed") == 4242, str(meta.get("world_seed")))
+        from preanalysis import write_inspection_plan
+        inspection_path = write_inspection_plan(tdir)
+        with open(inspection_path, encoding="utf-8") as f:
+            inspection = json.load(f)
+        check("deterministic preanalysis queues both session bookends",
+              [e["turn"] for e in inspection["inspection_turns"]] == [1, 5],
+              str(inspection.get("inspection_turns")))
+
+        class MeteredAgent(agent_mod.ScriptedAgent):
+            def __init__(self):
+                super().__init__([{"do": "wait"},
+                                  {"do": "key", "name": "Space"}])
+                self.needs_llm = True
+                self.decision_timeout = 90.0
+
+            def decide(self, screenshot_path, fb_size, memory_lines, turn,
+                       timeout_seconds=None):
+                result = super().decide(
+                    screenshot_path, fb_size, memory_lines, turn,
+                    timeout_seconds=timeout_seconds)
+                result["usage"] = {"input_tokens": 90, "output_tokens": 10}
+                return result
+
+        budget_dir = os.path.join(tmp, "token_budget")
+        budget_trace = SessionTrace(budget_dir, {"mode": "selftest-budget"})
+        budget_reason = run_session(
+            FakeEngine(), MeteredAgent(), budget_trace, turns=10, dt=0.0,
+            max_seconds=None, memory_turns=2, stuck_k=99, settle=0.0,
+            max_player_tokens=250)
+        budget_trace.finish(budget_reason)
+        budget_meta = load_meta(budget_dir)
+        check("projected reserve stops before a likely token overshoot",
+              budget_reason == "token_budget_reserved"
+              and budget_meta.get("turns") == 2,
+              f"{budget_reason}, {budget_meta.get('turns')}")
+        check("trace persists input+output usage totals incrementally",
+              budget_meta.get("usage_totals") == {
+                  "input_tokens": 180, "output_tokens": 20,
+                  "total_tokens": 200, "turns_with_usage": 2},
+              str(budget_meta.get("usage_totals")))
 
         # 2. replay against a fresh fake engine — same inputs, same
         # order (pre before the step, post after), same turn count
@@ -1106,22 +1204,28 @@ def selftest() -> int:
               "curious_carl" in prompt and "MANUAL" in prompt
               and "1280x720" in prompt)
 
-        # The naive-player backend is a hard pin, not a CLI-selectable
-        # default: every H1 player turn goes through Codex Luna at medium
-        # effort, with an empty cwd and all information-acquiring tools
-        # disabled. The critic/persona-flavor utilities are separate paths.
+        # The naive player can select exactly one of two audited profiles. The
+        # model and effort inside each profile remain hard pins, and both run
+        # from an empty cwd without repository or network access.
         player_params = list(inspect.signature(agent_mod.PlayerAgent).parameters)
-        check("naive player has no provider/model/effort override",
-              player_params == ["persona", "manual", "decision_timeout"],
+        check("naive player accepts only a complete profile selection",
+              player_params == ["persona", "manual", "player_profile",
+                                "decision_timeout"],
               str(player_params))
+        check("approved player profiles pin both medium-effort models",
+              agent_mod.PLAYER_PROFILES == {
+                  "codex-luna": {
+                      "backend": "codex-cli", "model": "gpt-5.6-luna",
+                      "effort": "medium", "binary": "codex"},
+                  "claude-sonnet": {
+                      "backend": "claude-cli", "model": "claude-sonnet-5",
+                      "effort": "medium", "binary": "claude"},
+              })
         codex_cmd = agent_mod._build_codex_command(
             "/usr/bin/codex", "frame.png", os.path.join(tmp, "empty"),
             os.path.join(tmp, "turn.schema.json"), os.path.join(tmp, "turn.json"))
-        check("naive player is pinned to Codex gpt-5.6-luna medium",
-              agent_mod.PLAYER_BACKEND == "codex-cli"
-              and agent_mod.PLAYER_MODEL == "gpt-5.6-luna"
-              and agent_mod.PLAYER_EFFORT == "medium"
-              and codex_cmd[:2] == ["/usr/bin/codex", "exec"]
+        check("Codex profile invokes gpt-5.6-luna medium",
+              codex_cmd[:2] == ["/usr/bin/codex", "exec"]
               and "gpt-5.6-luna" in codex_cmd
               and 'model_reasoning_effort="medium"' in codex_cmd)
         check("Codex player cannot inspect the repo or acquire oracle data",
@@ -1131,6 +1235,19 @@ def selftest() -> int:
               and 'web_search="disabled"' in codex_cmd
               and all(feature in codex_cmd for feature in
                       ("shell_tool", "multi_agent", "plugins", "skill_search")))
+        claude_cmd = agent_mod._build_claude_command(
+            "/usr/bin/claude", os.path.join(tmp, "empty"), "SYSTEM")
+        check("Claude profile invokes claude-sonnet-5 medium in safe mode",
+              claude_cmd[:2] == ["/usr/bin/claude", "-p"]
+              and "claude-sonnet-5" in claude_cmd
+              and claude_cmd[claude_cmd.index("--effort") + 1] == "medium"
+              and "--safe-mode" in claude_cmd
+              and "--no-session-persistence" in claude_cmd)
+        check("Claude player can read only the isolated screenshot",
+              claude_cmd[claude_cmd.index("--tools") + 1] == "Read"
+              and claude_cmd[claude_cmd.index("--allowedTools") + 1] == "Read"
+              and "--strict-mcp-config" in claude_cmd
+              and "--disable-slash-commands" in claude_cmd)
         action_schema = agent_mod.TURN_SCHEMA["properties"]["action"]
         check("Codex strict action schema requires every declared field",
               set(action_schema["required"]) == set(action_schema["properties"])
@@ -1150,6 +1267,27 @@ def selftest() -> int:
         check("Codex JSONL token usage maps into the existing trace shape",
               usage == {"input_tokens": 123, "output_tokens": 67,
                         "cache_read_input_tokens": 45}, str(usage))
+        claude_turn, claude_usage = agent_mod._parse_claude_result(json.dumps({
+            "structured_output": {
+                "observation": "menu", "action": {"do": "wait"},
+                "expectation": "", "note": ""},
+            "modelUsage": {
+                "claude-sonnet-5": {
+                    "inputTokens": 2, "outputTokens": 52,
+                    "cacheReadInputTokens": 1085,
+                    "cacheCreationInputTokens": 0},
+                "claude-haiku-4-5": {
+                    "inputTokens": 897, "outputTokens": 12,
+                    "cacheReadInputTokens": 0,
+                    "cacheCreationInputTokens": 0},
+            },
+        }))
+        check("Claude usage includes cached input and helper-model calls",
+              claude_turn["action"] == {"do": "wait"}
+              and claude_usage == {
+                  "input_tokens": 1984, "output_tokens": 64,
+                  "cache_read_input_tokens": 1085,
+                  "cache_creation_input_tokens": 0}, str(claude_usage))
 
         # 7. event-log snapshots (#699): the engine-side store appends,
         # moves coalesced updates to the tail, and drops from the head at
@@ -1303,10 +1441,17 @@ def main() -> int:
                     help="player manual path (C1; stubbed if missing)")
     ap.add_argument("--decision-timeout", type=float,
                     default=agent_mod.DEFAULT_DECISION_TIMEOUT,
-                    help="maximum seconds for each pinned Codex Luna decision")
-    ap.add_argument("--turns", type=int, default=40)
-    ap.add_argument("--max-seconds", type=float, default=None,
-                    help="wall-clock session budget")
+                    help="maximum seconds for each player decision")
+    ap.add_argument("--player", choices=sorted(agent_mod.PLAYER_PROFILES),
+                    default=agent_mod.DEFAULT_PLAYER_PROFILE,
+                    help="fixed medium-effort player profile")
+    ap.add_argument("--turns", type=int, default=DEFAULT_TURNS)
+    ap.add_argument("--max-seconds", type=float, default=DEFAULT_MAX_SECONDS,
+                    help="wall-clock session budget (default: 600)")
+    ap.add_argument("--max-player-tokens", type=int,
+                    default=DEFAULT_PLAYER_TOKEN_BUDGET,
+                    help="input+output token ceiling with projected next-turn "
+                         "reserve (default: 200K)")
     ap.add_argument("--dt", type=float, default=2.0,
                     help="unpaused wall-clock seconds per turn")
     ap.add_argument("--memory-turns", type=int, default=8)
@@ -1314,6 +1459,9 @@ def main() -> int:
                     help="identical action+frame repeats that count as stuck")
     ap.add_argument("--trace-dir", default=None,
                     help="session output dir (default tools/playtest/sessions/<ts>_<label>)")
+    ap.add_argument("--usage-log", default=None,
+                    help="aggregate Markdown usage ledger (default: shared "
+                         ".git/codex-test/playtest-usage.md)")
     ap.add_argument("--agent", choices=["llm", "scripted"], default="llm")
     ap.add_argument("--smoke", action="store_true",
                     help="tiny scripted session (3 turns, no LLM)")
@@ -1325,6 +1473,11 @@ def main() -> int:
 
     if args.selftest:
         return selftest()
+
+    if args.max_player_tokens <= 0:
+        ap.error("--max-player-tokens must be positive")
+    if args.max_seconds <= 0:
+        ap.error("--max-seconds must be positive")
 
     if args.smoke:
         args.agent = "scripted"
@@ -1347,6 +1500,7 @@ def main() -> int:
     trace_dir = args.trace_dir or _allocate_trace_dir(os.path.join(
         HERE, "sessions", time.strftime("%Y%m%d_%H%M%S") + f"_{os.path.basename(label)}"))
     from playtest import HARNESS_VERSION  # local package
+    usage_log_path = args.usage_log or default_usage_log(os.getcwd())
     meta = {
         "harness_version": HARNESS_VERSION,
         "mode": "replay" if replaying else args.agent,
@@ -1355,6 +1509,9 @@ def main() -> int:
         "dt": args.dt,
         "turn_budget": args.turns,
         "time_budget_seconds": args.max_seconds,
+        "player_token_budget": args.max_player_tokens,
+        "usage_log_path": usage_log_path,
+        "account_remaining_tokens": "unavailable from noninteractive CLI",
         "stuck_k": args.stuck_k,
         "memory_turns": args.memory_turns,
         "persona": persona,
@@ -1367,10 +1524,12 @@ def main() -> int:
         "replay_of": os.path.abspath(args.replay) if replaying else None,
     }
     if not replaying and args.agent == "llm":
+        profile = agent_mod.PLAYER_PROFILES[args.player]
         meta["player_model"] = {
-            "backend": agent_mod.PLAYER_BACKEND,
-            "model": agent_mod.PLAYER_MODEL,
-            "effort": agent_mod.PLAYER_EFFORT,
+            "profile": args.player,
+            "backend": profile["backend"],
+            "model": profile["model"],
+            "effort": profile["effort"],
             "decision_timeout_seconds": args.decision_timeout,
             "session_persistence": "ephemeral",
             "tools": "disabled",
@@ -1385,7 +1544,8 @@ def main() -> int:
         player = agent_mod.ScriptedAgent()
     else:
         player = agent_mod.PlayerAgent(
-            persona, manual, decision_timeout=args.decision_timeout)
+            persona, manual, player_profile=args.player,
+            decision_timeout=args.decision_timeout)
 
     if args.render_mode == "windowed":
         print("playtest: this launches a WINDOWED instance that will take "
@@ -1395,7 +1555,13 @@ def main() -> int:
         print("playtest: offscreen instance (#650) — no window, no focus "
               "steal; needs a GPU.")
     if player is not None and player.needs_llm:
-        print(f"playtest: player -> Codex {player.model} ({player.effort} effort)")
+        print(f"playtest: player -> {args.player}: {player.model} "
+              f"({player.effort} effort)")
+        print(f"playtest: bounds -> {args.turns} turns, "
+              f"{compact_tokens(args.max_player_tokens)} player tokens, "
+              f"{compact_tokens(int(args.max_seconds))}s wall clock")
+        print("playtest: account-plan tokens remaining are not exposed by "
+              "noninteractive Codex/Claude CLI output")
     print(f"playtest: trace -> {trace_dir}")
     trace = SessionTrace(trace_dir, meta)
     eng = PlaytestEngine(args.port,
@@ -1412,7 +1578,8 @@ def main() -> int:
             stop_reason = run_session(
                 eng, player, trace, turns=args.turns, dt=args.dt,
                 max_seconds=args.max_seconds, memory_turns=args.memory_turns,
-                stuck_k=args.stuck_k)
+                stuck_k=args.stuck_k,
+                max_player_tokens=args.max_player_tokens)
     except EngineCrash as e:
         # a crash mid-session is a finding: keep the partial trace + logs
         print(f"  [crash] {e}")
@@ -1428,6 +1595,23 @@ def main() -> int:
             pass
         trace.attach_engine_log(eng.log_path)
         trace.finish(stop_reason)
+
+    if not replaying and args.agent == "llm":
+        try:
+            from preanalysis import write_inspection_plan
+            inspection_path = write_inspection_plan(trace_dir)
+            print(f"playtest: deterministic inspection plan at {inspection_path}")
+        except Exception as e:
+            print(f"  [warn] could not write inspection plan: {e}")
+        if usage_log_path:
+            try:
+                artifacts_root = os.path.join(
+                    os.path.dirname(usage_log_path), "artifacts")
+                update_usage_log(usage_log_path, artifacts_root,
+                                 extra_trace_dir=trace_dir)
+                print(f"playtest: usage ledger at {usage_log_path}")
+            except Exception as e:
+                print(f"  [warn] could not update usage ledger: {e}")
 
     print(f"playtest: session ended ({stop_reason}); trace at {trace_dir}")
     return 0 if stop_reason not in ("error",) else 1

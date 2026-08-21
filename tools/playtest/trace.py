@@ -89,6 +89,8 @@ import os
 import shutil
 import time
 
+from usage import usage_total
+
 STEP_PHASES = ("not_started", "interrupted", "completed")
 
 
@@ -119,6 +121,32 @@ class SessionTrace:
         self.turns += 1
         with open(os.path.join(self.dir, "turns.jsonl"), "a") as f:
             f.write(json.dumps(record, sort_keys=True) + "\n")
+
+    def record_usage(self, usage: dict | None) -> bool:
+        """Persist normalized player usage immediately after a decision.
+
+        Returns False when the provider supplied no usable usage payload. This
+        lets the runner stop safely instead of continuing without accounting.
+        """
+        total = usage_total(usage)
+        if total is None:
+            return False
+        totals = self.meta.setdefault("usage_totals", {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "turns_with_usage": 0,
+        })
+        totals["input_tokens"] += max(0, int(usage.get("input_tokens") or 0))
+        totals["output_tokens"] += max(0, int(usage.get("output_tokens") or 0))
+        totals["total_tokens"] = (totals["input_tokens"]
+                                  + totals["output_tokens"])
+        totals["turns_with_usage"] += 1
+        if usage.get("account_remaining_tokens") is not None:
+            totals["account_remaining_tokens"] = max(
+                0, int(usage["account_remaining_tokens"]))
+        self._write_meta()
+        return True
 
     def record_replay(self, turn: int, pre: list[str], post: list[str],
                       step_phase: str) -> None:
