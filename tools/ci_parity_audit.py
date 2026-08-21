@@ -59,8 +59,11 @@ check failed, or the input could not be parsed).
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shlex
+import subprocess
+import sys
 from pathlib import Path
 
 try:
@@ -83,11 +86,13 @@ AUDITED_JOB = "build-test"
 WORKFLOW_LABEL = ".github/workflows/ci.yml (job: %s)" % AUDITED_JOB
 LOCAL_GATE_LABEL = "tools/ci-local.sh"
 
-# Invocations CI runs that `make ci` deliberately does not, each keyed on
-# the EXACT command CI runs so a neighbouring form is not exempted with it.
-# `--self-test` proves each entry is accepted, and the repository run
-# proves each is still live: an entry matching nothing on either side is a
-# stale exemption and fails, so this list cannot outlive its reason.
+# Invocations one side deliberately runs and the other does not, each
+# keyed on the EXACT command so a neighbouring form is not exempted with
+# it. Most run only in CI; the exemption is direction-agnostic, and the
+# one local-only entry is marked as such. `--self-test` proves each entry
+# is accepted, and the repository run proves each is still live: an entry
+# matching nothing on either side is a stale exemption and fails, so this
+# list cannot outlive its reason.
 EXEMPT_COMMANDS: tuple[tuple[str, str], ...] = (
     (
         "python3 tools/ci_expensive_gates.py --stdin --gate worldgen",
@@ -123,6 +128,19 @@ EXEMPT_COMMANDS: tuple[tuple[str, str], ...] = (
         "behaviour probes at all (they are an opt-in tier, see CLAUDE.md), "
         "so it has nothing to select. Its --self-test form is NOT exempt "
         "and does run locally.",
+    ),
+    (
+        "python3 tools/ci_expensive_gates.py --local-changed-paths",
+        "LOCAL-only, and the one entry that runs here rather than in CI "
+        "(#1360). It resolves the changed-path list `make ci` judges "
+        "itself by -- paths differing from the merge base with the "
+        "default branch, tracked working-tree edits included -- because "
+        "`make ci` has no pull-request base sha to be handed. CI already "
+        "has one and pipes it in directly. The DECISION both files then "
+        "reach is NOT exempt: both run "
+        "`ci_expensive_gates.py --stdin --gate save-compat`, and "
+        "audit_save_compat_reproducibility_wiring below checks they feed "
+        "it into the same guarded command.",
     ),
     (
         "python3 tools/ci_cache_report.py",
@@ -489,12 +507,311 @@ def audit_gate_sets(
     return problems
 
 
+# ---------------------------------------------------------------------------
+# Save-compat reproducibility wiring (issue #1360)
+# ---------------------------------------------------------------------------
+# The gate-set comparison above is a SET comparison: it proves both files
+# run `test_save_compat_audit.py --only-reproducibility`, and nothing
+# more. That is not enough for a check that is deliberately CONDITIONAL
+# on both sides -- each file could run it under a different condition, or
+# under none, and the set would still match. Requirement 7 of #1360 is
+# that the two agree about WHEN it runs, so this section pins the
+# condition itself.
+#
+# It does that behaviourally on the local side rather than by reading the
+# shell and believing it: the marked block in tools/ci-local.sh is
+# EXTRACTED and EXECUTED against synthetic changed-path lists, with
+# `python3` shimmed so the real selector still decides and the expensive
+# test is only recorded, never run. On the CI side the guard is a GitHub
+# expression this audit has no evaluator for, so it is pinned to its
+# exact canonical text and its provenance is checked -- the output it
+# reads must be the one the selector step writes from
+# `--gate save-compat`. Between them, a change that makes either side
+# select differently fails here.
+
+#: The gate whose decision both files must consult.
+SAVE_COMPAT_GATE = "save-compat"
+
+#: The command that must run unconditionally on both sides ...
+SAVE_COMPAT_WITHOUT_COMMAND = (
+    "python3 tools/test_save_compat_audit.py --without-reproducibility")
+#: ... the one that must run only when the gate selects ...
+SAVE_COMPAT_ONLY_COMMAND = (
+    "python3 tools/test_save_compat_audit.py --only-reproducibility")
+#: ... and the bare form neither side may run, because it would put the
+#: reproducibility member's `cabal repl` back on every pull request.
+SAVE_COMPAT_BARE_COMMAND = "python3 tools/test_save_compat_audit.py"
+
+#: The selector invocation both files reach their decision through.
+SAVE_COMPAT_SELECTOR_COMMAND = (
+    "python3 tools/ci_expensive_gates.py --stdin --gate " + SAVE_COMPAT_GATE)
+
+#: The exact guard CI's reproducibility step carries. Pinned rather than
+#: parsed: `if:` is a GitHub expression, and a half-understood evaluator
+#: would be a worse check than an exact match. The
+#: `github.event_name != 'pull_request'` half is requirement 5 -- a push
+#: to master runs the coverage whatever the paths were -- so removing it
+#: fails here.
+SAVE_COMPAT_CI_IF = (
+    "github.event_name != 'pull_request' "
+    "|| steps.expensive-gates.outputs.save-compat == 'true'")
+
+#: The markers delimiting the executable selection block in ci-local.sh.
+LOCAL_BLOCK_BEGIN = ">>> save-compat reproducibility selection >>>"
+LOCAL_BLOCK_END = "<<< save-compat reproducibility selection <<<"
+
+#: One changed path that must select the gate, and one that must not.
+#: The decision itself comes from ci_expensive_gates.py, whose own
+#: --self-test walks the full trigger-path table; these two only have to
+#: be unambiguous representatives of each direction.
+SAVE_COMPAT_POSITIVE_SAMPLE = ["src/World/Save/Envelope/Codec.hs"]
+SAVE_COMPAT_NEGATIVE_SAMPLE = ["scripts/unit_ai.lua"]
+
+_GATES_SCRIPT = REPO_ROOT / "tools" / "ci_expensive_gates.py"
+
+
+def _normalise_expression(text: str) -> str:
+    return " ".join(text.split())
+
+
+def workflow_steps(yaml_text: str, job: str = AUDITED_JOB,
+                   where: str = WORKFLOW_LABEL) -> list[dict]:
+    """The `build-test` job's steps as mappings, `if:` included.
+
+    workflow_run_blocks above deliberately returns only `run:` text,
+    because the gate-set comparison is about commands. This wiring check
+    needs the conditions too.
+    """
+    try:
+        document = yaml.safe_load(yaml_text)
+    except yaml.YAMLError as error:
+        raise AuditError(
+            f"{where}: could not parse as YAML ({error}).") from error
+    if not isinstance(document, dict):
+        raise AuditError(f"{where}: top level is not a YAML mapping.")
+    jobs = document.get("jobs")
+    if not isinstance(jobs, dict) or job not in jobs:
+        raise AuditError(f"{where}: no `{job}` job.")
+    definition = jobs[job]
+    if not isinstance(definition, dict):
+        raise AuditError(f"{where}: the `{job}` job is not a mapping.")
+    steps = definition.get("steps")
+    if not isinstance(steps, list) or not steps:
+        raise AuditError(f"{where}: the `{job}` job declares no steps.")
+    for index, step in enumerate(steps):
+        if not isinstance(step, dict):
+            raise AuditError(f"{where}: step {index} is not a mapping.")
+    return steps
+
+
+def extract_local_block(shell_text: str,
+                        where: str = LOCAL_GATE_LABEL) -> str:
+    """The executable selection block delimited by the two markers."""
+    begin = shell_text.find(LOCAL_BLOCK_BEGIN)
+    end = shell_text.find(LOCAL_BLOCK_END)
+    if begin < 0 or end < 0:
+        raise AuditError(
+            f"{where}: could not find the `{LOCAL_BLOCK_BEGIN}` / "
+            f"`{LOCAL_BLOCK_END}` markers around the save-compat "
+            "reproducibility selection. This audit executes that block to "
+            "prove `make ci` selects the same way CI does; without the "
+            "markers there is nothing to execute, and it will not fall "
+            "back to trusting the text.")
+    if end < begin:
+        raise AuditError(
+            f"{where}: the block markers are in the wrong order.")
+    body_start = shell_text.index("\n", begin) + 1
+    return shell_text[body_start:end].rsplit("\n", 1)[0]
+
+
+# The stand-in `python3` the extracted block runs under. It delegates
+# every real selector call to ci_expensive_gates.py -- the decision must
+# be the genuine one, or this proves nothing -- serves the synthetic
+# changed-path list in place of a git query, and records rather than runs
+# the expensive test. Any other command is a block that has grown
+# something this audit was not told about, and fails loudly.
+_SHIM_TEMPLATE = r'''import subprocess
+import sys
+
+argv = sys.argv[1:]
+gates = {gates!r}
+paths = {paths!r}
+marker = {marker!r}
+
+if argv[:2] == ["tools/ci_expensive_gates.py", "--local-changed-paths"]:
+    sys.stdout.write("".join(p + "\n" for p in paths))
+    sys.exit(0)
+if argv[:1] == ["tools/ci_expensive_gates.py"]:
+    sys.exit(subprocess.run([sys.executable, gates] + argv[1:]).returncode)
+if argv[:1] == ["tools/test_save_compat_audit.py"]:
+    with open(marker, "a", encoding="utf-8") as handle:
+        handle.write(" ".join(argv[1:]) + "\n")
+    sys.exit(0)
+sys.stderr.write("unexpected command in the extracted block: %r\n" % (argv,))
+sys.exit(3)
+'''
+
+
+def run_local_block(block: str, changed_paths: list[str],
+                    gates_script: Path = _GATES_SCRIPT) -> tuple[bool, str]:
+    """Execute the extracted block and report whether it ran the member.
+
+    Returns (ran, diagnostic).
+    """
+    import stat
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        marker = root / "ran.txt"
+        shim_dir = root / "bin"
+        shim_dir.mkdir()
+        shim = shim_dir / "python3"
+        shim.write_text(
+            "#!" + sys.executable + "\n"
+            + _SHIM_TEMPLATE.format(gates=str(gates_script),
+                                    paths=list(changed_paths),
+                                    marker=str(marker)),
+            encoding="utf-8")
+        shim.chmod(shim.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP
+                   | stat.S_IXOTH)
+        env = dict(os.environ)
+        env["PATH"] = f"{shim_dir}{os.pathsep}{env.get('PATH', '')}"
+        proc = subprocess.run(
+            ["bash", "-euo", "pipefail", "-c", block], cwd=str(root),
+            env=env, capture_output=True, text=True)
+        output = (proc.stdout or "") + (proc.stderr or "")
+        if proc.returncode != 0:
+            return False, (f"the extracted block exited {proc.returncode}: "
+                           f"{output.strip()}")
+        if not marker.exists():
+            return False, output.strip()
+        return True, marker.read_text(encoding="utf-8").strip()
+
+
+def audit_save_compat_reproducibility_wiring(
+        yaml_text: str, shell_text: str,
+        gates_script: Path = _GATES_SCRIPT) -> list[str]:
+    """Check both files select the reproducibility member the same way."""
+    if str(gates_script.parent) not in sys.path:
+        sys.path.insert(0, str(gates_script.parent))
+    try:
+        import ci_expensive_gates  # type: ignore
+    except ImportError as error:  # pragma: no cover - a broken checkout
+        return [f"could not import {gates_script}: {error}"]
+
+    problems: list[str] = []
+
+    # --- CI side ------------------------------------------------------
+    steps = workflow_steps(yaml_text)
+    guarded = [s for s in steps
+               if SAVE_COMPAT_ONLY_COMMAND in str(s.get("run") or "")]
+    if len(guarded) != 1:
+        problems.append(
+            f"{WORKFLOW_LABEL}: expected exactly one step running "
+            f"`{SAVE_COMPAT_ONLY_COMMAND}`, found {len(guarded)}.")
+    else:
+        condition = _normalise_expression(str(guarded[0].get("if") or ""))
+        if condition != _normalise_expression(SAVE_COMPAT_CI_IF):
+            problems.append(
+                f"{WORKFLOW_LABEL}: the step running "
+                f"`{SAVE_COMPAT_ONLY_COMMAND}` is guarded by "
+                f"{condition!r}, not by the pinned "
+                f"{_normalise_expression(SAVE_COMPAT_CI_IF)!r}. Changing "
+                "when that coverage runs is a deliberate act: update "
+                "SAVE_COMPAT_CI_IF in this audit in the same change.")
+
+    selector_steps = [
+        s for s in steps
+        if SAVE_COMPAT_SELECTOR_COMMAND in str(s.get("run") or "")]
+    if len(selector_steps) != 1:
+        problems.append(
+            f"{WORKFLOW_LABEL}: expected exactly one step running "
+            f"`{SAVE_COMPAT_SELECTOR_COMMAND}`, found "
+            f"{len(selector_steps)}.")
+    else:
+        step_id = str(selector_steps[0].get("id") or "")
+        reference = f"steps.{step_id}.outputs.{SAVE_COMPAT_GATE}"
+        if not step_id:
+            problems.append(
+                f"{WORKFLOW_LABEL}: the step running "
+                f"`{SAVE_COMPAT_SELECTOR_COMMAND}` has no `id:`, so no "
+                "guard can name its output.")
+        elif reference not in _normalise_expression(SAVE_COMPAT_CI_IF):
+            problems.append(
+                f"{WORKFLOW_LABEL}: the pinned guard does not read "
+                f"`{reference}`, so the step that decides the gate and "
+                "the step that consumes the decision are not connected.")
+        if f"{SAVE_COMPAT_GATE}=" not in str(selector_steps[0].get("run")):
+            problems.append(
+                f"{WORKFLOW_LABEL}: the selector step never writes a "
+                f"`{SAVE_COMPAT_GATE}=` output, so its guard reads an "
+                "always-empty value and the coverage silently stops "
+                "running on pull requests.")
+
+    ci_commands = workflow_invocations(yaml_text)
+    local_commands = local_gate_invocations(shell_text)
+    for label, commands in ((WORKFLOW_LABEL, ci_commands),
+                            (LOCAL_GATE_LABEL, local_commands)):
+        if SAVE_COMPAT_WITHOUT_COMMAND not in commands:
+            problems.append(
+                f"{label}: does not run `{SAVE_COMPAT_WITHOUT_COMMAND}`, "
+                "so the members that must stay blocking on every pull "
+                "request are not running.")
+        if SAVE_COMPAT_ONLY_COMMAND not in commands:
+            problems.append(
+                f"{label}: does not run `{SAVE_COMPAT_ONLY_COMMAND}`, so "
+                "the reproducibility coverage is not reachable at all.")
+        if SAVE_COMPAT_BARE_COMMAND in commands:
+            problems.append(
+                f"{label}: runs the bare `{SAVE_COMPAT_BARE_COMMAND}`, "
+                "which puts the reproducibility member's `cabal repl` "
+                "back on every run regardless of the selector.")
+        if SAVE_COMPAT_SELECTOR_COMMAND not in commands:
+            problems.append(
+                f"{label}: does not run `{SAVE_COMPAT_SELECTOR_COMMAND}`, "
+                "so it is not reaching its decision through the gate the "
+                "other side uses.")
+
+    # --- local side, executed -----------------------------------------
+    try:
+        block = extract_local_block(shell_text)
+    except AuditError as error:
+        problems.append(str(error))
+        return problems
+
+    for label, sample in (("a save-touching change",
+                           SAVE_COMPAT_POSITIVE_SAMPLE),
+                          ("an unrelated change",
+                           SAVE_COMPAT_NEGATIVE_SAMPLE)):
+        expected = ci_expensive_gates.selected(SAVE_COMPAT_GATE, sample)
+        ran, detail = run_local_block(block, sample, gates_script)
+        if ran != expected:
+            problems.append(
+                f"{LOCAL_GATE_LABEL}: for {label} ({sample}) the selector "
+                f"says {expected} but the executed block "
+                f"{'ran' if ran else 'did not run'} the reproducibility "
+                "member. CI's guard consumes the same selector decision, "
+                f"so the two would disagree. Detail: {detail!r}")
+        elif ran and detail != "--only-reproducibility":
+            problems.append(
+                f"{LOCAL_GATE_LABEL}: the guarded command was {detail!r}, "
+                "not `--only-reproducibility`.")
+
+    return problems
+
+
 def run_repository_audit() -> int:
     try:
-        ci_commands = workflow_invocations(
-            WORKFLOW_PATH.read_text(encoding="utf-8"))
-        local_commands = local_gate_invocations(
-            LOCAL_GATE_PATH.read_text(encoding="utf-8"))
+        yaml_text = WORKFLOW_PATH.read_text(encoding="utf-8")
+        shell_text = LOCAL_GATE_PATH.read_text(encoding="utf-8")
+        ci_commands = workflow_invocations(yaml_text)
+        local_commands = local_gate_invocations(shell_text)
+        problems = audit_gate_sets(ci_commands, local_commands)
+        # The gate SET agreeing is not enough for a check both files run
+        # conditionally (#1360): they must also agree on the condition.
+        problems.extend(
+            audit_save_compat_reproducibility_wiring(yaml_text, shell_text))
     except OSError as error:
         print(f"ci_parity_audit.py: {error}")
         return 1
@@ -502,7 +819,6 @@ def run_repository_audit() -> int:
         print(f"ci_parity_audit.py: {error}")
         return 1
 
-    problems = audit_gate_sets(ci_commands, local_commands)
     if problems:
         print("CI / `make ci` gate-set parity audit FAILED "
               f"({len(problems)} problem(s)):")
@@ -774,6 +1090,156 @@ def _self_test() -> list[str]:
             extract_invocations("python3 -m pip install PyYAML==6.0.2",
                                 "fixture") == [],
             "`python3 -m pip install` is environment preparation, not a gate")
+
+    # 13. The save-compat reproducibility wiring (#1360). Built from
+    #     synthetic fixtures so the cases are mutations of a known-good
+    #     pair, not of this repository's live files -- and the local half
+    #     is genuinely EXECUTED, so "the block still selects correctly"
+    #     is observed rather than asserted about its text.
+    failures.extend(_save_compat_wiring_self_test())
+
+    return failures
+
+
+_WIRING_LOCAL_GOOD = """#!/usr/bin/env bash
+set -euo pipefail
+python3 tools/test_save_compat_audit.py --without-reproducibility
+python3 tools/save_compat_audit.py
+# >>> save-compat reproducibility selection >>>
+SAVE_COMPAT_PATHS="$(python3 tools/ci_expensive_gates.py --local-changed-paths)"
+SAVE_COMPAT_REPRO="$(printf '%s\\n' "$SAVE_COMPAT_PATHS" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat)"
+if [ "$SAVE_COMPAT_REPRO" = true ]; then
+  python3 tools/test_save_compat_audit.py --only-reproducibility
+else
+  echo skipped
+fi
+# <<< save-compat reproducibility selection <<<
+"""
+
+_WIRING_CI_GOOD = """
+name: fixture
+on: push
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Select expensive path-relevant gates
+        id: expensive-gates
+        run: |
+          printf '%s\\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat | \\
+            sed 's/^/save-compat=/' >> "$GITHUB_OUTPUT"
+      - name: Save compatibility audit
+        run: |
+          python3 tools/test_save_compat_audit.py --without-reproducibility
+          python3 tools/save_compat_audit.py
+      - name: Save compatibility fixture reproducibility
+        if: >-
+          github.event_name != 'pull_request'
+          || steps.expensive-gates.outputs.save-compat == 'true'
+        run: python3 tools/test_save_compat_audit.py --only-reproducibility
+"""
+
+
+def _save_compat_wiring_self_test() -> list[str]:
+    failures: list[str] = []
+
+    def problems(ci: str = _WIRING_CI_GOOD,
+                 local: str = _WIRING_LOCAL_GOOD) -> list[str]:
+        return audit_save_compat_reproducibility_wiring(ci, local)
+
+    # (a) The known-good pair passes. Every mutation below starts here,
+    #     so a check that never fires would show up as a mutation that
+    #     also passes.
+    _expect(failures, problems() == [],
+            f"the known-good wiring fixture should pass, got {problems()}")
+
+    # (b) The local block that runs the member UNCONDITIONALLY is the
+    #     failure this whole section exists for: the gate sets still
+    #     match exactly, so only executing the block can catch it.
+    unconditional = _WIRING_LOCAL_GOOD.replace(
+        'if [ "$SAVE_COMPAT_REPRO" = true ]; then\n  '
+        'python3 tools/test_save_compat_audit.py --only-reproducibility\n'
+        'else\n  echo skipped\nfi\n',
+        "python3 tools/test_save_compat_audit.py --only-reproducibility\n")
+    _expect(failures,
+            any("an unrelated change" in p for p in problems(local=unconditional)),
+            "a local block running the member unconditionally should fail, "
+            f"got {problems(local=unconditional)}")
+
+    # (c) A local block guarded by a DIFFERENT gate's decision reverses
+    #     both directions: worldgen selects on the Lua sample and not on
+    #     the save sample.
+    other_gate = _WIRING_LOCAL_GOOD.replace("--gate save-compat",
+                                            "--gate worldgen")
+    _expect(failures, problems(local=other_gate) != [],
+            "a local block consulting a different gate should fail")
+
+    # (d) A local block that never runs the member at all.
+    never = _WIRING_LOCAL_GOOD.replace(
+        "python3 tools/test_save_compat_audit.py --only-reproducibility\n",
+        "echo would-run\n")
+    _expect(failures,
+            any("not reachable at all" in p for p in problems(local=never)),
+            f"a block that never runs the member should fail, "
+            f"got {problems(local=never)}")
+
+    # (e) Reintroducing the BARE invocation on either side puts the repl
+    #     back on every run.
+    bare_local = _WIRING_LOCAL_GOOD.replace(
+        "python3 tools/test_save_compat_audit.py --without-reproducibility",
+        "python3 tools/test_save_compat_audit.py")
+    _expect(failures,
+            any("runs the bare" in p for p in problems(local=bare_local)),
+            f"a bare local invocation should fail, got {problems(local=bare_local)}")
+    bare_ci = _WIRING_CI_GOOD.replace(
+        "python3 tools/test_save_compat_audit.py --without-reproducibility",
+        "python3 tools/test_save_compat_audit.py")
+    _expect(failures,
+            any("runs the bare" in p for p in problems(ci=bare_ci)),
+            f"a bare CI invocation should fail, got {problems(ci=bare_ci)}")
+
+    # (f) Dropping the markers refuses rather than falling back to
+    #     trusting the shell text.
+    unmarked = _WIRING_LOCAL_GOOD.replace(LOCAL_BLOCK_BEGIN, "(removed)")
+    _expect(failures,
+            any("markers" in p for p in problems(local=unmarked)),
+            f"a block with no markers should fail, got {problems(local=unmarked)}")
+
+    # (g) Losing the post-merge backstop from CI's guard (requirement 5)
+    #     fails, and so does swapping the guard for another gate's output.
+    no_backstop = _WIRING_CI_GOOD.replace(
+        "          github.event_name != 'pull_request'\n"
+        "          || steps.expensive-gates.outputs.save-compat == 'true'\n",
+        "          steps.expensive-gates.outputs.save-compat == 'true'\n")
+    _expect(failures,
+            any("guarded by" in p for p in problems(ci=no_backstop)),
+            f"losing the master-push backstop should fail, "
+            f"got {problems(ci=no_backstop)}")
+    wrong_output = _WIRING_CI_GOOD.replace(
+        "steps.expensive-gates.outputs.save-compat == 'true'",
+        "steps.expensive-gates.outputs.worldgen == 'true'")
+    _expect(failures, problems(ci=wrong_output) != [],
+            "a guard reading another gate's output should fail")
+
+    # (h) A selector step that computes the decision but never publishes
+    #     it leaves the guard reading an empty value.
+    unpublished = _WIRING_CI_GOOD.replace("sed 's/^/save-compat=/'",
+                                          "sed 's/^/unrelated=/'")
+    _expect(failures,
+            any("never writes" in p for p in problems(ci=unpublished)),
+            f"an unpublished selector output should fail, "
+            f"got {problems(ci=unpublished)}")
+
+    # (i) A CI reproducibility step with no `if:` at all -- the exact
+    #     "runs on every PR again" regression, from the other side.
+    unguarded_ci = _WIRING_CI_GOOD.replace(
+        "        if: >-\n"
+        "          github.event_name != 'pull_request'\n"
+        "          || steps.expensive-gates.outputs.save-compat == 'true'\n",
+        "")
+    _expect(failures,
+            any("guarded by" in p for p in problems(ci=unguarded_ci)),
+            f"an unguarded CI step should fail, got {problems(ci=unguarded_ci)}")
 
     return failures
 

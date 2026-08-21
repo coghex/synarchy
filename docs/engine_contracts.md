@@ -97,6 +97,55 @@ six probe-runner self-tests (`ci_probes.py --self-test`,
 `test_run_probes.py`, `test_persistence_contract_sweep.py`,
 `test_action_outcome_probe.py`), and the parity audit itself.
 
+**One member of the save-compat self-test is path-selective on BOTH
+sides (#1360).** `tools/test_save_compat_audit.py` gained two flags that
+partition it: `--without-reproducibility` runs every member except
+`test_normalize_fixture_timestamp_makes_generation_reproducible`, and
+`--only-reproducibility` runs exactly that one. The excluded member
+spawns its own `cabal repl test:synarchy-test-headless` to build two
+envelopes differing only in `smTimestamp` — ~26 s of a ~58 s module on a
+warm tree — and it exercises fixture GENERATION, which only a
+save-format, fixture, save-tooling or Cabal change can move. So both
+files run `--without-reproducibility` unconditionally and reach
+`--only-reproducibility` through `ci_expensive_gates.py`'s `save-compat`
+gate. A bare `python3 tools/test_save_compat_audit.py` still runs
+everything, which is what a developer running the module by hand gets.
+
+This is the ONE case where `make ci` is path-selective rather than
+unconditional, so it needs its own local changed-path notion:
+`ci_expensive_gates.py --local-changed-paths` prints every TRACKED path
+differing from the merge base with the checked-out default branch
+(committed, staged and unstaged alike), and `tools/ci-local.sh` pipes
+that into the very same `--stdin --gate save-compat` command CI runs —
+one matcher, one answer, no second table to drift. Untracked files are
+absent by construction, which is what keeps `ci-local.sh`'s own
+temporary `cabal.project.local` from selecting the gate; the gate's
+pattern table names `cabal.project` exactly rather than
+`cabal.project*`, so neither half has to be trusted alone. When no
+default branch or merge base resolves, `--local-changed-paths` emits a
+conservative sentinel that selects EVERY gate: a local gate that cannot
+tell what changed runs the coverage rather than skipping it.
+
+Two things stayed deliberately unconditional. `save_compat_audit.py`
+runs in full on every pull request, and so does every other member of
+the self-test module — this narrows ONE member, not the step. And the
+step is still not cabal-free: `save_compat_audit.py`'s real-manifest run
+decodes the tracked fixtures' envelope descriptors through a `cabal
+repl` of its own (`verify_fixture_descriptors` →
+`dump_fixture_descriptors`), and `test_real_manifest_passes_the_audit`
+runs that same audit. The saving is one ADDITIONAL repl, not all of
+them.
+
+The condition itself is gated, not just the command set:
+`ci_parity_audit.py` pins CI's `if:` to its exact canonical text
+(including the `github.event_name != 'pull_request'` post-merge
+backstop), checks that guard reads the output the selector step writes
+from `--gate save-compat`, refuses a bare invocation on either side, and
+— because a set comparison cannot see a condition — EXTRACTS the marked
+selection block from `ci-local.sh` and EXECUTES it against a positive
+and a negative changed-path sample with `python3` shimmed, so a block
+that stopped guarding the member fails there rather than after a push.
+
 **Same gate SET, not the same conditional control flow:** CI
 path-selects the graphical suite build, the unit-asset gate and
 `world_check` on PRs, while `make ci` runs all three unconditionally.
@@ -112,10 +161,15 @@ oversight: #1490's cause was a docs-only push breaking
 would hide the very failure it was built for. `make ci` has no push
 range and so has no fast path; it always runs everything.
 Two families are CI-only, by name: CI's path SELECTORS
-(`ci_expensive_gates.py --stdin --gate …`, `ci_probes.py --stdin`,
-`ci_docs_fast_path.py --stdin --explain`), which have nothing to select
-for locally, and `run_probes.py`, the engine-booting probe sweep
-CLAUDE.md keeps opt-in. Everything else must
+(`ci_expensive_gates.py --stdin --gate worldgen|graphical|unit-assets`,
+`ci_probes.py --stdin`, `ci_docs_fast_path.py --stdin --explain`), which
+have nothing to select for locally, and `run_probes.py`, the
+engine-booting probe sweep CLAUDE.md keeps opt-in. One invocation is
+LOCAL-only for the mirror-image reason:
+`ci_expensive_gates.py --local-changed-paths`, because CI is handed a
+pull-request base sha and `make ci` has to resolve its own. The
+`--stdin --gate save-compat` decision both of them feed is NOT exempt —
+it runs on both sides. Everything else must
 run on both sides — `tools/ci_parity_audit.py` (#1355, CI + `make ci`,
 with its own `--self-test`) compares the two files' `python3 tools/*.py`
 invocations at command-and-arguments granularity in both directions and

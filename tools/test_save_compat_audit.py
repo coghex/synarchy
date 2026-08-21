@@ -9,12 +9,42 @@ class it claims to (a "the audit detects an intentionally introduced
 violation" gate, mirroring tools/test_persistence_inventory_audit.py's
 own convention).
 
-Usage:
+Selecting what runs (issue #1360)
+--------------------------------
+Exactly one member of this module,
+`test_normalize_fixture_timestamp_makes_generation_reproducible`, spawns
+a `cabal repl test:synarchy-test-headless` to build its two envelope
+variants. That is ~26 s of a ~58 s module on a warm tree, and it
+exercises fixture GENERATION, which only the save format, the fixture
+set, or the audit tooling can move. So it -- and only it -- is selected
+by changed paths rather than run on every pull request:
+
   python3 tools/test_save_compat_audit.py
+      Everything, the reproducibility member included. The default, so a
+      developer running this by hand still gets the whole module.
+  python3 tools/test_save_compat_audit.py --without-reproducibility
+      Every member EXCEPT the reproducibility one. This is what CI and
+      `make ci` run unconditionally.
+  python3 tools/test_save_compat_audit.py --only-reproducibility
+      Just the reproducibility member. This is what CI and `make ci` run
+      when the change touches a save-format, fixture, save-tooling or
+      Cabal path -- `tools/ci_expensive_gates.py`'s `save-compat` gate,
+      whose pattern table names every such path and whose --self-test
+      pins both directions.
+
+The two selective forms partition the module: `REPRODUCIBILITY_TESTS`
+below is subtracted from the full list rather than duplicated, so a
+member can never be in both or in neither. Nothing is skipped on a push
+to master, where CI runs both forms as the post-merge backstop.
+
+Usage:
+  python3 tools/test_save_compat_audit.py [--without-reproducibility |
+                                           --only-reproducibility]
 Exit codes: 0 = all tests passed, 1 = one or more failed.
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import re
@@ -2027,83 +2057,142 @@ def test_detects_manifest_version_claim_not_backed_by_real_fixture_bytes() -> No
            f"expected a fixture-backed-claim violation, got {violations}")
 
 
-def main() -> int:
-    for fn in [
-        test_clean_manifest_has_no_violations,
-        test_detects_missing_fixture_file,
-        test_detects_checksum_drift,
-        test_detects_size_mismatch_alone,
-        test_decode_only_fixture_skips_checksum,
-        test_detects_complete_session_fixture_missing_checksum,
-        test_detects_complete_session_fixture_missing_summary,
-        test_component_focused_fixture_may_skip_checksum_and_summary,
-        test_detects_framing_version_mismatch,
-        test_detects_frozen_dto_fingerprint_mismatch,
-        test_detects_baseline_with_no_fixtures,
-        test_frozen_dto_fingerprint_is_comment_insensitive,
-        test_frozen_dto_fingerprint_changes_on_field_reorder,
-        test_frozen_dto_fingerprint_changes_on_transitively_embedded_leaf_dto_reorder,
-        test_frozen_dto_fingerprint_covers_save_metadata_v90,
-        test_envelope_framing_fingerprint_is_comment_insensitive,
-        test_envelope_framing_fingerprint_changes_on_layout_change,
-        test_envelope_framing_fingerprint_ignores_inherited_language_pragma,
-        test_envelope_framing_fingerprint_changes_on_effective_language_change,
-        test_envelope_framing_fingerprint_changes_on_import_edit,
-        test_envelope_framing_fingerprint_changes_on_options_ghc_edit,
-        test_envelope_framing_fingerprint_keeps_pragma_shaped_source,
-        test_envelope_framing_fingerprint_keeps_undecidable_headers,
-        test_envelope_framing_fingerprint_sees_past_header_block_comments,
-        test_inherited_extension_set_is_read_live_and_fails_loudly,
-        test_frozen_dto_fingerprint_unaffected_by_pragma_normalization,
-        test_detects_envelope_framing_fingerprint_mismatch,
-        test_add_baseline_creates_a_new_baseline_and_fixture_atomically,
-        test_add_baseline_refuses_new_baseline_missing_required_fields,
-        test_add_baseline_refuses_to_overwrite_without_force,
-        test_add_baseline_requires_summary_for_complete_session,
-        test_add_baseline_rolls_back_on_failed_real_codec_validation,
-        test_add_baseline_keeps_registration_on_passed_real_codec_validation,
-        test_add_baseline_skips_validation_for_component_focused_kind,
-        test_generate_session_refuses_when_summary_exists_without_force,
-        test_generate_session_rolls_back_on_generation_error_after_fixture_written,
-        test_generate_session_rolls_back_fixture_and_summary_on_dump_failure,
-        test_generate_session_rolls_back_fixture_and_summary_on_validation_failure,
-        test_normalize_fixture_timestamp_makes_generation_reproducible,
-        test_detects_registered_component_missing_from_source_scan,
-        test_discover_component_specs_derives_input_versions_from_one_declaration,
-        test_discover_component_specs_ignores_commented_out_fields,
-        test_discover_component_specs_raises_on_a_spec_missing_a_needed_field,
-        test_discover_component_specs_rejects_a_duplicate_older_version,
-        test_discover_component_specs_rejects_the_current_version_as_older,
-        test_discover_component_specs_rejects_a_future_older_version,
-        test_discover_component_specs_fails_closed_on_unreadable_older_entries,
-        test_discover_component_specs_exhausts_each_older_entry,
-        test_discover_component_specs_reads_the_real_build_argument_shapes,
-        test_discover_component_specs_accepts_a_well_formed_multi_version_table,
-        test_hand_rolled_component_codec_is_no_longer_silently_discovered,
-        test_haskell_component_source_paths_discovers_new_files_automatically,
-        test_discover_lua_save_modules_finds_the_real_two_modules,
-        test_detects_unknown_component_id_in_baseline,
-        test_detects_removed_input_version,
-        test_detects_untracked_oldest_version,
-        test_detects_untracked_current_version,
-        test_detects_required_component_with_zero_coverage,
-        test_detects_modern_baseline_missing_required_component,
-        test_modern_baseline_check_skips_b1_shaped_baselines,
-        test_detects_b1_migration_missing_apply_helper,
-        test_detects_unclassified_new_required_component_for_b1,
-        test_b1_migration_check_ignores_unrequired_new_component,
-        test_detects_orphaned_fixture_file,
-        test_no_orphan_violation_when_every_file_is_referenced,
-        test_orphan_check_is_skipped_when_fixture_dir_does_not_exist,
-        test_render_setup_lua_survives_lua_table_braces,
-        test_real_manifest_passes_the_audit,
-        test_detects_manifest_version_claim_not_backed_by_real_fixture_bytes,
-    ]:
+#: The members that spawn a `cabal repl` and are therefore selected by
+#: changed paths rather than run on every pull request (issue #1360).
+#: Subtracted from ALL_TESTS below rather than listed twice, so the two
+#: selective forms provably partition the module.
+REPRODUCIBILITY_TESTS = [
+    test_normalize_fixture_timestamp_makes_generation_reproducible,
+]
+
+#: Every member, in run order. `--without-reproducibility` runs this
+#: minus REPRODUCIBILITY_TESTS; `--only-reproducibility` runs the
+#: intersection; a bare run runs all of it.
+ALL_TESTS = [
+    test_clean_manifest_has_no_violations,
+    test_detects_missing_fixture_file,
+    test_detects_checksum_drift,
+    test_detects_size_mismatch_alone,
+    test_decode_only_fixture_skips_checksum,
+    test_detects_complete_session_fixture_missing_checksum,
+    test_detects_complete_session_fixture_missing_summary,
+    test_component_focused_fixture_may_skip_checksum_and_summary,
+    test_detects_framing_version_mismatch,
+    test_detects_frozen_dto_fingerprint_mismatch,
+    test_detects_baseline_with_no_fixtures,
+    test_frozen_dto_fingerprint_is_comment_insensitive,
+    test_frozen_dto_fingerprint_changes_on_field_reorder,
+    test_frozen_dto_fingerprint_changes_on_transitively_embedded_leaf_dto_reorder,
+    test_frozen_dto_fingerprint_covers_save_metadata_v90,
+    test_envelope_framing_fingerprint_is_comment_insensitive,
+    test_envelope_framing_fingerprint_changes_on_layout_change,
+    test_envelope_framing_fingerprint_ignores_inherited_language_pragma,
+    test_envelope_framing_fingerprint_changes_on_effective_language_change,
+    test_envelope_framing_fingerprint_changes_on_import_edit,
+    test_envelope_framing_fingerprint_changes_on_options_ghc_edit,
+    test_envelope_framing_fingerprint_keeps_pragma_shaped_source,
+    test_envelope_framing_fingerprint_keeps_undecidable_headers,
+    test_envelope_framing_fingerprint_sees_past_header_block_comments,
+    test_inherited_extension_set_is_read_live_and_fails_loudly,
+    test_frozen_dto_fingerprint_unaffected_by_pragma_normalization,
+    test_detects_envelope_framing_fingerprint_mismatch,
+    test_add_baseline_creates_a_new_baseline_and_fixture_atomically,
+    test_add_baseline_refuses_new_baseline_missing_required_fields,
+    test_add_baseline_refuses_to_overwrite_without_force,
+    test_add_baseline_requires_summary_for_complete_session,
+    test_add_baseline_rolls_back_on_failed_real_codec_validation,
+    test_add_baseline_keeps_registration_on_passed_real_codec_validation,
+    test_add_baseline_skips_validation_for_component_focused_kind,
+    test_generate_session_refuses_when_summary_exists_without_force,
+    test_generate_session_rolls_back_on_generation_error_after_fixture_written,
+    test_generate_session_rolls_back_fixture_and_summary_on_dump_failure,
+    test_generate_session_rolls_back_fixture_and_summary_on_validation_failure,
+    test_normalize_fixture_timestamp_makes_generation_reproducible,
+    test_detects_registered_component_missing_from_source_scan,
+    test_discover_component_specs_derives_input_versions_from_one_declaration,
+    test_discover_component_specs_ignores_commented_out_fields,
+    test_discover_component_specs_raises_on_a_spec_missing_a_needed_field,
+    test_discover_component_specs_rejects_a_duplicate_older_version,
+    test_discover_component_specs_rejects_the_current_version_as_older,
+    test_discover_component_specs_rejects_a_future_older_version,
+    test_discover_component_specs_fails_closed_on_unreadable_older_entries,
+    test_discover_component_specs_exhausts_each_older_entry,
+    test_discover_component_specs_reads_the_real_build_argument_shapes,
+    test_discover_component_specs_accepts_a_well_formed_multi_version_table,
+    test_hand_rolled_component_codec_is_no_longer_silently_discovered,
+    test_haskell_component_source_paths_discovers_new_files_automatically,
+    test_discover_lua_save_modules_finds_the_real_two_modules,
+    test_detects_unknown_component_id_in_baseline,
+    test_detects_removed_input_version,
+    test_detects_untracked_oldest_version,
+    test_detects_untracked_current_version,
+    test_detects_required_component_with_zero_coverage,
+    test_detects_modern_baseline_missing_required_component,
+    test_modern_baseline_check_skips_b1_shaped_baselines,
+    test_detects_b1_migration_missing_apply_helper,
+    test_detects_unclassified_new_required_component_for_b1,
+    test_b1_migration_check_ignores_unrequired_new_component,
+    test_detects_orphaned_fixture_file,
+    test_no_orphan_violation_when_every_file_is_referenced,
+    test_orphan_check_is_skipped_when_fixture_dir_does_not_exist,
+    test_render_setup_lua_survives_lua_table_braces,
+    test_real_manifest_passes_the_audit,
+    test_detects_manifest_version_claim_not_backed_by_real_fixture_bytes,
+]
+
+
+def selected_tests(only_reproducibility: bool,
+                   without_reproducibility: bool) -> list:
+    """The members one invocation runs.
+
+    The two flags partition ALL_TESTS: `--only-reproducibility` keeps
+    exactly REPRODUCIBILITY_TESTS and `--without-reproducibility` keeps
+    exactly the rest, so no member can be run twice or dropped by both.
+    """
+    expensive = set(REPRODUCIBILITY_TESTS)
+    if only_reproducibility:
+        return [fn for fn in ALL_TESTS if fn in expensive]
+    if without_reproducibility:
+        return [fn for fn in ALL_TESTS if fn not in expensive]
+    return list(ALL_TESTS)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Unit tests for tools/save_compat_audit.py.",
+        epilog="With no flag, every member runs.")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--only-reproducibility", action="store_true",
+        help="run ONLY the cabal-repl reproducibility member (#1360).")
+    group.add_argument(
+        "--without-reproducibility", action="store_true",
+        help="run every member EXCEPT the cabal-repl reproducibility "
+             "member (#1360).")
+    args = parser.parse_args(argv)
+
+    # A member listed as expensive but absent from the run order would
+    # silently vanish from BOTH selective forms, which is exactly the
+    # "coverage quietly stopped running" failure this selection exists
+    # to avoid. Fail loudly instead.
+    missing = [fn.__name__ for fn in REPRODUCIBILITY_TESTS
+               if fn not in ALL_TESTS]
+    if missing:
+        print(f"REPRODUCIBILITY_TESTS members missing from ALL_TESTS: "
+              f"{missing}")
+        return 1
+
+    tests = selected_tests(args.only_reproducibility,
+                           args.without_reproducibility)
+    if not tests:
+        print("no tests selected -- refusing to report a vacuous pass")
+        return 1
+    for fn in tests:
         fn()
     if FAILURES:
         print(f"\n{len(FAILURES)} failure(s)")
         return 1
-    print("\nall tests passed")
+    print(f"\nall tests passed ({len(tests)} of {len(ALL_TESTS)} members)")
     return 0
 
 
