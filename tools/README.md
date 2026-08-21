@@ -744,6 +744,10 @@ python3 tools/probe_census.py --print          # what the live registry implies
 python3 tools/probe_census.py --seed           # create/migrate in docs-wip
 python3 tools/probe_census.py --validate       # check the inventory
 python3 tools/probe_census.py --record R.json  # ingest one probe-flake-result/v1
+python3 tools/probe_census.py --summary        # every probe's current statistic
+python3 tools/probe_census.py --summary --probe KEY --json
+python3 tools/probe_census.py --summary --as-of 2026-08-21T05:00:00Z \
+    --stale-after-days 7
 python3 tools/probe_census.py --probe KEY --set-acceptable-failures 2 \
     --justification "two known engine-side races"
 python3 tools/probe_census.py --probe KEY --set-acceptable-failures 7
@@ -756,6 +760,41 @@ An X update that omits `--justification` never clears the stored text —
 `--clear-justification` is the only thing that does, and it may not be combined
 with `--justification`. `--justification` stores its argument verbatim, so
 every literal (`keep`, `none`, text with surrounding whitespace) is storable.
+
+`--summary` (#1429) is the selection-facing view of what those measurements
+MEAN over time. The newest cohort is the current statistic and DISPLACES the
+previous one without deleting it; runs accumulate only within one commit hash,
+and a cohort's rate is recomputed as `sum(failure_count) / sum(requested_runs)`
+over its samples rather than averaged across batches of unequal size. Commit
+hashes do not compare, so "newest" is append order: an A → B → A sequence ends
+with a THIRD cohort keyed by A, never with the first reopened. Every displaced
+cohort is retained for the lifetime view, and the authoritative cohort is
+`current` when one exists and `history[-1]` otherwise — which is where a probe
+promoted to CI eligibility keeps its newest measured statistic.
+
+Staleness is purely AGE-based. A commit never invalidates a record and
+repository HEAD moving is not a census event at all: only a measurement changes
+census state. Age runs from the cohort's own freshness anchor — the latest
+measurement timestamp contributing to it, never the commit's date, the file's
+mtime, the moment of ingestion or live HEAD, so an out-of-order same-commit
+result adds counts without dragging the anchor backwards — to an evaluation
+time the CALLER supplies (`--as-of`, defaulting to now), against a horizon the
+caller supplies (`--stale-after-days`, defaulting to 14). The boundary is
+inclusive, and age is clamped at zero so a future-anchored cohort is fresh
+rather than negatively old. Each row reports `measured`, the exact commit, the
+latest measurement, the nonnegative age, the stale flag, and the combined
+run/failure counts and rate; every measurement field of an UNMEASURED probe is
+null, so a zero failure rate can only ever mean an observed zero.
+
+Semantic validation is narrow and fails closed at BOTH boundaries. Before a
+`status: "ok"` sample changes a cohort, and again when an already-stored cohort
+is read, the commit must be a real 40-character lowercase-hex identity — not
+`probe_flake`'s `unknown` placeholder, which is a well-formed and schema-valid
+result field but names no commit — the timestamp must parse as UTC, and the
+aggregation counts must be usable nonnegative integers. Each refusal is
+controlled and writes nothing. A harness error is deliberately NOT gated: it
+contributes to no cohort, and unmeasurable provenance is exactly what the
+attempt log retains. The CROSS-FIELD invariants remain #1493's.
 
 `--print` never touches the docs worktree. `--seed` is the ONLY operation that
 migrates: it creates an absent census, migrates a `probe-census/v1` one
@@ -800,12 +839,20 @@ own in-repo `PROTOCOL_PROBES` and check identity from each probe's descriptor,
 so a checkout with no docs worktree behaves identically.
 
 `python3 tools/test_probe_census.py` is its deterministic, engine-free
-self-test. It drives the real checked-in schema — a valid census and result
-against every declared definition, each nullable field deleted, non-object
-per-run `checks` including truthy values, unexpected properties in every
-representative nested object, invalid enum/range/length values, non-finite
-numbers, and an environment where `jsonschema` is genuinely unimportable —
-asserting for each refusal that nothing was written.
+self-test, and since #1429 it runs unconditionally in CI's probe-runner
+self-test step and in `make ci`. It drives the real checked-in schema — a valid
+census and result against every declared definition, each nullable field
+deleted, non-object per-run `checks` including truthy values, unexpected
+properties in every representative nested object, invalid enum/range/length
+values, non-finite numbers, and an environment where `jsonschema` is genuinely
+unimportable — asserting for each refusal that nothing was written. Its cohort
+cases inject a fixed evaluation time rather than reading a clock: unequal
+same-commit batches (which an unweighted mean would report as 0.30 instead of
+0.17), an A → B → A sequence, HEAD moving with no measurement, the inclusive
+staleness boundary from both sides, a future anchor, an unmeasured probe beside
+a real zero rate and a cohort with no denominator, a promoted probe whose
+statistic lives in `history[-1]`, and the placeholder/malformed refusals at both
+the ingestion and the stored-read boundary.
 
 ### `probe_external_evidence.py` — the Codex `$test` record, read-only (#1432)
 
