@@ -12,6 +12,7 @@ import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Core.State
 import Engine.Core.Defaults
 import Engine.Core.Monad
+import Test.Engine.Graphics.Vulkan.Helpers (withTestInstance)
 import Data.IORef (newIORef)
 import Vulkan.Core10
 import Vulkan.Zero
@@ -25,13 +26,15 @@ spec env state = do
                 -- Get the existing window from state
                 case glfwWindow (graphicsState state) of
                     Nothing → liftIO $ expectationFailure "No window found in state"
-                    Just win → do
-                        -- Create a test instance
-                        (inst, _) ← createVulkanInstance defaultGraphicsConfig InstanceForWindow
-                        -- Create surface
-                        surface <- GLFW.createWindowSurface win inst
-                        -- The surface creation should succeed (if it fails, it will throw an exception)
-                        liftIO $ surface `shouldSatisfy` (/= zero)
+                    Just win →
+                        -- Create a test instance, destroyed when this
+                        -- scope exits. The surface's own allocResource
+                        -- nests inside, so it is destroyed first.
+                        withTestInstance defaultGraphicsConfig InstanceForWindow $ \(inst, _) → do
+                            -- Create surface
+                            surface <- GLFW.createWindowSurface win inst
+                            -- The surface creation should succeed (if it fails, it will throw an exception)
+                            liftIO $ surface `shouldSatisfy` (/= zero)
 
         it "fails with invalid instance" $ do
             runEngineTest env state $ do
@@ -54,12 +57,12 @@ spec env state = do
             runEngineTest env state $ do
                 case glfwWindow (graphicsState state) of
                     Nothing → liftIO $ expectationFailure "No window found in state"
-                    Just win → do
-                        (inst, _) ← createVulkanInstance defaultGraphicsConfig InstanceForWindow
-                        let createAndDestroySurface = do
-                              surface <- GLFW.createWindowSurface win inst
-                              liftIO $ surface `shouldSatisfy` (/= zero)
-                        replicateM_ 5 createAndDestroySurface
+                    Just win →
+                        withTestInstance defaultGraphicsConfig InstanceForWindow $ \(inst, _) → do
+                            let createAndDestroySurface = do
+                                  surface <- GLFW.createWindowSurface win inst
+                                  liftIO $ surface `shouldSatisfy` (/= zero)
+                            replicateM_ 5 createAndDestroySurface
 
     where
         runEngineTest ∷ ∀ α. EngineEnv → EngineState → EngineM EngineState α → IO α
