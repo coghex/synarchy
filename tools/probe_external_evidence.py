@@ -371,8 +371,26 @@ def _read_report(record: dict, scope: Path | None, diagnostics: list[str]) -> di
         )
         return report
 
-    if not resolved.is_file():
-        report["status"] = REPORT_ABSENT
+    # A path that is simply not there is DATA: a run whose report has not
+    # been written yet, or was cleaned up. A path that EXISTS but is not
+    # a regular file — a directory named `*.test-result.md`, a socket, a
+    # device — is damaged external state, and damage is diagnosed.
+    try:
+        exists = resolved.exists()
+        is_file = resolved.is_file()
+    except OSError as exc:
+        report["status"] = REPORT_UNREADABLE
+        diagnostics.append(f"{run_id}: cannot stat report {resolved}: {exc}")
+        return report
+    if not is_file:
+        if not exists:
+            report["status"] = REPORT_ABSENT
+            return report
+        report["status"] = REPORT_UNREADABLE
+        diagnostics.append(
+            f"{run_id}: cannot read report {resolved}: it exists but is not a "
+            f"regular file"
+        )
         return report
 
     try:
