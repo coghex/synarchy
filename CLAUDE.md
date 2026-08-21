@@ -155,6 +155,7 @@ mid-profile and truncate the `.prof`). Full recipe:
 | `≡` | equality (from Prelude.Unicode) | `==` |
 | `≢` | inequality (from Prelude.Unicode) | `/=` |
 | `∧` / `∨` | logical and/or (from Prelude.Unicode) | `&&` / `\|\|` |
+| `≠` | inequality — **prose only**, never an operator | use `≢` |
 
 Five of these are **enforced**: `.&.`, `.\|.`, `>>=`, `==`, and `/=` must
 not appear as Haskell operators in `src/`/`app/` outside
@@ -164,6 +165,13 @@ GLSL; the `Eq`/`Monad` instance method names, which must stay ASCII) —
 see issue #1005 / `docs/code_health_findings.md` CH-49. `fmap`'s two
 spellings, `<$>` and `⊚`, are a deliberate exception: **both are kept**,
 picked per call site by readability, not enforced either way.
+
+`≠` is **not** a second such exception. `Prelude.Unicode` exports it as
+the same `/=` at the same fixity, but this project spells inequality
+`≢` and nothing else: `≠` is allowed only inside comment prose —
+pseudocode or a maths formula — and never as an operator in
+`src/`/`app/`. The same audit enforces that (#1494), by its own
+single-code-point path, since its ASCII lexer cannot see `≠` at all.
 
 ## Architecture
 

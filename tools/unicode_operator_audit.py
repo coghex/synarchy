@@ -1,26 +1,39 @@
 #!/usr/bin/env python3
-"""Guard: the five ASCII operators normalised to Unicode by issue #1005
-must not reappear in `src/` + `app/` Haskell source, outside a short,
-explicit exemption list. Every fixity matches its ASCII counterpart
-exactly (src/UPrelude.hs:65-68, base-unicode-symbols Data/Eq/Unicode.hs),
-so the substitution below can never silently reassociate an expression:
+"""Guard: two spelling rules on `src/` + `app/` Haskell source, both
+outside a short, explicit exemption list.
 
-  .&. -> ⌃   bitwise AND,  infixl 7
-  .|. -> ⌄   bitwise OR,   infixl 5
-  >>= -> ⌦   monadic bind, infixl 1
-  ==  -> ≡   equality,     infix 4
-  /=  -> ≢   inequality,   infix 4
+1. (#1005) The five ASCII operators normalised to Unicode must not
+   reappear. Every fixity matches its ASCII counterpart exactly
+   (src/UPrelude.hs:65-68, base-unicode-symbols Data/Eq/Unicode.hs), so
+   the substitution below can never silently reassociate an expression:
+
+     .&. -> ⌃   bitwise AND,  infixl 7
+     .|. -> ⌄   bitwise OR,   infixl 5
+     >>= -> ⌦   monadic bind, infixl 1
+     ==  -> ≡   equality,     infix 4
+     /=  -> ≢   inequality,   infix 4
+
+2. (#1494) Inequality is spelled `≢`, never the noncanonical `≠`.
+   Both come from the same `Data.Eq.Unicode` re-export and are the same
+   `/=` at the same `infix 4`, so this too is a pure respelling. `≠`
+   remains legal in comment prose (pseudocode, a maths formula) --
+   which the scanner below already excludes -- and is forbidden only as
+   an operator.
+
+Rule 2 needs its own detection path: `_SYMBOL_RUN`'s character class is
+ASCII by construction, so `≠` is never lexed as a candidate token and a
+tree spelled entirely `≠` would audit clean.
 
 Mirrors tools/haskell_module_budget.py's label+check()+main() shape and
 tools/engine_env_capability_audit.py's comment/string-aware line scan
-(`_strip_haskell_comments`), extended with string-literal and GLSL
-quasiquote awareness since a false hit here would rewrite content this
-guard must never touch.
+(`_strip_haskell_comments` there; `_code_runs`/`_code_only` here),
+extended with string-literal and GLSL quasiquote awareness since a
+false hit here would rewrite content this guard must never touch.
 
 Usage:
   python3 tools/unicode_operator_audit.py
-Exit codes: 0 = clean tree, 1 = a forbidden operator reappeared outside
-the exemption list below.
+Exit codes: 0 = clean tree, 1 = a forbidden ASCII operator reappeared,
+or inequality was spelled `≠`, outside the exemption list below.
 """
 from __future__ import annotations
 
@@ -38,6 +51,18 @@ TOKEN_REPLACEMENTS = {
     "/=": "≢",
 }
 FORBIDDEN_TOKENS = frozenset(TOKEN_REPLACEMENTS)
+
+# #1494: already-Unicode spellings that are nonetheless not this
+# project's canonical one. Kept in their OWN table rather than folded
+# into TOKEN_REPLACEMENTS because the two are detected differently (see
+# `_NONCANONICAL_RUN`) and exempted differently (WHOLE_FILE_EXEMPT
+# covers the ASCII definition sites only).
+NONCANONICAL_REPLACEMENTS = {
+    "≠": "≢",
+}
+NONCANONICAL_TOKENS = frozenset(NONCANONICAL_REPLACEMENTS)
+
+ALL_REPLACEMENTS = {**TOKEN_REPLACEMENTS, **NONCANONICAL_REPLACEMENTS}
 
 # Haskell 2010 report §2.4: the ASCII characters usable in a symbolic
 # operator. A maximal run of these is one lexeme -- so `.&.` only
@@ -60,6 +85,17 @@ _SYMBOL_RUN = re.compile(r"[!#$%&*+./<=>?@\\^|~:-]+")
 # with any Unicode uppercase letter, same as this codebase's own
 # Unicode operators are not ASCII-limited.
 _QUALIFIER_CHARS = re.compile(r"[\w'.]")
+
+# Every noncanonical token is a SINGLE code point, so it is found by a
+# literal search rather than by lexing a maximal symbol run: `≠` cannot
+# be a substring of an identifier (Haskell identifiers hold no symbol
+# characters), and a qualified use (`E.≠`) or a hypothetical compound
+# (`≠?`) contains the noncanonical spelling either way and should be
+# reported either way. That makes this path unable to MISS a use, which
+# is the failure mode that matters for a guard. What it CAN over-match
+# is a char literal `'≠'` -- whose span `_scan_code` reports so
+# `find_violations` can exclude it.
+_NONCANONICAL_RUN = re.compile("[" + re.escape("".join(sorted(NONCANONICAL_TOKENS))) + "]")
 
 
 def _qualifier_before(text: str, pos: int) -> str:
@@ -96,13 +132,17 @@ def _matched_token(run: str, text: str, run_start: int) -> str | None:
     return None
 
 
-# Whole-file exemption: the one place the ASCII forms are the
-# definitions themselves, not usages.
+# Whole-file exemption, scoped to the ASCII tokens ONLY: the one place
+# the ASCII forms are the definitions themselves, not usages. It is
+# deliberately NOT a blanket amnesty -- a noncanonical `≠` written as an
+# operator here is ordinary drift with no definition-site excuse, and is
+# still flagged (#1494).
 WHOLE_FILE_EXEMPT = {
     "src/UPrelude.hs":
         "sole definition site for ⌃/⌄/⌦ (and the re-exported >>= that "
         "backs Prelude's own bind) -- contains the ASCII operators by "
-        "necessity, not by drift.",
+        "necessity, not by drift. Exempts the ASCII tokens only; a "
+        "noncanonical `≠` operator here still fails.",
 }
 
 # Construct-scoped exemptions: a forbidden operator ELSEWHERE in these
@@ -152,7 +192,7 @@ class Violation:
 
     def __str__(self) -> str:
         return (f"{self.path}:{self.line}: forbidden operator "
-                f"'{self.token}' (use '{TOKEN_REPLACEMENTS[self.token]}' "
+                f"'{self.token}' (use '{ALL_REPLACEMENTS[self.token]}' "
                 f"instead)")
 
 
@@ -177,15 +217,26 @@ _IDENT_CONTINUE = re.compile(r"[A-Za-z0-9_']")
 _CHAR_LITERAL = re.compile(r"'(?:\\(?:[A-Za-z0-9^]+|.)|[^'\\\n])'")
 
 
-def _code_runs(text: str) -> list[tuple[int, int]]:
-    """Spans of `text` that are plain Haskell code: outside `--` line
-    comments, nestable `{- -}` block comments, `'x'` char literals, and
+def _scan_code(text: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """`(code spans, char-literal spans)`.
+
+    Code spans are the parts of `text` that are plain Haskell code:
+    outside `--` line comments, nestable `{- -}` block comments, and
     `"..."` string literals (backslash-escaped; under-skipping an
     escape's payload never risks the closing quote, since the only
     escape that could fool detection -- `\\"` -- is still consumed
-    whole)."""
+    whole).
+
+    A `'x'` char literal is skipped ATOMICALLY but stays INSIDE its code
+    span, which is what the ASCII pass wants (a one-character literal
+    can never hold a multi-character token like `>>=`, and keeping the
+    span intact avoids splitting a run mid-expression). A single
+    code-point search cannot rely on that, so the literals' spans are
+    reported separately for `find_violations` to exclude -- otherwise
+    `'≠'`, a legitimate character value, would read as an operator."""
     i, n = 0, len(text)
     runs: list[tuple[int, int]] = []
+    char_literals: list[tuple[int, int]] = []
     run_start: int | None = None
     state = "CODE"
     depth = 0
@@ -213,6 +264,7 @@ def _code_runs(text: str) -> list[tuple[int, int]]:
                 if m:
                     if run_start is None:
                         run_start = i
+                    char_literals.append((i, m.end()))
                     i = m.end()
                     continue
             if c == '"':
@@ -248,7 +300,17 @@ def _code_runs(text: str) -> list[tuple[int, int]]:
                 i += 1
     if run_start is not None:
         runs.append((run_start, n))
-    return runs
+    return runs, char_literals
+
+
+def _code_runs(text: str) -> list[tuple[int, int]]:
+    """`_scan_code`'s code spans alone, for callers with no interest in
+    where the char literals sit."""
+    return _scan_code(text)[0]
+
+
+def _within(pos: int, spans: list[tuple[int, int]]) -> bool:
+    return any(start <= pos < end for start, end in spans)
 
 
 def _line_of(text: str, pos: int) -> int:
@@ -276,9 +338,6 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
     """Every forbidden-operator occurrence in `text` (the source of the
     file at repo-relative `rel_path`) outside a comment, a string
     literal, and this module's explicit exemptions above."""
-    if rel_path in WHOLE_FILE_EXEMPT:
-        return []
-
     scan_text = text
     if rel_path == GLSL_QUASIQUOTE_FILE:
         # Locate the quasiquote markers only in genuine code -- a `--`
@@ -297,16 +356,30 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
     if rel_path == MONAD_INSTANCE_FILE:
         exempt_spans.update(m.span(1) for m in _MONAD_BIND_METHOD_TOKEN.finditer(_code_only(text)))
 
-    violations: list[Violation] = []
-    for start, end in _code_runs(scan_text):
-        for m in _SYMBOL_RUN.finditer(scan_text, start, end):
-            tok = _matched_token(m.group(0), scan_text, m.start())
-            if tok is None:
+    code_spans, char_literal_spans = _scan_code(scan_text)
+    # The whole-file exemption covers the ASCII definition sites only,
+    # so it suppresses that pass rather than the whole scan.
+    ascii_exempt = rel_path in WHOLE_FILE_EXEMPT
+
+    hits: list[tuple[int, str]] = []
+    for start, end in code_spans:
+        if not ascii_exempt:
+            for m in _SYMBOL_RUN.finditer(scan_text, start, end):
+                tok = _matched_token(m.group(0), scan_text, m.start())
+                if tok is None:
+                    continue
+                if (m.start(), m.end()) in exempt_spans:
+                    continue
+                hits.append((m.start(), tok))
+        for m in _NONCANONICAL_RUN.finditer(scan_text, start, end):
+            if _within(m.start(), char_literal_spans):
                 continue
-            if (m.start(), m.end()) in exempt_spans:
-                continue
-            violations.append(Violation(rel_path, _line_of(text, m.start()), tok))
-    return violations
+            hits.append((m.start(), m.group(0)))
+    # Sorted by position so the two passes interleave into one
+    # source-order report rather than one pass's hits trailing the
+    # other's.
+    return [Violation(rel_path, _line_of(text, pos), tok)
+            for pos, tok in sorted(hits)]
 
 
 def scan_tree(repo_root: Path) -> list[Violation]:
@@ -322,14 +395,16 @@ def scan_tree(repo_root: Path) -> list[Violation]:
 def main() -> int:
     violations = scan_tree(REPO_ROOT)
     if violations:
-        print(f"{len(violations)} forbidden ASCII operator occurrence(s):")
+        print(f"{len(violations)} forbidden operator occurrence(s) "
+              f"(ASCII spellings and/or noncanonical `≠`):")
         for v in violations:
             print(f"  {v}")
         print("\nExempt by design:")
         for path, reason in {**WHOLE_FILE_EXEMPT, **CONSTRUCT_EXEMPTIONS}.items():
             print(f"  {path}: {reason}")
         return 1
-    print("No forbidden ASCII operators found outside the exemption list.")
+    print("No forbidden ASCII operators and no noncanonical `≠` found "
+          "outside the exemption list.")
     return 0
 
 

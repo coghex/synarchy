@@ -50,7 +50,7 @@ querySwapchainSupport pdev surface = do
 --   testable against synthetic capability flags.
 swapchainImageUsage ∷ ImageUsageFlags → (ImageUsageFlags, Bool)
 swapchainImageUsage supported =
-    let capture = (supported ⌃ IMAGE_USAGE_TRANSFER_SRC_BIT) ≠ zero
+    let capture = (supported ⌃ IMAGE_USAGE_TRANSFER_SRC_BIT) ≢ zero
     in ( if capture
            then IMAGE_USAGE_COLOR_ATTACHMENT_BIT ⌄ IMAGE_USAGE_TRANSFER_SRC_BIT
            else IMAGE_USAGE_COLOR_ATTACHMENT_BIT
@@ -79,7 +79,7 @@ createVulkanSwapchain pdev dev queues surface vsyncEnabled fbSize = do
       -- Sharing is decided by queue FAMILY, not queue handle — two
       -- distinct queues from the same family still allow EXCLUSIVE,
       -- and CONCURRENT requires the family indices to be distinct.
-      (sharing, qfi) = if (dqGraphicsFamIdx queues ≠ dqPresentFamIdx queues)
+      (sharing, qfi) = if (dqGraphicsFamIdx queues ≢ dqPresentFamIdx queues)
                        then (SHARING_MODE_CONCURRENT
                            , V.fromList [ dqGraphicsFamIdx queues
                                       , dqPresentFamIdx queues])

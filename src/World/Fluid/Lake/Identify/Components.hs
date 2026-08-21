@@ -67,9 +67,9 @@ labelComponents terrain filled worldOcean worldTiles = runST $ do
         isBasin i =
             let e = terrain VU.! i
                 f = filled  VU.! i
-            in e ≠ minBound
+            in e ≢ minBound
              ∧ not (worldOcean VU.! i)
-             ∧ f ≠ maxBound
+             ∧ f ≢ maxBound
                    -- Unreached by the flood: typically tiles enclosed
                    -- by a beyond-glacier ring. Treat as not-a-basin
                    -- so they don't poison their component's surface

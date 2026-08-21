@@ -380,7 +380,7 @@ validateTransferOrders (TransferOrdersDTO slices) = concat
              <> " holds an order whose own id is #"
              <> tshow (unTransferOrderId (trdId v)))
       | s ← slices, (k, v) ← HM.toList (toqOrders (ptoOrders s))
-      , k ≠ trdId v ]
+      , k ≢ trdId v ]
     ]
   where err = ComponentError transferOrdersComponentId 1 ValidatePhase
 
