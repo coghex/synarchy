@@ -227,6 +227,24 @@ def make_run(test_id: str, run_id: str, **overrides: object) -> dict:
     return {k: v for k, v in record.items() if v is not None or k in overrides}
 
 
+MISSING = object()
+
+
+def run_with_identity(run_id: str, identity: object, **overrides: object) -> dict:
+    """A record whose `test_id` is set to an arbitrary value, or removed.
+
+    `make_run` takes `test_id` positionally and drops None values, so a
+    deliberately damaged identity has to be written onto the record
+    afterwards — including the case where the field is absent entirely.
+    """
+    record = make_run("probe:placeholder", run_id, **overrides)
+    if identity is MISSING:
+        record.pop("test_id", None)
+    else:
+        record["test_id"] = identity
+    return record
+
+
 def build_test_state(root: Path, runs: list, *,
                      schema: str = evidence.COORDINATOR_SCHEMA) -> Path:
     """Write a synthetic `codex-test` tree and return its root."""
@@ -749,6 +767,26 @@ def test_absent_versus_damaged_test_state() -> None:
                     "an unstattable $test state root fails closed")
         check("could not be read" in document["source_errors"][0]["detail"],
               "and is diagnosed", document["source_errors"][0]["detail"])
+
+    # A record whose IDENTITY cannot be read has indeterminate probe
+    # ownership. It used to either crash the read outright (an unhashable
+    # value) or vanish silently (a missing one) and let the scan answer
+    # `clear` beside an active run nobody could attribute.
+    for label, value in (("an unhashable list", []), ("an absent", MISSING),
+                         ("a null", None), ("an empty", ""), ("a numeric", 17)):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = build_test_state(Path(tmp), [
+                run_with_identity("unattributable", value, status="running",
+                                  heartbeat_at="2026-08-21T11:59:00Z")])
+            root = build_reports(Path(tmp) / "repo")
+            document = evaluate("injury_log", state_root=state, repo_root=root)
+            check_equal(document["result"], inflight.RESULT_SOURCE_ERROR,
+                        f"{label} test_id fails closed rather than clearing")
+            check_equal(document["sources"][inflight.SOURCE_TEST_RUN], "error",
+                        f"{label} test_id marks the $test source in error")
+            check("no usable test_id" in document["source_errors"][0]["detail"],
+                  f"{label} test_id is diagnosed actionably",
+                  document["source_errors"][0]["detail"])
 
     # A damaged REPORT belongs to a finished run's interpretation, not to
     # active-run state, and must not fail the scan.

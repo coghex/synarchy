@@ -204,6 +204,24 @@ def make_run(test_id: str, run_id: str, **overrides: object) -> dict:
     return {k: v for k, v in record.items() if v is not None or k in overrides}
 
 
+MISSING = object()
+
+
+def run_with_identity(run_id: str, identity: object, **overrides: object) -> dict:
+    """A record whose `test_id` is set to an arbitrary value, or removed.
+
+    `make_run` takes `test_id` positionally and drops None values, so a
+    deliberately damaged identity has to be written onto the record
+    afterwards — including the case where the field is absent entirely.
+    """
+    record = make_run("probe:placeholder", run_id, **overrides)
+    if identity is MISSING:
+        record.pop("test_id", None)
+    else:
+        record["test_id"] = identity
+    return record
+
+
 def report_text(run_id: str, test_id: str, interpretation: str,
                 observations: int) -> str:
     lines = [
@@ -500,6 +518,60 @@ def test_entry_state_separates_absent_from_unexaminable() -> None:
               f"{present!r} {failure!r}")
         check(not os.path.lexists(regular / "child"),
               "which is exactly what lexists cannot tell you")
+
+
+def test_an_unreadable_run_identity_is_record_damage() -> None:
+    """A record whose `test_id` cannot be read is diagnosed, not dropped.
+
+    `test_id` is arbitrary external JSON. An UNHASHABLE value crashed the
+    whole read outright (`TypeError` from the set membership test),
+    taking every valid run with it; a missing or empty one was silently
+    skipped, which let an otherwise-active run of indeterminate ownership
+    pass as no evidence at all.
+    """
+    shapes = [
+        ("an unhashable list", []),
+        ("an unhashable dict", {}),
+        ("a number", 17),
+        ("a boolean", True),
+        ("an absent field", MISSING),
+        ("null", None),
+        ("an empty string", ""),
+        ("whitespace", "   "),
+    ]
+    for label, value in shapes:
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = [
+                run_with_identity("damaged", value, status="running"),
+                make_run("probe:role", "healthy"),
+            ]
+            state = build_state(Path(tmp), runs, {})
+            with NonInteraction(state) as guard:
+                result = read(state, "role")
+                guard.assert_untouched(f"{label} test_id")
+            check_equal([r["run_id"] for r in result["runs"]], ["healthy"],
+                        f"{label} does not crash the read, and the valid run "
+                        f"is still reported")
+            check_equal([d["scope"] for d in result["diagnostics_detail"]],
+                        [evidence.SCOPE_RECORD],
+                        f"{label} is diagnosed as record damage")
+            detail = result["diagnostics"][0]
+            check("no usable test_id" in detail, f"{label} says what is wrong",
+                  detail)
+            check("damaged" in detail, f"{label} names the run", detail)
+            json.dumps(result)
+            check(True, f"{label} leaves the document serializable")
+
+    # A well-formed identity for ANOTHER probe is not damage; it is just
+    # a non-match, and must stay diagnostic-free.
+    with tempfile.TemporaryDirectory() as tmp:
+        state = build_state(Path(tmp), [
+            make_run("gameplay:role", "other-namespace"),
+            make_run("probe:transfer-order", "other-probe")], {})
+        result = read(state, "role")
+        check_equal(result["runs"], [], "neither matches")
+        check_equal(result["diagnostics"], [],
+                    "and a non-match is never diagnosed as damage")
 
 
 def test_diagnostics_carry_the_state_they_concern() -> None:
@@ -1330,6 +1402,7 @@ def main() -> int:
         test_the_heartbeat_is_reported_raw,
         test_diagnostics_carry_the_state_they_concern,
         test_a_damaged_state_root_is_not_an_absent_one,
+        test_an_unreadable_run_identity_is_record_damage,
         test_entry_state_separates_absent_from_unexaminable,
         test_unknown_key_is_rejected,
         test_exact_matching,

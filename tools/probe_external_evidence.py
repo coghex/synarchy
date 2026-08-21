@@ -790,9 +790,27 @@ def read_probe_evidence(probe_key: str,
             diagnostics.add(SCOPE_RECORD,
                             f"registry run #{index} is not an object; skipped")
             continue
+        identity = record.get("test_id")
+        if not isinstance(identity, str) or not identity.strip():
+            # A record whose identity cannot be read belongs to no probe
+            # and to every probe: nothing here can say whether it is this
+            # one's work, so it is DIAGNOSED rather than quietly skipped
+            # — a consumer that fails closed on unreadable active-run
+            # state has to see it. Checking the type first is also what
+            # keeps the comparison from crashing: `test_id` is arbitrary
+            # external JSON, and an unhashable value such as `[]` raises
+            # `TypeError` from a set membership test, taking the whole
+            # read with it.
+            diagnostics.add(
+                SCOPE_RECORD,
+                f"registry run #{index} "
+                f"({_text_or_none(record.get('run_id')) or 'unidentified'}) "
+                f"records no usable test_id ({identity!r}), so which probe it "
+                f"belongs to cannot be determined; skipped")
+            continue
         # EXACT comparison against both generated identities. A run under
         # either one is this probe's work.
-        if record.get("test_id") not in wanted:
+        if identity not in wanted:
             continue
         matches.append(record)
 
