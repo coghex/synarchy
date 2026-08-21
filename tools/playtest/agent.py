@@ -22,14 +22,31 @@ import tempfile
 
 from engine import ACTION_KINDS
 
-# These are deliberately pins, not user-selectable defaults. Every naive-player
-# turn must use the same cheap, quick Codex configuration so an ordinary H1 run
-# cannot silently fall back to a costly provider/model. The critic and optional
-# persona-flavor generator are separate workflows with their own model choices.
-PLAYER_BACKEND = "codex-cli"
-PLAYER_MODEL = "gpt-5.6-luna"
-PLAYER_EFFORT = "medium"
-DEFAULT_DECISION_TIMEOUT = 120.0
+# These are fixed, audited profiles rather than arbitrary model overrides.  A
+# run selects one complete profile, so it cannot silently drift to a costly
+# model or a different effort level. The critic and optional persona-flavor
+# generator are separate workflows with their own model choices.
+PLAYER_PROFILES = {
+    "codex-luna": {
+        "backend": "codex-cli",
+        "model": "gpt-5.6-luna",
+        "effort": "medium",
+        "binary": "codex",
+    },
+    "claude-sonnet": {
+        "backend": "claude-cli",
+        "model": "claude-sonnet-5",
+        "effort": "medium",
+        "binary": "claude",
+    },
+}
+DEFAULT_PLAYER_PROFILE = "codex-luna"
+DEFAULT_DECISION_TIMEOUT = 90.0
+CLAUDE_SCREENSHOT_READ_RULE = "Read(./screenshot.png)"
+
+
+class DecisionTimeout(RuntimeError):
+    """The bounded provider call used all time available for this turn."""
 
 # Structured-output schema for the per-turn decision. The action mirrors
 # the harness vocabulary (translate_action in engine.py).
@@ -166,17 +183,19 @@ def normalize_turn(data: dict) -> dict:
 
 
 def _build_codex_command(codex_bin: str, screenshot_path: str, workspace: str,
-                         schema_path: str, output_path: str) -> list[str]:
+                         schema_path: str, output_path: str,
+                         profile: dict | None = None) -> list[str]:
     """Build the pinned, oracle-blind Codex invocation for one turn.
 
     The isolated empty cwd and disabled tools are part of the purity boundary:
     the player can reason over the attached screenshot and prompt, but cannot
     inspect the game repository or acquire outside information.
     """
+    profile = profile or PLAYER_PROFILES["codex-luna"]
     return [
         codex_bin, "exec",
-        "--model", PLAYER_MODEL,
-        "--config", f'model_reasoning_effort="{PLAYER_EFFORT}"',
+        "--model", profile["model"],
+        "--config", f'model_reasoning_effort="{profile["effort"]}"',
         "--config", 'model_provider="openai"',
         "--config", 'approval_policy="never"',
         "--config", 'web_search="disabled"',
@@ -201,6 +220,38 @@ def _build_codex_command(codex_bin: str, screenshot_path: str, workspace: str,
         "--json",
         "--color", "never",
         "-",
+    ]
+
+
+def _build_claude_command(claude_bin: str, workspace: str,
+                          system_prompt: str, profile: dict | None = None
+                          ) -> list[str]:
+    """Build an OAuth-compatible, oracle-blind Claude Code invocation.
+
+    Safe mode disables local customizations while the fresh cwd contains only
+    the copied screenshot. Read is the sole tool because Claude Code has no
+    image-attachment flag in print mode; its permission rule names that one
+    relative path exactly, so a guessed absolute repository path is denied.
+    """
+    profile = profile or PLAYER_PROFILES["claude-sonnet"]
+    return [
+        claude_bin, "-p",
+        "--safe-mode",
+        "--disable-slash-commands",
+        "--no-session-persistence",
+        "--prompt-suggestions", "false",
+        "--model", profile["model"],
+        "--effort", profile["effort"],
+        "--tools", "Read",
+        "--allowedTools", CLAUDE_SCREENSHOT_READ_RULE,
+        "--permission-mode", "dontAsk",
+        "--strict-mcp-config",
+        "--mcp-config", '{"mcpServers":{}}',
+        "--system-prompt", system_prompt,
+        "--json-schema", json.dumps(TURN_SCHEMA, separators=(",", ":")),
+        "--output-format", "json",
+        ("Use Read to inspect screenshot.png, then return one structured "
+         "turn decision. Do not inspect any other path."),
     ]
 
 
@@ -230,30 +281,93 @@ def _parse_codex_usage(events_jsonl: str) -> dict | None:
     return result
 
 
+def _parse_claude_result(output: str) -> tuple[dict | None, dict | None]:
+    """Return (structured turn, normalized usage) from Claude Code JSON.
+
+    Claude Code may make small internal helper-model calls. ``modelUsage`` is
+    therefore the conservative source: all models, cached/created input, and
+    output are counted. This intentionally measures actual CLI consumption,
+    not only the named Sonnet response.
+    """
+    try:
+        payload = json.loads(output)
+    except (TypeError, ValueError):
+        return None, None
+    if not isinstance(payload, dict):
+        return None, None
+    structured = payload.get("structured_output")
+    if not isinstance(structured, dict):
+        try:
+            structured = _lenient_parse(payload.get("result") or "")
+        except (TypeError, ValueError):
+            structured = None
+    input_tokens = 0
+    output_tokens = 0
+    cache_read = 0
+    cache_creation = 0
+    models = payload.get("modelUsage")
+    if isinstance(models, dict) and models:
+        for usage in models.values():
+            if not isinstance(usage, dict):
+                continue
+            input_tokens += int(usage.get("inputTokens") or 0)
+            output_tokens += int(usage.get("outputTokens") or 0)
+            cache_read += int(usage.get("cacheReadInputTokens") or 0)
+            cache_creation += int(usage.get("cacheCreationInputTokens") or 0)
+        # Claude reports cached and newly-cached prompt tokens separately from
+        # inputTokens. Both are input consumption and belong in the total.
+        input_tokens += cache_read + cache_creation
+    else:
+        usage = payload.get("usage")
+        if isinstance(usage, dict):
+            cache_read = int(usage.get("cache_read_input_tokens") or 0)
+            cache_creation = int(usage.get("cache_creation_input_tokens") or 0)
+            input_tokens = (int(usage.get("input_tokens") or 0)
+                            + cache_read + cache_creation)
+            output_tokens = int(usage.get("output_tokens") or 0)
+        else:
+            return structured, None
+    return structured, {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cache_read_input_tokens": cache_read,
+        "cache_creation_input_tokens": cache_creation,
+    }
+
+
 class PlayerAgent:
     """The naive LLM player. decide() sees the screenshot + rolling
-    memory only. Its provider/model/effort are intentionally fixed."""
+    memory only. Provider/model/effort come from one fixed profile."""
 
     def __init__(self, persona: dict, manual: str,
+                 player_profile: str = DEFAULT_PLAYER_PROFILE,
                  decision_timeout: float = DEFAULT_DECISION_TIMEOUT):
-        codex_bin = shutil.which("codex")
-        if codex_bin is None:
+        if player_profile not in PLAYER_PROFILES:
+            raise ValueError(f"unknown player profile {player_profile!r}")
+        profile = dict(PLAYER_PROFILES[player_profile])
+        provider_bin = shutil.which(profile["binary"])
+        if provider_bin is None:
+            auth_check = ("codex login status" if profile["backend"] == "codex-cli"
+                          else "claude auth status")
             raise SystemExit(
-                "the player agent needs the Codex CLI on PATH and logged in\n"
-                "(check with: codex login status; scripted/--smoke/--selftest/"
-                "--replay runs don't)")
+                f"the {player_profile} player needs {profile['binary']} on PATH "
+                f"and logged in\n(check with: {auth_check}; scripted/--smoke/"
+                "--selftest/--replay runs don't)")
         if decision_timeout <= 0:
             raise ValueError("decision_timeout must be positive")
-        self.codex_bin = codex_bin
+        self.provider_bin = provider_bin
+        self.player_profile = player_profile
+        self.backend = profile["backend"]
         self.persona = persona
         self.manual = manual
-        self.model = PLAYER_MODEL
-        self.effort = PLAYER_EFFORT
+        self.model = profile["model"]
+        self.effort = profile["effort"]
+        self.profile = profile
         self.decision_timeout = decision_timeout
         self.needs_llm = True
 
     def decide(self, screenshot_path: str, fb_size, memory_lines: list[str],
-               turn: int) -> dict:
+               turn: int, timeout_seconds: float | None = None) -> dict:
         system = build_system_prompt(self.persona, self.manual, fb_size)
         memory = "\n".join(memory_lines) if memory_lines else "(first turn — nothing yet)"
         prompt = (
@@ -264,45 +378,75 @@ class PlayerAgent:
               "are everything you know. Return one JSON object with one action."
         )
 
-        # A fresh empty cwd on every turn prevents Codex's general-purpose agent
+        timeout = self.decision_timeout
+        if timeout_seconds is not None:
+            timeout = min(timeout, timeout_seconds)
+        if timeout <= 0:
+            raise DecisionTimeout("no session time remains for a player decision")
+
+        # A fresh empty cwd on every turn prevents either general-purpose agent
         # substrate from seeing the game checkout. Session continuity comes only
         # from the rolling player memory explicitly included above.
-        with tempfile.TemporaryDirectory(prefix="synarchy_playtest_codex_") as scratch:
+        prefix = f"synarchy_playtest_{self.backend.replace('-cli', '')}_"
+        with tempfile.TemporaryDirectory(prefix=prefix) as scratch:
             workspace = os.path.join(scratch, "workspace")
             os.mkdir(workspace)
-            schema_path = os.path.join(scratch, "turn.schema.json")
-            output_path = os.path.join(scratch, "turn.json")
-            with open(schema_path, "w", encoding="utf-8") as f:
-                json.dump(TURN_SCHEMA, f)
-            command = _build_codex_command(
-                self.codex_bin, screenshot_path, workspace, schema_path, output_path)
+            if self.backend == "codex-cli":
+                schema_path = os.path.join(scratch, "turn.schema.json")
+                output_path = os.path.join(scratch, "turn.json")
+                with open(schema_path, "w", encoding="utf-8") as f:
+                    json.dump(TURN_SCHEMA, f)
+                command = _build_codex_command(
+                    self.provider_bin, screenshot_path, workspace, schema_path,
+                    output_path, self.profile)
+                run_input = prompt
+            else:
+                shutil.copyfile(screenshot_path,
+                                os.path.join(workspace, "screenshot.png"))
+                command = _build_claude_command(
+                    self.provider_bin, workspace, system, self.profile)
+                command[-1] = (
+                    f"Turn {turn}. Your notes from recent turns:\n{memory}\n\n"
+                    + command[-1])
+                run_input = None
             try:
                 response = subprocess.run(
-                    command, input=prompt, text=True, capture_output=True,
-                    timeout=self.decision_timeout, check=False)
+                    command, input=run_input, text=True, capture_output=True,
+                    timeout=timeout, check=False, cwd=workspace)
             except subprocess.TimeoutExpired as e:
-                raise RuntimeError(
-                    f"Codex player decision timed out after "
-                    f"{self.decision_timeout:g}s") from e
+                raise DecisionTimeout(
+                    f"{self.backend} player decision timed out after "
+                    f"{timeout:g}s") from e
             if response.returncode != 0:
                 detail = (response.stderr or response.stdout or "no diagnostic").strip()
                 raise RuntimeError(
-                    f"Codex player decision failed (exit {response.returncode}): "
+                    f"{self.backend} player decision failed "
+                    f"(exit {response.returncode}): "
                     f"{detail[-2000:]}")
-            try:
-                with open(output_path, encoding="utf-8") as f:
-                    text = f.read().strip()
-            except OSError as e:
-                raise RuntimeError("Codex player returned no final response file") from e
 
-        try:
-            data = _lenient_parse(text)
-        except (ValueError, TypeError):
-            data = {"observation": "", "action": {"do": "wait"},
-                    "expectation": "", "note": "[harness: reply was not JSON]"}
+            if self.backend == "codex-cli":
+                try:
+                    with open(output_path, encoding="utf-8") as f:
+                        text = f.read().strip()
+                except OSError as e:
+                    raise RuntimeError(
+                        "Codex player returned no final response file") from e
+                data = None
+                usage = _parse_codex_usage(response.stdout)
+            else:
+                data, usage = _parse_claude_result(response.stdout)
+                text = json.dumps(data, separators=(",", ":")) if data else ""
+
+        if data is None:
+            try:
+                data = _lenient_parse(text)
+            except (ValueError, TypeError):
+                data = {"observation": "", "action": {"do": "wait"},
+                        "expectation": "",
+                        "note": "[harness: reply was not JSON]"}
         result = normalize_turn(data)
         result["raw"] = text
-        result["usage"] = _parse_codex_usage(response.stdout)
+        result["usage"] = usage
         return result
 
 
@@ -323,7 +467,7 @@ class ScriptedAgent:
         self._i = 0
 
     def decide(self, screenshot_path: str, fb_size, memory_lines: list[str],
-               turn: int) -> dict:
+               turn: int, timeout_seconds: float | None = None) -> dict:
         action = self.script[self._i % len(self.script)]
         self._i += 1
         return {

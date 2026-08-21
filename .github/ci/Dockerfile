@@ -43,8 +43,9 @@ RUN apt-get update \
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
 
-# The Python toolchain the unit-asset tools run on (#1257 validator,
-# #1258 atlas compiler). These pins are duplicated from
+# The Python toolchain this repository's Python gates run on — the
+# unit-asset tools (#1257 validator, #1258 atlas compiler) and, since
+# #1492, the probe census. These pins are duplicated from
 # tools/requirements-assets.txt ON PURPOSE and must stay identical to
 # it: the image tag is the hash of THIS file plus ci-image.yml, so a
 # `COPY` of the requirements file would let a pin change silently reuse
@@ -52,15 +53,17 @@ ENV LC_ALL=en_US.UTF-8
 # is what makes the duplication safe.
 #
 # python3-yaml (apt) was replaced by the pip pin so exactly one PyYAML
-# is importable. Pillow is the real decoder both halves of the tool
-# need — the compiler to read and write atlases, and, since #1311, the
-# inventory gate itself to decode every declared frame. Neither is
-# optional here: without Pillow the gate reports one error and exits
-# non-zero rather than skipping the content checks, so a CI image
-# missing it fails loudly instead of validating nothing.
+# is importable. Pillow is the real decoder both halves of the asset
+# tool need — the compiler to read and write atlases, and, since #1311,
+# the inventory gate itself to decode every declared frame. jsonschema
+# is what tools/probe_census.py validates its declared schema with. None
+# of the three is optional here: each absence is one reported error and
+# a non-zero exit rather than a skipped check, so a CI image missing one
+# fails loudly instead of validating nothing.
 RUN python3 -m pip install --no-cache-dir \
       "PyYAML==6.0.2" \
-      "Pillow==11.3.0"
+      "Pillow==11.3.0" \
+      "jsonschema==4.26.0"
 
 # Toolchain baked into the image (#671): the ghcup-cache approach in
 # ci.yml never hit once the job moved into this container (the action
