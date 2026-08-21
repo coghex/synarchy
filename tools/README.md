@@ -686,7 +686,8 @@ Only probes that implement the shared `probe-result/v1` protocol
 is rejected BY NAME before execution, without running the probe at all —
 heuristically parsing free-form stdout is the guesswork a reliability harness
 must not do, and invoking a legacy probe to find out would boot a real engine.
-`role` is the only migrated probe today; later issues migrate one at a time.
+`position_hold` and `role` are the migrated probes today; later issues
+migrate one at a time.
 
 A migrated probe prints its ordered, stable check declaration with
 `--describe` (no engine) and, when the harness supplies an event path, writes
