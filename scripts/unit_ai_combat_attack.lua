@@ -20,6 +20,11 @@ local combatCore = require("scripts.unit_ai_combat")
 local staminaPct            = combatCore.staminaPct
 local chooseAttackMode      = combatCore.chooseAttackMode
 local computeAttackCooldown = combatCore.computeAttackCooldown
+-- The mid-fight retaliation swap below compares against this window; it
+-- is DEFINED in unit_ai_combat.lua (one definition, imported here rather
+-- than duplicated). Before #1483 the split left the name unbound here,
+-- so the comparison read a nil global and raised.
+local RETALIATE_WINDOW_SEC  = combatCore.RETALIATE_WINDOW_SEC
 
 local M = {}
 

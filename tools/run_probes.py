@@ -254,6 +254,11 @@ PROBES = [
      "the same geometry call over call, generated name/gloss with a recurring "
      "head, the no-language fallback, and both surviving save/fresh-load and "
      "regeneration (#1102)"),
+    ("retaliation_swap", "retaliation_swap_probe.py",
+     "mid-fight retaliation target swap (#1483): the attack_target branch "
+     "completes its tick on a live non-excluded recent attacker, the "
+     "next-ordered unit still gets its update, and a hit past the window "
+     "swaps nothing and raises nothing"),
     ("role", "role_probe.py",
      "derived unit-role hysteresis/demotion/work-XP growth (#265)"),
     ("save_compat_migration", "save_compat_migration_probe.py",
