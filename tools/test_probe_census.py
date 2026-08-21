@@ -559,7 +559,7 @@ def test_policy() -> None:
                                    acceptable_failures=5)
         expect(census_of()["acceptable_failures_justification"] is None
                and census_of()["acceptable_failures"] == 5,
-               "--justification none clears the justification only")
+               "an explicit clear removes the justification only")
 
         probe_census.record_policy(path, "alpha", estimate=480)
         record = census_of()
@@ -572,8 +572,8 @@ def test_policy() -> None:
         probe_census.record_policy(path, "alpha", acceptable_failures=None)
         record = census_of()
         expect(record["acceptable_failures"] is None
-               and record["acceptable_failures_justification"] is None,
-               "clearing X clears its justification too")
+               and record["acceptable_failures_justification"] == "restored",
+               "clearing X leaves its justification alone (#1479)")
         expect(record["estimated_worst_case_seconds"] == 480,
                "clearing X leaves the estimate alone")
 
@@ -1479,6 +1479,76 @@ def cli(*argv):
     return code, out.getvalue(), err.getvalue()
 
 
+def test_cli_justification() -> None:
+    """#1479: the CLI never clears the stored justification by omission.
+
+    These cases drive `main` — the argparse layer and its forwarding
+    into `record_policy` — because the defect was in that forwarding,
+    not in `set_policy`, which already distinguished "leave alone" from
+    "clear" with a sentinel the CLI never sent.
+    """
+    print("\n-- the justification is durable typed policy (#1479) --")
+    with registry(ci_eligible={"beta"}), cli_repo() as (_, path):
+        cli("--seed")
+
+        def stored(key="alpha"):
+            rows = json.loads(path.read_text(encoding="utf-8"))["probes"]
+            return {row["key"]: row["census"] for row in rows}[key]
+
+        # (a) an X-only update preserves the stored justification. This
+        # is the case that fails against the unconditional forwarding.
+        code, _, _ = cli("--probe", "alpha", "--set-acceptable-failures", "5",
+                         "--justification", "two known engine-side races")
+        expect(code == 0 and stored()["acceptable_failures"] == 5
+               and stored()["acceptable_failures_justification"]
+               == "two known engine-side races",
+               "the CLI stores X and its justification together")
+        code, _, err = cli("--probe", "alpha", "--set-acceptable-failures", "7")
+        expect(code == 0 and stored()["acceptable_failures"] == 7
+               and stored()["acceptable_failures_justification"]
+               == "two known engine-side races",
+               "raising X without --justification KEEPS the stored "
+               "justification (#1479 requirement 1)")
+        # Requirement 1 promises the same for the clearing path, which
+        # is the one that used to clear the text as a side effect.
+        code, _, _ = cli("--probe", "alpha", "--set-acceptable-failures",
+                         "none")
+        expect(code == 0 and stored()["acceptable_failures"] is None
+               and stored()["acceptable_failures_justification"]
+               == "two known engine-side races",
+               "--set-acceptable-failures none without --justification "
+               "keeps it too")
+
+        # (b) the explicit clear, and only the explicit clear, clears.
+        code, _, _ = cli("--probe", "alpha", "--set-acceptable-failures", "3",
+                         "--clear-justification")
+        expect(code == 0 and stored()["acceptable_failures"] == 3
+               and stored()["acceptable_failures_justification"] is None,
+               "--clear-justification clears the stored justification")
+        expect(stored()["acceptable_failures_justification"] is None
+               and "acceptable_failures_justification" in stored(),
+               "...to null, the same absent-vs-present meaning as the seed")
+        code, _, err = cli("--probe", "alpha", "--clear-justification")
+        expect(code != 0 and "--clear-justification" in err,
+               "--clear-justification alone is an argument error")
+        code, _, err = cli("--probe", "alpha", "--set-acceptable-failures", "3",
+                           "--justification", "x", "--clear-justification")
+        expect(code != 0 and "--clear-justification" in err,
+               "--justification and --clear-justification together are "
+               "refused, never silently resolved")
+
+        # (c) every literal round-trips: no in-band magic string.
+        for text in ("keep", "none", "  padded  ", "KEEP"):
+            code, _, _ = cli("--probe", "alpha", "--set-acceptable-failures",
+                             "4", "--justification", text)
+            expect(code == 0
+                   and stored()["acceptable_failures_justification"] == text,
+                   f"--justification {text!r} round-trips as stored text")
+        expect(stored()["acceptable_failures"] == 4
+               and stored("beta") == probe_census.empty_census(),
+               "and no justification command disturbed X or another row")
+
+
 def test_cli() -> None:
     print("\n-- the CLI contract --")
     with registry(ci_eligible={"beta"}):
@@ -1637,7 +1707,8 @@ def main() -> int:
                  test_path_substitution, test_atomicity,
                  test_preservation_guard,
                  test_independent_process_contention,
-                 test_unusable_docs_worktree, test_cli):
+                 test_unusable_docs_worktree, test_cli,
+                 test_cli_justification):
         test()
     print()
     if FAILURES:
