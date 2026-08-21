@@ -419,6 +419,14 @@ DOCS_WT="$(git worktree list --porcelain \
                        git worktree add "$DOCS_WT" -b docs-wip origin/master; }
 ```
 
+**An agent never lands docs on its own.** Landing is the user's call: either
+they ask for it explicitly, in which case use the tool below, or the work
+accumulates uncommitted in the `docs-wip` worktree until they batch it. Docs
+pile up there indefinitely by design — that is the worktree's whole job — and a
+push per edit is what floods master CI and makes the drainer re-check every
+open PR. There is no third option: never push `docs-wip`, never run
+`docs_land.sh` unasked, and never hand-roll an equivalent.
+
 Docs land on master by direct push, not a PR. **Use `tools/docs_land.sh`,
 not a hand-rolled sequence:**
 
