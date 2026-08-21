@@ -406,12 +406,14 @@ jobs:
           python3 tools/test_haskell_module_budget.py
           python3 tools/haskell_module_budget.py
 
-      # Cheap, no-engine guard (#1005): fails if any of the five ASCII
-      # operators normalised to Unicode (.&., .|., >>=, ==, /=) reappears
-      # in src/+app/ Haskell source outside the guard's explicit,
-      # construct-scoped exemption list (src/UPrelude.hs's definitions,
-      # ShaderCode.hs's quasiquoted GLSL, and the Eq/Monad instance
-      # method names that must stay ASCII).
+      # Cheap, no-engine guard (#1005, #1494): fails if any of the five
+      # ASCII operators normalised to Unicode (.&., .|., >>=, ==, /=)
+      # reappears in src/+app/ Haskell source, or if inequality is
+      # spelled with the noncanonical Unicode ≠ instead of ≢ -- either
+      # way outside the guard's explicit, construct-scoped exemption
+      # list (src/UPrelude.hs's ASCII definitions, ShaderCode.hs's
+      # quasiquoted GLSL, and the Eq/Monad instance method names that
+      # must stay ASCII). ≠ stays legal in comment prose.
       - name: Unicode operator audit
         run: |
           python3 tools/test_unicode_operator_audit.py

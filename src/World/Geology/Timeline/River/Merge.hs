@@ -32,11 +32,11 @@ mergeConvergingRivers worldSize periodIdx tbs =
                 Nothing → go rest st
                 Just pf →
                     if not (isActiveRiver (pfFeature pf))
-                       ∨ pfActivity pf ≠ FActive
+                       ∨ pfActivity pf ≢ FActive
                     then go rest st
                     else
                     let others = filter (\other →
-                            pfId other ≠ fid
+                            pfId other ≢ fid
                             ∧ isActiveRiver (pfFeature other)
                             ∧ pfActivity other ≡ FActive
                             ) (tbsFeatures st)

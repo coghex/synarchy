@@ -148,7 +148,7 @@ digSlopeMask (cNW, cNE, cSE, cSW) =
           ⌄ (if se ∧ sw then 4 else 0)
           ⌄ (if sw ∧ nw then 8 else 0) ∷ Word8
         mask = maskOf dugNW dugNE dugSE dugSW
-    in if mask ≠ 15
+    in if mask ≢ 15
        then mask
        else
         -- All dug: hold back the most-intact corner (tuple max —
@@ -156,5 +156,5 @@ digSlopeMask (cNW, cNE, cSE, cSW) =
         -- deterministic either way).
         let vals = [cNW, cNE, cSE, cSW]
             imax = snd (maximum (zip vals [0 ∷ Int, 1, 2, 3]))
-        in maskOf (dugNW ∧ imax ≠ 0) (dugNE ∧ imax ≠ 1)
-                  (dugSE ∧ imax ≠ 2) (dugSW ∧ imax ≠ 3)
+        in maskOf (dugNW ∧ imax ≢ 0) (dugNE ∧ imax ≢ 1)
+                  (dugSE ∧ imax ≢ 2) (dugSW ∧ imax ≢ 3)

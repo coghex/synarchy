@@ -117,7 +117,7 @@ worldListMaterialsFn env = do
                | i ← [1 ∷ Int .. 255]
                , let props = getMaterialProps registry
                                  (MaterialId (fromIntegral i))
-               , mpName props ≠ "unknown" ]
+               , mpName props ≢ "unknown" ]
     Lua.newtable
     forM_ (zip [1 ∷ Int ..] mats) $ \(n, (i, name)) → do
         Lua.newtable

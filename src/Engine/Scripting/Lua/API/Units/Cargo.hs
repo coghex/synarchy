@@ -146,7 +146,7 @@ unitTransferItemToUnitFn env = do
     nameArg ← Lua.tostring 3
     instArg ← Lua.tointeger 4
     case (fromArg, toArg, nameArg) of
-        (Just nF, Just nT, Just nameBS) | nF ≠ nT → do
+        (Just nF, Just nT, Just nameBS) | nF ≢ nT → do
             let fromUid = UnitId (fromIntegral nF)
                 toUid   = UnitId (fromIntegral nT)
                 defName = TE.decodeUtf8Lenient nameBS

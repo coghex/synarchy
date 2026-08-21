@@ -121,7 +121,7 @@ rockJaggedSlope seed (ChunkCoord cx cy) lx ly hardness z maxDrop rawSlope
                                         , (2, neighE, wetE)
                                         , (4, neighS, wetS)
                                         , (8, neighW, wetW) ]
-                       , nz ≠ minBound, nz ≤ z, not wet ]
+                       , nz ≢ minBound, nz ≤ z, not wet ]
             -- Clean-flank fallback: rawSlope with any wet directions
             -- cleared. rawSlope is built by 'World.Slope.Compute.slopeBit',
             -- whose bank check is IN-CHUNK only, so a 1-z lower wet neighbour

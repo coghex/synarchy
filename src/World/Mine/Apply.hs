@@ -55,7 +55,7 @@ applyCornerSlopeToChunk (gx, gy) z corners lc =
         idx = columnIndex lx ly
         col = lcTiles lc V.! idx
         i = z - ctStartZ col
-        progressed = corners ≠ (1.0, 1.0, 1.0, 1.0)
+        progressed = corners ≢ (1.0, 1.0, 1.0, 1.0)
     in if lx < 0 ∨ lx ≥ chunkSize ∨ ly < 0 ∨ ly ≥ chunkSize
         ∨ i < 0 ∨ i ≥ VU.length (ctSlopes col)
        then lc
@@ -70,8 +70,8 @@ applyCornerSlopeToChunk (gx, gy) z corners lc =
             flora' = if progressed
                      then FloraChunkData
                          [ fi | fi ← fcdInstances (lcFlora lc)
-                              , fromIntegral (fiTileX fi) ≠ lx
-                                ∨ fromIntegral (fiTileY fi) ≠ ly ]
+                              , fromIntegral (fiTileX fi) ≢ lx
+                                ∨ fromIntegral (fiTileY fi) ≢ ly ]
                      else lcFlora lc
         in lc { lcTiles = lcTiles lc V.// [(idx, col')]
               , lcFlora = flora' }
@@ -87,7 +87,7 @@ applyDigSlopes desigs lc =
             gx - cx * chunkSize ≥ 0 ∧ gx - cx * chunkSize < chunkSize
           ∧ gy - cy * chunkSize ≥ 0 ∧ gy - cy * chunkSize < chunkSize
         mine = [ (k, md) | (k, md) ← HM.toList desigs, inChunk k
-               , mdCorners md ≠ (1.0, 1.0, 1.0, 1.0) ]
+               , mdCorners md ≢ (1.0, 1.0, 1.0, 1.0) ]
     in foldl' (\c (k, md) → applyDigSlopeToChunk k md c) lc mine
 
 -- | Tile-data-level variant for the chunk-load pipeline: re-apply dig
