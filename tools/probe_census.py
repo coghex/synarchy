@@ -883,14 +883,28 @@ def _entry_map(document) -> dict:
 
 
 def _sample_total(census) -> int:
-    """Every retained sample a census record holds, current and archived."""
+    """Every retained sample a census record holds, current and archived.
+
+    Counts only what is countable and never raises: this runs on STORED
+    state, and a cohort whose `samples` is not a list is a shape for
+    #1492 to report, not something the preservation check should crash
+    on. Tolerating it costs nothing — a list that BECOMES uncountable
+    still reads as a drop from its old length, which is reported.
+    """
     if not isinstance(census, dict):
         return 0
-    cohorts = list(census.get("history") or [])
+    history = census.get("history")
+    cohorts = list(history) if isinstance(history, list) else []
     if census.get("current") is not None:
         cohorts.append(census["current"])
-    return sum(len(c.get("samples") or []) for c in cohorts
-               if isinstance(c, dict))
+    total = 0
+    for cohort in cohorts:
+        if not isinstance(cohort, dict):
+            continue
+        samples = cohort.get("samples")
+        if isinstance(samples, list):
+            total += len(samples)
+    return total
 
 
 POLICY_FIELDS = ("acceptable_failures", "acceptable_failures_justification",
@@ -908,8 +922,19 @@ def _append_only(key: str, was: dict, now: dict) -> list[str]:
     """`history` and `attempts` grew by appending, and nothing was lost."""
     problems: list[str] = []
     for field in ("history", "attempts"):
-        previous = was.get(field) or []
-        current = now.get(field) or []
+        previous = was.get(field)
+        current = now.get(field)
+        previous = [] if previous is None else previous
+        current = [] if current is None else current
+        # Reported rather than sliced blindly: a stored `history: 5` is a
+        # field this comparison cannot be made against, and slicing it
+        # would raise from inside the preservation check.
+        if not isinstance(previous, list) or not isinstance(current, list):
+            problems.append(
+                f"probe {key!r} `{field}` must be a list to compare "
+                f"append-only, got {type(previous).__name__} before and "
+                f"{type(current).__name__} after")
+            continue
         if current[:len(previous)] != previous:
             problems.append(
                 f"probe {key!r} `{field}` is append-only, but the candidate "
@@ -1073,25 +1098,28 @@ def update(path: Path, mutate) -> dict:
         try:
             candidate, touched = mutate(before)
             payload = render_manifest(candidate).encode("utf-8")
+            # Compare against the bytes a later reader will see, not the
+            # in-memory object that produced them.
+            installed = json.loads(payload.decode("utf-8"))
+            problems = _check_preserved(before, installed, touched)
         except CensusError:
             raise
         except (TypeError, ValueError, KeyError, AttributeError,
                 IndexError) as error:
             # The safety boundary the issue requires, at the ONE funnel
-            # every mutation passes through: a structural or type error
-            # met while performing the operation becomes a controlled
+            # every mutation passes through, and covering the WHOLE
+            # candidate derivation — the mutation, the serialization and
+            # the preservation comparison alike, since malformed stored
+            # state reaches all three. A structural or type error met
+            # while performing the operation becomes a controlled
             # refusal instead of a traceback. It is not schema
             # validation — it reports only what actually blocked this
             # operation, and #1492/#1493 still own finding the rest.
             raise CensusError(
                 f"census {path} is structurally malformed for this operation "
                 f"({type(error).__name__}: {error})") from None
-        # Compare against the bytes a later reader will see, not the
-        # in-memory object that produced them.
-        installed = json.loads(payload.decode("utf-8"))
-        problems = _check_preserved(before, installed, touched)
         if problems:
-            raise CensusError("refusing to install a census that loses data: " +
+            raise CensusError("refusing to install this candidate census: " +
                               "; ".join(problems[:5]))
         _clear_staging(path.parent)
         if path.exists() and path.read_bytes() == payload:

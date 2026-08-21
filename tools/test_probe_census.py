@@ -763,6 +763,44 @@ def test_malformed_rows_refuse_cleanly() -> None:
             "a policy update refuses an unusable row key", "has no string `key`")
         unchanged(path, before, "...and changes no bytes")
 
+        # The preservation comparison runs on STORED state too, so a
+        # truthy non-list append-only field must be reported there
+        # rather than sliced. `--seed` is the path that reaches it: a
+        # manual-only row archives nothing, so nothing else looks at
+        # `history` before the comparison does.
+        for field in ("history", "attempts"):
+            path = root / f"seedcmp-{field}.json"
+            path.write_text(json.dumps(census_with([
+                row(census={**probe_census.empty_census(), field: 5})])),
+                encoding="utf-8")
+            before = path.read_bytes()
+            expect_refusal(lambda p=path: probe_census.ensure_document(p),
+                           f"--seed refuses a stored non-list `{field}` "
+                           f"instead of crashing in the preservation check",
+                           "must be a list to compare")
+            unchanged(path, before, f"...and changes no bytes (`{field}`)")
+            expect_refusal(
+                lambda p=path: probe_census.record_result(p, result_document()),
+                f"--record refuses the same stored non-list `{field}`",
+                "must be a list")
+            unchanged(path, before, f"...and changes no bytes (`{field}`)")
+
+        # The same for a non-list `samples` inside an archived cohort,
+        # which only `_sample_total` and the comparison ever read.
+        path = root / "seedcmp-samples.json"
+        path.write_text(json.dumps(census_with([
+            row(census={**probe_census.empty_census(),
+                        "history": [{"commit_sha": COMMIT_A, "samples": 4}]})])),
+            encoding="utf-8")
+        stored = json.loads(path.read_text(encoding="utf-8"))["probes"][0]
+        result = probe_census.ensure_document(path)
+        expect(result["probes"][0]["census"] == stored["census"],
+               "a cohort with an uncountable `samples` is tolerated by --seed: "
+               "nothing is lost, and its shape is #1492's to report")
+        expect(json.loads(path.read_text(encoding="utf-8"))["probes"][0]["census"]
+               == stored["census"],
+               "...and the stored record survives the rewrite verbatim")
+
         # The safety boundary at `update`'s funnel: any structural or
         # type error a mutation meets becomes a controlled refusal.
         good = root / "good.json"
