@@ -5,3 +5,4 @@
 - First version. Released on an unsuspecting world.
 - rendering of multiple textured sprites
 - input handling
+# bounty-fix-ref: https://github.com/coghex/synarchy/issues/1091
