@@ -460,7 +460,7 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `retaliation_swap_probe.py` | #1483 | arena | Mid-fight retaliation target swap in `attack_target`'s shared execute. Every check is graded from ONE atomic console chunk that re-establishes the branch's preconditions and then drives a single `unitAi.update(dt)` under `pcall`, so nothing drifts between the precondition and the grade: `scripts.unit_ai_combat` exports one 3 s window the consumer module can see; a REAL hit from a third live unit makes it the recorded recent attacker; with that attacker live, non-collapsed, not a technomule and inside `unit.getAttackRange(subject) + 0.5`, the subject retargets onto it, its own tick reaches a post-execute completion point (`nextActionAt` advances), and a SENTINEL unit ordered after it — the order forced by wrapping `unit.getAllIds`, which the engine builds from `HashMap.keys` with no spawn-order contract — is reached by that same invocation, with no `Lua error in update()` logged across a window of natural ticks either; and a hit staged far outside the window swaps nothing while still completing its tick (asserting only the unchanged target would pass on the aborting code). `mental_state_probe.py`'s collapsed-attacker case cannot reach this comparison — `attPose ~= "collapsed"` short-circuits first. |
 | `river_naming_probe.py` | #1102 | worldgen (size 16, three boots) | River identity + naming through the real Lua table: every river carries its `GeoFeatureId` as `id`, a second `world.getRivers()` returns the identical id→geometry association, a language-bearing world names every river with a non-empty `name`/`gloss` whose head morpheme recurs, the same seed with a CUSTOM name leaves both keys absent, and every id/name/gloss survives save → fresh process → load and is reproduced by regenerating the same seed + language. |
 | `role_probe.py` | #265 | worldgen | Derived unit-role hysteresis/demotion/work-XP growth. |
-| `save_compat_migration_probe.py` | #766, #1485 | none (a tracked fixture is placed directly on disk, isolated resource root) | Fresh-process save-compatibility migration, for EVERY `complete-session` fixture `docs/save_compat/manifest.json` declares (the pre-#760 B1 envelope through every later baseline's own session): each loads and publishes through the normal whole-session transaction, the migrated session begins paused and a dwell advances no gameplay date, re-saving under a new slot produces a genuine current-format re-encode (not a copy of the input bytes), and a FRESH engine process loads that re-saved file and reaches the same active page — proving the migration survives a real restart, not merely an in-memory decode. Each engine is provisioned with the SAME registry families (and order) `scripts/startup_loader.lua`'s `queueNormalProfile` loads, which a headless boot never runs (#1485); `--self-test` verifies that plan and its startup-loader parser with no engine at all. |
+| `save_compat_migration_probe.py` | #766, #1485 | none (a tracked fixture is placed directly on disk, isolated resource root) | Fresh-process save-compatibility migration, for EVERY `complete-session` fixture `docs/save_compat/manifest.json` declares (the pre-#760 B1 envelope through every later baseline's own session): each loads and publishes through the normal whole-session transaction, the migrated session begins paused and a dwell advances no gameplay date, re-saving under a new slot produces a genuine current-format re-encode (not a copy of the input bytes), and a FRESH engine process loads that re-saved file and reaches the same active page — proving the migration survives a real restart, not merely an in-memory decode. Each engine is provisioned with the SAME registry families (and order) `scripts/startup_loader.lua`'s `queueNormalProfile` loads, which a headless boot never runs (#1485); `--self-test` verifies that plan and its startup-loader parser with no engine at all. A fixture whose load is not accepted, or does not publish, stops there (#1486): that failure is the last check reported for it, the stages it made unreachable are listed as `[SKIP]` diagnostics (never a pass, never a failure), its cleanup and the rest of the sweep are unaffected, and `--self-test` drives both prerequisite branches through injected doubles. |
 | `autosave_probe.py` | #913 | worldgen (size 32, isolated resource root with a COPIED `config/`) | Interval autosave end to end in one boot: the shipped default-off config produces neither a request nor a slot across a dwell longer than one configured interval; enabled, a REAL one-minute interval fires and hands an unpaused world back at its exact prior fast-forward time scale, while one that began paused stays paused and zero-scaled; a player pause/resume during the request window suppresses restoration even though the final pause boolean is unchanged (the time scale is the discriminator); an accepted autosave whose storage write fails stays paused and zero-scaled with `engine.getSaveStatus()` carrying the rendered `StoragePhase`; a deadline outside `uiManager.isGameplayView()` skips silently (no request, no failure event, cadence uninterrupted); a `save_load` category configured to pause wins over the restoration; a pre-existing MANUAL save on an `autosave-<n>` name — as a slot directory OR a pre-#762 legacy flat file a published directory would shadow — fails the attempt through `save_load` with nothing overwritten or partially rotated; rotation keeps `autosave-1` newest across generations that all stay classified autosave, a failed write against a FULL family discards and renumbers nothing (publish-then-rotate), a rotation that fails part-way leaves every generation on disk and retries cleanly (retire-by-rename, delete last), and one interrupted AFTER a partial shift resumes without ageing out a second generation; and reducing `rotation_depth` or disabling autosave retains every excess generation untouched. |
 | `save_pause_probe.py` | #42 | worldgen | Save/load pause-semantics regression. |
 | `save_barrier_probe.py` | #757 | worldgen (isolated resource root) | Coordinated save-owner acknowledgement and paused reload smoke test. |
@@ -687,8 +687,8 @@ Only probes that implement the shared `probe-result/v1` protocol
 is rejected BY NAME before execution, without running the probe at all —
 heuristically parsing free-form stdout is the guesswork a reliability harness
 must not do, and invoking a legacy probe to find out would boot a real engine.
-`position_hold` and `role` are the migrated probes today; later issues
-migrate one at a time.
+`position_hold`, `role` and `thermo_altitude` are the migrated probes today;
+later issues migrate one at a time.
 
 A migrated probe prints its ordered, stable check declaration with
 `--describe` (no engine) and, when the harness supplies an event path, writes
@@ -783,6 +783,72 @@ so a checkout with no docs worktree behaves identically.
 
 `python3 tools/test_probe_census.py` is its deterministic, engine-free
 self-test.
+
+### `probe_external_evidence.py` — the Codex `$test` record, read-only (#1432)
+
+The Codex `$test` skill independently records coordinated non-CI runs against
+this same probe set, with exact commit provenance and interpreted
+observations. This reports what it knows about ONE registered probe. The two
+systems run side by side and must not interact; this is strictly a reader.
+
+```bash
+python3 tools/probe_external_evidence.py --probe role
+python3 tools/probe_external_evidence.py --probe transfer_order --json
+python3 tools/test_probe_external_evidence.py   # the synthetic self-test
+```
+
+State lives at `<git-common-dir>/codex-test`, resolved with `git rev-parse
+--git-common-dir` — in a linked worktree `.git` is a pointer file, so a
+literal `.git/codex-test` would be wrong. That tree is untracked and
+machine-local: it is ABSENT on a fresh clone, on another machine, and wherever
+Codex is not installed, and its absence is a normal "no external evidence"
+result (exit 0, no diagnostic). An existing but unreadable or malformed
+registry or report is different — a non-fatal diagnostic beside whatever could
+still be read. A recorded report path that is simply not there is data (a run
+has not written it yet); one that EXISTS but is not a regular file is damage,
+and damage is diagnosed. So is a registry carrying JSON's non-standard
+`NaN`/`Infinity` constants, which Python's `json` would otherwise read and
+write straight back out, making `--json` invalid JSON. Every filesystem call
+catches `ValueError` beside `OSError`, because a registry field is arbitrary
+external text: a path string with an embedded NUL raises the former, and one
+malformed record must cost its own run a diagnostic, never the whole read.
+
+It never writes, never takes a `$test` lock, and never invokes the `$test`
+coordinator at all. That last part is not squeamishness: every one of the
+issue's four permitted read subcommands (`list`, `show`, `proposal-list`,
+`value-status`) goes through the coordinator's `read_registry` ->
+`locked_registry`, which takes the exclusive `registry.lock` flock, `mkdir`s
+the state tree and rewrites `registry.json` with a fresh `updated_at`. Reading
+the JSON directly is the only way to honour the permission boundary — and the
+only way that works when the machine-local coordinator is not installed.
+
+A `run_probes.PROBES` key maps to a `$test` run id by underscores-to-hyphens
+under the `probe:` namespace (`transfer_order` -> `probe:transfer-order`),
+derived from the KEY and never from the script filename —
+`persistence_contract_sweep.py` has no `_probe` suffix to strip. Matching is
+EXACT, and a key the registry does not carry is a controlled unknown-key
+rejection (exit 2), not a "no external evidence" answer.
+
+Per matching run it reports the run id and state, the tested commit, the
+MECHANICAL execution outcome (from the registry's own `execution_status` /
+`test_exit_code`, never inferred from the report's interpretation), the
+recorded duration and the observation status. A value the record does not
+carry reads as unavailable, never as a fabricated `false` or `0`, so active
+and legacy runs are surfaced rather than dropped. The whole known history is
+reported; there is no limit option and no default truncation. Report reads are
+confined to resolved `*.test-result.md` files directly beneath the state
+tree's own `reports/`, so a recorded path can never widen read scope. Both
+fixed names are confined the same way first: `registry.json` and `reports/`
+are each resolved and then required to still be an immediate child of the
+RESOLVED state root, of the right kind. A symlink at either name would
+otherwise relocate what gets read while the name itself still looked right —
+and a regular file standing in for `reports/` would make every recorded report
+read as a silent `absent`.
+
+External `$test` evidence is PRESENTATION-ONLY. A run appearing, passing,
+failing or recording observations changes no census sample, no statistic, no
+schedule and no skip decision — one interpreted `$test` run is context, not a
+measurement in the lab's statistics.
 
 ### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets selection
 
