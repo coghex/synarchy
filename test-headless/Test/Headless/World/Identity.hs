@@ -345,15 +345,15 @@ spec = do
                                        (lpSeed testProvenance)
 
     -- Round 9 review (issue #763): 'World.Load.Stage.stagePage' used to
-    -- call 'Craft.Bills.pruneToStations'/'Power.Types.pruneToBuildings'
-    -- on every staged page, silently dropping any craft bill/power node
-    -- whose station/building instance wasn't present in that SAME save's
-    -- building snapshot. That contradicts the documented, pre-existing
-    -- #758 persistence contract (see docs/persistence_state_inventory.md
-    -- and Craft.Bills's own 'cbStation' doc comment) that a demolished
-    -- station's bills "linger, visible + cancellable" rather than
-    -- vanish across a save/load round trip. This proves staging now
-    -- preserves such a dangling record verbatim instead of pruning it.
+    -- filter every staged page's craft bills and power nodes against
+    -- that SAME save's building snapshot, silently dropping any record
+    -- whose station/building instance wasn't in it. That contradicts
+    -- the documented, pre-existing #758 persistence contract (see
+    -- docs/persistence_state_inventory.md and Craft.Bills's own
+    -- 'cbStation' doc comment) that a demolished station's bills
+    -- "linger, visible + cancellable" rather than vanish across a
+    -- save/load round trip. This proves staging preserves such a
+    -- dangling record verbatim instead of pruning it.
     describe "dangling craft bills / power nodes survive staging \
               \(issue #758 contract, round 9 review)" $
         it "a craft bill and a power node whose station/building is \

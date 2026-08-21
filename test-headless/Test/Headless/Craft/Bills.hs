@@ -11,7 +11,6 @@ module Test.Headless.Craft.Bills (spec) where
 
 import UPrelude
 import Test.Hspec
-import qualified Data.HashSet as HS
 import qualified Data.Serialize as S
 import Craft.Bills
 import Building.Types (BuildingId(..))
@@ -423,10 +422,3 @@ spec = do
                 (b2, _) = addBillProgress bid 0.25 b1
                 (b3, _) = setBillWorking bid True b2
             S.decode (S.encode b3) `shouldBe` Right b3
-
-        it "pruneToStations drops bills whose station is gone" $ do
-            let (b1, i1) = addBill station1 "a" 1 emptyCraftBills
-                (b2, i2) = addBill station2 "b" 1 b1
-                pruned = pruneToStations (HS.singleton station2) b2
-            lookupBill i1 pruned `shouldBe` Nothing
-            cbRecipe ⊚ lookupBill i2 pruned `shouldBe` Just "b"
