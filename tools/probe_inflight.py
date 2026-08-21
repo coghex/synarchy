@@ -201,15 +201,16 @@ from a bare invocation with no arguments, no environment and no network.
 
 It is deliberately NOT a `tools/ci-local.sh` / CI step, which is the
 convention this component's nearest neighbour already sets:
-`test_probe_external_evidence.py` (#1432) and `test_probe_census.py` are
-both on-demand, because what they cover is optional machine-local state
-CI does not have — and this component adds two more things CI has no
-business reaching, a GitHub API and a `docs-wip` worktree.
-`test_probe_flake.py` is the counter-example that IS a CI step
-(`tools/ci-local.sh` and `.github/workflows/ci.yml` both run it), so it
-is the precedent for a later promotion; #1433 lists "changing `make ci`
-or GitHub CI" as an explicit non-goal, so that promotion is not this
-PR's to make.
+`test_probe_external_evidence.py` (#1432) is on-demand because what it
+covers is optional machine-local state CI does not have — and this
+component adds two more things CI has no business reaching, a GitHub API
+and a `docs-wip` worktree. `test_probe_flake.py` and, since #1429,
+`test_probe_census.py` are the counter-examples that ARE CI steps
+(`tools/ci-local.sh` and `.github/workflows/ci.yml` both run them),
+covering synthetic documents in throwaway trees rather than any local
+state, so they are the precedent for a later promotion; #1433 lists
+"changing `make ci` or GitHub CI" as an explicit non-goal, so that
+promotion is not this PR's to make.
 """
 from __future__ import annotations
 

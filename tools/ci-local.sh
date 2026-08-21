@@ -12,9 +12,10 @@
 # reason-carrying exemption list. Adding a check to one file without the
 # other now fails immediately instead of surfacing after a push. Two
 # things the audit deliberately does not compare: conditional control flow
-# (CI path-selects the graphical build, the unit-asset gate and
-# world_check on PRs; this file runs all three unconditionally, which is
-# what makes it conservative), and the non-Python steps around them.
+# (CI path-selects the graphical build, the unit-asset gate, world_check
+# and -- since #1364 -- the hspec step's SYNARCHY_FULL_TESTS=1 full tier
+# on PRs; this file runs all four unconditionally, which is what makes it
+# conservative), and the non-Python steps around them.
 #
 # -Werror is part of synarchy.cabal's checked-in warning policy now
 # (#1057), so every build of the `synarchy` package -- here, in CI, or a
@@ -84,8 +85,17 @@ echo "==> [2/20] build test suites"
 cabal build synarchy-test-headless
 cabal build synarchy-test-graphical
 
-echo "==> [3/20] headless hspec suite"
-cabal test synarchy-test-headless --test-show-details=direct
+echo "==> [3/20] headless hspec suite (full tier)"
+# SYNARCHY_FULL_TESTS=1 turns the full-tier examples from pending into
+# real runs (#1364) -- today exactly one, the w128 seed-42 volcano
+# exposure regression in test-headless/Test/Headless/WorldGen/Exposure.hs.
+# CI applies it only when its worldgen selector fires; this file runs
+# every gate unconditionally (see the header note), so it applies it
+# always and stays the conservative side of that parity. It must be set
+# on the `cabal test` process itself, and it must be `1` rather than ''
+# -- the test's guard treats ANY present value, empty string included, as
+# enabled.
+SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless --test-show-details=direct
 
 echo "==> [4/20] test audit"
 python3 tools/test_audit.py
@@ -191,9 +201,12 @@ python3 tools/world_check.py --quick
 # checked without that probe's own ~8-minute real engine;
 # test_probelib pins probelib.send_json's result contract against a real
 # socket and fails if a probe grows a private JSON console wrapper again
-# (#1160); test_probe_flake covers probe_protocol.py, probe_flake.py and
-# probe_census.py -- the only automated gate those three have, and one
-# every #1426 protocol migration extends (#1475).
+# (#1160); test_probe_flake mutation-covers probe_protocol.py,
+# probe_flake.py and probe_census.py's parsers, and every #1426 protocol
+# migration extends it (#1475); test_probe_census is the census's own
+# self-test -- the record, its atomic writer, the declared schema, and
+# #1429's cohort, freshness and staleness semantics -- against synthetic
+# documents in throwaway temporary trees, touching no docs worktree.
 echo "==> [18/20] probe runner self-tests"
 python3 tools/ci_probes.py --self-test
 python3 tools/ci_expensive_gates.py --self-test
@@ -203,6 +216,7 @@ python3 tools/test_persistence_contract_sweep.py
 python3 tools/test_action_outcome_probe.py
 python3 tools/test_probelib.py
 python3 tools/test_probe_flake.py
+python3 tools/test_probe_census.py
 
 # Cheap, no-engine self-test of CI's cache-outcome report (#1358). The
 # report itself runs only in CI -- `make ci` restores no GitHub Actions

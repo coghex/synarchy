@@ -159,17 +159,36 @@ spec = do
             reportViolations (worldViolations (wtdChunks tiles))
 
         -- FULL TIER ONLY: this is the single most expensive item in
-        -- the suite (~25 s — a dedicated w128 generation plus a 5×5
-        -- chunk ring). The w64 case above keeps the exposure
-        -- invariant pinned on every run; this one exercises the
-        -- basalt-cap + lava columns at the known volcano repro.
-        -- Run it (plus everything else) with SYNARCHY_FULL_TESTS=1
-        -- before calling a worldgen-output change done.
+        -- the suite — a dedicated w128 generation (this is
+        -- `sharedWorld env 42 128 3`'s only caller, so nothing else
+        -- amortizes it) plus a 5×5 chunk ring. Measured incremental
+        -- cost: ~11 s on a warm macOS/aarch64 dev tree (5.9 s → 17.1 s
+        -- for `--match "Column exposure invariant"`), and ~64 s on
+        -- CI's slower Linux runner (whole-suite hspec wall 214 s → 278 s
+        -- across comparable worldgen-selected runs). Both are
+        -- measurements of their own platform, not one portable number.
+        -- The w64 case above keeps the exposure invariant
+        -- pinned on every run; this one exercises the basalt-cap +
+        -- lava columns at the known volcano repro.
+        --
+        -- SYNARCHY_FULL_TESTS is enabled WHOLESALE, not per test
+        -- (#1364): .github/workflows/ci.yml's "Headless test suite"
+        -- step sets it whenever the worldgen gate fires — every
+        -- worldgen-output PR and every push to master — and
+        -- tools/ci-local.sh (`make ci`) sets it unconditionally. So
+        -- ANY future full-tier example added behind this variable
+        -- joins both of those automatically. Add one only after
+        -- deliberately accepting its CI cost; if that stops being
+        -- affordable, the fix is per-test selection, not an
+        -- untracked second variable.
         it "holds around a volcano with lava + basalt caps (w128 seed 42)" $ \env → do
+            -- Any present value runs it, empty string included — so a
+            -- caller that wants it OFF must leave the variable unset,
+            -- never set it to ''.
             full ← lookupEnv "SYNARCHY_FULL_TESTS"
             case full of
               Nothing → pendingWith
-                  "full tier only — set SYNARCHY_FULL_TESTS=1 (w128 volcano world, ~25s)"
+                  "full tier only — set SYNARCHY_FULL_TESTS=1 (w128 volcano world, ~11s local / ~64s CI)"
               Just _ → do
                 ws ← sharedWorld env 42 128 3
                 -- The seed-42 w128 volcano breaching a mountain lake sits

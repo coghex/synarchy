@@ -7,6 +7,10 @@
 #   - tier 2 audit:   python3 tools/test_audit.py
 #   - tier 2 worldgen: tools/world_check.py --quick, a blocking gate for
 #     worldgen-output PRs and every post-merge master push.
+#   - tier 3 full:    the same worldgen selection additionally sets
+#     SYNARCHY_FULL_TESTS=1 on the hspec step (#1364), so the full-tier
+#     examples run and block on exactly the runs world_check --quick
+#     does. See that step for why it is not a conditional `env:`.
 #     Worldgen float math proved bit-stable across architectures on the
 #     first run (6/6 exact-match against the macOS/aarch64-captured
 #     baselines from #421, PR #449) — if it ever flakes cross-arch,
@@ -423,9 +427,33 @@ jobs:
             echo "Skipping graphical test-suite build: no graphics-facing paths changed."
           fi
 
+      # The suite itself is unconditional; SYNARCHY_FULL_TESTS only
+      # decides whether its full-tier examples run or report pending
+      # (#1364). Today that is exactly one example --
+      # test-headless/Test/Headless/WorldGen/Exposure.hs's w128 seed-42
+      # volcano regression, whose dedicated w128 generation is the whole
+      # reason it is not on every run. It rides the SAME worldgen
+      # selector as world_check --quick below, so a worldgen-output PR
+      # gets both and a push to master (where the selector reports every
+      # gate) gets them unconditionally.
+      #
+      # Deliberately an if/else around the command rather than a step
+      # `env:` with a conditional expression: an expression that
+      # evaluates to '' still SETS the variable, and the test's guard
+      # matches `Just _`, so the empty-string branch would silently run
+      # the expensive case on every PR. The disabled branch has to leave
+      # the variable genuinely ABSENT from the test process's
+      # environment, which the bare invocation below does.
       - name: Headless test suite
         if: steps.docs-fast-path.outputs.docs_only != 'true'
-        run: cabal test synarchy-test-headless --test-show-details=direct
+        run: |
+          if [ "${{ steps.expensive-gates.outputs.worldgen }}" = true ]; then
+            echo "worldgen gate fired: running the full tier (SYNARCHY_FULL_TESTS=1)."
+            SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless --test-show-details=direct
+          else
+            echo "worldgen gate did not fire: full-tier examples stay pending."
+            cabal test synarchy-test-headless --test-show-details=direct
+          fi
 
       - name: Test audit
         run: python3 tools/test_audit.py
@@ -660,12 +688,16 @@ jobs:
       # -> value, invalid JSON -> text) against a real socket speaking
       # the console protocol, and fails if a probe grows a private JSON
       # console wrapper again — the twenty-two-copy duplication #1160
-      # removed. test_probe_flake is the only automated gate
-      # probe_protocol.py, probe_flake.py and probe_census.py have —
-      # mutation-covering all three parsers from both sides, engine-free
-      # and GPU-free — and every #1426 protocol migration extends it
-      # with another standalone case, so each of those migrations shipped
-      # with a gate nothing ran until #1475.
+      # removed. test_probe_flake mutation-covers probe_protocol.py,
+      # probe_flake.py and probe_census.py's parsers from both sides,
+      # engine-free and GPU-free, and every #1426 protocol migration
+      # extends it with another standalone case, so each of those
+      # migrations shipped with a gate nothing ran until #1475.
+      # test_probe_census is the census's own self-test — the record,
+      # its atomic writer, the declared schema, and #1429's cohort,
+      # freshness and staleness semantics — driving synthetic documents
+      # in throwaway temporary trees, so it touches no docs worktree and
+      # boots nothing.
       - name: probe runner self-tests
         run: |
           python3 tools/ci_probes.py --self-test
@@ -676,6 +708,7 @@ jobs:
           python3 tools/test_action_outcome_probe.py
           python3 tools/test_probelib.py
           python3 tools/test_probe_flake.py
+          python3 tools/test_probe_census.py
 
       # Cheap, no-engine guard (#1355): fails if a `python3 tools/*.py`
       # check runs in this job and not in tools/ci-local.sh, or the other

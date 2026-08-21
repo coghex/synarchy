@@ -28,6 +28,20 @@ What a census record holds, for each probe:
   well-formed harness-error result is logged but contributes no sample
   and no aggregate.
 
+#1429 adds what those measurements MEAN over time. The newest cohort is
+the current statistic and displaces the previous one without deleting
+it; runs accumulate only within one commit hash, and a cohort's rate is
+recomputed from the combined numerator and denominator rather than
+averaged across batches of unequal size; every cohort is retained for
+the lifetime view; and staleness is purely age-based, measured from the
+cohort's own latest measurement timestamp against an evaluation time
+the CALLER supplies. Commits never invalidate a record and repository
+HEAD moving is not a census event — only a measurement changes census
+state. `--summary` is the selection-facing view: it distinguishes an
+unmeasured probe from a measured one, and reports the authoritative
+cohort's exact commit, its latest measurement, its nonnegative age, its
+stale flag and its combined run/failure counts and rate.
+
 Only summarized outcomes and external artifact references live here.
 Raw stdout, protocol event streams and engine logs stay in the
 harness's artifact tree, outside every worktree.
@@ -55,7 +69,9 @@ completing every requested run; `check_counts` is keyed by exactly the
 descriptor's checks and each entry is the tally `runs` shows; a PASS run
 carries no FAIL check; and a cohort holds one commit's samples. Each
 rejects state no real run could have written, and each runs on both
-sides of a mutation exactly as the schema does.
+sides of a mutation exactly as the schema does. They are distinct from
+#1429's SEMANTIC checks, which stay narrow by design: only the commit
+identity, timestamp and counts the cohort arithmetic itself consumes.
 
 What is deliberately still absent: any requirement that the census agree
 with the live probe registry, which stays `validate_manifest`'s report
@@ -92,6 +108,12 @@ Usage:
   python3 tools/probe_census.py --seed             # create/migrate in docs-wip
   python3 tools/probe_census.py --validate         # check the docs-wip copy
   python3 tools/probe_census.py --record RESULT    # ingest one measurement
+  python3 tools/probe_census.py --summary          # the current statistics
+  python3 tools/probe_census.py --summary --probe KEY --json
+  # Age is measured against an evaluation time and an age horizon, both
+  # supplied rather than assumed, so a report is reproducible.
+  python3 tools/probe_census.py --summary --as-of 2026-08-21T05:00:00Z \
+      --stale-after-days 7
   python3 tools/probe_census.py --probe KEY --set-acceptable-failures 2 \
       --justification "two known engine-side races"
   # X only. Omitting --justification NEVER clears the stored text.
@@ -104,6 +126,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime
 import fcntl
 import json
 import math
@@ -1113,7 +1136,16 @@ def ingest_result(document: dict, result) -> tuple[dict, str]:
     non-accepted attempt and touches neither `current` nor any
     aggregate. An accepted measurement naming the same commit as
     `current` appends to that cohort; a different commit archives the
-    complete prior cohort into `history` first.
+    complete prior cohort into `history` first — even a commit that
+    appeared earlier in history, because append order is what "newest"
+    means and two hashes do not compare.
+
+    An accepted measurement must first pass #1429's semantic gate
+    (`require_measurement_semantics`); an unusable commit identity,
+    timestamp or count refuses and writes nothing at all. The STORED
+    current cohort is held to the same standard, because the
+    append-or-archive decision reads it: an unusable one refuses the
+    ingestion instead of being extended or archived.
 
     Deliberately NOT idempotent: recording the same document twice
     appends a second sample and a second attempt. The record is
@@ -1123,6 +1155,15 @@ def ingest_result(document: dict, result) -> tuple[dict, str]:
     entries = _rows(document, "census")
     target_row(document, probe, "--record")
     accepted = status == ACCEPTED_STATUS
+    if accepted:
+        # #1429's semantic gate, in front of the transaction: an
+        # accepted measurement whose commit identity, timestamp or
+        # aggregation counts are unusable refuses outright, logging no
+        # attempt either. A harness error is deliberately NOT gated —
+        # it contributes to no cohort and no aggregate, and `unknown`
+        # provenance is exactly the kind of failure the attempt log
+        # exists to retain.
+        require_measurement_semantics(result)
     sample = summarize_sample(result) if accepted else None
     attempt = summarize_attempt(result, accepted)
     commit = attempt["commit_sha"]
@@ -1134,6 +1175,16 @@ def ingest_result(document: dict, result) -> tuple[dict, str]:
         census = _deep_copy(row["census"])
         if sample is not None:
             current = census.get("current")
+            if current is not None:
+                # The append-or-archive decision READS the stored
+                # cohort, so #1429's semantic checks apply to it too:
+                # an unusable one refuses the whole ingestion rather
+                # than being silently extended or archived into
+                # history. Without this a legacy or hand-edited cohort
+                # keyed by (or containing) `unknown` would accept a
+                # valid measurement and only fail later, on read.
+                cohort_statistic(
+                    current, f"probe {probe!r} stored current cohort")
             if not isinstance(current, dict) or current.get("commit_sha") != commit:
                 _archive_current(census, probe)
                 census["current"] = {"commit_sha": commit, "samples": []}
@@ -1180,6 +1231,331 @@ def set_policy(document: dict, probe: str, *,
     updated = dict(document)
     updated["probes"] = rows
     return updated, probe
+
+
+# ==========================================================================
+# Cohort semantics: the current statistic, its age, and staleness (#1429)
+# ==========================================================================
+#
+# #1428 stores measurements; this says what they MEAN over time.
+#
+# * The newest cohort wins. The cohort created by the latest accepted
+#   measurement is the current statistic; it DISPLACES the previous one
+#   as the current number without deleting it.
+# * Runs accumulate only within one commit hash. Commit identity is the
+#   boundary that stops unlike code being averaged together, so pooling
+#   is per-cohort and the rate is recomputed from the combined
+#   numerator and denominator — never an arithmetic mean of the stored
+#   per-batch rates, which would weight a two-run batch like a
+#   fifty-run one.
+# * History is retained for the lifetime view. Nothing here prunes,
+#   reorders or rewrites a cohort: this whole section is a READER.
+# * Staleness is purely age-based. A commit never invalidates a record,
+#   and repository HEAD moving is not a census event at all — only a
+#   measurement changes census state. Age is measured from the cohort's
+#   own freshness anchor against an evaluation time the CALLER
+#   supplies, so a test pins a clock instead of racing one.
+#
+# Commit hashes have no intrinsic ordering, so "newest" is append
+# order, never a comparison between two hashes: an A -> B -> A sequence
+# ends with a THIRD cohort whose commit is A, not with the first one
+# resurrected.
+#
+# The authoritative cohort is `current` when the record carries one and
+# the final `history` entry otherwise. That second case is real rather
+# than defensive: `reconcile_inventory` archives `current` when a probe
+# is promoted to CI eligibility and deliberately does not restore it on
+# a later downgrade, so a promoted probe's newest measured statistic
+# lives in `history[-1]`. Only a record with neither is UNMEASURED, and
+# an unmeasured probe reports null measurements — never a zero failure
+# rate, which is a real and very different observation.
+FULL_COMMIT_LENGTH = 40
+_HEX = frozenset("0123456789abcdef")
+# What `probe_flake._commit_sha` writes when `git rev-parse` could not
+# be consulted. It is a well-formed result document and a legitimate
+# attempt-log entry; it is not a cohort identity.
+PLACEHOLDER_COMMIT = "unknown"
+TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+SECONDS_PER_DAY = 86400
+# The default age horizon. A fortnight is long enough that a probe
+# measured against a quiet subsystem is not re-measured every week, and
+# short enough that a number older than it predates most of a sprint's
+# merges. Policy, not physics: every entry point takes the horizon as
+# an argument, and `--stale-after-days` overrides this one.
+DEFAULT_STALE_AFTER_DAYS = 14
+DEFAULT_STALE_AFTER_SECONDS = DEFAULT_STALE_AFTER_DAYS * SECONDS_PER_DAY
+
+COHORT_CURRENT = "current"
+COHORT_HISTORY = "history"
+
+
+def require_commit_identity(value, what: str) -> str:
+    """A real full Git object identity, or a controlled refusal.
+
+    Commit identity is the whole reason cohorts exist, so the one value
+    a cohort may not be keyed by is a value that does not name a
+    commit. `probe_flake` writes the literal `unknown` when `git
+    rev-parse` could not be consulted, and the declared schema accepts
+    it because it IS a well-formed result field — pooling under it
+    would silently average every unmeasurable-provenance run of every
+    commit into one cohort, which is exactly what commit identity
+    exists to prevent.
+
+    Git emits lowercase hex, and the stored value is never normalised
+    (the census reports the EXACT hash), so an abbreviation, an
+    uppercase spelling and a placeholder are all refused rather than
+    repaired.
+    """
+    if not isinstance(value, str):
+        raise CensusError(
+            f"{what} must be a commit hash string, got "
+            f"{type(value).__name__}")
+    if value == PLACEHOLDER_COMMIT:
+        raise CensusError(
+            f"{what} is the placeholder {PLACEHOLDER_COMMIT!r}, which names "
+            f"no commit; a measurement whose provenance git could not "
+            f"report cannot open or extend a cohort")
+    if len(value) != FULL_COMMIT_LENGTH or not set(value) <= _HEX:
+        raise CensusError(
+            f"{what} must be {FULL_COMMIT_LENGTH} lowercase hex characters, "
+            f"got {value!r}")
+    return value
+
+
+def parse_timestamp(value, what: str):
+    """One `YYYY-MM-DDTHH:MM:SSZ` stamp as an aware UTC datetime.
+
+    The census stores UTC and says so in the field name; this refuses
+    anything it cannot read back rather than substituting a clock
+    reading, because a fabricated timestamp would make a stale record
+    look fresh.
+    """
+    if not isinstance(value, str):
+        raise CensusError(
+            f"{what} must be a UTC timestamp string, got "
+            f"{type(value).__name__}")
+    try:
+        naive = datetime.datetime.strptime(value, TIMESTAMP_FORMAT)
+    except ValueError:
+        raise CensusError(
+            f"{what} is not a `{TIMESTAMP_FORMAT}` UTC timestamp: "
+            f"{value!r}") from None
+    return naive.replace(tzinfo=datetime.timezone.utc)
+
+
+def require_count(value, what: str) -> int:
+    """A usable nonnegative aggregation count, or a controlled refusal.
+
+    `bool` is excluded deliberately: it is an `int` in Python, and a
+    `True` requested-run count would aggregate as 1 while meaning
+    nothing at all.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise CensusError(
+            f"{what} must be an integer count, got {type(value).__name__}")
+    if value < 0:
+        raise CensusError(f"{what} must not be negative, got {value}")
+    return value
+
+
+def require_measurement_semantics(result) -> None:
+    """The semantic fields an ACCEPTED measurement contributes.
+
+    The declared schema (#1492) already owns shape, type, enum, length
+    and range for a result document. This is the narrower question it
+    cannot answer: whether the values this issue's cohort arithmetic
+    consumes actually MEAN something. It runs before a `status: "ok"`
+    sample reaches a cohort, and its refusal leaves the census
+    completely unmodified — no sample, and no attempt either, because
+    an unusable measurement is not evidence that a run happened.
+
+    It is deliberately not a cross-field audit (#1493): nothing here
+    compares `failure_count` against `requested_runs` or a sample's
+    stored rate against its own counts.
+    """
+    require_commit_identity(result.get("commit_sha"), "commit_sha")
+    parse_timestamp(result.get("timestamp_utc"), "timestamp_utc")
+    require_count(result.get("requested_runs"), "requested_runs")
+    require_count(result.get("failure_count"), "failure_count")
+
+
+def cohort_statistic(cohort, what: str) -> tuple[dict, "datetime.datetime"]:
+    """One cohort's combined statistic, and its freshness anchor beside it.
+
+    The anchor is the LATEST measurement timestamp contributing to the
+    cohort — not the commit's own date, not the census file's mtime,
+    not the moment of ingestion, and never repository HEAD. An
+    out-of-order same-commit result therefore adds its counts without
+    dragging the anchor backwards. It is returned separately rather
+    than as a field of the statistic, because it is a `datetime` and
+    everything in the statistic is JSON.
+
+    This applies the ingestion path's semantic checks a second time, to
+    ALREADY-STORED state, so a census hand-edited (or written before
+    those checks existed) fails closed instead of being summarized into
+    a confident wrong number. It stays the same narrow set: nothing
+    here asks whether a sample's own commit matches the cohort it sits
+    in, or whether its stored rate agrees with its counts — those are
+    #1493's cross-field invariants.
+    """
+    if not isinstance(cohort, dict):
+        raise CensusError(
+            f"{what} must be an object, got {type(cohort).__name__}")
+    commit = require_commit_identity(cohort.get("commit_sha"),
+                                     f"{what} `commit_sha`")
+    samples = cohort.get("samples")
+    if not isinstance(samples, list):
+        raise CensusError(f"{what} `samples` must be a list")
+    if not samples:
+        # A cohort exists because a measurement created it, so an empty
+        # one has no anchor and no denominator. Refusing says so;
+        # falling through to an older cohort would invent a statistic
+        # for a commit nobody measured.
+        raise CensusError(
+            f"{what} holds no samples, so it has no measurement to "
+            f"summarize")
+    requested = 0
+    failures = 0
+    latest = None
+    for position, sample in enumerate(samples):
+        where = f"{what} sample {position}"
+        if not isinstance(sample, dict):
+            raise CensusError(
+                f"{where} is not an object, got {type(sample).__name__}")
+        require_commit_identity(sample.get("commit_sha"),
+                                f"{where} `commit_sha`")
+        stamp = parse_timestamp(sample.get("timestamp_utc"),
+                                f"{where} `timestamp_utc`")
+        requested += require_count(sample.get("requested_runs"),
+                                   f"{where} `requested_runs`")
+        failures += require_count(sample.get("failure_count"),
+                                  f"{where} `failure_count`")
+        if latest is None or stamp > latest:
+            latest = stamp
+    return {
+        "commit_sha": commit,
+        "sample_count": len(samples),
+        "requested_runs": requested,
+        "failure_count": failures,
+        # Recomputed from the COMBINED numerator and denominator. A
+        # cohort whose samples all requested zero runs has no rate at
+        # all, which is not the same observation as a rate of zero.
+        "failure_rate": None if requested == 0 else failures / requested,
+        "measured_at": latest.strftime(TIMESTAMP_FORMAT),
+    }, latest
+
+
+def authoritative_cohort(census, probe: str):
+    """The newest retained cohort and where it lives, or None.
+
+    `current` when the record carries one; otherwise the final
+    append-ordered `history` entry, which is where a probe promoted to
+    CI eligibility keeps its newest measured statistic. None means
+    UNMEASURED — neither a current cohort nor a single archived one.
+    """
+    if not isinstance(census, dict):
+        raise CensusError(
+            f"probe {probe!r} has no census record to summarize")
+    current = census.get("current")
+    if current is not None:
+        return current, COHORT_CURRENT
+    history = census.get("history")
+    if history is None:
+        history = []
+    if not isinstance(history, list):
+        raise CensusError(
+            f"probe {probe!r}: `history` must be a list, got "
+            f"{type(history).__name__}")
+    if not history:
+        return None
+    return history[-1], COHORT_HISTORY
+
+
+def require_horizon(stale_after_seconds):
+    """A usable nonnegative age horizon, or a controlled refusal."""
+    if isinstance(stale_after_seconds, bool) or not isinstance(
+            stale_after_seconds, (int, float)):
+        raise CensusError(
+            f"the staleness horizon must be a number of seconds, got "
+            f"{type(stale_after_seconds).__name__}")
+    if not math.isfinite(stale_after_seconds) or stale_after_seconds < 0:
+        raise CensusError(
+            f"the staleness horizon must be a finite nonnegative number of "
+            f"seconds, got {stale_after_seconds!r}")
+    return stale_after_seconds
+
+
+def summarize_entry(entry, *, now, stale_after_seconds) -> dict:
+    """The selection-facing view of ONE census row.
+
+    `measured` is the field that separates "this probe has never been
+    measured" from "this probe was measured and never failed"; every
+    measurement field of an unmeasured probe is null, so a zero rate
+    can only ever mean an observed zero. `stale` is a property of a
+    cohort, so it is null — not True — when there is no cohort: absent
+    data is a different selection input from old data.
+
+    `age_seconds` is clamped at zero. A cohort anchored in the future
+    (a skewed clock, an injected evaluation time) is the freshest thing
+    there is, never negative, and a negative age would sort ahead of
+    every real measurement.
+    """
+    if not isinstance(entry, dict):
+        raise CensusError(
+            f"census entry must be an object, got {type(entry).__name__}")
+    probe = entry.get("key")
+    if not isinstance(probe, str):
+        raise CensusError(
+            f"census entry has no string `key` ({entry.get('key')!r})")
+    horizon = require_horizon(stale_after_seconds)
+    summary = {
+        "key": probe,
+        "script": entry.get("script"),
+        "classification": entry.get("classification"),
+        "measured": False,
+        "cohort": None,
+        "commit_sha": None,
+        "measured_at": None,
+        "age_seconds": None,
+        "stale": None,
+        "sample_count": None,
+        "requested_runs": None,
+        "failure_count": None,
+        "failure_rate": None,
+    }
+    located = authoritative_cohort(entry.get("census"), probe)
+    if located is None:
+        return summary
+    cohort, source = located
+    statistic, anchor = cohort_statistic(
+        cohort, f"probe {probe!r} {source} cohort")
+    age = max(0.0, (now - anchor).total_seconds())
+    summary.update(statistic)
+    summary["measured"] = True
+    summary["cohort"] = source
+    summary["age_seconds"] = age
+    summary["stale"] = age >= horizon
+    return summary
+
+
+def census_summary(document, *, now, stale_after_seconds,
+                   probe: str | None = None) -> list[dict]:
+    """The selection-facing view of the whole census, or of one probe.
+
+    `now` is supplied by the caller and never read from the wall clock
+    here: staleness is a function of an evaluation time, and a test
+    that injects one is testing the classification rather than racing
+    it.
+    """
+    if not isinstance(now, datetime.datetime) or now.tzinfo is None:
+        raise CensusError(
+            "the evaluation time must be a timezone-aware datetime")
+    horizon = require_horizon(stale_after_seconds)
+    entries = _rows(document, "census")
+    if probe is not None:
+        entries = [target_row(document, probe, "--summary")]
+    return [summarize_entry(entry, now=now, stale_after_seconds=horizon)
+            for entry in entries]
 
 
 # ==========================================================================
@@ -1828,10 +2204,16 @@ def _companion_arguments(args) -> dict | None:
     setting_estimate = args.set_estimate is not None
     policy = setting_x or setting_estimate
     # `is not None`, not truthiness: `--probe ""` was still supplied.
-    if args.probe is not None and not policy:
+    if args.probe is not None and not policy and not args.summary:
         raise CensusError(
-            "--probe is only used by --set-acceptable-failures and "
-            "--set-estimate")
+            "--probe is only used by --summary, "
+            "--set-acceptable-failures and --set-estimate")
+    for flag, supplied in (("--as-of", args.as_of is not None),
+                           ("--stale-after-days",
+                            args.stale_after_days is not None),
+                           ("--json", args.json_output)):
+        if supplied and not args.summary:
+            raise CensusError(f"{flag} is only valid with --summary")
     if args.justification is not None and not setting_x:
         raise CensusError(
             "--justification is only valid with --set-acceptable-failures")
@@ -1873,6 +2255,70 @@ def _companion_arguments(args) -> dict | None:
     return {"estimate": _optional_number(args.set_estimate, "--set-estimate")}
 
 
+def _summary_arguments(args) -> dict:
+    """The evaluation time and horizon `--summary` runs under.
+
+    Both are INPUTS, defaulted here and nowhere deeper: the library
+    reads no clock of its own, so a caller — a test, or a selection
+    pass replaying a decision — always states the moment it is asking
+    about.
+    """
+    if args.as_of is None:
+        now = datetime.datetime.now(datetime.timezone.utc)
+    else:
+        now = parse_timestamp(args.as_of, "--as-of")
+    if args.stale_after_days is None:
+        horizon = DEFAULT_STALE_AFTER_SECONDS
+    else:
+        days = _optional_number(args.stale_after_days, "--stale-after-days")
+        if days is None:
+            raise CensusError(
+                "--stale-after-days takes a number of days; there is no "
+                "`none` horizon, because every cohort would then be fresh")
+        horizon = require_horizon(days) * SECONDS_PER_DAY
+    return {"now": now, "stale_after_seconds": horizon}
+
+
+def _rate_text(summary: dict) -> str:
+    """A cohort's combined failure rate, or why there is no number."""
+    if not summary["measured"]:
+        return "-"
+    if summary["failure_rate"] is None:
+        return "n/a"
+    return f"{summary['failure_rate'] * 100:.1f}%"
+
+
+def render_summary(summaries: list[dict]) -> str:
+    """The human table. `--json` is the machine-readable form.
+
+    The commit is printed IN FULL and sits last, where the widest
+    column costs the fixed ones no alignment: a selection-facing row
+    reports the exact hash the statistic was measured on, and an
+    abbreviation is not that hash.
+    """
+    header = (f"{'probe':<34}{'measured (UTC)':<22}"
+              f"{'age':>9}{'runs':>7}{'fail':>6}{'rate':>8}"
+              f"  {'state':<18}commit")
+    lines = [header, "-" * len(header)]
+    for summary in summaries:
+        if summary["measured"]:
+            commit = summary["commit_sha"]
+            measured_at = summary["measured_at"]
+            age = f"{summary['age_seconds'] / SECONDS_PER_DAY:.1f}d"
+            runs = str(summary["requested_runs"])
+            fails = str(summary["failure_count"])
+            state = "stale" if summary["stale"] else "fresh"
+            if summary["cohort"] == COHORT_HISTORY:
+                state += " (archived)"
+        else:
+            commit = measured_at = age = runs = fails = "-"
+            state = "unmeasured"
+        lines.append(f"{summary['key']:<34}{measured_at:<22}"
+                     f"{age:>9}{runs:>7}{fails:>6}{_rate_text(summary):>8}"
+                     f"  {state:<18}{commit}")
+    return "\n".join(lines) + "\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -1888,12 +2334,32 @@ def main(argv: list[str] | None = None) -> int:
                        help=f"check the {DOCS_BRANCH} worktree's inventory")
     group.add_argument("--record", metavar="RESULT",
                        help=f"ingest one {RESULT_SCHEMA} document")
+    group.add_argument("--summary", action="store_true",
+                       help="report each probe's current statistic, the "
+                            "commit it was measured on, its age and whether "
+                            "it is stale")
     group.add_argument("--set-acceptable-failures", metavar="N",
                        help="store X for --probe (an integer, or `none`)")
     group.add_argument("--set-estimate", metavar="SECONDS",
                        help="store the estimated worst-case duration for "
                             "--probe (a number of seconds, or `none`)")
-    ap.add_argument("--probe", help="the probe key a policy update acts on")
+    ap.add_argument("--probe",
+                    help="the probe key --summary reports on, or a policy "
+                         "update acts on")
+    # argparse `%`-interpolates a help string, so the strftime spelling
+    # of TIMESTAMP_FORMAT cannot appear in one: `%Y` raises on 3.14 and
+    # would raise at `--help` time on older interpreters. The literal
+    # shape is what a user types anyway.
+    ap.add_argument("--as-of", metavar="TIMESTAMP",
+                    help="the evaluation time --summary measures age "
+                         "against, as `YYYY-MM-DDTHH:MM:SSZ` "
+                         "(default: now, in UTC)")
+    ap.add_argument("--stale-after-days", metavar="DAYS",
+                    help=f"the age horizon at or past which --summary calls "
+                         f"a cohort stale (default: "
+                         f"{DEFAULT_STALE_AFTER_DAYS})")
+    ap.add_argument("--json", dest="json_output", action="store_true",
+                    help="print --summary as JSON instead of a table")
     ap.add_argument("--justification", default=None,
                     help="the justification stored beside X, verbatim; omit "
                          "to leave the stored one exactly as it was")
@@ -1907,6 +2373,7 @@ def main(argv: list[str] | None = None) -> int:
     # through which a misused companion flag passes unreported.
     try:
         fields = _companion_arguments(args)
+        summary_arguments = _summary_arguments(args) if args.summary else {}
     except CensusError as error:
         print(f"probe_census: {error}", file=sys.stderr)
         return 1
@@ -1940,6 +2407,16 @@ def main(argv: list[str] | None = None) -> int:
         if fields is not None:
             record_policy(path, args.probe, **fields)
             print(f"updated the census record for {args.probe} in {path}")
+            return 0
+        if args.summary:
+            document = load(path)
+            validate_census(document, f"census {path}")
+            summaries = census_summary(document, probe=args.probe,
+                                       **summary_arguments)
+            if args.json_output:
+                print(json.dumps(summaries, indent=2, sort_keys=True))
+            else:
+                sys.stdout.write(render_summary(summaries))
             return 0
         document = load(path)
         # Shape first, then inventory: a document that is not a census
