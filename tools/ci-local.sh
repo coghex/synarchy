@@ -134,7 +134,7 @@ echo "==> [17/19] world_check --quick"
 python3 tools/world_check.py --quick
 
 # Validate the probe-runner harness itself (cheap, no engine, no GPU) --
-# the same six checks, in the same order, as ci.yml's "probe runner
+# the same eight checks, in the same order, as ci.yml's "probe runner
 # self-tests" step. ci_probes/ci_expensive_gates cover the path->probe
 # and path->gate mappings, which would otherwise only surface after a
 # push as a PR mis-selecting its own gates; test_run_probes covers
@@ -145,7 +145,9 @@ python3 tools/world_check.py --quick
 # checked without that probe's own ~8-minute real engine;
 # test_probelib pins probelib.send_json's result contract against a real
 # socket and fails if a probe grows a private JSON console wrapper again
-# (#1160).
+# (#1160); test_probe_flake covers probe_protocol.py, probe_flake.py and
+# probe_census.py -- the only automated gate those three have, and one
+# every #1426 protocol migration extends (#1475).
 echo "==> [18/19] probe runner self-tests"
 python3 tools/ci_probes.py --self-test
 python3 tools/ci_expensive_gates.py --self-test
@@ -154,12 +156,13 @@ python3 tools/test_run_probes.py
 python3 tools/test_persistence_contract_sweep.py
 python3 tools/test_action_outcome_probe.py
 python3 tools/test_probelib.py
+python3 tools/test_probe_flake.py
 
 # The gate that keeps this file honest (#1355): fails if a
 # `python3 tools/*.py` check runs in ci.yml's build-test job and not
 # here, or here and not there, outside the audit's hard-coded exemption
 # list. Without it the two drift silently, and they already had --- the
-# five checks above ran only in CI.
+# original five of the probe-runner self-tests above ran only in CI.
 echo "==> [19/19] CI/local gate parity audit"
 python3 tools/ci_parity_audit.py --self-test
 python3 tools/ci_parity_audit.py
