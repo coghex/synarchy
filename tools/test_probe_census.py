@@ -55,6 +55,19 @@ def expect(cond: bool, msg: str) -> None:
     print(f"  {'ok  ' if cond else 'FAIL'} {msg}")
 
 
+def expect_refusal_kind(kind, call, msg: str) -> None:
+    """`call` raises exactly `kind`, not something uncontrolled."""
+    try:
+        call()
+    except kind:
+        expect(True, msg)
+        return
+    except Exception as error:  # noqa: BLE001
+        expect(False, f"{msg} (raised {type(error).__name__}: {error})")
+        return
+    expect(False, f"{msg} (nothing was raised)")
+
+
 def expect_refusal(call, msg: str, *fragments: str) -> None:
     """`call` refuses with a `CensusError` naming each fragment."""
     try:
@@ -1031,6 +1044,105 @@ def test_independent_process_contention() -> None:
 
 
 # ==========================================================================
+def test_unusable_docs_worktree() -> None:
+    """A registered-but-gone docs worktree is exit 2, never a write (#1503)."""
+    print("\n-- an unusable docs worktree --")
+    with registry(), cli_repo() as (main_wt, path):
+        code, _, _ = cli("--seed")
+        expect(code == 0 and path.exists(),
+               "the seed lands while the docs worktree is real")
+        docs_wt = path.parent.parent
+
+        # Git keeps LISTING a worktree whose directory is gone, marking
+        # the record prunable. Returning that path anyway would let the
+        # writer recreate the tree and publish the census outside any
+        # worktree at all.
+        shutil.rmtree(docs_wt)
+        listing = subprocess.run(["git", "worktree", "list", "--porcelain"],
+                                 cwd=str(main_wt), text=True,
+                                 capture_output=True).stdout
+        expect("refs/heads/docs-wip" in listing,
+               "git still lists the deleted worktree, so resolution must "
+               "reject it rather than trust the listing")
+
+        for argv, what in ((("--seed",), "--seed"),
+                           (("--validate",), "--validate"),
+                           (("--probe", "alpha", "--set-estimate", "5"),
+                            "a policy update")):
+            code, _, err = cli(*argv)
+            expect(code == 2, f"{what} on a prunable docs worktree exits 2")
+            expect("git worktree add" in err and "git worktree prune" in err,
+                   f"{what} names both halves of the repair")
+        expect(not docs_wt.exists(),
+               "and nothing recreated the deleted worktree directory")
+
+        # Recreating the directory does not make the registration usable
+        # again — git still calls it prunable, because the admin gitdir
+        # pointer is what is broken.
+        docs_wt.mkdir(parents=True)
+        code, _, err = cli("--seed")
+        expect(code == 2 and "git worktree prune" in err,
+               "recreating the directory does not revive the registration")
+        expect(not (docs_wt / "docs").exists(),
+               "and no census directory was created inside it")
+
+        expect_refusal_kind(
+            probe_census.DocsWorktreeMissing,
+            lambda: probe_census.resolve_docs_worktree(str(main_wt)),
+            "resolve_docs_worktree itself raises DocsWorktreeMissing")
+
+    # The belt-and-braces half of the same rule, for a git that reports
+    # no `prunable` attribute: a listed path that is not a checkout is
+    # refused on its own, without being trusted into the writer.
+    class Listed:
+        returncode = 0
+        stderr = ""
+
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    with scratch() as root:
+        saved = probe_census.subprocess.run
+        gone = root / "never-existed"
+        empty = root / "not-a-checkout"
+        empty.mkdir()
+        for target, why in ((gone, "a listed path that does not exist"),
+                            (empty, "a listed path with no .git")):
+            listing = (f"worktree {target}\nHEAD 1\n"
+                       f"branch refs/heads/docs-wip\n")
+            probe_census.subprocess.run = (
+                lambda *a, _out=listing, **k: Listed(_out))
+            try:
+                expect_refusal_kind(
+                    probe_census.DocsWorktreeMissing,
+                    lambda: probe_census.resolve_docs_worktree(str(root)),
+                    f"{why} is refused even with no prunable attribute")
+                try:
+                    probe_census.resolve_docs_worktree(str(root))
+                except probe_census.DocsWorktreeMissing as error:
+                    expect("not a usable checkout" in str(error),
+                           f"...naming why ({why})")
+            finally:
+                probe_census.subprocess.run = saved
+        expect(not gone.exists(),
+               "and resolution never created the missing directory")
+
+    # The record parser reads `prunable` as an attribute of its own
+    # record, not as a line anywhere in the listing.
+    records = probe_census._worktree_records(
+        "worktree /a\nHEAD 1\nbranch refs/heads/master\n\n"
+        "worktree /b\nHEAD 1\nbranch refs/heads/docs-wip\n"
+        "prunable gitdir file points to non-existent location\n")
+    expect(len(records) == 2 and "prunable" not in records[0]
+           and records[1]["prunable"].startswith("gitdir file"),
+           "prunable attaches to its own record, never a neighbour's")
+    bare = probe_census._worktree_records(
+        "worktree /a\nHEAD 1\ndetached\n")
+    expect(len(bare) == 1 and bare[0]["detached"] == "",
+           "a valueless porcelain attribute parses as an empty string")
+
+
+# ==========================================================================
 @contextmanager
 def cli_repo():
     """A scratch git repository with a real `docs-wip` worktree."""
@@ -1228,7 +1340,8 @@ def main() -> int:
                  test_malformed_rows_refuse_cleanly,
                  test_path_substitution, test_atomicity,
                  test_preservation_guard,
-                 test_independent_process_contention, test_cli):
+                 test_independent_process_contention,
+                 test_unusable_docs_worktree, test_cli):
         test()
     print()
     if FAILURES:

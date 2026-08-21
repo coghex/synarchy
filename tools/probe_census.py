@@ -602,6 +602,34 @@ def set_policy(document: dict, probe: str, *,
 # ==========================================================================
 # The docs worktree
 # ==========================================================================
+CREATE_DOCS_WORKTREE = (
+    f"  git worktree add ~/work/synarchy-docs -b {DOCS_BRANCH} origin/master")
+
+
+def _worktree_records(stdout: str) -> list[dict]:
+    """`git worktree list --porcelain` as one dict per blank-line record.
+
+    Attributes are parsed whole rather than line-matched, because
+    `prunable` is an attribute of the record it follows: a registered
+    worktree whose directory is gone still prints its `worktree` and
+    `branch` lines, and only the trailing `prunable <reason>` says it is
+    no longer usable.
+    """
+    records: list[dict] = []
+    current: dict = {}
+    for line in stdout.splitlines():
+        if not line.strip():
+            if current:
+                records.append(current)
+            current = {}
+            continue
+        name, _, value = line.partition(" ")
+        current[name] = value.strip()
+    if current:
+        records.append(current)
+    return records
+
+
 def resolve_docs_worktree(repo_root: str | None = None) -> Path:
     """The worktree whose branch is `docs-wip`, resolved BY BRANCH.
 
@@ -609,6 +637,12 @@ def resolve_docs_worktree(repo_root: str | None = None) -> Path:
     an actionable stop, never a silent fall back to the primary checkout
     (which the PR drainer must be able to fast-forward) and never an
     implicit `git worktree add` performed as a side effect.
+
+    A REGISTERED-BUT-UNUSABLE worktree is the same stop. Git keeps
+    listing a worktree whose directory has been deleted, marking the
+    record `prunable`; returning that path anyway would let the writer
+    recreate the directory and publish the census outside any worktree
+    at all — silently, in a place nobody will ever land from.
     """
     root = repo_root or run_probes.REPO_ROOT
     try:
@@ -621,15 +655,26 @@ def resolve_docs_worktree(repo_root: str | None = None) -> Path:
     if done.returncode != 0:
         raise DocsWorktreeMissing(
             f"could not list git worktrees: {done.stderr.strip()}")
-    current: str | None = None
-    for line in done.stdout.splitlines():
-        if line.startswith("worktree "):
-            current = line[len("worktree "):]
-        elif line.strip() == f"branch refs/heads/{DOCS_BRANCH}" and current:
-            return Path(current)
+    for record in _worktree_records(done.stdout):
+        if record.get("branch") != f"refs/heads/{DOCS_BRANCH}":
+            continue
+        path = Path(record.get("worktree", ""))
+        if "prunable" in record:
+            raise DocsWorktreeMissing(
+                f"the worktree registered for {DOCS_BRANCH} at {path} is "
+                f"prunable ({record['prunable'] or 'unusable'}). Clear the "
+                f"stale registration and recreate it with:\n"
+                f"  git worktree prune\n{CREATE_DOCS_WORKTREE}")
+        if not path.is_dir() or not (path / ".git").exists():
+            raise DocsWorktreeMissing(
+                f"the worktree registered for {DOCS_BRANCH} at {path} is not "
+                f"a usable checkout. Clear the stale registration and "
+                f"recreate it with:\n"
+                f"  git worktree prune\n{CREATE_DOCS_WORKTREE}")
+        return path
     raise DocsWorktreeMissing(
         f"no worktree is on branch {DOCS_BRANCH}. Create one with:\n"
-        f"  git worktree add ~/work/synarchy-docs -b {DOCS_BRANCH} origin/master")
+        f"{CREATE_DOCS_WORKTREE}")
 
 
 def manifest_path(repo_root: str | None = None) -> Path:
