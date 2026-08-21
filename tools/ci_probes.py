@@ -3,8 +3,9 @@
 
 Given the files a change touched, decide which behavior probes CI should
 run — only the ones relevant to the change, with a full-set catch-all for
-core/unclassified changes and zero probes for docs/assets or subsystems
-whose behavior probes are intentionally manual-only.
+core/unclassified changes and zero probes for docs/assets, the two test
+trees (#1359), or subsystems whose behavior probes are intentionally
+manual-only.
 This is what makes a green CI mean "the features still work" without
 paying a ~60s engine boot per probe on every PR.
 
@@ -409,6 +410,22 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
 # Sentinels (distinct objects so `is` comparisons are unambiguous).
 ALL = object()   # this file can affect anything -> full CI-eligible set
 NONE = object()  # this file affects no probe -> contributes nothing
+# Same zero contribution as NONE, kept distinct only so `select()` can say
+# WHY nothing was selected: CI echoes that string, and "docs/assets only"
+# would misdescribe a test-tree change (#1359).
+NONE_TEST = object()
+
+
+def contributes_nothing(contribution: object) -> bool:
+    """True for every sentinel that selects no probes.
+
+    Kept as one predicate so a third such sentinel cannot be added and
+    then missed by one of `select()`'s two branches. Compares by IDENTITY:
+    a feature rule's contribution is a real `set`, which must never be
+    mistaken for a sentinel.
+    """
+    return contribution is NONE or contribution is NONE_TEST
+
 
 # Docs / assets: zero probes. Checked FIRST.
 SKIP_GLOBS = [
@@ -418,6 +435,34 @@ SKIP_GLOBS = [
     # instance and cannot alter engine behavior — no probe covers it
     # and none should run for it.
     "tools/playtest/*",
+]
+
+# Test sources: zero probes (#1359). Checked after SKIP_GLOBS, before
+# everything else, so a change confined to either test tree contributes
+# nothing instead of falling through to the fail-safe full set.
+#
+# The behavior probes boot and drive the already-built `exe:synarchy`, and
+# neither test tree is an input to it: the executable is `hs-source-dirs:
+# app` (synarchy.cabal), `synarchy-test-graphical` is `hs-source-dirs:
+# test`, and `synarchy-test-headless` is `hs-source-dirs: test-headless,
+# app`. The dependency runs one way — the suites consume the app sources,
+# never the reverse — so no edit under `test/` or `test-headless/` can
+# change what a probe observes.
+#
+# One real coupling survives and is safe only because of CI's ORDERING:
+# the CI-eligible `persistence_contract` probe calls
+# `persistence_snapshot.compare_session_files`, which launches
+# `cabal repl test:synarchy-test-headless`, so it does need
+# `test-headless/` to COMPILE. But `.github/workflows/ci.yml` builds and
+# runs `synarchy-test-headless` unconditionally, both steps before the
+# behavior-probe step, so a compilation break there reddens the run before
+# any probe starts. `test/` has no such coupling: it belongs to
+# `synarchy-test-graphical`, which this selector never builds and which is
+# compiled only when `tools/ci_expensive_gates.py` selects the graphical
+# build through its own independent `GRAPHICAL_GLOBS` entry `test/*` —
+# a separate selector this mapping does not touch.
+TEST_GLOBS = [
+    "test/*", "test-headless/*",
 ]
 
 # Core / shared code: a change here can affect ANY probe -> full set.
@@ -474,6 +519,9 @@ def classify_file(path: str):
     for g in SKIP_GLOBS:
         if fnmatch.fnmatch(path, g):
             return NONE
+    for g in TEST_GLOBS:
+        if fnmatch.fnmatch(path, g):
+            return NONE_TEST
     for g in CORE_GLOBS:
         if fnmatch.fnmatch(path, g):
             return ALL
@@ -481,6 +529,21 @@ def classify_file(path: str):
         if any(fnmatch.fnmatch(path, g) for g in globs):
             return keys
     return ALL  # unclassified -> fail-safe full set
+
+
+def _no_probe_reason(contributions: list[tuple[str, object]]) -> str:
+    """Name WHY a wholly non-contributing change selected nothing (#1359).
+
+    CI echoes this string, so a test-only change must not be reported as
+    "docs/assets only". Takes the contributions rather than re-classifying
+    so the reason can never disagree with the selection above it.
+    """
+    tests = [f for f, c in contributions if c is NONE_TEST]
+    if not tests:
+        return "docs/assets only -> no probes"
+    if len(tests) == len(contributions):
+        return f"test sources only ({tests[0]}) -> no probes"
+    return f"docs/assets and test sources only ({tests[0]}) -> no probes"
 
 
 def select(changed_files: list[str]) -> tuple[list[str], str]:
@@ -491,11 +554,11 @@ def select(changed_files: list[str]) -> tuple[list[str], str]:
     if any(c is ALL for _, c in contributions):
         trigger = next(f for f, c in contributions if c is ALL)
         return sorted(CI_ELIGIBLE), f"core/unclassified change ({trigger}) -> full CI-eligible set"
-    if all(c is NONE for _, c in contributions):
-        return [], "docs/assets only -> no probes"
+    if all(contributes_nothing(c) for _, c in contributions):
+        return [], _no_probe_reason(contributions)
     keys: set[str] = set()
     for _, c in contributions:
-        if c is not NONE:
+        if not contributes_nothing(c):
             keys |= c
     keys &= CI_ELIGIBLE
     if not keys:
@@ -712,6 +775,40 @@ def _status_rendering_cases() -> list[str]:
     return problems
 
 
+def _reason_cases() -> list[str]:
+    """Pin the human reason `select()` returns, not just its keys (#1359).
+
+    CI echoes this string as the whole explanation for a skipped probe
+    step, so a test-only change reported as "docs/assets only" would be a
+    silently wrong audit trail. The key-level cases in `_self_test` cannot
+    catch that: every one of these selects the empty list either way.
+    """
+    problems: list[str] = []
+    docs_only = "docs/assets only"
+    for files, name in [
+        (["test/Spec.hs"], "test tree"),
+        (["test-headless/Spec.hs"], "test-headless tree"),
+        (["test-headless/Test/Headless/UI/ItemList.hs"], "nested test-headless source"),
+        (["README.md", "test-headless/Spec.hs"], "docs plus a test source"),
+    ]:
+        keys, reason = select(files)
+        if keys:
+            problems.append(f"reason case {name!r}: expected no probes, got {keys}")
+        if "test" not in reason:
+            problems.append(f"reason case {name!r}: reason does not name test paths: {reason!r}")
+        if docs_only in reason:
+            problems.append(f"reason case {name!r}: reason misreports a test change "
+                            f"as {docs_only!r}: {reason!r}")
+        if not any(f in reason for f in files if classify_file(f) is NONE_TEST):
+            problems.append(f"reason case {name!r}: reason names no changed test "
+                            f"file: {reason!r}")
+    # the docs-only reason is unchanged by the test-path split
+    keys, reason = select(["README.md", "assets/x.png"])
+    if keys or docs_only not in reason:
+        problems.append(f"docs-only reason regressed: keys={keys} reason={reason!r}")
+    return problems
+
+
 def _self_test() -> int:
     """Validate the mapping wiring — no engine needed."""
     problems = []
@@ -740,6 +837,7 @@ def _self_test() -> int:
     problems += validate_manual_only_reasons(MANUAL_ONLY_REASONS)
     problems += _reason_shape_cases()
     problems += _status_rendering_cases()
+    problems += _reason_cases()
     # behavioural expectations
     cases = [
         (["README.md"], [], "docs only"),
@@ -765,6 +863,31 @@ def _self_test() -> int:
          "unit_ai_*.lua submodule (#538) -> full"),
         (["src/SomethingNew/X.hs"], sorted(CI_ELIGIBLE), "unclassified -> full"),
         (["README.md", "src/Power/Network.hs"], [], "docs ignored, power manual-only"),
+        # #1359 requirement 1: either test tree alone selects nothing.
+        (["test-headless/Test/Headless/UI/ItemList.hs"], [],
+         "test-headless source -> no probes"),
+        (["test-headless/Spec.hs"], [], "test-headless entry point -> no probes"),
+        (["test/Spec.hs"], [], "graphical test entry point -> no probes"),
+        (["test/Test/Engine/Core/Queue.hs"], [],
+         "nested graphical test source -> no probes"),
+        # #1359 requirement 2: a test path neither adds nor removes probes
+        # from what the production path alone selects.
+        (["test-headless/Spec.hs", "data/items/coffee_pot.yaml"],
+         sorted({"cargo_capacity", "repair_item", "consumable_effects", "repair",
+                 "content_registry"}),
+         "test + items -> exactly the items set"),
+        (["test/Spec.hs", "src/Power/Network.hs"], [],
+         "test + a subsystem whose probes are manual-only -> still nothing"),
+        # #1359 requirement 3: the fail-safe still fires through a test path.
+        (["test-headless/Spec.hs", "src/SomethingNew/X.hs"], sorted(CI_ELIGIBLE),
+         "test + unclassified production -> full"),
+        # #1359 requirement 4: probe infrastructure and unrecognized tools/
+        # paths keep selecting the full set.
+        (["tools/probelib.py"], sorted(CI_ELIGIBLE), "probelib -> full"),
+        (["tools/run_probes.py"], sorted(CI_ELIGIBLE), "run_probes -> full"),
+        (["tools/ci_probes.py"], sorted(CI_ELIGIBLE), "this mapping -> full"),
+        (["tools/world_check.py"], sorted(CI_ELIGIBLE),
+         "an unrecognized tools/ path still falls through to full"),
     ]
     for files, expect, name in cases:
         got, reason = select(files)
