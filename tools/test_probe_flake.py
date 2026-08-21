@@ -1736,8 +1736,9 @@ def test_manifest_real_registry() -> None:
            f"{ci} entries are CI-eligible, matching tools/ci_probes.py")
     migrated = [e["key"] for e in manifest["probes"]
                 if e["protocol"] != "legacy"]
-    expect(migrated == ["role"],
-           f"role is the only probe-result/v1 probe (got {migrated})")
+    expect(migrated == ["position_hold", "role"],
+           f"position_hold and role are the probe-result/v1 probes, in "
+           f"run_probes.PROBES order (got {migrated})")
 
     # The REAL docs-wip manifest, only when one is resolvable.
     try:
@@ -1828,6 +1829,85 @@ def test_role_standalone() -> None:
                "checks it prevented stay MISSING")
 
 
+# ==========================================================================
+# position_hold's standalone behavior is preserved
+# ==========================================================================
+def test_position_hold_standalone() -> None:
+    print("\n-- position_hold probe migration --")
+    repo_root = Path(__file__).resolve().parent.parent
+    done = subprocess.run(
+        [sys.executable, "tools/position_hold_probe.py", "--describe"],
+        cwd=repo_root, text=True, capture_output=True, timeout=60)
+    expect(done.returncode == 0,
+           "position_hold --describe exits 0 without booting anything")
+    try:
+        descriptor = probe_protocol.parse_descriptor(
+            done.stdout, expected_probe="position_hold")
+    except probe_protocol.ProtocolError as error:
+        expect(False,
+               f"position_hold's descriptor is valid probe-result/v1 ({error})")
+        return
+    expect(len(descriptor.ids) == 12,
+           f"position_hold declares its twelve checks (got {len(descriptor.ids)})")
+    expect(len(set(descriptor.ids)) == len(descriptor.ids),
+           "position_hold's check identifiers are unique")
+    expect(all(probe_protocol.CHECK_ID_RE.match(cid) for cid in descriptor.ids),
+           "position_hold's identifiers are all stable, word-like identifiers")
+    # The human labels these replaced interpolate observed tiles and
+    # elapsed seconds; identity must carry none of that.
+    expect(not any(any(ch.isdigit() for ch in cid) for cid in descriptor.ids),
+           "position_hold's identifiers carry no runtime values")
+
+    # Standalone mode still prints the bracketed human markers, and
+    # protocol mode never does.
+    import position_hold_probe  # type: ignore
+    import io
+    stream = io.StringIO()
+    rep = probe_protocol.Reporter(position_hold_probe.DESCRIPTOR, stream=stream)
+    rep.check("hold_sustained", True, "stayed within 0.05 tiles of the anchor")
+    rep.abort("the commanded acolyte never arrived and never held")
+    expect("[PASS] stayed within 0.05 tiles of the anchor" in stream.getvalue(),
+           "standalone position_hold still prints its bracketed [PASS] line")
+    expect("[FAIL] the commanded acolyte never arrived and never held"
+           in stream.getvalue(),
+           "standalone position_hold still prints a setup abort as [FAIL]")
+    expect(rep.engine_args() == [],
+           "standalone position_hold passes no RTS override")
+    expect(rep.engine_log_path("position_hold_engine.log", "/tmp/x.log")
+           == "/tmp/x.log",
+           "standalone position_hold keeps its own engine-log path")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        events = Path(tmp) / "events.jsonl"
+        protocol_rep = probe_protocol.Reporter(
+            position_hold_probe.DESCRIPTOR, events_path=str(events),
+            engine_log_dir=tmp, rts_caps=4, stream=stream)
+        before = stream.getvalue()
+        protocol_rep.check("hold_created", True, "human text",
+                           {"anchor": [4, 4]})
+        protocol_rep.abort("setup failed")
+        protocol_rep.close()
+        expect(stream.getvalue() == before,
+               "protocol mode prints nothing to stdout")
+        expect(protocol_rep.engine_args() == ["+RTS", "-N4", "-RTS"],
+               "protocol mode pins the engine to the harness's RTS capabilities")
+        expect(protocol_rep.engine_log_path(
+                   "position_hold_engine.log", "/tmp/x.log")
+               == os.path.join(tmp, "position_hold_engine.log"),
+               "protocol mode stops position_hold overwriting its shared /tmp "
+               "engine log")
+        text = events.read_text(encoding="utf-8")
+        _events, outcomes = probe_protocol.parse_event_stream(
+            text, position_hold_probe.DESCRIPTOR)
+        expect(outcomes["hold_created"] == "PASS",
+               "the protocol event stream carries the check outcome")
+        expect(probe_protocol.forbidden_marker_lines(text) == [],
+               "the event stream itself holds no bracketed marker lines")
+        expect('"level": "WARN"' in text,
+               "a setup abort is a WARN diagnostic in protocol mode, so the "
+               "checks it prevented stay MISSING")
+
+
 def test_run_one_defaults() -> None:
     print("\n-- run_one's extended interface --")
     expect(run_probes.probe_protocol_env() == {},
@@ -1891,6 +1971,7 @@ def main() -> int:
                  test_no_tmpdir_default, test_result_document,
                  test_exit_codes, test_render, test_manifest_fixture,
                  test_manifest_real_registry, test_role_standalone,
+                 test_position_hold_standalone,
                  test_run_one_defaults):
         test()
     print()
