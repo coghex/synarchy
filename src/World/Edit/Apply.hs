@@ -59,8 +59,8 @@ applyEdit (WeDeleteTile gx gy) lc
                    -- goes with it (a tree can't stand over the hole).
                    floraKept = FloraChunkData
                        [ fi | fi ← fcdInstances (lcFlora lc)
-                            , fromIntegral (fiTileX fi) ≠ lx
-                              ∨ fromIntegral (fiTileY fi) ≠ ly ]
+                            , fromIntegral (fiTileX fi) ≢ lx
+                              ∨ fromIntegral (fiTileY fi) ≢ ly ]
                    newTopZ  = oldTopZ - 1
                    wt       = waterTableAtTile lc lx ly
                    curFluid = lcFluidMap lc V.! idx
@@ -124,8 +124,8 @@ applyEdit (WeAddTile gx gy mat) lc
                    -- with it, same rule as digging it out.
                    floraKept = FloraChunkData
                        [ fi | fi ← fcdInstances (lcFlora lc)
-                            , fromIntegral (fiTileX fi) ≠ lx
-                              ∨ fromIntegral (fiTileY fi) ≠ ly ]
+                            , fromIntegral (fiTileX fi) ≢ lx
+                              ∨ fromIntegral (fiTileY fi) ≢ ly ]
                    curFluid = lcFluidMap lc V.! idx
                    -- Filling at or above the fluid surface displaces
                    -- the fluid cell entirely (promotion legality
@@ -294,14 +294,14 @@ replayEdits edits lc = case HM.lookup (lcCoord lc) edits of
 topSolidIndex ∷ VU.Vector Word8 → Int
 topSolidIndex mats = go (VU.length mats - 1)
   where go k | k < 0           = -1
-             | mats VU.! k ≠ 0 = k
+             | mats VU.! k ≢ 0 = k
              | otherwise       = go (k - 1)
 
 -- | Drop any flora rooted on local tile (lx, ly).
 dropFloraAt ∷ Int → Int → FloraChunkData → FloraChunkData
 dropFloraAt lx ly fcd = FloraChunkData
     [ fi | fi ← fcdInstances fcd
-         , fromIntegral (fiTileX fi) ≠ lx ∨ fromIntegral (fiTileY fi) ≠ ly ]
+         , fromIntegral (fiTileX fi) ≢ lx ∨ fromIntegral (fiTileY fi) ≢ ly ]
 
 -- | After a WeSetCell write, re-derive the column's surface state: trim
 --   trailing air so the top cell is solid (matches generator output and

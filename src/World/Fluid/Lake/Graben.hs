@@ -162,7 +162,7 @@ grabenCarveIndex seed worldSize terrain riftAt lakes =
                         lid = lakeIdAt VU.! i
                     in bx ≡ 0 ∨ bx ≡ worldTiles - 1
                      ∨ by ≡ 0 ∨ by ≡ worldTiles - 1
-                     ∨ any (\j → lakeIdAt VU.! j ≠ lid) (neighbours i)
+                     ∨ any (\j → lakeIdAt VU.! j ≢ lid) (neighbours i)
             frontier0Ref ← newSTRef []
             forM_ [0 .. nTiles - 1] $ \i →
                 when (lakeIdAt VU.! i ≥ 0 ∧ isShoreEdge i) $ do

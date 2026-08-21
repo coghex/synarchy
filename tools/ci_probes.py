@@ -227,6 +227,13 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                            "regression: getMentalEffectiveness, craft-bill progress "
                                            "rate, craft-quality delta, damage-energy invariance"),),
     "mental_state": (Reason(TARGETED, "narrow #352 mental-state ladder/hysteresis/break-AI regression"),),
+    "retaliation_swap": (Reason(TARGETED, "narrow #1483 mid-fight retaliation-swap "
+                                          "regression: one attack_target branch and the "
+                                          "tick-abort it caused. mental_state remains the "
+                                          "general #352/#717 gate over the same branch's "
+                                          "collapsed/technomule exclusions, which "
+                                          "short-circuit before the comparison this one "
+                                          "reaches"),),
     "movement": (Reason(TARGETED, "registered CI invocation takes no arguments, so it runs only "
                                   "movement_probe.py's default corner_trap diagonal-routing "
                                   "regression, not the cliff/fall/ramp/stamina courses the "

@@ -62,12 +62,12 @@ priorityFlood terrain worldOcean worldTiles = runST $ do
     -- Seed pass.
     forM_ [0 .. nTiles - 1] $ \idx → do
         let t = terrain VU.! idx
-        when (t ≠ minBound) $ do
+        when (t ≢ minBound) $ do
             when (worldOcean VU.! idx ∨ adjacentToVoid idx)
                  (seedTile idx)
     let tryPropagate srcZ nIdx = do
             let nT = terrain VU.! nIdx
-            when (nT ≠ minBound) $ do
+            when (nT ≢ minBound) $ do
                 done ← VUM.read procM nIdx
                 when (not done) $ do
                     let nZ = max nT srcZ

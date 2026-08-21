@@ -415,5 +415,10 @@ M.engageExecute          = engageExecute
 M.staminaPct             = staminaPct
 M.chooseAttackMode       = chooseAttackMode
 M.computeAttackCooldown  = computeAttackCooldown
+-- The mid-fight retaliation swap in unit_ai_combat_attack.lua reads this
+-- same window. It is exported rather than copied so the duration keeps a
+-- single definition (the #538 split left the consumer reading it as an
+-- unassigned global, which raised on every swap).
+M.RETALIATE_WINDOW_SEC   = RETALIATE_WINDOW_SEC
 
 return M

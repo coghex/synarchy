@@ -338,7 +338,7 @@ discoverChunkLava ctx coord surfaceMap waterSurfMap =
                     let localTop = maximum
                             (map (shapeTopAtXY ws gx gy surfZ) ss)
                         subSea  = surfZ ≤ seaLevel
-                        subLake = wSurf ≠ minBound ∧ surfZ < wSurf
+                        subLake = wSurf ≢ minBound ∧ surfZ < wSurf
                         capLimit
                             | subSea ∧ subLake =
                                 min (seaLevel - 1) (wSurf - 1)
