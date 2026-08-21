@@ -39,7 +39,7 @@ local MOOD_BIAS_MAX = 2.0
 
 thoughts.catalogue = thoughts.catalogue or nil
 
-local function clamp(x, lo, hi) return math.max(lo, math.min(hi, x)) end
+local clamp = require("scripts.lib.numeric").clamp
 
 -- Trigger predicates, referenced by name from data/thoughts.yaml's
 -- `trigger` field. `ctx` is built fresh per unit per tick by
