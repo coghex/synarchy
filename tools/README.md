@@ -687,8 +687,8 @@ Only probes that implement the shared `probe-result/v1` protocol
 is rejected BY NAME before execution, without running the probe at all —
 heuristically parsing free-form stdout is the guesswork a reliability harness
 must not do, and invoking a legacy probe to find out would boot a real engine.
-`position_hold` and `role` are the migrated probes today; later issues
-migrate one at a time.
+`position_hold`, `role` and `thermo_altitude` are the migrated probes today;
+later issues migrate one at a time.
 
 A migrated probe prints its ordered, stable check declaration with
 `--describe` (no engine) and, when the harness supplies an event path, writes
@@ -784,6 +784,72 @@ so a checkout with no docs worktree behaves identically.
 `python3 tools/test_probe_census.py` is its deterministic, engine-free
 self-test.
 
+### `probe_external_evidence.py` — the Codex `$test` record, read-only (#1432)
+
+The Codex `$test` skill independently records coordinated non-CI runs against
+this same probe set, with exact commit provenance and interpreted
+observations. This reports what it knows about ONE registered probe. The two
+systems run side by side and must not interact; this is strictly a reader.
+
+```bash
+python3 tools/probe_external_evidence.py --probe role
+python3 tools/probe_external_evidence.py --probe transfer_order --json
+python3 tools/test_probe_external_evidence.py   # the synthetic self-test
+```
+
+State lives at `<git-common-dir>/codex-test`, resolved with `git rev-parse
+--git-common-dir` — in a linked worktree `.git` is a pointer file, so a
+literal `.git/codex-test` would be wrong. That tree is untracked and
+machine-local: it is ABSENT on a fresh clone, on another machine, and wherever
+Codex is not installed, and its absence is a normal "no external evidence"
+result (exit 0, no diagnostic). An existing but unreadable or malformed
+registry or report is different — a non-fatal diagnostic beside whatever could
+still be read. A recorded report path that is simply not there is data (a run
+has not written it yet); one that EXISTS but is not a regular file is damage,
+and damage is diagnosed. So is a registry carrying JSON's non-standard
+`NaN`/`Infinity` constants, which Python's `json` would otherwise read and
+write straight back out, making `--json` invalid JSON. Every filesystem call
+catches `ValueError` beside `OSError`, because a registry field is arbitrary
+external text: a path string with an embedded NUL raises the former, and one
+malformed record must cost its own run a diagnostic, never the whole read.
+
+It never writes, never takes a `$test` lock, and never invokes the `$test`
+coordinator at all. That last part is not squeamishness: every one of the
+issue's four permitted read subcommands (`list`, `show`, `proposal-list`,
+`value-status`) goes through the coordinator's `read_registry` ->
+`locked_registry`, which takes the exclusive `registry.lock` flock, `mkdir`s
+the state tree and rewrites `registry.json` with a fresh `updated_at`. Reading
+the JSON directly is the only way to honour the permission boundary — and the
+only way that works when the machine-local coordinator is not installed.
+
+A `run_probes.PROBES` key maps to a `$test` run id by underscores-to-hyphens
+under the `probe:` namespace (`transfer_order` -> `probe:transfer-order`),
+derived from the KEY and never from the script filename —
+`persistence_contract_sweep.py` has no `_probe` suffix to strip. Matching is
+EXACT, and a key the registry does not carry is a controlled unknown-key
+rejection (exit 2), not a "no external evidence" answer.
+
+Per matching run it reports the run id and state, the tested commit, the
+MECHANICAL execution outcome (from the registry's own `execution_status` /
+`test_exit_code`, never inferred from the report's interpretation), the
+recorded duration and the observation status. A value the record does not
+carry reads as unavailable, never as a fabricated `false` or `0`, so active
+and legacy runs are surfaced rather than dropped. The whole known history is
+reported; there is no limit option and no default truncation. Report reads are
+confined to resolved `*.test-result.md` files directly beneath the state
+tree's own `reports/`, so a recorded path can never widen read scope. Both
+fixed names are confined the same way first: `registry.json` and `reports/`
+are each resolved and then required to still be an immediate child of the
+RESOLVED state root, of the right kind. A symlink at either name would
+otherwise relocate what gets read while the name itself still looked right —
+and a regular file standing in for `reports/` would make every recorded report
+read as a silent `absent`.
+
+External `$test` evidence is PRESENTATION-ONLY. A run appearing, passing,
+failing or recording observations changes no census sample, no statistic, no
+schedule and no skip decision — one interpreted `$test` run is context, not a
+measurement in the lab's statistics.
+
 ### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets selection
 
 Selects the three expensive CI gates that are conditional on pull requests:
@@ -861,19 +927,58 @@ tear the engine down in a `finally`, and save nothing.
   already over capacity refuses further items and says so; the runner
   never unloads inventory it did not put there. A capacity refusal is a
   gameplay observation and still exits 0, in both scenarios.
-- **`first-aid`** (~2 min) builds a wide arena ridge, issues the mule's
+- **`first-aid`** (~4 min) builds a wide arena ridge, issues the mule's
   pre-stocked `first_aid_kit` to the selected expedition acolyte via that
   same capacity-gated transfer path — a kit refused for want of room is
   recorded as an observation and the run continues rather than aborting,
   with the pre-fall baseline dropping only its kit precondition (and
   saying so) and `unit.treatBleeding` falling back to the makeshift
   tourniquet it improvises when the kit owner has no supplies — walks
-  that acolyte off the ridge for a real fall,
-  administers first aid through `unit.treatBleeding` the moment the injury
-  lands, and reports the injury, the treatment call's full result
-  (part/kind/method/bandages used/attempts/residual seep/message), the
-  kit's remaining contents and holder, whether the medic AI claimed the
-  patient on its own, and the final unit state.
+  that acolyte off the ridge for a real fall, and then **follows the real
+  medic AI's treatment to a named terminal condition** (#1221). It
+  reports the injury, that treatment trajectory, the kit's remaining
+  contents and holder, and the final unit state.
+
+  **The runner administers no treatment at all.** It used to fire
+  `unit.treatBleeding` itself the moment the injury landed, which made
+  the AI's own throughput unmeasurable — every dressing the report showed
+  was the runner's. Post-#998 a 2-z fall leaves well over a minute before
+  a naive exsanguination (`test-headless/Test/Headless/Unit/Fall.hs`), so
+  the real `treat_ally` path — real claim, real kit fetch, real
+  `unit.treatBleeding` calls, live blood tick and real clotting — is
+  simply followed instead. Two scenario-local Lua pieces make that
+  observable without touching any engine surface or AI script: a
+  **transparent wrapper** around `unit.treatBleeding` that forwards each
+  call with the caller's exact argument list, logs the arguments and the
+  returned table, and returns the original results unchanged; and a
+  one-round-trip sampler that reads the patient and drains that log.
+
+  Every sampling interval (2 s, within a 120 s budget) prints a
+  trajectory row: elapsed time, pose and knockdown state, current/max
+  blood and aggregate bleed rate, total/dressed/undressed/external/
+  still-bleeding wound counts, remaining bandages and where they are,
+  who currently holds a treat claim, and each treatment result observed
+  since the previous row (`ok`/`method`/`part`/`kind`/`bandagesUsed`/
+  `attempts`/residual `seep`/`message`, with the treating unit's id).
+
+  Which acolyte treats is **discovered, never staged**: every acolyte
+  rolls its own `bleed_control` knowledge at spawn and `bestMedicFor`
+  ranks the whole squad, so the acolyte placed beside the landing is only
+  a bystander and the report names the units that actually claimed and
+  treated. "Still bleeding" is `scripts/unit_ai_medic.lua`'s own
+  `needsTreatment` policy rather than a cutoff invented by the runner —
+  external kinds only (`concussion`/`fracture`/`internal` excluded), seep
+  above `treat_min_seep` (read live off `unit_ai_tunables.lua`) and clot
+  below `CLOT_ENOUGH` — so `controlled` means the medic itself would
+  stop. The terminal condition is one of **controlled**, **supplies
+  exhausted**, **collapsed**, **died**, **gone** or **timeout**, checked
+  in that precedence with patient-state outcomes first; a `collapsed`
+  terminal requires pose `collapsed` **with `knockedDown` false**, since
+  every real fall lands in that same pose with the flag set and the
+  ordinary knockdown is not an outcome. The terminal row is printed
+  whatever happened, including when no treatment call was ever made, and
+  the condition is reported as an OBSERVATION — it never affects the exit
+  status.
 
   Its **pre-fall baseline is captured under a stopped simulation** (#1218).
   `engine.setPaused(true)` goes on before the first spawn and stays on

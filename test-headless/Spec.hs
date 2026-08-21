@@ -194,6 +194,7 @@ import qualified Test.Headless.Location.LootDeterminism as LocationLootDetermini
 import qualified Test.Headless.Location.MapIcons as LocationMapIcons
 import qualified Test.Headless.Tutorial.Definitions as TutorialDefinitions
 import qualified Test.Headless.Lua.SaveModules as LuaSaveModules
+import qualified Test.Headless.Lua.SharedHelpers as LuaSharedHelpers
 import qualified Test.Headless.Lua.SaveBridge as LuaSaveBridge
 import qualified Test.Headless.Lua.TutorialProgress as LuaTutorialProgress
 import qualified Test.Headless.Lua.TutorialEvaluation as LuaTutorialEvaluation
@@ -392,6 +393,7 @@ main = hspec $ do
     describe "Load.Status" LoadStatus.spec
     describe "Save.Snapshot" SaveSnapshot.spec
     describe "Lua persistence components" LuaSaveModules.spec
+    describe "Lua shared helpers" LuaSharedHelpers.spec
     LuaTutorialProgress.spec
     LuaTutorialEvaluation.spec
     LuaUnitAiLocations.spec

@@ -74,6 +74,7 @@ RESULT_SCHEMA = "probe-flake-result/v1"
 PROTOCOL_PROBES: dict[str, str] = {
     "position_hold": probe_protocol.PROTOCOL_VERSION,
     "role": probe_protocol.PROTOCOL_VERSION,
+    "thermo_altitude": probe_protocol.PROTOCOL_VERSION,
 }
 
 # 8008 is the user's graphical instance. It is outside the range below

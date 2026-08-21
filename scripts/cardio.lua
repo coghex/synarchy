@@ -36,7 +36,7 @@ local O2_DANGER  = 0.70 ; local O2_FATAL = 0.40   -- hypoxia danger band
 
 local MOVING_RUN = { running = true, sprinting = true }
 
-local function clamp(x, lo, hi) return math.max(lo, math.min(hi, x)) end
+local clamp = require("scripts.lib.numeric").clamp
 
 -- Advance heart rate then blood oxygen one tick. Runs BEFORE thermo.tick so
 -- circulation reads this tick's heart rate; O2 uses last tick's circulation
