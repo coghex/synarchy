@@ -34,6 +34,17 @@ instead:
      prove for storage-level failures, exercised here specifically
      through the new integrity-aware load path.
 
+  3. The OTHER side of check 1 (issue #1484): a cached AI reference
+     whose target died is expected to be gone by the save boundary, not
+     tolerated there. A real acolyte acquires a real construction site
+     as `s.buildTarget`, the site is destroyed, the AI ticks past the
+     point where resolution finds no replacement -- and the save that
+     follows carries NO `lua.unit_ai` `dangling-reference` diagnostic
+     naming that unit's `buildTarget` and that building. Check 1's
+     deliberately-dangling `attackTargetUid` rides the SAME save, so the
+     absence is proven against a log that demonstrably does report this
+     class of diagnostic rather than against a silent one.
+
 Runs against an ISOLATED temporary resource root (symlinked
 scripts/assets/data/config, a throwaway saves/ dir) so it never touches
 a real player's saves/ directory.
@@ -49,17 +60,21 @@ from __future__ import annotations
 import argparse
 import glob
 import os
+import re
 import shutil
 import sys
 import tempfile
 import time
 from pathlib import Path
 
-from probelib import boot, quit_engine, send, send_json, wait_load_published, load_ai_stack
+from probelib import (boot, clear_find_water, load_ai_stack, poll_until,
+                      quit_engine, send, send_json, wait_load_published)
 
 REPO = Path(__file__).resolve().parent.parent
 SLOT = "probe_integrity_slot"
 CORRUPT_SLOT = "probe_integrity_corrupt"
+BUILD_SITE_DEF = "cargo_hold_S"
+BUILD_SITE_YAML = f"data/buildings/{BUILD_SITE_DEF}.yaml"
 
 
 def make_isolated_root(base: str) -> str:
@@ -88,6 +103,12 @@ def bootstrap_defs(port: int) -> None:
         ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
         ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
         ("data/units/*.yaml",      "engine.loadUnitYaml"),
+        # Just the one def the #1484 scenario stakes -- a shipped
+        # `build_work: 240.0` building, so a `building.spawn`ed instance
+        # reports "appearing" with real build work outstanding and stays
+        # there (no construction tick runs in this probe), which is
+        # exactly what `findNearestUnbuilt` looks for.
+        (BUILD_SITE_YAML,          "engine.loadBuildingYaml"),
     ]
     for pattern, fn in loaders:
         for path in sorted(glob.glob(pattern)):
@@ -112,6 +133,57 @@ def find_flat_strip(port: int) -> tuple[int, int, int] | None:
             return gx, gy, z
         time.sleep(0.75)
     return None
+
+
+def find_build_site(port: int, gx: int, gy: int) -> tuple[int, int] | None:
+    """First tile near (gx, gy) the ENGINE's own placement validator
+    accepts for BUILD_SITE_DEF, plus an adjacent tile with the same
+    terrain z (where the acolyte will stand). Asking
+    `building.canPlaceAt` beats guessing at flat ground: it is the same
+    check `building.spawn` runs, so a hit here cannot spawn-fail.
+    """
+    lua = (
+        "local function f() for dy=-6,6 do for dx=-6,6 do "
+        "local bx,by = %d+dx, %d+dy "
+        f"local ok = building.canPlaceAt('{BUILD_SITE_DEF}', bx, by) "
+        "if ok then "
+        "local zb = world.getTerrainAt(bx,by) local zu = world.getTerrainAt(bx+1,by) "
+        "if zb and zu and zb==zu and not world.getFluidAt(bx+1,by) "
+        "then return bx..','..by end end end end return 'none' end return f()"
+    ) % (gx, gy)
+    for _ in range(8):
+        res = send(port, lua).strip('"')
+        if res and res != "none" and res.count(",") == 1:
+            bx, by = (int(v) for v in res.split(","))
+            return bx, by
+        time.sleep(0.75)
+    return None
+
+
+def ai_build_target(port: int, uid: int) -> str:
+    """`s.buildTarget` for `uid`, as the raw console string ("nil" when
+    the field is absent)."""
+    return send(port, f"local s = require('scripts.unit_ai').getState({uid}); "
+                      f"if not s or s.buildTarget == nil then return 'nil' end "
+                      f"return tostring(s.buildTarget)").strip('"')
+
+
+def dangling_build_target_lines(log_text: str, uid: int, bid: int) -> list[str]:
+    """Every rendered integrity line that is THE #1484 diagnostic: the
+    `lua.unit_ai` component, this unit's `buildTarget` path, the
+    `dangling-reference` code, and the destroyed building as the
+    reference value.
+
+    Matching only the component and the code (which is all
+    `persistence_integrity_probe`'s check-1 assertion needs, since it
+    is asserting PRESENCE) would let this absence assertion pass on an
+    unrelated unit_ai reference -- or fail on check 1's own deliberately
+    dangling `attackTargetUid`, which rides the same save.
+    """
+    pattern = re.compile(
+        r"\[lua\.unit_ai v\d+ unit\[" + str(uid) + r"\]\.buildTarget\] "
+        r"dangling-reference:[^\n]*references building " + str(bid) + r"\b")
+    return [ln for ln in log_text.splitlines() if pattern.search(ln)]
 
 
 class Checks:
@@ -174,6 +246,95 @@ def main() -> int:
         print(f"spawned unit #{a} (attacker) and unit #{b} (soon-destroyed target)")
         time.sleep(1.0)  # let both units settle onto the ground
 
+        # ── #1484: a cached buildTarget whose site died must be gone
+        #    from the LIVE AI state before the save, not tolerated at
+        #    the boundary. Runs BEFORE the pause below, because it is
+        #    the AI's own ticking that has to do the clearing.
+        print("\n--- a cached build target clears when its site dies (#1484) ---")
+        site = find_build_site(args.port, gx, gy)
+        if not site:
+            sys.exit("FAIL (setup): no placeable build-site tile found near "
+                      f"({gx},{gy})")
+        bx, by = site
+        bid_raw = send(args.port,
+            f"return building.spawn('{BUILD_SITE_DEF}', {bx}, {by})")
+        try:
+            bid = int(float(bid_raw))
+        except (TypeError, ValueError):
+            sys.exit(f"FAIL (setup): building.spawn returned {bid_raw!r}")
+        # The AI only targets a site that is still APPEARING with build
+        # work outstanding; assert that rather than assuming it, so a
+        # def change that made this instant-built fails loudly here
+        # instead of making the whole scenario vacuous.
+        #
+        # `building.spawn` only QUEUES a BuildingSpawn, so until the
+        # building thread drains it both accessors answer nil -- and
+        # "nil,nil" is a perfectly truthy Python string. Poll on the
+        # WANTED shape rather than on any answer at all, or the very
+        # first sample ends the wait and the assertion below aborts a
+        # setup that was merely not ready yet.
+        def site_state() -> str:
+            return send(args.port,
+                f"return tostring(building.getActivity({bid})) .. ',' .. "
+                f"tostring(building.getBuildRequired({bid}))").strip('"')
+
+        def site_is_a_build_target() -> str | None:
+            """`site_state()` once it reads "appearing,<work>" with the
+            work above zero -- the exact shape `findNearestUnbuilt`
+            accepts -- and None on every other answer, so the wait keeps
+            going instead of ending on the first sample."""
+            v = site_state()
+            activity, _, work = v.partition(",")
+            if activity != "appearing":
+                return None
+            try:
+                return v if float(work) > 0 else None
+            except ValueError:
+                return None
+
+        appearing = poll_until(20.0, site_is_a_build_target)
+        if not appearing:
+            sys.exit(f"FAIL (setup): building #{bid} is {site_state()!r}, "
+                      f"expected an appearing site with build work outstanding")
+        # Bind to a local first: getTerrainAt yields more than one value,
+        # and only the first (surface z) is wanted here.
+        bz = int(float(send(args.port,
+            f"local z = world.getTerrainAt({bx + 1}, {by}); return z")))
+        c = int(float(send(args.port,
+            f"return unit.spawn('acolyte', {bx + 1}, {by}, {bz}, 'player')")))
+        if c < 0:
+            sys.exit(f"FAIL (setup): builder spawn rejected ({c})")
+        clear_find_water(args.port, c)
+        print(f"staked build site #{bid} at ({bx},{by}); builder is unit #{c}")
+
+        # buildNearbyUtility runs for every candidate on every thought
+        # tick, so the cache is populated whether or not build_nearby
+        # WINS arbitration -- no need to steer the unit into building.
+        acquired = poll_until(45.0,
+            lambda: ai_build_target(args.port, c) == str(bid))
+        if not acquired:
+            sys.exit(f"FAIL (setup): unit #{c} never cached build site #{bid} "
+                      f"(buildTarget={ai_build_target(args.port, c)!r})")
+        print(f"unit #{c} cached buildTarget={bid}")
+
+        destroyed_b = send(args.port, f"return building.destroy({bid})")
+        if destroyed_b.strip() != "true":
+            sys.exit(f"FAIL: building.destroy({bid}) returned {destroyed_b!r}")
+        # building.destroy only QUEUES a BuildingDestroy; wait until the
+        # building is observably gone before counting the cleanup tick,
+        # or the poll below can be satisfied (or not) by ticks that ran
+        # while the site still resolved.
+        gone = poll_until(30.0, lambda: send(
+            args.port, f"return building.getInfo({bid}) == nil") == "true")
+        chk.ok(bool(gone), f"build site #{bid} is observably destroyed")
+
+        cleared = poll_until(45.0,
+            lambda: ai_build_target(args.port, c) == "nil")
+        chk.ok(bool(cleared),
+               f"unit #{c}'s cached buildTarget is cleared at runtime, without "
+               f"waiting for a save and load "
+               f"(buildTarget={ai_build_target(args.port, c)!r})")
+
         # Pause BEFORE committing the target: unit_ai.update's own tick
         # already self-heals a dead attackTargetUid the instant it next
         # runs ("the AI already runs when a target legitimately
@@ -229,6 +390,18 @@ def main() -> int:
         chk.ok("unit_ai" in log_a_text and "dangling-reference" in log_a_text,
                "the save-time diagnostic names unit_ai and is coded "
                "'dangling-reference'")
+
+        # #1484's assertion, made against that same log: the two checks
+        # above prove this save DOES report dangling unit_ai references,
+        # so the absence below is a real absence rather than a silent
+        # log. Matched on the full (component, path, code, kind, value)
+        # tuple -- check 1's own attackTargetUid diagnostic is in here
+        # too and must not satisfy it.
+        stale = dangling_build_target_lines(log_a_text, c, bid)
+        chk.ok(not stale,
+               f"the save carries NO 'unit[{c}].buildTarget -> building "
+               f"{bid}' dangling-reference diagnostic"
+               + (f" (found: {stale[0]!r})" if stale else ""))
 
         # ── Engine B: fresh restart. Load the valid save; the dangling
         #    reference must be diagnosed, never load-blocking ─────────
