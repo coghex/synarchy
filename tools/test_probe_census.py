@@ -1646,6 +1646,118 @@ def test_declared_schema() -> None:
 
 
 # ==========================================================================
+DRAFT = "https://json-schema.org/draft/2020-12/schema"
+
+
+@contextmanager
+def schema_file(text: str | None, root: Path):
+    """`probe_census.SCHEMA_PATH` pointed at `text` (None = absent)."""
+    target = root / f"schema-{abs(hash(text)) % 10 ** 8}.json"
+    if text is not None:
+        target.write_text(text, encoding="utf-8")
+    saved = probe_census.SCHEMA_PATH
+    cache = dict(probe_census._SCHEMA_CACHE)
+    probe_census.SCHEMA_PATH = target
+    probe_census._SCHEMA_CACHE.clear()
+    try:
+        yield target
+    finally:
+        probe_census.SCHEMA_PATH = saved
+        probe_census._SCHEMA_CACHE.clear()
+        probe_census._SCHEMA_CACHE.update(cache)
+
+
+def _refuses_every_operation(census, before, good, fragment, why) -> None:
+    """Every writing operation refuses `fragment`, and writes nothing."""
+    for name, operation in (
+        ("--record", lambda: probe_census.record_result(census, good)),
+        ("--seed", lambda: probe_census.ensure_document(census)),
+        ("a policy update", lambda: probe_census.record_policy(
+            census, "alpha", acceptable_failures=1)),
+    ):
+        expect_refusal(operation, f"...and {name} refuses ({why})", fragment)
+        expect(census.read_bytes() == before,
+               f"...having written nothing ({name}, {why})")
+
+
+def test_malformed_schema_file() -> None:
+    """A broken SCHEMA is a refusal too, not a traceback.
+
+    The validator's own input is a checked-in file, so it is exactly as
+    capable of being wrong as the documents it validates — and a gate
+    that dies with a stack trace on its own configuration is the failure
+    mode this module exists to avoid. Every step of `load_schema` is
+    ordered so the next one is safe to take; each case here is one of
+    those steps, and every one also proves a real operation refused
+    without writing.
+    """
+    print("\n-- a broken schema file refuses cleanly --")
+    with registry(), scratch() as root:
+        census = root / "probe_census.json"
+        seeded(census)
+        before = census.read_bytes()
+        good = result_document()
+
+        # Files `load_schema` itself must refuse, before it hands the
+        # document to a library helper that would subscript it.
+        unloadable = [
+            # A valid-JSON schema that is not an object at all. The
+            # library's `validator_for` SUBSCRIPTS what it is given, so
+            # reaching it with a list raised out of the library.
+            ('["$schema"]', "must be a JSON object", "a list"),
+            ("5", "must be a JSON object", "a bare number"),
+            ('"x"', "must be a JSON object", "a bare string"),
+            ("true", "must be a JSON object", "a bare boolean"),
+            ("null", "must be a JSON object", "a bare null"),
+            ("{oops", "is not valid JSON", "text that is not JSON"),
+            ("{}", "does not identify a JSON Schema draft", "no `$schema`"),
+            ('{"$schema": 5}', "does not identify a JSON Schema draft",
+             "a numeric `$schema`"),
+            ('{"$schema": [1]}', "does not identify a JSON Schema draft",
+             "an unhashable `$schema`"),
+            ('{"$schema": "https://example.invalid/draft/9"}',
+             "not a draft this jsonschema implements", "an unknown draft"),
+            (json.dumps({"$schema": DRAFT,
+                         "$defs": {"census_v2": {"type": 5}}}),
+             "is not a valid", "a draft-invalid schema body"),
+            (None, "is unreadable", "no schema file at all"),
+        ]
+        # And files that LOAD but cannot be applied: a schema can be a
+        # perfectly valid schema and still not describe this tool's
+        # documents, or not resolve its own references.
+        # Every root definition dangles, so the failure is reached
+        # whichever document an operation validates first.
+        dangling = {"$schema": DRAFT,
+                    "$defs": {name: {"$ref": "#/$defs/gone"}
+                              for name in ("census_v1", "census_v2",
+                                           "flake_result_v1")}}
+        unusable = [
+            (json.dumps({"$schema": DRAFT, "$defs": {"nothing": True}}),
+             "declares no", "no definition for the documents it validates"),
+            (json.dumps(dangling), "could not be applied",
+             "a `$ref` naming nothing"),
+        ]
+
+        for text, fragment, why in unloadable:
+            with schema_file(text, root):
+                expect_refusal(probe_census.load_schema,
+                               f"loading the schema refuses {why}", fragment)
+                _refuses_every_operation(census, before, good, fragment, why)
+        for text, fragment, why in unusable:
+            with schema_file(text, root):
+                expect_valid(probe_census.load_schema,
+                             f"the schema itself loads with {why}")
+                _refuses_every_operation(census, before, good, fragment, why)
+
+        # And the shipped schema still loads, so no case above leaked
+        # global state into the rest of the suite.
+        expect_valid(probe_census.load_schema,
+                     "the shipped schema still loads afterwards")
+        expect_valid(lambda: probe_census.record_result(census, good),
+                     "...and a real measurement still records")
+
+
+# ==========================================================================
 class _BlockedImport:
     """A meta-path finder that makes one package deterministically absent."""
 
@@ -2175,7 +2287,8 @@ def main() -> int:
                  test_malformed_rows_refuse_cleanly,
                  test_duplicate_target_rows,
                  test_adversarial_malformed_input,
-                 test_declared_schema, test_missing_dependency,
+                 test_declared_schema, test_malformed_schema_file,
+                 test_missing_dependency,
                  test_path_substitution, test_atomicity,
                  test_preservation_guard,
                  test_independent_process_contention,

@@ -212,6 +212,13 @@ def load_schema() -> dict:
     fails here rather than silently validating nothing: an unrecognized
     `$schema` would otherwise fall back to whichever draft the installed
     library happens to consider newest.
+
+    Every step is ordered so the NEXT one is safe to take. The root is
+    proved to be an object and its `$schema` proved to be a string
+    before `validator_for` is asked anything, because that helper
+    subscripts what it is given: a valid-JSON schema file that is a list
+    or a scalar would raise out of the library rather than refuse here,
+    and this module's whole promise is that it does not do that.
     """
     jsonschema = _require_jsonschema()
     cached = _SCHEMA_CACHE.get("document")
@@ -226,12 +233,20 @@ def load_schema() -> dict:
         raise CensusError(
             f"the census schema {SCHEMA_PATH} is not valid JSON: "
             f"{error}") from None
-    declared = document.get("$schema") if isinstance(document, dict) else None
-    factory = jsonschema.validators.validator_for(document, default=None)
-    if not isinstance(declared, str) or factory is None:
+    if not isinstance(document, dict):
         raise CensusError(
-            f"the census schema {SCHEMA_PATH} does not identify a supported "
-            f"JSON Schema draft (`$schema` is {declared!r})")
+            f"the census schema {SCHEMA_PATH} must be a JSON object, got "
+            f"{type(document).__name__}")
+    declared = document.get("$schema")
+    if not isinstance(declared, str):
+        raise CensusError(
+            f"the census schema {SCHEMA_PATH} does not identify a JSON Schema "
+            f"draft (`$schema` is {declared!r})")
+    factory = jsonschema.validators.validator_for(document, default=None)
+    if factory is None:
+        raise CensusError(
+            f"the census schema {SCHEMA_PATH} names {declared!r}, which is not "
+            f"a draft this jsonschema implements")
     try:
         factory.check_schema(document)
     except jsonschema.exceptions.SchemaError as error:
