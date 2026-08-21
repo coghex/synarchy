@@ -27,7 +27,6 @@ import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
 import World.Material.Id (MaterialId(..))
 import World.Thread.Command.Edit.Sync (syncEditToSim)
-import World.Thread.Helpers (unWorldPageId)
 
 -- | Dig the top of the column at (gx, gy) down by 1 Z.
 --   Records the edit in the world's edit log so it survives chunk

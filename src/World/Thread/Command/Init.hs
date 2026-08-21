@@ -63,7 +63,7 @@ import World.Generate.Config (WorldGenConfig(..)
                               , minimumWorldSize
                               , normalizeWorldGenInputs)
 import World.Geology.Ore.Types (OreLevers(..))
-import World.Thread.Helpers (sendGenLog, unWorldPageId)
+import World.Thread.Helpers (sendGenLog)
 import World.Thread.ChunkLoading (dispatchLocationStamps)
 
 handleWorldInitCommand ∷ EngineEnv → LoggerState → WorldPageId

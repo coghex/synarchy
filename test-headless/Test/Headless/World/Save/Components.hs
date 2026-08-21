@@ -66,6 +66,12 @@ import World.Save.Types
     , MissingBillOutputItemRef(..), missingBillOutputItemReferences
     , MissingConstructDefRef(..)
     , missingConstructDefReferences
+    , renderMissingItemDefRef, renderMissingRecipeRef
+    , renderMissingBillOutputItemRef, renderMissingConstructDefRef
+    , MissingMaterialRef(..), renderMissingMaterialRef
+    , MissingFloraRef(..), renderMissingFloraRef
+    , MissingLocationRef(..), renderMissingLocationRef
+    , MissingInfectionRef(..), renderMissingInfectionRef
     , WorldPageSave(..), SaveData(..), resolveLegacyLocationParams )
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.River.Naming (RiverNames(..))
@@ -2408,6 +2414,103 @@ spec = do
             case ccDecode texPaletteCodec 1 (ccEncode texPaletteCodec snap) of
                 Left e  → expectationFailure (T.unpack (renderComponentError e))
                 Right d → fromTexPaletteDTO d `shouldBe` tp
+
+    -- #1091: 'WorldPageId' grew a field label so the nine hand-written
+    -- @where unWorldPageId (WorldPageId t) = t@ clauses in
+    -- 'World.Save.Types' (plus the two named accessors) could go. That
+    -- is a pure cleanup ONLY if three observable things are unchanged:
+    -- every render string, the stock 'Show' representation the save
+    -- validation diagnostics and 'Sim.Thread' print through 'tshow',
+    -- and the wire bytes 'deriving newtype Serialize' produces.
+    describe "WorldPageId accessor cleanup (#1091)" $ do
+        -- The expected strings below are written out in full rather
+        -- than rebuilt from the record's own fields, so a change to
+        -- either side of a render function fails this gate.
+        it "renderMissingDefRef is unchanged" $
+            renderMissingDefRef MissingDefRef
+                { mdrKind = "building", mdrPage = page1
+                , mdrEntity = 7, mdrDefName = "ghost_building" }
+                `shouldBe`
+                "building #7 on page 'page1' references unknown \
+                \definition 'ghost_building'"
+
+        it "renderMissingItemDefRef is unchanged" $
+            renderMissingItemDefRef MissingItemDefRef
+                { midrSource = "unit inventory", midrPage = page1
+                , midrItemId = 42, midrDefName = "ghost_item" }
+                `shouldBe`
+                "unit inventory item #42 on page 'page1' references \
+                \unknown item definition 'ghost_item'"
+
+        it "renderMissingRecipeRef is unchanged" $
+            renderMissingRecipeRef MissingRecipeRef
+                { mrrPage = page2, mrrBillId = 3, mrrRecipe = "ghost_recipe" }
+                `shouldBe`
+                "craft bill #3 on page 'page2' references unknown \
+                \recipe 'ghost_recipe'"
+
+        it "renderMissingBillOutputItemRef is unchanged" $
+            renderMissingBillOutputItemRef MissingBillOutputItemRef
+                { mbirPage = page1, mbirBillId = 9, mbirDefName = "ghost_output" }
+                `shouldBe`
+                "craft bill #9 on page 'page1' references unknown \
+                \output item definition 'ghost_output'"
+
+        it "renderMissingConstructDefRef is unchanged" $
+            renderMissingConstructDefRef MissingConstructDefRef
+                { mcdPage = page1, mcdTile = (1, 2), mcdDefName = "ghost_bldg" }
+                `shouldBe`
+                "construct designation at (1,2) on page 'page1' \
+                \references unknown building definition 'ghost_bldg'"
+
+        it "renderMissingMaterialRef is unchanged" $
+            renderMissingMaterialRef MissingMaterialRef
+                { mmrSource = "edit log", mmrPage = page2
+                , mmrCoord = (-3, 4), mmrMatId = 200 }
+                `shouldBe`
+                "edit log at (-3,4) on page 'page2' references unknown \
+                \material id 200"
+
+        it "renderMissingFloraRef is unchanged" $
+            renderMissingFloraRef MissingFloraRef
+                { mfrSource = "crop plot", mfrPage = page1
+                , mfrCoord = (5, -6), mfrFloraId = 77 }
+                `shouldBe`
+                "crop plot at (5,-6) on page 'page1' references unknown \
+                \flora id 77"
+
+        it "renderMissingLocationRef is unchanged" $
+            renderMissingLocationRef MissingLocationRef
+                { mlrPage = page2, mlrCoord = (0, 1), mlrLocId = "ghost_loc" }
+                `shouldBe`
+                "location overlay chunk (0,1) on page 'page2' references \
+                \unknown location id 'ghost_loc'"
+
+        it "renderMissingInfectionRef is unchanged" $
+            renderMissingInfectionRef MissingInfectionRef
+                { mirPage = page1, mirUnitId = 12
+                , mirWoundPart = "left_arm", mirInfType = "ghost_rot" }
+                `shouldBe`
+                "unit #12 wound (left_arm) on page 'page1' references \
+                \unknown infection id 'ghost_rot'"
+
+        -- The field label is deliberately NOT reflected in 'Show': the
+        -- record-syntax derivation would print
+        -- @WorldPageId {unWorldPageId = "page1"}@, and page ids reach
+        -- diagnostics through 'tshow'.
+        it "Show still prints the unlabelled constructor application" $ do
+            show page1 `shouldBe` "WorldPageId \"page1\""
+            showsPrec 11 page1 "" `shouldBe` "(WorldPageId \"page1\")"
+
+        it "the accessor reads back exactly what the constructor wrapped" $
+            unWorldPageId (WorldPageId "main_world") `shouldBe` "main_world"
+
+        -- Requirement 4: a field label changes nothing about what
+        -- @deriving newtype Serialize@ derives, which is why no save
+        -- version moved with this cleanup.
+        it "encodes byte-identically to the underlying Text" $
+            S.encode (WorldPageId "main_world")
+                `shouldBe` S.encode ("main_world" ∷ Text)
 
 -- Helpers -----------------------------------------------------------
 

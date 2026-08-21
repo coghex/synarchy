@@ -40,7 +40,6 @@ import World.Spoil.Types (SpoilPile(..), spoilCapacity, depositSpoil
                          , candidateVertices, promotableTiles
                          , debitPromotedTile, tileCornerVertices)
 import World.Thread.Command.Edit.Terrain (handleWorldDeleteTileCommand)
-import World.Thread.Helpers (unWorldPageId)
 
 -- | Apply dig progress to the designated tile at (gx, gy).
 --

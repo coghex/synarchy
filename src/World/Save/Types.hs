@@ -761,7 +761,6 @@ renderMissingDefRef r =
     mdrKind r <> " #" <> T.pack (show (mdrEntity r)) <> " on page '"
         <> unWorldPageId (mdrPage r) <> "' references unknown definition '"
         <> mdrDefName r <> "'"
-  where unWorldPageId (WorldPageId t) = t
 
 -- | Every saved building/unit whose definition name is absent from the
 --   registered-definition key sets, across all saved pages. Empty ⇒ every
@@ -903,7 +902,6 @@ renderMissingItemDefRef r =
     midrSource r <> " item #" <> T.pack (show (midrItemId r)) <> " on page '"
         <> unWorldPageId (midrPage r) <> "' references unknown item \
            \definition '" <> midrDefName r <> "'"
-  where unWorldPageId (WorldPageId t) = t
 
 -- | Every saved item instance — across ground items, unit inventory/
 --   equipped/accessories, and building storage/materials-delivered,
@@ -951,7 +949,6 @@ renderMissingRecipeRef r =
     "craft bill #" <> T.pack (show (mrrBillId r)) <> " on page '"
         <> unWorldPageId (mrrPage r) <> "' references unknown recipe '"
         <> mrrRecipe r <> "'"
-  where unWorldPageId (WorldPageId t) = t
 
 -- | Every saved craft bill, across all pages, whose recipe id is absent
 --   from the registered recipe key set. Empty ⇒ every recipe reference
@@ -984,7 +981,6 @@ renderMissingBillOutputItemRef r =
     "craft bill #" <> T.pack (show (mbirBillId r)) <> " on page '"
         <> unWorldPageId (mbirPage r) <> "' references unknown output item \
            \definition '" <> mbirDefName r <> "'"
-  where unWorldPageId (WorldPageId t) = t
 
 -- | Every saved craft bill, across all pages, whose non-empty
 --   'cbOutputItem' is absent from the registered item-definition key set.
@@ -1018,7 +1014,6 @@ renderMissingConstructDefRef r =
     "construct designation at " <> T.pack (show (mcdTile r)) <> " on page '"
         <> unWorldPageId (mcdPage r) <> "' references unknown building \
            \definition '" <> mcdDefName r <> "'"
-  where unWorldPageId (WorldPageId t) = t
 
 -- | Every saved construct designation, across all pages, whose
 --   'CtBuilding' target names a building definition absent from the
@@ -1060,7 +1055,6 @@ renderMissingMaterialRef r =
     mmrSource r <> " at " <> T.pack (show (mmrCoord r)) <> " on page '"
         <> unWorldPageId (mmrPage r) <> "' references unknown material id "
         <> T.pack (show (mmrMatId r))
-  where unWorldPageId (WorldPageId t) = t
 
 -- | Every saved material reference, across all pages, that does not
 --   resolve against the currently-registered material set. Covers the
@@ -1119,7 +1113,6 @@ renderMissingFloraRef r =
     mfrSource r <> " at " <> T.pack (show (mfrCoord r)) <> " on page '"
         <> unWorldPageId (mfrPage r) <> "' references unknown flora id "
         <> T.pack (show (mfrFloraId r))
-  where unWorldPageId (WorldPageId t) = t
 
 -- | Every saved flora-species reference, across all pages, that does
 --   not resolve against the currently-registered flora catalog. Covers
@@ -1172,7 +1165,6 @@ renderMissingLocationRef r =
     "location overlay chunk " <> T.pack (show (mlrCoord r)) <> " on page '"
         <> unWorldPageId (mlrPage r) <> "' references unknown location id '"
         <> mlrLocId r <> "'"
-  where unWorldPageId (WorldPageId t) = t
 
 -- | Every saved location reference, across all pages, that does not
 --   resolve against the currently-registered location definitions.
@@ -1256,7 +1248,6 @@ renderMissingInfectionRef r =
     "unit #" <> T.pack (show (mirUnitId r)) <> " wound (" <> mirWoundPart r
         <> ") on page '" <> unWorldPageId (mirPage r)
         <> "' references unknown infection id '" <> mirInfType r <> "'"
-  where unWorldPageId (WorldPageId t) = t
 
 -- | Every saved wound-infection reference, across all pages, that does
 --   not resolve against the currently-registered infection catalogue.

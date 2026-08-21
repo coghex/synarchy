@@ -40,7 +40,7 @@ import World.Types
 import World.Load.Types (StagedPage(..), StagedSession(..))
 import World.Blood.Teardown (enqueueBloodDisposalAll)
 import World.Thread.Command.UI (handleWorldShowCommand)
-import World.Thread.Helpers (sendSaveLoaded, sendGenLog, unWorldPageId)
+import World.Thread.Helpers (sendSaveLoaded, sendGenLog)
 import Building.Types (BuildingManager(..), unBuildingId)
 import Unit.Types (UnitManager(..), unUnitId)
 import Unit.Sim.Types (UnitThreadState(..))

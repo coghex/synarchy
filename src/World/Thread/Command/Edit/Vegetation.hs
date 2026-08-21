@@ -22,7 +22,6 @@ import World.Generate.Coordinates (canonicalTileFrame)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
 import World.Vegetation (isTilledSoil)
-import World.Thread.Helpers (unWorldPageId)
 
 -- | Set the vegetation id of an existing tile at (gx,gy,z) via the
 --   WeSetVeg edit path. Mirrors handleWorldSetSlopeCommand exactly —

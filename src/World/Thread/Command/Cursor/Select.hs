@@ -27,7 +27,6 @@ import Engine.Core.Log (logWarn, LogCategory(..), LoggerState)
 import qualified Data.Vector.Unboxed as VU
 import World.Types
 import World.Generate (globalToChunk)
-import World.Thread.Helpers (unWorldPageId)
 
 handleWorldSetZoomCursorHoverCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → Int → Int → IO ()

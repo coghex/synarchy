@@ -6,7 +6,6 @@ module World.Thread.Helpers
     , sendHudChunkInfo
     , sendHudWeatherInfo
     , sendHudResourcesInfo
-    , unWorldPageId
     ) where
 
 import UPrelude
@@ -15,7 +14,6 @@ import Engine.Core.Capability.InputView
     (InputViewCapability(..), toInputViewCapability)
 import qualified Engine.Core.Queue as Q
 import Engine.Scripting.Lua.Types (LuaMsg(..))
-import World.Types (WorldPageId(..))
 
 -- | Send a progress message to Lua
 sendGenLog ∷ EngineEnv → Text → IO ()
@@ -70,6 +68,3 @@ sendHudWeatherInfo env weatherText = Q.writeQueue (ivLuaQueue (toInputViewCapabi
 sendHudResourcesInfo ∷ EngineEnv → Text → IO ()
 sendHudResourcesInfo env resText = Q.writeQueue (ivLuaQueue (toInputViewCapability env))
                                             (LuaHudLogResourcesInfo resText)
-
-unWorldPageId ∷ WorldPageId → Text
-unWorldPageId (WorldPageId t) = t
