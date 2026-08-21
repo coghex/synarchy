@@ -39,9 +39,20 @@ For each seed:
        cannot be compared with itself, and the content coverage comes
        from the baseline-hash comparison above instead.
 
+A selected seed whose tracked baseline file is absent is reported SKIP
+and, by default, fails the run: baselines are tracked in git (#421), so in
+every environment this gate actually runs in, a missing one means the file
+was deleted or a seed was added without capturing it — not that coverage
+should quietly shrink. That seed is never generated or audited, so a green
+exit would certify worlds nobody looked at.
+`--allow-missing-baselines` restores the tolerant exit for local
+exploratory runs; it narrows nothing else, so an ordinary FAIL still fails
+under it. Neither CI nor `make ci` passes it.
+
 Exit codes:
   0 = all checks passed
-  1 = one or more failures
+  1 = one or more failures, or a selected seed had no baseline
+      (see --allow-missing-baselines)
   2 = bad invocation
 """
 
@@ -84,6 +95,12 @@ class CheckResult:
     # `notes` are suppressed unless the seed fails or -v is passed, which
     # makes them the wrong carrier for "this seed is not being gated".
     banners: list[str] = field(default_factory=list)
+    # The baseline file this seed needed and did not have. Set only by
+    # check_seed's missing-baseline branch, which is what lets the exit
+    # policy below name that one cause instead of keying on the SKIP
+    # string: a later second producer of SKIP would not silently inherit
+    # --allow-missing-baselines' tolerance.
+    missing_baseline: Path | None = None
 
 
 def seed_label(result: CheckResult) -> str:
@@ -377,6 +394,7 @@ def check_seed(entry: dict[str, Any], runs: int) -> CheckResult:
     bpath = baseline_path(seed, world_size, region)
     if not bpath.exists():
         result.status = SKIP
+        result.missing_baseline = bpath
         result.notes.append(f"no baseline at {bpath.name}")
         return result
 
@@ -498,6 +516,68 @@ def format_details(r: CheckResult) -> list[str]:
     return lines
 
 
+# ----- Exit policy ---------------------------------------------------------
+
+def missing_baseline_results(results: list[CheckResult]) -> list[CheckResult]:
+    """The selected seeds whose tracked baseline file was absent.
+
+    Keyed on the recorded path rather than on the SKIP status string.
+    SKIP has exactly one producer today, but that is a fact about
+    check_seed, not a contract: a future second producer must not
+    silently inherit the tolerance --allow-missing-baselines grants to
+    this one cause.
+    """
+    return [r for r in results
+            if r.status == SKIP and r.missing_baseline is not None]
+
+
+def exit_status(results: list[CheckResult],
+                allow_missing_baselines: bool) -> int:
+    """Process exit status for a completed run.
+
+    Two independent failure sources, and the flag narrows exactly one of
+    them. An ordinary FAIL fails whatever the flag says, so
+    --allow-missing-baselines can never turn a run that found a real
+    regression green — it only accepts the reduced coverage of a seed
+    that was never generated at all.
+    """
+    if any(r.status == FAIL for r in results):
+        return 1
+    if missing_baseline_results(results) and not allow_missing_baselines:
+        return 1
+    return 0
+
+
+def report_missing_baselines(missing: list[CheckResult],
+                             allow_missing_baselines: bool) -> list[str]:
+    """Lines naming every missing baseline, and what to do about it.
+
+    Every entry is listed — the run does not stop at the first one, so
+    one command tells you the whole set to restore or capture.
+    """
+    if not missing:
+        return []
+    label = "tolerated" if allow_missing_baselines else "MISSING BASELINE"
+    lines = [f"  {label}: {seed_label(r)} expected {r.missing_baseline}"
+             for r in missing]
+    if allow_missing_baselines:
+        lines.append(
+            f"  --allow-missing-baselines: reduced coverage accepted. "
+            f"{len(missing)} selected seed(s) were never generated or audited."
+        )
+    else:
+        lines.append(
+            f"  {len(missing)} selected seed(s) were never generated or "
+            "audited. Baselines are tracked in git, so a missing one means "
+            "the file was deleted or the seed was added without capturing "
+            "it: restore the file, or capture it with `python3 "
+            "tools/world_baseline.py --seed <N>`. Pass "
+            "--allow-missing-baselines only for a local exploratory run "
+            "that accepts the reduced coverage."
+        )
+    return lines
+
+
 # ----- Main ----------------------------------------------------------------
 
 def main() -> int:
@@ -525,6 +605,15 @@ def main() -> int:
                              "seeds file (~6 seeds, <1 min) — the iteration "
                              "tier. Run the full set before calling a "
                              "worldgen change done.")
+    parser.add_argument("--allow-missing-baselines", action="store_true",
+                        help="Do not fail when a selected seed has no "
+                             "baseline file. The seed is still reported "
+                             "SKIP and still gets no generation or audit "
+                             "coverage — this only accepts that reduced "
+                             "coverage, for local exploratory runs. It "
+                             "tolerates nothing else: an ordinary failure "
+                             "still exits 1. Neither CI nor `make ci` "
+                             "passes it.")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Always show per-seed details, even on PASS")
     args = parser.parse_args()
@@ -581,7 +670,11 @@ def main() -> int:
     if bug_fail or qual_fail or other_fail:
         print(f"  Failure breakdown: bugs={bug_fail} quality={qual_fail} other={other_fail}")
 
-    return 0 if counts.get(FAIL, 0) == 0 else 1
+    for line in report_missing_baselines(
+            missing_baseline_results(results), args.allow_missing_baselines):
+        print(line)
+
+    return exit_status(results, args.allow_missing_baselines)
 
 
 if __name__ == "__main__":

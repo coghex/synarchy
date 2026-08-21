@@ -36,7 +36,8 @@ import Engine.Graphics.Vulkan.Sampler.Cache ( acquireSampler, releaseSampler
 import Engine.Graphics.Vulkan.Texture.Bindless (registerPinnedTexture, unregisterTexture)
 import Engine.Graphics.Types (DevQueues(..))
 import Engine.Scripting.Lua.Types
-import World.Render.Zoom.Types (ZoomAtlasInfo(..), zoomTileSize)
+import World.ZoomMap.Types (zoomTileSize)
+import World.Render.Zoom.Types (ZoomAtlasInfo(..))
 import World.State.Types (wsZoomAtlasRef)
 import Vulkan.Core10
 import Vulkan.Zero (zero)

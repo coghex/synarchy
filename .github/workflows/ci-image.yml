@@ -43,7 +43,7 @@ jobs:
     outputs:
       tag: ${{ steps.hash.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Compute content-addressed candidate tag
         id: hash
@@ -67,7 +67,7 @@ jobs:
     outputs:
       image: ${{ steps.pick.outputs.image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: docker/setup-buildx-action@v3
 

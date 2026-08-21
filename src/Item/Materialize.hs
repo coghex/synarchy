@@ -28,6 +28,14 @@
 --   * the instance-id allocator, so this module needs no engine
 --     environment at all and every caller keeps allocating from the one
 --     'Engine.Core.State.freshItemInstanceId' counter it already used.
+--
+--   The shared logger is a third explicit parameter, for the one thing
+--   this module reports: a CYCLIC definition graph (#1420). Authored
+--   default contents recurse by definition NAME, so a definition listing
+--   itself — or two listing each other — used to recurse forever and
+--   hang the minting thread with no error and no log line. See
+--   'materializeEntries' for the rule and why it is scoped the way it
+--   is.
 module Item.Materialize
     ( ItemOverrides(..)
     , pristineItem
@@ -39,7 +47,9 @@ module Item.Materialize
 
 import UPrelude
 import Data.IORef (IORef)
+import qualified Data.Text as T
 import System.Random (StdGen)
+import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
 import Item.Roll (rollItemSpec, rollItemWeight)
 import Item.Types
     ( ItemContainer(..), ItemContentEntry(..), ItemDef(..)
@@ -106,22 +116,30 @@ pristineSharpness = 100.0
 --   4).
 materializeItem
     ∷ ItemManager
+    → LoggerState   -- ^ where a cyclic definition graph is reported (#1420)
     → IORef StdGen   -- ^ the stat RNG this call site draws from
     → IO Word64      -- ^ instance-id allocator (@freshItemInstanceId env@)
     → ItemOverrides
     → Text
     → IO (Maybe ItemInstance)
-materializeItem itemMgr rngRef allocId ovr name =
-    materializeNode itemMgr rngRef allocId ovr Nothing name
+materializeItem itemMgr logger rngRef allocId ovr name =
+    materializeNode itemMgr logger rngRef allocId [] ovr Nothing name
 
 -- | The shared root\/child body. @mEntries@ is the child list to
 --   materialise: 'Nothing' means "this node did not author one, so use
 --   the definition's own 'idDefaultContents'".
+--
+--   @expanding@ is the cycle ancestry (#1420): the definition names
+--   whose OWN 'idDefaultContents' are being expanded on the path to
+--   here, outermost first. It grows by exactly the name of each node
+--   that delegates to its definition, which is the only step that can
+--   revisit a definition, and is what 'materializeEntries' tests a
+--   delegating child against.
 materializeNode
-    ∷ ItemManager → IORef StdGen → IO Word64
+    ∷ ItemManager → LoggerState → IORef StdGen → IO Word64 → [Text]
     → ItemOverrides → Maybe [ItemContentEntry] → Text
     → IO (Maybe ItemInstance)
-materializeNode itemMgr rngRef allocId ovr mEntries name =
+materializeNode itemMgr logger rngRef allocId expanding ovr mEntries name =
     case lookupItemDef name itemMgr of
         Nothing  → return Nothing
         Just def → do
@@ -129,8 +147,11 @@ materializeNode itemMgr rngRef allocId ovr mEntries name =
                 Just q  → return q
                 Nothing → rollItemSpec (idQualitySpec def) rngRef
             wght ← rollItemWeight def rngRef
-            contents ← materializeEntries itemMgr rngRef allocId
-                            (fromMaybe (idDefaultContents def) mEntries)
+            let (entries, expanding') = case mEntries of
+                    Just es → (es, expanding)
+                    Nothing → (idDefaultContents def, expanding ⧺ [name])
+            contents ← materializeEntries itemMgr logger rngRef allocId
+                            expanding' entries
             iid ← allocId
             return $ Just ItemInstance
                 { iiDefName     = name
@@ -155,15 +176,65 @@ materializeNode itemMgr rngRef allocId ovr mEntries name =
 --   definition is silently dropped — the same skip the hand-written
 --   sites did, so a typo in one line of a kit's loadout never costs the
 --   kit.
+--
+--   A CYCLIC entry (#1420) is dropped the same way, with a warning: an
+--   entry that DELEGATES to its child definition (no authored
+--   @contents:@ of its own) and names a definition already being
+--   expanded on this path would re-enter that definition's defaults and
+--   never terminate. Only that back edge is dropped — the node holding
+--   it, its siblings, and everything above it still materialise, so
+--   @a → a@ yields an @a@ without that child and @a → b → a@ keeps the
+--   outer @a@ and the nested @b@, minus @b@'s reference back to @a@.
+--
+--   Two scoping decisions are load-bearing, and both follow from
+--   requirement 3 (an acyclic graph materialises exactly as before):
+--
+--   * the ancestry is the current PATH, never a global visited set. One
+--     definition may legitimately appear in separate branches or twice
+--     under one @count@ — the shipped first-aid kit does — and a global
+--     set would silently drop those.
+--   * only a DELEGATING entry is tested. An entry with its own authored
+--     @contents:@ does not consult the named definition's defaults at
+--     all, so it is a finite authored subtree that terminates on its
+--     own; a crate authored holding a crate is legal nesting, not a
+--     cycle, and blocking it would drop contents an author explicitly
+--     wrote.
+--
+--   The warning is emitted ONCE per rejected entry, here at the point of
+--   detection: no unwinding frame or caller re-reports it, and a @count@
+--   of ten repetitions of one bad entry is still one authoring mistake.
 materializeEntries
-    ∷ ItemManager → IORef StdGen → IO Word64 → [ItemContentEntry]
-    → IO [ItemInstance]
-materializeEntries itemMgr rngRef allocId entries =
+    ∷ ItemManager → LoggerState → IORef StdGen → IO Word64 → [Text]
+    → [ItemContentEntry] → IO [ItemInstance]
+materializeEntries itemMgr logger rngRef allocId expanding entries =
     catMaybes ∘ concat ⊚ mapM one entries
   where
-    one e = replicateM (max 0 (iceCount e)) $
-        materializeNode itemMgr rngRef allocId
-            (filledItem (iceFill e)) (iceContents e) (iceItem e)
+    one e = case cycleThrough e of
+        Just seg → do
+            warnCycle logger seg (iceItem e)
+            return []
+        Nothing → replicateM (max 0 (iceCount e)) $
+            materializeNode itemMgr logger rngRef allocId expanding
+                (filledItem (iceFill e)) (iceContents e) (iceItem e)
+    -- The closed cycle segment this entry would re-enter, if any: the
+    -- ancestry from the repeated definition onwards. The acyclic prefix
+    -- that merely LED here is dropped — it is not part of the cycle.
+    cycleThrough e
+        | isJust (iceContents e) = Nothing
+        | otherwise = case dropWhile (≢ iceItem e) expanding of
+            []  → Nothing
+            seg → Just seg
+
+-- | Report one cyclic default-contents entry. @seg@ is the ancestry
+--   from the repeated definition onwards, so @seg ⧺ [name]@ closes the
+--   loop and names every definition taking part in it.
+warnCycle ∷ LoggerState → [Text] → Text → IO ()
+warnCycle logger seg name =
+    logWarn logger CatAsset $
+        "Item default contents: cyclic contents graph "
+        <> T.intercalate " → " (map quoted (seg ⧺ [name]))
+        <> " — dropping the repeated " <> quoted name <> " entry"
+  where quoted t = "'" <> t <> "'"
 
 -- | The fill a fresh instance holds: an explicit caller\/entry fill
 --   wins, else the container's authored @default_fill@ (a quinoa sack

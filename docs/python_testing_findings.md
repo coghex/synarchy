@@ -158,6 +158,19 @@ starting an engine.
 - **Remaining uncertainty:** None at draft time; the zero exit status was
   reproduced through the real CLI.
 
+**Resolved in #1319.** The evidence above describes the behavior as it stood
+when this finding was drafted, and the line numbers are those of that revision.
+`world_check.py` now records the baseline path each skipped seed expected and
+exits 1 whenever any selected seed carries one, naming every such seed and its
+expected file rather than stopping at the first. The externally visible `SKIP`
+disposition and the summary line are unchanged. `--allow-missing-baselines`
+restores the tolerant exit for local exploratory runs and narrows nothing else,
+so an ordinary `FAIL` still exits 1 under it; neither
+`.github/workflows/ci.yml` nor `tools/ci-local.sh` passes it. Engine-free cases
+in `tools/test_audit.py` drive the real `main()` across the unfiltered,
+`--quick` and `--seed N` selections and pin both bad-selection paths at their
+existing exit 2.
+
 ### [#1320] PYT-3. New world-audit categories can bypass the intended classification gate
 
 The audit's test claims that every category produced by `ALL_CHECKS` must be

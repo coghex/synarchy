@@ -709,7 +709,8 @@ four, none of them implemented by this issue (#756):
 1. `wsTimeScaleRef` / `wpsTimeScale` — v82 persisted it; target was
    Exclude (contract §1, "the pre-save speed is not persisted").
    **Implemented by #757/#758**: see the row above and CLAUDE.md's
-   "Session snapshot (#758, save-overhaul A3)" note.
+   Save/Load architecture notes
+   (`World.Save.Snapshot.SessionSnapshot`).
 2. `pause.lua`'s `prevTimeScale` — v82 persisted and restored it;
    target was Exclude (same rule). **Implemented by #757.**
 3. `wsToolModeRef` / `wpsToolMode` — v82 writes the field, but the field

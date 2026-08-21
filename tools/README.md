@@ -91,9 +91,21 @@ python3 tools/world_check.py --verbose
 
 # Check a single seed
 python3 tools/world_check.py --seed 42
+
+# Accept the reduced coverage of a seed whose baseline is missing
+python3 tools/world_check.py --quick --allow-missing-baselines
 ```
 
-Exit 0 on pass/improvement, 1 on failure, 2 on bad invocation.
+A selected seed whose baseline file is absent is reported `SKIP` and, by
+default, fails the run: that seed is never generated or audited, and
+baselines are tracked in git, so a missing one means the file was deleted
+or a seed was added without capturing it. `--allow-missing-baselines`
+accepts that reduced coverage for local exploratory runs — it narrows
+nothing else, so an ordinary failure still exits 1. Neither
+`.github/workflows/ci.yml` nor `tools/ci-local.sh` passes it.
+
+Exit 0 on pass/improvement, 1 on failure or a missing baseline, 2 on bad
+invocation.
 
 ### `test_audit.py`
 Unit tests for the audit script. Constructs synthetic tile grids to verify

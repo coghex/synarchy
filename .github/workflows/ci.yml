@@ -137,9 +137,24 @@ on:
     branches: [master]
   pull_request:
 
+# A pull_request run SHOULD supersede its own older runs -- that is what
+# cancel-in-progress is for, and it is kept.
+#
+# A master PUSH must never cancel another master push (#1490). Keying
+# every push on its own SHA gives each master commit its own group, so
+# pushes neither cancel nor queue behind one another. A shared group with
+# `cancel-in-progress: false` is NOT sufficient: GitHub keeps only the
+# newest PENDING run in a group and cancels older pending ones, which
+# loses exactly the verdicts this exists to preserve.
+#
+# Why it matters: 39 of the 40 master runs before this change concluded
+# `cancelled`, so master `559e946f`'s own run never reported the breakage
+# it introduced. It surfaced only when PRs merged forward past it, by
+# which point two of them had each burned their CI reruns and been
+# quarantined by the drainer.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Resolves (building + validating + first-publishing when needed) the
@@ -172,7 +187,7 @@ jobs:
     steps:
       # fetch-depth: 0 so the path-selective probe step (#530) can diff a
       # PR against its base to see which files changed.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -202,7 +217,51 @@ jobs:
           echo "/usr/local/.ghcup/bin" >> "$GITHUB_PATH"
           echo "CABAL_DIR=/usr/local/cabal" >> "$GITHUB_ENV"
 
+      # Docs-only fast path (#1490). A push that changes ONLY
+      # documentation cannot affect the Haskell half of this job -- no
+      # target compiles a doc, and the single doc any target reads at
+      # runtime (docs/save_compat/manifest.json) is excluded by the
+      # selector. Such a push therefore skips the cabal build, the test
+      # suites, the headless hspec suite and world_check, and still runs
+      # EVERY Python audit below.
+      #
+      # Skipping the audits too would have been the natural reading of
+      # "docs-only", and it would have been wrong: #1490's whole cause was
+      # a docs-only push breaking test_findings_report_audit.py, whose
+      # self-test reads docs/code_health_findings.md. Filtering docs out
+      # of CI would have hidden that outright. Skip the BUILD, never the
+      # AUDITS.
+      #
+      # The range is the COMPLETE pushed span (before..after), so a batch
+      # push of several commits is judged as one. --no-renames turns a
+      # rename into the delete+add pair the selector rejects. The selector
+      # fails closed: a missing, zero, or unresolvable `before` (a first
+      # push or a force push) runs the full job.
+      - name: Select docs-only fast path
+        id: docs-fast-path
+        run: |
+          DOCS_ONLY=false
+          BEFORE='${{ github.event.before }}'
+          ZERO=0000000000000000000000000000000000000000
+          ELIGIBLE=no
+          if [ "${{ github.event_name }}" = push ]; then
+            if [ -n "$BEFORE" ] && [ "$BEFORE" != "$ZERO" ]; then
+              if git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+                ELIGIBLE=yes
+              fi
+            fi
+          fi
+          if [ "$ELIGIBLE" = yes ]; then
+            git diff --no-renames --name-status "$BEFORE" '${{ github.sha }}' > /tmp/pushed-range.txt
+            DOCS_ONLY="$(python3 tools/ci_docs_fast_path.py --stdin --explain < /tmp/pushed-range.txt)"
+          else
+            echo "ci_docs_fast_path: no resolvable push range; running the full job"
+          fi
+          echo "docs_only=$DOCS_ONLY" >> "$GITHUB_OUTPUT"
+          echo "docs-only fast path: $DOCS_ONLY"
+
       - name: Resolve dependency plan
+        if: steps.docs-fast-path.outputs.docs_only != 'true'
         run: |
           # Resolve ONCE against the image's own baked index, before the
           # update below can hide a problem with it (#1354). cabal.project
@@ -250,7 +309,8 @@ jobs:
       # plan.json exists after --dry-run; its hash keys the store cache.
       # The store path is static because the image pins CABAL_DIR (#671).
       - name: Restore dependency cache
-        uses: actions/cache/restore@v4
+        if: steps.docs-fast-path.outputs.docs_only != 'true'
+        uses: actions/cache/restore@v6
         id: cache
         with:
           path: /usr/local/cabal/store
@@ -267,7 +327,8 @@ jobs:
       # restores the newest prior snapshot for this GHC/Cabal via
       # restore-keys and then saves exactly one new entry.
       - name: Cache project build (dist-newstyle)
-        uses: actions/cache@v4
+        if: steps.docs-fast-path.outputs.docs_only != 'true'
+        uses: actions/cache@v6
         with:
           path: dist-newstyle
           key: dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}
@@ -275,21 +336,32 @@ jobs:
             dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-
 
       - name: Build dependencies
+        if: steps.docs-fast-path.outputs.docs_only != 'true'
         run: cabal build all --only-dependencies
 
       # Save the store as soon as deps are built, so a later failure in
       # the package build doesn't throw away the expensive part.
       - name: Save dependency cache
-        if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        # The fast-path term is load-bearing, not defensive: when the
+        # restore step is skipped, steps.cache.outputs.cache-hit is
+        # EMPTY, which satisfies `!= 'true'` -- so without it this step
+        # would run on a docs-only push and save a store that was never
+        # populated, under a key hashing a plan.json that was never
+        # written.
+        if: >-
+          steps.cache.outputs.cache-hit != 'true'
+          && steps.docs-fast-path.outputs.docs_only != 'true'
+        uses: actions/cache/save@v6
         with:
           path: /usr/local/cabal/store
           key: deps-v2-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
 
       - name: Build (library + executable)
+        if: steps.docs-fast-path.outputs.docs_only != 'true'
         run: cabal build all
 
       - name: Build test suites
+        if: steps.docs-fast-path.outputs.docs_only != 'true'
         run: |
           cabal build synarchy-test-headless
           if [ "${{ steps.expensive-gates.outputs.graphical }}" = true ]; then
@@ -299,6 +371,7 @@ jobs:
           fi
 
       - name: Headless test suite
+        if: steps.docs-fast-path.outputs.docs_only != 'true'
         run: cabal test synarchy-test-headless --test-show-details=direct
 
       - name: Test audit
@@ -470,7 +543,9 @@ jobs:
       # are tracked in tools/baselines/ (#421), captured on the primary
       # dev machine (macOS/aarch64); Linux output matches them exactly.
       - name: world_check --quick
-        if: steps.expensive-gates.outputs.worldgen == 'true'
+        if: >-
+          steps.expensive-gates.outputs.worldgen == 'true'
+          && steps.docs-fast-path.outputs.docs_only != 'true'
         run: python3 tools/world_check.py --quick
 
       # Validate the probe-runner harness itself on every run (cheap, no
@@ -495,6 +570,7 @@ jobs:
         run: |
           python3 tools/ci_probes.py --self-test
           python3 tools/ci_expensive_gates.py --self-test
+          python3 tools/ci_docs_fast_path.py --self-test
           python3 tools/test_run_probes.py
           python3 tools/test_persistence_contract_sweep.py
           python3 tools/test_action_outcome_probe.py
