@@ -688,12 +688,16 @@ jobs:
       # -> value, invalid JSON -> text) against a real socket speaking
       # the console protocol, and fails if a probe grows a private JSON
       # console wrapper again — the twenty-two-copy duplication #1160
-      # removed. test_probe_flake is the only automated gate
-      # probe_protocol.py, probe_flake.py and probe_census.py have —
-      # mutation-covering all three parsers from both sides, engine-free
-      # and GPU-free — and every #1426 protocol migration extends it
-      # with another standalone case, so each of those migrations shipped
-      # with a gate nothing ran until #1475.
+      # removed. test_probe_flake mutation-covers probe_protocol.py,
+      # probe_flake.py and probe_census.py's parsers from both sides,
+      # engine-free and GPU-free, and every #1426 protocol migration
+      # extends it with another standalone case, so each of those
+      # migrations shipped with a gate nothing ran until #1475.
+      # test_probe_census is the census's own self-test — the record,
+      # its atomic writer, the declared schema, and #1429's cohort,
+      # freshness and staleness semantics — driving synthetic documents
+      # in throwaway temporary trees, so it touches no docs worktree and
+      # boots nothing.
       - name: probe runner self-tests
         run: |
           python3 tools/ci_probes.py --self-test
@@ -704,6 +708,7 @@ jobs:
           python3 tools/test_action_outcome_probe.py
           python3 tools/test_probelib.py
           python3 tools/test_probe_flake.py
+          python3 tools/test_probe_census.py
 
       # Cheap, no-engine guard (#1355): fails if a `python3 tools/*.py`
       # check runs in this job and not in tools/ci-local.sh, or the other
