@@ -16,11 +16,14 @@ exercises the shipped code paths rather than a copy.
 #1492 added the declared schema, so shape, required-field, closure,
 enum, length, range and finite-number validation ARE covered, by
 `test_declared_schema` and `test_missing_dependency` driving the real
-checked-in `tools/probe_census_schema.json`. What is still deliberately
-NOT covered: the cross-field census/measurement invariants (#1493). The
-safety promise every case shares is a CONTROLLED refusal — no traceback,
-authoritative bytes unchanged — rather than the discovery of every
-possible corruption in a hand-edited document.
+checked-in `tools/probe_census_schema.json`. #1493 added the CROSS-FIELD
+invariants, covered by `test_cross_field_invariants`, which gives every
+rule a rejecting fixture that is still schema-valid, the legitimate
+retention flows it must not over-reject, and a mutation check that lifts
+that one rule out of the production rule set. The safety promise every
+case shares is a CONTROLLED refusal — no traceback, authoritative bytes
+unchanged — rather than the discovery of every possible corruption in a
+hand-edited document.
 
 Usage:
   python3 tools/test_probe_census.py
@@ -140,6 +143,14 @@ def result_document(probe="alpha", status="ok", commit=COMMIT_A, **overrides):
 
     It carries every producer-only field `Measurement.to_document` adds,
     so the exclusion case has something real to prove.
+
+    A non-`ok` status returns what a real harness error looks like, not
+    an accepted measurement with its status field flipped: the run that
+    broke the stream is reported as `error_run` and is NOT one of the
+    completed runs, so one requested run is left uncompleted and the
+    tally covers only the run that finished. Since #1493 those are
+    cross-field invariants, so a flipped-status fixture would be state
+    the producer cannot write.
     """
     document = {
         "schema": probe_census.RESULT_SCHEMA,
@@ -176,6 +187,24 @@ def result_document(probe="alpha", status="ok", commit=COMMIT_A, **overrides):
         "invocation_dir": "/home/dev/synarchy",
         "retained_artifacts": ["/tmp/artifacts/run-002"],
     }
+    if status != "ok":
+        document.update({
+            "completed_runs": 1,
+            "runs": [{"index": 1, "port": 9100, "outcome": "PASS",
+                      "elapsed_seconds": 12.5,
+                      "checks": {"first": "PASS", "second": "MISSING"},
+                      "artifact_dir": None}],
+            "error_run": {"index": 2, "port": 9101, "outcome": "HARNESS_ERROR",
+                          "elapsed_seconds": 0.5, "checks": {},
+                          "artifact_dir": "/tmp/artifacts/run-002"},
+            "check_counts": {"first": {"PASS": 1, "FAIL": 0, "MISSING": 0},
+                             "second": {"PASS": 0, "FAIL": 0, "MISSING": 1}},
+            "failure_count": 0,
+            "failure_rate": None,
+            "timeout_count": 0,
+            "worst_elapsed_seconds": 12.5,
+            "total_elapsed_seconds": 12.5,
+        })
     document.update(overrides)
     return document
 
@@ -378,7 +407,8 @@ def test_reconciliation() -> None:
                  "census": {**probe_census.empty_census(),
                             "acceptable_failures": 1,
                             "current": {"commit_sha": COMMIT_A,
-                                        "samples": [sample_record("kept")]}}},
+                                        "samples": [sample_record("kept")]},
+                            "attempts": [attempt_record("retired-attempt")]}},
                 {"key": "alpha", "script": "stale_name.py",
                  "classification": "manual-only", "protocol": "legacy",
                  "census": {**probe_census.empty_census(),
@@ -389,7 +419,9 @@ def test_reconciliation() -> None:
                                         "samples": [sample_record("alpha-1")]},
                             "history": [{"commit_sha": COMMIT_B,
                                          "samples": [sample_record("old", COMMIT_B)]}],
-                            "attempts": [attempt_record("attempt-1")]}},
+                            "attempts": [attempt_record("attempt-1"),
+                                         attempt_record("attempt-2",
+                                                        COMMIT_B)]}},
                 {"key": "beta", "script": "beta_probe.py",
                  "classification": "manual-only", "protocol": "legacy",
                  "census": {**probe_census.empty_census(),
@@ -1171,9 +1203,21 @@ def _replace(document, path, value):
 
 
 def rich_census() -> dict:
-    """A v2 census with real accumulated data on its first row."""
+    """A v2 census with real accumulated data on its first row.
+
+    Consistent under #1493's cross-field invariants, which is what keeps
+    every case built on it honest: a base document that were already
+    inconsistent would be refused for its OWN defect, and each case
+    would then pass without ever exercising the mutation it applies.
+    So the two retained samples are matched by two accepted attempts —
+    one per commit, in the order they were ingested — and the archived
+    cohort's sample really is from that cohort's commit.
+    """
     sample = probe_census.summarize_sample(result_document())
     attempt = probe_census.summarize_attempt(result_document(), True)
+    archived = probe_census.summarize_sample(result_document(commit=COMMIT_B))
+    archived_attempt = probe_census.summarize_attempt(
+        result_document(commit=COMMIT_B), True)
 
     def row(key, census):
         return {"key": key, "script": f"{key}_probe.py",
@@ -1189,8 +1233,9 @@ def rich_census() -> dict:
                           "current": {"commit_sha": COMMIT_A,
                                       "samples": [copy.deepcopy(sample)]},
                           "history": [{"commit_sha": COMMIT_B,
-                                       "samples": [copy.deepcopy(sample)]}],
-                          "attempts": [copy.deepcopy(attempt)]}),
+                                       "samples": [copy.deepcopy(archived)]}],
+                          "attempts": [copy.deepcopy(archived_attempt),
+                                       copy.deepcopy(attempt)]}),
             row("beta", probe_census.empty_census()),
             row("gamma", probe_census.empty_census()),
         ],
@@ -1344,19 +1389,7 @@ def expect_valid(call, msg: str) -> None:
 
 def harness_error_result() -> dict:
     """A well-formed harness error, carrying the run that broke."""
-    return result_document(
-        status="harness-error",
-        completed_runs=1,
-        runs=[{"index": 1, "port": 9100, "outcome": "PASS",
-               "elapsed_seconds": 12.5,
-               "checks": {"first": "PASS", "second": "MISSING"},
-               "artifact_dir": None}],
-        error_run={"index": 2, "port": 9101, "outcome": "HARNESS_ERROR",
-                   "elapsed_seconds": 0.5, "checks": {},
-                   "artifact_dir": "/tmp/artifacts/run-002"},
-        failure_count=0, failure_rate=None, timeout_count=0,
-        check_counts={"first": {"PASS": 1, "FAIL": 0, "MISSING": 0},
-                      "second": {"PASS": 0, "FAIL": 0, "MISSING": 1}})
+    return result_document(status="harness-error")
 
 
 def test_declared_schema() -> None:
@@ -1623,6 +1656,11 @@ def test_declared_schema() -> None:
             "intake schema")
         expect(set(measurement.to_document()) == set(result_document()),
                "...and this file's fixture carries exactly its fields")
+        # A real harness error on run 3 means three runs were REQUESTED
+        # and the broken one never joined `runs`, so two completed —
+        # which is #1493's cross-field rule as well as the producer's
+        # own behaviour.
+        measurement.requested_runs = 3
         measurement.status = "harness-error"
         measurement.error = "run 3 emitted a duplicate event"
         measurement.error_run = probe_flake.RunRecord(
@@ -2280,6 +2318,337 @@ def test_cli() -> None:
 
 
 # ==========================================================================
+# The cross-field invariants (#1493)
+# ==========================================================================
+def _alpha(document: dict) -> dict:
+    """The census record of `rich_census()`'s measured row."""
+    return document["probes"][0]["census"]
+
+
+def _harness_attempt(accepted: bool, **overrides) -> dict:
+    """One well-formed harness-error attempt, from the real summarizer."""
+    record = probe_census.summarize_attempt(
+        result_document(status="harness-error"), accepted)
+    record.update(overrides)
+    return record
+
+
+def _drop_attempt(document: dict) -> None:
+    _alpha(document)["attempts"].pop()
+
+
+def _lose_the_samples(document: dict) -> None:
+    census = _alpha(document)
+    census["current"] = None
+    census["history"] = []
+
+
+def _forge_accepted_flag(document: dict) -> None:
+    _alpha(document)["attempts"][0]["accepted"] = False
+
+
+def _forge_harness_accepted(document: dict) -> None:
+    _alpha(document)["attempts"].append(_harness_attempt(True))
+
+
+def _finished_harness_error(document: dict) -> None:
+    _alpha(document)["attempts"].append(
+        _harness_attempt(False, requested_runs=2, completed_runs=2))
+
+
+def _misfiled_sample(document: dict) -> None:
+    _alpha(document)["current"]["samples"][0]["commit_sha"] = COMMIT_B
+
+
+# Each stored case breaks exactly ONE relationship while staying
+# schema-valid, and names the rule that must be the one rejecting it.
+CENSUS_CASES = (
+    (probe_census._rule_attempts_reconcile_with_samples,
+     "accepted attempts left behind by cleared cohorts",
+     "logs 2 accepted attempt(s) but retains 0 sample(s)",
+     _lose_the_samples),
+    (probe_census._rule_attempts_reconcile_with_samples,
+     "a sample with no accepted attempt to log it",
+     "logs 1 accepted attempt(s) but retains 2 sample(s)",
+     _drop_attempt),
+    (probe_census._rule_accepted_derives_from_status,
+     "`accepted` false beside an accepted status",
+     "`accepted` is derived from `status`",
+     _forge_accepted_flag),
+    (probe_census._rule_accepted_derives_from_status,
+     "`accepted` true beside a harness error",
+     "`accepted` is derived from `status`",
+     _forge_harness_accepted),
+    (probe_census._rule_attempt_leaves_a_run_uncompleted,
+     "a logged harness error that completed every run",
+     "reports completing 2 of 2 requested run(s)",
+     _finished_harness_error),
+    (probe_census._rule_cohort_holds_one_commit,
+     "a sample filed under another commit's cohort",
+     "a cohort holds one commit's samples",
+     _misfiled_sample),
+)
+
+
+def _pass_run_fails_a_check(result: dict) -> None:
+    result["runs"][0]["checks"]["second"] = "FAIL"
+    # Kept in step so the tally rule has nothing to say about it.
+    result["check_counts"]["second"] = {"PASS": 0, "FAIL": 2, "MISSING": 0}
+
+
+def _wrong_tally(result: dict) -> None:
+    result["check_counts"]["first"]["PASS"] = 1
+
+
+def _untallied_check(result: dict) -> None:
+    del result["check_counts"]["second"]
+
+
+def _finished_harness_result(result: dict) -> None:
+    """A real harness error, then its broken run counted as completed.
+
+    Built from the realistic fixture rather than by flipping an accepted
+    measurement's status, so `completed_runs` is the only field left
+    disagreeing with the rest.
+    """
+    result.update(result_document(status="harness-error"))
+    result["completed_runs"] = result["requested_runs"]
+
+
+RESULT_CASES = (
+    (probe_census._rule_pass_run_has_no_failed_check,
+     "a PASS run carrying a FAIL check",
+     "a failed check makes its run fail",
+     _pass_run_fails_a_check),
+    (probe_census._rule_check_counts_tally_runs,
+     "a tally that is not what the runs show",
+     "is not the PASS=2 FAIL=0 MISSING=0 `runs` shows",
+     _wrong_tally),
+    (probe_census._rule_check_counts_tally_runs,
+     "a check tallied in the runs with no entry",
+     "but has no entry",
+     _untallied_check),
+    (probe_census._rule_result_leaves_a_run_uncompleted,
+     "a harness error that completed every requested run",
+     "reports completing 2 of 2 requested run(s)",
+     _finished_harness_result),
+)
+
+
+@contextmanager
+def without_rule(rule):
+    """The production rule set with exactly `rule` lifted out of it.
+
+    This is the mutation check the issue requires, run rather than
+    asserted: with one rule gone its own case must be ACCEPTED, which is
+    what proves that rule is the one rejecting it and that the fixture
+    isolates a single relationship. A neighbouring rule catching the
+    same fixture would keep refusing it here and fail the case.
+    """
+    saved = (probe_census.CENSUS_RULES, probe_census.RESULT_RULES)
+    probe_census.CENSUS_RULES = tuple(
+        r for r in probe_census.CENSUS_RULES if r is not rule)
+    probe_census.RESULT_RULES = tuple(
+        r for r in probe_census.RESULT_RULES if r is not rule)
+    try:
+        yield
+    finally:
+        probe_census.CENSUS_RULES, probe_census.RESULT_RULES = saved
+
+
+def test_cross_field_invariants() -> None:
+    """The rules that span fields, which no schema keyword can state.
+
+    Three things are proved for every rule, because "reject malformed
+    input" fails by over-rejecting just as readily as by
+    under-rejecting: a rejecting case driven through a REAL operation on
+    a real census (refused, and not one byte rewritten), a positive case
+    built the way the producer really builds one, and a mutation check
+    that lifts that one rule out of the production rule set and requires
+    its own case to be accepted again.
+    """
+    print("\n-- the cross-field invariants --")
+    expect(len(probe_census.CENSUS_RULES) == len(
+        {rule for rule, _why, _fragment, _mutate in CENSUS_CASES}),
+        "every stored rule has a case of its own")
+    expect(len(probe_census.RESULT_RULES) == len(
+        {rule for rule, _why, _fragment, _mutate in RESULT_CASES}),
+        "every intake rule has a case of its own")
+
+    with registry(), scratch() as root:
+        target = root / "probe_census.json"
+        clean = root / "clean.json"
+        probe_census.ensure_document(clean)
+        clean_bytes = clean.read_bytes()
+
+        # -- stored state: refused by every operation, and unchanged ---
+        # A census this tool cannot trust must stop `--record`, the
+        # policy updates, `--seed` and `--validate` alike: the defect
+        # #1493 was filed for is that they each rewrote the file and so
+        # made the inconsistency durable.
+        operations = (
+            ("--record", lambda p: probe_census.record_result(
+                p, result_document(commit=COMMIT_B))),
+            ("--set-acceptable-failures", lambda p: probe_census.record_policy(
+                p, "alpha", acceptable_failures=1)),
+            ("--seed", probe_census.ensure_document),
+            ("--validate", lambda p: probe_census.validate_census(
+                probe_census.load(p), f"census {p}")),
+        )
+        for rule, why, fragment, mutate in CENSUS_CASES:
+            document = rich_census()
+            mutate(document)
+            target.write_text(json.dumps(document), encoding="utf-8")
+            stored = target.read_bytes()
+            expect_valid(
+                lambda d=document: probe_census.validate_document(
+                    d, probe_census.CENSUS_SCHEMA, "the case"),
+                f"a census with {why} is still SCHEMA-valid, so only the "
+                f"cross-field rule can reject it")
+            for name, operation in operations:
+                expect_refusal(lambda o=operation: o(target),
+                               f"{name} refuses a census with {why}", fragment)
+                expect(target.read_bytes() == stored,
+                       f"...and rewrote nothing ({name}, {why})")
+            with without_rule(rule):
+                expect_valid(
+                    lambda d=document: probe_census.validate_census(
+                        d, "the case"),
+                    f"mutation check: without {rule.__name__}, {why} is "
+                    f"accepted — that rule is what rejects it")
+
+        # -- the intake surface: refused, and nothing written ----------
+        for rule, why, fragment, mutate in RESULT_CASES:
+            document = result_document()
+            mutate(document)
+            expect_valid(
+                lambda d=document: probe_census.validate_document(
+                    d, probe_census.RESULT_SCHEMA, "the case"),
+                f"a result with {why} is still SCHEMA-valid")
+            expect_refusal(
+                lambda d=document: probe_census.record_result(clean, d),
+                f"--record refuses a result with {why}", fragment)
+            expect(clean.read_bytes() == clean_bytes,
+                   f"...and wrote nothing ({why})")
+            with without_rule(rule):
+                expect_valid(
+                    lambda d=document: probe_census.validate_result(d),
+                    f"mutation check: without {rule.__name__}, {why} is "
+                    f"accepted — that rule is what rejects it")
+
+        # The harness-error relationship is guarded on BOTH surfaces,
+        # deliberately: the intake rule refuses the document, and the
+        # stored rule refuses the attempt it would have become. Lifting
+        # the intake one out therefore does NOT let the write through —
+        # which is the defence in depth, and worth pinning rather than
+        # hiding inside a mutation check that dodges it.
+        finished = result_document()
+        _finished_harness_result(finished)
+        with without_rule(probe_census._rule_result_leaves_a_run_uncompleted):
+            expect_refusal(
+                lambda: probe_census.record_result(clean, finished),
+                "the stored rule still catches a finished harness error "
+                "the intake rule was not there to refuse",
+                "reports completing 2 of 2 requested run(s)")
+        expect(clean.read_bytes() == clean_bytes,
+               "...and that refusal wrote nothing either")
+
+    # -- the positive half: every legitimate flow still goes through ---
+    # Over-rejection is this kind of rule's real failure mode, so the
+    # accepting cases are the load-bearing ones. They come from the
+    # producer's own serialization where they can, not from a
+    # hand-written document that could agree with the fixtures while
+    # both drifted from what probe_flake.py writes.
+    with registry(), scratch() as root:
+        path = root / "probe_census.json"
+        expect(probe_census.census_invariants(probe_census.build_manifest())
+               == [], "an empty census reconciles 0 accepted against 0 "
+                      "retained")
+        probe_census.ensure_document(path)
+
+        descriptor = probe_flake.probe_protocol.build_descriptor(
+            "alpha", [("first", "the first check"),
+                      ("second", "the second check")])
+
+        def measurement(requested: int) -> probe_flake.Measurement:
+            return probe_flake.Measurement(
+                "alpha", descriptor, requested_runs=requested,
+                rts_caps=probe_flake.DEFAULT_RTS_CAPS,
+                artifact_root=Path("/tmp/artifacts"),
+                invocation_dir=Path("/tmp/artifacts/alpha-1"))
+
+        # A TIMEOUT wins outright, so a timed-out run really can carry a
+        # FAIL check. The PASS rule must not reach it.
+        timed_out = measurement(1)
+        timed_out.runs.append(probe_flake.RunRecord(
+            1, 9100, probe_flake.RUN_TIMEOUT, 900.0,
+            {"first": "PASS", "second": "FAIL"},
+            Path("/tmp/artifacts/alpha-1/run-001")))
+        expect_valid(
+            lambda: probe_census.record_result(path, timed_out.to_document()),
+            "a TIMEOUT run carrying a FAIL check is accepted")
+
+        # A harness error on the very FIRST run completes nothing.
+        nothing_ran = measurement(3)
+        nothing_ran.status = "harness-error"
+        nothing_ran.error = "run 1 emitted a duplicate event"
+        nothing_ran.error_run = probe_flake.RunRecord(
+            1, 9101, probe_flake.RUN_HARNESS_ERROR, 0.5, {},
+            Path("/tmp/artifacts/alpha-1/run-001"))
+        expect_valid(
+            lambda: probe_census.record_result(path,
+                                               nothing_ran.to_document()),
+            "a harness error that completed no run at all is accepted")
+
+        # Two measurements of ONE commit accumulate in a single cohort;
+        # a third naming another commit rolls that whole cohort into
+        # history. Both are legitimate retention, and the equality has
+        # to survive each. (The producer-built measurements above stamp
+        # the REAL checkout commit, so they sit in a cohort of their
+        # own — which is exactly the multi-cohort state the equality is
+        # summed across.)
+        for index in (1, 2):
+            expect_valid(lambda: probe_census.record_result(path,
+                                                            result_document()),
+                         f"accepted measurement {index} of one commit is "
+                         f"accepted")
+        rollover = result_document(commit=COMMIT_B)
+        expect_valid(
+            lambda: probe_census.record_result(path, rollover),
+            "and one naming a new commit, which rolls the cohort over")
+        stored = json.loads(path.read_text(encoding="utf-8"))
+        census = stored["probes"][0]["census"]
+        archived = {cohort["commit_sha"]: len(cohort["samples"])
+                    for cohort in census["history"]}
+        expect(archived.get(COMMIT_A) == 2
+               and census["current"]["commit_sha"] == COMMIT_B
+               and len(census["current"]["samples"]) == 1,
+               f"the rollover archived the two-sample cohort rather than "
+               f"dropping it ({archived})")
+        expect(len(census["attempts"]) == 5
+               and sum(1 for a in census["attempts"]
+                       if a["status"] == "ok") == 4,
+               "and the harness error is logged without a sample")
+        expect(probe_census.census_invariants(stored) == [],
+               "accepted attempts still reconcile against retained samples "
+               "across current AND history")
+
+        # Promotion archives the current cohort; reconciliation appends
+        # rows. Neither may disturb the equality.
+        cohorts = len(census["history"])
+        with registry(ci_eligible={"alpha"}):
+            promoted = probe_census.ensure_document(path)
+        expect(promoted["probes"][0]["census"]["current"] is None
+               and len(promoted["probes"][0]["census"]["history"])
+               == cohorts + 1,
+               "promotion archived the current cohort rather than dropping it")
+        expect_valid(
+            lambda: probe_census.validate_census(promoted, "the promoted "
+                                                           "census"),
+            "a promoted, reconciled census still satisfies every invariant")
+
+
+# ==========================================================================
 def main() -> int:
     for test in (test_record_shape, test_migration, test_seed_and_noop,
                  test_reconciliation, test_ingest_accepted,
@@ -2287,6 +2656,7 @@ def main() -> int:
                  test_malformed_rows_refuse_cleanly,
                  test_duplicate_target_rows,
                  test_adversarial_malformed_input,
+                 test_cross_field_invariants,
                  test_declared_schema, test_malformed_schema_file,
                  test_missing_dependency,
                  test_path_substitution, test_atomicity,
