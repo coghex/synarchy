@@ -61,6 +61,17 @@ if [ -e "$LOCAL" ]; then
   cp "$LOCAL" "$BACKUP"
 fi
 
+# Resolve THIS working tree's own changed paths before the scratch
+# cabal.project.local below exists (#1360). The order is load-bearing,
+# not incidental: cabal.project.local is not gitignored, so a change can
+# legitimately track one -- and CI's save-compat gate selects on it,
+# because cabal would apply it there. Capturing after the write would
+# report this gate's own scratch edit to a tracked file as if it were
+# the candidate's, which is exactly what requirement 7 forbids;
+# capturing before reports the candidate's real edit and nothing else.
+# The list feeds the save-compat decision at step 11.
+SAVE_COMPAT_PATHS="$(python3 tools/ci_expensive_gates.py --local-changed-paths)"
+
 # -fforce-recomp so a warm build can't mask a warning a fresh build would
 # catch; see the header comment above for why -Werror itself no longer
 # needs to be injected here.
@@ -102,9 +113,44 @@ echo "==> [10/20] EngineEnv capability inventory audit"
 python3 tools/test_engine_env_capability_audit.py
 python3 tools/engine_env_capability_audit.py
 
+# Both of these stay unconditional, exactly as in CI:
+# --without-reproducibility (#1360) drops exactly ONE member of the
+# self-test module -- the one that spawns its own `cabal repl` to build
+# two timestamp variants -- and the block below runs that member when
+# this working tree's own changes touch a path that can move its result.
+# Every other member, and the whole real audit, still run every time.
 echo "==> [11/20] save compatibility audit"
-python3 tools/test_save_compat_audit.py
+python3 tools/test_save_compat_audit.py --without-reproducibility
 python3 tools/save_compat_audit.py
+
+# The reproducibility member, selected by the SAME decision CI takes
+# (#1360, requirement 7): $SAVE_COMPAT_PATHS was resolved at the top of
+# this script, against the merge base with the default branch and before
+# the scratch cabal.project.local existed, and is piped here into the
+# very same `ci_expensive_gates.py --stdin --gate save-compat` command
+# .github/workflows/ci.yml runs. Not a second matcher that could drift:
+# one script, one pattern table, one answer. An unresolvable base yields
+# the selector's conservative sentinel, which selects the gate, so a
+# detached or shallow checkout runs the coverage rather than skipping it.
+# tools/ci_parity_audit.py fails if the two files stop agreeing about
+# which gate decides this or which command it guards.
+# >>> save-compat reproducibility selection >>>
+# tools/ci_parity_audit.py EXTRACTS the lines between these two markers
+# and EXECUTES them against synthetic changed-path lists (supplied as
+# $SAVE_COMPAT_PATHS), so this block's real behaviour -- not a grep for
+# its text -- is what proves `make ci` selects the reproducibility
+# member from the same decision CI's `if:` takes. Keep the markers, and
+# keep the block reading $SAVE_COMPAT_PATHS rather than re-deriving it:
+# re-deriving it here would put the resolution back after the scratch
+# write.
+SAVE_COMPAT_REPRO="$(printf '%s\n' "$SAVE_COMPAT_PATHS" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat)"
+if [ "$SAVE_COMPAT_REPRO" = true ]; then
+  echo "==> [11/20] save compatibility fixture reproducibility (selected)"
+  python3 tools/test_save_compat_audit.py --only-reproducibility
+else
+  echo "==> [11/20] save compatibility fixture reproducibility: skipped (no save-format, fixture, save-tooling or Cabal path changed)"
+fi
+# <<< save-compat reproducibility selection <<<
 
 echo "==> [12/20] enum append-only audit"
 python3 tools/enum_append_only_audit.py --self-test

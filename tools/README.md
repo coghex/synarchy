@@ -850,15 +850,17 @@ failing or recording observations changes no census sample, no statistic, no
 schedule and no skip decision — one interpreted `$test` run is context, not a
 measurement in the lab's statistics.
 
-### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets selection
+### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets/save-compat selection
 
-Selects the three expensive CI gates that are conditional on pull requests:
+Selects the four expensive gates that are conditional on pull requests:
 quick worldgen-output regression checking, graphical test-suite compilation,
-and the unit-asset inventory pair (`test_pack_atlas.py` +
-`pack_atlas.py --validate-only --strict`, #1257). All three run
-unconditionally after a merge to master. The mapping is intentionally
-explicit; add a relevant glob when introducing a new worldgen output,
-graphics entry point, or unit-asset input.
+the unit-asset inventory pair (`test_pack_atlas.py` +
+`pack_atlas.py --validate-only --strict`, #1257), and the save-compat
+fixture-reproducibility test (`test_save_compat_audit.py
+--only-reproducibility`, #1360). All four run unconditionally after a merge
+to master. The mapping is intentionally explicit; add a relevant glob when
+introducing a new worldgen output, graphics entry point, unit-asset input, or
+save-format/fixture/save-tooling path.
 
 Patterns are matched with `fnmatch`, where `*` crosses `/` and `**` carries no
 special meaning — write `dir/*` for a whole subtree. `--gate` names are
@@ -868,8 +870,37 @@ raises instead of silently inheriting another gate's globs.
 ```bash
 python3 tools/ci_expensive_gates.py --changed src/World/Geology/Timeline.hs --gate worldgen
 python3 tools/ci_expensive_gates.py --changed data/units/acolyte.yaml --gate unit-assets
+python3 tools/ci_expensive_gates.py --changed src/World/Save/Envelope/Codec.hs --gate save-compat
 python3 tools/ci_expensive_gates.py --self-test
 ```
+
+**`save-compat` is the one gate `make ci` also selects with** (#1360), so it
+is the one that needs a LOCAL notion of "what changed":
+
+```bash
+python3 tools/ci_expensive_gates.py --local-changed-paths \
+  | python3 tools/ci_expensive_gates.py --stdin --gate save-compat
+```
+
+`--local-changed-paths` prints every TRACKED path differing from the merge
+base with the checked-out default branch — commits on the branch, staged and
+unstaged edits alike — which is the local counterpart of CI's
+`git diff --name-only <pr-base> HEAD`. If no default branch or merge base
+resolves, it prints a conservative sentinel that selects EVERY gate: a local
+gate that cannot tell what changed runs the coverage rather than skipping it.
+
+`tools/ci-local.sh` calls it at the **top** of the script, before writing its
+own temporary `cabal.project.local`, and that order is load-bearing rather than
+incidental: that file is not gitignored, so a change can track one and cabal
+applies it in CI (hence `cabal.project*` in the gate's table) — resolving after
+the write would report this gate's own scratch edit as the candidate's.
+`ci_parity_audit.py` checks the ordering. The decision itself still goes
+through the same
+`--stdin --gate` command CI runs, so there is one matcher and one answer;
+`tools/ci_parity_audit.py` fails if the two files stop agreeing about which
+gate decides the reproducibility member or which command it guards, and it
+proves the local half by EXECUTING `ci-local.sh`'s marked selection block
+against a positive and a negative sample rather than reading it.
 
 ## Manual gameplay scenarios (`gameplay_scenarios.py`, #925)
 
@@ -1164,7 +1195,7 @@ tools/
 ├── world_baseline.py       (capture reference outputs)
 ├── world_check.py          (regression suite runner)
 ├── test_audit.py           (unit tests)
-├── ci_expensive_gates.py   (path selector for CI's worldgen/graphical/unit-assets gates)
+├── ci_expensive_gates.py   (path selector for the worldgen/graphical/unit-assets/save-compat gates)
 ├── lua_module_budget.py    (Lua module split line-budget guard)
 ├── action_outcome_coverage.py (F4 action-outcome verb instrumentation self-audit)
 ├── language_report.py      (generated-language native-name report/check, #710/#1094/#1095/#1096)
