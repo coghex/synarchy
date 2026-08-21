@@ -19,7 +19,7 @@ local stats = require("scripts.unit_stats")
 
 local M = {}
 
-local function clamp(x, lo, hi) return math.max(lo, math.min(hi, x)) end
+local clamp = require("scripts.lib.numeric").clamp
 
 -- Fraction 0..1. Defaults to 1.0 (fully rested) when the resource hasn't
 -- been initialized yet (unit_resources seeds it to max on first tick) or
