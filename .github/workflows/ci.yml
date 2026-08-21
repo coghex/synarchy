@@ -31,10 +31,11 @@
 # The dist-newstyle key includes the GHC and Cabal versions and the
 # dependency plan hash (so a compiler/Cabal bump or a dependency change
 # invalidates it) — and NOTHING per-commit (#790). GitHub cache keys
-# are immutable: actions/cache only writes on a key miss and an
-# exact-key hit never re-saves, so a stable plan-hash key means the
-# FIRST run for a given plan freezes one snapshot and every later run
-# on that same plan just restores it and saves nothing. Retained
+# are immutable, and both caches below restore and save as SEPARATE
+# steps whose save is conditioned on the exact key having missed, so an
+# exact-key hit never re-saves. A stable plan-hash key therefore means
+# the FIRST run for a given plan freezes one snapshot and every later
+# run on that same plan just restores it and saves nothing. Retained
 # build-product snapshots are therefore BOUNDED by the number of
 # distinct dependency plans in flight (a handful that only turns over
 # when dependencies change), not by commit count. This mirrors the
@@ -320,20 +321,70 @@ jobs:
       # Cache the project build products so GHC recompiles only dirty
       # modules. plan.json (from the --dry-run above) exists now, so its
       # hash keys the cache alongside the GHC/Cabal versions. The key is
-      # stable per plan (no per-commit component, #790): the combined
-      # cache action restores here and, at post-job, saves dist-newstyle
-      # ONLY when the exact key missed — so an unchanged plan re-saves
-      # nothing (one frozen snapshot per plan), while a changed plan
-      # restores the newest prior snapshot for this GHC/Cabal via
-      # restore-keys and then saves exactly one new entry.
-      - name: Cache project build (dist-newstyle)
+      # stable per plan (no per-commit component, #790): this restores
+      # here and the save step at the very END of this job writes
+      # dist-newstyle ONLY when the exact key missed — so an unchanged
+      # plan re-saves nothing (one frozen snapshot per plan), while a
+      # changed plan restores the newest prior snapshot for this
+      # GHC/Cabal via restore-keys and then saves exactly one new entry.
+      #
+      # Split out of the combined `actions/cache` action (#1358), which
+      # is the only way to learn WHICH key a prefix hit restored: the
+      # combined action stashes the matched key in step STATE for its own
+      # post step and publishes just `cache-hit`, while
+      # `actions/cache/restore` publishes `cache-primary-key` and
+      # `cache-matched-key` as outputs the report step below can read.
+      # The key, the path and the restore-keys are untouched, and the
+      # save step reproduces the combined action's conditions term for
+      # term — see it.
+      - name: Restore project build cache (dist-newstyle)
         if: steps.docs-fast-path.outputs.docs_only != 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: dist-cache
         with:
           path: dist-newstyle
           key: dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}
           restore-keys: |
             dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-
+
+      # Classify what each of the two restores above actually got: exact
+      # hit, prefix hit (naming the key it restored), or full miss
+      # (#1358). All three exit zero today and differ only in wall-clock,
+      # so a systematic slide into cold caches — a key-scheme edit, LRU
+      # eviction against the 10 GB repository quota, branch scoping
+      # denying a PR access to master's cache, a backend regression —
+      # would multiply every build's cost with nothing turning red.
+      #
+      # Reporting only: the script exits 0 for every outcome, and a full
+      # miss emits a NON-failing annotation — warning on a master push,
+      # where master's own previous build populated the cache, and notice
+      # on a PR, where a miss can be legitimate. A first build after a
+      # real dependency change legitimately misses, and a gate that cries
+      # wolf gets ignored.
+      #
+      # Deliberately NOT carrying the docs-only term the cache steps
+      # have: that fast path skips those steps, which leaves their
+      # outputs empty and therefore indistinguishable from a cold cache,
+      # so the reporter is TOLD instead — which puts the case under
+      # --self-test rather than under an untested workflow expression.
+      # That self-test also re-checks that both caches are still restored
+      # by `actions/cache/restore` under the ids bound below: reverting
+      # either to the combined action would leave `cache-matched-key`
+      # permanently empty and silently turn every prefix hit into a
+      # reported full miss.
+      - name: Report cache restore outcomes
+        env:
+          CI_CACHE_DOCS_ONLY: ${{ steps.docs-fast-path.outputs.docs_only }}
+          CI_CACHE_EVENT_NAME: ${{ github.event_name }}
+          CI_CACHE_DEPS_HIT: ${{ steps.cache.outputs.cache-hit }}
+          CI_CACHE_DEPS_PRIMARY_KEY: ${{ steps.cache.outputs.cache-primary-key }}
+          CI_CACHE_DEPS_MATCHED_KEY: ${{ steps.cache.outputs.cache-matched-key }}
+          CI_CACHE_DIST_HIT: ${{ steps.dist-cache.outputs.cache-hit }}
+          CI_CACHE_DIST_PRIMARY_KEY: ${{ steps.dist-cache.outputs.cache-primary-key }}
+          CI_CACHE_DIST_MATCHED_KEY: ${{ steps.dist-cache.outputs.cache-matched-key }}
+        run: |
+          python3 tools/ci_cache_report.py --self-test
+          python3 tools/ci_cache_report.py
 
       - name: Build dependencies
         if: steps.docs-fast-path.outputs.docs_only != 'true'
@@ -624,3 +675,41 @@ jobs:
           fi
           echo "Selected probes: $ONLY"
           python3 tools/run_probes.py --only "$ONLY" --exact --retries 1 --jobs 2
+
+      # The other half of the #1358 restore/save split above. It has to
+      # reproduce the combined `actions/cache` action's post step, and it
+      # does so term for term:
+      #   * `post-if: success()` — a step `if:` naming no status function
+      #     has `success()` applied implicitly, so this is skipped
+      #     whenever an earlier step failed or the job was cancelled,
+      #     exactly as that post step was.
+      #   * LAST step in the job, so dist-newstyle is captured in the
+      #     same final state a post step would have seen.
+      #   * Save only when the EXACT key missed. The combined action's
+      #     save half compares its primary key against the key it
+      #     restored and skips on an exact match — that is what keeps one
+      #     frozen snapshot per plan (#790). `actions/cache/save` has no
+      #     such check of its own, so the cache-hit term is load-bearing
+      #     here exactly as it is on the dependency save above.
+      #   * `key:` is the restore step's OWN `cache-primary-key` output,
+      #     not a second `hashFiles(...)` evaluation. The combined action
+      #     saves under the key its restore half evaluated, carried in
+      #     step state; re-hashing plan.json here would save under
+      #     whatever the file hashes to after the whole build instead —
+      #     a different key from the one the cache-hit term above was
+      #     decided against. That output is empty in exactly the case
+      #     where the combined action's save half logged "Error
+      #     retrieving key from state" and returned, so the emptiness
+      #     term keeps that a no-op rather than an invalid-input failure.
+      # The docs-only term is load-bearing for the same reason it is on
+      # the dependency save: a skipped restore step leaves cache-hit
+      # EMPTY, which satisfies `!= 'true'`.
+      - name: Save project build cache (dist-newstyle)
+        if: >-
+          steps.dist-cache.outputs.cache-hit != 'true'
+          && steps.dist-cache.outputs.cache-primary-key != ''
+          && steps.docs-fast-path.outputs.docs_only != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: dist-newstyle
+          key: ${{ steps.dist-cache.outputs.cache-primary-key }}
