@@ -113,7 +113,7 @@ local CAFFEINE_CONCENTRATION_BONUS = 0.15  -- added on top, at caffeine = 1.0
 -- minutes at the default time scale) to clear a fully-dosed meter.
 local CAFFEINE_DECAY = 1.0 / 1800
 
-local function clamp(x, lo, hi) return math.max(lo, math.min(hi, x)) end
+local clamp = require("scripts.lib.numeric").clamp
 
 -- current/max fraction via stats.get (so a Lua-derived max, e.g.
 -- max_stamina = endurance*10, resolves the same way tickResource does).

@@ -94,7 +94,7 @@ local FEVER_MAX_OFFSET = 3.5   -- ceiling (fever core ≈ 40.5°C)
 
 local MOVING = { walking = true, running = true, sprinting = true }
 
-local function clamp(x, lo, hi) return math.max(lo, math.min(hi, x)) end
+local clamp = require("scripts.lib.numeric").clamp
 
 -- Advance a unit's core temperature one tick. `info` is unit.getInfo(uid)
 -- (for gridX/gridY). No-op if there's no world climate to sample.

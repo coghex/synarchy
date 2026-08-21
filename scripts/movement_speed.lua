@@ -18,9 +18,7 @@ local salts      = require("scripts.salts")
 local exhaustion = require("scripts.exhaustion")
 local starvation = require("scripts.starvation")
 
-local function clamp(x, lo, hi)
-    return math.max(lo, math.min(hi, x))
-end
+local clamp = require("scripts.lib.numeric").clamp
 
 -- Encumbrance speed band, keyed on the carried-weight / capacity ratio.
 --   FREE_FRAC  — load up to this fraction of capacity is "free" (a unit

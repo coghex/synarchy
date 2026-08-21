@@ -40,7 +40,7 @@ local CRAMP_START   = 0.80
 local CRAMP_FULL    = 0.50
 local CRAMP_MIN_MULT = 0.40    -- worst-case movement speed ×
 
-local function clamp(x, lo, hi) return math.max(lo, math.min(hi, x)) end
+local clamp = require("scripts.lib.numeric").clamp
 
 function salts.maxSalt(uid)
     return (unit.getStat(uid, "body_mass") or 70.0) * SALT_PER_KG
