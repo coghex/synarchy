@@ -27,7 +27,9 @@ full story behind a contract stated tersely here.
 - **Run tests:** see **Testing Tiers** below — pick the cheapest tier that covers the change; don't run the gates as an iteration loop
 - **Pre-push gate:** `make ci` runs the same **gate set** as `ci.yml`'s
   `build-test` job — the warning-clean (`-Werror`) builds, the headless
-  hspec suite, and every `python3 tools/*.py` audit and self-test.
+  hspec suite (full tier: it sets `SYNARCHY_FULL_TESTS=1`, which CI sets
+  only on worldgen-selected runs — #1364), and every `python3 tools/*.py`
+  audit and self-test.
   `tools/ci_parity_audit.py` (#1355, run on both sides) compares the two
   files' tool invocations in both directions and fails on any difference
   outside its hard-coded, reason-carrying exemption list, so the set
@@ -73,9 +75,28 @@ seconds and the expensive gates at the end.
    Do NOT run the whole headless suite, the 21-seed world check, or
    `make ci` by default — CI is the full-suite authority.
 3. **Worldgen-OUTPUT changes only (full tier).**
-   `SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless` (+~25 s),
-   then re-capture baselines `python3 tools/world_baseline.py` (~7 min)
-   and re-run world_check. Remember the save-version bump.
+   `SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless` (+~11 s on
+   a warm macOS/aarch64 tree; +~64 s of hspec wall on CI's Linux
+   runner — measure each platform, don't port one number), then
+   re-capture baselines `python3 tools/world_baseline.py` (~7 min) and
+   re-run world_check. Remember the save-version bump.
+
+   Since #1364 this tier is no longer local-only: CI's `Headless test
+   suite` step sets `SYNARCHY_FULL_TESTS=1` whenever the **same
+   worldgen selector** that gates `world_check --quick` fires — so
+   every worldgen-output PR and every push to master runs it and a
+   failure blocks — and `tools/ci-local.sh` (`make ci`) sets it
+   unconditionally. Running it by hand is still the fast way to see a
+   failure before pushing; it is no longer the only thing standing
+   between a full-tier regression and master.
+
+   **The variable is wholesale, not per-test.** It has exactly one
+   consumer today (`Test.Headless.WorldGen.Exposure`'s w128 seed-42
+   volcano case), and any new example added behind it automatically
+   joins BOTH of those gates. Add one only after deliberately accepting
+   that recurring CI cost. Note also that the guard matches any present
+   value: `SYNARCHY_FULL_TESTS=` (empty) reads as ENABLED, so anything
+   turning it off must leave it unset.
 4. **Behavior probes — opt-in, not a default gate.** ~85 headless
    `tools/*_probe.py` scripts each boot a real engine and gate one
    system — see `tools/README.md` and **Subsystem probes & domain

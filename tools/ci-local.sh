@@ -12,9 +12,10 @@
 # reason-carrying exemption list. Adding a check to one file without the
 # other now fails immediately instead of surfacing after a push. Two
 # things the audit deliberately does not compare: conditional control flow
-# (CI path-selects the graphical build, the unit-asset gate and
-# world_check on PRs; this file runs all three unconditionally, which is
-# what makes it conservative), and the non-Python steps around them.
+# (CI path-selects the graphical build, the unit-asset gate, world_check
+# and -- since #1364 -- the hspec step's SYNARCHY_FULL_TESTS=1 full tier
+# on PRs; this file runs all four unconditionally, which is what makes it
+# conservative), and the non-Python steps around them.
 #
 # -Werror is part of synarchy.cabal's checked-in warning policy now
 # (#1057), so every build of the `synarchy` package -- here, in CI, or a
@@ -84,8 +85,17 @@ echo "==> [2/20] build test suites"
 cabal build synarchy-test-headless
 cabal build synarchy-test-graphical
 
-echo "==> [3/20] headless hspec suite"
-cabal test synarchy-test-headless --test-show-details=direct
+echo "==> [3/20] headless hspec suite (full tier)"
+# SYNARCHY_FULL_TESTS=1 turns the full-tier examples from pending into
+# real runs (#1364) -- today exactly one, the w128 seed-42 volcano
+# exposure regression in test-headless/Test/Headless/WorldGen/Exposure.hs.
+# CI applies it only when its worldgen selector fires; this file runs
+# every gate unconditionally (see the header note), so it applies it
+# always and stays the conservative side of that parity. It must be set
+# on the `cabal test` process itself, and it must be `1` rather than ''
+# -- the test's guard treats ANY present value, empty string included, as
+# enabled.
+SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless --test-show-details=direct
 
 echo "==> [4/20] test audit"
 python3 tools/test_audit.py
