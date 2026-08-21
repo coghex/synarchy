@@ -861,19 +861,58 @@ tear the engine down in a `finally`, and save nothing.
   already over capacity refuses further items and says so; the runner
   never unloads inventory it did not put there. A capacity refusal is a
   gameplay observation and still exits 0, in both scenarios.
-- **`first-aid`** (~2 min) builds a wide arena ridge, issues the mule's
+- **`first-aid`** (~4 min) builds a wide arena ridge, issues the mule's
   pre-stocked `first_aid_kit` to the selected expedition acolyte via that
   same capacity-gated transfer path — a kit refused for want of room is
   recorded as an observation and the run continues rather than aborting,
   with the pre-fall baseline dropping only its kit precondition (and
   saying so) and `unit.treatBleeding` falling back to the makeshift
   tourniquet it improvises when the kit owner has no supplies — walks
-  that acolyte off the ridge for a real fall,
-  administers first aid through `unit.treatBleeding` the moment the injury
-  lands, and reports the injury, the treatment call's full result
-  (part/kind/method/bandages used/attempts/residual seep/message), the
-  kit's remaining contents and holder, whether the medic AI claimed the
-  patient on its own, and the final unit state.
+  that acolyte off the ridge for a real fall, and then **follows the real
+  medic AI's treatment to a named terminal condition** (#1221). It
+  reports the injury, that treatment trajectory, the kit's remaining
+  contents and holder, and the final unit state.
+
+  **The runner administers no treatment at all.** It used to fire
+  `unit.treatBleeding` itself the moment the injury landed, which made
+  the AI's own throughput unmeasurable — every dressing the report showed
+  was the runner's. Post-#998 a 2-z fall leaves well over a minute before
+  a naive exsanguination (`test-headless/Test/Headless/Unit/Fall.hs`), so
+  the real `treat_ally` path — real claim, real kit fetch, real
+  `unit.treatBleeding` calls, live blood tick and real clotting — is
+  simply followed instead. Two scenario-local Lua pieces make that
+  observable without touching any engine surface or AI script: a
+  **transparent wrapper** around `unit.treatBleeding` that forwards each
+  call with the caller's exact argument list, logs the arguments and the
+  returned table, and returns the original results unchanged; and a
+  one-round-trip sampler that reads the patient and drains that log.
+
+  Every sampling interval (2 s, within a 120 s budget) prints a
+  trajectory row: elapsed time, pose and knockdown state, current/max
+  blood and aggregate bleed rate, total/dressed/undressed/external/
+  still-bleeding wound counts, remaining bandages and where they are,
+  who currently holds a treat claim, and each treatment result observed
+  since the previous row (`ok`/`method`/`part`/`kind`/`bandagesUsed`/
+  `attempts`/residual `seep`/`message`, with the treating unit's id).
+
+  Which acolyte treats is **discovered, never staged**: every acolyte
+  rolls its own `bleed_control` knowledge at spawn and `bestMedicFor`
+  ranks the whole squad, so the acolyte placed beside the landing is only
+  a bystander and the report names the units that actually claimed and
+  treated. "Still bleeding" is `scripts/unit_ai_medic.lua`'s own
+  `needsTreatment` policy rather than a cutoff invented by the runner —
+  external kinds only (`concussion`/`fracture`/`internal` excluded), seep
+  above `treat_min_seep` (read live off `unit_ai_tunables.lua`) and clot
+  below `CLOT_ENOUGH` — so `controlled` means the medic itself would
+  stop. The terminal condition is one of **controlled**, **supplies
+  exhausted**, **collapsed**, **died**, **gone** or **timeout**, checked
+  in that precedence with patient-state outcomes first; a `collapsed`
+  terminal requires pose `collapsed` **with `knockedDown` false**, since
+  every real fall lands in that same pose with the flag set and the
+  ordinary knockdown is not an outcome. The terminal row is printed
+  whatever happened, including when no treatment call was ever made, and
+  the condition is reported as an OBSERVATION — it never affects the exit
+  status.
 
   Its **pre-fall baseline is captured under a stopped simulation** (#1218).
   `engine.setPaused(true)` goes on before the first spawn and stays on

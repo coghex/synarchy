@@ -13,12 +13,19 @@ one-shot:
   first-aid   The same real starting roster on a repeatable arena. The
               mule's pre-stocked first-aid kit is moved onto the selected
               expedition acolyte, who then takes a real fall; the injury,
-              the treatment attempt/outcome, the kit state and the final
-              unit state are reported. Its roster setup, provisioning and
-              pre-fall baseline all run with the simulation STOPPED, so
-              ambient AI cannot move or injure the scout between the kit
-              issue and the fall (#1218); the fall itself and everything
-              after it stay live and observational.
+              the kit state and the final unit state are reported. Its
+              roster setup, provisioning and pre-fall baseline all run
+              with the simulation STOPPED, so ambient AI cannot move or
+              injure the scout between the kit issue and the fall
+              (#1218); the fall itself and everything after it stay live
+              and observational. Treatment is then FOLLOWED to a named
+              terminal condition (#1221): the runner administers none of
+              it, the real medic AI claims/fetches/dresses on its own,
+              and every sampling interval records the patient's blood,
+              aggregate bleed rate, dressing state, remaining bandages
+              and each treatment result until bleeding is controlled,
+              the bandages run out, the patient collapses or dies, or a
+              bounded budget expires.
 
 THIS IS NOT A BEHAVIOR PROBE AND NOT A CI GATE. It is deliberately
 absent from ``tools/run_probes.py`` and ``tools/ci_probes.py``, is never
@@ -85,20 +92,43 @@ ARRIVAL_TILES = 0.8           # matches the AI's own 0.6 + a little slack
 #
 # The height is the SHALLOWEST real fall: `pcFallTriggerDrop` is 2, so a
 # 2-z step is the first descent the mover turns into a Falling
-# transition at all. Measured on a baseline acolyte, that already lands
-# ~30 wounds (blunt + fractures) and a live bleed — a genuine patient —
-# while every taller drop tested (3/4/5 z) drained the unit's blood
-# far enough that it was dying or dead before a medic could reach it,
-# which leaves nothing to treat. Whether it survives is still NOT
-# asserted; that balance question belongs to #919.
+# transition at all. Since the #998 correction that is a bruising but
+# survivable landing, not the old pathological one: the checked contract
+# in `test-headless/Test/Headless/Unit/Fall.hs` requires an average
+# acolyte's 2-z fall to be all-blunt, non-vital, FEWER THAN 15 wounds,
+# and to leave MORE THAN 30 SECONDS before a naive (untreated,
+# unclotted) exsanguination. That margin is what makes treatment
+# throughput observable at all (#1221) — there is time for the real
+# medic AI to claim, close and dress. Taller drops are still avoided:
+# they spend the margin before a medic can arrive, leaving nothing to
+# treat. Whether the scout survives is still NOT asserted; that balance
+# question belongs to #919.
 FA_RIDGE_X1, FA_RIDGE_X2 = -4, 0
 FA_RIDGE_Y1, FA_RIDGE_Y2 = -20, 20
 FA_RIDGE_H = 2
 FA_LOAM = 56                  # movement_arena's loam material id
 FA_SCOUT_TILE = (-2, 0)       # on top of the ridge
-FA_MEDIC_TILE = (2, 0)        # waiting at the foot, beside the landing
+FA_MEDIC_TILE = (2, 0)        # a bystander at the foot, beside the
+                              # landing — staging only; the AI picks
+                              # who actually treats (#1221)
 FA_CAMP_X = 4                 # low ground east of the ridge
 FA_LANDING = (1, 0)           # the tile the fall lands on
+
+# --- first-aid treatment throughput (#1221) ---------------------------
+# How long the AI-driven treatment is followed and how often the
+# trajectory is sampled. The budget is a BOUND, never an expectation:
+# reaching it is the `timeout` terminal condition, reported exactly like
+# any other outcome.
+FA_TREAT_BUDGET = 120.0       # seconds of AI treatment followed
+FA_TREAT_INTERVAL = 2.0       # seconds between trajectory samples
+# "Still bleeding" is the medic AI's OWN policy, not a cutoff invented
+# here, so `controlled` means "the medic itself would stop treating".
+# `treat_min_seep` is exported (scripts/unit_ai_tunables.lua) and is read
+# LIVE off the running engine; these two are module-locals in
+# scripts/unit_ai_medic.lua with no accessor, so they are restated here
+# with their source named — change them there and here together.
+FA_CLOT_ENOUGH = 0.85         # unit_ai_medic.lua CLOT_ENOUGH
+FA_TREAT_SKIP_KINDS = ("concussion", "fracture", "internal")
 
 YAML_LOADERS = [
     ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
@@ -913,11 +943,14 @@ def descend_and_fall(port: int, scout: int, tx: float, ty: float,
     window ever separates the verified baseline from the intended
     command. Everything from that release on is live and observational.
 
-    A shallow fall opens a live bleed measured in whole litres per
-    second, so this polls as fast as the console allows rather than on
-    the leisurely walk_leg cadence — otherwise the injury is only ever
-    observed after the patient has already bled out, and there is no
-    treatment situation left to stage."""
+    The landing is polled as fast as the console allows rather than on
+    the leisurely walk_leg cadence, so the wound set the throughput
+    observation (#1221) starts from is the fall's OWN output rather than
+    one already partly dressed or partly self-clotted. Post-#998 a 2-z
+    fall leaves well over a minute before a naive exsanguination
+    (`test-headless/Test/Headless/Unit/Fall.hs`), so the tight poll buys
+    a clean starting snapshot — it is no longer a race against a
+    corpse."""
     command_move(port, [scout], tx, ty)
     release_simulation(port)
     deadline = time.time() + budget
@@ -959,6 +992,332 @@ def dressed(port: int, uid: int) -> bool:
     return raw == "yes"
 
 
+# --- treatment throughput (#1221) ------------------------------------
+def install_treatment_observer(port: int) -> None:
+    """Install the two scenario-local Lua pieces the throughput
+    observation needs, both purely additive.
+
+    1. A TRANSPARENT wrapper around `unit.treatBleeding`. It forwards the
+       call to the original engine function with the caller's exact
+       argument list (`table.pack`/`table.unpack` preserve arity, so a
+       two-argument AI call still defaults its kit owner to the medic),
+       appends the arguments and the returned table to a log, and returns
+       the original results unchanged. No engine surface and no AI script
+       is touched: the wrapper only WATCHES the calls the medic AI
+       already makes, which is what lets every treatment counted below be
+       the AI's own.
+    2. `_SCEN_treatObs(patient, roster)`, one console round trip per
+       trajectory sample. It reads the patient, classifies the wounds by
+       the medic's own policy, counts the bandages wherever the kit ended
+       up, finds who is actually claiming the patient, and DRAINS the
+       log so each sample carries exactly the treatments made since the
+       previous one.
+
+    Installed once, before the fall, so no treatment can escape the log.
+    Both guards are idempotent: re-installing must never double-wrap (a
+    second wrapper would log every call twice and report a treatment
+    throughput the AI never achieved)."""
+    wrapper = (
+        "if not _SCEN_treatLog then "
+        "_SCEN_treatLog = {}; "
+        "local orig = unit.treatBleeding; "
+        "_SCEN_treatOrig = orig; "
+        "unit.treatBleeding = function(...) "
+        "local a = table.pack(...); "
+        "local r = table.pack(orig(table.unpack(a, 1, a.n))); "
+        "local res = r[1]; "
+        "_SCEN_treatLog[#_SCEN_treatLog + 1] = {medic = a[1], "
+        "patient = a[2], kitOwner = a[3], returned = (res ~= nil), "
+        "ok = res and res.ok, method = res and res.method, "
+        "part = res and res.part, kind = res and res.kind, "
+        "bandagesUsed = res and res.bandagesUsed, "
+        "attempts = res and res.attempts, seep = res and res.seep, "
+        "message = res and res.message}; "
+        "return table.unpack(r, 1, r.n) end end; "
+        "return 'ok'")
+    if send(port, wrapper) != "ok":
+        raise ScenarioError(
+            "could not install the unit.treatBleeding observation wrapper — "
+            "without it no AI treatment could be attributed")
+
+    skip = ", ".join(f"{kind} = true" for kind in FA_TREAT_SKIP_KINDS)
+    sampler = (
+        "function _SCEN_treatObs(patient, roster) "
+        "local out = {}; "
+        "local okCfg, cfgMod = pcall(require, 'scripts.unit_ai_tunables'); "
+        "local cfg = okCfg and cfgMod and cfgMod.acolyte or nil; "
+        "local minSeep = (cfg and cfg.treat_min_seep) or 0.6; "
+        f"local clotEnough = {FA_CLOT_ENOUGH}; "
+        f"local skip = {{{skip}}}; "
+        "out.minSeep = minSeep; out.clotEnough = clotEnough; "
+        "out.seepLive = (cfg ~= nil); "
+        "local i = unit.getInfo(patient); "
+        "if not i then out.gone = true else "
+        "out.gone = false; out.pose = unit.getPose(patient); "
+        "out.knockedDown = i.knockedDown and true or false; "
+        "out.blood = unit.getBlood(patient); "
+        "local total, dressed, external, bleeding = 0, 0, 0, 0; "
+        "for _, w in ipairs(unit.getWounds(patient) or {}) do "
+        "total = total + 1; local band = w.bandage or 1; "
+        "if band < 1 or (w.dressing or '') ~= '' then "
+        "dressed = dressed + 1 end; "
+        "if not skip[w.kind] then external = external + 1; "
+        "if band > minSeep and (w.clot or 0) < clotEnough then "
+        "bleeding = bleeding + 1 end end end; "
+        "out.wounds = {total = total, dressed = dressed, "
+        "undressed = total - dressed, external = external, "
+        "bleeding = bleeding} end; "
+        "local bandages, holders = 0, {}; "
+        "for _, u in ipairs(roster) do "
+        "for _, it in ipairs(unit.getInventory(u) or {}) do "
+        "if it.kind == 'container' then "
+        "for _, r in ipairs(unit.getItemContents(u, it.defName, "
+        "it.instanceId) or {}) do "
+        "if r.defName == 'bandage' and (r.count or 0) > 0 then "
+        "bandages = bandages + r.count; "
+        "holders[#holders + 1] = {holder = u, kit = it.defName, "
+        "count = r.count} end end end end end; "
+        "out.bandages = bandages; out.bandageHolders = holders; "
+        "local ai = package.loaded['scripts.unit_ai']; "
+        "local claimers = {}; "
+        "if ai and ai.getState then for _, u in ipairs(roster) do "
+        "local s = ai.getState(u); "
+        "if s and s.treatClaim and s.treatClaim.patient == patient then "
+        "claimers[#claimers + 1] = u end end end; "
+        "out.claimers = claimers; "
+        "out.treatments = _SCEN_treatLog or {}; _SCEN_treatLog = {}; "
+        "return out end; return 'ok'")
+    if send(port, sampler) != "ok":
+        raise ScenarioError(
+            "could not install the treatment-throughput sampler")
+
+
+def _treatment_terminal(sample: dict) -> str | None:
+    """Name the terminal condition this sample reaches, or None.
+
+    Precedence, in this order: the patient is gone, dead, in a SURVIVAL
+    collapse, bleeding-controlled, out of bandages. Patient-state
+    outcomes come first because they end the treatment situation
+    outright; every sample is printed either way, so a co-occurrence
+    stays visible in the trajectory rather than being hidden by the
+    label.
+
+    The collapse test is `pose == "collapsed" AND knockedDown false`.
+    Every real fall lands in `Collapsed` with a self-timed get-up
+    pending (`src/Unit/Thread/Movement/Timers.hs`), and `knockedDown`
+    (`src/Engine/Scripting/Lua/API/Units/List.hs`) is exactly the flag
+    that distinguishes that ordinary knockdown from a survival collapse
+    — without the flag test this would call every single run "collapsed"
+    on its first sample."""
+    if sample.get("gone"):
+        return "gone"
+    pose = str(sample.get("pose"))
+    if pose == "dead":
+        return "died"
+    if pose == "collapsed" and not sample.get("knockedDown"):
+        return "collapsed"
+    wounds = sample.get("wounds") or {}
+    if int(_num(wounds.get("bleeding"), 0) or 0) == 0:
+        return "controlled"
+    if int(_num(sample.get("bandages"), 0) or 0) == 0:
+        return "supplies exhausted"
+    return None
+
+
+def follow_treatment(port: int, patient: int, roster: list[int], t0: float,
+                     observations: list[str]) -> dict:
+    """Follow the REAL medic AI treating `patient` to a terminal
+    condition (#1221).
+
+    Nothing here treats, commands or nudges the squad: the claim, the
+    kit fetch and every `unit.treatBleeding` call are the AI's own, on
+    the real `treat_ally` path with the real kit contents, the live
+    blood tick and real clotting. The runner only keeps the simulation
+    running and reads — which is why the section this returns is an
+    OBSERVATION of throughput and not a staged demonstration of it.
+
+    Which acolyte does the treating is DISCOVERED, never assumed:
+    `bestMedicFor` ranks every available allied medic and each acolyte
+    rolls its own `bleed_control` knowledge at spawn, so the claimant is
+    read back out of the AI's own state and the treating unit out of the
+    wrapper's log.
+
+    Sampling is one console round trip per interval, and each sample
+    drains the wrapper's log, so treatments made between two samples are
+    attributed to the later row. Every sample becomes a row and the loop
+    always breaks immediately after appending one, so the terminal row
+    is printed even when no treatment call ever happened.
+
+    Raises `ScenarioError` only when the console read itself breaks —
+    a terminal condition is never a failure, whichever one it is."""
+    rows: list[dict] = []
+    deadline = time.time() + FA_TREAT_BUDGET
+    terminal = None
+    while True:
+        # The unpause rides along on the sample's own round trip: a
+        # `unit_warning` notification can auto-pause the whole sim
+        # (config/notifications), which would silently freeze the very
+        # AI this is measuring. Same defence poll_positions uses.
+        sample = send_json(
+            port,
+            "engine.setPaused(false); "
+            f"return _SCEN_treatObs({patient}, {_lua_uid_list(roster)})",
+            timeout=20.0)
+        if not isinstance(sample, dict):
+            raise ScenarioError(
+                f"the treatment-throughput read for unit {patient} failed: "
+                f"{sample!r}")
+        sample["elapsed"] = time.time() - t0
+        sample["treatments"] = [
+            rec for rec in _as_list(sample.get("treatments"))
+            if isinstance(rec, dict)]
+        rows.append(sample)
+        terminal = _treatment_terminal(sample)
+        if terminal is not None:
+            break
+        if time.time() >= deadline:
+            terminal = "timeout"
+            break
+        time.sleep(FA_TREAT_INTERVAL)
+
+    treatments = [rec for row in rows for rec in row["treatments"]]
+    treating = sorted({int(rec["medic"]) for rec in treatments
+                       if _num(rec.get("medic")) is not None})
+    claimers = sorted({int(uid) for row in rows
+                       for uid in _as_list(row.get("claimers"))
+                       if _num(uid) is not None})
+    start = rows[0]
+    result = {
+        "rows": rows,
+        "terminal": terminal,
+        "treatments": treatments,
+        "treating": treating,
+        "claimers": claimers,
+        "start": start,
+        "budget": FA_TREAT_BUDGET,
+    }
+
+    observations.append(
+        "the AI-driven treatment ended in the terminal condition "
+        f"'{terminal}' after {rows[-1]['elapsed'] - start['elapsed']:.1f}s of "
+        f"following (budget {FA_TREAT_BUDGET:.0f}s), across "
+        f"{len(rows)} sample(s) and {len(treatments)} AI treatment call(s)")
+    observations.append(
+        f"the treating unit(s) the AI actually used: "
+        f"{treating or 'none — no unit.treatBleeding call was made'}; "
+        f"the unit(s) seen holding a treat claim on the scout: "
+        f"{claimers or 'none'}")
+    if not claimers and not treating:
+        observations.append(
+            "no acolyte ever claimed or treated the scout — with every "
+            "acolyte rolling its own bleed_control knowledge, a squad in "
+            "which nobody qualifies is a real (and reportable) outcome")
+    return result
+
+
+def _as_dict(value) -> dict:
+    """A console sub-table that may legitimately be absent (a dead
+    patient reports no blood or wound block at all)."""
+    return value if isinstance(value, dict) else {}
+
+
+def _count(value) -> int:
+    """A console count, absent-or-unreadable reading as 0."""
+    return int(_num(value, 0) or 0)
+
+
+def _fmt_num(value, places: int = 2) -> str:
+    number = _num(value)
+    return "?" if number is None else f"{number:.{places}f}"
+
+
+def _fmt_treatment(rec: dict) -> str:
+    medic, pat = rec.get("medic"), rec.get("patient")
+    if not rec.get("returned"):
+        return (f"medic {medic} -> patient {pat}: the call returned nil "
+                f"(missing id arguments)")
+    owner = rec.get("kitOwner")
+    owner_s = str(owner) if owner is not None else "the medic (defaulted)"
+    return (f"medic {medic} -> patient {pat} (kit owner {owner_s}): "
+            f"ok={rec.get('ok')} method={rec.get('method')!r} "
+            f"part={rec.get('part')!r} kind={rec.get('kind')!r} "
+            f"bandagesUsed={rec.get('bandagesUsed')} "
+            f"attempts={rec.get('attempts')} "
+            f"seep={_fmt_num(rec.get('seep'), 3)} "
+            f"message={rec.get('message')!r}")
+
+
+def print_treatment_row(row: dict) -> None:
+    """One trajectory sample: patient state, supply state, who is on it,
+    and every treatment observed since the previous sample."""
+    stamp = f"    t={row['elapsed']:7.1f}s  "
+    if row.get("gone"):
+        print(stamp + "the patient no longer exists")
+    else:
+        blood = _as_dict(row.get("blood"))
+        wounds = _as_dict(row.get("wounds"))
+        knocked = " (knocked down)" if row.get("knockedDown") else ""
+        print(f"{stamp}pose {row.get('pose')}{knocked}  "
+              f"blood {_fmt_num(blood.get('current'))}/"
+              f"{_fmt_num(blood.get('max'))} L  "
+              f"bleed {_fmt_num(blood.get('bleedRate'), 4)} L/s")
+        pad = " " * len(stamp)
+        print(f"{pad}wounds {_count(wounds.get('total'))} "
+              f"(dressed {_count(wounds.get('dressed'))}, "
+              f"undressed {_count(wounds.get('undressed'))}, "
+              f"external {_count(wounds.get('external'))}, "
+              f"still bleeding {_count(wounds.get('bleeding'))})")
+    holders = ", ".join(
+        f"{_count(h.get('count'))} in {h.get('kit')} on unit {h.get('holder')}"
+        for h in _as_list(row.get("bandageHolders")) if isinstance(h, dict))
+    claim = _as_list(row.get("claimers"))
+    pad = " " * len(stamp)
+    print(f"{pad}bandages {_count(row.get('bandages'))} "
+          f"({holders or 'nowhere on the roster'})  "
+          f"treat claim: {claim or 'none'}")
+    for rec in row["treatments"]:
+        print(f"{pad}  * {_fmt_treatment(rec)}")
+
+
+def print_throughput(result: dict) -> None:
+    start = result["start"]
+    rows = result["rows"]
+    wounds = _as_dict(start.get("wounds"))
+    print("\n  -- treatment throughput (#1221): the real medic AI, followed "
+          "to a terminal condition --")
+    print("    every treatment below came through the AI's own treat_ally "
+          "path (real claim, real kit,")
+    print("    live blood tick, real clotting); the runner administered "
+          "none of it and only read.")
+    seep_src = ("live from scripts/unit_ai_tunables.lua"
+                if start.get("seepLive") else "FALLBACK — tunables unreadable")
+    print(f"    policy         a wound still counts as BLEEDING when its "
+          f"kind is external (not "
+          f"{'/'.join(FA_TREAT_SKIP_KINDS)}),")
+    print(f"                   its seep multiplier is above treat_min_seep "
+          f"({_fmt_num(start.get('minSeep'))}, {seep_src}) and its clot is "
+          f"below {_fmt_num(start.get('clotEnough'))}")
+    print("                   — scripts/unit_ai_medic.lua's own "
+          "needsTreatment policy, so 'controlled' means the medic itself "
+          "would stop")
+    print(f"    at the landing {_count(wounds.get('total'))} wound(s) from "
+          f"the fall, {_count(wounds.get('external'))} external, "
+          f"{_count(wounds.get('bleeding'))} of them bleeding above the "
+          f"clot cutoff")
+    print(f"    treating unit  "
+          f"{result['treating'] or 'none — no AI treatment call was made'}"
+          f"  (claimed by {result['claimers'] or 'nobody'})")
+    print(f"    calls          {len(result['treatments'])} AI "
+          f"unit.treatBleeding call(s) over {len(rows)} sample(s), "
+          f"{FA_TREAT_INTERVAL:.0f}s apart")
+    print(f"    TERMINAL       {result['terminal']}  "
+          f"(after {rows[-1]['elapsed'] - start['elapsed']:.1f}s of a "
+          f"{result['budget']:.0f}s budget)")
+    print("    -- trajectory --")
+    for row in rows:
+        print_treatment_row(row)
+
+
 def run_first_aid(port: int) -> int:
     proc = boot(port, log=LOG, label="first-aid engine")
     t0 = time.time()
@@ -966,6 +1325,10 @@ def run_first_aid(port: int) -> int:
     checkpoints: list[dict] = []
     try:
         bootstrap(port)
+        # Before ANY unit exists, so no treatment can predate the log
+        # (#1221). Purely additive: it wraps unit.treatBleeding to watch
+        # the AI's calls and installs the trajectory sampler.
+        install_treatment_observer(port)
         print("building the arena ridge ...")
         send(port, "require('scripts.movement_arena'); return 'ok'")
         send(port, "return require('scripts.movement_arena')"
@@ -992,7 +1355,7 @@ def run_first_aid(port: int) -> int:
                 f"(got {top}) — cannot stage a real fall")
 
         camp_tiles = [FA_SCOUT_TILE,                        # the scout
-                      FA_MEDIC_TILE,                        # the medic
+                      FA_MEDIC_TILE,                        # a bystander
                       (FA_CAMP_X, 1), (FA_CAMP_X, -1),
                       (FA_CAMP_X + 1, 0),                   # 3 more acolytes
                       (FA_CAMP_X + 1, 1)]                   # technomule
@@ -1003,7 +1366,13 @@ def run_first_aid(port: int) -> int:
         # scenario means to stage. spawn_roster returns still holding.
         uids = spawn_roster(port, page, camp_tiles, hold=True)
         acolytes, mule = uids[:5], uids[5]
-        scout, medic = acolytes[0], acolytes[1]
+        # `bystander` is only the acolyte STAGED beside the landing — it
+        # is not "the medic". Which acolyte treats is the AI's call:
+        # every acolyte rolls its own bleed_control knowledge at spawn
+        # and `bestMedicFor` ranks the whole squad, so the treating unit
+        # is discovered from the AI's state and the wrapper's log rather
+        # than asserted here (#1221).
+        scout, bystander = acolytes[0], acolytes[1]
 
         # The kit issue runs through the same capacity-gated helper the
         # expedition provisioning uses (#1212). A refusal for want of
@@ -1029,7 +1398,7 @@ def run_first_aid(port: int) -> int:
         kit_before = kit_state(port, uids)
         scout_baseline = baseline_scout(port, scout, expect_kit=kit_issued)
         pre_fall = checkpoint(port, "kit issued, before the fall",
-                              [scout, medic, mule], t0,
+                              [scout, bystander, mule], t0,
                               snaps={scout: scout_baseline},
                               paused=is_paused(port))
         if not pre_fall["paused"]:
@@ -1044,54 +1413,28 @@ def run_first_aid(port: int) -> int:
         pose, nwounds, landing = descend_and_fall(
             port, scout, FA_CAMP_X, 0, budget=90.0, observations=observations)
 
-        # Treat the moment the injury lands. The medic AI is live and its
-        # own treat_ally path (fetch the kit off the patient, close, dress)
-        # is reported below, but a fall opens a multi-litre-per-second
-        # bleed: waiting out the AI's fetch-and-walk means observing a
-        # corpse. So the runner administers first aid immediately through
-        # the same engine verb the AI itself calls, drawing on the kit we
-        # issued to the scout (kit owner = the patient).
-        direct = None
-        if nwounds > 0 and pose not in ("dead", "gone"):
-            direct = send_json(
-                port, f"return unit.treatBleeding({medic}, {scout}, {scout})",
-                timeout=20.0)
-        elif pose == "dead":
+        # NOTHING is administered here (#1221). The runner used to fire
+        # unit.treatBleeding itself the moment the injury landed, which
+        # made the AI's own throughput unmeasurable — every dressing the
+        # report showed was the runner's. Post-#998 a 2-z fall leaves
+        # well over a minute before a naive exsanguination, so the real
+        # treat_ally path can simply be followed instead.
+        checkpoints.append(checkpoint(port, "the landing, before any "
+                                      "treatment", [scout, bystander], t0))
+        if pose == "dead":
             observations.append(
                 "the scout was already dead when the injury was first "
-                "observed, so no treatment was administered")
-        checkpoints.append(checkpoint(port, "after the fall and first aid",
-                                      [scout, medic], t0))
+                "observed, so the treatment observation starts from a corpse")
 
-        # Whatever the medic AI does on its own is a separate observation.
-        print("  observing the medic AI ...")
-        ai_engaged = False
-        deadline = time.time() + 30.0
-        while time.time() < deadline:
-            send(port, "engine.setPaused(false)", expect_result=False)
-            claim = send(port,
-                         "local ai = package.loaded['scripts.unit_ai']; "
-                         f"local s = ai and ai.getState({medic}); "
-                         "if s and s.treatClaim then return "
-                         "tostring(s.treatClaim.patient) end; return 'none'")
-            if claim == str(scout):
-                ai_engaged = True
-                break
-            if send(port, f"return unit.getPose({scout})") in ("dead", "nil"):
-                break
-            time.sleep(1.0)
-        observations.append(
-            f"the medic AI on acolyte {medic} claimed the scout as a patient"
-            if ai_engaged else
-            f"the medic AI on acolyte {medic} never claimed the scout within "
-            f"30s of the fall")
+        print("  following the medic AI's treatment ...")
+        throughput = follow_treatment(port, scout, uids, t0, observations)
         if dressed(port, scout):
             observations.append("the scout ends the run with a dressed wound")
         observations.append(
             f"the scout's final pose is "
             f"{send(port, f'return unit.getPose({scout})')}")
         checkpoints.append(checkpoint(port, "final state",
-                                      [scout, medic, mule], t0))
+                                      [scout, bystander, mule], t0))
 
         print("\n" + "=" * 72)
         print("FIRST-AID SCENARIO REPORT")
@@ -1101,7 +1444,10 @@ def run_first_aid(port: int) -> int:
               f"y {FA_RIDGE_Y1}..{FA_RIDGE_Y2}")
         print(f"roster         {len(acolytes)} acolytes + 1 technomule "
               f"(uids {uids}), player faction")
-        print(f"scout          acolyte {scout} (fell), medic acolyte {medic}")
+        print(f"scout          acolyte {scout} (fell); acolyte {bystander} "
+              f"staged beside the landing")
+        print( "               (which acolyte treats is NOT staged — see "
+               "the treating unit in the throughput section)")
         print(f"supply point   technomule {mule}, stationary at camp")
         print("kit issue      " + (
             "1x first_aid_kit moved mule -> scout via "
@@ -1125,22 +1471,12 @@ def run_first_aid(port: int) -> int:
         print(f"kit after      {kit_state(port, uids)}")
         print(f"landing        {landing}, pose {pose}, {nwounds} wound(s); "
               f"expected near {FA_LANDING}")
-        if direct is None:
-            print("treatment      none administered — see the observations")
-        elif isinstance(direct, dict):
-            print(f"treatment      unit.treatBleeding(medic {medic}, "
-                  f"patient {scout}, kit owner {scout}) -> "
-                  f"ok={direct.get('ok')}, "
-                  f"part={direct.get('part')}, kind={direct.get('kind')}, "
-                  f"method={direct.get('method')}, "
-                  f"bandagesUsed={direct.get('bandagesUsed')}, "
-                  f"attempts={direct.get('attempts')}, "
-                  f"seep={direct.get('seep')}, "
-                  f"message={direct.get('message')!r}")
-        else:
-            print(f"treatment      the call returned {direct!r}")
+        print(f"treatment      administered entirely by the medic AI — "
+              f"terminal condition '{throughput['terminal']}' after "
+              f"{len(throughput['treatments'])} AI call(s)")
         for cp in checkpoints:
             print_checkpoint(cp)
+        print_throughput(throughput)
         print("\n  -- observations --")
         for line in observations or ["nothing out of the ordinary"]:
             print(f"    * {line}")
@@ -1166,8 +1502,11 @@ SCENARIOS = {
     "first-aid": (
         "The same starting roster on a repeatable arena: the mule's "
         "stocked first-aid kit is moved onto the expedition acolyte, who "
-        "takes a real fall; reports the injury, the treatment attempt or "
-        "outcome, the kit's remaining contents and the final unit state.",
+        "takes a real fall. The REAL medic AI is then followed to a named "
+        "terminal condition (controlled / supplies exhausted / collapsed "
+        "/ died / timeout), reporting per-interval blood, bleed rate, "
+        "dressed-vs-undressed wounds, remaining bandages and every "
+        "treatment result, plus the kit's contents and the final state.",
         run_first_aid),
 }
 
