@@ -16,6 +16,9 @@ mechanically rather than inferred from the reader's output:
 * every file under the synthetic tree is digested before and after each
   read, and the digests (and the path set) must be identical — registry,
   reports and lock files alike;
+* the confinement cases record every file the reader actually opens, so
+  an out-of-scope read fails even though the reader would never echo a
+  byte of it back;
 * `subprocess.run` / `subprocess.Popen` are replaced with tripwires, so
   a coordinator invocation of ANY subcommand — permitted or mutating —
   fails the test rather than passing quietly;
@@ -531,6 +534,77 @@ def test_report_reads_are_confined_to_the_reports_directory() -> None:
                     "each refusal is diagnosed exactly once")
 
 
+def test_a_symlinked_reports_directory_refuses_every_read() -> None:
+    """The scope check is on the DIRECTORY too, not only each path.
+
+    A symlinked `reports/` relocates the whole read scope out of the
+    state tree while every individual recorded path still resolves to a
+    `*.test-result.md` file directly under its own parent — so the
+    per-path check alone would happily read them.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        runs = [make_run("probe:role", "relocated-run")]
+        state = build_state(Path(tmp), runs, {})
+
+        # Move reports/ out of the state tree and symlink it back in,
+        # with a perfectly well-formed report waiting inside it.
+        external = Path(tmp) / "elsewhere"
+        external.mkdir()
+        leaked = external / ("relocated-run" + evidence.REPORT_SUFFIX)
+        leaked.write_text(
+            report_text("relocated-run", "probe:role", "observations", 3)
+            + SENTINEL + "\n", encoding="utf-8")
+        shutil.rmtree(state / evidence.REPORTS_DIRNAME)
+        os.symlink(external, state / evidence.REPORTS_DIRNAME)
+
+        runs[0]["report_path"] = str(state / evidence.REPORTS_DIRNAME
+                                     / ("relocated-run" + evidence.REPORT_SUFFIX))
+        document = json.loads((state / evidence.REGISTRY_FILENAME).read_text())
+        document["runs"] = runs
+        (state / evidence.REGISTRY_FILENAME).write_text(json.dumps(document))
+
+        with NonInteraction(state) as guard:
+            with RecordReads() as reads:
+                result = read(state, "role")
+            guard.assert_untouched("symlinked reports directory")
+
+        opened = [path.resolve() for path in reads.paths]
+        check(leaked.resolve() not in opened,
+              "the relocated report is never opened", str([str(p) for p in opened]))
+        check(external.resolve() not in [p.resolve().parent for p in reads.paths],
+              "nothing in the relocated directory is opened")
+        run = result["runs"][0]
+        check_equal(run["report"]["status"], evidence.REPORT_OUT_OF_SCOPE,
+                    "the relocated report is refused as out of scope")
+        check_equal(run["report"]["observation_count"], None,
+                    "it contributes no observation count")
+        check_equal(run["execution_status"], "passed",
+                    "the run's mechanical fields are still reported")
+        check(any("immediate child of the state root" in d
+                  for d in result["diagnostics"]),
+              "the relocated directory is diagnosed once at directory level",
+              str(result["diagnostics"]))
+        check_equal(len(result["diagnostics"]), 1,
+                    "one directory-level diagnostic, not one per run")
+        check(SENTINEL not in evidence.render(result) + json.dumps(result),
+              "no relocated content reaches the output")
+
+        # The scope helper says so directly, and creates nothing.
+        diagnostics: list[str] = []
+        check_equal(evidence.resolve_reports_scope(state, diagnostics), None,
+                    "resolve_reports_scope refuses the relocated directory")
+        check_equal(len(diagnostics), 1, "and diagnoses it exactly once")
+
+        # A real directory in the same place is trusted again.
+        (state / evidence.REPORTS_DIRNAME).unlink()
+        (state / evidence.REPORTS_DIRNAME).mkdir()
+        trusted: list[str] = []
+        check_equal(evidence.resolve_reports_scope(state, trusted),
+                    (state / evidence.REPORTS_DIRNAME).resolve(),
+                    "a real reports directory is trusted")
+        check_equal(trusted, [], "and produces no diagnostic")
+
+
 def test_absent_state_is_success_not_error() -> None:
     """An absent `codex-test` tree is the normal no-evidence result."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -689,6 +763,7 @@ def main() -> int:
         test_mechanical_outcome_is_not_inferred_from_interpretation,
         test_missing_and_malformed_reports_are_non_fatal,
         test_report_reads_are_confined_to_the_reports_directory,
+        test_a_symlinked_reports_directory_refuses_every_read,
         test_absent_state_is_success_not_error,
         test_damaged_registry_is_non_fatal,
         test_full_history_is_never_truncated,

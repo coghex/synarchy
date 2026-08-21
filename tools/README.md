@@ -822,7 +822,10 @@ carry reads as unavailable, never as a fabricated `false` or `0`, so active
 and legacy runs are surfaced rather than dropped. The whole known history is
 reported; there is no limit option and no default truncation. Report reads are
 confined to resolved `*.test-result.md` files directly beneath the state
-tree's own `reports/`, so a recorded path can never widen read scope.
+tree's own `reports/`, so a recorded path can never widen read scope — and
+`reports/` itself must resolve to an immediate child of the resolved state
+root, because a symlinked `reports/` would relocate the whole scope out of the
+tree while every individual recorded path still passed its own check.
 
 External `$test` evidence is PRESENTATION-ONLY. A run appearing, passing,
 failing or recording observations changes no census sample, no statistic, no

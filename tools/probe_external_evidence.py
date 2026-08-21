@@ -25,9 +25,12 @@ strictly a reader:
   machine-local coordinator is not installed.
 * It reads the registry and, for each matching run, at most the one
   `*.test-result.md` report that run recorded — and only when that path
-  resolves to a regular file BENEATH the state tree's own `reports/`
-  directory. A recorded path is data, never an authority to widen read
-  scope.
+  resolves to a regular file directly beneath the state tree's own
+  `reports/` directory, AND that directory itself resolves to an
+  immediate child of the resolved state root. Checking recorded paths
+  alone would not be enough: a symlinked `reports/` relocates the whole
+  scope while every individual path still passes. A recorded path is
+  data, never an authority to widen read scope.
 
 **External evidence is presentation-only.** A `$test` run appearing,
 disappearing, passing, failing or recording observations changes no
@@ -298,13 +301,42 @@ def _parse_report(text: str) -> dict:
     }
 
 
-def _read_report(record: dict, reports_dir: Path, diagnostics: list[str]) -> dict:
+def resolve_reports_scope(root: Path, diagnostics: list[str]) -> Path | None:
+    """The ONE directory report reads may touch, or None when untrusted.
+
+    Checking each recorded path against `<root>/reports` is not enough
+    on its own: if `reports` is ITSELF a symlink to somewhere else, that
+    check keeps passing while the whole read scope has quietly moved out
+    of the state tree. So the scope is trusted only when it resolves to
+    an immediate child of the RESOLVED state root, under its own name.
+    Anything else refuses every report read with one diagnostic.
+    """
+    try:
+        root_resolved = root.resolve()
+        scope = (root / REPORTS_DIRNAME).resolve()
+    except OSError as exc:
+        diagnostics.append(
+            f"refused to read any report: cannot resolve {root / REPORTS_DIRNAME}: {exc}")
+        return None
+    if scope.parent != root_resolved or scope.name != REPORTS_DIRNAME:
+        diagnostics.append(
+            f"refused to read any report: {root / REPORTS_DIRNAME} resolves to {scope}, "
+            f"which is not an immediate child of the state root {root_resolved}"
+        )
+        return None
+    return scope
+
+
+def _read_report(record: dict, scope: Path | None, diagnostics: list[str]) -> dict:
     """Read this run's report, if it is recorded and in scope.
 
     Read scope is confined to resolved regular files named
-    `*.test-result.md` directly beneath `reports_dir`. A recorded path
-    that escapes it — traversal, an absolute path elsewhere, a symlink
-    out of the tree — is refused and diagnosed, never followed.
+    `*.test-result.md` directly beneath `scope`, the validated reports
+    directory from `resolve_reports_scope`. A recorded path that escapes
+    it — traversal, an absolute path elsewhere, a symlink out of the
+    tree — is refused and diagnosed, never followed. A `scope` of None
+    means the reports directory itself was not trustworthy, which is
+    already diagnosed once at the directory level.
     """
     recorded = _text_or_none(record.get("report_path"))
     report: dict = {
@@ -315,14 +347,16 @@ def _read_report(record: dict, reports_dir: Path, diagnostics: list[str]) -> dic
     }
     if recorded is None:
         return report
+    if scope is None:
+        report["status"] = REPORT_OUT_OF_SCOPE
+        return report
 
     run_id = _text_or_none(record.get("run_id")) or "<unidentified run>"
     candidate = Path(recorded)
     if not candidate.is_absolute():
-        candidate = reports_dir / candidate
+        candidate = scope / candidate
     try:
         resolved = candidate.resolve()
-        scope = reports_dir.resolve()
     except OSError as exc:
         report["status"] = REPORT_UNREADABLE
         diagnostics.append(f"{run_id}: cannot resolve report path {recorded!r}: {exc}")
@@ -360,7 +394,7 @@ def _read_report(record: dict, reports_dir: Path, diagnostics: list[str]) -> dic
     return report
 
 
-def _summarize_run(record: dict, reports_dir: Path, diagnostics: list[str]) -> dict:
+def _summarize_run(record: dict, scope: Path | None, diagnostics: list[str]) -> dict:
     """One matching `$test` run, with every unavailable value as None."""
     return {
         "run_id": _text_or_none(record.get("run_id")),
@@ -377,7 +411,7 @@ def _summarize_run(record: dict, reports_dir: Path, diagnostics: list[str]) -> d
         "completed_at": _text_or_none(record.get("completed_at")),
         "observations": _observation_status(record),
         "interpretation_outcome": _text_or_none(record.get("interpretation_outcome")),
-        "report": _read_report(record, reports_dir, diagnostics),
+        "report": _read_report(record, scope, diagnostics),
     }
 
 
@@ -446,7 +480,7 @@ def read_probe_evidence(probe_key: str,
     evidence["state"] = STATE_PRESENT
     diagnostics: list[str] = evidence["diagnostics"]
     records = _load_runs(root / REGISTRY_FILENAME, diagnostics)
-    reports_dir = root / REPORTS_DIRNAME
+    scope = resolve_reports_scope(root, diagnostics)
 
     matches = []
     for index, record in enumerate(records):
@@ -461,7 +495,7 @@ def read_probe_evidence(probe_key: str,
     # WHOLE known history is reported; there is deliberately no limit.
     matches.sort(key=lambda record: _text_or_none(record.get("claimed_at")) or "",
                  reverse=True)
-    evidence["runs"] = [_summarize_run(r, reports_dir, diagnostics) for r in matches]
+    evidence["runs"] = [_summarize_run(r, scope, diagnostics) for r in matches]
     return evidence
 
 
