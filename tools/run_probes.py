@@ -128,7 +128,9 @@ PROBES = [
      "required-debug-console boot contract: --headless/--offscreen refuse port 0 and a "
      "failed bind, exit non-zero with a mode/port/cause diagnostic and a cleanup trace, "
      "no READY, no offscreen Vulkan; --dump's #46 port-0 sentinel and a successful "
-     "bind unchanged (#1190)"),
+     "bind unchanged (#1190); plus normal-boot widget-module loading — the 28 "
+     "scripts.ui.* modules a non-preview headless boot loads, with two negative "
+     "regressions against really-broken boots (#1365)"),
     ("disarm", "disarm_probe.py",
      "disabled-hand auto-drop must re-fire (#193)"),
     ("expedition_loop", "expedition_loop_probe.py",
