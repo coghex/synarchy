@@ -727,7 +727,7 @@ pre-execution rejections (2), port exhaustion (3) and harness errors (4) — a
 malformed, truncated, duplicate, out-of-order or unclassifiable protocol
 event, which is never reported as a probe pass.
 
-### `probe_census.py` — the probe census (#1425, #1428, #1492)
+### `probe_census.py` — the probe census (#1425, #1428, #1430, #1492)
 
 Builds, validates and updates `docs/probe_census.json`, now
 `probe-census/v2`: every registered probe exactly once, with its script, its
@@ -751,7 +751,7 @@ python3 tools/probe_census.py --summary --as-of 2026-08-21T05:00:00Z \
 python3 tools/probe_census.py --probe KEY --set-acceptable-failures 2 \
     --justification "two known engine-side races"
 python3 tools/probe_census.py --probe KEY --set-acceptable-failures 7
-python3 tools/probe_census.py --probe KEY --set-acceptable-failures 7 \
+python3 tools/probe_census.py --probe KEY --set-acceptable-failures 0 \
     --clear-justification
 python3 tools/probe_census.py --probe KEY --set-estimate 480
 ```
@@ -760,6 +760,46 @@ An X update that omits `--justification` never clears the stored text —
 `--clear-justification` is the only thing that does, and it may not be combined
 with `--justification`. `--justification` stores its argument verbatim, so
 every literal (`keep`, `none`, text with surrounding whitespace) is storable.
+
+**The acceptable-failure policy (#1430).** X is how many failures a COMPLETE
+ten-run measurement may show and still be acceptable, so the admissible values
+are 0 through 9: an X of ten would declare a probe that never passes
+acceptable. A result is acceptable at `failures <= X` and over tolerance at
+`failures > X`, so X=1 accepts both 10/10 and 9/10 and rejects 8/10. That is a
+statement about ONE ten-run result, not a reclassification of the probe —
+`tools/ci_probes.py` remains the authority on which probes are flaky,
+base-failing or scenario-heavy. `tools/probe_flake.py` accepts any positive
+`--runs`, and a measurement with another run count stays valid data this
+threshold reports as `not-comparable` rather than rescaling X into a rate.
+
+**X=0 is the default and every probe has one.** #1428 staged a nullable X while
+the policy was being chosen; there is no null X any more, and no
+`--set-acceptable-failures none`. A fresh seed, a `probe-census/v1` migration
+and a newly registered probe all arrive at 0, and `--seed` initializes an
+existing record whose X is still null — that single null-to-zero transition is
+the ONLY automatic policy repair there is, and the preservation gate permits
+exactly it: every non-null X, justification, estimate, cohort, sample and
+attempt comes through untouched, on a retired row as much as a live one. A
+malformed stored X (a boolean, a string, a float, a negative, ten or more)
+stays VISIBLE as a refusal rather than being silently corrected.
+
+**An X above 0 must say why, and may not be CI-eligible.** It needs a
+non-whitespace justification, already stored or supplied in the same command —
+a tolerance without a stated reason is indistinguishable from a bug someone
+gave up on. `--clear-justification` is therefore valid only while setting X
+back to 0. And because CI stops on a single failure, tolerance is a manual-only
+concept: a row with X>0 that `tools/ci_probes.py` now classifies CI-eligible is
+refused, including during `--seed`'s promotion reconciliation, so a promotion
+reports the conflict instead of quietly erasing a maintainer's decision. Reset
+X to 0 first; the written reason survives.
+
+These three rules are CODE, not schema, because each spans fields — and they
+are applied ASYMMETRICALLY, unlike the declared schema and the cross-field
+invariants: on every mutation's CANDIDATE and on `--validate`, never on the
+stored side, since `--seed` has to be able to READ a null X in order to
+initialize it. `--validate` reports every offending row in one pass alongside
+inventory drift; a candidate refusal names the first and counts the rest, and
+writes no bytes.
 
 `--summary` (#1429) is the selection-facing view of what those measurements
 MEAN over time. The newest cohort is the current statistic and DISPLACES the
@@ -784,7 +824,10 @@ inclusive, and age is clamped at zero so a future-anchored cohort is fresh
 rather than negatively old. Each row reports `measured`, the exact commit, the
 latest measurement, the nonnegative age, the stale flag, and the combined
 run/failure counts and rate; every measurement field of an UNMEASURED probe is
-null, so a zero failure rate can only ever mean an observed zero. The table
+null, so a zero failure rate can only ever mean an observed zero. Each row also
+carries its `acceptable_failures` and the `tolerance` its authoritative cohort
+sits at — `acceptable`, `over-tolerance`, or `not-comparable` when the cohort
+is not a complete ten-run measurement, an unmeasured probe included. The table
 prints the commit IN FULL, in its last column: a selection-facing row reports
 the exact hash the statistic was measured on, and an abbreviation is not that
 hash.
