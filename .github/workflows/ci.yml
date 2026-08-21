@@ -187,7 +187,7 @@ jobs:
     steps:
       # fetch-depth: 0 so the path-selective probe step (#530) can diff a
       # PR against its base to see which files changed.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -310,7 +310,7 @@ jobs:
       # The store path is static because the image pins CABAL_DIR (#671).
       - name: Restore dependency cache
         if: steps.docs-fast-path.outputs.docs_only != 'true'
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: cache
         with:
           path: /usr/local/cabal/store
@@ -328,7 +328,7 @@ jobs:
       # restore-keys and then saves exactly one new entry.
       - name: Cache project build (dist-newstyle)
         if: steps.docs-fast-path.outputs.docs_only != 'true'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: dist-newstyle
           key: dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}
@@ -351,7 +351,7 @@ jobs:
         if: >-
           steps.cache.outputs.cache-hit != 'true'
           && steps.docs-fast-path.outputs.docs_only != 'true'
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /usr/local/cabal/store
           key: deps-v2-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
