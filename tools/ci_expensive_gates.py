@@ -186,8 +186,13 @@ SAVE_COMPAT_GLOBS = [
     # the real files exactly means neither half has to be trusted alone.
     "synarchy.cabal", "cabal.project", "cabal.project.freeze",
     # The CI toolchain image: the GHC/cabal versions and the pinned
-    # index snapshot the repl actually runs against.
-    ".github/ci/Dockerfile",
+    # index snapshot the repl actually runs against. BOTH files that
+    # define it -- the image tag is a hash of the reusable workflow's
+    # own bytes concatenated with the Dockerfile's, so an edit to the
+    # build recipe alone (context, options, validation) mints a new
+    # image just as a Dockerfile edit does, and can move what the repl
+    # runs under.
+    ".github/ci/Dockerfile", ".github/workflows/ci-image.yml",
     # The wiring that selects and runs this gate on both sides, and the
     # audit that keeps those two sides honest. An edit to any of them
     # can change WHEN the coverage runs, so it has to face the coverage
@@ -558,6 +563,10 @@ def self_test() -> int:
         ("save-compat", ["cabal.project"], True),
         ("save-compat", ["cabal.project.freeze"], True),
         ("save-compat", [".github/ci/Dockerfile"], True),
+        # The reusable image workflow is the OTHER half of the image
+        # identity hash, so a PR editing only it still changes the
+        # toolchain the repl runs under.
+        ("save-compat", [".github/workflows/ci-image.yml"], True),
         # The wiring on both sides, and the parity audit over it.
         ("save-compat", ["tools/ci_expensive_gates.py"], True),
         ("save-compat", ["tools/ci_parity_audit.py"], True),
@@ -575,6 +584,11 @@ def self_test() -> int:
         ("save-compat", ["docs/persistence_contract.md"], False),
         ("save-compat", ["docs/code_health_findings.md"], False),
         ("save-compat", ["tools/world_check.py"], False),
+        # ...and the workflows that are NOT the toolchain: naming
+        # ci-image.yml exactly rather than .github/workflows/* keeps
+        # these out.
+        ("save-compat", [".github/workflows/ntfy-notify.yml"], False),
+        ("save-compat", [".github/workflows/review-gate.yml"], False),
         ("save-compat", ["tools/pack_atlas.py"], False),
         # The save-adjacent Haskell that is NOT the format: the world
         # thread's save command and the barrier live outside
