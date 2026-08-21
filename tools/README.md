@@ -798,7 +798,9 @@ result (exit 0, no diagnostic). An existing but unreadable or malformed
 registry or report is different — a non-fatal diagnostic beside whatever could
 still be read. A recorded report path that is simply not there is data (a run
 has not written it yet); one that EXISTS but is not a regular file is damage,
-and damage is diagnosed.
+and damage is diagnosed. So is a registry carrying JSON's non-standard
+`NaN`/`Infinity` constants, which Python's `json` would otherwise read and
+write straight back out, making `--json` invalid JSON.
 
 It never writes, never takes a `$test` lock, and never invokes the `$test`
 coordinator at all. That last part is not squeamishness: every one of the

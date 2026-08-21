@@ -820,6 +820,54 @@ def test_damaged_registry_is_non_fatal() -> None:
               "the malformed record is diagnosed", str(result["diagnostics"]))
 
 
+def test_non_finite_numbers_never_reach_the_output() -> None:
+    """`NaN`/`Infinity` in the registry are malformed state, and diagnosed.
+
+    Python's `json` reads those non-standard constants happily and
+    writes them straight back, so without this the reader would present
+    a damaged registry with no diagnostic AND emit invalid JSON from
+    `--json`.
+    """
+    for token in ("NaN", "Infinity", "-Infinity"):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = build_state(Path(tmp), [make_run("probe:role", "run")], {})
+            document = json.loads((state / evidence.REGISTRY_FILENAME).read_text())
+            (state / evidence.REGISTRY_FILENAME).write_text(
+                json.dumps(document).replace('"elapsed_seconds": 288.783',
+                                             f'"elapsed_seconds": {token}'),
+                encoding="utf-8")
+            with NonInteraction(state) as guard:
+                result = read(state, "role")
+                guard.assert_untouched(f"{token} registry")
+            check_equal(result["runs"], [],
+                        f"a registry carrying {token} contributes no runs")
+            check(any("cannot parse" in d and token.lstrip("-") in d
+                      for d in result["diagnostics"]),
+                  f"{token} is diagnosed as a parse failure",
+                  str(result["diagnostics"]))
+            check_equal(evidence.main(["--probe", "role", "--json",
+                                       "--state-root", str(state)]),
+                        evidence.EXIT_OK,
+                        f"the CLI still exits 0 with {token} in the registry")
+
+    # Second layer: nothing non-finite survives the field readers, so no
+    # hand-built or computed value can reintroduce one.
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        check_equal(evidence._number_or_none(bad), None,
+                    f"{bad!r} reads as unavailable")
+    check_equal(evidence._number_or_none(288.783), 288.783,
+                "a finite duration is kept")
+    check_equal(evidence._number_or_none(True), None, "a bool is not a duration")
+
+    # And the emitted document is STRICT JSON: no NaN, no Infinity.
+    with tempfile.TemporaryDirectory() as tmp:
+        state = build_state(Path(tmp), [make_run("probe:role", "run")], {})
+        result = read(state, "role")
+        strict = json.dumps(result, allow_nan=False)
+        json.loads(strict, parse_constant=evidence._reject_json_constant)
+        check(True, "the evidence document is strict, constant-free JSON")
+
+
 def test_full_history_is_never_truncated() -> None:
     """No default limit silently drops known history."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -926,6 +974,7 @@ def main() -> int:
         test_the_registry_is_confined_to_the_state_root,
         test_absent_state_is_success_not_error,
         test_damaged_registry_is_non_fatal,
+        test_non_finite_numbers_never_reach_the_output,
         test_full_history_is_never_truncated,
         test_presentation_only,
         test_state_root_resolves_through_the_common_git_dir,

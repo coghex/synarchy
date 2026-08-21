@@ -103,6 +103,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -235,13 +236,19 @@ def _text_or_none(value: object) -> str | None:
 
 
 def _number_or_none(value: object) -> float | int | None:
-    """`value` as a real number, or None when it is unavailable.
+    """`value` as a FINITE real number, or None when it is unavailable.
 
-    `bool` is excluded deliberately: a duration is never True.
+    `bool` is excluded deliberately: a duration is never True. So are
+    NaN and the infinities — Python's `json` reads the non-standard
+    `NaN`/`Infinity`/`-Infinity` constants happily and writes them back
+    out, which would make this reader's own `--json` invalid JSON. The
+    registry is rejected outright when it carries one (see
+    `_reject_json_constant`); this is the second layer, so no arithmetic
+    or hand-built value can reintroduce one either.
     """
     if isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)):
+    if isinstance(value, (int, float)) and math.isfinite(value):
         return value
     return None
 
@@ -470,6 +477,18 @@ def _summarize_run(record: dict, scope: Path | None, diagnostics: list[str]) -> 
     }
 
 
+def _reject_json_constant(token: str) -> None:
+    """Refuse JSON's non-standard `NaN`/`Infinity`/`-Infinity` constants.
+
+    `json.loads` accepts them by default and `json.dumps` writes them
+    back, so a registry carrying one would flow through this reader and
+    make its own `--json` output invalid JSON — presented as evidence,
+    with no diagnostic. A document containing one is malformed external
+    state, and malformed state is diagnosed.
+    """
+    raise ValueError(f"non-standard JSON constant {token}")
+
+
 def _load_runs(registry_path: Path, diagnostics: list[str]) -> list[dict]:
     """The registry's run list, or [] with a diagnostic when unusable."""
     try:
@@ -494,8 +513,8 @@ def _load_runs(registry_path: Path, diagnostics: list[str]) -> list[dict]:
         diagnostics.append(f"cannot read {registry_path}: {exc}")
         return []
     try:
-        document = json.loads(text)
-    except json.JSONDecodeError as exc:
+        document = json.loads(text, parse_constant=_reject_json_constant)
+    except ValueError as exc:                  # JSONDecodeError is a ValueError
         diagnostics.append(f"cannot parse {registry_path}: {exc}")
         return []
     if not isinstance(document, dict):
@@ -634,7 +653,10 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_REJECTED
 
     if args.json:
-        print(json.dumps(evidence, indent=2, sort_keys=True))
+        # allow_nan=False so this can never emit invalid JSON: by here
+        # nothing non-finite can have survived, and the exit path below
+        # would rather fail loudly than print a `NaN` as data.
+        print(json.dumps(evidence, indent=2, sort_keys=True, allow_nan=False))
     else:
         print(render(evidence))
     return EXIT_OK
