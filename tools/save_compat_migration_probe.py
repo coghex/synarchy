@@ -11,11 +11,22 @@ restart -- end to end, not merely "the pure decode function returns
 Right".
 
 Iterates EVERY "complete-session" fixture declared across
-docs/save_compat/manifest.json's baselines (currently the legacy B1
-baseline's fixture AND the #764 raw-to-typed-reference v1 fixture,
-which is a MODERN envelope decoded through the ordinary registry-driven
-path, never the legacy fallback -- proving that baseline's real-engine
-round trip too, not just the B1 one).
+docs/save_compat/manifest.json's baselines -- 20 of them as of issue
+#1485, spanning the legacy pre-#760 B1 envelope, the #764
+raw-to-typed-reference v1 shapes (MODERN envelopes decoded through the
+ordinary registry-driven path, never the legacy fallback), and every
+later baseline's own session fixture. That roster is never hard-coded
+here: the manifest is the single source of it, and this run's trailing
+summary names how many fixtures it actually covered.
+
+Every one of them is provisioned with the SAME registry families
+production's startup loader registers, in production's order (issue
+#1485) -- see BOOTSTRAP_LOADERS. A headless boot runs no loading
+screen, so nothing else supplies them, and the load path's own
+content-reference validation rejects a whole load whose saved entities
+name an unregistered definition. Before #1485 the bootstrap skipped
+locations, and the 12 fixtures carrying a `ruin_small` never reached a
+single migration assertion.
 
 Flow per fixture (isolated resource root -- never touches a real
 player's saves, see make_isolated_root):
@@ -69,6 +80,13 @@ didn't outright fail.
 
 Usage:
   python3 tools/save_compat_migration_probe.py [--port 9276]
+  python3 tools/save_compat_migration_probe.py --self-test
+
+--self-test boots no engine at all: it verifies the registry bootstrap
+plan below and the startup-loader parser that keeps it honest, which is
+what a reviewer can run in a second instead of grepping this file for
+loader names. A normal run performs the same verification first, before
+placing a fixture or booting anything.
 
 Exit 0 = every check above passed, for every declared complete-session
 fixture.
@@ -76,9 +94,9 @@ fixture.
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -102,23 +120,272 @@ _DUMP_COMPARE_EXCLUDED_KEYS = frozenset(
     {"$comment", "luaStateChecks", "isMigratedLegacyBaseline", "luaComponentCount"})
 
 
-def bootstrap_defs(port: int) -> None:
-    """Load the defs a headless boot skips (no loading screen) but the
-    load path's content-reference validation (issue #760 requirement 9)
-    demands -- mirrors tools/multiworld_save_probe.py's helper, plus
-    recipes (this probe's #764 fixture carries a real craft bill)."""
-    loaders = [
-        ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
-        ("data/items/*.yaml",      "engine.loadItemYaml"),
-        ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
-        ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/units/*.yaml",      "engine.loadUnitYaml"),
-        ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),
-        ("data/recipes/*.yaml",    "engine.loadRecipeYaml"),
+STARTUP_LOADER_PATH = REPO / "scripts" / "startup_loader.lua"
+
+#: The registry families this probe provisions into every headless
+#: engine it boots, as ``(directory, engine verb, recursive)`` triples in
+#: the order they are loaded (issue #1485).
+#:
+#: A headless boot reaches neither scripts/loading_screen.lua nor
+#: scripts/ui_manager_boot.lua, so scripts/startup_loader.lua never runs
+#: and NOTHING registers a definition -- which is why this helper exists
+#: at all. But the load path's content-reference validation
+#: (Engine.Scripting.Lua.API.Save, issue #760 requirement 9) rejects the
+#: WHOLE load when a saved entity names a definition that is not
+#: registered, so any family this list omits turns every fixture
+#: referencing it into a content-validation rejection that never reaches
+#: a migration assertion. Before #1485 this list held seven families and
+#: omitted locations; the 12 tracked complete-session fixtures carrying
+#: a `ruin_small` all failed there.
+#:
+#: This is deliberately production's OWN sequence rather than a
+#: hand-picked subset: `verify_bootstrap_plan` asserts it equals
+#: startup_loader.lua's `queueNormalProfile` exactly, so a family added
+#: there is a loud, deterministic failure here instead of a fixture that
+#: silently stops being covered. Ordering is load-bearing in one
+#: direction -- a family whose definitions name ids from another must
+#: come after it, which is why locations are LAST (their content ids,
+#: incl. loot_table ids, reference the registries above; #90).
+#:
+#: `recursive` mirrors production's addYamlTree/addYamlDir split:
+#: items are the one family whose definitions may live in
+#: subdirectories (#1232), enumerated at any depth in the canonical
+#: byte order of the path relative to the family root.
+BOOTSTRAP_LOADERS: list[tuple[str, str, bool]] = [
+    ("data/materials",   "engine.loadMaterialYaml",   False),
+    ("data/vegetation",  "engine.loadVegetationYaml", False),
+    ("data/flora",       "engine.loadFloraYaml",      False),
+    ("data/substances",  "engine.loadSubstanceYaml",  False),
+    ("data/infections",  "engine.loadInfectionYaml",  False),
+    ("data/recipes",     "engine.loadRecipeYaml",     False),
+    ("data/items",       "engine.loadItemYaml",       True),
+    ("data/equipment",   "engine.loadEquipmentYaml",  False),
+    ("data/buildings",   "engine.loadBuildingYaml",   False),
+    ("data/units",       "engine.loadUnitYaml",       False),
+    ("data/loot_tables", "engine.loadLootTableYaml",  False),
+    ("data/locations",   "engine.loadLocationYaml",   False),
+]
+
+#: Every engine verb whose registry the load path's content-reference
+#: validation can reject a load on. Engine.Scripting.Lua.API.Save folds
+#: NINE checks into `allMessages` -- unit/building def, item, recipe,
+#: bill-output item, construct def, material, flora, location,
+#: infection -- over these EIGHT registries: the def check spans units
+#: and buildings, the bill-output check re-reads the item registry, and
+#: the construct check re-reads the building one.
+#:
+#: Requirement 2 of #1485: the bootstrap must cover all of them, so a
+#: fixture that LATER carries a flora or infection reference is already
+#: provisioned rather than needing this same repair again. Loot tables
+#: and vegetation are NOT validated on the load path; they are in
+#: BOOTSTRAP_LOADERS because production loads them and locations
+#: resolve loot_table ids at spawn time (#90), not because a load can
+#: be rejected on them.
+LOAD_VALIDATED_LOADERS = frozenset({
+    "engine.loadUnitYaml",
+    "engine.loadBuildingYaml",
+    "engine.loadItemYaml",
+    "engine.loadRecipeYaml",
+    "engine.loadMaterialYaml",
+    "engine.loadFloraYaml",
+    "engine.loadLocationYaml",
+    "engine.loadInfectionYaml",
+})
+
+#: The ASCII spine of the content-validation rejection message
+#: Engine.Scripting.Lua.API.Save builds ("... reference a gameplay
+#: definition no longer registered - aborting the entire load ...").
+#: Matched against the load status's own `outcome` to tell a bootstrap
+#: gap apart from a real migration failure; see `load_failure_reason`.
+MISSING_DEF_OUTCOME_MARKER = "gameplay definition no longer registered"
+
+
+class BootstrapPlanError(RuntimeError):
+    """scripts/startup_loader.lua's registry sequence could not be read.
+
+    A SETUP failure, raised rather than returned so an unreadable or
+    restructured startup loader can never be mistaken for "production
+    loads nothing" -- which would let `verify_bootstrap_plan` certify
+    any plan at all, including one that provisions nothing (#1342's
+    lesson: a setup check that passes while checking nothing is worse
+    than no check).
+    """
+
+
+_QUEUE_NORMAL_PROFILE_RE = re.compile(
+    r"^local function queueNormalProfile\(\)$(?P<body>.*?)^end$",
+    re.MULTILINE | re.DOTALL)
+
+_ADD_YAML_CALL_RE = re.compile(
+    r"^[ \t]*addYaml(?P<kind>Dir|Tree)\(\s*"
+    r"\"(?P<dir>[^\"]+)\"\s*,\s*\"[^\"]*\"\s*,\s*"
+    r"(?P<loader>engine\.load[A-Za-z]+)\s*\)",
+    re.MULTILINE)
+
+
+def production_registry_sequence(source: str | None = None
+                                  ) -> list[tuple[str, str, bool]]:
+    """The registry families scripts/startup_loader.lua's
+    `queueNormalProfile` actually enqueues, in ITS order, as the same
+    ``(directory, engine verb, recursive)`` triples BOOTSTRAP_LOADERS
+    uses.
+
+    Reads only that one function's body, so `queueArenaProfile`'s much
+    smaller dev-boot subset cannot leak in, and only its
+    `addYamlDir`/`addYamlTree` calls, so the tutorial directory load
+    (an `addItem`, not a registry family -- and self-contained authored
+    data that references no registry) and the texture-only phases are
+    excluded. A commented-out call is excluded too: the pattern anchors
+    the verb to the start of its line, past leading whitespace only.
+
+    Raises BootstrapPlanError when the function cannot be located or
+    enqueues no YAML family at all.
+    """
+    if source is None:
+        try:
+            source = STARTUP_LOADER_PATH.read_text(encoding="utf-8")
+        except OSError as error:
+            raise BootstrapPlanError(
+                f"could not read {STARTUP_LOADER_PATH} to compare this "
+                f"probe's registry bootstrap against production's: "
+                f"{error}") from None
+    match = _QUEUE_NORMAL_PROFILE_RE.search(source)
+    if match is None:
+        raise BootstrapPlanError(
+            f"could not locate `local function queueNormalProfile()` in "
+            f"{STARTUP_LOADER_PATH}; this probe's registry bootstrap can "
+            f"no longer be checked against production's and must be "
+            f"re-derived by hand")
+    found = [
+        (call.group("dir"), call.group("loader"), call.group("kind") == "Tree")
+        for call in _ADD_YAML_CALL_RE.finditer(match.group("body"))
     ]
-    for pattern, fn in loaders:
-        for path in sorted(glob.glob(pattern)):
-            send(port, f"{fn}('{path}'); return 'ok'")
+    if not found:
+        raise BootstrapPlanError(
+            f"`queueNormalProfile` in {STARTUP_LOADER_PATH} enqueues no "
+            f"addYamlDir/addYamlTree registry family; the parse found "
+            f"nothing to compare against, which is a broken check rather "
+            f"than a production that loads no registries")
+    return found
+
+
+def yaml_files(directory: str, recursive: bool) -> list[str]:
+    """One family's YAML files as ENGINE-relative paths (`data/...`).
+
+    Enumerated from the repository rather than the probe's own working
+    directory -- the engine resolves these under its isolated resource
+    root, whose `data` symlinks back here (see make_isolated_root), so
+    the paths are correct wherever this script was invoked from.
+
+    `recursive` mirrors production's addYamlTree, including its ordering
+    rule: startupLoader.canonicalFileOrder sorts by the UTF-8 BYTES of
+    the path relative to the family root, deliberately not by any
+    locale-dependent collation, so this sorts on the encoded bytes too.
+    """
+    root = REPO / directory
+    if not root.is_dir():
+        return []
+    paths = root.rglob("*.yaml") if recursive else root.glob("*.yaml")
+    rels = sorted((path.relative_to(root).as_posix() for path in paths),
+                  key=lambda rel: rel.encode("utf-8"))
+    return [f"{directory}/{rel}" for rel in rels]
+
+
+def verify_bootstrap_plan() -> list[str]:
+    """Check BOOTSTRAP_LOADERS before any engine is booted, returning one
+    string per problem (empty ⇒ usable).
+
+    Deterministic and engine-free, and run at the top of every normal
+    probe run: a bootstrap that has silently stopped provisioning a
+    family the fixtures need would otherwise surface only as whichever
+    load happens to be rejected first, arbitrarily far from the cause.
+    """
+    problems: list[str] = []
+    try:
+        production = production_registry_sequence()
+    except BootstrapPlanError as error:
+        return [str(error)]
+
+    if BOOTSTRAP_LOADERS != production:
+        for index, expected in enumerate(production):
+            actual = (BOOTSTRAP_LOADERS[index]
+                      if index < len(BOOTSTRAP_LOADERS) else None)
+            if actual != expected:
+                problems.append(
+                    f"BOOTSTRAP_LOADERS diverges from "
+                    f"queueNormalProfile at position {index}: production "
+                    f"enqueues {expected!r}, this probe has {actual!r}")
+                break
+        else:
+            problems.append(
+                f"BOOTSTRAP_LOADERS carries {len(BOOTSTRAP_LOADERS)} "
+                f"families but queueNormalProfile enqueues "
+                f"{len(production)}: extra entries "
+                f"{BOOTSTRAP_LOADERS[len(production):]!r}")
+
+    if not BOOTSTRAP_LOADERS:
+        problems.append("BOOTSTRAP_LOADERS is empty")
+    elif BOOTSTRAP_LOADERS[-1][1] != "engine.loadLocationYaml":
+        problems.append(
+            f"locations must be provisioned LAST (their content ids "
+            f"reference the registries above, #90); the last family is "
+            f"{BOOTSTRAP_LOADERS[-1][0]!r}")
+
+    provisioned = {loader for _, loader, _ in BOOTSTRAP_LOADERS}
+    for loader in sorted(LOAD_VALIDATED_LOADERS - provisioned):
+        problems.append(
+            f"{loader} is not in BOOTSTRAP_LOADERS, but the load path's "
+            f"content-reference validation can reject a fixture's load "
+            f"on that registry")
+
+    for directory, loader, recursive in BOOTSTRAP_LOADERS:
+        if not yaml_files(directory, recursive):
+            problems.append(
+                f"{directory}/ enumerated no .yaml file, so {loader} "
+                f"would register nothing from it")
+    return problems
+
+
+def bootstrap_defs(port: int) -> None:
+    """Provision BOOTSTRAP_LOADERS into a freshly booted headless engine.
+
+    One `send` per file, exactly as production enqueues one queue item
+    per file, so each loader still sees each definition file once and in
+    the same order. `verify_bootstrap_plan` has already established that
+    the plan is the production one and that every family enumerates
+    files, so this stays a straight-line replay.
+    """
+    for directory, loader, recursive in BOOTSTRAP_LOADERS:
+        for path in yaml_files(directory, recursive):
+            send(port, f"{loader}('{path}'); return 'ok'")
+
+
+def load_failure_reason(status) -> str:
+    """Why a load did not publish, saying WHICH KIND of failure it is.
+
+    Requirement 5 of #1485: a fixture rejected because this probe never
+    registered a definition family is a HARNESS setup failure, and must
+    never read like the migration itself is broken. The engine already
+    separates the two -- a content-reference rejection reports
+    `failedAtPhase == "LoadContentValidated"` with an unknown-definition
+    outcome, while a decode or migration failure keeps its own earlier
+    phase and its own outcome -- so this reads that distinction back out
+    rather than guessing from the message alone.
+    """
+    if not isinstance(status, dict):
+        return ("the load never reported a terminal status (no "
+                "engine.getLoadStatus() table was observed)")
+    phase = status.get("failedAtPhase") or status.get("phase")
+    outcome = str(status.get("outcome", ""))
+    if (status.get("failedAtPhase") == "LoadContentValidated"
+            and MISSING_DEF_OUTCOME_MARKER in outcome):
+        return ("SETUP FAILURE, not a migration failure: the load was "
+                "rejected at content validation because the fixture "
+                "references a definition this probe never registered. "
+                "Fix BOOTSTRAP_LOADERS (issue #1485), not the fixture. "
+                f"Engine outcome: {outcome}")
+    return (f"MIGRATION FAILURE: the load reached {phase!r} and did not "
+            f"publish. Engine outcome: {outcome or '(none reported)'}")
 
 
 def make_isolated_root(base: str) -> str:
@@ -322,8 +589,10 @@ def run_one_fixture(chk: Checks, port: int, fixture: dict) -> None:
                f"(got {loaded!r})")
         published, status = wait_load_published(port)
         chk.ok(published,
-               f"fixture's load transaction published through the normal "
-               f"#763 staging/publish path (status={status})")
+               "fixture's load transaction published through the normal "
+               "#763 staging/publish path"
+               + ("" if published
+                  else f" -- {load_failure_reason(status)}"))
 
         active = send(port, "return world.getActiveWorldId()").strip('"')
         chk.ok(active == active_page,
@@ -381,8 +650,9 @@ def run_one_fixture(chk: Checks, port: int, fixture: dict) -> None:
                f"current-format file (got {loaded_b!r})")
         published_b, status_b = wait_load_published(port)
         chk.ok(published_b,
-               f"re-saved file's load transaction published "
-               f"(status={status_b})")
+               "re-saved file's load transaction published"
+               + ("" if published_b
+                  else f" -- {load_failure_reason(status_b)}"))
 
         active_b = send(port, "return world.getActiveWorldId()").strip('"')
         chk.ok(active_b == active_page,
@@ -433,11 +703,119 @@ def run_one_fixture(chk: Checks, port: int, fixture: dict) -> None:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+#: A synthetic startup loader for `self_test`: every shape
+#: `production_registry_sequence` must include or exclude, in one file.
+#: A neighbouring profile's families, a commented-out call, the tutorial
+#: `addItem`, and the texture-only phases must ALL stay out; the
+#: addYamlDir/addYamlTree split and the enqueue order must survive.
+_SELF_TEST_LOADER = """
+local function queueArenaProfile()
+    addYamlDir("data/arena",      "Loading arena...",      engine.loadArenaYaml)
+end
+
+local function queueNormalProfile()
+    addYamlDir("data/materials",  "Loading materials...",  engine.loadMaterialYaml)
+    -- addYamlDir("data/retired",  "Loading retired...",   engine.loadRetiredYaml)
+    addYamlTree("data/items",     "Loading items...",      engine.loadItemYaml)
+    addItem("Loading tutorial...", function()
+        engine.loadTutorialDir("data/tutorials")
+    end)
+    for _, sub in ipairs({ "stat", "skill" }) do
+        addTextureDir("assets/textures/icons/" .. sub, "Loading icons...")
+    end
+    addYamlDir("data/locations",  "Loading locations...",  engine.loadLocationYaml)
+end
+
+local function queueLaterProfile()
+    addYamlDir("data/later",      "Loading later...",      engine.loadLaterYaml)
+end
+"""
+
+
+def self_test() -> int:
+    """Prove the bootstrap plan and the parser that checks it, with no
+    engine, no GPU and no fixture (issue #1485).
+
+    Two halves, both deterministic. The parser is exercised against
+    `_SELF_TEST_LOADER`, whose expected answer is written out
+    independently of the regex, plus the two ways reading production can
+    fail; then the REAL plan is verified against the REAL startup
+    loader, which is the assertion that replaces grepping this file for
+    loader names.
+    """
+    failures = 0
+
+    def check(cond: bool, label: str) -> None:
+        nonlocal failures
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label}")
+        if not cond:
+            failures += 1
+
+    print("=== parsing scripts/startup_loader.lua ===")
+    parsed = production_registry_sequence(_SELF_TEST_LOADER)
+    expected = [
+        ("data/materials", "engine.loadMaterialYaml", False),
+        ("data/items",     "engine.loadItemYaml",     True),
+        ("data/locations", "engine.loadLocationYaml", False),
+    ]
+    check(parsed == expected,
+          f"reads queueNormalProfile's registry families, in order, with "
+          f"the Dir/Tree split -- and excludes the other profiles, the "
+          f"commented-out call, the tutorial addItem and the texture "
+          f"phases (got {parsed!r})")
+
+    for label, source in (
+            ("a startup loader with no queueNormalProfile",
+             "local function queueArenaProfile()\nend\n"),
+            ("a queueNormalProfile that enqueues no registry family",
+             "local function queueNormalProfile()\n"
+             "    addTextureList(\"Loading HUD...\", hudPaths)\n"
+             "end\n")):
+        try:
+            production_registry_sequence(source)
+        except BootstrapPlanError:
+            check(True, f"{label} raises BootstrapPlanError")
+        else:
+            check(False, f"{label} raises BootstrapPlanError")
+
+    print("\n=== the real bootstrap plan ===")
+    problems = verify_bootstrap_plan()
+    check(not problems,
+          "BOOTSTRAP_LOADERS matches production's queueNormalProfile, "
+          "provisions every load-validated registry, ends with "
+          "locations, and enumerates files for every family"
+          + ("" if not problems else ": " + "; ".join(problems)))
+
+    print(f"\n{'PASS' if failures == 0 else 'FAIL'}: {failures} "
+          f"self-test check(s) failed")
+    return 0 if failures == 0 else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=9276)
+    ap.add_argument("--self-test", action="store_true",
+                    help="verify the registry bootstrap plan and the "
+                         "startup-loader parser behind it; boots no engine")
     args = ap.parse_args()
+
+    if args.self_test:
+        return self_test()
+
+    # Before any engine boots: a bootstrap that has stopped provisioning
+    # a family the fixtures reference would otherwise surface only as
+    # whichever load happens to be rejected first, far from the cause
+    # and an engine boot at a time (issue #1485).
+    problems = verify_bootstrap_plan()
+    if problems:
+        print("FAIL: the registry bootstrap plan is unusable, so no "
+              "fixture could be provisioned correctly:")
+        for problem in problems:
+            print(f"  - {problem}")
+        return 1
+    print(f"registry bootstrap: {len(BOOTSTRAP_LOADERS)} families "
+          f"mirroring startup_loader.queueNormalProfile, locations last")
 
     fixtures = declared_complete_session_fixtures()
     chk = Checks()
@@ -445,7 +823,7 @@ def main() -> int:
         run_one_fixture(chk, args.port, fixture)
 
     print(f"\n{'PASS' if chk.failed == 0 else 'FAIL'}: "
-          f"{chk.failed} check(s) failed across {len(fixtures)} "
+          f"{chk.failed} check(s) failed across {len(fixtures)} declared "
           f"complete-session fixture(s)")
     return 0 if chk.failed == 0 else 1
 

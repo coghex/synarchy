@@ -22,7 +22,7 @@ WORLDGEN_GLOBS = [
     # Generation-family subtrees use a `Name*` prefix (not `Name/*`) so each
     # family's facade module (e.g. src/World/Generate.hs, src/World/Fluids.hs)
     # matches alongside its directory. Deliberately NOT src/World/* wholesale:
-    # gameplay/plumbing subtrees there (Save, Command, Thread, designations,
+    # the gameplay subtrees there (saves, designations, cursors, power,
     # render-side Tile texturing, ...) cannot shift a bare --dump's
     # terrain/material/fluid/ice/ore layers, and must not trigger the gate.
     "src/World/Generate*", "src/World/Geology*", "src/World/Hydrology*",
@@ -33,6 +33,32 @@ WORLDGEN_GLOBS = [
     "src/World/Grid.hs", "src/World/Scale.hs", "src/World/Constants.hs",
     "src/World/Base.hs",
     "src/World/ZoomMap*", "src/World/Types*",
+    # A bare --dump does not read generation output directly (#1318): it
+    # drives the live pipeline and then reads back what the world thread
+    # left in wsTilesRef. The whole verified sequence is in scope here.
+    #   * WorldInit orchestration — app/App/Dump.hs queues WorldInit,
+    #     World.Thread.Command delegates it to World.Thread.Command.Init,
+    #     which builds the generation parameters, the centre chunk, the
+    #     live tile state and the remaining chunk queue.
+    #   * Chunk loading — World.Thread's tick runs
+    #     World.Thread.ChunkLoading.drainInitQueues, which is what the
+    #     dump's waitForChunks waits on.
+    #   * SimFastSettleAll — Sim.Thread runs real simulateActiveTick fluid
+    #     simulation, then emits acknowledged FluidWriteback batches built
+    #     from fluid, terrain, rendered surface and side decorations.
+    #   * Writeback application — World.Thread.Command's
+    #     handleApplyFluidsCommand overwrites lcFluidMap,
+    #     lcTerrainSurfaceMap, lcSurfaceMap and lcSideDeco on the live
+    #     chunk, and the dump reads terrainZ/surfaceZ/fluidType/fluidSurf
+    #     straight out of those just-overwritten fields.
+    # So a change to any of these stages can move baseline-observed dump
+    # output. src/Sim* is whole-tree (and picks up a future src/Sim.hs
+    # facade) because every module there feeds that settle, including ones
+    # added later; the world-thread entries are exact paths instead, so the
+    # excluded src/World/Thread/ siblings above stay excluded.
+    "src/Sim*",
+    "src/World/Thread.hs", "src/World/Thread/ChunkLoading.hs",
+    "src/World/Thread/Command.hs", "src/World/Thread/Command/Init.hs",
     "config/world_gen_default.yaml", "data/materials/*", "data/flora/*",
     "data/vegetation/*", "tools/world_*.py", "tools/baselines/*",
 ]
@@ -137,10 +163,33 @@ def self_test() -> int:
         ("worldgen", ["src/World/Magma/Pool.hs"], True),
         ("worldgen", ["src/World/Material/Id.hs"], True),
         ("worldgen", ["src/World/Weather.hs"], True),
+        # The stages a bare --dump reads THROUGH (#1318): the simulation
+        # settle and the world-thread writeback that overwrite the terrain,
+        # surface and fluid fields the dump prints. Both a top-level and a
+        # nested src/Sim path are pinned, so the whole-tree pattern cannot
+        # be narrowed back to a handful of literals without failing here.
+        ("worldgen", ["src/Sim/Thread.hs"], True),
+        ("worldgen", ["src/Sim/Fluid/Active.hs"], True),
+        ("worldgen", ["src/Sim/Fluid/Types.hs"], True),
+        ("worldgen", ["src/Sim/State/Types.hs"], True),
+        ("worldgen", ["src/Sim/Command/Types.hs"], True),
+        # A module added to that tree later must select the gate too.
+        ("worldgen", ["src/Sim/Fluid/Future.hs"], True),
+        ("worldgen", ["src/World/Thread.hs"], True),
+        ("worldgen", ["src/World/Thread/ChunkLoading.hs"], True),
+        ("worldgen", ["src/World/Thread/Command.hs"], True),
+        ("worldgen", ["src/World/Thread/Command/Init.hs"], True),
         # Non-generation src/World subtrees must NOT trigger the gate — a
-        # save/thread/designation change never shifts bare --dump output.
+        # save/designation/cursor/power change never shifts bare --dump
+        # output. These sit right beside the four world-thread paths above,
+        # so they also pin that those stayed exact rather than becoming
+        # src/World/Thread/* wholesale.
         ("worldgen", ["src/World/Save/Storage.hs"], False),
         ("worldgen", ["src/World/Thread/Command/Save.hs"], False),
+        ("worldgen", ["src/World/Thread/Command/Cursor.hs"], False),
+        ("worldgen", ["src/World/Thread/Command/Edit.hs"], False),
+        ("worldgen", ["src/World/Thread/Cursor.hs"], False),
+        ("worldgen", ["src/World/Thread/Power.hs"], False),
         ("worldgen", ["src/World/Mine/Types.hs"], False),
         ("worldgen", ["scripts/unit_ai.lua"], False),
         ("worldgen", ["data/materials/stone.yaml"], True),
@@ -207,6 +256,15 @@ def self_test() -> int:
         ("worldgen", ["data/units/acolyte.yaml"], False),
         ("graphical", ["data/units/acolyte.yaml"], False),
         ("graphical", ["tools/pack_atlas.py"], False),
+        # ...including the #1318 additions, which are worldgen-only.
+        ("graphical", ["src/Sim/Thread.hs"], False),
+        ("graphical", ["src/Sim/Fluid/Active.hs"], False),
+        ("graphical", ["src/World/Thread.hs"], False),
+        ("graphical", ["src/World/Thread/ChunkLoading.hs"], False),
+        ("graphical", ["src/World/Thread/Command.hs"], False),
+        ("graphical", ["src/World/Thread/Command/Init.hs"], False),
+        ("unit-assets", ["src/Sim/Thread.hs"], False),
+        ("unit-assets", ["src/World/Thread/Command/Init.hs"], False),
     ]
     failures = []
     for gate, files, expected in cases:

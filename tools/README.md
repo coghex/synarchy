@@ -457,9 +457,10 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `repair_probe.py` | #301 | arena | Repair policy layer (station-gated repair on top of #300). |
 | `repair_ai_probe.py` | #302 | arena | `repair_job` AI end-to-end: claim, own/equipped/mule-held sourcing, station routing, dead-claimant release, `smith` role weighting. |
 | `resource_root_probe.py` | #636 | worldgen (size 64, one dump) | Resource-root launch contract: the built binary run from a temp directory OUTSIDE the repo fails with an actionable error when no root is given, and works (`--dump` JSON via `--resource-root`, `--headless` READY/console/clean quit via `SYNARCHY_ROOT`) when pointed at the checkout. |
+| `retaliation_swap_probe.py` | #1483 | arena | Mid-fight retaliation target swap in `attack_target`'s shared execute. Every check is graded from ONE atomic console chunk that re-establishes the branch's preconditions and then drives a single `unitAi.update(dt)` under `pcall`, so nothing drifts between the precondition and the grade: `scripts.unit_ai_combat` exports one 3 s window the consumer module can see; a REAL hit from a third live unit makes it the recorded recent attacker; with that attacker live, non-collapsed, not a technomule and inside `unit.getAttackRange(subject) + 0.5`, the subject retargets onto it, its own tick reaches a post-execute completion point (`nextActionAt` advances), and a SENTINEL unit ordered after it — the order forced by wrapping `unit.getAllIds`, which the engine builds from `HashMap.keys` with no spawn-order contract — is reached by that same invocation, with no `Lua error in update()` logged across a window of natural ticks either; and a hit staged far outside the window swaps nothing while still completing its tick (asserting only the unchanged target would pass on the aborting code). `mental_state_probe.py`'s collapsed-attacker case cannot reach this comparison — `attPose ~= "collapsed"` short-circuits first. |
 | `river_naming_probe.py` | #1102 | worldgen (size 16, three boots) | River identity + naming through the real Lua table: every river carries its `GeoFeatureId` as `id`, a second `world.getRivers()` returns the identical id→geometry association, a language-bearing world names every river with a non-empty `name`/`gloss` whose head morpheme recurs, the same seed with a CUSTOM name leaves both keys absent, and every id/name/gloss survives save → fresh process → load and is reproduced by regenerating the same seed + language. |
 | `role_probe.py` | #265 | worldgen | Derived unit-role hysteresis/demotion/work-XP growth. |
-| `save_compat_migration_probe.py` | #766 | none (a tracked legacy fixture is placed directly on disk, isolated resource root) | Fresh-process save-compatibility migration: a tracked pre-#760 B1 fixture (`docs/save_compat/manifest.json`'s `b1-initial-session` baseline) loads and publishes through the normal whole-session transaction, the migrated session begins paused and a dwell advances no gameplay date, re-saving under a new slot produces a genuine current-format re-encode (not a copy of the legacy bytes), and a FRESH engine process loads that re-saved file and reaches the same active page — proving the migration survives a real restart, not merely an in-memory decode. |
+| `save_compat_migration_probe.py` | #766, #1485 | none (a tracked fixture is placed directly on disk, isolated resource root) | Fresh-process save-compatibility migration, for EVERY `complete-session` fixture `docs/save_compat/manifest.json` declares (the pre-#760 B1 envelope through every later baseline's own session): each loads and publishes through the normal whole-session transaction, the migrated session begins paused and a dwell advances no gameplay date, re-saving under a new slot produces a genuine current-format re-encode (not a copy of the input bytes), and a FRESH engine process loads that re-saved file and reaches the same active page — proving the migration survives a real restart, not merely an in-memory decode. Each engine is provisioned with the SAME registry families (and order) `scripts/startup_loader.lua`'s `queueNormalProfile` loads, which a headless boot never runs (#1485); `--self-test` verifies that plan and its startup-loader parser with no engine at all. |
 | `autosave_probe.py` | #913 | worldgen (size 32, isolated resource root with a COPIED `config/`) | Interval autosave end to end in one boot: the shipped default-off config produces neither a request nor a slot across a dwell longer than one configured interval; enabled, a REAL one-minute interval fires and hands an unpaused world back at its exact prior fast-forward time scale, while one that began paused stays paused and zero-scaled; a player pause/resume during the request window suppresses restoration even though the final pause boolean is unchanged (the time scale is the discriminator); an accepted autosave whose storage write fails stays paused and zero-scaled with `engine.getSaveStatus()` carrying the rendered `StoragePhase`; a deadline outside `uiManager.isGameplayView()` skips silently (no request, no failure event, cadence uninterrupted); a `save_load` category configured to pause wins over the restoration; a pre-existing MANUAL save on an `autosave-<n>` name — as a slot directory OR a pre-#762 legacy flat file a published directory would shadow — fails the attempt through `save_load` with nothing overwritten or partially rotated; rotation keeps `autosave-1` newest across generations that all stay classified autosave, a failed write against a FULL family discards and renumbers nothing (publish-then-rotate), a rotation that fails part-way leaves every generation on disk and retries cleanly (retire-by-rename, delete last), and one interrupted AFTER a partial shift resumes without ageing out a second generation; and reducing `rotation_depth` or disabling autosave retains every excess generation untouched. |
 | `save_pause_probe.py` | #42 | worldgen | Save/load pause-semantics regression. |
 | `save_barrier_probe.py` | #757 | worldgen (isolated resource root) | Coordinated save-owner acknowledgement and paused reload smoke test. |
@@ -686,7 +687,8 @@ Only probes that implement the shared `probe-result/v1` protocol
 is rejected BY NAME before execution, without running the probe at all —
 heuristically parsing free-form stdout is the guesswork a reliability harness
 must not do, and invoking a legacy probe to find out would boot a real engine.
-`role` is the only migrated probe today; later issues migrate one at a time.
+`position_hold` and `role` are the migrated probes today; later issues
+migrate one at a time.
 
 A migrated probe prints its ordered, stable check declaration with
 `--describe` (no engine) and, when the harness supplies an event path, writes
@@ -725,24 +727,54 @@ pre-execution rejections (2), port exhaustion (3) and harness errors (4) — a
 malformed, truncated, duplicate, out-of-order or unclassifiable protocol
 event, which is never reported as a probe pass.
 
-### `probe_census.py` — the probe migration inventory (#1425)
+### `probe_census.py` — the probe census (#1425, #1428)
 
-Builds and validates `docs/probe_census.json`: every registered probe exactly
-once, with its script, its CI-eligible/manual-only classification and its
-protocol status (`legacy` or `probe-result/v1`). The manifest lives in the
+Builds, validates and updates `docs/probe_census.json`, now
+`probe-census/v2`: every registered probe exactly once, with its script, its
+CI-eligible/manual-only classification, its protocol status (`legacy` or
+`probe-result/v1`) and one census record holding the acceptable-failure
+policy, the estimated worst-case duration, the current commit cohort, the
+archived cohorts and an append-only attempt log. The census lives in the
 worktree whose branch is `docs-wip`, resolved BY BRANCH the way
 `tools/docs_land.sh` does — never a hard-coded path and never the primary
 checkout.
 
 ```bash
-python3 tools/probe_census.py --print       # what the live registry implies
-python3 tools/probe_census.py --seed        # write it into the docs worktree
-python3 tools/probe_census.py --validate    # check the seeded copy
+python3 tools/probe_census.py --print          # what the live registry implies
+python3 tools/probe_census.py --seed           # create/migrate in docs-wip
+python3 tools/probe_census.py --validate       # check the inventory
+python3 tools/probe_census.py --record R.json  # ingest one probe-flake-result/v1
+python3 tools/probe_census.py --probe KEY --set-acceptable-failures 2 \
+    --justification "two known engine-side races"
+python3 tools/probe_census.py --probe KEY --set-estimate 480
 ```
+
+`--print` never touches the docs worktree. `--seed` is the ONLY operation that
+migrates: it creates an absent census, migrates a `probe-census/v1` one
+losslessly, and reconciles inventory drift — appending newly registered
+probes, refreshing inventory metadata, retaining a row whose probe left the
+registry for a person to dispose of, and archiving a `current` cohort when a
+probe becomes CI-eligible. It never regenerates accumulated census data.
+`--record` and both policy operations refuse, naming `--seed`, when the census
+is absent or still v1.
+
+Every mutation is one locked read-modify-write: a cross-process `flock` keyed
+by the resolved target, held from the read through serialization and the
+preservation checks to a same-filesystem `os.replace`. Any failure before the
+replacement leaves the old bytes exactly as they were. Only summarized
+outcomes and external artifact references are stored — no stdout, no protocol
+stream, no engine log. Exit codes: 2 for a missing or unusable docs worktree,
+1 for inventory drift and every controlled refusal.
+
+Declared schema validation (`jsonschema`) is #1492 and the cross-field
+invariants are #1493; this tool reads only the fields its own operations need.
 
 Nothing at runtime reads it: `probe_flake.py` takes protocol status from its
 own in-repo `PROTOCOL_PROBES` and check identity from each probe's descriptor,
 so a checkout with no docs worktree behaves identically.
+
+`python3 tools/test_probe_census.py` is its deterministic, engine-free
+self-test.
 
 ### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets selection
 
