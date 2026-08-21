@@ -88,7 +88,7 @@ mental.TUNE = {
     LASHOUT_WEIGHT    = 0.15,
 }
 
-local function clamp(x, lo, hi) return math.max(lo, math.min(hi, x)) end
+local clamp = require("scripts.lib.numeric").clamp
 
 local function stateCode(uid)
     return unit.getStat(uid, "mental_state") or mental.STABLE

@@ -40,7 +40,7 @@ local EFFECTS = {
     },
 }
 
-local function clamp(x, lo, hi) return math.max(lo, math.min(hi, x)) end
+local clamp = require("scripts.lib.numeric").clamp
 
 -- 0..1: 1 at/above hot_temp, warmth_floor at/below cold_temp, linear
 -- between. nil temp (no ambient to fall back on) reads as fully fresh

@@ -24,7 +24,7 @@
 
 local M = {}
 
-local function clamp(x, lo, hi) return math.max(lo, math.min(hi, x)) end
+local clamp = require("scripts.lib.numeric").clamp
 
 -- Fraction 0..1 of the calorie ENERGY STORE. nil (not a band member —
 -- callers all treat this as "unaffected") when the unit has no live
