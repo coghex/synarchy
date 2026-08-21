@@ -111,7 +111,7 @@ applyTimelineFast timeline plates worldSize gx gy registry base =
                Nothing → 0
         m' = case HM.lookup (ChunkCoord cx cy)
                             (coMatOverride (gtCoastal timeline)) of
-               Just mv | mv VU.! li ≠ 0 ∧ m ≠ matGlacier
+               Just mv | mv VU.! li ≢ 0 ∧ m ≢ matGlacier
                        → MaterialId (mv VU.! li)
                _       → m
         -- Seabed: same guarded per-tile lookup (save v26). Applied
@@ -123,7 +123,7 @@ applyTimelineFast timeline plates worldSize gx gy registry base =
                Nothing → 0
         m'' = case HM.lookup (ChunkCoord cx cy)
                              (sbMatOverride (gtSeabed timeline)) of
-                Just mv | mv VU.! li ≠ 0 ∧ m' ≠ matGlacier
+                Just mv | mv VU.! li ≢ 0 ∧ m' ≢ matGlacier
                         → MaterialId (mv VU.! li)
                 _       → m'
     in if e ≡ minBound then (e, m) else (e + d + sd, m'')

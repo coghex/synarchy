@@ -75,7 +75,7 @@ checkFlatGround bm wtd instances worldSize def gx gy =
     in case zs of
         Nothing → NotPlaceable "chunk not loaded"
         Just (z0:rest)
-            | any (≠ z0) rest → NotPlaceable "ground is uneven"
+            | any (≢ z0) rest → NotPlaceable "ground is uneven"
             | any (tileHasBuilding worldSize bm) tiles →
                 NotPlaceable "tile already occupied"
             | bdIsStarting def ∧ overlapsAnyLocation worldSize instances def gx gy →

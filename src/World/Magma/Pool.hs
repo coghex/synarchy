@@ -199,7 +199,7 @@ identifyLavaPools worldSize poolDepth poolRadius ctx lakes rivers terrain
                 [ (gx, gy)
                 | (gx, gy) ← bboxTiles bb
                 , let tz = terrainAt gx gy
-                , tz ≠ minBound
+                , tz ≢ minBound
                 , not (isWater gx gy)
                 , any (pointInShape worldSize gx gy tz) shapes
                 ]
@@ -225,7 +225,7 @@ identifyLavaPools worldSize poolDepth poolRadius ctx lakes rivers terrain
                 grow acc (_p@(px, py) : rest) =
                     let nbrs = [ q
                                | dx ← [-1, 0, 1], dy ← [-1, 0, 1]
-                               , (dx, dy) ≠ (0, 0)
+                               , (dx, dy) ≢ (0, 0)
                                , let q = (px + dx, py + dy)
                                , HS.member q s
                                , not (HS.member q acc)
@@ -274,7 +274,7 @@ identifyLavaPools worldSize poolDepth poolRadius ctx lakes rivers terrain
                             | (dx, dy) ← [(1,0),(-1,0),(0,1),(0,-1)]
                             , let q = (px + dx, py + dy)
                             , let tzq = uncurry terrainAt q
-                            , tzq ≠ minBound
+                            , tzq ≢ minBound
                             , tzq < tz
                             ]
                 in case downs of
@@ -319,7 +319,7 @@ identifyLavaPools worldSize poolDepth poolRadius ctx lakes rivers terrain
                                    | (dx, dy) ← [(1,0),(-1,0),(0,1),(0,-1)]
                                    , let q = (fst p + dx, snd p + dy)
                                    , not (HS.member q visited)
-                                   , uncurry terrainAt q ≠ minBound
+                                   , uncurry terrainAt q ≢ minBound
                                    , withinRim m q
                                    ]
                             visited' = foldr (HS.insert . snd) visited nbrs

@@ -70,7 +70,7 @@ computeWorldEdgeOcean terrain worldTiles = runST $ do
     let nTiles = worldTiles * worldTiles
         isSubSea i =
             let t = terrain VU.! i
-            in t ≠ minBound ∧ t ≤ seaLevel
+            in t ≢ minBound ∧ t ≤ seaLevel
     flag  ← VUM.replicate nTiles False
     queue ← newSTRef ([] ∷ [Int])
     -- Seed: boundary-ring tiles that are sub-sea.
@@ -120,7 +120,7 @@ computeRenderedOcean worldSize oceanMap terrain = runST $ do
     let worldTiles = worldSize * chunkSize
         nTiles = worldTiles * worldTiles
         half   = worldTiles `div` 2
-        isSubSea i = let t = terrain VU.! i in t ≠ minBound ∧ t ≤ seaLevel
+        isSubSea i = let t = terrain VU.! i in t ≢ minBound ∧ t ≤ seaLevel
         chunkOf i =
             let gx = (i `mod` worldTiles) - half
                 gy = (i `div` worldTiles) - half
@@ -229,7 +229,7 @@ nearOceanMask maxDist worldTiles worldOcean terrain = runST $ do
                     tryN ok nIdx = when ok $ do
                         let nT = terrain VU.! nIdx
                         cur ← VUM.read near nIdx
-                        when (nT ≠ minBound ∧ not cur) $ do
+                        when (nT ≢ minBound ∧ not cur) $ do
                             VUM.write near nIdx True
                             modifySTRef' nextRef (nIdx :)
                 tryN True                  west
