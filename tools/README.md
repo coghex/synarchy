@@ -898,7 +898,10 @@ findings reports (`non_ci_test_audit_findings.md`, `ci_test_audit_findings.md`,
 `python_testing_findings.md`, `code_health_findings.md`) in BOTH the checked-out
 repository and a branch-resolved `docs-wip` worktree. Issues and PRs match on
 TITLES only; reports match on the full finding heading, with the heading marker
-authoritative for whether the finding is still open.
+authoritative for whether the finding is still open. Since the title is the
+whole subject, a tracker record whose title, number or state cannot be read is a
+`source-error`, not a non-match — "no tokens" and "no match" would otherwise be
+the same answer.
 
 It fails closed. A partial scan never returns `clear`, and the read-only
 boundary is absolute: no coordinator invocation, no lock, no state directory, no

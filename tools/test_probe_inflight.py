@@ -882,6 +882,87 @@ def test_open_draft_and_merged_pull_requests() -> None:
                     "an open draft excludes the probe")
 
 
+def test_a_malformed_tracker_record_fails_closed() -> None:
+    """A record whose subject cannot be read is not a non-match.
+
+    `normalize_tokens` answers "no tokens" for a missing or non-string
+    title, which is indistinguishable from a genuine non-match — so a
+    page containing one used to sail through and let the scan report
+    `clear`, despite the required subject being uninterpretable.
+    """
+    damaged_titles = [("an absent", MISSING), ("a null", None),
+                      ("an empty", ""), ("a whitespace", "   "),
+                      ("a numeric", 17), ("a list", ["x"])]
+    for label, value in damaged_titles:
+        for kind, source in (("issue", inflight.SOURCE_ISSUE),
+                             ("pull", inflight.SOURCE_PULL_REQUEST)):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = build_reports(Path(tmp) / "repo")
+                record = (issue(50, "placeholder") if kind == "issue"
+                          else pull(50, "placeholder"))
+                if value is MISSING:
+                    record.pop("title", None)
+                else:
+                    record["title"] = value
+                api = FakeGitHub(**{kind + "s": [record]})
+                document = evaluate("injury_log", repo_root=root, github=api,
+                                    state_root=Path(tmp) / "none")
+                check_equal(document["result"], inflight.RESULT_SOURCE_ERROR,
+                            f"{label} {kind} title fails closed")
+                check_equal([e["source"] for e in document["source_errors"]],
+                            [source], f"{label} {kind} title fails its own source")
+                check("no usable title" in document["source_errors"][0]["detail"],
+                      f"{label} {kind} title is diagnosed actionably",
+                      document["source_errors"][0]["detail"])
+
+    # The number and the state are validated for the same reason: one
+    # makes the evidence inspectable, the other decides eligibility.
+    for field, value, fragment in (("number", MISSING, "no usable number"),
+                                   ("number", "50", "no usable number"),
+                                   ("number", True, "no usable number"),
+                                   ("state", MISSING, "no usable state"),
+                                   ("state", 1, "no usable state"),
+                                   ("state", "", "no usable state")):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = build_reports(Path(tmp) / "repo")
+            record = issue(50, "Injury-log probe accepts the wrong unit")
+            if value is MISSING:
+                record.pop(field, None)
+            else:
+                record[field] = value
+            # A raw transport, not `FakeGitHub`: that fake filters by
+            # `state` the way the server does, so it would drop a record
+            # with a damaged `state` before the component ever saw it —
+            # and the component's own guard is exactly what is under
+            # test here.
+            def raw(path, params, _record=record):
+                return [_record] if int(params["page"]) == 1 else []
+
+            document = evaluate("injury_log", repo_root=root, github=raw,
+                                state_root=Path(tmp) / "none")
+            check_equal(document["result"], inflight.RESULT_SOURCE_ERROR,
+                        f"a {value!r} {field} fails closed")
+            check(fragment in document["source_errors"][0]["detail"],
+                  f"a {value!r} {field} is diagnosed actionably",
+                  document["source_errors"][0]["detail"])
+
+    # A transport that ignores `state=open` must not let a closed item
+    # exclude the probe: the returned state is checked, not assumed.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = build_reports(Path(tmp) / "repo")
+
+        def unfiltered(path, params):
+            if int(params["page"]) > 1:
+                return []
+            return [issue(60, "Injury-log probe accepts the wrong unit",
+                          state="closed")]
+
+        document = evaluate("injury_log", repo_root=root, github=unfiltered,
+                            state_root=Path(tmp) / "none")
+        check_equal(document["result"], inflight.RESULT_CLEAR,
+                    "a closed item returned anyway is still not open")
+
+
 def test_every_page_is_retrieved() -> None:
     """Pagination walks to the end; a match on the last page is found."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -1606,6 +1687,7 @@ def main() -> int:
         test_absent_versus_damaged_test_state,
         test_open_issues_match_titles_only,
         test_open_draft_and_merged_pull_requests,
+        test_a_malformed_tracker_record_fails_closed,
         test_every_page_is_retrieved,
         test_a_failing_or_endless_list_fails_closed,
         test_target_repository_resolution,

@@ -124,7 +124,13 @@ The four sources
    issues and closed or merged PRs do not.
 
    Issue and PR matching uses TITLES only — never bodies, comments,
-   branch names or incidental narrative text.
+   branch names or incidental narrative text. Because the title is the
+   whole subject, a record whose title cannot be read is a record whose
+   subject cannot be interpreted, and that is a `source-error` rather
+   than a non-match: "no tokens" and "no match" are otherwise the same
+   answer. The number and the state are validated for the same reason
+   from the other two ends — one makes the evidence inspectable, the
+   other decides eligibility, and neither may be guessed.
 
    **Target repository resolution.** `tools/` contained no
    GitHub-querying code before this module, so this establishes the
@@ -646,6 +652,57 @@ def _paginate(transport, path: str, params: dict[str, str]) -> list[dict]:
         f"present a truncated list as complete.")
 
 
+OPEN_STATE = "open"
+
+
+def _tracker_subject(entry: dict, repository: str, kind: str) -> tuple[int, str]:
+    """`(number, title)` for one tracker record, or `SourceError`.
+
+    The title is the ONLY subject this component matches a tracker item
+    on, so a record whose title cannot be read is a record whose subject
+    cannot be interpreted — and a scan containing one has not been read
+    completely, whatever the rest of the page said. `normalize_tokens`
+    would answer "no tokens" for a missing or non-string title, which is
+    indistinguishable from a genuine non-match and would let the scan
+    report `clear`.
+
+    The number is validated for the same reason from the other end: the
+    evidence contract promises number, title and URL, and a number that
+    is not one makes the match uninspectable. `bool` is excluded
+    explicitly — it is an `int` in Python, and issue #True is not a
+    thing. The URL is deliberately NOT required: it can be reconstructed
+    from the repository and number, so its absence costs no evidence.
+    """
+    number, title = entry.get("number"), entry.get("title")
+    if isinstance(number, bool) or not isinstance(number, int):
+        raise SourceError(
+            f"an open {kind} in {repository} records no usable number "
+            f"({number!r}), so the complete list could not be interpreted.")
+    if not isinstance(title, str) or not title.strip():
+        raise SourceError(
+            f"open {kind} #{number} in {repository} records no usable title "
+            f"({title!r}), and the title is the only subject a {kind} is "
+            f"matched on, so whether it names this probe cannot be decided.")
+    return number, title
+
+
+def _is_open(entry: dict, number: int, repository: str, kind: str) -> bool:
+    """Whether a record is open, refusing to guess when it does not say.
+
+    The endpoints are already asked for `state=open`, so this is a
+    belt-and-braces check on the answer rather than the primary filter —
+    but a record that does not say whether it is open is one whose
+    eligibility cannot be decided, and closed items must not be able to
+    exclude a probe.
+    """
+    state = entry.get("state")
+    if not isinstance(state, str) or not state.strip():
+        raise SourceError(
+            f"open {kind} #{number} in {repository} records no usable state "
+            f"({state!r}), so whether it is still open cannot be decided.")
+    return state == OPEN_STATE
+
+
 def _tracker_evidence(entry: dict, repository: str, path_segment: str, *,
                       include_draft: bool = False) -> dict:
     """Number, title and URL — the inspectable evidence for a tracker item.
@@ -680,10 +737,13 @@ def evaluate_issues(probe_key: str, repository: str, transport, index) -> list[d
     """
     matches: list[dict] = []
     for entry in _paginate(transport, f"repos/{repository}/issues",
-                           {"state": "open"}):
+                           {"state": OPEN_STATE}):
         if "pull_request" in entry:
             continue
-        occurrences = subject_matches(entry.get("title"), probe_key, index)
+        number, title = _tracker_subject(entry, repository, "issue")
+        if not _is_open(entry, number, repository, "issue"):
+            continue
+        occurrences = subject_matches(title, probe_key, index)
         if not occurrences:
             continue
         matches.append(_match(
@@ -702,8 +762,11 @@ def evaluate_pull_requests(probe_key: str, repository: str, transport,
     """
     matches: list[dict] = []
     for entry in _paginate(transport, f"repos/{repository}/pulls",
-                           {"state": "open"}):
-        occurrences = subject_matches(entry.get("title"), probe_key, index)
+                           {"state": OPEN_STATE}):
+        number, title = _tracker_subject(entry, repository, "pull request")
+        if not _is_open(entry, number, repository, "pull request"):
+            continue
+        occurrences = subject_matches(title, probe_key, index)
         if not occurrences:
             continue
         matches.append(_match(
