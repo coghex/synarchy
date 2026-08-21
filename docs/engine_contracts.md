@@ -92,18 +92,30 @@ Unicode-operator audit, the persistence-inventory / EngineEnv-capability
 material-id / findings-report-status audits (each with its own
 self-test), the unit-asset inventory gate (`test_pack_atlas.py` +
 `pack_atlas.py --validate-only --strict`), `world_check.py --quick`, the
-five probe-runner self-tests (`ci_probes.py --self-test`,
-`ci_expensive_gates.py --self-test`, `test_run_probes.py`,
-`test_persistence_contract_sweep.py`, `test_action_outcome_probe.py`),
-and the parity audit itself.
+six probe-runner self-tests (`ci_probes.py --self-test`,
+`ci_expensive_gates.py --self-test`, `ci_docs_fast_path.py --self-test`,
+`test_run_probes.py`, `test_persistence_contract_sweep.py`,
+`test_action_outcome_probe.py`), and the parity audit itself.
 
 **Same gate SET, not the same conditional control flow:** CI
 path-selects the graphical suite build, the unit-asset gate and
 `world_check` on PRs, while `make ci` runs all three unconditionally.
+Since #1490 CI also has a **docs-only fast path on master pushes**: when
+every path in the complete pushed range is documentation — under
+`docs/`, a plain add or modify, and never
+`docs/save_compat/manifest.json`, the one doc a Haskell target reads at
+runtime — the cabal build, both test-suite builds, the headless hspec
+suite and `world_check` are skipped. **Every Python audit still runs,
+self-tests included.** That asymmetry is the point rather than an
+oversight: #1490's cause was a docs-only push breaking
+`test_findings_report_audit.py`, so a fast path that skipped the audits
+would hide the very failure it was built for. `make ci` has no push
+range and so has no fast path; it always runs everything.
 Two families are CI-only, by name: CI's path SELECTORS
-(`ci_expensive_gates.py --stdin --gate …`, `ci_probes.py --stdin`),
-which have nothing to select for locally, and `run_probes.py`, the
-engine-booting probe sweep CLAUDE.md keeps opt-in. Everything else must
+(`ci_expensive_gates.py --stdin --gate …`, `ci_probes.py --stdin`,
+`ci_docs_fast_path.py --stdin --explain`), which have nothing to select
+for locally, and `run_probes.py`, the engine-booting probe sweep
+CLAUDE.md keeps opt-in. Everything else must
 run on both sides — `tools/ci_parity_audit.py` (#1355, CI + `make ci`,
 with its own `--self-test`) compares the two files' `python3 tools/*.py`
 invocations at command-and-arguments granularity in both directions and
