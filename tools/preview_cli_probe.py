@@ -63,22 +63,26 @@ Checks:
      graphical is what argv naming no selector resolves to — and is
      covered by check 9's own --headless rows plus hspec
      `--match "App.Cli"`.)
- 10. Present-but-malformed values (#1191): every affected spelling
-     (--seed/--worldSize/--plates/--ages/--port), an empty and an
-     unknown --dump= layer selection plus empty segments, and a
-     malformed and a non-positive --size all exit 1 pre-boot naming the
-     flag and the offending token — never the silent fall-through to a
-     default that made `--seed not-a-number` produce a full, valid,
-     WRONG dump at seed 42. Also pins the two orderings the fix has to
-     preserve: validation runs ahead of mode-specific early exits and
+ 10. Present-but-malformed values (#1191, #1481): every affected
+     spelling (--seed/--worldSize/--plates/--ages/--port), an empty and
+     an unknown --dump= layer selection plus empty segments, a
+     malformed and a non-positive --size, and every malformed --region
+     shape (non-numeric, too few, too many, partially numeric, and no
+     operand at all) exit 1 pre-boot naming the flag and the offending
+     token — never the silent fall-through to a default that made
+     `--seed not-a-number` produce a full, valid, WRONG dump at seed 42,
+     or `--region bogus` dump the wrong 17x17 chunks of the world
+     (CH-67, closed by #1481). Also pins the two orderings the fix has
+     to preserve: validation runs ahead of mode-specific early exits and
      regardless of whether the value would be consumed (a malformed
      --port fails even for a bare grouped --preview; a malformed --ages
      fails even when a valid --plates wins), while check 9's
      mode-compatibility rejection still takes priority over it (a
-     malformed --seed given to --headless is reported as unsupported in
-     headless mode, not as malformed). Omitting a flag entirely still
-     keeps its documented default. The pure four-outcome parser
-     coverage is hspec `--match "App.Cli"`.
+     malformed --seed or --region given to --headless is reported as
+     unsupported in headless mode, not as malformed). Omitting a flag
+     entirely still keeps its documented default, --region's included.
+     The pure four-outcome parser coverage is hspec
+     `--match "App.Cli"`.
  10d. An explicit --dump= selection really emits those layers and no
      others (#1086): the prefix strip is stripPrefix now rather than a
      separately-maintained length, and a real dump is what proves the
@@ -435,6 +439,24 @@ MALFORMED_VALUE_CASES = [
      ["--dump", "--worldSize", "16", "--plates", "3", "--ages", "nonsense",
       "--region", "0,0,0,0"],
      ["--ages", "nonsense"]),
+    # --region (#1481, CH-67) was the last flag still answering a typo
+    # with its documented default. One row per malformed SHAPE the old
+    # parser swallowed, since each reaches the rejection differently.
+    ("--region non-numeric",
+     ["--dump", "--worldSize", "16", "--region", "bogus"],
+     ["--region", "bogus"]),
+    ("--region too few coordinates",
+     ["--dump", "--worldSize", "16", "--region", "1,2,3"],
+     ["--region", "1,2,3"]),
+    ("--region too many coordinates",
+     ["--dump", "--worldSize", "16", "--region", "1,2,3,4,5"],
+     ["--region", "1,2,3,4,5"]),
+    ("--region partially numeric",
+     ["--dump", "--worldSize", "16", "--region", "1,2,3,x"],
+     ["--region", "1,2,3,x"]),
+    ("--region with no operand",
+     ["--dump", "--worldSize", "16", "--region"],
+     ["--region"]),
 ]
 
 # Mode compatibility (check 9) must keep its priority over value
@@ -443,6 +465,7 @@ MALFORMED_VALUE_CASES = [
 MALFORMED_IN_WRONG_MODE_CASES = [
     (["--headless", "--seed", "not-a-number"], "--seed", "headless"),
     (["--dump", "--port", "not-a-port"], "--port", "dump"),
+    (["--headless", "--region", "nonsense"], "--region", "headless"),
 ]
 
 
@@ -459,8 +482,11 @@ def check_malformed_values() -> bool:
                                  "malformed value reached a real boot"))
             continue
         problems = []
-        if r.returncode == 0:
-            problems.append("exit 0")
+        # app/Main.hs's orExitCli defines CliError rejection as
+        # ExitFailure 1 specifically, so "nonzero" is too weak a
+        # reading of the contract.
+        if r.returncode != 1:
+            problems.append(f"exit status {r.returncode} (want 1)")
         if "READY" in r.stdout:
             problems.append("a READY marker reached stdout")
         if r.stdout.strip():
@@ -510,8 +536,30 @@ def check_omission_still_defaults() -> bool:
             problems.append("dump produced no tiles")
     except (json.JSONDecodeError, ValueError) as e:
         problems.append(f"stdout is not valid JSON: {e}")
-    return check("omission defaults", not problems,
-                 f"rc={r.returncode} " + "; ".join(problems))
+    results = [check("omission defaults", not problems,
+                     f"rc={r.returncode} " + "; ".join(problems))]
+
+    # --region's own default is checked separately because the run above
+    # pins it to one chunk for speed, so its banner cannot show it
+    # (#1481). Now that a malformed --region is rejected, the default
+    # must still be reachable by OMITTING the flag — the banner is what
+    # names the region actually dumped, and the parser's own Right
+    # Nothing is hspec `--match "chunk region"`.
+    try:
+        rd = run_cli("--dump", "--worldSize", "16", timeout=180.0)
+    except subprocess.TimeoutExpired:
+        return all(results + [check("omitted --region still defaults",
+                                    False, "dump did not finish in 180s")])
+    region_problems = []
+    if rd.returncode != 0:
+        region_problems.append(f"exit status {rd.returncode} (want 0)")
+    if "region=(-8,-8,8,8)" not in rd.stderr:
+        region_problems.append(
+            "banner does not name the documented default region: "
+            f"{rd.stderr.strip().splitlines()[:1]}")
+    results.append(check("omitted --region still defaults", not region_problems,
+                         f"rc={rd.returncode} " + "; ".join(region_problems)))
+    return all(results)
 
 
 # Layer name -> the tile keys it (and only it) contributes, from

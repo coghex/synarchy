@@ -18,6 +18,7 @@ import Engine.Preview.Unit (buildPreviewUnit, unitFocusErrorMessage
 import Engine.Preview.Building (buildPreviewBuilding)
 import World.Plate (defaultPlatesFor)
 import App.Cli (parseDump, defaultLayers, parseArg, parseRegion
+               , defaultChunkRegion
                , parseSize, parsePreview
                , PreviewCategoryKind(..), classifyPreviewCategory
                , simplePreviewCategories, groupedPreviewCategories
@@ -86,10 +87,14 @@ main = do
   plates  ← orExitCli (parseArg "--plates" args)
   agesLeg ← orExitCli (parseArg "--ages" args)
   mSize   ← orExitCli (parseSize args)
+  mRegion ← orExitCli (parseRegion args)
 
   let bootProfile = if "--arena" `elem` args then BootArena else BootNormal
       mPreview = parsePreview args
-      region = parseRegion args
+      -- Absence, and only absence, takes the documented default
+      -- (#1481): 'parseRegion' answers 'Nothing' just for a --region
+      -- that never appeared, and a malformed one already exited above.
+      region = fromMaybe defaultChunkRegion mRegion
       rawWorldSize = fromMaybe 256 worldSz
       worldSize = normalizeWorldSize rawWorldSize
       rawPlateCount = case plates of
