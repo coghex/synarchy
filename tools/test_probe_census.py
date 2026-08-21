@@ -13,13 +13,14 @@ The real `tools/probe_census.py` is imported and driven — with
 `probe_flake.PROTOCOL_PROBES` pointed at a synthetic registry — so this
 exercises the shipped code paths rather than a copy.
 
-What is deliberately NOT covered: comprehensive schema, required-field,
-enum, range and finite-number validation (#1492) and the cross-field
-census/measurement invariants (#1493). This slice owns the record, the
-operations, and the atomic write path, and its safety promise is a
-CONTROLLED refusal — no traceback, authoritative bytes unchanged — when
-an operation cannot be performed, not the discovery of every possible
-corruption in a hand-edited document.
+#1492 added the declared schema, so shape, required-field, closure,
+enum, length, range and finite-number validation ARE covered, by
+`test_declared_schema` and `test_missing_dependency` driving the real
+checked-in `tools/probe_census_schema.json`. What is still deliberately
+NOT covered: the cross-field census/measurement invariants (#1493). The
+safety promise every case shares is a CONTROLLED refusal — no traceback,
+authoritative bytes unchanged — rather than the discovery of every
+possible corruption in a hand-edited document.
 
 Usage:
   python3 tools/test_probe_census.py
@@ -179,6 +180,27 @@ def result_document(probe="alpha", status="ok", commit=COMMIT_A, **overrides):
     return document
 
 
+def sample_record(mark: str, commit: str = COMMIT_A) -> dict:
+    """A schema-valid durable sample, tagged by its retained artifact.
+
+    Fixtures used to stand a sample in as `{"tag": ...}`. Since #1492
+    declared the record's shape, stored state has to BE a sample — so
+    these come from the real summarizer and carry one distinguishing
+    value each.
+    """
+    record = probe_census.summarize_sample(result_document(commit=commit))
+    record["retained_artifacts"] = [f"/tmp/artifacts/{mark}"]
+    return record
+
+
+def attempt_record(mark: str, commit: str = COMMIT_A) -> dict:
+    """A schema-valid durable attempt, tagged by its error text."""
+    record = probe_census.summarize_attempt(
+        result_document(commit=commit), True)
+    record["error"] = mark
+    return record
+
+
 def seeded(path: Path) -> dict:
     """A fresh v2 census on disk, from the synthetic registry."""
     return probe_census.ensure_document(path)
@@ -280,9 +302,9 @@ def test_migration() -> None:
         expect(probe_census.migrate_document(with_data) == with_data,
                "migrating an already-v2 document changes nothing")
 
-        # A v2 row with no census is NOT silently repaired: that is
-        # corruption for #1492 to report, and inserting an empty record
-        # would erase the evidence.
+        # A v2 row with no census is NOT silently repaired here: it is
+        # a declared-schema violation for the validator to report, and
+        # inserting an empty record would erase the evidence.
         damaged = copy.deepcopy(migrated)
         del damaged["probes"][1]["census"]
         expect("census" not in probe_census.migrate_document(
@@ -356,7 +378,7 @@ def test_reconciliation() -> None:
                  "census": {**probe_census.empty_census(),
                             "acceptable_failures": 1,
                             "current": {"commit_sha": COMMIT_A,
-                                        "samples": [{"tag": "kept"}]}}},
+                                        "samples": [sample_record("kept")]}}},
                 {"key": "alpha", "script": "stale_name.py",
                  "classification": "manual-only", "protocol": "legacy",
                  "census": {**probe_census.empty_census(),
@@ -364,17 +386,17 @@ def test_reconciliation() -> None:
                             "acceptable_failures_justification": "two races",
                             "estimated_worst_case_seconds": 480,
                             "current": {"commit_sha": COMMIT_A,
-                                        "samples": [{"tag": "alpha-1"}]},
+                                        "samples": [sample_record("alpha-1")]},
                             "history": [{"commit_sha": COMMIT_B,
-                                         "samples": [{"tag": "old"}]}],
-                            "attempts": [{"tag": "attempt-1"}]}},
+                                         "samples": [sample_record("old", COMMIT_B)]}],
+                            "attempts": [attempt_record("attempt-1")]}},
                 {"key": "beta", "script": "beta_probe.py",
                  "classification": "manual-only", "protocol": "legacy",
                  "census": {**probe_census.empty_census(),
                             "acceptable_failures": 9,
                             "current": {"commit_sha": COMMIT_A,
-                                        "samples": [{"tag": "beta-1"}]},
-                            "attempts": [{"tag": "beta-attempt"}]}},
+                                        "samples": [sample_record("beta-1")]},
+                            "attempts": [attempt_record("beta-attempt")]}},
             ],
         }
         path.write_text(json.dumps(document), encoding="utf-8")
@@ -407,9 +429,9 @@ def test_reconciliation() -> None:
         expect(promoted["current"] is None,
                "promotion clears the current manual-only cohort")
         expect(promoted["history"] == [{"commit_sha": COMMIT_A,
-                                        "samples": [{"tag": "beta-1"}]}],
+                                        "samples": [sample_record("beta-1")]}],
                "the promoted cohort is ARCHIVED into history, never dropped")
-        expect(promoted["attempts"] == [{"tag": "beta-attempt"}]
+        expect(promoted["attempts"] == [attempt_record("beta-attempt")]
                and promoted["acceptable_failures"] == 9,
                "promotion keeps attempts and policy fields")
 
@@ -632,11 +654,13 @@ def test_refusals() -> None:
         unchanged(legacy, legacy_bytes,
                   "a v1 census is not migrated as a side effect of a refusal")
 
-        # The three discriminating fields of a result document.
+        # The three discriminating fields of a result document. Since
+        # #1492 the declared schema reports these, so the refusal names
+        # the offending JSON path rather than a hand-written phrase.
         for mutation, fragment, why in (
             ({"schema": "probe-flake-result/v9"}, "probe-flake-result/v9",
              "an unrecognized result schema"),
-            ({"probe": None}, "names no probe", "a result naming no probe"),
+            ({"probe": None}, "$.probe", "a result naming no probe"),
             ({"status": "weird"}, "weird", "an unrecognized status"),
         ):
             expect_refusal(
@@ -645,7 +669,7 @@ def test_refusals() -> None:
                 f"{why} is refused", fragment)
         expect_refusal(lambda: probe_census.record_result(path, [1, 2]),
                        "a result that is not an object is refused",
-                       "must be a JSON object")
+                       "is not of type 'object'")
         after = json.loads(path.read_text(encoding="utf-8"))
         expect(all(row["census"]["attempts"] == []
                    for row in after["probes"]),
@@ -657,12 +681,15 @@ def test_refusals() -> None:
             "a result naming no census row is refused", "ghost", "--seed")
 
         # Structural/type errors that block building the durable record.
+        # Each is now a declared-schema violation, reported at its path
+        # BEFORE the census is opened rather than from inside the
+        # summarizer that would have tripped over it.
         for mutation, fragment, why in (
-            ({"runs": "no"}, "`runs` must be a list", "a non-list `runs`"),
-            ({"runs": [{"index": 1}]}, "'outcome'", "a run missing a field"),
-            ({"check_counts": []}, "`check_counts` must be an object",
+            ({"runs": "no"}, "$.runs", "a non-list `runs`"),
+            ({"runs": [{"index": 1}]}, "$.runs[0]", "a run missing a field"),
+            ({"check_counts": []}, "$.check_counts",
              "a non-object `check_counts`"),
-            ({"retained_artifacts": "one"}, "must be a list",
+            ({"retained_artifacts": "one"}, "$.retained_artifacts",
              "a non-list `retained_artifacts`"),
         ):
             expect_refusal(
@@ -696,7 +723,13 @@ def test_refusals() -> None:
 
 # ==========================================================================
 def test_malformed_rows_refuse_cleanly() -> None:
-    """Valid JSON, structurally unusable: refuse, never traceback (#1503)."""
+    """Valid JSON, structurally unusable: refuse, never traceback (#1503).
+
+    Since #1492 the refusal comes from the declared schema, so each case
+    asserts the JSON PATH the message names rather than a hand-written
+    phrase. The two promises the cases exist for are unchanged: a
+    controlled refusal, and not one byte of the stored census disturbed.
+    """
     print("\n-- structurally malformed census state --")
 
     def census_with(rows):
@@ -712,30 +745,30 @@ def test_malformed_rows_refuse_cleanly() -> None:
         cases = [
             # An UNHASHABLE key: `key in live` and `{e["key"] for e ...}`
             # both raise TypeError on this, so it must be refused first.
-            (census_with([row(key=[])]), "has no string `key`",
+            (census_with([row(key=[])]), "$.probes[0].key",
              "a row whose key is an unhashable list"),
-            (census_with([row(key=7)]), "has no string `key`",
+            (census_with([row(key=7)]), "$.probes[0].key",
              "a row whose key is a number"),
-            (census_with([{"script": "x.py"}]), "has no string `key`",
+            (census_with([{"script": "x.py"}]), "'key' is a required property",
              "a row with no key at all"),
             ({"schema": "probe-census/v2", "probes": {"alpha": {}}},
-             "must be a list", "a `probes` mapping instead of a list"),
-            (census_with(["alpha"]), "is not an object",
+             "$.probes", "a `probes` mapping instead of a list"),
+            (census_with(["alpha"]), "$.probes[0]",
              "a row that is a bare string"),
             (census_with([row(census={**probe_census.empty_census(),
                                       "attempts": 5})]),
-             "must be a list to append to", "a non-list attempt log"),
+             "$.probes[0].census.attempts", "a non-list attempt log"),
             (census_with([row(census={**probe_census.empty_census(),
                                       "history": "old",
                                       "current": {"commit_sha": COMMIT_B,
                                                   "samples": []}})]),
-             "must be a list to append to", "a non-list history"),
+             "$.probes[0].census.history", "a non-list history"),
             (census_with([row(census={**probe_census.empty_census(),
                                       "current": {"commit_sha": COMMIT_A,
                                                   "samples": 3}})]),
-             "must be a list to append to", "a non-list sample list"),
+             "$.probes[0].census.current.samples", "a non-list sample list"),
             (census_with([row(census="not a record")]),
-             "no census record", "a row whose census is a string"),
+             "$.probes[0].census", "a row whose census is a string"),
         ]
         for index, (document, fragment, why) in enumerate(cases):
             path = root / f"case-{index}.json"
@@ -761,14 +794,13 @@ def test_malformed_rows_refuse_cleanly() -> None:
         before = path.read_bytes()
         expect_refusal(lambda: probe_census.record_policy(
             path, "alpha", acceptable_failures=1),
-            "a policy update refuses an unusable row key", "has no string `key`")
+            "a policy update refuses an unusable row key", "$.probes[0].key")
         unchanged(path, before, "...and changes no bytes")
 
-        # The preservation comparison runs on STORED state too, so a
-        # truthy non-list append-only field must be reported there
-        # rather than sliced. `--seed` is the path that reaches it: a
-        # manual-only row archives nothing, so nothing else looks at
-        # `history` before the comparison does.
+        # A truthy non-list append-only field used to reach the
+        # preservation comparison, which reported it rather than slicing
+        # it. The declared schema now refuses it a step earlier, for
+        # every operation alike and at its exact path.
         for field in ("history", "attempts"):
             path = root / f"seedcmp-{field}.json"
             path.write_text(json.dumps(census_with([
@@ -776,31 +808,31 @@ def test_malformed_rows_refuse_cleanly() -> None:
                 encoding="utf-8")
             before = path.read_bytes()
             expect_refusal(lambda p=path: probe_census.ensure_document(p),
-                           f"--seed refuses a stored non-list `{field}` "
-                           f"instead of crashing in the preservation check",
-                           "must be a list to compare")
+                           f"--seed refuses a stored non-list `{field}`",
+                           f"$.probes[0].census.{field}")
             unchanged(path, before, f"...and changes no bytes (`{field}`)")
             expect_refusal(
                 lambda p=path: probe_census.record_result(p, result_document()),
                 f"--record refuses the same stored non-list `{field}`",
-                "must be a list")
+                f"$.probes[0].census.{field}")
             unchanged(path, before, f"...and changes no bytes (`{field}`)")
 
-        # The same for a non-list `samples` inside an archived cohort,
-        # which only `_sample_total` and the comparison ever read.
+        # A non-list `samples` inside an ARCHIVED cohort is the case
+        # #1428 could only tolerate: nothing but `_sample_total` and the
+        # preservation comparison ever read it, and both were written to
+        # cope rather than crash. It is exactly what "its shape is
+        # #1492's to report" meant, and this is #1492 reporting it.
         path = root / "seedcmp-samples.json"
         path.write_text(json.dumps(census_with([
             row(census={**probe_census.empty_census(),
                         "history": [{"commit_sha": COMMIT_A, "samples": 4}]})])),
             encoding="utf-8")
-        stored = json.loads(path.read_text(encoding="utf-8"))["probes"][0]
-        result = probe_census.ensure_document(path)
-        expect(result["probes"][0]["census"] == stored["census"],
-               "a cohort with an uncountable `samples` is tolerated by --seed: "
-               "nothing is lost, and its shape is #1492's to report")
-        expect(json.loads(path.read_text(encoding="utf-8"))["probes"][0]["census"]
-               == stored["census"],
-               "...and the stored record survives the rewrite verbatim")
+        before = path.read_bytes()
+        expect_refusal(lambda: probe_census.ensure_document(path),
+                       "--seed refuses an archived cohort whose `samples` is "
+                       "not a list, which #1428 could only tolerate",
+                       "$.probes[0].census.history[0].samples")
+        unchanged(path, before, "...and changes no bytes")
 
         # The safety boundary at `update`'s funnel: any structural or
         # type error a mutation meets becomes a controlled refusal.
@@ -1178,10 +1210,11 @@ def test_adversarial_malformed_input() -> None:
 
     It is exhaustive rather than random, so it is fully deterministic:
     the locations come from insertion-ordered dicts and the values from
-    a fixed tuple. What it does NOT assert is that a malformed document
-    is REJECTED — an accepted one is #1492's declared schema to catch,
-    and asserting it here would be reintroducing exactly the surface
-    this slice defers.
+    a fixed tuple. It deliberately does not enumerate WHICH mutations
+    must be rejected — that is the declared schema's specification, and
+    restating it case by case here would rebuild by hand exactly the
+    surface #1492 replaced. What it asserts is the three promises that
+    hold whatever the schema says, and that both outcomes really occur.
     """
     print("\n-- adversarial sweep over both input surfaces --")
     with registry(ci_eligible={"beta"}), scratch() as root:
@@ -1244,6 +1277,10 @@ def test_adversarial_malformed_input() -> None:
                f"({len(disturbed)}: {disturbed[:3]})")
 
         # -- the other surface: the result document `--record` consumes --
+        # The census sweep leaves its last mutated document on disk, and
+        # the declared schema will not reconcile that into a fresh one;
+        # the second sweep starts from a newly seeded census.
+        target.unlink()
         probe_census.ensure_document(target)
         clean = target.read_bytes()
         uncontrolled, disturbed, leaked = [], [], []
@@ -1290,6 +1327,440 @@ def test_adversarial_malformed_input() -> None:
         expect(leaked == [],
                f"no accepted result carries a producer-only field into the "
                f"census ({len(leaked)}: {leaked[:3]})")
+
+
+# ==========================================================================
+# The declared schema (#1492)
+# ==========================================================================
+def expect_valid(call, msg: str) -> None:
+    """`call` accepts. A refusal is the failure, reported not raised."""
+    try:
+        call()
+    except Exception as error:  # noqa: BLE001 - a refusal here IS the bug
+        expect(False, f"{msg} (refused: {type(error).__name__}: {error})")
+        return
+    expect(True, msg)
+
+
+def harness_error_result() -> dict:
+    """A well-formed harness error, carrying the run that broke."""
+    return result_document(
+        status="harness-error",
+        completed_runs=1,
+        runs=[{"index": 1, "port": 9100, "outcome": "PASS",
+               "elapsed_seconds": 12.5,
+               "checks": {"first": "PASS", "second": "MISSING"},
+               "artifact_dir": None}],
+        error_run={"index": 2, "port": 9101, "outcome": "HARNESS_ERROR",
+                   "elapsed_seconds": 0.5, "checks": {},
+                   "artifact_dir": "/tmp/artifacts/run-002"},
+        failure_count=0, failure_rate=None, timeout_count=0,
+        check_counts={"first": {"PASS": 1, "FAIL": 0, "MISSING": 0},
+                      "second": {"PASS": 0, "FAIL": 0, "MISSING": 1}})
+
+
+def test_declared_schema() -> None:
+    """The schema file itself, and what it now refuses (#1492).
+
+    Every rejection is driven through a REAL operation against a real
+    census on disk, so each case proves the two things a declared
+    validator has to prove together: the document is refused, and the
+    authoritative bytes are not touched by the refusal.
+    """
+    print("\n-- the declared JSON Schema --")
+    schema = probe_census.load_schema()
+    expect(schema.get("$schema") == "https://json-schema.org/draft/2020-12/schema",
+           "the checked-in schema identifies a supported draft")
+    # `load_schema` runs that draft's own meta-schema check, so reaching
+    # here at all is the self-check passing.
+    expect(set(probe_census.SCHEMA_DEFINITIONS)
+           == {probe_census.SEED_SCHEMA, probe_census.CENSUS_SCHEMA,
+               probe_census.RESULT_SCHEMA},
+           "every document kind the tool reads has a declared schema")
+    expect(all(name in (schema.get("$defs") or {})
+               for name in probe_census.SCHEMA_DEFINITIONS.values()),
+           "each declared schema names a definition the file really has")
+    expect(all("/" not in name
+               for name in probe_census.SCHEMA_DEFINITIONS.values()),
+           "no definition name contains a JSON Pointer separator")
+    expect_refusal(
+        lambda: probe_census.validate_document({}, "probe-census/v9", "x"),
+        "asking for an undeclared schema is a controlled refusal",
+        "probe-census/v9")
+
+    with registry(ci_eligible={"beta"}), scratch() as root:
+        # Applying every declared schema to a document that satisfies it
+        # is what proves the file's internal `$ref`s all resolve — a
+        # schema that self-checks can still be unusable.
+        expect_valid(lambda: probe_census.validate_document(
+            v1_document(), probe_census.SEED_SCHEMA, "a v1 seed"),
+            "the v1 seed schema accepts a real v1 seed")
+        expect_valid(lambda: probe_census.validate_document(
+            rich_census(), probe_census.CENSUS_SCHEMA, "a v2 census"),
+            "the v2 census schema accepts a real measured census")
+        expect_valid(lambda: probe_census.validate_document(
+            probe_census.build_manifest(), probe_census.CENSUS_SCHEMA,
+            "a fresh manifest"),
+            "...and the manifest this tool generates for itself")
+        expect_valid(lambda: probe_census.validate_result(result_document()),
+                     "the result schema accepts a real ok measurement")
+        expect_valid(
+            lambda: probe_census.validate_result(harness_error_result()),
+            "...and a harness error carrying its HARNESS_ERROR run")
+
+        target = root / "probe_census.json"
+        clean = root / "clean.json"
+        probe_census.ensure_document(clean)
+        clean_bytes = clean.read_bytes()
+
+        def refuses_census(mutate, fragment, why) -> None:
+            """A stored census `mutate` breaks: refused, and unchanged."""
+            document = rich_census()
+            mutate(document)
+            target.write_text(json.dumps(document), encoding="utf-8")
+            stored = target.read_bytes()
+            expect_refusal(
+                lambda: probe_census.record_result(target, result_document()),
+                f"a census with {why} is refused", fragment)
+            expect(target.read_bytes() == stored,
+                   f"...and the refusal changed no bytes ({why})")
+
+        def refuses_result(mutate, fragment, why) -> None:
+            """A result document `mutate` breaks: refused, nothing written."""
+            document = result_document()
+            mutate(document)
+            expect_refusal(
+                lambda: probe_census.record_result(clean, document),
+                f"a result with {why} is refused", fragment)
+            expect(clean.read_bytes() == clean_bytes,
+                   f"...and the refusal wrote nothing ({why})")
+
+        # -- a nullable field DELETED, not set to null (`6a23027f`) -----
+        # Nullable is spelled as a REQUIRED null-inclusive type, so
+        # removing one is a violation rather than an absence. That is
+        # the whole difference between `additionalProperties`/`required`
+        # and reading fields with `.get()`.
+        for field in probe_census.empty_census():
+            refuses_census(
+                lambda d, f=field: d["probes"][0]["census"].pop(f),
+                f"'{field}' is a required property",
+                f"the census field `{field}` deleted")
+        for field in ("key", "script", "classification", "protocol", "census"):
+            refuses_census(
+                lambda d, f=field: d["probes"][0].pop(f),
+                f"'{field}' is a required property",
+                f"the inventory field `{field}` deleted")
+        for field in ("timestamp_utc", "commit_sha", "failure_rate",
+                      "retained_artifacts", "check_counts"):
+            refuses_census(
+                lambda d, f=field: d["probes"][0]["census"]["current"][
+                    "samples"][0].pop(f),
+                f"'{field}' is a required property",
+                f"a stored sample missing `{field}`")
+
+        # -- a truthy non-object `runs[i].checks` (`6ddc01d9`) ----------
+        # This one used to raise AttributeError from inside the
+        # transaction, because a truthy value passed the guard and then
+        # was asked for `.items()`.
+        for value, why in ((5, "the number 5"), ("PASS", "a string"),
+                           (["first"], "a non-empty list"),
+                           (True, "the boolean True"), (0, "the number 0"),
+                           (None, "null"), ([], "an empty list")):
+            refuses_result(
+                lambda d, v=value: d["runs"][0].__setitem__("checks", v),
+                "$.runs[0].checks", f"a per-run `checks` that is {why}")
+        refuses_result(
+            lambda d: d["runs"][0]["checks"].__setitem__("first", "MAYBE"),
+            "$.runs[0].checks.first", "an unrecognized per-run check result")
+
+        # -- unexpected properties, in every representative object -----
+        for mutate, fragment, why in (
+            (lambda d: d.__setitem__("extra", 1), "$", "the result root"),
+            (lambda d: d["runs"][0].__setitem__("extra", 1), "$.runs[0]",
+             "a result run"),
+            (lambda d: d["checks"][0].__setitem__("extra", 1), "$.checks[0]",
+             "a check descriptor"),
+            (lambda d: d["check_counts"]["first"].__setitem__("SKIPPED", 1),
+             "$.check_counts.first", "a check tally"),
+        ):
+            refuses_result(mutate, fragment,
+                           f"an unexpected property in {why}")
+        for mutate, fragment, why in (
+            (lambda d: d.__setitem__("extra", 1), "$", "the census root"),
+            (lambda d: d["probes"][0].__setitem__("extra", 1), "$.probes[0]",
+             "an inventory row"),
+            (lambda d: d["probes"][0]["census"].__setitem__("extra", 1),
+             "$.probes[0].census", "a census record"),
+            (lambda d: d["probes"][0]["census"]["current"].__setitem__(
+                "extra", 1), "$.probes[0].census.current", "a cohort"),
+            (lambda d: d["probes"][0]["census"]["current"]["samples"][
+                0].__setitem__("port", 9100),
+             "$.probes[0].census.current.samples[0]",
+             "a stored sample (a producer-only field)"),
+            (lambda d: d["probes"][0]["census"]["attempts"][0].__setitem__(
+                "extra", 1), "$.probes[0].census.attempts[0]", "an attempt"),
+        ):
+            refuses_census(mutate, fragment,
+                           f"an unexpected property in {why}")
+
+        # -- enums, ranges and lengths ---------------------------------
+        for mutate, fragment, why in (
+            (lambda d: d["probes"][0].__setitem__("classification", "maybe"),
+             "$.probes[0].classification", "an unrecognized classification"),
+            (lambda d: d["probes"][0].__setitem__("protocol", "probe/v9"),
+             "$.probes[0].protocol", "an unrecognized protocol status"),
+            (lambda d: d["probes"][0]["census"].__setitem__(
+                "acceptable_failures", -1),
+             "$.probes[0].census.acceptable_failures", "a negative X"),
+            (lambda d: d["probes"][0]["census"].__setitem__(
+                "estimated_worst_case_seconds", -1),
+             "$.probes[0].census.estimated_worst_case_seconds",
+             "a negative estimate"),
+            (lambda d: d["probes"][0]["census"].__setitem__(
+                "acceptable_failures_justification", "x" * 4001),
+             "$.probes[0].census.acceptable_failures_justification",
+             "a justification past its length bound"),
+            (lambda d: d["probes"][0]["census"]["current"].__setitem__(
+                "commit_sha", ""),
+             "$.probes[0].census.current.commit_sha", "an empty commit sha"),
+            (lambda d: d["probes"][0]["census"]["current"]["samples"][
+                0].__setitem__("failure_rate", 1.5),
+             "$.probes[0].census.current.samples[0].failure_rate",
+             "a failure rate above 1"),
+            (lambda d: d["probes"][0]["census"]["current"]["samples"][
+                0].__setitem__("timestamp_utc", "yesterday"),
+             "$.probes[0].census.current.samples[0].timestamp_utc",
+             "a timestamp in no recognized form"),
+            (lambda d: d["probes"][0]["census"]["current"]["samples"][0][
+                "runs"][0].__setitem__("outcome", "HARNESS_ERROR"),
+             "$.probes[0].census.current.samples[0].runs[0].outcome",
+             "HARNESS_ERROR as a stored run outcome, which it never is"),
+            (lambda d: d["probes"][0]["census"]["attempts"][0].__setitem__(
+                "status", "nope"),
+             "$.probes[0].census.attempts[0].status",
+             "an unrecognized attempt status"),
+            (lambda d: d["probes"][0]["census"]["attempts"][0].__setitem__(
+                "accepted", "yes"),
+             "$.probes[0].census.attempts[0].accepted",
+             "a non-boolean `accepted`"),
+        ):
+            refuses_census(mutate, fragment, why)
+        for mutate, fragment, why in (
+            (lambda d: d["runs"][0].__setitem__("port", 0), "$.runs[0].port",
+             "a port below the representable range"),
+            (lambda d: d["runs"][0].__setitem__("port", 70000),
+             "$.runs[0].port", "a port above the representable range"),
+            (lambda d: d.__setitem__("rts_capabilities", 0),
+             "$.rts_capabilities", "zero RTS capabilities"),
+            (lambda d: d.__setitem__("failure_count", -1), "$.failure_count",
+             "a negative failure count"),
+            (lambda d: d.__setitem__("worst_elapsed_seconds", -1),
+             "$.worst_elapsed_seconds", "a negative elapsed time"),
+            (lambda d: d["retained_artifacts"].append(""),
+             "$.retained_artifacts[1]", "an empty artifact path"),
+            (lambda d: d.__setitem__("commit_sha", "c" * 65), "$.commit_sha",
+             "a commit sha past its length bound"),
+        ):
+            refuses_result(mutate, fragment, why)
+
+        # -- non-finite numbers, which no schema bound can express -----
+        # `json.loads` really does accept these spellings, and `maximum`
+        # does not reject a NaN: no comparison with one is ever true.
+        for value, why in ((float("nan"), "NaN"), (float("inf"), "Infinity"),
+                           (float("-inf"), "-Infinity")):
+            refuses_census(
+                lambda d, v=value: d["probes"][0]["census"].__setitem__(
+                    "estimated_worst_case_seconds", v),
+                "$.probes[0].census.estimated_worst_case_seconds",
+                f"a stored {why}")
+            refuses_result(
+                lambda d, v=value: d.__setitem__("total_elapsed_seconds", v),
+                "$.total_elapsed_seconds", f"an incoming {why}")
+        expect_refusal(
+            lambda: probe_census.record_policy(
+                clean, "alpha", estimate=float("nan")),
+            "a policy update may not store a NaN either",
+            "non-finite")
+        expect(clean.read_bytes() == clean_bytes,
+               "...and that refusal wrote nothing")
+
+        # -- the schema DISCRIMINATOR, which is not a schema keyword ----
+        target.write_text(json.dumps({**rich_census(),
+                                      "schema": "probe-census/v9"}),
+                          encoding="utf-8")
+        stored = target.read_bytes()
+        expect_refusal(
+            lambda: probe_census.record_result(target, result_document()),
+            "a census declaring an unreadable schema is refused",
+            "probe-census/v9")
+        expect(target.read_bytes() == stored, "...and changes no bytes")
+
+        # -- the intake contract against the REAL producer -------------
+        # `result_document()` is hand-written, so a schema that only
+        # ever met it could agree with the fixture while both drifted
+        # from what tools/probe_flake.py actually writes. This builds a
+        # real `Measurement` — no engine, no subprocess beyond the `git`
+        # call it makes for its own commit sha — and validates its own
+        # serialization.
+        descriptor = probe_flake.probe_protocol.build_descriptor(
+            "alpha", [("first", "the first check"),
+                      ("second", "the second check")])
+        measurement = probe_flake.Measurement(
+            "alpha", descriptor, requested_runs=2,
+            rts_caps=probe_flake.DEFAULT_RTS_CAPS,
+            artifact_root=Path("/tmp/artifacts"),
+            invocation_dir=Path("/tmp/artifacts/alpha-1"))
+        measurement.runs.append(probe_flake.RunRecord(
+            1, 9100, probe_flake.RUN_PASS, 12.5,
+            {"first": "PASS", "second": "PASS"}, None))
+        measurement.runs.append(probe_flake.RunRecord(
+            2, 9101, probe_flake.RUN_FAIL, 13.25,
+            {"first": "PASS", "second": "FAIL"},
+            Path("/tmp/artifacts/alpha-1/run-002")))
+        expect_valid(
+            lambda: probe_census.validate_result(measurement.to_document()),
+            "the producer's own serialization satisfies the declared "
+            "intake schema")
+        expect(set(measurement.to_document()) == set(result_document()),
+               "...and this file's fixture carries exactly its fields")
+        measurement.status = "harness-error"
+        measurement.error = "run 3 emitted a duplicate event"
+        measurement.error_run = probe_flake.RunRecord(
+            3, 9102, probe_flake.RUN_HARNESS_ERROR, 0.5, {},
+            Path("/tmp/artifacts/alpha-1/run-003"))
+        expect_valid(
+            lambda: probe_census.validate_result(measurement.to_document()),
+            "...and so does one carrying a real HARNESS_ERROR run")
+
+        # -- and a valid document still goes all the way through -------
+        expect_valid(lambda: probe_census.record_result(clean,
+                                                        result_document()),
+                     "a valid measurement is still accepted end to end")
+        expect_valid(lambda: probe_census.record_result(clean,
+                                                        harness_error_result()),
+                     "...and so is a valid harness error")
+        expect_valid(lambda: probe_census.validate_document(
+            json.loads(clean.read_text(encoding="utf-8")),
+            probe_census.CENSUS_SCHEMA, "the written census"),
+            "and what the writer produced validates against its own schema")
+
+
+# ==========================================================================
+class _BlockedImport:
+    """A meta-path finder that makes one package deterministically absent."""
+
+    def __init__(self, name: str):
+        self.name = name
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == self.name or fullname.startswith(f"{self.name}."):
+            raise ImportError(
+                f"blocked by the missing-dependency case: {fullname}")
+        return None
+
+
+@contextmanager
+def without_jsonschema():
+    """`import jsonschema` fails for the duration, and nothing else does.
+
+    Deliberately NOT a monkeypatched flag inside `probe_census`: the
+    promise under test is about the ENVIRONMENT, so the import itself
+    has to fail. Any already-imported submodule is purged too, or the
+    blocked import would be served from `sys.modules`.
+    """
+    blocked = _BlockedImport("jsonschema")
+    purged = {name: module for name, module in sys.modules.items()
+              if name == "jsonschema" or name.startswith("jsonschema.")}
+    for name in purged:
+        del sys.modules[name]
+    sys.meta_path.insert(0, blocked)
+    try:
+        yield
+    finally:
+        sys.meta_path.remove(blocked)
+        sys.modules.update(purged)
+
+
+def test_missing_dependency() -> None:
+    """An absent `jsonschema` is one loud error, never a silent skip.
+
+    A validator that quietly enforces nothing is worse than no validator
+    at all: the run looks clean and the gate is gone. So every case here
+    asserts BOTH halves — the refusal happened, and the operation it
+    refused wrote nothing.
+    """
+    print("\n-- an absent jsonschema refuses loudly --")
+    with registry(), scratch() as root:
+        path = root / "probe_census.json"
+        seeded(path)
+        before = path.read_bytes()
+        good = result_document()
+        # Warm every cache first. `_require_jsonschema` runs BEFORE the
+        # schema and validator caches are consulted precisely so a
+        # previously working environment cannot satisfy a later
+        # validation, and priming here is what proves it.
+        probe_census.validate_result(good)
+        probe_census.load_schema()
+
+        with without_jsonschema():
+            expect_refusal(lambda: probe_census.validate_result(good),
+                           "validation refuses when the library is absent",
+                           "jsonschema is required", probe_census.INSTALL_HINT)
+            expect_refusal(lambda: probe_census.load_schema(),
+                           "a primed schema cache does not satisfy it either",
+                           probe_census.INSTALL_HINT)
+            for name, operation in (
+                ("--record", lambda: probe_census.record_result(path, good)),
+                ("--seed", lambda: probe_census.ensure_document(path)),
+                ("a policy update", lambda: probe_census.record_policy(
+                    path, "alpha", acceptable_failures=1)),
+            ):
+                expect_refusal(operation,
+                               f"{name} refuses without the library",
+                               probe_census.INSTALL_HINT)
+                expect(path.read_bytes() == before,
+                       f"...and {name} wrote nothing")
+
+        expect_valid(lambda: probe_census.validate_result(good),
+                     "and validation works again once the library is back")
+
+    # Through the CLI, where the exit code and the streams are the
+    # contract: one non-zero refusal, the install command named once,
+    # no traceback, and no success line.
+    with registry(ci_eligible={"beta"}), cli_repo() as (_root, path):
+        cli("--seed")
+        before = path.read_bytes()
+        holding = Path(tempfile.mkdtemp(prefix="probe-census-nodep-"))
+        try:
+            result_file = holding / "result.json"
+            result_file.write_text(json.dumps(result_document()),
+                                   encoding="utf-8")
+            with without_jsonschema():
+                code, out, err = cli("--record", str(result_file))
+                expect(code == 1,
+                       "--record exits non-zero with no jsonschema")
+                expect(err.count(probe_census.INSTALL_HINT) == 1,
+                       "...naming the install command exactly once")
+                expect("Traceback" not in err, "...with no traceback")
+                expect(out == "", "...and printing no success line")
+                expect(path.read_bytes() == before,
+                       "...and leaving the census byte-for-byte alone")
+                code, _, err = cli("--validate")
+                expect(code == 1 and probe_census.INSTALL_HINT in err,
+                       "--validate refuses rather than validating nothing")
+                expect(path.read_bytes() == before, "...and changes no bytes")
+                # `--print` reads and writes nothing and validates
+                # nothing — it renders the live registry — so it is not
+                # a skipped check, and keeping it dependency-free is
+                # what lets a fresh checkout run it.
+                code, out, _ = cli("--print")
+                expect(code == 0 and '"probe-census/v2"' in out,
+                       "--print still works: it validates nothing to skip")
+            code, _, _ = cli("--record", str(result_file))
+            expect(code == 0,
+                   "and the same command succeeds once the library is back")
+        finally:
+            shutil.rmtree(holding, ignore_errors=True)
 
 
 # ==========================================================================
@@ -1704,6 +2175,7 @@ def main() -> int:
                  test_malformed_rows_refuse_cleanly,
                  test_duplicate_target_rows,
                  test_adversarial_malformed_input,
+                 test_declared_schema, test_missing_dependency,
                  test_path_substitution, test_atomicity,
                  test_preservation_guard,
                  test_independent_process_contention,
