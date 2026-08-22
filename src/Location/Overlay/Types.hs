@@ -2,7 +2,6 @@
 module Location.Overlay.Types
     ( LocationOverlay
     , emptyLocationOverlay
-    , overlayLookup
     , overlayToList
     ) where
 
@@ -25,10 +24,6 @@ type LocationOverlay = HM.HashMap ChunkCoord Text
 
 emptyLocationOverlay ∷ LocationOverlay
 emptyLocationOverlay = HM.empty
-
--- | The location id placed in a chunk, if any.
-overlayLookup ∷ ChunkCoord → LocationOverlay → Maybe Text
-overlayLookup = HM.lookup
 
 -- | All placed entries, sorted by (cx, cy). 'HM.HashMap' iteration
 --   order is unspecified, so callers that surface the overlay (the
