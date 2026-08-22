@@ -98,8 +98,8 @@ externalBleedRateFor def inst =
 --   representative wound "Blood.Trail"'s emitter tags a placed mark's
 --   texture request with (style/severity mapping is still driven by
 --   accumulated VOLUME, never by this wound's own severity — see
---   'Blood.Trail.trailBloodForVolume'). Nothing once nothing qualifies
---   (healed, clotted, or bandaged to a standstill).
+--   "Blood.Trail"'s volume-to-texture-request mapping). Nothing once
+--   nothing qualifies (healed, clotted, or bandaged to a standstill).
 dominantExternalBleedWound ∷ UnitDef → UnitInstance → Maybe Wound
 dominantExternalBleedWound def inst =
     let (parts, bleedCon) = bleedContext def inst

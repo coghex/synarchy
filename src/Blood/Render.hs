@@ -8,8 +8,6 @@
 --   two that could drift apart. See docs/blood_decals.md ("Aging").
 module Blood.Render
     ( BloodRenderRecord(..)
-    , decalTint
-    , bloodRenderRecord
     , bloodRenderRecords
     ) where
 
@@ -62,8 +60,8 @@ decalTint now d =
 -- | One decal's render record, or 'Nothing' if its texture reference no
 --   longer exists in the pool (issue #606 requirement 7: "omitted if
 --   their texture reference has been evicted"). Defensive rather than
---   load-bearing — 'removeDecalsForTexture' already drops the decal
---   itself on eviction — but keeps the "no orphaned render record"
+--   load-bearing — "Blood.Types"'s texture-eviction cascade already
+--   drops the decal itself — but keeps the "no orphaned render record"
 --   contract explicit rather than relying on that invariant forever.
 bloodRenderRecord ∷ Double → BloodTexturePool → BloodDecal
                   → Maybe BloodRenderRecord

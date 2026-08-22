@@ -30,7 +30,6 @@ module Language.Generated.Types
     , GenitiveOrder(..)
     , Segment(..)
     , SyllableShape(..)
-    , shapeLength
     , PluralMarking(..)
     , PossessiveMarking(..)
     , JoinStyle(..)
@@ -134,9 +133,6 @@ data Segment = ConsonantSlot | VowelSlot
 
 newtype SyllableShape = SyllableShape { shapeSegments ∷ [Segment] }
     deriving (Show, Eq)
-
-shapeLength ∷ SyllableShape → Int
-shapeLength = length ∘ shapeSegments
 
 -- | Explicit-plural marking: a lowercase-letter suffix appended
 --   directly to a root (#710 requirement 9 — grammatical marking must

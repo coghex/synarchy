@@ -33,7 +33,6 @@ module Language.Semantic.Types
     , formOf
     , numberFormKind
     , formKindText
-    , domainText
     , domainFromText
     , catalogueErrorText
     , renderErrorText
@@ -172,14 +171,6 @@ formKindText FormSingular   = "singular"
 formKindText FormPlural     = "plural"
 formKindText FormModifier   = "modifier"
 formKindText FormPossessive = "possessive"
-
-domainText ∷ ConceptDomain → Text
-domainText DomainPlace     = "place"
-domainText DomainElement   = "element"
-domainText DomainCelestial = "celestial"
-domainText DomainCreature  = "creature"
-domainText DomainEmotion   = "emotion"
-domainText DomainMythic    = "mythic"
 
 domainFromText ∷ Text → Maybe ConceptDomain
 domainFromText "place"     = Just DomainPlace

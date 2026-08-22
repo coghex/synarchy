@@ -3184,10 +3184,15 @@ make the UV winding a single fact. Pairs with CH-99's observation that the nine
 ## Batch 13 — remaining Haskell: `Item`, `Language`, `Blood`, and the test suites (swept 2026-07-25)
 
 `Item` (555), `Language` (1091), `Blood` (1413), `Equipment`/`Substance` (102)
-are healthy — 15 unreferenced exports between them, all over-exported internal
-helpers or documented named constants (`Blood/Trail.hs`'s severity ladder,
-`Language/Generated/Root.hs`'s `generateRoot`, both used within their own
-modules).
+are healthy — 15 exports between them with no code consumer outside their
+defining module (`src/Blood` 12, `src/Language` 2, `src/Item` 1): 13
+over-exported internal helpers or documented named constants, plus the two
+dead bindings `Language/Generated/Types.hs`'s `shapeLength` and
+`Language/Semantic/Types.hs`'s `domainText`, which occurred only in their own
+export entry and definition. `Blood/Trail.hs`'s `trailModerateVolume`,
+`Language/Generated/Root.hs`'s `generateRoot`/`minNativeWordLength`, and
+`Language/Semantic/Types.hs`'s `formKindText` are NOT among them — each has a
+real consumer outside its own module.
 
 The real gap is the test tree: **134 files, 34,293 lines — never audited, and
 larger than any production subsystem except `World/`.**
@@ -3288,14 +3293,35 @@ for the same omission before trusting their coverage claims.
 
 ### [#1154] CH-119. Minor remaining-Haskell defects for one cleanup issue
 > **Note:** Bullets 2 and 3 are **already #1119** — `Geology`, `Magma`, `Plate`, `Weather`, `Flora`, and `Slope` all live under `src/World/`, and #1119's own table names the same two clusters verbatim (`World/Geology/Volcano.hs`'s 7 `apply*` dispatched by `applyVolcanicFeature`; `World/Magma/Init.hs`'s geometry helpers), with `Geology/Generate.hs` in the same tree. Bullet 1 is filed as #1154 after re-measuring all four source roots with line comments stripped: **16** in-module-only exports across `src/Blood` (12), `src/Language` (3), `src/Item` (1); `src/Equipment`/`src/Substance` have none. **Three of bullet 1's eleven names are wrong** and must keep their exports — `trailModerateVolume` is imported and used by `Blood/Pool.hs:60,115`, and `generateRoot`/`minNativeWordLength` are used by `test-headless/Test/Headless/Language/Generated.hs:512,533,761,777,804` (batch 13's header repeats this error, calling the severity ladder and `generateRoot` "both used within their own modules"). It also omits eight: `catastrophicBluntThreshold`, `poolStyleVolume`, `poolFootprintFor`, `decalTint`, `bloodRenderRecord`, `shapeLength`, `formKindText`, `domainText`. Two names on the list are referenced only from OTHER modules' haddock — `trailBloodForVolume` (`Combat/Wounds/Bleed.hs:101`) and `removeDecalsForTexture` (`Blood/Render.hs:65`, `Lua/API/Blood.hs:303`) — so they belong on it, but un-exporting them leaves dangling documentation links.
+>
+> **Note (supersedes the classification above, verified 2026-08-22):** the final
+> count is **15** names with no code consumer outside their defining module —
+> `src/Blood` (12), `src/Language` (2), `src/Item` (1) — comprising **13**
+> over-exported internal helpers plus **two dead bindings**,
+> `Language/Generated/Types.hs`'s `shapeLength` and
+> `Language/Semantic/Types.hs`'s `domainText`, which occurred only in their own
+> export entry and definition and so were deleted outright rather than merely
+> hidden (leaving them would break `-Wall -Werror`). **Four** names keep their
+> exports, not three: `trailModerateVolume` (`Blood/Pool.hs:60,115`),
+> `generateRoot` and `minNativeWordLength`
+> (`test-headless/Test/Headless/Language/Generated.hs`), and `formKindText`,
+> which gained production consumers at `src/Location/Naming.hs:164,167` after
+> this entry was written. The cross-module haddock naming now-hidden helpers is
+> `Blood/Types.hs:302,420`, `Blood/Render.hs:65`, `Combat/Wounds/Bleed.hs:101`,
+> and `Lua/API/Blood.hs:303`.
 
 - `Item`/`Language`/`Blood` over-exports (used only in-module):
-  `Blood/Trail.hs`'s `trailModerateVolume`/`trailSevereVolume`/
-  `trailCatastrophicVolume`/`trailBloodForVolume`,
-  `Language/Generated/Root.hs`'s `generateRoot`/`minNativeWordLength`,
-  `Blood/Impact.hs`'s `impactFootprint`/`impactOpacity`,
-  `Blood/Types.hs`'s `matchThreshold`/`removeDecalsForTexture`,
-  `Item/Types.hs`'s `defaultQualityTiers`.
+  `Blood/Impact.hs`'s `catastrophicBluntThreshold`/`impactFootprint`/
+  `impactOpacity`, `Blood/Pool.hs`'s `poolStyleVolume`/`poolFootprintFor`,
+  `Blood/Render.hs`'s `decalTint`/`bloodRenderRecord`,
+  `Blood/Trail.hs`'s `trailSevereVolume`/`trailCatastrophicVolume`/
+  `trailBloodForVolume`, `Blood/Types.hs`'s
+  `matchThreshold`/`removeDecalsForTexture`, and `Item/Types.hs`'s
+  `defaultQualityTiers` — plus the two dead bindings
+  `Language/Generated/Types.hs`'s `shapeLength` and
+  `Language/Semantic/Types.hs`'s `domainText`. `trailModerateVolume`,
+  `generateRoot`, `minNativeWordLength`, and `formKindText` are NOT on this
+  list: each has a consumer outside its defining module.
 - `World/Geology` + `Magma` + `Plate` + `Weather` + `Flora` + `Slope` carry 40
   unreferenced exports, dominated by two clusters already noted in CH-90:
   `Geology/Volcano.hs` (7 `apply*` feature builders dispatched internally by

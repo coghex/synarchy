@@ -154,10 +154,14 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
             , gtOreDeposits = emptyWorldOreDeposits
             }
 
-        -- Ocean map: which chunks are ocean-BFS-reachable from the
-        -- world edge. Used by the lake identifier below; Init.hs
-        -- computes its own copy after buildTimeline — redundant work
-        -- but cheap (chunk-resolution sampling).
+        -- Ocean map: the coarse chunk-resolution flood, seeded from
+        -- TECTONIC PLATES rather than the world edge — each non-land
+        -- plate contributes the first below-sea chunk found from its
+        -- centre outward to radius 4, and a plate with none in that
+        -- range contributes no seed at all. Used by the lake
+        -- identifier below, and returned from buildTimeline together
+        -- with its distance map so Init consumes THIS map instead of
+        -- recomputing one (see the return-type note above).
         applyTL gx gy base =
             applyTimelineFast preLakeTimeline plates worldSize gx gy
                               registry base
