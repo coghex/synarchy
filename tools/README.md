@@ -865,6 +865,18 @@ writes nothing. A harness error is deliberately NOT gated: it reads no cohort
 and contributes to none, and unmeasurable provenance is exactly what the
 attempt log retains. The CROSS-FIELD invariants remain #1493's.
 
+**A CI-eligible probe takes no measurement at all (#1431).** "A promoted probe
+receives no further census samples" is a STORAGE invariant, not only a
+reporting one: `--record` refuses a probe `tools/ci_probes.py` currently
+classifies CI-eligible, before the census is locked and without writing a byte,
+and refuses a harness error for one on the same ground. `probe_flake.py`
+already refuses to RUN such a probe, but a result document outlives its run —
+one measured before a promotion, or replayed from an artifact tree afterwards,
+is still well-formed and schema-valid. Eligibility is read LIVE from the
+registry, never from the stored row's classification, which a census not yet
+reconciled by `--seed` still holds at its old value. The retained history stays
+exactly as the promotion left it.
+
 `--print` never touches the docs worktree. `--seed` is the ONLY operation that
 migrates: it creates an absent census, migrates a `probe-census/v1` one
 losslessly, and reconciles inventory drift — appending newly registered
@@ -940,6 +952,88 @@ and a cohort with no denominator, a promoted probe whose statistic lives in
 `history[-1]`, the placeholder/malformed refusals at the incoming,
 stored-cohort-on-ingest and stored-read boundaries alike, and the exact commit
 in the rendered table.
+
+### `probe_census_page.py` — the manual-only census page (#1431)
+
+`docs/probe_census.json` stays the authoritative global manifest — every
+registered probe, CI-eligible and manual-only alike, with its retained history.
+This renders the READABLE half of it, `docs/probe_census.md`: one row per
+MANUAL-ONLY probe, in stable key order, beside the manifest in the same
+`docs-wip` worktree. It writes nothing else, migrates nothing, and neither
+publishes nor lands the page.
+
+```bash
+python3 tools/probe_census_page.py --generate
+python3 tools/probe_census_page.py --generate --as-of 2026-08-21T05:00:00Z
+python3 tools/probe_census_page.py --audit
+python3 tools/test_probe_census_page.py   # the synthetic self-test
+```
+
+**Manual-only, deliberately.** Neither command, and not the self-test, runs in
+`make ci` or GitHub CI — nothing here is a gate on anything, and the page it
+audits lives in a worktree a fresh clone does not have.
+
+**It has two sources and needs both.** The manifest holds classification,
+protocol status, the acceptable-failure policy, the duration estimate and the
+measurements; #1440's reason records live in `tools/ci_probes.py`'s
+`MANUAL_ONLY_REASONS`. Joining them is what lets one row answer both "why is
+this probe not in the blocking gate?" and "how flaky is it, on which commit,
+how long ago?". The reason categories render in each probe's DECLARED order,
+which is the order the registry states the independent grounds in.
+
+**Which probes appear is derived, never listed.** The row set is exactly
+`ALL_KEYS - CI_ELIGIBLE`, computed from the live registries, so a newly
+registered probe appears the day it registers and a promoted one leaves the
+page the day it is promoted — while keeping its manifest row, its policy and
+its whole archived history, and receiving no further samples (see the
+`--record` refusal above).
+
+**The source manifest is validated before either operation.** A missing,
+duplicate, extra, stale-classification or stale-protocol manifest row would
+otherwise yield a subset page that is perfectly consistent with itself and
+quietly wrong about which probes exist, so `--generate` and `--audit` both run
+`probe_census`'s shape check and inventory comparison first and stop there.
+#1430's acceptable-failure policy is deliberately NOT applied: a null X is
+state the page must be able to DISPLAY (`unset`), and a policy problem is
+`probe_census --validate`'s report either way.
+
+**Three explicit measurement states, and no value invented.** A row with a
+current cohort is `measured`. A row with none is `not yet measurable` when its
+protocol status is `legacy` — `probe_flake.py` refuses to run a legacy probe at
+all — and `not yet measured` when it has been migrated and simply has no sample
+yet. `unset` (no X) and `unknown` (no duration estimate) are their own cells,
+so an absent value never renders as a zero, and an unmeasured row shows no
+rate, no commit and no age. The ladder is cohort-FIRST: a legacy row that
+nonetheless holds a cohort reports the cohort, because `probe_flake.py` cannot
+produce one and hiding a stored measurement behind "not yet measurable" would
+be a lie rather than a safeguard.
+
+**Rate is pooled, age is relative to a DECLARED as-of.** A row's rate is the
+current cohort's total `failure_count` over its total `requested_runs` —
+`probe_census.cohort_statistic`'s own arithmetic — because averaging the
+samples' stored rates would weight a three-run measurement like a ten-run one.
+Age runs from that cohort's freshness anchor to the as-of time the page records
+in its own header, clamped at zero; that is why the header carries it, and why
+`--audit` recomputes every age from it rather than from a clock.
+
+**The audit checks values, not membership.** Missing, duplicate and extra rows
+are diagnosed independently, so one never masks another, and an extra row says
+WHY it does not belong (CI-eligible, or not registered at all). Every surviving
+row is then compared cell by cell against the row the same generator would
+render, so a hand-edited protocol, reason set, state, rate, X, duration, commit
+or age is a finding naming that column. A page whose table is not the generated
+one is one structural finding rather than ninety derived ones.
+
+`python3 tools/test_probe_census_page.py` is the deterministic, engine-free,
+offline self-test: synthetic censuses and a synthetic probe registry in a
+throwaway tree, an injected as-of rather than a clock, and the real module
+driven rather than a copy. It covers the whole-registry manifest filtered down
+to the manual-only page, the three measurement states, several reason
+categories in declared order, promotion (the row leaves while the manifest
+entry, policy and archived history stay, and `--record` then refuses), missing
+/ duplicate / extra / reordered rows, a tampered value in every audited column,
+the source-manifest gate, byte-stable rendering, and the CLI's exit codes
+against a real two-worktree scratch repository.
 
 ### `probe_external_evidence.py` — the Codex `$test` record, read-only (#1432)
 
