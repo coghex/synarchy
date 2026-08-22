@@ -1474,6 +1474,22 @@ def selftest() -> int:
             def sleep(self, _seconds):
                 self.now += self.step
 
+        class SleepClock:
+            """A clock that advances by whatever the code sleeps for —
+            so a loop that clamps its sleep to a deadline converges,
+            and one that does not overshoots visibly."""
+
+            def __init__(self):
+                self.now = 0.0
+                self.slept: list = []
+
+            def __call__(self):
+                return self.now
+
+            def sleep(self, seconds):
+                self.slept.append(seconds)
+                self.now += max(seconds, 0.01)
+
         class ReadyAfter:
             """Player-readiness that arrives only on the Nth probe —
             positive evidence, never elapsed time."""
@@ -1594,13 +1610,20 @@ def selftest() -> int:
         # probe itself against stub engines that each withhold exactly
         # one of the three signals.
         class ReadyEngine(FakeEngine):
-            """Menu + widgets + a working screenshot: player-ready."""
+            """Boot finished + main menu built + widgets + a working
+            screenshot: player-ready. `boot_done`/`main_menu` default to
+            True; a LOADING SCREEN is `main_menu=False` — it still
+            reports currentMenu "main" (the module-load default) and
+            still has visible labels."""
 
-            def __init__(self, menu="main", widgets=None, shoot=True):
+            def __init__(self, menu="main", widgets=None, shoot=True,
+                         boot_done=True, main_menu=True):
                 super().__init__()
                 self._menu = menu
                 self._widgets = [{"name": "start"}] if widgets is None else widgets
                 self._shoot = shoot
+                self._boot_done = boot_done
+                self._main_menu = main_menu
                 self.shot_paths: list[str] = []
                 self.shot_timeouts: list = []
                 self.lua_timeouts: list = []
@@ -1608,7 +1631,9 @@ def selftest() -> int:
             def lua(self, code, timeout=0):
                 self.lua_timeouts.append(timeout)
                 if "currentMenu" in code:
-                    return self._menu
+                    return {"menu": self._menu,
+                            "bootDone": self._boot_done,
+                            "mainMenuReady": self._main_menu}
                 if "dumpWidgets" in code:
                     return self._widgets
                 return {"ok": True}
@@ -1622,15 +1647,26 @@ def selftest() -> int:
 
         probe_dir, probe_trace = fresh("ready_probe")
         ok_eng = ReadyEngine()
-        check("readiness demands a menu surface, widgets AND a real frame",
-              launch_mod.probe_player_ready(
-                  ReadyEngine(menu=None), probe_trace.setup_frame_path()) is False
-              and launch_mod.probe_player_ready(
-                  ReadyEngine(widgets=[]), probe_trace.setup_frame_path()) is False
-              and launch_mod.probe_player_ready(
-                  ReadyEngine(shoot=False), probe_trace.setup_frame_path()) is False
+        def _probe(**kw):
+            return launch_mod.probe_player_ready(
+                ReadyEngine(**kw), probe_trace.setup_frame_path())
+
+        check("readiness demands a built main menu, a menu name, widgets "
+              "AND a real frame",
+              _probe(menu=None) is False
+              and _probe(widgets=[]) is False
+              and _probe(shoot=False) is False
+              and _probe(boot_done=False) is False
               and launch_mod.probe_player_ready(
                   ok_eng, probe_trace.setup_frame_path()) is True)
+        # The exact shape the startup LOADING SCREEN presents: currentMenu
+        # is "main" (its module-load default, never changed while the
+        # loading screen is up) and the screen's own labels make
+        # dumpWidgets() non-empty. Accepting that would hand the player a
+        # progress bar as its first frame.
+        check("the startup loading screen is not player-ready",
+              _probe(menu="main", widgets=[{"name": "loading_label"}],
+                     main_menu=False) is False)
         check("the readiness frame is a setup artifact, never turn 1's frame",
               ok_eng.shot_paths == [probe_trace.setup_frame_path()]
               and probe_trace.setup_frame_path()
@@ -1767,6 +1803,31 @@ def selftest() -> int:
               and never_exc.timed_out is True
               and never_clock.now > 120.0,
               str(never_exc))
+
+        # ...and the render poll never sleeps past the deadline either:
+        # a --setup-timeout smaller than READY_POLL_INTERVAL used to
+        # overshoot by a whole interval before reporting render_timeout.
+        tight_render = SleepClock()
+        tight_render_budget = 0.05     # well under READY_POLL_INTERVAL
+        _, tight_render_trace = fresh("ready_tight_poll")
+        try:
+            launch_mod.launch_player_ready(
+                FakeEngine(), tight_render_trace,
+                setup_timeout=tight_render_budget,
+                build=lambda: "/nonexistent/synarchy",
+                start=lambda exe: None, ready=lambda: False,
+                clock=tight_render, sleep=tight_render.sleep,
+                poll_interval=launch_mod.READY_POLL_INTERVAL,
+                log=lambda *a, **k: None)
+            tight_render_exc = None
+        except launch_mod.SetupFailure as e:
+            tight_render_exc = e
+        check("the render poll never sleeps past the setup deadline",
+              tight_render_exc is not None
+              and tight_render_exc.kind == "render_timeout"
+              and tight_render_budget < launch_mod.READY_POLL_INTERVAL
+              and all(v <= tight_render_budget for v in tight_render.slept),
+              f"{tight_render.slept} -> {tight_render_exc}")
 
         # 8e. every pre-ready failure: zero turns, no replay entries,
         # a phase-specific stop reason, and null lifecycle stamps.
@@ -1979,20 +2040,6 @@ def selftest() -> int:
         # ...and the wait never sleeps past its own deadline: a
         # --setup-timeout smaller than CONSOLE_POLL_INTERVAL must still
         # end on time rather than overshoot by a whole interval.
-
-        class SleepClock:
-            """A clock that advances by whatever the code sleeps for."""
-
-            def __init__(self):
-                self.now = 0.0
-                self.slept: list = []
-
-            def __call__(self):
-                return self.now
-
-            def sleep(self, seconds):
-                self.slept.append(seconds)
-                self.now += max(seconds, 0.01)
 
         tight_eng = StubEngine(os.path.join(tmp, "tight_engine.log"))
         tight_stub, tight_pids = _tree_stub("tight_engine")

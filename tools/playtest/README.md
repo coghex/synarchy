@@ -74,11 +74,20 @@ at once:
 
 1. the engine process is running and its debug console is reachable
    (it printed `READY`);
-2. the title/main-menu interaction surface is initialized
-   (`ui_manager.currentMenu` names a menu **and** `ui.registry.dumpWidgets()`
-   is non-empty); and
+2. startup boot has **finished** and the main-menu surface itself is
+   initialized (`ui_manager.startupBootDone` and
+   `moduleReady.mainMenu`, both set by `finishStartupBoot`), with
+   `currentMenu` naming a menu and `ui.registry.dumpWidgets()`
+   non-empty; and
 3. a screenshot that could really be handed to the player succeeds and
    reports a positive framebuffer size.
+
+Condition 2 is what keeps the **loading screen** out: `currentMenu` is
+initialized to `"main"` at module load, long before any UI exists, and
+the startup loading screen is shown without changing it — and it carries
+visible labels, so `dumpWidgets()` is non-empty there too. A menu name
+plus arbitrary visible widgets would hand the player a progress bar as
+its first frame.
 
 Elapsed time and fixed sleeps never satisfy it — the old
 `time.sleep(3.0)` after boot is gone. Both console reads are ordinary

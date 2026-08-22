@@ -366,13 +366,24 @@ def probe_player_ready(eng, screenshot_path: str, deadline: float | None = None,
                        clock=time.monotonic) -> bool:
     """POSITIVE evidence that a first frame could be handed to a player.
 
-    All three must hold, and elapsed time counts for nothing:
+    All of these must hold, and elapsed time counts for nothing:
 
-    * an initialized title/main-menu interaction surface
-      (`ui_manager.currentMenu` names one), and
-    * a non-empty widget registry (`ui.registry.dumpWidgets()` — the
-      menu's interactive surface actually exists), and
+    * startup boot has FINISHED and the main-menu surface itself is
+      initialized (`ui_manager.startupBootDone` and
+      `moduleReady.mainMenu`, both set by `finishStartupBoot`), and
+    * `ui_manager.currentMenu` names a menu, and
+    * a non-empty widget registry (`ui.registry.dumpWidgets()` — an
+      interactive surface actually exists), and
     * a screenshot that really succeeds and reports a positive size.
+
+    The first condition is what keeps the LOADING SCREEN out.
+    `currentMenu` is initialized to `"main"` at module load, long
+    before any UI exists, and the startup loading screen is shown
+    without changing it — and it carries visible labels, so
+    `dumpWidgets()` is non-empty there too. A menu name plus arbitrary
+    visible widgets would therefore accept a progress bar as the
+    player's first frame; only `moduleReady.mainMenu` says the main
+    menu itself was built.
 
     Both console reads are harness-side ORACLE reads: they are recorded
     for the critic and never surfaced to the player, so using them here
@@ -426,8 +437,20 @@ def probe_player_ready(eng, screenshot_path: str, deadline: float | None = None,
         budget = io_timeout(CONSOLE_READ_TIMEOUT)
         if budget is None:
             return False
-        menu = eng.lua('local m = package.loaded["scripts.ui_manager"]; '
-                       'return m and m.currentMenu or nil', timeout=budget)
+        state = eng.lua(
+            'local m = package.loaded["scripts.ui_manager"]; '
+            'if not m then return nil end; '
+            'return {menu = m.currentMenu, '
+            'bootDone = m.startupBootDone and true or false, '
+            'mainMenuReady = (m.moduleReady and m.moduleReady.mainMenu) '
+            'and true or false}', timeout=budget)
+        if not isinstance(state, dict):
+            return False
+        if state.get("bootDone") is not True:
+            return False
+        if state.get("mainMenuReady") is not True:
+            return False
+        menu = state.get("menu")
         if not isinstance(menu, str) or not menu.strip():
             return False
         budget = io_timeout(CONSOLE_READ_TIMEOUT)
@@ -534,7 +557,10 @@ def _launch_player_ready(eng, trace, *, started: float, deadline: float,
                     "the game became player-ready only after the setup "
                     "budget had already expired", timed_out=True)
             break
-        sleep(poll_interval)
+        # Never sleep past the deadline: a --setup-timeout smaller than
+        # one poll interval must still report on time rather than
+        # overshoot by a whole interval.
+        sleep(max(0.0, min(poll_interval, _remaining(deadline, clock))))
 
     elapsed = clock() - started
     trace.mark_loaded()
