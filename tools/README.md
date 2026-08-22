@@ -1149,7 +1149,11 @@ refusing outright if that write fails or no `docs-wip` census is reachable;
 REASSERT ownership immediately before the probe starts and refuse to start it
 if that is gone, since beginning a measurement this run no longer owns is the
 duplicated work the claim exists to prevent; measure, renewing
-throughout; ingest the result inside ONE hold of the sidecar lock that first
+throughout; RETAIN the completed measurement on disk — the `--result` path or
+the run's own invocation directory — before anything that can fail touches it,
+because the measurement is the expensive thing and the retained file is a
+complete `probe-flake-result/v1` that `probe_census.py --record` ingests once
+the cause is fixed; ingest the result inside ONE hold of the sidecar lock that first
 re-reads the claim file, confirms the claim is still ours and still live, and
 renews the lease so it cannot elapse mid-commit — checking and then writing
 would leave a gap in which a slow commit outlives the lease and another agent
@@ -1167,9 +1171,12 @@ measurement API stays usable on its own.
 Exit codes: 0 a measurement that ran and was ingested, whatever rate it
 observed; 2 rejected before anything was claimed; 3 ALREADY CLAIMED; 4 a
 harness error, whose non-accepted attempt is still ingested; 5 a claim audit
-failure, where the acquisition could not be durably recorded so nothing ran;
-6 no leasable port; 7 the claim was lost — before the probe started, so it was
-never run, or while it ran, so nothing was ingested.
+failure — before the probe ran, the acquisition was not recordable so nothing
+ran; after it ran, the measurement happened and its retained file is named in
+the diagnostic, and re-running the probe is never the recovery; 6 no leasable
+port; 7 the claim was lost — before the probe started, so it was never run, or
+while it ran, so nothing was ingested. An unwritable `--result` is refused up
+front, before anything is claimed.
 
 Gate: `python3 tools/test_probe_claim.py` (in CI and `make ci`) — engine-free
 and GPU-free, but genuinely multi-process: its concurrency cases race real

@@ -25,12 +25,14 @@ Exit codes: 0 = all tests passed, 1 = one or more failed.
 """
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from contextlib import contextmanager
 from datetime import timedelta
@@ -99,7 +101,6 @@ def registry(probes=None, ci_eligible=(), protocol=None):
 
 @contextmanager
 def scratch(prefix="probe-claim-test-"):
-    import tempfile
     root = Path(tempfile.mkdtemp(prefix=prefix))
     try:
         yield root
@@ -157,9 +158,20 @@ def descriptor(probe="alpha") -> probe_protocol.Descriptor:
                              ("second", "the second check")))
 
 
+ARTIFACTS = tempfile.mkdtemp(prefix="probe-claim-artifacts-")
+atexit.register(shutil.rmtree, ARTIFACTS, True)
+
+
 def fake_measurement(probe="alpha", runs=2, *, harness_error=False,
-                     artifact_root="/tmp/artifacts"):
-    """A real `probe_flake.Measurement`, filled in without running anything."""
+                     artifact_root=None):
+    """A real `probe_flake.Measurement`, filled in without running anything.
+
+    Its artifact root is a throwaway tree of this run's own, because a
+    completed measurement is now RETAINED under its invocation
+    directory — so a hard-coded root would have every case here writing
+    into a shared path outside the scratch.
+    """
+    artifact_root = ARTIFACTS if artifact_root is None else artifact_root
     measurement = probe_flake.Measurement(
         probe, descriptor(probe), runs, 4, Path(artifact_root),
         Path(artifact_root) / "invocation")
@@ -1389,6 +1401,167 @@ def test_a_delayed_audit_cannot_be_overtaken() -> None:
                    "and the new owner's claim was left alone on the way out")
 
 
+def test_a_completed_measurement_is_never_lost() -> None:
+    """An ingestion failure must not cost an hour of engine time.
+
+    A review found this: the result document used to be written by the
+    CLI AFTER `run_claimed_measurement` returned, so a census that
+    refused the measurement unwound past it — and `probe_flake` has
+    already pruned the artifact directories of every successful run, so
+    there was nothing left to re-ingest once the census was fixed. The
+    document is now written the moment the measurement exists, before
+    anything that can fail.
+
+    The proof is recovery, not existence: the retained file is ingested
+    into a working census afterwards and produces the sample the failed
+    run would have.
+    """
+    print("\n-- a completed measurement survives a failed ingestion --")
+
+    def refusing(target, document):
+        raise probe_census.CensusError("injected: the census refused it")
+
+    # (a) With an explicit --result path.
+    with registry(), scratch_repo() as (main_wt, _other, census):
+        seeded_census(census)
+        with claim_root() as root, scratch() as out:
+            wanted = out / "nested" / "role.json"
+            error = None
+            try:
+                probe_claim.run_claimed_measurement(
+                    "alpha", 2, root=root, census_path=census,
+                    result_path=wanted,
+                    measure=lambda p, r, **k: fake_measurement(p, r),
+                    record_result=refusing, repo_root=str(main_wt),
+                    renew_interval=3600)
+            except probe_claim.ResultIngestionFailed as raised:
+                error = raised
+            expect(error is not None,
+                   "a census that refuses the measurement is its own failure")
+            expect(wanted.exists(),
+                   "...and the requested result document was written anyway")
+            expect(str(wanted) in str(error)
+                   and "--record" in str(error),
+                   "...with the diagnostic naming it and how to re-ingest it")
+            expect(error.retained == wanted,
+                   "...and the exception carrying the retained path")
+            row = probe_census.find_entry(
+                json.loads(census.read_text(encoding="utf-8")),
+                "alpha")["census"]
+            expect(row["attempts"] == [] and row["current"] is None
+                   and len(row["claims"]) == 1,
+                   "the census really did refuse the measurement, holding "
+                   "only the acquisition record")
+
+            # Recovery: the retained document ingests once the cause is
+            # fixed. That is what makes retention worth anything — and
+            # it is reported rather than raised when the document is
+            # missing, so a regression says so instead of aborting the
+            # cases below it.
+            try:
+                document = json.loads(wanted.read_text(encoding="utf-8"))
+            except OSError as missing:
+                document = None
+                expect(False, f"the retained document is readable ({missing})")
+            if document is not None:
+                expect(document["schema"] == probe_census.RESULT_SCHEMA
+                       and document["probe"] == "alpha",
+                       "the retained file is a complete probe-flake-result/v1")
+                probe_census.record_result(census, document)
+                row = probe_census.find_entry(
+                    json.loads(census.read_text(encoding="utf-8")),
+                    "alpha")["census"]
+                expect(len(row["attempts"]) == 1 and row["current"] is not None,
+                       "...and re-ingesting it lands exactly the lost sample")
+
+    # (b) With no --result at all: the run's own invocation directory.
+    with registry(), scratch_repo() as (main_wt, _other, census):
+        seeded_census(census)
+        with claim_root() as root, scratch() as artifacts:
+            made = fake_measurement("alpha", 2, artifact_root=artifacts)
+            error = None
+            try:
+                probe_claim.run_claimed_measurement(
+                    "alpha", 2, root=root, census_path=census,
+                    measure=lambda *a, **k: made,
+                    record_result=refusing, repo_root=str(main_wt),
+                    renew_interval=3600)
+            except probe_claim.ResultIngestionFailed as raised:
+                error = raised
+            fallback = (Path(made.invocation_dir)
+                        / probe_claim.RETAINED_RESULT_NAME)
+            expect(error is not None and fallback.exists(),
+                   "a measurement nobody asked for a copy of is retained "
+                   "beside its own artifacts")
+            try:
+                same = json.loads(
+                    fallback.read_text(encoding="utf-8"))["probe"] == "alpha"
+                detail = ""
+            except OSError as missing:
+                same, detail = False, f" ({missing})"
+            expect(same,
+                   f"...as the same complete result document{detail}")
+
+    # (c) A lost claim keeps it too — that path ingests nothing either.
+    with registry(), scratch_repo() as (main_wt, _other, census):
+        seeded_census(census)
+        with claim_root() as root, scratch() as out:
+            wanted = out / "lost.json"
+
+            def steal(probe, runs, **kwargs):
+                probe_claim.acquire(
+                    probe, root=root,
+                    lease_seconds=probe_claim.LEASE_SECONDS,
+                    now=probe_claim.utc_now()
+                    + timedelta(seconds=2 * probe_claim.LEASE_SECONDS))
+                return fake_measurement(probe, runs)
+
+            expect_raises(
+                probe_claim.ClaimLostDuringRun,
+                lambda: probe_claim.run_claimed_measurement(
+                    "alpha", 2, root=root, census_path=census,
+                    result_path=wanted, measure=steal,
+                    repo_root=str(main_wt), renew_interval=3600),
+                "a lost claim still refuses to ingest", "retained at")
+            expect(wanted.exists(),
+                   "...but the measurement it refused is retained all the same")
+
+    # (d) An unwritable --result is refused BEFORE anything is claimed.
+    with registry(), scratch_repo() as (main_wt, _other, census):
+        seeded_census(census)
+        with claim_root() as root, scratch() as out:
+            blocker = out / "a-file"
+            blocker.write_text("not a directory", encoding="utf-8")
+            ran = []
+            expect_raises(
+                probe_claim.ClaimError,
+                lambda: probe_claim.run_claimed_measurement(
+                    "alpha", 2, root=root, census_path=census,
+                    result_path=blocker / "result.json",
+                    measure=lambda *a, **k: ran.append(1) or fake_measurement(),
+                    repo_root=str(main_wt)),
+                "an unwritable --result is refused up front, not after an "
+                "hour of engine time", "result document cannot be written")
+            expect(not ran and probe_claim.read_claim("alpha", root=root) is None,
+                   "...having run nothing and claimed nothing")
+
+    # (e) The happy path writes it too, and says so.
+    with registry(), scratch_repo() as (main_wt, _other, census):
+        seeded_census(census)
+        with claim_root() as root, scratch() as out:
+            wanted = out / "ok.json"
+            outcome = probe_claim.run_claimed_measurement(
+                "alpha", 2, root=root, census_path=census, result_path=wanted,
+                measure=lambda p, r, **k: fake_measurement(p, r),
+                repo_root=str(main_wt), renew_interval=3600)
+            expect(outcome.exit_code == probe_claim.EXIT_OK
+                   and wanted.exists() and outcome.result_path == wanted
+                   and outcome.result_problem is None,
+                   "a successful run writes the requested result document")
+            expect(outcome.to_document()["result_document"] == str(wanted),
+                   "...and reports where it is")
+
+
 def test_probe_flake_needs_no_docs_worktree() -> None:
     """The low-level measurement API stays usable without a census.
 
@@ -1487,6 +1660,7 @@ def main() -> int:
                  test_ingestion_cannot_be_overtaken,
                  test_a_delayed_audit_cannot_be_overtaken,
                  test_commit_while_held_renews_and_refuses,
+                 test_a_completed_measurement_is_never_lost,
                  test_probe_flake_needs_no_docs_worktree, test_cli):
         test()
     print()
