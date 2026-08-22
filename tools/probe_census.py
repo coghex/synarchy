@@ -31,6 +31,14 @@ What a census record holds, for each probe:
 * `attempts` — an append-only log of well-formed ingestion attempts. A
   well-formed harness-error result is logged but contributes no sample
   and no aggregate.
+* `claims` — #1434 extends the file again, to `probe-census/v3`, with an
+  append-only log of successful per-probe claim ACQUISITIONS, written by
+  `tools/probe_claim.py` before the measurement each one authorizes
+  runs. It is deliberately a separate collection rather than more
+  `attempts`: an attempt is a result ingestion and is non-idempotent by
+  design, while an acquisition is identified by its acquisition TOKEN
+  and stays one record however many times the recorder retries. The
+  v2→v3 migration adds the empty log and nothing else.
 
 #1429 adds what those measurements MEAN over time. The newest cohort is
 the current statistic and displaces the previous one without deleting
@@ -123,6 +131,9 @@ errors; 1 inventory drift and every controlled refusal.
 Usage:
   python3 tools/probe_census.py --print            # the manifest, to stdout
   python3 tools/probe_census.py --seed             # create/migrate in docs-wip
+  # A stored probe-census/v1 or /v2 census migrates in place here,
+  # losing no policy field, cohort, sample or attempt; `--record` and
+  # the policy operations refuse an unmigrated census by name.
   python3 tools/probe_census.py --validate         # check the docs-wip copy
   python3 tools/probe_census.py --record RESULT    # ingest one measurement
   python3 tools/probe_census.py --summary          # the current statistics
@@ -163,12 +174,13 @@ import probe_flake  # noqa: E402
 import probe_protocol  # noqa: E402
 import run_probes  # noqa: E402
 
-CENSUS_SCHEMA = "probe-census/v2"
+CENSUS_SCHEMA = "probe-census/v3"
+RECORD_SCHEMA = "probe-census/v2"
 SEED_SCHEMA = "probe-census/v1"
 # The schema `--print`, `--seed` and `--validate` speak. Kept under the
 # #1425 name too, because that is what the manifest helpers are called.
 MANIFEST_SCHEMA = CENSUS_SCHEMA
-MIGRATABLE_SCHEMAS = (SEED_SCHEMA, CENSUS_SCHEMA)
+MIGRATABLE_SCHEMAS = (SEED_SCHEMA, RECORD_SCHEMA, CENSUS_SCHEMA)
 
 MANIFEST_RELPATH = "docs/probe_census.json"
 DOCS_BRANCH = "docs-wip"
@@ -217,7 +229,8 @@ INSTALL_HINT = "python3 -m pip install --user -r tools/requirements-assets.txt"
 # treats `/` as a separator, so `#/$defs/probe-census/v2` names nothing.
 SCHEMA_DEFINITIONS = {
     SEED_SCHEMA: "census_v1",
-    CENSUS_SCHEMA: "census_v2",
+    RECORD_SCHEMA: "census_v2",
+    CENSUS_SCHEMA: "census_v3",
     RESULT_SCHEMA: "flake_result_v1",
 }
 
@@ -831,6 +844,7 @@ def empty_census() -> dict:
         "current": None,
         "history": [],
         "attempts": [],
+        "claims": [],
     }
 
 
@@ -1168,17 +1182,23 @@ def _rows(document, what: str) -> list:
 
 
 def migrate_document(document) -> dict:
-    """A `probe-census/v1` or `/v2` document, as `/v2`.
+    """A `probe-census/v1`, `/v2` or `/v3` document, as `/v3`.
 
-    Lossless: every existing row survives, in the same order, with its
-    existing inventory values. The v1 migration adds the exact empty
-    census record; it never regenerates the inventory from the live
-    registry, because the seeded document is migration INPUT.
+    Lossless in both steps: every existing row survives, in the same
+    order, with its existing inventory values, and every policy field,
+    cohort, sample and attempt is carried through untouched. The v1
+    migration adds the exact empty census record; it never regenerates
+    the inventory from the live registry, because the seeded document is
+    migration INPUT. The v2 migration adds ONLY the empty `claims` log
+    (#1434) — a record that already carries one keeps it exactly as it
+    is, so re-migrating an already-migrated document is a no-op rather
+    than a truncation.
 
-    A v2 row missing its `census` field is left exactly as it is rather
-    than repaired: in a v2 document that is a declared-schema violation
-    for the validator to report, and silently inserting an empty record
-    here would erase the evidence on the next write.
+    A row missing its `census` field, or carrying a non-object one, is
+    left exactly as it is rather than repaired: in a v2 or v3 document
+    that is a declared-schema violation for the validator to report, and
+    silently inserting an empty record here would erase the evidence on
+    the next write.
     """
     entries = _rows(document, "census")
     schema = document.get("schema")
@@ -1191,6 +1211,11 @@ def migrate_document(document) -> dict:
         row = dict(entry)
         if schema == SEED_SCHEMA and "census" not in row:
             row["census"] = empty_census()
+        census = row.get("census")
+        if isinstance(census, dict) and "claims" not in census:
+            census = dict(census)
+            census["claims"] = []
+            row["census"] = census
         migrated.append(row)
     result = dict(document)
     result["schema"] = CENSUS_SCHEMA
@@ -1461,6 +1486,80 @@ def ingest_result(document: dict, result) -> tuple[dict, str]:
                 census["current"], "samples", probe) + [sample]
         census["attempts"] = _appendable(census, "attempts", probe) + [attempt]
         row["census"] = census
+        break
+    updated = dict(document)
+    updated["probes"] = rows
+    return updated, probe
+
+
+# ==========================================================================
+# Recording a claim acquisition (#1434)
+# ==========================================================================
+# A CLAIM is not a measurement and does not live with the measurements.
+# `attempts` is the result-ingestion log and is deliberately
+# non-idempotent — the same result recorded twice is two attempts,
+# because a repeated ingestion is a real event worth seeing. An
+# acquisition is the opposite: it is identified by its acquisition
+# TOKEN, one lock acquisition produces exactly one record however many
+# times the recorder retries, and a second acquisition of the same probe
+# is a different token and a different record. Overloading `attempts`
+# would have to give up one of those two contracts, so `claims` is its
+# own collection.
+def find_claim(census, token: str):
+    """The stored claim carrying `token`, or None. A plain lookup."""
+    for claim in (census or {}).get("claims") or []:
+        if isinstance(claim, dict) and claim.get("token") == token:
+            return claim
+    return None
+
+
+def ingest_claim(document: dict, probe: str, claim) -> tuple[dict, str]:
+    """`document` with one successful acquisition recorded, plus its row.
+
+    IDEMPOTENT ON THE TOKEN, and only on the token. Recording an
+    acquisition the census already holds is a no-op that installs the
+    identical document, so a recorder that retries after an ambiguous
+    failure cannot duplicate the record. The same token carrying
+    DIFFERENT metadata is a controlled refusal instead: two distinct
+    acquisitions sharing one token would mean the token generator
+    stopped being unique, which is exactly the condition every
+    ownership-safe operation downstream depends on, so it must surface
+    rather than be appended past or silently overwritten.
+
+    A claim appends to `claims` and touches nothing else — no cohort, no
+    sample, no attempt, no policy field. The preservation guard enforces
+    that from the other side.
+    """
+    if not isinstance(claim, dict):
+        raise CensusError(
+            f"probe {probe!r}: a claim record must be a JSON object, got "
+            f"{type(claim).__name__}")
+    token = claim.get("token")
+    if not isinstance(token, str) or not token:
+        raise CensusError(
+            f"probe {probe!r}: a claim record must carry a non-empty string "
+            f"`token`, got {token!r}")
+    entries = _rows(document, "census")
+    row = target_row(document, probe, "a claim acquisition")
+    existing = find_claim(row.get("census"), token)
+    record = _deep_copy(claim)
+    if existing is not None:
+        if existing != record:
+            raise CensusError(
+                f"probe {probe!r}: acquisition token {token!r} is already "
+                f"recorded with different metadata, so this is not a replay "
+                f"of that acquisition; an acquisition token must be unique")
+        # A genuine replay: return the document unchanged, so the write
+        # path installs the identical bytes and the file is not touched.
+        return _deep_copy(document), probe
+
+    rows = [dict(entry) for entry in entries]
+    for candidate in rows:
+        if candidate.get("key") != probe:
+            continue
+        census = _deep_copy(candidate["census"])
+        census["claims"] = _appendable(census, "claims", probe) + [record]
+        candidate["census"] = census
         break
     updated = dict(document)
     updated["probes"] = rows
@@ -2151,6 +2250,12 @@ def _sample_total(census) -> int:
 POLICY_FIELDS = ("acceptable_failures", "acceptable_failures_justification",
                  "estimated_worst_case_seconds")
 MEASUREMENT_FIELDS = ("current", "history", "attempts")
+# #1434's claim log is its own aspect, not a measurement field: a claim
+# is recorded BEFORE the measurement runs and may not carry a cohort, a
+# sample or an attempt with it, and a measurement may not append a
+# claim. Keeping the two sets disjoint is what makes each operation's
+# `touched` aspect mean exactly one thing.
+CLAIM_FIELDS = ("claims",)
 INVENTORY_FIELDS = ("key", "script", "classification", "protocol")
 
 
@@ -2171,9 +2276,9 @@ def _census_of(entry) -> dict:
 
 
 def _append_only(key: str, was: dict, now: dict) -> list[str]:
-    """`history` and `attempts` grew by appending, and nothing was lost."""
+    """`history`, `attempts` and `claims` grew by appending, nothing lost."""
     problems: list[str] = []
-    for field in ("history", "attempts"):
+    for field in ("history", "attempts", "claims"):
         previous = was.get(field)
         current = now.get(field)
         previous = [] if previous is None else previous
@@ -2281,14 +2386,29 @@ def _check_preserved(before, after, touched) -> list[str]:
                     problems.append(
                         f"probe {key!r}: the candidate changed policy field "
                         f"`{field}`")
-        if "measurements" in allowed:
+        if "measurements" in allowed or "claims" in allowed:
+            # One append-only comparison covers `history`, `attempts` and
+            # `claims` together; the per-aspect equality checks below are
+            # what keep an operation inside the aspect it declared.
             problems += _append_only(key, was, now)
-        else:
+        # Names the operation, not just the field: "a policy update may
+        # not touch `attempts`" is the sentence a reader needs, and the
+        # wording has to stay true now that a claim acquisition is a
+        # third operation reaching this same comparison.
+        label = ("a claim acquisition" if "claims" in allowed
+                 else "a policy update")
+        if "measurements" not in allowed:
             for field in MEASUREMENT_FIELDS:
                 if now.get(field) != was.get(field):
                     problems.append(
                         f"probe {key!r}: the candidate changed `{field}`, "
-                        f"which a policy update may not touch")
+                        f"which {label} may not touch")
+        if "claims" not in allowed:
+            for field in CLAIM_FIELDS:
+                if now.get(field) != was.get(field):
+                    problems.append(
+                        f"probe {key!r}: the candidate changed `{field}`, "
+                        f"which only a claim acquisition may append to")
     return problems
 
 
@@ -2461,6 +2581,24 @@ def record_result(path: Path, result) -> str:
         return candidate, {probe: {"measurements"}}
     update(path, mutate)
     return touched[0]
+
+
+def record_claim(path: Path, probe: str, claim) -> str:
+    """Durably record one successful claim acquisition. Returns the probe.
+
+    The same locked read-modify-write every other mutation uses, so a
+    recorder contending with a measurement ingestion or a policy edit
+    serializes against it rather than losing an update. A replay of an
+    already-recorded token installs the identical bytes, which `update`
+    recognizes as a no-op and leaves the file, its inode and its mtime
+    alone.
+    """
+    def mutate(before):
+        document = require_current_schema(before, path)
+        candidate, key = ingest_claim(document, probe, claim)
+        return candidate, {key: {"claims"}}
+    update(path, mutate)
+    return probe
 
 
 def record_policy(path: Path, probe: str, **fields) -> str:

@@ -1,0 +1,1006 @@
+#!/usr/bin/env python3
+"""Focused self-test for the atomic per-probe claim (#1434).
+
+Deterministic, engine-free, GPU-free and offline. Nothing here boots an
+engine, runs a registered probe, touches the developer's real `docs-wip`
+worktree or the repository's real claim namespace: every case runs in a
+throwaway temporary tree, and the only subprocesses are `git` (to build
+scratch repositories with real linked worktrees) and this same
+interpreter (for the cases that need genuinely separate processes).
+
+The real `tools/probe_claim.py` and `tools/probe_census.py` are imported
+and driven, with `run_probes.PROBES` and the other live registries
+pointed at a synthetic set, so this exercises the shipped code paths
+rather than a copy.
+
+What the concurrency cases actually prove, and why they are subprocesses
+rather than threads: the claim has to hold between OS processes, and an
+in-process test could pass on nothing but the GIL. Each of them starts N
+real interpreters that block on a shared barrier file before racing, so
+the contention is real and the count of winners is the assertion.
+
+Usage:
+  python3 tools/test_probe_claim.py
+Exit codes: 0 = all tests passed, 1 = one or more failed.
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from contextlib import contextmanager
+from datetime import timedelta
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ci_probes  # type: ignore  # noqa: E402
+import probe_census  # type: ignore  # noqa: E402
+import probe_claim  # type: ignore  # noqa: E402
+import probe_flake  # type: ignore  # noqa: E402
+import probe_protocol  # type: ignore  # noqa: E402
+import run_probes  # type: ignore  # noqa: E402
+
+FAILURES: list[str] = []
+
+TOOLS = str(Path(__file__).resolve().parent)
+COMMIT_A = "a" * 40
+COMMIT_B = "b" * 40
+
+SYNTHETIC = [
+    ("alpha", "alpha_probe.py", "the first synthetic probe"),
+    ("beta", "beta_probe.py", "the second synthetic probe"),
+    ("gamma", "gamma_probe.py", "the third synthetic probe"),
+]
+
+
+def expect(cond: bool, msg: str) -> None:
+    if not cond:
+        FAILURES.append(msg)
+    print(f"  {'ok  ' if cond else 'FAIL'} {msg}")
+
+
+def expect_raises(kind, call, msg: str, *fragments: str) -> None:
+    try:
+        call()
+    except kind as error:
+        missing = [f for f in fragments if f not in str(error)]
+        expect(not missing,
+               msg if not missing else f"{msg} (missing {missing} in {error})")
+        return
+    except Exception as error:  # noqa: BLE001
+        expect(False, f"{msg} (raised {type(error).__name__}: {error})")
+        return
+    expect(False, f"{msg} (nothing was raised)")
+
+
+# ==========================================================================
+# Fixtures
+# ==========================================================================
+@contextmanager
+def registry(probes=None, ci_eligible=(), protocol=None):
+    """The live registries, pointed at a synthetic set for one case."""
+    saved = (run_probes.PROBES, ci_probes.CI_ELIGIBLE,
+             probe_flake.PROTOCOL_PROBES)
+    run_probes.PROBES = list(SYNTHETIC if probes is None else probes)
+    ci_probes.CI_ELIGIBLE = set(ci_eligible)
+    probe_flake.PROTOCOL_PROBES = dict(
+        {key: probe_protocol.PROTOCOL_VERSION for key, _s, _p in run_probes.PROBES}
+        if protocol is None else protocol)
+    try:
+        yield
+    finally:
+        (run_probes.PROBES, ci_probes.CI_ELIGIBLE,
+         probe_flake.PROTOCOL_PROBES) = saved
+
+
+@contextmanager
+def scratch(prefix="probe-claim-test-"):
+    import tempfile
+    root = Path(tempfile.mkdtemp(prefix=prefix))
+    try:
+        yield root
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@contextmanager
+def claim_root():
+    with scratch() as root:
+        yield root / "probe-claims"
+
+
+@contextmanager
+def scratch_repo():
+    """A scratch repository with a linked worktree and a `docs-wip` one.
+
+    Three checkouts of ONE repository, which is what the namespace rule
+    is actually about: `main`, a second ordinary worktree, and the
+    docs-wip worktree the census resolves through.
+    """
+    with scratch("probe-claim-repo-") as root:
+        main_wt, other_wt, docs_wt = root / "main", root / "other", root / "docs"
+        env = {**os.environ, "GIT_CONFIG_GLOBAL": str(root / "gitconfig"),
+               "GIT_CONFIG_SYSTEM": "/dev/null"}
+
+        def run(*args, cwd=None):
+            return subprocess.run(args, cwd=str(cwd or main_wt), env=env,
+                                  check=True, capture_output=True, text=True)
+
+        subprocess.run(["git", "init", "-q", "-b", "master", str(main_wt)],
+                       env=env, check=True, capture_output=True)
+        run("git", "config", "user.email", "test@example.invalid")
+        run("git", "config", "user.name", "Claim Test")
+        run("git", "commit", "-q", "--allow-empty", "-m", "root")
+        run("git", "worktree", "add", "-q", str(other_wt), "-b", "feature")
+        run("git", "worktree", "add", "-q", str(docs_wt), "-b", "docs-wip")
+        saved = run_probes.REPO_ROOT
+        run_probes.REPO_ROOT = str(main_wt)
+        try:
+            yield main_wt, other_wt, docs_wt / probe_census.MANIFEST_RELPATH
+        finally:
+            run_probes.REPO_ROOT = saved
+
+
+def seeded_census(path: Path) -> Path:
+    """A freshly seeded v3 census for the synthetic registry."""
+    probe_census.ensure_document(path)
+    return path
+
+
+def descriptor(probe="alpha") -> probe_protocol.Descriptor:
+    return probe_protocol.Descriptor(
+        probe=probe, checks=(("first", "the first check"),
+                             ("second", "the second check")))
+
+
+def fake_measurement(probe="alpha", runs=2, *, harness_error=False,
+                     artifact_root="/tmp/artifacts"):
+    """A real `probe_flake.Measurement`, filled in without running anything."""
+    measurement = probe_flake.Measurement(
+        probe, descriptor(probe), runs, 4, Path(artifact_root),
+        Path(artifact_root) / "invocation")
+    measurement.commit_sha = COMMIT_A
+    measurement.timestamp = "2026-08-21T05:00:00Z"
+    if harness_error:
+        measurement.status = "harness-error"
+        measurement.error = "run 2: duplicate event"
+        measurement.runs = [probe_flake.RunRecord(
+            1, 9100, probe_flake.RUN_PASS, 1.0,
+            {"first": "PASS", "second": "PASS"}, None)]
+        measurement.error_run = probe_flake.RunRecord(
+            2, 9101, probe_flake.RUN_HARNESS_ERROR, 0.5, {}, None)
+    else:
+        measurement.runs = [
+            probe_flake.RunRecord(index, 9100 + index, probe_flake.RUN_PASS,
+                                  1.0, {"first": "PASS", "second": "PASS"},
+                                  None)
+            for index in range(1, runs + 1)]
+    return measurement
+
+
+CONTENDER = f"""
+import json, os, sys, time
+sys.path.insert(0, {TOOLS!r})
+import run_probes
+run_probes.PROBES = [(k, k + '_probe.py', k) for k in ('alpha', 'beta', 'gamma')]
+import probe_claim
+
+root, probe, barrier, lease = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4])
+hold = float(sys.argv[5]) if len(sys.argv) > 5 else 0.0
+# Every contender waits for the same starting gun, so the race is real.
+while not os.path.exists(barrier):
+    time.sleep(0.01)
+try:
+    claim = probe_claim.acquire(probe, root=__import__('pathlib').Path(root),
+                                lease_seconds=lease)
+except probe_claim.ClaimDenied as denied:
+    print(json.dumps({{"outcome": "denied", "detail": denied.describe()}}))
+    sys.exit(0)
+except probe_claim.ClaimError as error:
+    print(json.dumps({{"outcome": "error", "detail": str(error)}}))
+    sys.exit(0)
+print(json.dumps({{"outcome": "won", "token": claim.token}}), flush=True)
+if hold > 0:
+    time.sleep(hold)
+    claim.release()
+"""
+
+
+def race(root: Path, probe: str, count: int, *, lease=60.0):
+    """`count` separate processes contend for one probe. Returns their rows."""
+    root.mkdir(parents=True, exist_ok=True)
+    barrier = root.parent / f"barrier-{probe}-{count}"
+    children = [subprocess.Popen(
+        [sys.executable, "-c", CONTENDER, str(root), probe, str(barrier),
+         str(lease)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for _ in range(count)]
+    time.sleep(0.4)
+    barrier.write_text("go", encoding="utf-8")
+    rows = []
+    for process in children:
+        out, err = process.communicate(timeout=120)
+        try:
+            rows.append(json.loads(out.strip().splitlines()[-1]))
+        except (IndexError, ValueError):
+            rows.append({"outcome": "crashed", "detail": (err or out)[-400:]})
+    return rows
+
+
+# ==========================================================================
+def test_namespace() -> None:
+    """One repository, one claim namespace, whatever worktree asks."""
+    print("\n-- the claim namespace is repository-common --")
+    with registry(), scratch_repo() as (main_wt, other_wt, _census):
+        here = probe_claim.repository_claim_root(str(main_wt))
+        there = probe_claim.repository_claim_root(str(other_wt))
+        expect(here == there,
+               "a linked worktree resolves the SAME claim directory as the "
+               "main checkout")
+        expect(here.is_absolute() and here.name == probe_claim.CLAIM_DIR_NAME,
+               "the namespace is an absolute path under the common git dir")
+        expect(str(here).startswith(str(Path(main_wt).resolve())),
+               "it lives under the MAIN checkout's git directory, not the "
+               "asking worktree's private one")
+
+        # None of the three things that would split the namespace move it.
+        saved = dict(os.environ)
+        try:
+            os.environ["TMPDIR"] = str(other_wt)
+            expect(probe_claim.repository_claim_root(str(other_wt)) == here,
+                   "TMPDIR does not move the namespace")
+        finally:
+            os.environ.clear()
+            os.environ.update(saved)
+
+    with registry():
+        expect_raises(probe_claim.ClaimError,
+                      lambda: probe_claim.require_probe_key("alpha_probe.py"),
+                      "a non-canonical spelling is refused, not claimed twice",
+                      "unknown probe")
+        expect_raises(probe_claim.ClaimError,
+                      lambda: probe_claim.require_probe_key("../escape"),
+                      "a key with path structure never reaches a path",
+                      "unknown probe")
+        expect(probe_claim.require_probe_key("alpha") == "alpha",
+               "a canonical key is accepted")
+
+
+def test_exclusive_acquisition() -> None:
+    """One winner per probe; distinct probes never contend."""
+    print("\n-- an exclusive claim, per probe --")
+    with registry(), claim_root() as root:
+        first = probe_claim.acquire("alpha", root=root, lease_seconds=600)
+        expect(first.token and probe_claim.claim_path("alpha", root).exists(),
+               "the first claimant creates the claim file")
+
+        try:
+            probe_claim.acquire("alpha", root=root, lease_seconds=600)
+            expect(False, "a second claimant on the same probe is denied")
+        except probe_claim.ClaimDenied as denied:
+            expect(True, "a second claimant on the same probe is denied")
+            expect(denied.owner == first.payload["owner"]
+                   and denied.token == first.token,
+                   "the denial names the current owner")
+            expect(denied.age_seconds is not None
+                   and denied.expires_in_seconds is not None,
+                   "the denial reports the claim's age and remaining lease")
+            expect(denied.to_document()["outcome"] == "already-claimed",
+                   "the denial is a distinct machine-readable outcome")
+
+        second = probe_claim.acquire("beta", root=root, lease_seconds=600)
+        expect(second.token != first.token,
+               "a DIFFERENT probe is claimable while the first is held")
+        expect(probe_claim.read_claim("alpha", root=root)["token"] == first.token
+               and probe_claim.read_claim("beta", root=root)["token"] == second.token,
+               "the two claims are independent records")
+
+        expect(first.release() is True, "the holder releases its own claim")
+        expect(probe_claim.read_claim("alpha", root=root) is None,
+               "a released claim is gone")
+        third = probe_claim.acquire("alpha", root=root, lease_seconds=600)
+        expect(third.token != first.token,
+               "the probe is claimable again after release")
+
+
+def test_independent_process_contention() -> None:
+    """Separate PROCESSES racing for one probe: exactly one wins."""
+    print("\n-- separate processes contend for one probe --")
+    with scratch() as base:
+        root = base / "probe-claims"
+        rows = race(root, "alpha", 6)
+        winners = [r for r in rows if r["outcome"] == "won"]
+        denied = [r for r in rows if r["outcome"] == "denied"]
+        expect(len(winners) == 1,
+               "exactly one of six processes won the claim"
+               + ("" if len(winners) == 1 else f" (got {len(winners)}: {rows})"))
+        expect(len(denied) == len(rows) - 1,
+               "every other process got the already-claimed outcome")
+        expect(all("already claimed" in r["detail"] for r in denied),
+               "each denial says the probe is already claimed")
+
+        # Two DISTINCT probes are claimed concurrently by design: the
+        # claim prevents duplicated work, it does not serialize the lab.
+        both = race(root, "beta", 1) + race(root, "gamma", 1)
+        expect([r["outcome"] for r in both] == ["won", "won"],
+               "two distinct probes acquire concurrently")
+
+
+def test_expiry_and_reclaim() -> None:
+    """A lapsed claim is reclaimable; a renewed one is not."""
+    print("\n-- lease expiry, renewal and reclaim --")
+    with registry(), claim_root() as root:
+        held = probe_claim.acquire("alpha", root=root, lease_seconds=600)
+        later = probe_claim.utc_now() + timedelta(seconds=599)
+        expect_raises(probe_claim.ClaimDenied,
+                      lambda: probe_claim.acquire("alpha", root=root,
+                                                  lease_seconds=600, now=later),
+                      "one second before expiry the claim still holds")
+        past = probe_claim.utc_now() + timedelta(seconds=601)
+        successor = probe_claim.acquire("alpha", root=root, lease_seconds=600,
+                                        now=past)
+        expect(successor.token != held.token,
+               "one second after expiry the claim is reclaimable")
+
+        # Renewal is what keeps a long, SUPPORTED measurement safe.
+        renewed = probe_claim.acquire("beta", root=root, lease_seconds=600)
+        renewed.renew(now=probe_claim.utc_now() + timedelta(seconds=590))
+        still_live = probe_claim.utc_now() + timedelta(seconds=1000)
+        expect_raises(probe_claim.ClaimDenied,
+                      lambda: probe_claim.acquire("beta", root=root,
+                                                  lease_seconds=600,
+                                                  now=still_live),
+                      "a renewed claim outlives its original lease")
+        expired = probe_claim.utc_now() + timedelta(seconds=1200)
+        taken = probe_claim.acquire("beta", root=root, lease_seconds=600,
+                                    now=expired)
+        expect(taken.token != renewed.token,
+               "renewal extends the lease, it does not make it permanent")
+
+
+def test_concurrent_stale_reclaimers() -> None:
+    """Several processes reclaiming ONE lapsed claim yield one successor."""
+    print("\n-- concurrent stale reclaimers --")
+    with registry(), scratch() as base:
+        root = base / "probe-claims"
+        root.mkdir(parents=True)
+        # A claim whose lease elapsed a moment ago, exactly as a crashed
+        # agent would have left it.
+        stale = probe_claim.acquire("alpha", root=root, lease_seconds=1,
+                                    now=probe_claim.utc_now() - timedelta(seconds=30))
+        time.sleep(0.05)
+        rows = race(root, "alpha", 6, lease=600.0)
+        winners = [r for r in rows if r["outcome"] == "won"]
+        expect(len(winners) == 1,
+               "exactly one reclaimer succeeded"
+               + ("" if len(winners) == 1 else f" (got {len(winners)}: {rows})"))
+        survivor = probe_claim.read_claim("alpha", root=root)
+        expect(survivor is not None
+               and survivor["token"] == winners[0]["token"],
+               "the surviving claim is the one winner's, not a later "
+               "reclaimer's overwrite")
+        expect(survivor["token"] != stale.token,
+               "the lapsed owner's claim was genuinely replaced")
+
+
+def test_owner_safe_late_release() -> None:
+    """An expired owner that exits late leaves the successor alone."""
+    print("\n-- ownership-safe late release --")
+    with registry(), claim_root() as root:
+        lapsed = probe_claim.acquire("alpha", root=root, lease_seconds=1)
+        successor = probe_claim.acquire(
+            "alpha", root=root, lease_seconds=600,
+            now=probe_claim.utc_now() + timedelta(seconds=60))
+        expect(lapsed.release() is False,
+               "the expired owner's release removes nothing")
+        current = probe_claim.read_claim("alpha", root=root)
+        expect(current is not None and current["token"] == successor.token,
+               "the successor's claim survives its predecessor's late exit")
+        expect_raises(probe_claim.ClaimLost, lapsed.renew,
+                      "and its late RENEWAL is refused rather than overwriting "
+                      "the successor's lease",
+                      "no longer ours")
+        expect(probe_claim.read_claim("alpha", root=root)["token"]
+               == successor.token,
+               "the successor's token is still the one on disk")
+
+
+def test_malformed_claim() -> None:
+    """Empty, partial and unparseable claims are occupied until they age out."""
+    print("\n-- a malformed claim is occupied, then reclaimable --")
+    payloads = {
+        "empty": "",
+        "truncated": '{"schema": "probe-claim/v1", "probe": "alph',
+        "not an object": '["probe-claim/v1"]',
+        "no token": '{"schema": "probe-claim/v1", "probe": "alpha", '
+                    '"expires_at": "2099-01-01T00:00:00Z"}',
+        "unparseable expiry": '{"schema": "probe-claim/v1", "probe": "alpha", '
+                              '"token": "t", "expires_at": "soon"}',
+        # A claim file that disagrees about which probe it is for is a
+        # copied or hand-edited one; honouring it would key the lock on
+        # the filename while reporting somebody else's owner.
+        "wrong probe": '{"schema": "probe-claim/v1", "probe": "beta", '
+                       '"token": "t", "expires_at": "2099-01-01T00:00:00Z"}',
+    }
+    for name, text in payloads.items():
+        with registry(), claim_root() as root:
+            root.mkdir(parents=True, exist_ok=True)
+            path = probe_claim.claim_path("alpha", root)
+            path.write_text(text, encoding="utf-8")
+            os.utime(path, (time.time() - 100, time.time() - 100))
+            expect_raises(
+                probe_claim.ClaimDenied,
+                lambda: probe_claim.acquire("alpha", root=root,
+                                            lease_seconds=600),
+                f"a {name!r} claim 100s old is treated as HELD",
+                "unreadable")
+            taken = probe_claim.acquire("alpha", root=root, lease_seconds=60)
+            expect(taken.token and probe_claim.read_claim(
+                "alpha", root=root)["token"] == taken.token,
+                f"a {name!r} claim older than the lease is reclaimable")
+
+
+def test_release_on_every_managed_exit() -> None:
+    """Normal completion, a raised exception and an interruption all release."""
+    print("\n-- release on normal and abnormal (but managed) exit --")
+    with registry(), claim_root() as root:
+        with probe_claim.acquire("alpha", root=root, lease_seconds=600):
+            pass
+        expect(probe_claim.read_claim("alpha", root=root) is None,
+               "a normal completion releases the claim")
+
+        class Boom(Exception):
+            pass
+
+        for kind in (Boom, KeyboardInterrupt, SystemExit):
+            try:
+                with probe_claim.acquire("alpha", root=root, lease_seconds=600):
+                    raise kind("stopped")
+            except BaseException:  # noqa: BLE001
+                pass
+            expect(probe_claim.read_claim("alpha", root=root) is None,
+                   f"a {kind.__name__} inside the claim still releases it")
+
+
+def test_crash_recovery_through_ttl() -> None:
+    """SIGKILL cannot release, so the lease is what recovers the probe."""
+    print("\n-- crash/SIGKILL recovery is the lease, not cleanup --")
+    with registry(), scratch() as base:
+        root = base / "probe-claims"
+        root.mkdir(parents=True)
+        barrier = base / "go"
+        barrier.write_text("go", encoding="utf-8")
+        holder = subprocess.Popen(
+            [sys.executable, "-c", CONTENDER, str(root), "alpha", str(barrier),
+             "3", "600"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True)
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            if probe_claim.read_claim("alpha", root=root) is not None:
+                break
+            time.sleep(0.05)
+        held = probe_claim.read_claim("alpha", root=root)
+        expect(held is not None, "the child took the claim")
+        os.kill(holder.pid, signal.SIGKILL)
+        holder.wait(timeout=30)
+        expect(probe_claim.read_claim("alpha", root=root) is not None,
+               "a SIGKILLed holder's claim SURVIVES, exactly as intended — "
+               "it does not vanish with the process")
+        expect_raises(probe_claim.ClaimDenied,
+                      lambda: probe_claim.acquire("alpha", root=root,
+                                                  lease_seconds=600),
+                      "so the probe stays unavailable immediately after the "
+                      "crash")
+        recovered = probe_claim.acquire(
+            "alpha", root=root, lease_seconds=3,
+            now=probe_claim.utc_now() + timedelta(seconds=10))
+        expect(recovered.token != held["token"],
+               "and becomes reclaimable once the lease elapses")
+
+
+def test_renewer_keeps_a_long_measurement_alive() -> None:
+    """The renewer thread refreshes a live claim on its own clock."""
+    print("\n-- the renewer holds a long measurement's claim --")
+    with registry(), claim_root() as root:
+        claim = probe_claim.acquire("alpha", root=root, lease_seconds=2)
+        first = probe_claim.read_claim("alpha", root=root)["expires_at"]
+        with probe_claim.Renewer(claim, interval=0.05) as renewer:
+            time.sleep(1.2)
+        expect(renewer.renewals > 0 and renewer.lost is None,
+               f"the renewer refreshed the lease ({renewer.renewals} times)")
+        current = probe_claim.read_claim("alpha", root=root)
+        expect(current is not None and current["token"] == claim.token,
+               "the claim is still ours after the renewals")
+        expect(current["expires_at"] >= first,
+               "and its expiry moved forward rather than back")
+
+        # A claim taken away underneath the renewer is REPORTED, never
+        # silently re-taken: it means two agents may have measured one probe.
+        claim.release()
+        other = probe_claim.acquire("alpha", root=root, lease_seconds=600)
+        with probe_claim.Renewer(claim, interval=0.05) as lost_renewer:
+            time.sleep(0.4)
+        expect(lost_renewer.lost is not None,
+               "a claim lost mid-measurement is reported")
+        expect(probe_claim.read_claim("alpha", root=root)["token"] == other.token,
+               "and the new owner's claim is untouched")
+
+
+# ==========================================================================
+# The census side
+# ==========================================================================
+def test_census_claim_collection() -> None:
+    """Claims are their own append-only collection, keyed by token."""
+    print("\n-- the census records acquisitions, idempotently --")
+    with registry(), scratch_repo() as (_main, _other, census):
+        seeded_census(census)
+        record = {"token": "tok-1", "timestamp_utc": "2026-08-21T05:00:00Z",
+                  "commit_sha": COMMIT_A, "owner": "dev@host:1",
+                  "host": "host", "pid": 1, "lease_seconds": 3600.0,
+                  "requested_runs": 10}
+        probe_census.record_claim(census, "alpha", record)
+        document = json.loads(census.read_text(encoding="utf-8"))
+        row = probe_census.find_entry(document, "alpha")["census"]
+        expect(row["claims"] == [record],
+               "one acquisition appends exactly one claim record")
+        expect(row["attempts"] == [] and row["current"] is None,
+               "and touches neither the attempt log nor the measurements")
+
+        before = census.read_bytes()
+        probe_census.record_claim(census, "alpha", dict(record))
+        expect(census.read_bytes() == before,
+               "replaying the SAME acquisition token is a byte-for-byte no-op")
+
+        conflicting = dict(record, requested_runs=3)
+        expect_raises(
+            probe_census.CensusError,
+            lambda: probe_census.record_claim(census, "alpha", conflicting),
+            "the same token with different metadata is refused",
+            "tok-1", "different metadata")
+        expect(census.read_bytes() == before,
+               "...having written nothing")
+
+        second = dict(record, token="tok-2", requested_runs=3)
+        probe_census.record_claim(census, "alpha", second)
+        document = json.loads(census.read_text(encoding="utf-8"))
+        expect(probe_census.find_entry(document, "alpha")["census"]["claims"]
+               == [record, second],
+               "a genuinely new acquisition appends beside the first")
+
+        expect_raises(
+            probe_census.CensusError,
+            lambda: probe_census.record_claim(census, "alpha", {"owner": "x"}),
+            "a claim with no token is refused", "token")
+        expect_raises(
+            probe_census.CensusError,
+            lambda: probe_census.record_claim(census, "nonesuch", record),
+            "a claim for a probe with no census row is refused", "nonesuch")
+
+
+def test_claims_are_not_measurements() -> None:
+    """Neither aspect may reach into the other's fields."""
+    print("\n-- the claim log and the measurement log stay separate --")
+    with registry(), scratch_repo() as (_main, _other, census):
+        seeded_census(census)
+        record = {"token": "tok-1", "timestamp_utc": "2026-08-21T05:00:00Z",
+                  "commit_sha": COMMIT_A, "owner": "dev@host:1",
+                  "host": "host", "pid": 1, "lease_seconds": 60.0,
+                  "requested_runs": 2}
+        probe_census.record_claim(census, "alpha", record)
+        probe_census.record_result(census,
+                                   fake_measurement("alpha").to_document())
+        document = json.loads(census.read_text(encoding="utf-8"))
+        row = probe_census.find_entry(document, "alpha")["census"]
+        expect(row["claims"] == [record],
+               "ingesting a measurement leaves the claim log alone")
+        expect(len(row["attempts"]) == 1 and row["current"] is not None,
+               "and the measurement still landed")
+
+        # The preservation guard is what makes those promises real, so
+        # drive it directly from both directions.
+        def claim_touching_measurements(before):
+            candidate = probe_census._deep_copy(before)
+            target = probe_census.find_entry(candidate, "alpha")["census"]
+            target["attempts"] = target["attempts"] + [dict(target["attempts"][0])]
+            return candidate, {"alpha": {"claims"}}
+
+        def measurement_touching_claims(before):
+            candidate = probe_census._deep_copy(before)
+            target = probe_census.find_entry(candidate, "alpha")["census"]
+            target["claims"] = target["claims"] + [dict(record, token="tok-9")]
+            return candidate, {"alpha": {"measurements"}}
+
+        for mutate, msg, fragment in (
+                (claim_touching_measurements,
+                 "a claim operation may not append an attempt", "attempts"),
+                (measurement_touching_claims,
+                 "a measurement operation may not append a claim", "claims")):
+            expect_raises(probe_census.CensusError,
+                          lambda m=mutate: probe_census.update(census, m),
+                          msg, fragment)
+
+        def drops_a_claim(before):
+            candidate = probe_census._deep_copy(before)
+            probe_census.find_entry(candidate, "alpha")["census"]["claims"] = []
+            return candidate, {"alpha": {"claims"}}
+
+        expect_raises(probe_census.CensusError,
+                      lambda: probe_census.update(census, drops_a_claim),
+                      "the claim log is append-only: a candidate that "
+                      "discards one is refused", "append-only")
+
+
+def test_schema_migration_is_lossless() -> None:
+    """v1 and v2 censuses migrate to v3 keeping every accumulated field."""
+    print("\n-- the v2 -> v3 migration loses nothing --")
+    with registry():
+        expect(probe_census.CENSUS_SCHEMA == "probe-census/v3",
+               "the current census schema is probe-census/v3")
+
+        cohort = {"commit_sha": COMMIT_A, "samples": []}
+        attempt = {"timestamp_utc": "2026-08-20T05:00:00Z",
+                   "commit_sha": COMMIT_A, "status": "harness-error",
+                   "accepted": False, "requested_runs": 2, "completed_runs": 1,
+                   "error": "run 2 broke", "retained_artifacts": []}
+        v2 = {
+            "schema": "probe-census/v2",
+            "probes": [{
+                "key": "alpha", "script": "alpha_probe.py",
+                "classification": "manual-only",
+                "protocol": probe_protocol.PROTOCOL_VERSION,
+                "census": {
+                    "acceptable_failures": 3,
+                    "acceptable_failures_justification": "three known races",
+                    "estimated_worst_case_seconds": 480,
+                    "current": {"commit_sha": COMMIT_B, "samples": []},
+                    "history": [cohort],
+                    "attempts": [attempt],
+                },
+            }],
+        }
+        probe_census.validate_document(v2, "probe-census/v2", "a stored v2")
+        migrated = probe_census.migrate_document(v2)
+        probe_census.validate_document(migrated, probe_census.CENSUS_SCHEMA,
+                                       "the migrated census")
+        record = migrated["probes"][0]["census"]
+        expect(migrated["schema"] == "probe-census/v3",
+               "the migrated document is probe-census/v3")
+        expect(record["claims"] == [],
+               "the migration adds an EMPTY claim log")
+        for field, value in (("acceptable_failures", 3),
+                             ("acceptable_failures_justification",
+                              "three known races"),
+                             ("estimated_worst_case_seconds", 480),
+                             ("history", [cohort]), ("attempts", [attempt])):
+            expect(record[field] == value,
+                   f"the migration preserves `{field}` exactly")
+        expect(record["current"] == {"commit_sha": COMMIT_B, "samples": []},
+               "the migration preserves the current cohort exactly")
+        expect(v2["probes"][0]["census"].get("claims") is None,
+               "and it does not mutate the document it migrated FROM")
+
+        again = probe_census.migrate_document(migrated)
+        expect(again == migrated,
+               "re-migrating an already-migrated census is a no-op")
+
+        with_claims = probe_census._deep_copy(migrated)
+        kept = {"token": "tok-1", "timestamp_utc": "2026-08-21T05:00:00Z",
+                "commit_sha": COMMIT_A, "owner": "dev@host:1", "host": "host",
+                "pid": 1, "lease_seconds": 60.0, "requested_runs": 2}
+        with_claims["probes"][0]["census"]["claims"] = [kept]
+        expect(probe_census.migrate_document(with_claims)["probes"][0]
+               ["census"]["claims"] == [kept],
+               "migrating a v3 census never truncates its existing claims")
+
+        v1 = {"schema": "probe-census/v1",
+              "probes": [{"key": "alpha", "script": "alpha_probe.py",
+                          "classification": "manual-only",
+                          "protocol": "legacy"}]}
+        from_v1 = probe_census.migrate_document(v1)
+        probe_census.validate_document(from_v1, probe_census.CENSUS_SCHEMA,
+                                       "the migrated v1 census")
+        expect(from_v1["probes"][0]["census"] == probe_census.empty_census(),
+               "a v1 seed still migrates straight to the empty v3 record")
+
+    with registry(), scratch_repo() as (_main, _other, census):
+        # The migration through the real writer, on disk, is what an
+        # operator actually runs.
+        census.parent.mkdir(parents=True, exist_ok=True)
+        v2["probes"] = [dict(v2["probes"][0])] + [
+            {"key": key, "script": script, "classification": "manual-only",
+             "protocol": probe_protocol.PROTOCOL_VERSION,
+             "census": probe_census.empty_census()}
+            for key, script, _p in SYNTHETIC[1:]]
+        for row in v2["probes"][1:]:
+            row["census"].pop("claims")
+        census.write_text(json.dumps(v2, indent=2, sort_keys=True) + "\n",
+                          encoding="utf-8")
+        probe_census.ensure_document(census)
+        stored = json.loads(census.read_text(encoding="utf-8"))
+        expect(stored["schema"] == "probe-census/v3",
+               "`--seed` migrates a stored v2 census in place")
+        alpha = probe_census.find_entry(stored, "alpha")["census"]
+        expect(alpha["acceptable_failures"] == 3
+               and alpha["history"] == [cohort] and alpha["attempts"] == [attempt],
+               "...keeping every policy field, cohort and attempt it held")
+        expect(all(probe_census.find_entry(stored, key)["census"]["claims"] == []
+                   for key, _s, _p in SYNTHETIC),
+               "...and giving every row an empty claim log")
+
+
+# ==========================================================================
+# The orchestration boundary
+# ==========================================================================
+def test_orchestration_happy_path() -> None:
+    """Claim, record, measure, ingest, release — in that order."""
+    print("\n-- the claim-aware orchestration boundary --")
+    with registry(), scratch_repo() as (main_wt, _other, census):
+        seeded_census(census)
+        with claim_root() as root:
+            seen = {}
+
+            def measure(probe, runs, **kwargs):
+                # While the measurement runs, the claim is HELD and the
+                # acquisition is already recorded.
+                seen["claim"] = probe_claim.read_claim(probe, root=root)
+                document = json.loads(census.read_text(encoding="utf-8"))
+                seen["claims"] = probe_census.find_entry(
+                    document, probe)["census"]["claims"]
+                seen["attempts"] = probe_census.find_entry(
+                    document, probe)["census"]["attempts"]
+                return fake_measurement(probe, runs)
+
+            outcome = probe_claim.run_claimed_measurement(
+                "alpha", 2, root=root, census_path=census, measure=measure,
+                repo_root=str(main_wt), renew_interval=0.05)
+
+        expect(outcome.exit_code == probe_claim.EXIT_OK
+               and outcome.outcome == "measured",
+               "a completed measurement reports success")
+        expect(seen["claim"] is not None
+               and seen["claim"]["token"] == outcome.claim.token,
+               "the claim is held while the probe runs")
+        expect(len(seen["claims"]) == 1
+               and seen["claims"][0]["token"] == outcome.claim.token,
+               "the acquisition is recorded BEFORE the measurement begins")
+        expect(seen["attempts"] == [],
+               "and no result is ingested before the measurement finishes")
+
+        document = json.loads(census.read_text(encoding="utf-8"))
+        row = probe_census.find_entry(document, "alpha")["census"]
+        expect(len(row["attempts"]) == 1 and row["current"] is not None,
+               "the result is ingested while the claim is still held")
+        expect(row["claims"][0]["requested_runs"] == 2
+               and row["claims"][0]["commit_sha"] != "",
+               "the claim record carries the run count and the commit")
+        expect(outcome.claim.released,
+               "and the claim is released once ingestion is durable")
+
+
+def test_orchestration_denied_creates_nothing() -> None:
+    """A denied claimant writes no artifact, no result and no census entry."""
+    print("\n-- a denied claimant creates nothing --")
+    with registry(), scratch_repo() as (main_wt, _other, census):
+        seeded_census(census)
+        with claim_root() as root:
+            holder = probe_claim.acquire("alpha", root=root, lease_seconds=600)
+            before = census.read_bytes()
+            ran = []
+            outcome = probe_claim.run_claimed_measurement(
+                "alpha", 2, root=root, census_path=census,
+                measure=lambda *a, **k: ran.append(1) or fake_measurement(),
+                repo_root=str(main_wt))
+            expect(outcome.exit_code == probe_claim.EXIT_ALREADY_CLAIMED,
+                   "the run reports the already-claimed exit code")
+            expect(outcome.denied is not None
+                   and outcome.denied.token == holder.token,
+                   "and names the holder in its outcome")
+            expect(not ran, "the probe was never executed")
+            expect(census.read_bytes() == before,
+                   "the census is byte-for-byte unchanged")
+            expect(probe_claim.read_claim("alpha", root=root)["token"]
+                   == holder.token,
+                   "and the holder's claim is untouched")
+
+
+def test_orchestration_claim_audit_failure() -> None:
+    """An unrecordable acquisition releases the claim and runs nothing."""
+    print("\n-- a claim audit failure prevents execution --")
+    with registry(), scratch_repo() as (main_wt, _other, census):
+        # Deliberately NOT seeded: `--record` refuses an absent census by
+        # name, which is exactly the audit failure this must survive.
+        with claim_root() as root:
+            ran = []
+            expect_raises(
+                probe_claim.ClaimAuditFailed,
+                lambda: probe_claim.run_claimed_measurement(
+                    "alpha", 2, root=root, census_path=census,
+                    measure=lambda *a, **k: ran.append(1) or fake_measurement(),
+                    repo_root=str(main_wt)),
+                "an unrecordable acquisition refuses the measurement",
+                "could not be recorded", "released")
+            expect(not ran, "the probe was never executed")
+            expect(probe_claim.read_claim("alpha", root=root) is None,
+                   "and the claim was released, not left wedged")
+
+        # The same, with the docs worktree itself unreachable.
+        with claim_root() as root, scratch() as elsewhere:
+            saved = run_probes.REPO_ROOT
+            run_probes.REPO_ROOT = str(elsewhere)
+            try:
+                expect_raises(
+                    (probe_claim.ClaimAuditFailed, probe_census.DocsWorktreeMissing,
+                     probe_claim.ClaimError),
+                    lambda: probe_claim.run_claimed_measurement(
+                        "alpha", 2, root=root,
+                        measure=lambda *a, **k: fake_measurement(),
+                        repo_root=str(elsewhere)),
+                    "an unreachable docs-wip census refuses the measurement too")
+            finally:
+                run_probes.REPO_ROOT = saved
+            expect(probe_claim.read_claim("alpha", root=root) is None,
+                   "...leaving no claim behind")
+
+
+def test_orchestration_harness_error_is_still_ingested() -> None:
+    """A harness error is ingested while the claim is held, then released."""
+    print("\n-- a harness error still ends in a durable record --")
+    with registry(), scratch_repo() as (main_wt, _other, census):
+        seeded_census(census)
+        with claim_root() as root:
+            outcome = probe_claim.run_claimed_measurement(
+                "alpha", 2, root=root, census_path=census,
+                measure=lambda p, r, **k: fake_measurement(p, r,
+                                                           harness_error=True),
+                repo_root=str(main_wt), renew_interval=0.05)
+            expect(probe_claim.read_claim("alpha", root=root) is None
+                   and outcome.claim.released,
+                   "the claim is released once the harness error is durable")
+        expect(outcome.exit_code == probe_claim.EXIT_HARNESS_ERROR
+               and outcome.outcome == "harness-error",
+               "the harness error is reported as its own outcome")
+        row = probe_census.find_entry(
+            json.loads(census.read_text(encoding="utf-8")), "alpha")["census"]
+        expect(len(row["attempts"]) == 1 and row["attempts"][0]["accepted"] is False
+               and row["current"] is None,
+               "the non-accepted attempt is durably recorded, with no sample")
+        expect(len(row["claims"]) == 1,
+               "and the acquisition it belongs to is recorded exactly once")
+
+
+def test_orchestration_rejects_before_claiming() -> None:
+    """An unmeasurable probe never takes a claim off anyone's list."""
+    print("\n-- an unmeasurable probe is rejected before claiming --")
+    with registry(ci_eligible={"beta"},
+                 protocol={"alpha": probe_protocol.PROTOCOL_VERSION}), \
+            scratch_repo() as (main_wt, _other, census):
+        seeded_census(census)
+        with claim_root() as root:
+            for probe, why in (("beta", "CI-eligible"), ("gamma", "legacy")):
+                expect_raises(
+                    probe_flake.Rejection,
+                    lambda p=probe: probe_claim.run_claimed_measurement(
+                        p, 2, root=root, census_path=census,
+                        measure=lambda *a, **k: fake_measurement(),
+                        repo_root=str(main_wt)),
+                    f"a {why} probe is rejected before anything is claimed")
+                expect(probe_claim.read_claim(probe, root=root) is None,
+                       f"...and no claim exists for the {why} probe")
+            expect_raises(
+                probe_claim.ClaimError,
+                lambda: probe_claim.run_claimed_measurement(
+                    "alpha", 0, root=root, census_path=census,
+                    measure=lambda *a, **k: fake_measurement(),
+                    repo_root=str(main_wt)),
+                "a non-positive run count is refused", "positive")
+
+
+def test_probe_flake_needs_no_docs_worktree() -> None:
+    """The low-level measurement API stays usable without a census.
+
+    `probe_flake.py` guarantees that a fresh checkout with no `docs-wip`
+    worktree behaves identically, and the census-backed claim must not
+    quietly take that away: the mandatory claim belongs to the
+    ORCHESTRATION path, not to the measurement API.
+    """
+    print("\n-- probe_flake stays usable with no docs worktree --")
+    with registry(), scratch() as elsewhere:
+        saved = run_probes.REPO_ROOT
+        run_probes.REPO_ROOT = str(elsewhere)
+        try:
+            expect_raises(probe_census.DocsWorktreeMissing,
+                          lambda: probe_census.manifest_path(),
+                          "the scratch tree really has no docs-wip census")
+            # Every pre-execution decision the harness makes is reachable.
+            expect(probe_flake.protocol_status("alpha")
+                   == probe_protocol.PROTOCOL_VERSION,
+                   "probe_flake resolves protocol status with no census")
+            expect(probe_flake.resolve_probe("alpha") == "alpha_probe.py",
+                   "and resolves a probe to its script with no census")
+            expect_raises(probe_flake.Rejection,
+                          lambda: probe_flake.measure("alpha", 0),
+                          "and its own argument checking still refuses first",
+                          "positive")
+            expect("probe_census" not in probe_flake.__dict__,
+                   "probe_flake does not import the census at all")
+        finally:
+            run_probes.REPO_ROOT = saved
+
+
+def test_cli() -> None:
+    """The CLI's outcomes, exit codes and read-only status view."""
+    print("\n-- the command line --")
+    import io
+    from contextlib import redirect_stdout, redirect_stderr
+
+    def cli(*argv):
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with redirect_stdout(out), redirect_stderr(err):
+                code = probe_claim.main(list(argv))
+        except SystemExit as exit_code:
+            code = exit_code.code if isinstance(exit_code.code, int) else 1
+        return code, out.getvalue(), err.getvalue()
+
+    with registry(), scratch_repo() as (main_wt, _other, _census):
+        code, out, _err = cli("--status", "--json")
+        expect(code == probe_claim.EXIT_OK and json.loads(out)["claims"] == [],
+               "--status on an unclaimed repository reports no claims")
+
+        claim = probe_claim.acquire("alpha", lease_seconds=600,
+                                    repo_root=str(main_wt))
+        try:
+            code, out, _err = cli("--status", "--json")
+            rows = json.loads(out)["claims"]
+            expect(code == probe_claim.EXIT_OK and len(rows) == 1
+                   and rows[0]["probe"] == "alpha" and rows[0]["state"] == "held",
+                   "--status reports a held claim and its owner")
+
+            code, _out, err = cli("--probe", "alpha", "--runs", "2")
+            expect(code == probe_claim.EXIT_ALREADY_CLAIMED
+                   and "already claimed" in err,
+                   "a denied run exits with the already-claimed code")
+        finally:
+            claim.release()
+
+        code, _out, err = cli("--probe", "nonesuch", "--runs", "2")
+        expect(code == probe_claim.EXIT_REJECTED and "nonesuch" in err,
+               "an unknown probe is rejected")
+        code, _out, err = cli("--runs", "2")
+        expect(code != probe_claim.EXIT_OK,
+               "--runs without --probe is a usage error")
+
+
+# ==========================================================================
+def main() -> int:
+    for test in (test_namespace, test_exclusive_acquisition,
+                 test_independent_process_contention,
+                 test_expiry_and_reclaim, test_concurrent_stale_reclaimers,
+                 test_owner_safe_late_release, test_malformed_claim,
+                 test_release_on_every_managed_exit,
+                 test_crash_recovery_through_ttl,
+                 test_renewer_keeps_a_long_measurement_alive,
+                 test_census_claim_collection, test_claims_are_not_measurements,
+                 test_schema_migration_is_lossless,
+                 test_orchestration_happy_path,
+                 test_orchestration_denied_creates_nothing,
+                 test_orchestration_claim_audit_failure,
+                 test_orchestration_harness_error_is_still_ingested,
+                 test_orchestration_rejects_before_claiming,
+                 test_probe_flake_needs_no_docs_worktree, test_cli):
+        test()
+    print()
+    if FAILURES:
+        print(f"{len(FAILURES)} FAILED:")
+        for message in FAILURES:
+            print(f"  - {message}")
+        return 1
+    print("probe_claim self-test: all cases pass")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

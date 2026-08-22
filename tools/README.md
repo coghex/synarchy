@@ -736,14 +736,18 @@ pre-execution rejections (2), port exhaustion (3) and harness errors (4) — a
 malformed, truncated, duplicate, out-of-order or unclassifiable protocol
 event, which is never reported as a probe pass.
 
-### `probe_census.py` — the probe census (#1425, #1428, #1430, #1492)
+### `probe_census.py` — the probe census (#1425, #1428, #1430, #1492, #1434)
 
 Builds, validates and updates `docs/probe_census.json`, now
-`probe-census/v2`: every registered probe exactly once, with its script, its
+`probe-census/v3`: every registered probe exactly once, with its script, its
 CI-eligible/manual-only classification, its protocol status (`legacy` or
 `probe-result/v1`) and one census record holding the acceptable-failure
 policy, the estimated worst-case duration, the current commit cohort, the
-archived cohorts and an append-only attempt log. The census lives in the
+archived cohorts, an append-only attempt log and — since #1434 — an
+append-only log of claim ACQUISITIONS, keyed for idempotency by acquisition
+token. Claims are a separate collection from `attempts` on purpose: an
+attempt is a result ingestion and is deliberately non-idempotent, while
+recording one acquisition twice must stay one record. The census lives in the
 worktree whose branch is `docs-wip`, resolved BY BRANCH the way
 `tools/docs_land.sh` does — never a hard-coded path and never the primary
 checkout.
@@ -866,13 +870,15 @@ and contributes to none, and unmeasurable provenance is exactly what the
 attempt log retains. The CROSS-FIELD invariants remain #1493's.
 
 `--print` never touches the docs worktree. `--seed` is the ONLY operation that
-migrates: it creates an absent census, migrates a `probe-census/v1` one
-losslessly, and reconciles inventory drift — appending newly registered
+migrates: it creates an absent census, migrates a `probe-census/v1` or
+`/v2` one losslessly — the v2 step adds only the empty claim log, keeping
+every policy field, cohort, sample and attempt — and reconciles inventory
+drift — appending newly registered
 probes, refreshing inventory metadata, retaining a row whose probe left the
 registry for a person to dispose of, and archiving a `current` cohort when a
 probe becomes CI-eligible. It never regenerates accumulated census data.
-`--record` and both policy operations refuse, naming `--seed`, when the census
-is absent or still v1.
+`--record`, `probe_census.record_claim` and both policy operations refuse,
+naming `--seed`, when the census is absent or still on an older schema.
 
 Every mutation is one locked read-modify-write: a cross-process `flock` keyed
 by the resolved target, held from the read through serialization and the
@@ -884,8 +890,11 @@ stream, no engine log. Exit codes: 2 for a missing or unusable docs worktree,
 
 Shape validation is DECLARED, in `tools/probe_census_schema.json` — a JSON
 Schema 2020-12 document, self-checked against that draft when it loads, that
-describes the v1 seed, the v2 census and the incoming `probe-flake-result/v1`
-document alike. Every object in it is closed (`required` plus
+describes the v1 seed, the frozen v2 census, the current v3 census and the
+incoming `probe-flake-result/v1` document alike. The v2 root definition is
+FROZEN at the six-field record it really held: it now describes migration
+INPUT, so widening it would make every stored v2 census invalid for lacking
+the field migration exists to add. Every object in it is closed (`required` plus
 `additionalProperties: false`, with a nullable field REQUIRED and
 null-inclusive rather than optional), so a deleted field is a violation rather
 than an absence. The stored census is checked before any operation transforms
@@ -1063,6 +1072,81 @@ the same answer.
 It fails closed. A partial scan never returns `clear`, and the read-only
 boundary is absolute: no coordinator invocation, no lock, no state directory, no
 `registry.json` write, and not one byte written to any findings report.
+
+### `probe_claim.py` — one probe, one claimant (#1434)
+
+Many `/deflake` agents run at once, one probe each. Nothing stopped two of
+them measuring the SAME probe: `run_probes.py` coordinates only the probes
+inside ONE runner process, and `probe_flake.py`'s port leases coordinate
+host-global ports, not probe identity. This is the claim that does, and the
+one claim-aware orchestration boundary that holds it.
+
+```bash
+python3 tools/probe_claim.py --probe role --runs 10 --result /tmp/role.json
+python3 tools/probe_claim.py --status            # every claim in this repository
+python3 tools/probe_claim.py --status --json
+```
+
+The claim is a FILE, created `O_CREAT|O_EXCL` at
+`<git-common-dir>/probe-claims/<probe>.json`, carrying its owner, its
+acquisition token and its lease. **The file is the lock**, which is the
+deliberate opposite of `probe_flake.PortLease`: an `flock` dies with its
+holder, and a claim must NOT — an agent SIGKILLed mid-measurement leaves real
+ambiguity behind, so its probe stays unavailable until the lease elapses
+rather than becoming instantly reclaimable. A sidecar `flock` exists all the
+same and is not the claim: it serializes the read-decide-write of the claim
+file for microseconds per operation, which is what makes TAKEOVER
+single-successor — reclaiming a lapsed claim is unavoidably a read-then-write,
+and two unserialized reclaimers is the race where the second lands on top of
+the first's fresh claim.
+
+Claims are keyed by the canonical `run_probes.PROBES` key, so the several
+human spellings of one probe cannot claim it twice, and the namespace is the
+REPOSITORY-common git directory: every linked worktree of one repository
+resolves the same directory, and none of the three things that would split it
+— the current worktree, `--artifact-root`, `TMPDIR` — moves it. It is
+repository-scoped rather than host-global because a port is a host resource
+and a probe key is a repository's.
+
+The lease is RENEWED rather than sized. `probe_flake.measure` accepts any
+positive `--runs` and each run inherits a 900-second timeout, so no constant
+TTL can outlive every supported measurement; a background renewer refreshes
+the lease while the probe runs, and the lease only has to exceed one run's
+worst case. A long, supported measurement therefore never becomes
+reclaimable, while a dead holder's claim lapses one lease after its last
+renewal. Every acquisition mints a unique token, and release, renewal and
+takeover are all checked against it: concurrent reclaimers of one lapsed claim
+yield exactly one successor, and an expired owner that exits late finds a
+token that is not its own and leaves the successor alone. An empty, truncated
+or unparseable claim is treated as OCCUPIED until its own filesystem age
+reaches the lease — which covers a crash between the exclusive create and the
+payload write without letting a competitor straight in.
+
+`run_claimed_measurement` is the orchestration boundary, in order: reject an
+unmeasurable probe before claiming anything; acquire, where a DENIED claimant
+stops having created no artifact directory, no result document and no census
+entry, reporting the current owner and the claim's age; record the acquisition
+in the census BEFORE the probe runs, releasing the claim and refusing outright
+if that write fails or no `docs-wip` census is reachable; measure, renewing
+throughout; ingest the result — success or harness error — while still
+holding the claim; release, token-checked.
+
+`probe_flake.py` is deliberately unchanged by all of this. Its contract is
+that a checkout with no `docs-wip` worktree behaves identically, so the
+census-backed claim lives in the orchestration path and the low-level
+measurement API stays usable on its own.
+
+Exit codes: 0 a measurement that ran and was ingested, whatever rate it
+observed; 2 rejected before anything was claimed; 3 ALREADY CLAIMED; 4 a
+harness error, whose non-accepted attempt is still ingested; 5 a claim audit
+failure, where the acquisition could not be durably recorded so nothing ran;
+6 no leasable port.
+
+Gate: `python3 tools/test_probe_claim.py` (in CI and `make ci`) — engine-free
+and GPU-free, but genuinely multi-process: its concurrency cases race real
+interpreters against a shared barrier file and its crash case SIGKILLs one of
+them, because a claim that must hold between OS processes cannot be proved by
+threads.
 
 ### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets/save-compat selection
 

@@ -702,7 +702,13 @@ jobs:
       # its atomic writer, the declared schema, and #1429's cohort,
       # freshness and staleness semantics — driving synthetic documents
       # in throwaway temporary trees, so it touches no docs worktree and
-      # boots nothing.
+      # boots nothing. test_probe_claim is #1434's: the atomic per-probe
+      # claim, its lease, ownership-safe takeover and release, and the
+      # claim-aware orchestration boundary. Its concurrency cases start
+      # real interpreters that race on a shared barrier file, and its
+      # crash case SIGKILLs one of them, because a claim that has to
+      # hold between OS processes cannot be proved by threads. Still
+      # engine-free and GPU-free: no probe is ever executed.
       - name: probe runner self-tests
         run: |
           python3 tools/ci_probes.py --self-test
@@ -714,6 +720,7 @@ jobs:
           python3 tools/test_probelib.py
           python3 tools/test_probe_flake.py
           python3 tools/test_probe_census.py
+          python3 tools/test_probe_claim.py
 
       # Cheap, no-engine guard (#1355): fails if a `python3 tools/*.py`
       # check runs in this job and not in tools/ci-local.sh, or the other
