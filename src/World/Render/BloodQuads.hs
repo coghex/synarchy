@@ -51,7 +51,9 @@ import Engine.Graphics.Vulkan.Texture (createTextureFromRGBABytes)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (registerTexture, unregisterTexture)
 import Engine.Scene.Types (SortableQuad(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
+import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..)
+                                           , QuadCorners(..), QuadPayload(..)
+                                           , quadVertices, fullQuadUV
                                            , packWorldUV)
 import Blood.Types
 import Blood.Texture (generateBloodTexture, btiWidth, btiHeight, btiPixels)
@@ -318,10 +320,25 @@ renderBloodDecalQuads env pageId worldState tileAlpha = do
                         slotF = fromIntegral (lookupSlot texHandle)
                         wuv = packWorldUV tx ty
 
-                        v0 = Vertex (Vec2 x0 y0) (Vec2 0 0) tint slotF defFmSlot 0 wuv
-                        v1 = Vertex (Vec2 x1 y1) (Vec2 1 0) tint slotF defFmSlot 0 wuv
-                        v2 = Vertex (Vec2 x2 y2) (Vec2 1 1) tint slotF defFmSlot 0 wuv
-                        v3 = Vertex (Vec2 x3 y3) (Vec2 0 1) tint slotF defFmSlot 0 wuv
+                        -- Each corner is rotated about the decal's
+                        -- centre independently, so there is no
+                        -- origin-plus-size to hand 'rectCorners'.
+                        (v0, v1, v2, v3) =
+                            quadVertices
+                                QuadCorners
+                                    { qcTopLeft     = Vec2 x0 y0
+                                    , qcTopRight    = Vec2 x1 y1
+                                    , qcBottomRight = Vec2 x2 y2
+                                    , qcBottomLeft  = Vec2 x3 y3
+                                    }
+                                fullQuadUV
+                                QuadPayload
+                                    { qpTint      = tint
+                                    , qpAtlasSlot = slotF
+                                    , qpFaceMap   = defFmSlot
+                                    , qpFlags     = 0
+                                    , qpWorldUV   = wuv
+                                    }
                     Just SortableQuad
                         { sqSortKey = sortKey
                         , sqV0 = v0, sqV1 = v1, sqV2 = v2, sqV3 = v3

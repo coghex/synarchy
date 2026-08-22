@@ -163,6 +163,7 @@ import qualified Test.Headless.World.Render.SlopeBit as RenderSlopeBit
 import qualified Test.Headless.World.Render.WaterSlope as RenderWaterSlope
 import qualified Test.Headless.World.Render.ZoomBakeUV as ZoomBakeUV
 import qualified Test.Headless.Render.ViewportGuard as ViewportGuard
+import qualified Test.Headless.Render.QuadVertices as QuadVertices
 import qualified Test.Headless.Graphics.BindlessRebind as BindlessRebind
 import qualified Test.Headless.Graphics.BindlessRelease as BindlessRelease
 import qualified Test.Headless.Core.ConfigState as ConfigState
@@ -499,6 +500,7 @@ main = hspec $ do
     describe "World.Render.WaterSlope" RenderWaterSlope.spec
     describe "World.Render.Zoom.zoomQuadWorldUVs" ZoomBakeUV.spec
     describe "Render.ViewportGuard" ViewportGuard.spec
+    describe "Render.QuadVertices" QuadVertices.spec
     describe "Core.ConfigState" ConfigState.spec
     LogMonad.spec
     LogParity.spec
