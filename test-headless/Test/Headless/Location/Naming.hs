@@ -124,10 +124,39 @@ spec = describe "Location naming" $ do
                                    (M.elems roots)
             namesOf builtA `shouldSatisfy` all anyRootIn
 
-        it "the same seed and world produce identical names every time" $
-            namesOf (buildLocationInstances (Just (namerOf provA))
-                        registry overlay)
-                `shouldBe` namesOf builtA
+        -- GOLDEN VECTOR (#1383). The exact text this fixture renders:
+        -- provA at 'currentGeneratorVersion', over the three placements
+        -- above, in canonical instance-id order. Written out by hand --
+        -- never recomputed from 'buildLocationInstances' or
+        -- 'nameLocationInstance', which is what makes it an oracle
+        -- rather than a restatement.
+        --
+        -- A failure means this fixture's INTEGRATED output changed, and
+        -- the cause is not always the same one. It can come from
+        -- 'locationNameExpr' (@src/Location/Naming.hs@), the catalogue
+        -- draw and root assignment (@src/Language/Naming.hs@), instance
+        -- ordering or id allocation (@src/Location/Instance.hs@), the
+        -- shipped @data/language/concepts.yaml@, or the authored pools
+        -- mirrored at the top of this module.
+        --
+        -- When the cause is a change to VERSIONED profile, root or
+        -- rendering behaviour, that change is deliberate and
+        -- 'currentGeneratorVersion' must be bumped with it: a stored
+        -- name is decomposable later (#1104) only because its recorded
+        -- version says which generator rendered it, so a rendering
+        -- change that lands without a bump silently makes every already
+        -- persisted name undecodable. Every other cause must still be
+        -- investigated before this vector is re-blessed. It is NOT a
+        -- number to refresh until the suite goes green.
+        it "renders exactly this name and gloss for each of the three \
+           \instances -- the pinned vector for provA at the current \
+           \generator version" $ do
+            namesOf builtA `shouldBe`
+                [ "Leraj-yroeb", "Jdyebto-efbne", "Fyąyn-fkofbe" ]
+            glossesOf builtA `shouldBe`
+                [ Just "Ashen Sanctuary"
+                , Just "Hollow Throne"
+                , Just "Iron Cavern" ]
 
         it "different instances of the same definition get different \
            \names -- the choice is driven by the instance id, not the def" $
