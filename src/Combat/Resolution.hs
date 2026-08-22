@@ -244,10 +244,10 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
             logDebug logger CatThread $
                 (if isDodge then "dodge (" else "miss (")
                           <> attackModeText mode <> "): "
-                          <> T.pack (show atkRaw) <> " → "
-                          <> T.pack (show tgtRaw)
-                          <> " (p_hit=" <> T.pack (show pHit)
-                          <> " p_dodge=" <> T.pack (show pDodge) <> ")"
+                          <> tshow atkRaw <> " → "
+                          <> tshow tgtRaw
+                          <> " (p_hit=" <> tshow pHit
+                          <> " p_dodge=" <> tshow pDodge <> ")"
         Right ((partId, kind), allocRoll) → do
             let -- Resolve the swing into one or more (kind, energy-fraction)
                 -- COMPONENTS. A natural "paw" (combo_attack) fuses
@@ -307,7 +307,7 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
                 detailStr = T.intercalate "|"
                     [ T.intercalate ":"
                         [ sub, lname, lmat
-                        , T.pack (show (round (s * 100) ∷ Int)) ]
+                        , tshow (round (s * 100) ∷ Int) ]
                     | (sub, lname, lmat, s) ← logDetail ]
                 -- A landed hit produces a DISTRIBUTION of wounds, each on
                 -- the SUBPART it landed in. A mixed paw merges its slash,
@@ -410,16 +410,16 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
                     pushEvent env (deathEvent gt atkRaw tgtRaw
                                                 cause cpart ckind)
                     logDebug logger CatThread $
-                        "death: " <> T.pack (show tgtRaw)
+                        "death: " <> tshow tgtRaw
                             <> " by " <> cause
                 else
                     logDebug logger CatThread $
                         "hit (" <> attackModeText mode <> "): "
-                            <> T.pack (show atkRaw)
-                            <> " → " <> T.pack (show tgtRaw)
+                            <> tshow atkRaw
+                            <> " → " <> tshow tgtRaw
                             <> " " <> kind <> "@" <> partId
-                            <> " sev=" <> T.pack (show severity)
-                            <> " injuries=" <> T.pack (show dist)
+                            <> " sev=" <> tshow severity
+                            <> " injuries=" <> tshow dist
 
     -- Drain stamina on EVERY swing (hit or miss). The motion costs
     -- the same; landing the blow is a separate roll. Cost is a

@@ -296,7 +296,7 @@ assembleSnapshot meta de = do
 --   cross-cutting relationships those invariants check).
 snapErr ∷ Show e ⇒ e → ComponentError
 snapErr e = ComponentError coreSessionComponentId 1 AssemblePhase
-                (T.pack (show e))
+                (tshow e)
 
 -- | Lift a "World.Save.Integrity" structural finding (issue #764,
 --   save-overhaul C3) into the existing per-component error shape —
@@ -330,12 +330,12 @@ capComponentErrors errs =
         omitted = max 0 (total - length capped)
     in capped ++
         [ ComponentError coreSessionComponentId 1 AssemblePhase
-            (T.pack (show omitted) <> " additional component finding(s) \
+            (tshow omitted <> " additional component finding(s) \
              \omitted (see World.Save.Integrity.integrityErrorCap)")
         | omitted > 0 ]
   where
     sortKey e = ( cidText (ceComponent e), ceVersion e
-                , T.pack (show (cePhase e)), ceMessage e )
+                , tshow (cePhase e), ceMessage e )
     cidText (ComponentId t) = t
 
 -- | Requirement 12: the manifest metadata must agree with the
@@ -362,6 +362,6 @@ metadataErrors meta snap =
     disagree label a b
         | a ≡ b     = []
         | otherwise = [ ComponentError (ComponentId "metadata") 1 AssemblePhase
-                          ("manifest " <> label <> " (" <> T.pack (show a)
-                           <> ") disagrees with gameplay (" <> T.pack (show b)
+                          ("manifest " <> label <> " (" <> tshow a
+                           <> ") disagrees with gameplay (" <> tshow b
                            <> ")") ]

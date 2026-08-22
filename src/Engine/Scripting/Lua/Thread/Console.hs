@@ -136,7 +136,6 @@ fmtInitProgress env = do
     -- string is rendered quoted by 'luaValueToText', so quote it here.
     fmt ∷ Int → Int → Int → Text → Text
     fmt a b c s = T.intercalate "\t" [tshow a, tshow b, tshow c, "\"" <> s <> "\""]
-    tshow = T.pack ∘ show
 
 -- | Execute a Lua string and return the result as text.
 --   Uses loadstring to compile, then pcall to run safely.

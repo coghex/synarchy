@@ -8,7 +8,6 @@ module Engine.Graphics.Vulkan.Command.Record
 import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Map as Map
-import qualified Data.Text as T
 import Data.IORef (newIORef, readIORef, writeIORef, IORef)
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logDebugSM)
@@ -39,9 +38,9 @@ recordSceneCommandBuffer ∷ CommandBuffer → Word64 → Int → SceneDynamicBu
                          → EngineM σ ()
 recordSceneCommandBuffer cmdBuf imageIndex frameInFlight dynamicBuffer layeredBatches mCapture = do
     logDebugSM CatRender "Recording command buffer"
-      [("image", T.pack $ show imageIndex)
-      ,("frame_in_flight", T.pack $ show frameInFlight)
-      ,("layer_count", T.pack $ show $ Map.size layeredBatches)]
+      [("image", tshow imageIndex)
+      ,("frame_in_flight", tshow frameInFlight)
+      ,("layer_count", tshow $ Map.size layeredBatches)]
     
     state ← gets graphicsState
     core ← toCoreCapability ⊚ ask

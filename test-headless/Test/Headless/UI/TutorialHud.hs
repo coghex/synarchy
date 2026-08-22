@@ -132,9 +132,6 @@ bootAt w h treeExpr = luaLines
     , "th.update(0);"
     ]
 
-tshow ∷ Int → Text
-tshow = T.pack ∘ show
-
 -- | @wideTree@'s zero-padded subobjective id for index @n@ (row @n+1@,
 --   since row 1 is the composite root).
 subId ∷ Int → Text

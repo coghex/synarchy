@@ -71,7 +71,7 @@ loadInfectionYamlFn core regs = do
                     return (acc + 1)
                     ) (0 ∷ Int) defs
                 logInfo logger CatAsset $
-                    "loadInfectionYaml: loaded " <> T.pack (show total)
+                    "loadInfectionYaml: loaded " <> tshow total
                     <> " infections from " <> T.pack filePath
                 return total
             Lua.pushnumber (Lua.Number (fromIntegral count))

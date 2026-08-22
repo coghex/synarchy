@@ -7,7 +7,6 @@ module World.Thread.Command.UI
 
 
 import UPrelude
-import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
@@ -41,7 +40,7 @@ handleWorldShowCommand wsc logger pageId = do
     else do
         mgr ← readIORef (wsWorldManagerRef wsc)
         logDebug logger CatWorld $
-            "Visible worlds after show: " <> T.pack (show $ length $ wmVisible mgr)
+            "Visible worlds after show: " <> tshow (length $ wmVisible mgr)
 
         -- Force a quad-cache rebuild when a world becomes visible: a world
         -- can have been cached while invisible (or before its textures
@@ -112,14 +111,14 @@ handleWorldSetMapModeCommand ∷ WorldSimCapability → LoggerState → WorldPag
 handleWorldSetMapModeCommand wsc logger pageId mode = do
     logDebug logger CatWorld $
         "Setting map mode for world: " <> unWorldPageId pageId
-        <> " to " <> T.pack (show mode)
+        <> " to " <> tshow mode
     mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Just worldState → do
             writeIORef (wsMapModeRef worldState) mode
             logInfo logger CatWorld $
                 "Map mode updated for world: " <> unWorldPageId pageId
-                <> ", new mode: " <> T.pack (show mode)
+                <> ", new mode: " <> tshow mode
         Nothing →
             logDebug logger CatWorld $
                 "World not found for map mode update: " <> unWorldPageId pageId
@@ -132,7 +131,7 @@ handleWorldSetToolModeCommand wsc logger pagedId mode = do
                 writeIORef (wsToolModeRef worldState) mode
                 logInfo logger CatWorld $
                     "Tool mode updated for world: " <> unWorldPageId pagedId
-                    <> ", new mode: " <> T.pack (show mode)
+                    <> ", new mode: " <> tshow mode
             Nothing →
                 logDebug logger CatWorld $
                     "World not found for tool mode update: " <> unWorldPageId pagedId

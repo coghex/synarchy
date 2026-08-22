@@ -20,7 +20,6 @@ import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
-import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv, freshItemInstanceId, loggerRef)
@@ -298,18 +297,18 @@ shedToCapacity logger uid itemW cap fixedW tagged = do
     forM_ events $ \ev → case ev of
         ShedDrop name total →
             logInfo logger CatThread $
-                "UnitSpawn " <> T.pack (show uid)
+                "UnitSpawn " <> tshow uid
                 <> ": over capacity ("
-                <> T.pack (show total) <> " > "
-                <> T.pack (show cap)
+                <> tshow total <> " > "
+                <> tshow cap
                 <> " kg) — leaving " <> name <> " behind"
         ShedOverCapacity total →
             logWarn logger CatThread $
-                "UnitSpawn " <> T.pack (show uid)
+                "UnitSpawn " <> tshow uid
                 <> ": loadout "
-                <> T.pack (show total)
+                <> tshow total
                 <> " kg exceeds capacity "
-                <> T.pack (show cap)
+                <> tshow cap
                 <> " kg with nothing left to shed"
     return kept
 

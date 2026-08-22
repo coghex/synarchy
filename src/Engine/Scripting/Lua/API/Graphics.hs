@@ -122,7 +122,7 @@ spawnSpriteFn env backendState = do
           (\n → (n + 1, ObjectId n))
         
         logDebug logger CatLua $ "Lua spawning sprite with ID " 
-                       <> T.pack (show objId)
+                       <> tshow objId
         
         let (lteq, _) = lbsMsgQueues backendState
             texHandle = TextureHandle (fromIntegral texNum)
@@ -231,7 +231,7 @@ destroyFn env backendState = do
         logger ← readIORef $ loggerRef env
         let objId = ObjectId (fromIntegral idVal)
         logDebug logger CatLua $ "Lua destroying object with ID " 
-                       <> T.pack (show objId)
+                       <> tshow objId
         let (lteq, _) = lbsMsgQueues backendState
             msg = LuaDestroyRequest (ObjectId (fromIntegral idVal))
         Q.writeQueue lteq msg

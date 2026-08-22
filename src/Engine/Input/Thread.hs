@@ -22,7 +22,6 @@ module Engine.Input.Thread
   ) where
 
 import UPrelude
-import qualified Data.Text as T
 import Control.Concurrent (threadDelay)
 import Data.IORef (writeIORef, readIORef)
 import Engine.Core.Log (logDebug, logError, LogCategory(..))
@@ -67,7 +66,7 @@ startInputThread env = startWorkerThread WorkerSpec
         logDebug logger CatInput "Input thread stopping..."
     , wsOnCrash     = \_ e → do
         logger ← readIORef (ccLoggerRef (toCoreCapability env))
-        logError logger CatInput $ "Input thread crashed: " <> T.pack (show e)
+        logError logger CatInput $ "Input thread crashed: " <> tshow e
         writeIORef (ccLifecycleRef (toCoreCapability env)) CleaningUp
     }
 

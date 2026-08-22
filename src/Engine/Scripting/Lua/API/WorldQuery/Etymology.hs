@@ -50,7 +50,6 @@ module Engine.Scripting.Lua.API.WorldQuery.Etymology
 import UPrelude
 import Data.IORef (modifyIORef', readIORef)
 import Data.List (sortOn)
-import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
 import qualified HsLua as Lua
@@ -550,7 +549,7 @@ readCatalogueForEtymology ∷ IO (Either Text Catalogue)
 readCatalogueForEtymology = do
     eRead ← try (loadCatalogue conceptCataloguePath ⌦ evaluate)
     pure $ case eRead of
-        Left (ioErr ∷ IOException) → Left (describe (T.pack (show ioErr)))
+        Left (ioErr ∷ IOException) → Left (describe (tshow ioErr))
         Right (Left cErr)          → Left (describe (catalogueErrorText cErr))
         Right (Right cat)          → Right cat
   where

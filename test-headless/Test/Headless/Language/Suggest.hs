@@ -412,9 +412,6 @@ evalDebug ls src = unquote ⊚ executeDebugLua (lbsLuaState ls) src
         Just inner → inner
         Nothing    → t
 
-tshow ∷ Int → Text
-tshow = T.pack ∘ show
-
 -- | The first four suggestions world seed 42 offers at generator
 --   version 5, written out as literals.
 --

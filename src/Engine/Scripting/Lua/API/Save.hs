@@ -806,7 +806,7 @@ continueLoad env logger requestId saveName descriptors = do
             Lua.liftIO $ advanceLoad (loadStatusRef env) requestId LoadContentValidated
             if allMissing > 0
               then do
-                let msg = T.pack (show allMissing)
+                let msg = tshow allMissing
                         <> " saved entit" <> (if allMissing ≡ 1
                                                 then "y references a"
                                                 else "ies reference")

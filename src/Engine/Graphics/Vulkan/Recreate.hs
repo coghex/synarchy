@@ -5,7 +5,6 @@ module Engine.Graphics.Vulkan.Recreate
 
 import UPrelude
 import qualified Data.Vector as V
-import qualified Data.Text as T
 import Data.IORef (writeIORef, readIORef)
 import Engine.Core.Monad
 import Engine.Core.State (EngineState(..), GraphicsState(..))
@@ -71,8 +70,8 @@ recreateSwapchain window = do
             liftIO $ writeIORef (rcUiCameraRef (toRenderCapability env)) $ 
                 UICamera (fromIntegral width) (fromIntegral height)
             
-            logInfoM CatSwapchain $ "Swapchain recreated: " <> (T.pack (show width)) 
-                                    <> "x" <> (T.pack (show height))
+            logInfoM CatSwapchain $ "Swapchain recreated: " <> (tshow width) 
+                                    <> "x" <> (tshow height)
 
 -- | Recreate all swapchain-dependent resources
 recreateAllResources ∷ PhysicalDevice → Device → DevQueues → SurfaceKHR 

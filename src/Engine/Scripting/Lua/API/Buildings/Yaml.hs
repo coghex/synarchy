@@ -62,7 +62,7 @@ loadBuildingYamlFn env backendState = do
                                 loadAndRegister env backendState lteq
                                     ("building_" <> name
                                      <> "_" <> animName
-                                     <> "_" <> T.pack (show i))
+                                     <> "_" <> tshow i)
                                     resolved
                                 ) (zip [(0 ∷ Int)..] framePaths)
                             return (Map.insert DirS
@@ -115,15 +115,15 @@ loadBuildingYamlFn env backendState = do
 
                     logDebug logger CatAsset $
                         "Registered building def: " <> name
-                        <> " (" <> T.pack (show (HM.size animMap))
-                        <> " animations, " <> T.pack (show (bytsX (bydTileSize def)))
-                        <> "x" <> T.pack (show (bytsY (bydTileSize def))) <> ")"
+                        <> " (" <> tshow (HM.size animMap)
+                        <> " animations, " <> tshow (bytsX (bydTileSize def))
+                        <> "x" <> tshow (bytsY (bydTileSize def)) <> ")"
 
                     return (acc + 1)
                     ) (0 ∷ Int) defs
 
                 logInfo logger CatAsset $
-                    "loadBuildingYaml: loaded " <> T.pack (show total)
+                    "loadBuildingYaml: loaded " <> tshow total
                     <> " building definitions from " <> T.pack filePath
                 return total
 

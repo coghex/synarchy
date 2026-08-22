@@ -120,7 +120,7 @@ data IntegrityError = IntegrityError
 
 renderIntegrityError ∷ IntegrityError → Text
 renderIntegrityError e =
-    "[" <> cidText (ieComponent e) <> " v" <> T.pack (show (ieVersion e))
+    "[" <> cidText (ieComponent e) <> " v" <> tshow (ieVersion e)
         <> " " <> iePath e <> "] " <> ieCode e <> ": " <> ieMessage e
   where cidText (ComponentId t) = t
 
@@ -163,7 +163,7 @@ capIntegrityErrors errs =
 renderIntegrityReport ∷ IntegrityReport → [Text]
 renderIntegrityReport report =
     map renderIntegrityError (irErrors report)
-    ++ [ T.pack (show (irOmitted report)) <> " additional integrity \
+    ++ [ tshow (irOmitted report) <> " additional integrity \
         \finding(s) omitted (see World.Save.Integrity.integrityErrorCap)"
        | irOmitted report > 0 ]
 
@@ -251,10 +251,10 @@ sessionIntegrityErrors snap = concat
         | (pid, page) ← HM.toList pages
         , (bid, bill) ← HM.toList (cbsBills (pgsCraftBills page))
         , let path = "craft-bills[page=" <> unWorldPageId pid <> ",bill="
-                     <> T.pack (show (unBillId bid)) <> "].station"
+                     <> tshow (unBillId bid) <> "].station"
         , Just err ← [ refEdgeError craftBillsComponentId 2 path RefBuilding
                          ScopeSamePage pid (buildingPages (cbStation bill))
-                         (T.pack (show (unBuildingId (cbStation bill)))) ]
+                         (tshow (unBuildingId (cbStation bill))) ]
         ]
 
     billClaimantErrors =
@@ -263,10 +263,10 @@ sessionIntegrityErrors snap = concat
         , (bid, bill) ← HM.toList (cbsBills (pgsCraftBills page))
         , Just uid ← [ cbClaimant bill ]
         , let path = "craft-bills[page=" <> unWorldPageId pid <> ",bill="
-                     <> T.pack (show (unBillId bid)) <> "].claimant"
+                     <> tshow (unBillId bid) <> "].claimant"
         , Just err ← [ refEdgeError craftBillsComponentId 2 path RefUnit
                          ScopeSamePage pid (unitPages uid)
-                         (T.pack (show (unUnitId uid))) ]
+                         (tshow (unUnitId uid)) ]
         ]
 
     nodeBuildingErrors =
@@ -274,10 +274,10 @@ sessionIntegrityErrors snap = concat
         | (pid, page) ← HM.toList pages
         , (nid, node) ← HM.toList (pnsNodes (pgsPowerNodes page))
         , let path = "power-nodes[page=" <> unWorldPageId pid <> ",node="
-                     <> T.pack (show (unPowerNodeId nid)) <> "].building"
+                     <> tshow (unPowerNodeId nid) <> "].building"
         , Just err ← [ refEdgeError powerNodesComponentId 2 path RefBuilding
                          ScopeSamePage pid (buildingPages (pnBuilding node))
-                         (T.pack (show (unBuildingId (pnBuilding node)))) ]
+                         (tshow (unBuildingId (pnBuilding node))) ]
         ]
 
 -- Transfer orders (#1246) -------------------------------------------
@@ -322,24 +322,24 @@ transferOrderRefs pid orders = concatMap orderRefs (transferOrderList orders)
   where
     orderRefs o =
         let at field = "transfer-orders[page=" <> unWorldPageId pid <> ",order="
-                       <> T.pack (show (unTransferOrderId (troId o))) <> "]."
+                       <> tshow (unTransferOrderId (troId o)) <> "]."
                        <> field
         in endpointRef (at "unit") (EndpointUnit (troUnit o))
            ⧺ endpointRef (at "source") (tbSource (troBatch o))
            ⧺ endpointRef (at "destination") (tbDestination (troBatch o))
            ⧺ [ OrderRef
-                 { orfPath   = at ("entries[" <> T.pack (show i) <> "].instance")
+                 { orfPath   = at ("entries[" <> tshow i <> "].instance")
                  , orfKind   = RefItemInstance
-                 , orfValue  = T.pack (show iid)
+                 , orfValue  = tshow iid
                  , orfTarget = OrderRefItem iid }
              | (i, entry) ← zip [(0 ∷ Int) ..] (tbEntries (troBatch o))
              , let iid = tirInstanceId (qtItem entry) ]
     endpointRef path e = case e of
         EndpointUnit uid →
-            [ OrderRef path RefUnit (T.pack (show (unUnitId uid)))
+            [ OrderRef path RefUnit (tshow (unUnitId uid))
                        (OrderRefUnit uid) ]
         EndpointBuilding bid →
-            [ OrderRef path RefBuilding (T.pack (show (unBuildingId bid)))
+            [ OrderRef path RefBuilding (tshow (unBuildingId bid))
                        (OrderRefBuilding bid) ]
 
 -- | The live identities resolvable on ONE page, as the transfer-order
@@ -492,13 +492,13 @@ duplicateGlobalIdErrors snap = concat
     dupsFor kind cid entries =
         [ IntegrityError
             { ieComponent = cid, ieVersion = 1
-            , iePath = refKindText kind <> "#" <> T.pack (show val)
-            , ieRefKind = kind, ieRefValue = T.pack (show val)
+            , iePath = refKindText kind <> "#" <> tshow val
+            , ieRefKind = kind, ieRefValue = tshow val
             , ieExpectedScope = "globally unique identity (one allocator \
                                  \for the whole session)"
             , ieActual = "present on pages " <> pagesText
             , ieCode = "duplicate-identity"
-            , ieMessage = refKindText kind <> " " <> T.pack (show val)
+            , ieMessage = refKindText kind <> " " <> tshow val
                 <> " exists on multiple pages: " <> pagesText
             }
         | (val, ps) ← HM.toList (HM.fromListWith (++)
@@ -679,7 +679,7 @@ luaReferenceErrors componentVersions ke edges =
     , let code = if luaEdgeExceedsAllocator ke e
                    then "ref-exceeds-allocator" else "dangling-reference"
     , let path = if T.null (lrePath e)
-                   then lreKind e <> "#" <> T.pack (show (lreId e))
+                   then lreKind e <> "#" <> tshow (lreId e)
                    else lrePath e
     -- A per-page id alone is not a usable diagnostic value for a kind
     -- whose durable identity is (page, id) — a bare "3" names nothing
@@ -688,8 +688,8 @@ luaReferenceErrors componentVersions ke edges =
     -- in the rendered finding, not only the path.
     , let refValue = case (lreKind e, lrePage e) of
             ("location_instance", Just page) →
-                "page=" <> page <> ",id=" <> T.pack (show (lreId e))
-            _ → T.pack (show (lreId e))
+                "page=" <> page <> ",id=" <> tshow (lreId e)
+            _ → tshow (lreId e)
     ]
   where
     luaKind k = case k of

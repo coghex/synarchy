@@ -24,7 +24,6 @@ import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Sequence as Seq
-import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent.STM (atomically, writeTVar)
 import Engine.Core.State (EngineEnv(..))
@@ -90,7 +89,7 @@ publishStagedSession env logger requestId staged = do
         newPageIds = map spPageId (ssPages staged)
 
     logInfo logger CatWorld $
-        "Publishing loaded session: " <> T.pack (show (length newPageIds))
+        "Publishing loaded session: " <> tshow (length newPageIds)
         <> " page(s), active=" <> unWorldPageId (ssActivePage staged)
 
     -- Drop every OLD page's sim state FIRST (before any new page is
@@ -221,7 +220,7 @@ discardStaleQueues env logger = do
         stale ← Q.flushQueue q
         unless (null stale) $
             logWarn logger CatWorld $
-                "Load publish discarded " <> T.pack (show (length stale))
+                "Load publish discarded " <> tshow (length stale)
                 <> " stale " <> label <> " message(s) queued before the \
                    \whole-session replacement"
 

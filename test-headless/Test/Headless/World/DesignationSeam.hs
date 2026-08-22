@@ -632,9 +632,6 @@ engineSpec = beforeAll setup $ do
 pageText ∷ Text
 pageText = "seam_frame_probe"
 
-tshow ∷ Show α ⇒ α → Text
-tshow = T.pack . show
-
 -- | The OTHER name for a tile: one u-alias step away, which is what a
 --   pre-#1175 save or a caller working in a raw frame can hold.
 aliasOf ∷ (Int, Int) → (Int, Int)

@@ -175,7 +175,7 @@ readPatch logger path = do
             Left err → do
                 logWarn logger CatInit $
                     "save config " <> T.pack path <> " could not be read ("
-                    <> T.pack (show err) <> "); falling back to the values \
+                    <> tshow err <> "); falling back to the values \
                        \beneath it"
                 pure emptyPatch
             Right value → pure $ fromMaybe emptyPatch (parseMaybe patchParser value)
@@ -240,7 +240,7 @@ clearLocalFile logger path = do
         case removed ∷ Either SomeException () of
             Left e → do
                 let msg = "could not remove " <> T.pack path <> ": "
-                            <> T.pack (show e)
+                            <> tshow e
                 logWarn logger CatInit $ "save config: " <> msg
                 pure (Left msg)
             Right () → do
@@ -255,7 +255,7 @@ writeOverrides logger path overrides = do
     case written ∷ Either SomeException () of
         Left e → do
             let msg = "could not write " <> T.pack path <> ": "
-                        <> T.pack (show e)
+                        <> tshow e
             logWarn logger CatInit $ "save config: " <> msg
             pure (Left msg)
         Right () → do

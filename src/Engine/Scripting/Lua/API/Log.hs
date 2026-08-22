@@ -38,7 +38,7 @@ logInfoFn core = do
             logger ← readIORef (ccLoggerRef core)
             let msgText = TE.decodeUtf8Lenient msgBS
                 fullMsg = "[" <> T.pack srcFileStripped <> ":"
-                              <> T.pack (show srcLine) <> "] " <> msgText
+                              <> tshow srcLine <> "] " <> msgText
             logThreadInfo logger CatLua fullMsg
         Nothing → pure ()
     return 0
@@ -57,7 +57,7 @@ logWarnFn core = do
             logger ← readIORef (ccLoggerRef core)
             let msgText = TE.decodeUtf8Lenient msgBS
                 fullMsg = "[" <> T.pack srcFileStripped <> ":"
-                              <> T.pack (show srcLine) <> "] " <> msgText
+                              <> tshow srcLine <> "] " <> msgText
             logThreadWarn logger CatLua fullMsg
         Nothing → pure ()
     return 0
@@ -76,7 +76,7 @@ logErrorFn core = do
             logger ← readIORef (ccLoggerRef core)
             let msgText = TE.decodeUtf8Lenient msgBS
                 fullMsg = "[" <> T.pack srcFileStripped <> ":"
-                              <> T.pack (show srcLine) <> "] " <> msgText
+                              <> tshow srcLine <> "] " <> msgText
             logThreadError logger CatLua fullMsg
         Nothing → pure ()
     return 0
@@ -97,7 +97,7 @@ logDebugFn core = do
         Just msgBS → Lua.liftIO $ do
             logger ← readIORef (ccLoggerRef core)
             let msgText = TE.decodeUtf8Lenient msgBS
-                fullMsg = "[" <> T.pack srcFileStripped <> ":" <> T.pack (show srcLine) <> "] " <> msgText
+                fullMsg = "[" <> T.pack srcFileStripped <> ":" <> tshow srcLine <> "] " <> msgText
             logThreadDebug logger CatLua fullMsg
         Nothing → pure ()
     

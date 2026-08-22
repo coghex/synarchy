@@ -7,7 +7,6 @@ module Engine.Graphics.Vulkan.Swapchain
 
 import UPrelude
 import qualified Data.Vector as V
-import qualified Data.Text as T
 import Engine.Core.Monad
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logDebugSM, logInfoSM)
@@ -28,13 +27,13 @@ querySwapchainSupport pdev surface = do
   (_, modes) ← liftIO $ getPhysicalDeviceSurfacePresentModesKHR pdev surface
   
   logDebugSM CatGraphics "Surface capabilities"
-    [("min_image_count", T.pack $ show $ Surf.minImageCount caps)
-    ,("max_image_count", T.pack $ show $ Surf.maxImageCount caps)
-    ,("current_extent", T.pack $ show $ currentExtent caps)]
+    [("min_image_count", tshow $ Surf.minImageCount caps)
+    ,("max_image_count", tshow $ Surf.maxImageCount caps)
+    ,("current_extent", tshow $ currentExtent caps)]
   
   logDebugSM CatGraphics "Available surface formats"
-    [("format_count", T.pack $ show $ V.length fmts)
-    ,("present_mode_count", T.pack $ show $ V.length modes)]
+    [("format_count", tshow $ V.length fmts)
+    ,("present_mode_count", tshow $ V.length modes)]
   
   pure $ SwapchainSupportDetails caps fmts modes
 
@@ -105,10 +104,10 @@ createVulkanSwapchain pdev dev queues surface vsyncEnabled fbSize = do
         }
   
   logDebugSM CatSwapchain "Swapchain created"
-    [("format", T.pack $ show form)
-    ,("present_mode", T.pack $ show spMode)
-    ,("extent", T.pack $ show sExtent)
-    ,("image_count", T.pack $ show imageCount)]
+    [("format", tshow form)
+    ,("present_mode", tshow spMode)
+    ,("extent", tshow sExtent)
+    ,("image_count", tshow imageCount)]
   
   swapchain ← createSwapchainKHR dev swCreateInfo Nothing
   
@@ -133,7 +132,7 @@ createVulkanSwapchain pdev dev queues surface vsyncEnabled fbSize = do
 createSwapchainImageViews ∷ Device → SwapchainInfo → EngineM σ (V.Vector ImageView)
 createSwapchainImageViews dev SwapchainInfo{..} = do
   logDebugSM CatSwapchain "Creating swapchain image views"
-    [("count", T.pack $ show $ V.length siSwapImgs)]
+    [("count", tshow $ V.length siSwapImgs)]
   imageViews ← V.mapM createImageViewf siSwapImgs
   
   logDebugM CatSwapchain "Swapchain image views created"
@@ -192,7 +191,7 @@ chooseSwapPresentMode ssd vsyncEnabled = do
                                else Swap.PRESENT_MODE_FIFO_KHR
       
       logInfoSM CatSwapchain "VSync disabled: using present mode"
-        [("mode", T.pack $ show preferred)]
+        [("mode", tshow preferred)]
       pure preferred
 
 -- | Clamp swapchain extent to surface capabilities. When currentExtent

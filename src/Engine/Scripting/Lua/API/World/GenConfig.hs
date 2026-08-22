@@ -7,7 +7,6 @@ module Engine.Scripting.Lua.API.World.GenConfig
 import UPrelude
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
-import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
@@ -21,7 +20,7 @@ worldGetGenDefaultsFn wsc = do
     Lua.newtable
     -- Top-level params
     case wgcSeed cfg of
-        Just s  → do Lua.pushstring (TE.encodeUtf8 (T.pack (show s)))
+        Just s  → do Lua.pushstring (TE.encodeUtf8 (tshow s))
                      Lua.setfield (Lua.nth 2) "seed"
         Nothing → pure ()
     Lua.pushinteger (fromIntegral (wgcWorldSize cfg))

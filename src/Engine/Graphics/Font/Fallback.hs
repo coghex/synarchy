@@ -101,7 +101,7 @@ takeUnreportedMissingGlyphs cacheRef fontH atlas text =
 -- | The diagnostic text for one claimed pair, naming both identities.
 missingGlyphMessage ∷ FontHandle → Char → Text
 missingGlyphMessage fontH char =
-    "Missing glyph, drawing fallback mark: font=" <> T.pack (show fontH)
+    "Missing glyph, drawing fallback mark: font=" <> tshow fontH
       <> " codepoint=U+" <> codepointHex char
 
 -- | A codepoint in @XXXX@ form, at least four digits — the tail of the

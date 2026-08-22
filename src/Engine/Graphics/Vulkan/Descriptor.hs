@@ -6,7 +6,6 @@ module Engine.Graphics.Vulkan.Descriptor
 
 import UPrelude
 import qualified Data.Vector as V
-import qualified Data.Text as T
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Core.Log (LogCategory(..))
@@ -19,9 +18,9 @@ import Vulkan.Zero
 createVulkanDescriptorPool ∷ Device → DescriptorManagerConfig → EngineM σ DescriptorPool
 createVulkanDescriptorPool device config = do
   logDebugSM CatDescriptor "Creating descriptor pool"
-    [("max_sets", T.pack $ show $ dmcMaxSets config)
-    ,("uniform_count", T.pack $ show $ dmcUniformCount config)
-    ,("sampler_count", T.pack $ show $ dmcSamplerCount config)]
+    [("max_sets", tshow $ dmcMaxSets config)
+    ,("uniform_count", tshow $ dmcUniformCount config)
+    ,("sampler_count", tshow $ dmcSamplerCount config)]
   
   let poolSizes = V.fromList
         [ zero
@@ -72,7 +71,7 @@ createVulkanDescriptorManager device config = do
 allocateVulkanDescriptorSets ∷ Device → DescriptorManager → Word32 → EngineM σ (V.Vector DescriptorSet)
 allocateVulkanDescriptorSets device manager count = do
   logDebugSM CatDescriptor "Allocating descriptor sets"
-    [("count", T.pack $ show count)
+    [("count", tshow count)
     ,("layout", "uniform")]
   
   let allocInfo = zero

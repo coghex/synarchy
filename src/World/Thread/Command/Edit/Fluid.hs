@@ -7,7 +7,6 @@ module World.Thread.Command.Edit.Fluid
     ) where
 
 import UPrelude
-import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
@@ -37,7 +36,7 @@ handleWorldSetFluidTileCommand wsc logger pageId gx gy fluidType = do
                 Nothing →
                     logWarn logger CatWorld $
                         "Chunk not loaded for set fluid at "
-                          <> T.pack (show gx) <> "," <> T.pack (show gy)
+                          <> tshow gx <> "," <> tshow gy
                 Just lc → do
                     let lc' = applyEdit edit lc
                     atomicModifyIORef' (wsTilesRef ws) $ \w →
@@ -52,6 +51,6 @@ handleWorldSetFluidTileCommand wsc logger pageId gx gy fluidType = do
                     writeIORef (wsZoomQuadCacheRef ws) Nothing
                     writeIORef (wsBgQuadCacheRef ws)   Nothing
                     logDebug logger CatWorld $
-                        "Placed fluid " <> T.pack (show fluidType)
-                          <> " at " <> T.pack (show gx) <> ","
-                          <> T.pack (show gy)
+                        "Placed fluid " <> tshow fluidType
+                          <> " at " <> tshow gx <> ","
+                          <> tshow gy

@@ -69,7 +69,7 @@ loadRecipeYamlFn core regs = do
                     return (acc + 1)
                     ) (0 ∷ Int) defs
                 logInfo logger CatAsset $
-                    "loadRecipeYaml: loaded " <> T.pack (show total)
+                    "loadRecipeYaml: loaded " <> tshow total
                     <> " recipes from " <> T.pack filePath
                 return total
             Lua.pushnumber (Lua.Number (fromIntegral count))

@@ -81,10 +81,10 @@ startLuaThread env = startWorkerThreadEither WorkerSpec
         Lua.close (lbsLuaState (llsBackend lls))
     , wsOnCrash     = \lls e → do
         logger ← readIORef (loggerRef env)
-        logWarn logger CatLua $ "Lua thread crashed: " <> T.pack (show e)
+        logWarn logger CatLua $ "Lua thread crashed: " <> tshow e
         -- Drain pending debug commands so clients don't hang
         drainDebugQueue (llsDebugQueue lls) $
-            "ERROR: Lua thread crashed: " <> T.pack (show e)
+            "ERROR: Lua thread crashed: " <> tshow e
         Lua.close (lbsLuaState (llsBackend lls))
         writeIORef (lifecycleRef env) CleaningUp
     }
@@ -155,7 +155,7 @@ luaStartup env stateRef = do
                 Map.insert initScriptId initScript
 
             logDebug logger CatLua $ "Lua script module loaded with ID: "
-                           <> T.pack (show initScriptId)
+                           <> tshow initScriptId
 
             when (isValidRef modRef) $ do
                 logDebug logger CatLua "Calling init() on Lua module"
@@ -176,7 +176,7 @@ luaStartup env stateRef = do
         attemptBind = startDebugServer port (debugBuiltin env)
         listening q = do
             logInfo logger CatLua $
-                "Debug server listening on port " <> T.pack (show port)
+                "Debug server listening on port " <> tshow port
             return (Right q)
     -- #1190: whether a dead listener is survivable is a per-MODE
     -- decision, made here (with the mode in hand) rather than
@@ -191,7 +191,7 @@ luaStartup env stateRef = do
                 -- queue is inert (nothing ever feeds it).
                 logWarn logger CatLua $
                     "Debug server failed to start on port "
-                    <> T.pack (show port) <> ": " <> err
+                    <> tshow port <> ": " <> err
                 Right ⊚ atomically newTQueue
         RequireListener → attemptBind ⌦ \case
             Right q  → listening q

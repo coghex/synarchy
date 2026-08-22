@@ -28,7 +28,7 @@ loadFont ∷ FontHandle → FilePath → Int → EngineM σ FontHandle
 loadFont requestedHandle fontPath fontSize = do
     logDebugSM CatFont "Font atlas generation started"
         [("path", T.pack fontPath)
-        ,("size", T.pack $ show fontSize)
+        ,("size", tshow fontSize)
         ,("char_range", "' ' to '~'")]
 
     cacheRef ← asks (rcFontCacheRef . toRenderCapability)
@@ -36,7 +36,7 @@ loadFont requestedHandle fontPath fontSize = do
     gs ← gets graphicsState
     case Map.lookup (bitmapFontKey fontPath fontSize) (fcPathCache cache) of
         Just handle → do
-            logWarnM CatFont $ "Font already loaded: " <> T.pack (show fontPath)
+            logWarnM CatFont $ "Font already loaded: " <> tshow fontPath
             return handle
         Nothing → do
             fontDescLayout ← case fontDescriptorLayout gs of
@@ -49,14 +49,14 @@ loadFont requestedHandle fontPath fontSize = do
             atlas ← liftIO $ generateFontAtlas logger fontPath fontSize
 
             logDebugSM CatFont "Atlas texture dimensions"
-                [("width", T.pack $ show $ faAtlasWidth atlas)
-                ,("height", T.pack $ show $ faAtlasHeight atlas)
-                ,("glyph_count", T.pack $ show $ Map.size $ faGlyphData atlas)]
+                [("width", tshow $ faAtlasWidth atlas)
+                ,("height", tshow $ faAtlasHeight atlas)
+                ,("glyph_count", tshow $ Map.size $ faGlyphData atlas)]
 
             (texHandle, descriptorSet, imgView, samp) ← uploadFontAtlasToGPU atlas fontDescLayout
 
             logDebugSM CatFont "Font GPU upload completion"
-                [("atlas_size", T.pack (show (faAtlasWidth atlas)) <> "x" <> T.pack (show (faAtlasHeight atlas)))]
+                [("atlas_size", tshow (faAtlasWidth atlas) <> "x" <> tshow (faAtlasHeight atlas))]
 
             let newAtlas = atlas { faTexture = texHandle
                                  , faDescriptorSet = Just descriptorSet
@@ -77,8 +77,8 @@ loadSDFFont ∷ FontHandle → FilePath → EngineM σ FontHandle
 loadSDFFont requestedHandle fontPath = do
     logDebugSM CatFont "SDF Font atlas generation started"
         [("path", T.pack fontPath)
-        ,("base_size", T.pack $ show sdfBaseSize)
-        ,("requested_chars", T.pack $ show $ repertoireSize
+        ,("base_size", tshow sdfBaseSize)
+        ,("requested_chars", tshow $ repertoireSize
                                            $ repertoireForFont fontPath)]
 
     cacheRef ← asks (rcFontCacheRef . toRenderCapability)
@@ -89,8 +89,8 @@ loadSDFFont requestedHandle fontPath = do
         Just existingHandle → do
             logDebugSM CatFont "SDF Font already loaded, reusing atlas"
                 [("path", T.pack fontPath)
-                ,("existing_handle", T.pack $ show existingHandle)
-                ,("requested_handle", T.pack $ show requestedHandle)]
+                ,("existing_handle", tshow existingHandle)
+                ,("requested_handle", tshow requestedHandle)]
 
             case Map.lookup existingHandle (fcFonts cache) of
                 Just existingAtlas → do
@@ -124,9 +124,9 @@ loadNewSDFFont requestedHandle fontPath cacheRef gs = do
         Right generated → return generated
 
     logDebugSM CatFont "SDF Atlas texture dimensions"
-        [("width", T.pack $ show $ faAtlasWidth atlas)
-        ,("height", T.pack $ show $ faAtlasHeight atlas)
-        ,("glyph_count", T.pack $ show $ Map.size $ faGlyphData atlas)]
+        [("width", tshow $ faAtlasWidth atlas)
+        ,("height", tshow $ faAtlasHeight atlas)
+        ,("glyph_count", tshow $ Map.size $ faGlyphData atlas)]
 
     (texHandle, descriptorSet, imgView, samp) ← uploadFontAtlasToGPU atlas fontDescLayout
 

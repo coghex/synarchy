@@ -18,7 +18,6 @@ module Engine.Graphics.Vulkan.Screenshot
 
 import UPrelude
 import qualified Data.ByteString as BS
-import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Monad
@@ -73,7 +72,7 @@ prepareCapture device pDevice si imageIndex req
         Nothing → do
             liftIO $ Q.writeQueue (srReply req) $ Left $
                 "captureScreenshot: unsupported swapchain format "
-                <> T.pack (show (siSwapImgFormat si))
+                <> tshow (siSwapImgFormat si)
             pure Nothing
         Just order → do
             let Extent2D w h = siSwapExtent si

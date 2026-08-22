@@ -9,7 +9,6 @@ module Engine.Loop.Resource
   ) where
 
 import UPrelude
-import qualified Data.Text as T
 import qualified Data.Vector as V
 import Engine.Core.Monad
 import Engine.Core.Log (LogCategory(..))
@@ -40,7 +39,7 @@ getFrameResources ∷ GraphicsState → Word32 → EngineM σ FrameResources
 getFrameResources state frameIdx = 
     case safeVectorIndex (frameResources state) (fromIntegral frameIdx) of
         Nothing → logAndThrowM CatGraphics (ExGraphics CommandBufferError) $
-            "Frame index out of bounds: " <> T.pack (show frameIdx)
+            "Frame index out of bounds: " <> tshow frameIdx
         Just res → pure res
 
 -- | Get command buffer from frame resources

@@ -25,7 +25,6 @@ import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
-import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
@@ -151,8 +150,8 @@ unitSpawnFn env = do
                                         logger ← readIORef (loggerRef env)
                                         logWarn logger CatAsset $
                                             "unit.spawn: chunk not loaded at ("
-                                            <> T.pack (show gxi) <> ", "
-                                            <> T.pack (show gyi)
+                                            <> tshow gxi <> ", "
+                                            <> tshow gyi
                                             <> "), defaulting Z=0"
                                         return 0
 

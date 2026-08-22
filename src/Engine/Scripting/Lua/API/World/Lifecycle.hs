@@ -152,12 +152,12 @@ worldInitFn env = do
                 logger ← readIORef (ccLoggerRef (toCoreCapability env))
                 logWarn logger CatWorld $
                     "world.init normalized worldgen inputs: worldSize "
-                    <> T.pack (show rawSize) <> " → "
-                    <> T.pack (show size) <> ", plateCount "
-                    <> T.pack (show rawPlates) <> " → "
-                    <> T.pack (show plates)
+                    <> tshow rawSize <> " → "
+                    <> tshow size <> ", plateCount "
+                    <> tshow rawPlates <> " → "
+                    <> tshow plates
                     <> " (worldSize minimum/multiple "
-                    <> T.pack (show minimumWorldSize)
+                    <> tshow minimumWorldSize
                     <> ", plateCount min 1)."
             Q.writeQueue (wsWorldQueue (toWorldSimCapability env))
                 (WorldInit pageId seed size plates identity)
@@ -218,7 +218,7 @@ parseNameExpr logger raw = case decodeNameExpr (T.strip raw) of
     Just expr → pure (Just expr)
     Nothing   → do
         logWarn logger CatWorld $
-            "world.init ignoring name expression " <> T.pack (show raw)
+            "world.init ignoring name expression " <> tshow raw
             <> " (not a recognized expression form); the page keeps its \
             \generated name with no etymology."
         pure Nothing
@@ -386,9 +386,9 @@ maxSuggestNameOrdinal = 10000
 ordinalOutOfRangeText ∷ Lua.Integer → Text
 ordinalOutOfRangeText raw = T.concat
     [ "world.suggestName: reroll ordinal "
-    , T.pack (show (toInteger raw))
+    , tshow (toInteger raw)
     , " is out of range; the maximum is "
-    , T.pack (show maxSuggestNameOrdinal)
+    , tshow maxSuggestNameOrdinal
     , "." ]
 
 -- | world.generatedNameCharacters() → string
@@ -515,7 +515,7 @@ readCatalogueForSuggestions ∷ FilePath → IO (Either Text Catalogue)
 readCatalogueForSuggestions path = do
     eRead ← try (loadCatalogue path ⌦ evaluate)
     pure $ case eRead of
-        Left (ioErr ∷ IOException) → Left (describe (T.pack (show ioErr)))
+        Left (ioErr ∷ IOException) → Left (describe (tshow ioErr))
         Right (Left cErr)          → Left (describe (catalogueErrorText cErr))
         Right (Right cat)          → Right cat
   where

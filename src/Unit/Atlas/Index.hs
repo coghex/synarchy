@@ -707,9 +707,6 @@ parseRawDirection = A.withObject "atlas index direction" $ \o → RawDirection
 
 -- * Small helpers
 
-tshow ∷ Show a ⇒ a → Text
-tshow = T.pack ∘ show
-
 mapLeft ∷ (a → c) → Either a b → Either c b
 mapLeft f (Left a)  = Left (f a)
 mapLeft _ (Right b) = Right b
