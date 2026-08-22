@@ -21,7 +21,10 @@ reader/writer (#1322, #1444): every probe holds the resources named in
 `IMPLICIT_SHARED_RESOURCES` below in a SHARED interest, and the few probes
 that need one to themselves declare it in `EXCLUSIVE_RESOURCES`, which
 holds such a probe back until nothing else is running and holds every other
-probe back until it has finished. A full sequential run is low tens of
+probe back until it has finished. Since #1436 the SAME two tables are also
+enforced ACROSS processes, through `tools/probe_resource_lock.py`, so a
+`/deflake` measurement or a second runner cannot overlap what this one is
+holding either. A full sequential run is low tens of
 minutes; `--jobs` cuts wall-time to ~total/N (bounded by the slowest single
 probe). This is NOT part of any default test tier (see CLAUDE.md Testing
 Tiers) — run it deliberately, and prefer `--only`.
@@ -47,6 +50,7 @@ after terminating every probe still running and the engine it booted.
 from __future__ import annotations
 import argparse
 import concurrent.futures
+import contextlib
 import os
 import signal
 import subprocess
@@ -56,6 +60,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe_protocol  # noqa: E402
+import probe_resource_lock  # noqa: E402
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -352,7 +357,10 @@ PROBES = [
 # holds to itself. Shared holders coexist freely; an exclusive holder
 # coexists with nothing else that names the same resource. The scheduler
 # below reads only these two tables and knows nothing about any particular
-# probe, so a future probe that must run alone is one row here.
+# probe, so a future probe that must run alone is one row here. Since #1436
+# `tools/probe_resource_lock.py` reads the same two tables through the same
+# two accessors, so one conflict model covers both inside this process and
+# between processes.
 #
 # `repo-config` is the tracked `config/` directory of THIS checkout.
 #
@@ -424,6 +432,12 @@ class ResourceLedger:
     Not thread-safe by design — the scheduler owns it from its own thread
     and the workers never touch it, which is what keeps a blocked probe out
     of a worker slot instead of parked inside one.
+
+    In-process ONLY, and deliberately so: it is a plain object in one
+    runner's memory, so it says nothing about a second runner or a
+    `/deflake` measurement. `tools/probe_resource_lock.py` is the
+    cross-process half (#1436), taken at the same dispatch point from the
+    same two declaration tables; see the note below it.
     """
 
     def __init__(self) -> None:
@@ -455,6 +469,71 @@ class ResourceLedger:
     def idle(self) -> bool:
         """True when nothing is held, and therefore nothing can be blocked."""
         return not self._exclusive and not self._shared
+
+
+# ---------------------------------------------------------------------------
+# The same reader/writer model BETWEEN processes (#1436)
+#
+# The ledger above coordinates the probes inside ONE runner. It cannot see a
+# second `run_probes.py`, and it cannot see a `/deflake` measurement, yet
+# every one of them drives the same checkout's tracked `config/` tree — so
+# `config_state_probe.py` holding `repo-config` exclusively stopped nothing
+# outside its own sweep. `tools/probe_resource_lock.py` is the cross-process
+# half, keyed by the same two declaration tables above so there is one
+# conflict model rather than two.
+#
+# Both layers apply, and they compose in one direction: the ledger decides
+# what may overlap WITHIN this sweep, and the lock decides whether it may
+# overlap something outside it. A probe the ledger holds back never attempts
+# the cross-process acquisition at all, which is what keeps this process from
+# conflicting with itself — two of its own probes asking for the same
+# resource in incompatible interests would otherwise meet each other's flock.
+RESOURCE_WAIT_POLL = 5.0
+
+# The namespace every worktree of this repository shares, resolved from git
+# rather than from a path. `None` means "resolve it from REPO_ROOT"; it is
+# overridable only so `tools/test_run_probes.py` can isolate its synthetic
+# sweep from the real repository's live locks. Production never sets it.
+RESOURCE_NAMESPACE: str | None = None
+
+
+def resource_namespace() -> str:
+    """The cross-process resource namespace for this checkout's repository."""
+    if RESOURCE_NAMESPACE is not None:
+        return RESOURCE_NAMESPACE
+    return probe_resource_lock.repository_namespace(REPO_ROOT)
+
+
+@contextlib.contextmanager
+def resource_hold(key: str, namespace, *, announce=None):
+    """Hold `key`'s cross-process interests around ONE probe execution.
+
+    Entered immediately before the probe process is launched and left only
+    once `run_one` has returned, which is after it has reaped the probe's
+    whole process group — so a foreign holder never starts while this
+    probe's engine is still up, exactly as the in-process ledger already
+    guarantees within a sweep.
+
+    Waiting happens HERE, in front of the launch, so it is never charged to
+    the probe: `run_one` starts its own clock after this returns, so a
+    probe's reported `elapsed` and its `--timeout` cover execution alone and
+    a queued probe can never be reported as a TIMEOUT.
+
+    `namespace` of None disables the cross-process layer entirely for
+    callers that have no repository to name (the module's own helpers used
+    as a library); the in-process ledger is unaffected either way.
+    """
+    if namespace is None:
+        yield None
+        return
+    hold = probe_resource_lock.wait_acquire(
+        exclusive=exclusive_resources(key), shared=shared_resources(key),
+        namespace=namespace, purpose=f"run_probes {key}",
+        poll=RESOURCE_WAIT_POLL, announce=announce)
+    try:
+        yield hold
+    finally:
+        hold.release()
 
 
 # farm_ai_probe.py's O(n^2) TCP tile scan over natural terrain (#336) is the
@@ -860,7 +939,8 @@ def run_one(script: str, port: int | None, timeout: float,
     return ok, timed_out, elapsed, out or ""
 
 
-def run_with_retry(script, port, timeout, retries, announce=None, groups=None):
+def run_with_retry(script, port, timeout, retries, announce=None, groups=None,
+                   key=None, namespace=None, waiting=None):
     """Run a probe, re-running SOLO up to `retries` times on failure.
 
     Returns (status, elapsed, out, attempts). `announce(kind, attempt,
@@ -868,10 +948,19 @@ def run_with_retry(script, port, timeout, retries, announce=None, groups=None):
     A retry never starts before the previous attempt's group is reaped —
     `run_one` does that before it returns — so it can never be handed a
     port a leaked engine still holds.
+
+    `key` and `namespace` bring EVERY attempt, the first and each retry
+    alike, inside the cross-process resource hold (#1436): a retry is
+    another full probe execution, so a foreign exclusive holder must be
+    able to stop it exactly as it stops the first attempt. `waiting` is an
+    optional callback receiving the `ResourceBusy` that is holding this
+    attempt up. Passing no `key` leaves the behaviour as it was, which is
+    what `tools/test_run_probes.py`'s direct calls rely on.
     """
     attempt = 0
     while True:
-        ok, timed_out, elapsed, out = run_one(script, port, timeout, groups)
+        with resource_hold(key, namespace if key else None, announce=waiting):
+            ok, timed_out, elapsed, out = run_one(script, port, timeout, groups)
         attempt += 1
         if ok or attempt > retries:
             break
@@ -937,6 +1026,20 @@ def main() -> int:
     results: dict[str, tuple[str, str, float, str]] = {}  # key -> (script, status, elapsed, out)
     wall_start = time.time()
     groups = ProbeGroups()
+    # Resolved ONCE, here: after --list has had its chance to return without
+    # needing a repository, and before any probe runs, so an unusable
+    # namespace is a loud refusal in the first second rather than a sweep
+    # that silently coordinates with nobody.
+    try:
+        namespace = resource_namespace()
+    except probe_resource_lock.ResourceLockError as error:
+        print(f"cannot coordinate probe resources across processes: {error}",
+              file=sys.stderr)
+        return 2
+
+    def waiting(busy) -> None:
+        print(f"\n    waiting for {busy.resource!r} ({busy.interest}) held "
+              f"outside this runner ... ", end="", flush=True)
 
     try:
         if args.jobs <= 1:
@@ -949,7 +1052,8 @@ def main() -> int:
             for i, (key, script, purpose) in enumerate(chosen, 1):
                 print(f"[{i}/{n}] {script} ... ", end="", flush=True)
                 status, elapsed, out, attempts = run_with_retry(
-                    script, args.port, args.timeout, args.retries, announce, groups)
+                    script, args.port, args.timeout, args.retries, announce,
+                    groups, key=key, namespace=namespace, waiting=waiting)
                 note = f"  [passed on retry {attempts}]" if status == "PASS" and attempts > 1 else ""
                 print(f"{status} ({elapsed:.1f}s){note}")
                 if status != "PASS" and args.tail > 0:
@@ -965,7 +1069,9 @@ def main() -> int:
             # the same repository-relative files, so the reader/writer ledger
             # above decides what may overlap (#1322, #1444) — the scheduling
             # below holds a conflicting probe back rather than letting a worker
-            # discover the conflict. Anything not named by either resource table
+            # discover the conflict, and takes the cross-process interest at
+            # the same point (#1436) so a foreign runner or measurement cannot
+            # overlap it either. Anything not named by either resource table
             # is unguarded: `tools/probelib.py` still launches shared-tree
             # `cabal run` processes, and
             # `docs/project_review_534-518.md:16-30` records a separate
@@ -998,14 +1104,17 @@ def main() -> int:
                 # worth of real work in flight while a conflict is pending.
                 pending = list(enumerate(chosen))
                 running: dict[concurrent.futures.Future,
-                              tuple[set[str], set[str]]] = {}
+                              tuple[set[str], set[str],
+                                    probe_resource_lock.ResourceHold]] = {}
                 ledger = ResourceLedger()
                 done = 0
+                foreign = None
                 try:
                     while pending or running:
                         # Dispatch in registry order every probe that fits and
                         # whose resources are free; a BLOCKED probe is skipped,
                         # never waited on, so later disjoint probes still start.
+                        foreign = None
                         for item in list(pending):
                             if len(running) >= jobs:
                                 break
@@ -1014,15 +1123,48 @@ def main() -> int:
                             need_shared = shared_resources(probe[0])
                             if ledger.blocked(need_exclusive, need_shared):
                                 continue
+                            # The cross-process half, taken at the SAME point
+                            # and in the same non-blocking way (#1436): a probe
+                            # a foreign holder conflicts with stays pending
+                            # rather than occupying a worker or blocking the
+                            # dispatch of a disjoint probe behind it. Taken
+                            # before `submit`, so no worker is ever spent on a
+                            # probe that cannot start.
+                            try:
+                                hold = probe_resource_lock.acquire(
+                                    exclusive=need_exclusive,
+                                    shared=need_shared, namespace=namespace,
+                                    purpose=f"run_probes {probe[0]}")
+                            except probe_resource_lock.ResourceBusy as busy:
+                                foreign = busy
+                                continue
                             ledger.acquire(need_exclusive, need_shared)
                             fut = ex.submit(work, i, probe)
-                            running[fut] = (need_exclusive, need_shared)
+                            running[fut] = (need_exclusive, need_shared, hold)
                             futs.append(fut)
                             pending.remove(item)
                         if not running:
+                            if foreign is not None:
+                                # Reachable only because of a holder OUTSIDE
+                                # this runner — another sweep, or a /deflake
+                                # measurement. The in-process ledger is idle
+                                # here, so this is not the stall below: there
+                                # is real work pending and it will become
+                                # dispatchable when the foreign holder
+                                # finishes. Wait for it rather than crashing
+                                # the sweep. The wait cannot wedge: an flock
+                                # dies with the process holding it, so only a
+                                # live holder still doing its work keeps us
+                                # here.
+                                print(f"waiting for {foreign.resource!r} "
+                                      f"({foreign.interest}) held outside this "
+                                      f"runner: {foreign.describe()}")
+                                time.sleep(RESOURCE_WAIT_POLL)
+                                continue
                             # Unreachable: with nothing running the ledger is
-                            # idle, so the first pending probe always
-                            # dispatches. Say so rather than spin forever.
+                            # idle and no foreign holder was met, so the first
+                            # pending probe always dispatches. Say so rather
+                            # than spin forever.
                             raise RuntimeError(
                                 "probe scheduler stalled with work pending: "
                                 f"{[p[0] for _, p in pending]}")
@@ -1034,8 +1176,12 @@ def main() -> int:
                             # returned, which is after it reaped the probe's
                             # whole process group. A probe waiting on these
                             # resources therefore never starts while the
-                            # previous holder's engine is still up.
-                            ledger.release(*running.pop(fut))
+                            # previous holder's engine is still up. Both
+                            # layers are released together, in-process ledger
+                            # first, so no window pairs one with the other.
+                            probe_exclusive, probe_shared, hold = running.pop(fut)
+                            ledger.release(probe_exclusive, probe_shared)
+                            hold.release()
                             done += 1
                             key, script, status, elapsed, out = fut.result()
                             print(f"[{done}/{n}] {script} ... {status} ({elapsed:.1f}s)")
@@ -1051,6 +1197,11 @@ def main() -> int:
                     for pending in futs:
                         pending.cancel()
                     groups.reap_all()
+                    # Only AFTER the engines are down: a cross-process holder
+                    # waiting on these resources must not be let in while this
+                    # runner's engines are still being torn down.
+                    for _exclusive, _shared, hold in running.values():
+                        hold.release()
                     raise
 
             failed = [p for p in chosen if results[p[0]][1] != "PASS"]
@@ -1063,8 +1214,11 @@ def main() -> int:
                       f"batch was the first)...")
                 for key, script, _ in failed:
                     for r in range(1, args.retries + 1):
-                        ok, timed_out, elapsed, out = run_one(
-                            script, PARALLEL_PORT_BASE, args.timeout, groups)
+                        # A solo retry is another full probe execution, so it
+                        # takes the cross-process hold like any other (#1436).
+                        with resource_hold(key, namespace, announce=waiting):
+                            ok, timed_out, elapsed, out = run_one(
+                                script, PARALLEL_PORT_BASE, args.timeout, groups)
                         status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
                         print(f"  {script} solo retry {r}/{args.retries} ... "
                               f"{status} ({elapsed:.1f}s)")

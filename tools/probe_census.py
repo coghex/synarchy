@@ -159,6 +159,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
 import fcntl
 import json
@@ -259,6 +260,35 @@ class CensusError(Exception):
 
 class DocsWorktreeMissing(Exception):
     """No worktree is on `docs-wip`; the caller must create one."""
+
+
+class CensusDurabilityUnconfirmed(Exception):
+    """The replacement is ALREADY VISIBLE, and making it durable failed.
+
+    Deliberately NOT a `CensusError`. That type's whole contract is the
+    one `update` states — a failure before `os.replace` leaves the old
+    authoritative bytes untouched — and by the time this is raised the
+    new complete census is what every later reader will parse. Reporting
+    it as an ordinary refusal would tell a caller its measurement was
+    not recorded when it may well have been, and census ingestion is
+    append-only and deliberately non-idempotent, so a caller that
+    believed that and retried would duplicate the sample.
+
+    It exists so a caller can distinguish the two sides DETERMINISTICALLY
+    (#1436): the staging write and the pre-replacement fsync raise
+    `OSError` from inside `_atomic_replace`'s try/except, the
+    post-replacement directory fsync sits outside it, and both used to
+    reach the caller as an indistinguishable bare `OSError`. Classifying
+    them by exception message would be guesswork; this is the signal.
+
+    `error` is the underlying failure and `target` the census that was
+    replaced, so a report can name both.
+    """
+
+    def __init__(self, message: str, *, target, error):
+        super().__init__(message)
+        self.target = Path(target)
+        self.error = error
 
 
 # ==========================================================================
@@ -2216,11 +2246,30 @@ def _atomic_replace(target: Path, payload: bytes, *, what: str = "census",
         except OSError:
             pass
         raise
-    dir_fd = os.open(str(target.parent), os.O_RDONLY)
+    # Everything above either succeeded or left the old bytes in place.
+    # From here the replacement is VISIBLE, so a failure is a durability
+    # question and not a "did it happen" question — and the two have to
+    # be told apart by their type rather than by their message, because
+    # a caller's recovery differs completely (#1436). Nothing is retried
+    # or rolled back here: the rename has landed and undoing it would
+    # discard a committed append-only update.
+    try:
+        dir_fd = os.open(str(target.parent), os.O_RDONLY)
+    except OSError as error:
+        raise CensusDurabilityUnconfirmed(
+            f"the {what} at {target} was replaced, but its directory could "
+            f"not be opened to make the rename durable ({error}); the new "
+            f"content is already visible", target=target, error=error) from None
     try:
         os.fsync(dir_fd)
+    except OSError as error:
+        raise CensusDurabilityUnconfirmed(
+            f"the {what} at {target} was replaced, but the directory fsync "
+            f"that makes the rename durable failed ({error}); the new "
+            f"content is already visible", target=target, error=error) from None
     finally:
-        os.close(dir_fd)
+        with contextlib.suppress(OSError):
+            os.close(dir_fd)
 
 
 # ==========================================================================
@@ -2490,6 +2539,13 @@ def update(path: Path, mutate) -> dict:
     a refusing mutation, an unserializable candidate, a preservation
     violation, a staging write that dies — leaves the old authoritative
     bytes untouched.
+
+    AFTER the replacement there is exactly one thing left to fail, and
+    it raises `CensusDurabilityUnconfirmed` rather than the `CensusError`
+    that promise belongs to: the directory fsync that makes the rename
+    durable. The new census is already what a later reader parses by
+    then, so a caller must not treat it as a refusal and must not retry
+    an append-only ingestion against it.
     """
     path = Path(path)
     with _locked(path):

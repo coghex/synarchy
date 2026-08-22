@@ -215,7 +215,15 @@ python3 tools/world_check.py --quick
 # ownership-safe takeover and release, and the claim-aware orchestration
 # boundary -- racing real interpreters against a shared barrier file and
 # SIGKILLing one of them, because a claim that must hold between OS
-# processes cannot be proved by threads. No probe is ever executed.
+# processes cannot be proved by threads.
+# test_probe_resource_lock is #1436's cross-process reader/writer lock --
+# the half run_probes' in-process ledger cannot provide -- proved with
+# separate interpreters and one SIGKILLed holder; test_deflake is the
+# /deflake orchestrator, driven entirely through injected adapters, with
+# probe_census and probe_flake.Measurement themselves real against
+# throwaway censuses. No probe is ever executed by any of them, and the
+# real engine-booting ten-run measurement is deliberately NOT wired into
+# this gate or CI (tools/README.md states why).
 echo "==> [18/20] probe runner self-tests"
 python3 tools/ci_probes.py --self-test
 python3 tools/ci_expensive_gates.py --self-test
@@ -227,6 +235,8 @@ python3 tools/test_probelib.py
 python3 tools/test_probe_flake.py
 python3 tools/test_probe_census.py
 python3 tools/test_probe_claim.py
+python3 tools/test_probe_resource_lock.py
+python3 tools/test_deflake.py
 
 # Cheap, no-engine self-test of CI's cache-outcome report (#1358). The
 # report itself runs only in CI -- `make ci` restores no GitHub Actions
