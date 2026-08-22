@@ -10,6 +10,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Chunk.Types (ChunkCoord(..), chunkSize, columnIndex)
+import World.Generate.Coordinates (globalToChunk)
 import World.Fluid.Internal (wrapChunkCoordU)
 import World.Geology.Hash (wrappedDeltaUV)
 import World.Plate.Types (TectonicPlate)
@@ -251,18 +252,14 @@ indexFromBoxes worldSize boxed =
                  ]
 
 -- | Convert a tile-space bbox to the inclusive chunk-coord rectangle
---   it touches. Uses floor-division so negative coords land in the
---   correct chunk.
+--   it touches: one shared 'globalToChunk' per corner, whose
+--   floor-division lands negative coords in the correct chunk. The
+--   local indices it also returns are unused here.
 bboxChunkRange ∷ EventBBox → (Int, Int, Int, Int)
 bboxChunkRange (EventBBox xlo ylo xhi yhi) =
-    ( xlo `floorDiv` chunkSize
-    , ylo `floorDiv` chunkSize
-    , xhi `floorDiv` chunkSize
-    , yhi `floorDiv` chunkSize
-    )
-  where
-    floorDiv a b = let (q, r) = a `divMod` b
-                   in if r < 0 then q - 1 else q
+    let (ChunkCoord cxlo cylo, _) = globalToChunk xlo ylo
+        (ChunkCoord cxhi cyhi, _) = globalToChunk xhi yhi
+    in (cxlo, cylo, cxhi, cyhi)
 
 -- * Per-chunk discovery (Phase 2 hook)
 
