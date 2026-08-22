@@ -31,7 +31,6 @@ module Blood.Pool
     ( -- * Thresholds (documented named constants)
       PoolThresholds(..)
     , defaultPoolThresholds
-    , poolStyleVolume
     , poolTravelSpeed
       -- * Per-tick arbitration
     , OngoingMode(..)
@@ -44,7 +43,6 @@ module Blood.Pool
       -- * Volume -> texture-request mapping
     , PoolBlood(..)
     , poolStyleFor
-    , poolFootprintFor
     , poolBloodForVolume
       -- * IO glue
     , spawnPoolLayer

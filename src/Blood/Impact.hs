@@ -22,10 +22,7 @@
 module Blood.Impact
     ( ImpactBlood(..)
     , defaultStyleForWound
-    , catastrophicBluntThreshold
     , impactSeverityBucket
-    , impactFootprint
-    , impactOpacity
     , impactFallbackAngle
     , impactBloodForWound
     , pickImpactWound

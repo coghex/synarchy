@@ -27,8 +27,6 @@ module Blood.Trail
       TrailThresholds(..)
     , defaultTrailThresholds
     , trailModerateVolume
-    , trailSevereVolume
-    , trailCatastrophicVolume
       -- * Pure accumulator
     , TrailMarkOut(..)
     , consumeTrailMarks
@@ -38,7 +36,6 @@ module Blood.Trail
     , trailFootprint
     , trailStyleFor
     , trailOpacity
-    , trailBloodForVolume
       -- * IO glue
     , spawnTrailMark
     ) where
