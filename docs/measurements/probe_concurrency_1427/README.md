@@ -72,18 +72,36 @@ probe run time ÷ cohort wall time) is the independent cross-check.
 ## Regenerating
 
 ```bash
-# One cohort: <probe> <rts-caps> <concurrency> <total attempts> <outdir>
-bash docs/measurements/probe_concurrency_1427/cohort.sh role 4 8 8 /tmp/out/n4-c8-role
+# One cohort: <probe> <rts-caps> <concurrency> <total-attempts> <outdir> [repo-root]
+bash docs/measurements/probe_concurrency_1427/cohort.sh \
+     role 4 8 8 /tmp/probe-1427/n4-c8-role
 
-# Whole matrices (build the executable once first — see the report's §6)
+# Whole matrices (build the executable once first — see the report's §6).
+# The output root is REQUIRED and has no default.
 cabal build exe:synarchy
-bash docs/measurements/probe_concurrency_1427/primary.sh
-bash docs/measurements/probe_concurrency_1427/rts.sh
+bash docs/measurements/probe_concurrency_1427/primary.sh /tmp/probe-1427
+bash docs/measurements/probe_concurrency_1427/rts.sh     /tmp/probe-1427
 
 # Re-derive summary.json from the retained documents
 python3 docs/measurements/probe_concurrency_1427/aggregate.py \
         docs/measurements/probe_concurrency_1427/cohorts
 ```
+
+All three scripts **refuse an output directory inside any git working
+tree**, judged on the deepest existing ancestor before anything is
+created — so a rerun cannot land on top of this checked-in dataset and
+leave `summary.json` describing evidence that no longer exists, and a
+refused path leaves no stray directory behind. `probe_flake.py` applies
+the same rule to its own artifact root; these scripts extend it to the
+cohort directory the launcher owns. Retained probe artifacts go to
+`<output-root>/probe-flake-artifacts`, so a rerun is self-contained.
+
+The repository the probes run from defaults to the checkout these scripts
+live in; pass it as the trailing argument to measure a different one. The
+original run predates that derivation and used
+`~/probe-flake-1427-artifacts` as its artifact root, which is why the
+`artifact_root` and `artifact_dir` values recorded in the checked-in
+documents name it.
 
 Re-running `aggregate.py` over `cohorts/` here reproduces the committed
 `summary.json` **byte for byte** — verified. One field is the exception in
@@ -95,12 +113,7 @@ identical anyway; on a run that had matched a signature it would come
 back empty instead. Re-derive that one field by grepping `artifacts/`
 directly; the bundles carry the same text the scan reads.
 
-`primary.sh` and `rts.sh` hard-code the measuring worktree's absolute
-path and write into the scratchpad directory they were run from; point
-them at your own checkout before rerunning. `cohort.sh` takes its output
-directory as an argument and needs no editing.
-
 These are **historical measurement artifacts**, not a maintained tool. No
 gate runs them, and they are not expected to be re-run on every change —
-a later characterization gets its own directory rather than overwriting
-this one.
+a later characterization gets its own output root, which is now enforced
+rather than merely asked for.

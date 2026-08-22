@@ -415,20 +415,23 @@ Each cohort is one command. `cohort.sh`, `primary.sh`, `rts.sh` and
 `aggregate.py` are retained verbatim beside the data.
 
 ```bash
-# One cohort: <probe> <rts-caps> <concurrency> <total attempts> <outdir>
-bash docs/measurements/probe_concurrency_1427/cohort.sh role 4 8 8 /tmp/out/n4-c8-role
+# One cohort: <probe> <rts-caps> <concurrency> <total-attempts> <outdir>
+bash docs/measurements/probe_concurrency_1427/cohort.sh \
+     role 4 8 8 /tmp/probe-1427/n4-c8-role
 
 # which expands to, from the repository root:
 for i in $(seq 1 8); do
   python3 tools/probe_flake.py --probe role --runs 1 --rts-caps 4 \
-    --artifact-root "$HOME/probe-flake-1427-artifacts" \
-    --result /tmp/out/n4-c8-role/inv${i}.json \
-    > /tmp/out/n4-c8-role/inv${i}.stdout 2> /tmp/out/n4-c8-role/inv${i}.stderr &
+    --artifact-root /tmp/probe-1427/probe-flake-artifacts \
+    --result /tmp/probe-1427/n4-c8-role/inv${i}.json \
+    > /tmp/probe-1427/n4-c8-role/inv${i}.stdout \
+    2> /tmp/probe-1427/n4-c8-role/inv${i}.stderr &
 done; wait
 
-# The full primary matrix (13 cohorts) and the RTS subsets (8 cohorts):
-bash docs/measurements/probe_concurrency_1427/primary.sh
-bash docs/measurements/probe_concurrency_1427/rts.sh
+# The full primary matrix (13 cohorts) and the RTS subsets (8 cohorts).
+# The output root is REQUIRED and has no default:
+bash docs/measurements/probe_concurrency_1427/primary.sh /tmp/probe-1427
+bash docs/measurements/probe_concurrency_1427/rts.sh     /tmp/probe-1427
 
 # Re-derive summary.json from the retained result documents:
 python3 docs/measurements/probe_concurrency_1427/aggregate.py \
@@ -437,8 +440,13 @@ python3 docs/measurements/probe_concurrency_1427/aggregate.py \
 
 `cohort.sh` refuses to start while any `probe_flake.py` invocation is
 registered machine-wide, and records the commit, the tree-clean flag and
-the cohort's own wall clock. Build the executable once
-(`cabal build exe:synarchy`) before the first cohort — §6.
+the cohort's own wall clock. All three scripts also refuse an output
+directory inside any git working tree — judged before anything is
+created — so a rerun cannot land on top of the checked-in dataset this
+report cites, and retained probe artifacts go to
+`<output-root>/probe-flake-artifacts` rather than a fixed home path.
+Build the executable once (`cabal build exe:synarchy`) before the first
+cohort — §6.
 
 The commands above write per-invocation `.stdout`/`.stderr` captures and
 a directory per retained attempt, which is what produced this data. The
