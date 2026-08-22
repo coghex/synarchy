@@ -1297,6 +1297,79 @@ interpreters against a shared barrier file and its crash case SIGKILLs one of
 them, because a claim that must hold between OS processes cannot be proved by
 threads.
 
+### `probe_select.py` — which probe does `/deflake` measure next? (#1435)
+
+The census (#1428/#1429), the acceptable-failure policy (#1430), the in-flight
+check (#1433) and the atomic claim (#1434) each answer one question about ONE
+probe. This is the PURE DECISION that consumes all four and answers the one
+that spans the roster: which single probe should the next measurement spend
+its hour on?
+
+```bash
+python3 tools/test_probe_select.py   # the synthetic, in-memory self-test
+```
+
+There is no CLI, by design. Every input — the registry, the two
+classifications, protocol status, the census document, the in-flight set, the
+claim set, the evaluation time and the age horizon — is passed in, so nothing
+here boots an engine, runs a probe, reads a wall clock, resolves a docs
+worktree, or touches the census file or the claim lockfiles the prerequisites
+own. Reading that state, claiming, launching, recording and releasing are all
+#1436's.
+
+Borrowed vocabulary is consumed as-is. What a valid run is, what a failure is,
+which cohort is current and what makes a measurement stale are #1429's
+definitions, reached through `probe_census.summarize_entry`; N is
+`probe_census.POLICY_RUN_COUNT` and each probe's X is the validated
+`acceptable_failures` #1430 stores in its census record. Manual-only
+eligibility is KEY MEMBERSHIP of `CI_ELIGIBLE` versus `MANUAL_ONLY_REASONS`
+and nothing else — #1440 made the latter's value a tuple of `Reason` records,
+and no selection may depend on their count, category or shape. Protocol status
+is likewise supplied, never inferred: a legacy probe is skipped with a
+recorded `requires protocol migration` reason rather than treated as
+unmeasured, because `probe_flake.resolve_probe` would refuse to run it.
+
+Every eligible probe lands in exactly one rung, or in none. **1. Incomplete
+measurement** — no cohort, or fewer than N valid runs; fewest valid runs
+first, so an unmeasured probe (zero valid runs) precedes every partial cohort.
+**2. Over tolerance** — at least N valid runs and a failure rate strictly
+above X/N; worst rate first, then oldest. **3. Stale within tolerance** —
+oldest first, then worst rate. A fresh probe within tolerance is in NO rung:
+that is the successful terminal state, not a fourth one. Every remaining tie
+breaks on the exact registered key, so registration order, script filenames
+and census array order move nothing.
+
+Tolerance is decided as `failures * N > X * valid_runs`, in integers, so a
+cohort sitting exactly on X/N is within tolerance whatever its size — 3
+failures in 30 valid runs against X=1 is at the threshold, not over it. A
+cohort is only divided once it has N valid runs, so a zero-run cohort reaches
+rung 1 with no rate arithmetic at all.
+
+Three outcomes come back: a selected registered key, a valid census in which
+nothing qualifies, or malformed census data. The reason channel never changes
+WHICH one: `no-candidate` is returned both when every eligible probe is fresh
+and when every probe was excluded, and `Selection.skipped` carries the
+recorded reasons that tell "the roster is healthy" from "everything is
+claimed" — the difference between stopping and waiting. A structurally broken
+container always errors, and so does a record for a REGISTERED, MANUAL-ONLY
+probe that is missing a field ranking needs, whatever that probe's in-flight,
+claimed or legacy status — transient external state must not hide corrupt
+persistent data. A record keyed outside that domain, unregistered or
+CI-eligible, is ignored instead: reconciling the census against the live
+registry is `probe_census.validate_manifest`'s job. An ABSENT record is not
+malformed at all; it is rung 1's commonest case.
+
+`test_probe_select.py` supplies its own registries, classifications and census
+documents rather than asserting against the live ones, because CLAUDE.md's
+CI-promotion procedure moves keys between the two classifications and a gate
+pinned to live membership would redden on unrelated registry work. Purity is
+proved mechanically: subprocesses, sockets, `open`, `os.replace`, `time.time`
+and `datetime.datetime.now`/`utcnow` are tripwires for the whole run, the last
+pair installed by swapping the `datetime` module inside `probe_select` and
+`probe_census` for one that refuses a clock read while still delegating
+`isinstance`. Like #1431's, #1432's and #1433's self-tests, it is not wired
+into `make ci` or GitHub CI.
+
 ### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets/save-compat selection
 
 Selects the four expensive gates that are conditional on pull requests:
