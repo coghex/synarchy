@@ -31,7 +31,11 @@ What it does:
   1. Boots a headless engine, loads defs, builds a flat arena, spawns a
      technomule (its starting kit carries the new items — #358).
   2. power.isPlaceable: true for the two power items, false for an
-     ordinary building (furnace).
+     ordinary building (furnace) and for `wiring` (a carried item that
+     has no building def at all). Then power.placeNode('wiring') is
+     refused with the placeability reason while the mule's inventory
+     stays identical in COUNT AND ORDER (#1148 requirement 4: the
+     refusal happens before the pop, never as a pop-and-rollback).
   3. buildTool.commitPlacement with NO unit selected refuses a power-item
      placement (no building appears, inventory untouched).
   4. With the technomule selected, commitPlacement places a solar panel
@@ -164,6 +168,21 @@ def count_item(port: int, uid: int, name: str) -> int:
     return as_int(send(port,
         f"local c=0; for _,it in ipairs(unit.getInventory({uid}) or {{}}) do "
         f"if it.defName=='{name}' then c=c+1 end end; return c")) or 0
+
+
+def inventory_order(port: int, uid: int) -> list:
+    """Every carried instance as (defName, instanceId), IN ORDER.
+
+    #1148 requirement 4 is about more than a count: a refusal that
+    popped the item and spliced it back would keep every count intact
+    while moving one instance, so the assertion has to be on the whole
+    ordered list of identities."""
+    rows = send_json(port,
+        f"local t={{}}; for _,it in ipairs(unit.getInventory({uid}) or {{}}) do "
+        f"t[#t+1]={{n=it.defName, i=it.instanceId}} end; return t")
+    if not isinstance(rows, list):
+        return []
+    return [(r.get("n"), r.get("i")) for r in rows if isinstance(r, dict)]
 
 
 def check(passed: bool, ok: bool, label: str, detail: str = "") -> bool:
@@ -336,6 +355,37 @@ def _run(port: int, root: str) -> int:
         passed = check(passed,
             send(port, "return power.isPlaceable('furnace')") == "false",
             "isPlaceable(furnace) is false (ordinary building)")
+        # #1148: `wiring` is the OTHER shape of "not a power item" — a
+        # real item the mule is carrying, with no building def at all.
+        # The furnace case above only covers a def that exists and
+        # declares no node.
+        passed = check(passed,
+            send(port, "return power.isPlaceable('wiring')") == "false",
+            "isPlaceable(wiring) is false (item, never a building)")
+
+        # --- 2b. #1148 req 4: a non-power item is refused WITHOUT
+        # mutating the inventory. Straight at power.placeNode, since
+        # the build tool never routes wiring here — the refusal has to
+        # happen before the pop, not as a pop-then-rollback.
+        before = inventory_order(port, uid)
+        r = send_json(port,
+            f"local n, err = power.placeNode({uid}, 'wiring', 6, 5); "
+            "return {ok = (n ~= nil), err = err}")
+        passed = check(passed, isinstance(r, dict) and r.get("ok") is False,
+                       "placeNode(wiring) refused", r)
+        passed = check(passed,
+            isinstance(r, dict) and r.get("err") == "not a placeable power item",
+            "placeNode(wiring) gives the placeability reason", r)
+        after = inventory_order(port, uid)
+        passed = check(passed, before and after == before,
+                       "placeNode(wiring) left the mule's inventory "
+                       "byte-identical (count AND order)",
+                       f"{len(before)} -> {len(after)} items")
+        passed = check(passed, count_item(port, uid, "wiring") == 20,
+                       "the mule still carries all 20 wiring")
+        passed = check(passed,
+            send(port, "return building.getInfo(1) and 'yes' or 'no'") == "no",
+            "no building appeared where wiring was refused")
 
         # --- 3. commitPlacement with NO unit selected ---
         send(port, "unit.deselectAll(); return 'ok'")

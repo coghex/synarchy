@@ -10,9 +10,13 @@ module Engine.Asset.YamlBuildings
 import UPrelude
 import GHC.Generics (Generic)
 import qualified Data.Map.Strict as Map
+import qualified Data.Text as T
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
+import qualified Data.Aeson as Aeson
+import qualified Data.Aeson.Types as Aeson (Parser)
 import Engine.Core.Log (LoggerState)
 import Engine.Asset.YamlList (loadYamlList)
+import Power.Base (PowerNodeSpec, powerNodeSpecFromYaml)
 
 -- | Reuse of the unit anim YAML shape: per-direction frame paths.
 --   For buildings we only use the "default" direction key.
@@ -61,6 +65,12 @@ data BuildingYamlDef = BuildingYamlDef
     , bydPowerDrain      ∷ !Float
       -- ^ Watts drawn while Built (#361); 0 (default) = not a power
       --   consumer. See Building.Types.bdPowerDrain.
+    , bydPowerNode       ∷ !(Maybe PowerNodeSpec)
+      -- ^ The power NODE this def mints when placed (#1148), decoded
+      --   from `power_role` + the one rating that role takes
+      --   (`power_peak` watts for a source, `power_capacity` Wh for
+      --   storage). Nothing (no `power_role`) = not a power node, which
+      --   is every ordinary building. See Building.Types.bdPowerNode.
     } deriving (Show, Eq, Generic)
 
 instance FromJSON BuildingYamlDef where
@@ -82,6 +92,26 @@ instance FromJSON BuildingYamlDef where
         ⊛ v .:? "state_animations" .!= Map.empty
         ⊛ v .:? "animations"       .!= Map.empty
         ⊛ v .:? "power_drain"      .!= 0.0
+        ⊛ powerNode v
+
+-- | Decode + validate the three optional power-node keys (#1148).
+--
+--   A malformed declaration is a PARSE failure, not a silently dropped
+--   field: the whole file is refused (loadYamlList logs it and yields
+--   no defs), so a mistyped role or a missing rating can never leave a
+--   half-declared node that the build tool would route through
+--   ordinary building placement. Aeson's `.:?` reads an explicit
+--   `key: null` as absent, which Power.Base documents and treats as
+--   "not declared".
+powerNode ∷ Aeson.Object → Aeson.Parser (Maybe PowerNodeSpec)
+powerNode v = do
+    mName     ← v .:? "name" .!= "<unnamed>"
+    mRole     ← v .:? "power_role"
+    mPeak     ← v .:? "power_peak"
+    mCapacity ← v .:? "power_capacity"
+    case powerNodeSpecFromYaml mRole mPeak mCapacity of
+        Right spec → pure spec
+        Left  err  → fail (T.unpack ("building def " <> mName <> " " <> err))
 
 newtype BuildingYamlFile = BuildingYamlFile
     { byfBuildings ∷ [BuildingYamlDef]

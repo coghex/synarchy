@@ -48,7 +48,7 @@ fixtureDef name w h = BuildingDef
     , bdOperations      = []
     , bdAnimations      = HM.empty
     , bdStateAnims      = HM.empty
-    , bdPowerDrain      = 0
+    , bdPowerDrain      = 0, bdPowerNode      = Nothing
     }
 
 spec ∷ Spec

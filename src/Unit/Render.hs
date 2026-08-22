@@ -21,7 +21,9 @@ import Engine.Core.State (EngineEnv, unitManagerRef)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
+import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..)
+                                          , QuadUV(..), QuadPayload(..)
+                                          , quadVertices, rectCorners
                                           , renderFlagSelected, packWorldUV)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
@@ -308,14 +310,20 @@ unitToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst mDef
             -- preview's).
             (uL, uR) = if flipX then (su1, su0) else (su0, su1)
 
-            v0 = Vertex (Vec2 drawX drawY)
-                         (Vec2 uL sv0) tint (fromIntegral actualSlot) defFmSlot flags wuv
-            v1 = Vertex (Vec2 (drawX + quadW) drawY)
-                         (Vec2 uR sv0) tint (fromIntegral actualSlot) defFmSlot flags wuv
-            v2 = Vertex (Vec2 (drawX + quadW) (drawY + quadH))
-                         (Vec2 uR sv1) tint (fromIntegral actualSlot) defFmSlot flags wuv
-            v3 = Vertex (Vec2 drawX (drawY + quadH))
-                         (Vec2 uL sv1) tint (fromIntegral actualSlot) defFmSlot flags wuv
+            (v0, v1, v2, v3) =
+                quadVertices (rectCorners (Vec2 drawX drawY) (Vec2 quadW quadH))
+                             QuadUV { quLeftU   = uL
+                                    , quTopV    = sv0
+                                    , quRightU  = uR
+                                    , quBottomV = sv1
+                                    }
+                             QuadPayload
+                                 { qpTint      = tint
+                                 , qpAtlasSlot = fromIntegral actualSlot
+                                 , qpFaceMap   = defFmSlot
+                                 , qpFlags     = flags
+                                 , qpWorldUV   = wuv
+                                 }
 
         in Just SortableQuad
             { sqSortKey = sortKey

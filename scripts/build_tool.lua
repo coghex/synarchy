@@ -862,11 +862,13 @@ local function carryingSelectedUnit(defName)
     return nil
 end
 
--- Commit a power-node placement at an already hit-tested tile. Power
--- items (#358: solar_panel / high_voltage_battery) consume a matching
--- item off a selected unit via power.placeNode. Non-power building
--- targets are handled by the caller according to the normal build-tool
--- rules (starting building spawn vs. construction designation).
+-- Commit a power-node placement at an already hit-tested tile. A power
+-- item — one whose building def declares a power node in its YAML
+-- (#1148); power.isPlaceable is the single source of truth, so this
+-- file holds no list of names — consumes a matching item off a
+-- selected unit via power.placeNode. Non-power building targets are
+-- handled by the caller according to the normal build-tool rules
+-- (starting building spawn vs. construction designation).
 --
 -- Returns the placed building id, or nil + a reason on failure.
 -- F4 (#646): every exit records its outcome so a silent placement

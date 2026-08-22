@@ -12,3 +12,11 @@ buildings:
     tile_size: { x: 1, y: 1 }
     placement: "flat_ground"
     race: "acolyte_cult"
+    # #1148: the power-node declaration lives here, not in Haskell.
+    # power_role picks the registry role; a source takes power_peak,
+    # its nominal output in watts at full sun (Power.Network scales it
+    # by the sun angle). Read at placement time and snapshotted onto
+    # the node, so an edit here changes later placements, not nodes
+    # already standing.
+    power_role: "source"
+    power_peak: 400
