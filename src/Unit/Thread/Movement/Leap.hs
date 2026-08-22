@@ -15,7 +15,7 @@ module Unit.Thread.Movement.Leap
 
 import UPrelude
 import Unit.Sim.Types
-import Unit.Fall (gravity)
+import Unit.Physics (gravity)
 import Unit.Thread.Movement.Types (fallGravityZ, vectorToDirection)
 
 -- | Metres per tile at UNIT scale (combat/leaps). Not the worldgen
