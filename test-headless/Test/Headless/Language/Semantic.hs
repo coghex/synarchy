@@ -135,11 +135,14 @@ spec = describe "Semantic proper names" $ do
             gloss (Possessive (cid "RAVEN") (cid "CROWN"))
                 `shouldBe` Right "Raven's Crown"
 
-    describe "determinism" $ do
-        it "rendering the same expression twice is byte-identical" $ do
-            let e = Modifier (cid "ASH") (cid "LAND")
-            gloss e `shouldBe` gloss e
-
+    -- #1368 removed a "rendering the same expression twice is
+    -- byte-identical" example from here. 'gloss' is pure, so both sides
+    -- of it necessarily agreed and it established only that evaluation
+    -- did not throw. The twelve pinned goldens above and the reparse
+    -- below are the real determinism coverage: the goldens fix the
+    -- output text itself, and the reparse proves two independently
+    -- built catalogues render one expression the same way.
+    describe "determinism" $
         it "reparsing the same catalogue bytes yields an equal catalogue and equal glosses" $ do
             let reparsed = either (error ∘ T.unpack ∘ catalogueErrorText) id
                                   (parseCatalogue prodBytes)
