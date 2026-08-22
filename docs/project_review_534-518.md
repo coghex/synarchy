@@ -8,14 +8,14 @@ The glacier-pair cleanup, thought and unified state-of-mind systems, data-driven
 
 ## Status
 
-- [ ] PRR-1. Parallel probes race while mutating the shared Cabal build directory
+- [x] PRR-1. Parallel probes race while mutating the shared Cabal build directory — [#1570]
 - [ ] PRR-2. `make ci` no longer runs every locally reproducible CI gate it claims to mirror
 - [ ] PRR-3. Coffee's consumable effects have no production gameplay caller
 - [ ] PRR-4. Auto-harvest ignores the farming skill it claims to scale by
 
 ## 1. Parallel probe build isolation
 
-### PRR-1. Parallel probes race while mutating the shared Cabal build directory
+### [#1570] PRR-1. Parallel probes race while mutating the shared Cabal build directory
 
 > **Captured note:** Stop the aggregate probe runner from launching multiple `cabal run` processes against the same `dist-newstyle` at once. Parallel probes need execution isolation as well as distinct engine ports: the runner can build or resolve one executable before fan-out, or each Cabal invocation must have an isolated build directory, but concurrent tasks must not mutate the same inplace package database.
 
