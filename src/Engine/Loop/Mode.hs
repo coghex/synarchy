@@ -20,7 +20,6 @@ module Engine.Loop.Mode
 import UPrelude
 import Control.Concurrent (threadDelay)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import qualified Data.Text as T
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Monad
 import Engine.Core.State (EngineEnv, EngineLifecycle(..), lifecycleRef
@@ -133,7 +132,7 @@ runStartupHandshake mode env = do
     flushed ← liftIO $ Q.flushQueue (inputQueue env)
     when (not $ null flushed) $
         logWarnM CatThread $ "Unexpected inputs during startup: "
-                                 <> (T.pack (show (length flushed)) <> " events flushed")
+                                 <> (tshow (length flushed) <> " events flushed")
 
     promoted ← liftIO $ promoteToRunning env
     when promoted $
@@ -238,7 +237,7 @@ runGatedByCaptureLock mode env = do
             discarded ← liftIO $ discardLuaMessagesForActiveLoad env
             when (discarded > 0) $
                 logWarnM CatLua $ "Load publication discarded "
-                    <> T.pack (show discarded) <> " stale Lua-to-engine message(s)"
+                    <> tshow discarded <> " stale Lua-to-engine message(s)"
         else do
             lmCameraUpdates mode
             processLuaMessages

@@ -10,7 +10,6 @@ module Engine.Core.Resource
 import UPrelude
 import Control.Exception (finally)
 import Data.IORef (readIORef)
-import qualified Data.Text as T
 import Engine.Core.Log (logError, LogCategory(..))
 import Engine.Core.Monad (EngineM(..), EngineM')
 import Engine.Core.State (loggerRef)
@@ -50,7 +49,7 @@ allocResource'IO free alloc = EngineM $ \e c → unEngineM alloc e $ \case
     Left err → do
       logger ← readIORef (loggerRef e)
       logError logger CatSystem $
-        "resource cleanup failed: " <> T.pack (show err))
+        "resource cleanup failed: " <> tshow err)
 {-# INLINE allocResource'IO #-}
 -- | Run a nested continuation locally, discarding its result type
 locally ∷ EngineM' α → EngineM σ α

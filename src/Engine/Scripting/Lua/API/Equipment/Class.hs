@@ -109,7 +109,7 @@ loadEquipmentYamlFn core regs env backendState = do
                     ) (0 ∷ Int) classes
 
                 logInfo logger CatAsset $
-                    "loadEquipmentYaml: loaded " <> T.pack (show total)
+                    "loadEquipmentYaml: loaded " <> tshow total
                     <> " equipment classes from " <> T.pack filePath
                 return total
 

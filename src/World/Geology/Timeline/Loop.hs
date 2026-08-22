@@ -8,7 +8,6 @@ module World.Geology.Timeline.Loop
     ( buildEonLoop
     ) where
 import UPrelude
-import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import World.Types
@@ -110,7 +109,7 @@ buildEra seed worldSize plates eraIdx tbs grid =
         coarseOcean = oceanRegionsFromGrid grid worldSize
 
         eraPeriod = mkGeoPeriod worldSize
-            ("Era " <> T.pack (show eraIdx) <> " Events")
+            ("Era " <> tshow eraIdx <> " Events")
             Era 100 currentDate []
             (ErosionParams (tbsErosionIntensity tbs) 0.5 0.5 0.3 0.2 (seed + 3000 + fromIntegral eraIdx)
                            15.0 0.5 0.5 0.0 False)
@@ -337,9 +336,9 @@ buildAge seed worldSize plates ageIdx tbs0 elevGrid =
         _debugGridW = egGridW elevGrid
 
         period = mkGeoPeriod worldSize
-            ("Age " <> T.pack (show (tbsPeriodIdx tbs))
-             <> " [grid=" <> T.pack (show _debugGridW)
-             <> " land=" <> T.pack (show _debugLandCount) <> "]")
+            ("Age " <> tshow (tbsPeriodIdx tbs)
+             <> " [grid=" <> tshow _debugGridW
+             <> " land=" <> tshow _debugLandCount <> "]")
             Age durationI currentDate
             allEvents erosion regErosion
 

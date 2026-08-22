@@ -28,6 +28,9 @@ import Prelude.Unicode
 import qualified Prelude as P
 import Prelude hiding ((>>=), (=<<))
 import qualified Data.Text.Encoding as T
+-- `T` above is Data.Text.Encoding; the text package's own `pack` needs
+-- its own qualifier so both stay reachable from here.
+import qualified Data.Text as TXT
 import qualified Data.Bits as B
 import qualified Data.Functor as F
 import Data.Serialize (Serialize(..))
@@ -61,6 +64,12 @@ import Foreign.Marshal.Array (allocaArray, peekArray, pokeArray, copyArray)
 -- | Concatenate a list of lists (like 'concat', via explicit foldr).
 flatten ∷ [[α]] → [α]
 flatten xs = (\z n → foldr (\x y → foldr z y x) n xs) (:) []
+
+-- | Render any 'Show' value straight to 'Text'. The one shared spelling
+-- of the pack-a-shown-value wrapper (#1099); local copies of it, whether
+-- top-level or @where@-bound, are not to reappear.
+tshow ∷ Show α ⇒ α → Text
+tshow = TXT.pack ∘ show
 
 infixl 7 ⌃
 infixl 5 ⌄

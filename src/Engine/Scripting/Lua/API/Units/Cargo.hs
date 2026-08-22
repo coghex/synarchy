@@ -18,7 +18,6 @@ import Engine.Core.Capability.UnitCombat
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Building.Knowledge.Live
     (ContainerObserver, containerObserver, revealContainerForUnit)
-import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
@@ -110,9 +109,9 @@ unitTransferItemToBuildingFn env = do
                             logger ← Lua.liftIO $ readIORef (loggerRef env)
                             Lua.liftIO $ logWarn logger CatThread $
                                 "transferItemToBuilding: building "
-                                <> T.pack (show nB)
+                                <> tshow nB
                                 <> " gone between pop and deliver and unit "
-                                <> T.pack (show nU)
+                                <> tshow nU
                                 <> " also vanished — "
                                 <> defName <> " lost"
                     Lua.pushboolean delivered
@@ -275,9 +274,9 @@ unitDepositToCargoFn env = do
                                 logger ← Lua.liftIO $ readIORef (loggerRef env)
                                 Lua.liftIO $ logWarn logger CatThread $
                                     "depositToCargo: building "
-                                    <> T.pack (show nB)
+                                    <> tshow nB
                                     <> " gone between pop and deposit and unit "
-                                    <> T.pack (show nU)
+                                    <> tshow nU
                                     <> " also vanished — "
                                     <> defName <> " lost"
                         when ok $ Lua.liftIO $ void $
@@ -362,9 +361,9 @@ unitWithdrawFromCargoFn env = do
                             logger ← Lua.liftIO $ readIORef (loggerRef env)
                             Lua.liftIO $ logWarn logger CatThread $
                                 "withdrawFromCargo: unit "
-                                <> T.pack (show nU)
+                                <> tshow nU
                                 <> " gone between pop and append and building "
-                                <> T.pack (show nB)
+                                <> tshow nB
                                 <> " also vanished — "
                                 <> defName <> " lost"
                     when ok $ Lua.liftIO $ void $

@@ -45,7 +45,6 @@ module World.Save.Component.Knowledge
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.List as L
-import qualified Data.Text as T
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 
@@ -60,9 +59,6 @@ import World.Save.Snapshot (SessionSnapshot(..), PageSnapshot(..))
 
 orderedPages ∷ SessionSnapshot → [PageSnapshot]
 orderedPages = L.sortOn pgsPageId ∘ HM.elems ∘ snapPages
-
-tshow ∷ Show a ⇒ a → Text
-tshow = T.pack ∘ show
 
 -- | Frozen mirror of 'Building.Knowledge.ContainerRecord'.
 --

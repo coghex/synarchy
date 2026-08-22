@@ -4,7 +4,6 @@ module World.Thread.Command.Texture
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Capability.WorldSim
@@ -17,8 +16,8 @@ handleWorldSetTextureCommand ∷ WorldSimCapability → LoggerState → WorldPag
 handleWorldSetTextureCommand wsc logger pageId texType texHandle = do
     logDebug logger CatWorld $ 
         "Setting texture for world: " <> unWorldPageId pageId 
-        <> ", type: " <> T.pack (show texType)
-        <> ", handle: " <> T.pack (show texHandle)
+        <> ", type: " <> tshow texType
+        <> ", handle: " <> tshow texHandle
     
     mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of

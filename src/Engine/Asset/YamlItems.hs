@@ -69,8 +69,6 @@ requirePositiveQuantity defName label unit v key = do
                        else pure f
             _ → bad ("must be a number of " <> unit <> ", got " <> tshow val)
   where
-    tshow ∷ Show a ⇒ a → Text
-    tshow = T.pack ∘ show
     bad why = fail ∘ T.unpack $
         "item definition '" <> defName <> "': " <> label <> " (key '"
         <> key <> "', " <> unit <> ") " <> why
@@ -127,7 +125,7 @@ parseItemYamlStorage defName val = case val of
     _ → fail ∘ T.unpack $
         "item definition '" <> defName <> "': storage must be a block \
         \authoring weight_capacity (kilograms) and bulk_capacity \
-        \(litres), got " <> T.pack (show val)
+        \(litres), got " <> tshow val
 
 -- | One entry in an item-container's default contents (first-aid kit /
 --   toolbox): which item, how many, an optional fill for fillable

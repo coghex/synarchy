@@ -37,7 +37,6 @@ import UPrelude
 import qualified Data.Map.Strict as Map
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Set as Set
-import qualified Data.Text as T
 import Data.IORef (IORef, readIORef, atomicModifyIORef', writeIORef)
 import Engine.Core.Monad
 import Engine.Core.State (EngineState(..), GraphicsState(..))
@@ -237,7 +236,7 @@ cleanupResources device _state = do
         logDebugSM CatAsset "Cleaning up texture"
           [("name", taName atlas)
           ,("path", taPath atlas)
-          ,("asset_id", T.pack $ show $ taId atlas)]
+          ,("asset_id", tshow $ taId atlas)]
         liftIO $ maybe (pure ()) id (taCleanup atlas)
 
     liftIO $ writeIORef (apNextAssetId pool) 0

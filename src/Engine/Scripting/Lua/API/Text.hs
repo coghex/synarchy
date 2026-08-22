@@ -82,7 +82,7 @@ spawnTextFn env backendState = do
         objId ← atomicModifyIORef' (lbsNextObjectId backendState) 
             (\n → (n + 1, ObjectId n))
         logDebug logger CatLua $ "Lua spawning text with ID " 
-                       <> T.pack (show objId)
+                       <> tshow objId
         let fontHandle = FontHandle $ fromIntegral fh
             textStr = TE.decodeUtf8Lenient textBS
             cStr = T.unpack $ TE.decodeUtf8Lenient c

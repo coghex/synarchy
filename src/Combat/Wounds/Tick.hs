@@ -12,7 +12,6 @@ import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
-import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Sequence as Seq
 import qualified Data.List as L
@@ -126,7 +125,7 @@ tickAllWounds env dt = do
         UnconsciousNow part → do
             Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) (UnitCollapse uid)
             logDebug logger CatThread $
-                "collapsed: " <> T.pack (show uidRaw)
+                "collapsed: " <> tshow uidRaw
                     <> " (bleeding from " <> part <> ")"
         DiedNow part cause → do
             Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) (UnitKill uid)
@@ -143,7 +142,7 @@ tickAllWounds env dt = do
             atomicModifyIORef' (ucCombatEventsRef (toUnitCombatCapability env)) $ \buf →
                 (buf Seq.|> ev, ())
             logDebug logger CatThread $
-                "bled out: " <> T.pack (show uidRaw)
+                "bled out: " <> tshow uidRaw
                     <> " from " <> part
         NoChange → pure ()
         ) outcomes

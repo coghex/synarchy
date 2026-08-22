@@ -166,9 +166,6 @@ indexWithout field =
 goodIndex ∷ BL.ByteString
 goodIndex = indexWith [] [idleFields, swingFields]
 
-tshow ∷ Show a ⇒ a → Text
-tshow = T.pack ∘ show
-
 parse ∷ BL.ByteString → Either AtlasLoadError [AtlasAnimation]
 parse = parseAtlasIndex "acolyte" "assets/textures/units/acolyte/atlas/index.json"
 

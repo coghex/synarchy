@@ -207,7 +207,7 @@ luaValueToText depth idx
                 Lua.pop 1
                 return $ case mStr of
                     Just bs → TE.decodeUtf8Lenient bs
-                    Nothing → "\"<" <> T.pack (show ty) <> ">\""
+                    Nothing → "\"<" <> tshow ty <> ">\""
 
 -- | Serialize a Lua table to JSON. Detects arrays vs objects:
 --   if all keys are consecutive integers starting at 1, emit [...],

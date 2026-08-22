@@ -9,7 +9,6 @@ import UPrelude
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Vector as V
-import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef)
 import Linear (identity)
 import Engine.Core.Defaults
@@ -82,8 +81,8 @@ initializeVulkan window = do
   logDebugM CatVulkan "Logical device created successfully"
 
   logDebugSM CatVulkan "Queue family indices selected"
-    [("graphics_family", T.pack $ show $ dqGraphicsFamIdx queues)
-    ,("present_family", T.pack $ show $ dqPresentFamIdx queues)]
+    [("graphics_family", tshow $ dqGraphicsFamIdx queues)
+    ,("present_family", tshow $ dqPresentFamIdx queues)]
 
   modifyGraphicsState $ \gs → gs
                     { vulkanInstance = Just vkInstance
@@ -164,8 +163,8 @@ initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
   let supportedSamples = framebufferColorSampleCounts (limits props)
       sampleCount = clampSampleCount supportedSamples requestedSamples
   logDebugSM CatVulkan "MSAA configuration"
-    [("requested", T.pack $ show msaaInt)
-    ,("actual_samples", T.pack $ show sampleCount)]
+    [("requested", tshow msaaInt)
+    ,("actual_samples", tshow sampleCount)]
 
   let numFrames = gcMaxFrames defaultGraphicsConfig
   frameRes ← V.generateM (fromIntegral numFrames) $ \_ →
@@ -181,8 +180,8 @@ initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
         , dmcSamplerCount = fromIntegral numFrames
         }
   logDebugSM CatDescriptor "Creating descriptor manager"
-    [("max_sets", T.pack $ show $ dmcMaxSets descConfig)
-    ,("uniform_count", T.pack $ show $ dmcUniformCount descConfig)]
+    [("max_sets", tshow $ dmcMaxSets descConfig)
+    ,("uniform_count", tshow $ dmcUniformCount descConfig)]
   descManager ← createVulkanDescriptorManager device descConfig
   logDebugM CatDescriptor "Descriptor manager created successfully"
   modifyGraphicsState $ \gs → gs {
@@ -282,7 +281,7 @@ initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
       pure Nothing
   
   logDebugSM CatGraphics "Creating framebuffers"
-    [("count", T.pack $ show $ V.length imageViews)]
+    [("count", tshow $ V.length imageViews)]
   framebuffers ← createVulkanFramebuffers device renderPass swapInfo
                                           imageViews mMsaaImageView
   logDebugM CatGraphics "Framebuffers created successfully"
@@ -355,7 +354,7 @@ createUniformBuffersForFrames device physicalDevice (width, height) descSets = d
   
   forM_ (zip [0..] (V.toList uniformBuffers)) $ \(i, (buffer, _)) → do
     logDebugSM CatDescriptor "Updating descriptor set"
-      [("set_index", T.pack $ show (i ∷ Int))
+      [("set_index", tshow (i ∷ Int))
       ,("binding", "0")
       ,("type", "UNIFORM_BUFFER")
       ,("count", "1")]

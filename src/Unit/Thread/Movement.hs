@@ -196,12 +196,12 @@ tickAllMovement dt env utsRef = do
         let detail = T.intercalate "|"
                 [ T.intercalate ":"
                     [ fiPart i, fiKind i
-                    , T.pack (show (round (fiSeverity i * 100) ∷ Int)) ]
+                    , tshow (round (fiSeverity i * 100) ∷ Int) ]
                 | i ← injs ]
         in pushInjuryEvent (ucInjuryEventsRef (toUnitCombatCapability env)) now (unUnitId uid) "fall"
              [ ("detail",   detail)
-             , ("count",    T.pack (show (length injs)))
-             , ("severity", T.pack (show worst)) ]
+             , ("count",    tshow (length injs))
+             , ("severity", tshow worst) ]
 
     -- Impact blood (#607): ONE mark per fall (never per fractured part,
     -- so a bad fall that breaks several bones at once stays bounded to

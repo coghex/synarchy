@@ -42,7 +42,7 @@ processLuaMsgs env ls stateRef = do
     case mMsg of
         Just msg → do
             logger ← readIORef (loggerRef env)
-            logDebug logger CatLua $ "Engine-to-Lua message: " <> T.pack (show msg)
+            logDebug logger CatLua $ "Engine-to-Lua message: " <> tshow msg
             processLuaMsg env ls stateRef msg
             processLuaMsgs env ls stateRef
         Nothing → return ()
@@ -52,17 +52,17 @@ processLuaMsg env ls stateRef msg = case msg of
   LuaTextureLoaded handle assetId → do
     logger ← readIORef (loggerRef env)
     logDebug logger CatLua $
-        "Texture loaded with handle " <> T.pack (show handle)
-        <> " as asset " <> T.pack (show assetId)
+        "Texture loaded with handle " <> tshow handle
+        <> " as asset " <> tshow assetId
   LuaFontLoaded handle path → do
     logger ← readIORef (loggerRef env)
     logDebug logger CatLua $
-        "Font " <> T.pack (show path)
-        <> " loaded with handle " <> T.pack (show handle)
+        "Font " <> tshow path
+        <> " loaded with handle " <> tshow handle
   LuaFontLoadFailed err → do
     logger ← readIORef (loggerRef env)
     logWarn logger CatLua $
-        "Font load failed: " <> T.pack (show err)
+        "Font load failed: " <> tshow err
   LuaThreadKill → writeIORef stateRef ThreadStopped
   LuaMouseDownEvent button x y → do
     let buttonNum = case button of
@@ -419,7 +419,7 @@ handleLoadStaged env ls requestId = do
     case started of
       Left err → do
         logWarn logger CatWorld $
-            "load publish #" <> T.pack (show requestId)
+            "load publish #" <> tshow requestId
             <> " could not begin the publish barrier: " <> err
         failLoad (loadStatusRef env) requestId err
         -- prepareLuaLoad already succeeded by the time
@@ -437,7 +437,7 @@ handleLoadStaged env ls requestId = do
           Left err → do
             failSave (saveBarrierRef env) barrierRequestId err
             logWarn logger CatWorld $
-                "load publish #" <> T.pack (show requestId)
+                "load publish #" <> tshow requestId
                 <> " timed out waiting for state owners: " <> err
             failLoad (loadStatusRef env) requestId err
             writeIORef (pendingLoadRef env) Nothing
@@ -459,7 +459,7 @@ handleLoadStaged env ls requestId = do
               Left err → do
                 failSave (saveBarrierRef env) barrierRequestId err
                 logWarn logger CatWorld $
-                    "load publish #" <> T.pack (show requestId)
+                    "load publish #" <> tshow requestId
                     <> " failed applying Lua state: " <> err
                 failLoad (loadStatusRef env) requestId err
                 writeIORef (pendingLoadRef env) Nothing
@@ -485,7 +485,7 @@ handleLoadStaged env ls requestId = do
                 stale ← Q.flushQueue (luaQueue env)
                 when (not (null stale)) $
                     logWarn logger CatWorld $
-                        "Load publish discarded " <> T.pack (show (length stale))
+                        "Load publish discarded " <> tshow (length stale)
                         <> " stale Lua message(s) queued during staging"
                 Q.writeQueue (worldQueue env) (WorldLoadPublish requestId)
 

@@ -127,7 +127,7 @@ autosaveSlotPrefix = "autosave-"
 
 -- | The slot name for generation @n@ (1 = newest).
 autosaveSlotName ∷ Int → Text
-autosaveSlotName n = autosaveSlotPrefix <> T.pack (show n)
+autosaveSlotName n = autosaveSlotPrefix <> tshow n
 
 -- | The staging slot every autosave is PUBLISHED to, before the family
 --   is rotated and it becomes @autosave-1@. Inside the reserved prefix
@@ -332,7 +332,7 @@ clearRetired logger slots =
             pure $ case result ∷ Either IOException () of
                 Left e → Left ("autosave refused: could not discard the \
                                \previously retired generation: "
-                               <> T.pack (show e))
+                               <> tshow e)
                 Right () → Right ()
 
 -- | Ownership first, then containment — both across the WHOLE cycle
@@ -430,5 +430,5 @@ performRotation logger depth slotAt incoming retired = do
         stillRetired ← doesDirectoryExist (ssDir retired)
         when stillRetired $ removeDirectoryRecursive (ssDir retired)
     pure $ case result ∷ Either IOException () of
-        Left e   → Left ("autosave rotation failed: " <> T.pack (show e))
+        Left e   → Left ("autosave rotation failed: " <> tshow e)
         Right () → Right ()

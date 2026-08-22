@@ -190,18 +190,18 @@ instance FromJSON LocationYamlDef where
         -- is only ever built from a box that has passed here.
         when (lybMinX bounds > lybMaxX bounds) $
             fail (T.unpack ("location '" <> lid <> "': bounds.min_x ("
-                <> T.pack (show (lybMinX bounds)) <> ") > bounds.max_x ("
-                <> T.pack (show (lybMaxX bounds)) <> ")"))
+                <> tshow (lybMinX bounds) <> ") > bounds.max_x ("
+                <> tshow (lybMaxX bounds) <> ")"))
         when (lybMinY bounds > lybMaxY bounds) $
             fail (T.unpack ("location '" <> lid <> "': bounds.min_y ("
-                <> T.pack (show (lybMinY bounds)) <> ") > bounds.max_y ("
-                <> T.pack (show (lybMaxY bounds)) <> ")"))
+                <> tshow (lybMinY bounds) <> ") > bounds.max_y ("
+                <> tshow (lybMaxY bounds) <> ")"))
         forM_ contents $ \c → forM_ (lycPosition c) $ \p →
             unless (relBoundsContains bounds (lypX p) (lypY p)) $
                 fail (T.unpack ("location '" <> lid <> "': content '"
                     <> lycId c <> "' fixed position ("
-                    <> T.pack (show (lypX p)) <> ","
-                    <> T.pack (show (lypY p))
+                    <> tshow (lypX p) <> ","
+                    <> tshow (lypY p)
                     <> ") lies outside declared bounds"))
         forM_ anchor $ \tag →
             unless (tag `elem` validAnchorTags) $

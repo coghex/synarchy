@@ -92,7 +92,7 @@ loadMaterialYamlFn env backendState = do
 
                     -- Also register by numeric ID for world.setTexture
                     -- compatibility: "mat_tile_56" etc.
-                    let idStr = T.pack (show (mdId def))
+                    let idStr = tshow (mdId def)
                     let rv = toRenderViewCapability env
                     registerTextureName (rvTextureNameRegistryRef rv)
                         ("mat_tile_" <> idStr) tileH
@@ -128,7 +128,7 @@ loadMaterialYamlFn env backendState = do
                     in (reg', ())
 
                 logInfo logger CatAsset $
-                    "loadMaterialYaml: loaded " <> T.pack (show total)
+                    "loadMaterialYaml: loaded " <> tshow total
                     <> " textures from " <> T.pack filePath
                 return total
 
@@ -159,7 +159,7 @@ loadVegetationYamlFn env backendState = do
                         variants = vdVariants def
                     varCount ← foldM (\vacc (idx, texPath) → do
                         let vegId = baseId + fromIntegral idx
-                            regName = "veg_tile_" <> T.pack (show vegId)
+                            regName = "veg_tile_" <> tshow vegId
                         resolved ← resolveTexturePath env "Vegetation variant"
                                        "assets/textures/utility/blanktexture.png"
                                        (T.unpack texPath)
@@ -171,7 +171,7 @@ loadVegetationYamlFn env backendState = do
                     ) (0 ∷ Int) defs
 
                 logInfo logger CatAsset $
-                    "loadVegetationYaml: loaded " <> T.pack (show total)
+                    "loadVegetationYaml: loaded " <> tshow total
                     <> " textures from " <> T.pack filePath
                 return total
 
@@ -258,8 +258,8 @@ loadFloraYamlFn env backendState = do
                     ) (0 ∷ Int) defs
 
                 logInfo logger CatAsset $
-                    "loadFloraYaml: loaded " <> T.pack (show (length defs))
-                    <> " species (" <> T.pack (show total)
+                    "loadFloraYaml: loaded " <> tshow (length defs)
+                    <> " species (" <> tshow total
                     <> " textures) from " <> T.pack filePath
                 return total
 

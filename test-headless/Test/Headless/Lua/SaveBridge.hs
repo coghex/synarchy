@@ -76,8 +76,6 @@ setupChunk = T.intercalate "\n"
     , "      path = '" <> sentinelPath <> "',"
     , "      page = '" <> sentinelPage <> "' }} end })"
     ]
-  where tshow ∷ Show α ⇒ α → Text
-        tshow = T.pack . show
 
 quietLogger ∷ IO LoggerState
 quietLogger = initLogger defaultLogConfig { lcEnableByDefault = False }

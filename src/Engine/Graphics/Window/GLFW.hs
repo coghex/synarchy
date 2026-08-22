@@ -75,7 +75,7 @@ createWindow config = do
                  ⧺ show (wcWidth config) ⧺ "x" ⧺ show (wcHeight config)
       Just win → do
         actualSize ← liftIO $ GLFW.getWindowSize win
-        logInfoM CatGraphics $ "Window created with actual size: " <> T.pack (show actualSize)
+        logInfoM CatGraphics $ "Window created with actual size: " <> tshow actualSize
         pure $ Window win
   let Window win = window
   -- A fullscreen request degrades gracefully to the plain window GLFW

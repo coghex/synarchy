@@ -154,7 +154,7 @@ loadUnitAtlasIndexIn root unit yamlAnims = do
                 <> " directory but no index; the compiled artifacts are "
                 <> "incomplete — re-run tools/pack_atlas.py --compile"
             else "the unit declares "
-                <> T.pack (show (Map.size yamlAnims))
+                <> tshow (Map.size yamlAnims)
                 <> " animation(s) but ships no compiled atlas artifacts; "
                 <> "unit animations are atlas-backed only (#1261) — run "
                 <> "tools/pack_atlas.py --compile" }
@@ -236,7 +236,7 @@ checkSourceFrames root unit yamlAnims anim atlas =
     go ((dir, row) : rest) ya acc =
         case Map.lookup dir (yafFrames ya) of
             Nothing → pure (Left (miss ("the unit YAML declares no frames for "
-                                        <> T.pack (show dir))))
+                                        <> tshow dir)))
             Just paths → do
                 r ← goFrames dir row (zip [0 ..] paths) []
                 case r of
@@ -285,7 +285,7 @@ decodeImageFile ∷ FilePath → IO (Either Text DecodedImage)
 decodeImageFile path = do
     r ← try (JP.readImage path) ∷ IO (Either SomeException (Either String JP.DynamicImage))
     pure $ case r of
-        Left e          → Left (T.pack (show e))
+        Left e          → Left (tshow e)
         Right (Left m)  → Left (T.pack m)
         Right (Right d) →
             let img = JP.convertRGBA8 d
@@ -303,5 +303,5 @@ readFileBytes ∷ FilePath → IO (Either Text BL.ByteString)
 readFileBytes path = do
     r ← try (BS.readFile path) ∷ IO (Either SomeException BS.ByteString)
     pure $ case r of
-        Left e   → Left (T.pack (show e))
+        Left e   → Left (tshow e)
         Right bs → Right (BL.fromStrict bs)

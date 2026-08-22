@@ -375,12 +375,12 @@ decodeLegacyStructureAndMetadata bytes =
             when (cdVersion metaDesc ≢ legacyMetadataComponentVersion) $
                 Left ("Save format incompatible: expected legacy metadata \
                       \component v"
-                      <> T.pack (show legacyMetadataComponentVersion)
-                      <> ", got v" <> T.pack (show (cdVersion metaDesc)))
+                      <> tshow legacyMetadataComponentVersion
+                      <> ", got v" <> tshow (cdVersion metaDesc))
             when (cdVersion sessionDesc ≢ sessionComponentVersion) $
                 Left ("Save format incompatible: expected legacy session \
-                      \component v" <> T.pack (show sessionComponentVersion)
-                      <> ", got v" <> T.pack (show (cdVersion sessionDesc)))
+                      \component v" <> tshow sessionComponentVersion
+                      <> ", got v" <> tshow (cdVersion sessionDesc))
             meta ← decodeMetadataComponent decoded
             pure (decoded, meta)
   where
@@ -514,8 +514,8 @@ decodeB2StructureAndMetadata bytes =
                 when (cdVersion luaStateDesc ≢ luaStateComponentVersion) $
                     Left ("Save format incompatible: expected legacy \
                           \\"lua-state\" component v"
-                          <> T.pack (show luaStateComponentVersion)
-                          <> ", got v" <> T.pack (show (cdVersion luaStateDesc)))
+                          <> tshow luaStateComponentVersion
+                          <> ", got v" <> tshow (cdVersion luaStateDesc))
                 meta ← decodeMetadataComponent decoded
                 pure (decoded, meta)
   where
@@ -907,7 +907,7 @@ decodeMetadataComponent decoded = do
         Left ("Save format incompatible: expected metadata component v"
               <> T.intercalate "/"
                    (map (T.pack . show) metadataComponentInputVersions)
-              <> ", got v" <> T.pack (show version))
+              <> ", got v" <> tshow version)
     payload ← maybe (Left "metadata component payload missing \
                            \(unreachable — already required)") Right
                     (HM.lookup metadataComponentId (dePayloads decoded))

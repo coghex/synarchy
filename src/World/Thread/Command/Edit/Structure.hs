@@ -11,7 +11,6 @@ module World.Thread.Command.Edit.Structure
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Text as T
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
@@ -45,7 +44,7 @@ handleWorldSetStructureCommand wsc logger pageId gx gy slotTag texId faceId z = 
                 Nothing →
                     logWarn logger CatWorld $
                         "Chunk not loaded for set structure at "
-                          <> T.pack (show gx) <> "," <> T.pack (show gy)
+                          <> tshow gx <> "," <> tshow gy
                 Just lc → do
                     let lc' = applyEdit edit lc
                     atomicModifyIORef' (wsTilesRef ws) $ \w →

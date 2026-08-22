@@ -39,7 +39,6 @@ module World.Save.Component.Session
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Text as T
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import Structure.Palette (TexPalette(..))
@@ -48,9 +47,6 @@ import Engine.Graphics.Camera (CameraFacing)
 import World.Save.Snapshot
     ( SessionSnapshot(..), LiveCameraSnapshot(..) )
 import World.Save.Component.Types
-
-tshow ∷ Show a ⇒ a → Text
-tshow = T.pack . show
 
 -- core-session ------------------------------------------------------
 

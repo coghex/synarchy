@@ -17,7 +17,7 @@ showF1 ∷ Float → Text
 showF1 f =
     let whole = floor f ∷ Int
         frac  = abs (round ((f - fromIntegral whole) * 10.0) ∷ Int)
-    in T.pack (show whole) <> "." <> T.pack (show frac)
+    in tshow whole <> "." <> tshow frac
 
 showSeasonal ∷ SeasonalClimate → Text
 showSeasonal (SeasonalClimate s w) =
@@ -59,23 +59,23 @@ formatOceanGrid og =
         currentCount = length (ogCurrents og)
         thcCount = length (ogThcCells og)
         header = "═══ Ocean Grid ═══"
-        stats  = "  Cells: " <> T.pack (show cellCount)
-              <> "  Deep water masses: " <> T.pack (show deepCount)
-              <> "  Named currents: " <> T.pack (show currentCount)
-              <> "  THC loops: " <> T.pack (show thcCount)
+        stats  = "  Cells: " <> tshow cellCount
+              <> "  Deep water masses: " <> tshow deepCount
+              <> "  Named currents: " <> tshow currentCount
+              <> "  THC loops: " <> tshow thcCount
         -- Show a sample of ocean cells (first 5)
         sampleCells = take 5 $ HM.toList (ogCells og)
         cellLines = map formatOceanCellSample sampleCells
     in [header, stats] <> cellLines
-       <> (if cellCount > 5 then ["  ... (" <> T.pack (show (cellCount - 5)) <> " more)"] else [])
+       <> (if cellCount > 5 then ["  ... (" <> tshow (cellCount - 5) <> " more)"] else [])
        <> [""]
 
 formatOceanCellSample ∷ (ClimateCoord, OceanCell) → Text
 formatOceanCellSample (ClimateCoord cx cy, oc) =
-    "  (" <> T.pack (show cx) <> "," <> T.pack (show cy) <> ")"
+    "  (" <> tshow cx <> "," <> tshow cy <> ")"
     <> " SST=" <> showSeasonal (ocTemperature oc)
     <> " sal=" <> showF1 (ocSalinity oc)
-    <> " depth=" <> T.pack (show (ocDepth oc))
+    <> " depth=" <> tshow (ocDepth oc)
     <> " ice=" <> showF1 (ocIceCover oc)
 
 -- * Atmosphere Grid Summary
@@ -86,9 +86,9 @@ formatAtmoGrid ag =
         moistCount = HM.size (agMoisture ag)
         sysCount = length (agSystems ag)
         header = "═══ Atmospheric Circulation ═══"
-        stats  = "  Wind cells: " <> T.pack (show windCount)
-              <> "  Moisture cells: " <> T.pack (show moistCount)
-              <> "  Pressure systems: " <> T.pack (show sysCount)
+        stats  = "  Wind cells: " <> tshow windCount
+              <> "  Moisture cells: " <> tshow moistCount
+              <> "  Pressure systems: " <> tshow sysCount
     in [header, stats, ""]
 
 -- * Climate Grid Summary
@@ -96,41 +96,41 @@ formatAtmoGrid ag =
 formatClimateGrid ∷ ClimateGrid → [Text]
 formatClimateGrid cg =
     let regionCount = HM.size (cgRegions cg)
-        header = "═══ Climate Regions (" <> T.pack (show regionCount) <> ") ═══"
+        header = "═══ Climate Regions (" <> tshow regionCount <> ") ═══"
         -- Show a sample of regions
         sampleRegions = take 8 $ HM.toList (cgRegions cg)
         regionLines = map formatRegionClimate sampleRegions
     in [header] <> regionLines
-       <> (if regionCount > 8 then ["  ... (" <> T.pack (show (regionCount - 8)) <> " more)"] else [])
+       <> (if regionCount > 8 then ["  ... (" <> tshow (regionCount - 8) <> " more)"] else [])
        <> [""]
 
 formatRegionClimate ∷ (ClimateCoord, RegionClimate) → Text
 formatRegionClimate (ClimateCoord cx cy, rc) =
-    "  (" <> T.pack (show cx) <> "," <> T.pack (show cy) <> ")"
+    "  (" <> tshow cx <> "," <> tshow cy <> ")"
     <> " temp=" <> showSeasonal (rcAirTemp rc)
     <> " humid=" <> showF1 (rcHumidity rc)
     <> " precip=" <> showSeasonal (rcPrecipitation rc)
     <> " cloud=" <> showF1 (rcCloudCover rc)
-    <> " elev=" <> T.pack (show (rcElevAvg rc))
+    <> " elev=" <> tshow (rcElevAvg rc)
 
 -- * Surface Budgets Summary
 
 formatSurfaceBudgets ∷ HM.HashMap ClimateCoord SurfaceBudget → [Text]
 formatSurfaceBudgets sb =
     let count = HM.size sb
-        header = "═══ Surface Budgets (" <> T.pack (show count) <> ") ═══"
+        header = "═══ Surface Budgets (" <> tshow count <> ") ═══"
     in if count ≡ 0
        then [header, "  (empty — not yet computed)", ""]
        else let samples = take 5 $ HM.toList sb
                 sampleLines = map formatBudgetSample samples
             in [header] <> sampleLines
-               <> (if count > 5 then ["  ... (" <> T.pack (show (count - 5)) <> " more)"] else [])
+               <> (if count > 5 then ["  ... (" <> tshow (count - 5) <> " more)"] else [])
                <> [""]
 
 formatBudgetSample ∷ (ClimateCoord, SurfaceBudget) → Text
 formatBudgetSample (ClimateCoord cx cy, sb) =
-    "  (" <> T.pack (show cx) <> "," <> T.pack (show cy) <> ")"
-    <> " " <> T.pack (show (sbSurfaceType sb))
+    "  (" <> tshow cx <> "," <> tshow cy <> ")"
+    <> " " <> tshow (sbSurfaceType sb)
     <> " albedo=" <> showF1 (sbAlbedo sb)
     <> " net=" <> showF1 (sbNetMoisture sb)
     <> " runoff=" <> showF1 (sbRunoff sb)

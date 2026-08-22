@@ -15,7 +15,6 @@ module World.Thread.Command.Cursor.Chop
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Text as T
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle)
 import Engine.Core.Capability.WorldSim
@@ -106,10 +105,10 @@ handleWorldDesignateChopCommand env logger pageId gx1 gy1 gx2 gy2 tag = do
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                 (cs { chopAnchor = Nothing }, ())
             logDebug logger CatWorld $
-                "Chop designation: +" <> T.pack (show (length entries))
-                <> " trees (" <> T.pack (show xLo) <> ","
-                <> T.pack (show yLo) <> ")–(" <> T.pack (show xHi)
-                <> "," <> T.pack (show yHi) <> ")"
+                "Chop designation: +" <> tshow (length entries)
+                <> " trees (" <> tshow xLo <> ","
+                <> tshow yLo <> ")–(" <> tshow xHi
+                <> "," <> tshow yHi <> ")"
             -- F4 (#646): requested is the FULL swept-rectangle tile
             -- count, matching till/mine and the naive player's own
             -- mental model ("I dragged a 5x5 box") — NOT the count of

@@ -15,7 +15,6 @@ module Engine.Input.Thread.Dispatch
   ) where
 
 import UPrelude
-import qualified Data.Text as T
 import Control.Concurrent.STM (atomically)
 import Control.Concurrent.STM.TVar (modifyTVar')
 import Data.IORef (readIORef, writeIORef)
@@ -129,18 +128,18 @@ dispatchInput env inpSt event = case event of
         logger ← readIORef (ccLoggerRef (toCoreCapability env))
         case winEv of
           WindowResize w h → do
-            logDebug logger CatInput $ "Window resize event: width=" <> T.pack (show w) <> ", height=" <> T.pack (show h)
+            logDebug logger CatInput $ "Window resize event: width=" <> tshow w <> ", height=" <> tshow h
             writeIORef (rvWindowSizeRef (toRenderViewCapability env)) (w, h)
             Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaWindowResize w h)
           FramebufferResize w h → do
-            logDebug logger CatInput $ "Framebuffer resize event: width=" <> T.pack (show w) <> ", height=" <> T.pack (show h)
+            logDebug logger CatInput $ "Framebuffer resize event: width=" <> tshow w <> ", height=" <> tshow h
             writeIORef (rvFramebufferSizeRef (toRenderViewCapability env)) (w, h)
             Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaFramebufferResize w h)
           WindowFocus focused → do
-            logDebug logger CatInput $ "Window focus event: focused=" <> T.pack (show focused)
+            logDebug logger CatInput $ "Window focus event: focused=" <> tshow focused
             unless focused $ releaseHeldButtons env inpSt
           WindowMinimize minimized → do
-            logDebug logger CatInput $ "Window minimize event: minimized=" <> T.pack (show minimized)
+            logDebug logger CatInput $ "Window minimize event: minimized=" <> tshow minimized
             when minimized $ releaseHeldButtons env inpSt
           -- Currently never emitted (the GLFW close request is polled
           -- via shouldClose in the main loop, not routed as an input

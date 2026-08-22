@@ -28,7 +28,6 @@ module Engine.Graphics.Vulkan.Texture.Bindless
 import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Map.Strict as Map
-import qualified Data.Text as T
 import Data.IORef (readIORef)
 import Engine.Core.Monad
 import Engine.Core.Resource
@@ -485,8 +484,8 @@ setTextureFilter dev flt system = do
           (srSlot rebind) (srImageView rebind) (srSampler rebind)
     forM_ (frpUnrecoverable plan) $ \(TextureHandle hid, slotIdx) →
         logWarnM CatTexture $ "setTextureFilter: texture handle "
-          <> T.pack (show hid) <> " maps to bindless slot "
-          <> T.pack (show slotIdx) <> " but no canonical image view owns "
+          <> tshow hid <> " maps to bindless slot "
+          <> tshow slotIdx <> " but no canonical image view owns "
           <> "that slot; it stays on the undefined texture."
     -- Now no slot references the old sampler — safe to release.
     liftIO $ releaseSampler dev ref oldKind

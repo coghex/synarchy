@@ -37,12 +37,12 @@ loadNamePool logger path = do
     case result of
         Left err → do
             logWarn logger CatAsset $ "Failed to parse name pool "
-                <> T.pack path <> ": " <> T.pack (show err)
+                <> T.pack path <> ": " <> tshow err
             return (NamePool [] [])
         Right nf → do
             let pool = NamePool (nyfGiven nf) (nyfFamily nf)
             logDebug logger CatAsset $ "Loaded name pool from "
-                <> T.pack path <> " (" <> T.pack (show (length (nyfGiven nf)))
-                <> " given, " <> T.pack (show (length (nyfFamily nf)))
+                <> T.pack path <> " (" <> tshow (length (nyfGiven nf))
+                <> " given, " <> tshow (length (nyfFamily nf))
                 <> " family)"
             return pool

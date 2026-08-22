@@ -43,7 +43,6 @@ import GHC.Generics (Generic)
 import Control.DeepSeq (NFData)
 import Data.Serialize (Serialize)
 import qualified Data.Map.Strict as M
-import qualified Data.Text as T
 
 -- | Stable identifier of a semantic concept (e.g. @ASH@, @LAND@).
 --   Uppercase ASCII letters, digits, and underscores; independent of —
@@ -187,13 +186,13 @@ catalogueErrorText err = case err of
         "concept catalogue YAML is malformed: " <> msg
     InvalidVersion v →
         "concept catalogue version must be a positive integer, got "
-        <> T.pack (show v)
+        <> tshow v
     InvalidConceptId raw why →
-        "invalid concept id " <> T.pack (show raw) <> ": " <> why
+        "invalid concept id " <> tshow raw <> ": " <> why
     DuplicateConceptId (ConceptId cid) →
         "duplicate concept id " <> cid
     UnknownDomain (ConceptId cid) raw →
-        "concept " <> cid <> " has unknown domain " <> T.pack (show raw)
+        "concept " <> cid <> " has unknown domain " <> tshow raw
         <> " (expected one of: place, element, celestial, creature,"
         <> " emotion, mythic)"
     InvalidLexicalForm (ConceptId cid) k why →
@@ -201,7 +200,7 @@ catalogueErrorText err = case err of
         <> " form: " <> why
     DuplicateSingularForm sing (ConceptId first) (ConceptId second) →
         "concepts " <> first <> " and " <> second
-        <> " share the same singular form " <> T.pack (show sing)
+        <> " share the same singular form " <> tshow sing
 
 renderErrorText ∷ RenderError → Text
 renderErrorText err = case err of

@@ -11,7 +11,6 @@ module Engine.Scripting.Lua.Message.WorldTexture
 
 import UPrelude
 import qualified Data.ByteString as BS
-import qualified Data.Text as T
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.Manager (generateTextureHandle)
@@ -70,7 +69,7 @@ handleWorldPreview = do
         Nothing → pure ()
         Just (w, h, rgbaData, myGen) → do
             logInfoM CatWorld $ "Creating world preview texture: "
-                <> T.pack (show w) <> "×" <> T.pack (show h)
+                <> tshow w <> "×" <> tshow h
 
             gs ← gets graphicsState
             mBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
@@ -174,7 +173,7 @@ handleWorldPreview = do
                         (LuaWorldPreviewReady (fromIntegral h) myGen)
 
                     logInfoM CatWorld $ "World preview texture created: handle="
-                        <> T.pack (show h)
+                        <> tshow h
 
                 _ → logWarnM CatWorld
                         "Cannot create preview texture: Vulkan not ready"
@@ -191,7 +190,7 @@ handleZoomAtlasUpload = do
         Nothing → pure ()
         Just (w, h, rgbaData, targetStates) → do
             logInfoM CatWorld $ "Uploading zoom atlas texture: "
-                <> T.pack (show w) <> "×" <> T.pack (show h)
+                <> tshow w <> "×" <> tshow h
 
             gs ← gets graphicsState
             mBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
@@ -293,8 +292,8 @@ handleZoomAtlasUpload = do
                         liftIO $ writeIORef (wsZoomAtlasRef ws) (Just atlasInfo)
 
                     logInfoM CatWorld $ "Zoom atlas uploaded: handle="
-                        <> T.pack (show texHandle) <> ", chunksPerRow="
-                        <> T.pack (show chunksPerRow)
+                        <> tshow texHandle <> ", chunksPerRow="
+                        <> tshow chunksPerRow
 
                 _ → logWarnM CatWorld
                         "Cannot upload zoom atlas: Vulkan not ready"

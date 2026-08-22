@@ -21,7 +21,6 @@ module Unit.Pathing.Config
     ) where
 
 import UPrelude
-import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
 import Data.Aeson ((.:?), (.!=), FromJSON(..), withObject)
 import System.Directory (doesFileExist)
@@ -172,5 +171,5 @@ loadPathingConfig logger path = do
                 Right pc → return (normalizePathingConfig pc)
                 Left err → do
                     logWarn logger CatInit $ "Error loading pathing config: "
-                                           <> T.pack (show err)
+                                           <> tshow err
                     return defaultPathingConfig

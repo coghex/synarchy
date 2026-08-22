@@ -63,7 +63,7 @@ loadSubstanceYamlFn core regs = do
                     return (acc + 1)
                     ) (0 ∷ Int) defs
                 logInfo logger CatAsset $
-                    "loadSubstanceYaml: loaded " <> T.pack (show total)
+                    "loadSubstanceYaml: loaded " <> tshow total
                     <> " substances from " <> T.pack filePath
                 return total
             Lua.pushnumber (Lua.Number (fromIntegral count))

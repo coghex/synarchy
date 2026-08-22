@@ -325,9 +325,6 @@ itemLit ∷ Int → Text → Text
 itemLit iid defName =
     "{ instanceId = " <> tshow iid <> ", defName = '" <> defName <> "' }"
 
-tshow ∷ Int → Text
-tshow = T.pack . show
-
 -- | A destination that always refuses AFTER the source has popped, so
 --   'commitCross' has to run its rollback.
 refusingPush ∷ PushStep

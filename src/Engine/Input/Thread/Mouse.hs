@@ -12,7 +12,6 @@ module Engine.Input.Thread.Mouse
 
 import UPrelude
 import qualified Data.Map.Strict as Map
-import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
 import Data.IORef (readIORef, writeIORef, newIORef, atomicModifyIORef')
 import Engine.Core.Log (logDebug, LogCategory(..))
@@ -119,15 +118,15 @@ dispatchMouseEvent env inpSt btn pos state = do
     -- are kept out of inpMouseBtns so button pollers (camera
     -- middle-drag) don't react to clicks the tooltip ate.
     mRoute ← if state ≢ GLFW.MouseButtonState'Pressed then return Nothing else fmap Just $ do
-        logDebug logger CatInput $ "Mouse button pressed: button=" <> T.pack (show btn)
-                                <> ", pos=(" <> T.pack (show x) <> "," <> T.pack (show y) <> ")"
+        logDebug logger CatInput $ "Mouse button pressed: button=" <> tshow btn
+                                <> ", pos=(" <> tshow x <> "," <> tshow y <> ")"
 
         let scaleX = fromIntegral fbW / fromIntegral winW
             scaleY = fromIntegral fbH / fromIntegral winH
             mouseX = realToFrac x * scaleX
             mouseY = realToFrac y * scaleY
 
-        logDebug logger CatUI $ "Click at (" <> T.pack (show mouseX) <> ", " <> T.pack (show mouseY) <> ")"
+        logDebug logger CatUI $ "Click at (" <> tshow mouseX <> ", " <> tshow mouseY <> ")"
 
         uiMgr ← readIORef (uicUiManagerRef (toUiCapability env))
         let mousePos = (mouseX, mouseY)
@@ -410,8 +409,8 @@ dispatchMouseEvent env inpSt btn pos state = do
     -- along so handlers wanting strict down/up pairing can filter
     -- on "game".
     when (state ≡ GLFW.MouseButtonState'Released) $ do
-        logDebug logger CatInput $ "Mouse button released: button=" <> T.pack (show btn)
-                                <> ", pos=(" <> T.pack (show x) <> "," <> T.pack (show y) <> ")"
+        logDebug logger CatInput $ "Mouse button released: button=" <> tshow btn
+                                <> ", pos=(" <> tshow x <> "," <> tshow y <> ")"
         let downRoute = Map.findWithDefault ClickGame btn (inpMouseRoutes inpSt)
         Q.writeQueue lq (LuaMouseUpEvent btn x y downRoute)
 

@@ -10,7 +10,6 @@ import UPrelude
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
-import qualified Data.Text as T
 import Data.List (sortOn)
 import Data.IORef (readIORef)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
@@ -113,7 +112,7 @@ renderUIPages = do
             logWarnM CatUI "No bindless texture system available for UI rendering"
             pure (V.empty, Map.empty)
         Just bindless → do
-            logDebugM CatUI $ "UI rendering with bindless texture system containing " <> T.pack (show $ Map.size (btsHandleMap bindless)) <> " textures"
+            logDebugM CatUI $ "UI rendering with bindless texture system containing " <> tshow (Map.size (btsHandleMap bindless)) <> " textures"
             fontCache ← liftIO $ readIORef (rcFontCacheRef (toRenderCapability env))
 
             let visiblePages = getVisiblePages mgr
@@ -228,10 +227,10 @@ renderElementData mgr fontCache layerId elem absX absY clip =
             let fontHandle = utsFont style
             case Map.lookup fontHandle (fcFonts fontCache) of
                 Nothing → do
-                    logWarnM CatUI $ "Font cache miss: UI text font not found: " <> (T.pack (show fontHandle))
+                    logWarnM CatUI $ "Font cache miss: UI text font not found: " <> (tshow fontHandle)
                     pure (V.empty, V.empty)
                 Just atlas → do
-                    logDebugM CatFont $ "Font cache hit: Found UI font " <> T.pack (show fontHandle)
+                    logDebugM CatFont $ "Font cache hit: Found UI font " <> tshow fontHandle
                     let text = utsText style
                         (cr, cg, cb, ca) = utsColor style
                         color = (cr, cg, cb, ca)
@@ -251,7 +250,7 @@ renderElementData mgr fontCache layerId elem absX absY clip =
                         -- the clip is dropped entirely.
                         instances = V.mapMaybe (clipGlyphInstance clip) rawInstances
 
-                    logDebugM CatFont $ "UI text layout generated " <> T.pack (show $ V.length instances) <> " vertices"
+                    logDebugM CatFont $ "UI text layout generated " <> tshow (V.length instances) <> " vertices"
 
                     if V.null instances
                         then pure (V.empty, V.empty)

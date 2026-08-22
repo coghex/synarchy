@@ -102,7 +102,7 @@ data MorphemeIdentity = MorphemeIdentity
 morphemeIdentityText ∷ MorphemeIdentity → Text
 morphemeIdentityText mi = T.intercalate ":"
     [ langSeedText (lpSeed (miLanguage mi))
-    , T.pack (show (generatorVersionInt (lpVersion (miLanguage mi))))
+    , tshow (generatorVersionInt (lpVersion (miLanguage mi)))
     , conceptIdText (miConcept mi)
     ]
 
@@ -260,7 +260,7 @@ etyUnavailableText u = case u of
         \than this world's, so it cannot explain it"
     EtyUnsupportedVersion v →
         "this name was written by language generator version "
-        <> T.pack (show v) <> ", which this build cannot rebuild"
+        <> tshow v <> ", which this build cannot rebuild"
     EtyInvalidConcept (ConceptId cid) →
         "this name refers to the concept " <> cid
         <> ", which is no longer available"
