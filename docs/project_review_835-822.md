@@ -8,7 +8,7 @@ PR #832's committed building-footprint expansion, #831's tile-Z UI-wiring regres
 
 ## Status
 
-- [ ] PRR-1. Soil receivers can credit a high neighbour that cannot shed any soil
+- [x] PRR-1. Soil receivers can credit a high neighbour that cannot shed any soil — [#1591]
 - [ ] PRR-2. Slot-aware occupancy still stores only one pending construction job per tile
 - [ ] PRR-3. The location-content probe shares four fixed temporary fixture paths and never cleans them
 - [ ] PRR-4. A freshwater tile above four lower neighbours is still forced back to a flat slope
@@ -18,7 +18,7 @@ PR #832's committed building-footprint expansion, #831's tile-Z UI-wiring regres
 
 ## 1. Soil donor eligibility
 
-### PRR-1. Soil receivers can credit a high neighbour that cannot shed any soil
+### [#1591] PRR-1. Soil receivers can credit a high neighbour that cannot shed any soil
 
 > **Captured note:** Derive shed credit from a donor state that includes whether the donor actually participates in erosion, or otherwise exclude indestructible neighbour materials. The receiver currently sees elevations only, so it treats every neighbour at least three levels higher as a donor even when that neighbour's own erosion call returns immediately without shedding.
 
