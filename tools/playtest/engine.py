@@ -47,6 +47,12 @@ class ActionError(ValueError):
 # verbs; documented for the player in the agent prompt and in README.md.
 ACTION_KINDS = ("click", "drag", "scroll", "key", "hold", "type", "wait", "done")
 
+# Default per-call console budgets. Named so the setup launcher can
+# shrink them to whatever is left of its own deadline (#1539) instead of
+# letting one stalled read run 15-20 s past a smaller --setup-timeout.
+CONSOLE_READ_TIMEOUT = 15.0
+SCREENSHOT_TIMEOUT = 20.0
+
 # How the instance renders: "windowed" opens (and focuses) a real game
 # window; "offscreen" (#650) runs the same full render pipeline into
 # offscreen images — no window, no focus steal, parallel-safe.
@@ -221,7 +227,7 @@ class PlaytestEngine:
 
     # -- console I/O with crash detection -----------------------------
 
-    def lua(self, code: str, timeout: float = 15.0):
+    def lua(self, code: str, timeout: float = CONSOLE_READ_TIMEOUT):
         """Run one console line, JSON-decoding the reply. Raises
         EngineCrash when the process is gone / unreachable — a crash
         mid-session is a finding, and the caller ends gracefully."""
@@ -245,9 +251,10 @@ class PlaytestEngine:
         flag = "true" if paused else "false"
         self.lua_fire(f'require("scripts.pause").set({flag})')
 
-    def screenshot(self, path: str) -> tuple[int, int]:
+    def screenshot(self, path: str,
+                   timeout: float = SCREENSHOT_TIMEOUT) -> tuple[int, int]:
         reply = self.lua(f"return debug.captureScreenshot({_lua_str(path)})",
-                         timeout=20.0)
+                         timeout=timeout)
         if not isinstance(reply, dict) or "width" not in reply:
             err = reply.get("error") if isinstance(reply, dict) else repr(reply)
             raise EngineCrash(f"screenshot failed: {err}")
@@ -341,7 +348,8 @@ class FakeEngine(PlaytestEngine):
             self.unpauses += 1
         self.paused = paused
 
-    def screenshot(self, path: str) -> tuple[int, int]:
+    def screenshot(self, path: str,
+                   timeout: float = SCREENSHOT_TIMEOUT) -> tuple[int, int]:
         with open(path, "wb") as f:
             f.write(self._PNG)
         self.fb_size = (1280, 720)

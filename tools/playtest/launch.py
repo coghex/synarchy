@@ -56,7 +56,8 @@ for _path in (HERE, TOOLS):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
-from engine import EngineCrash  # noqa: E402
+from engine import (CONSOLE_READ_TIMEOUT, EngineCrash,  # noqa: E402
+                    SCREENSHOT_TIMEOUT)
 from probelib import GUI_PORT  # noqa: E402
 from run_probes import reap_group  # noqa: E402
 
@@ -138,6 +139,67 @@ def _remaining(deadline: float, clock) -> float:
 # --------------------------------------------------------------------------
 # Phase 1: build
 # --------------------------------------------------------------------------
+def _run_setup_command(cmd: list[str], repo_root: str, deadline: float, clock,
+                       *, stdout=None, capture: bool = False):
+    """Run one setup subprocess in its OWN process group, and reap that
+    GROUP on timeout or interruption.
+
+    `cabal` is a process TREE — it spawns `ghc`, which spawns more — so
+    killing the immediate child leaves compilation running (and, on a
+    Ctrl-C, running unattended after the harness is gone). Spawning into
+    a new session makes the child's pid its process-group id, which is
+    what lets `run_probes.reap_group` address every descendant (#1323).
+    The BaseException arm is what covers Ctrl-C: the build blocks inside
+    `communicate`, so the interruption lands here rather than anywhere a
+    later teardown could see it.
+
+    Returns ``(returncode, stdout_text, stderr_text)``; the text values
+    are empty unless ``capture`` is set.
+    """
+    left = _remaining(deadline, clock)
+    label = " ".join(cmd[:2])
+    if left <= 0:
+        raise SetupFailure(
+            "build", "build_timeout",
+            f"the setup budget was already spent before `{label}` could run",
+            timed_out=True)
+    try:
+        proc = subprocess.Popen(
+            cmd, cwd=repo_root,
+            stdout=subprocess.PIPE if capture else stdout,
+            stderr=subprocess.PIPE if capture else subprocess.STDOUT,
+            text=True if capture else None,
+            start_new_session=True)
+    except OSError as e:
+        raise SetupFailure("build", "build_failed",
+                           f"could not run `{label}`: {e}") from e
+    try:
+        out, err = proc.communicate(timeout=left)
+    except subprocess.TimeoutExpired:
+        _reap_setup_process(proc)
+        raise SetupFailure(
+            "build", "build_timeout",
+            f"`{label}` did not finish inside the setup budget",
+            timed_out=True) from None
+    except BaseException:
+        # Ctrl-C, or anything else: the build tree must not outlive us.
+        _reap_setup_process(proc)
+        raise
+    return proc.returncode, out or "", err or ""
+
+
+def _reap_setup_process(proc: subprocess.Popen) -> None:
+    """Terminate a setup subprocess's whole group and drain its pipes."""
+    try:
+        reap_group(proc.pid)
+    except (OSError, ValueError):
+        pass
+    try:
+        proc.communicate(timeout=10)
+    except (subprocess.SubprocessError, OSError, ValueError):
+        pass
+
+
 def build_executable(repo_root: str, log_path: str, deadline: float,
                      clock=time.monotonic) -> str:
     """Compile the game and answer with the executable's path.
@@ -148,34 +210,12 @@ def build_executable(repo_root: str, log_path: str, deadline: float,
     leaves its real output behind instead of an unexplained empty engine
     log.
     """
-    if _remaining(deadline, clock) <= 0:
-        raise SetupFailure(
-            "build", "build_timeout",
-            "the setup budget was already spent before the build began",
-            timed_out=True)
     with open(log_path, "w") as logf:
         logf.write(f"$ cabal build exe:synarchy    (cwd {repo_root})\n")
         logf.flush()
-        try:
-            proc = subprocess.Popen(
-                ["cabal", "build", "exe:synarchy"], cwd=repo_root,
-                stdout=logf, stderr=subprocess.STDOUT)
-        except OSError as e:
-            raise SetupFailure("build", "build_failed",
-                               f"could not run cabal: {e}") from e
-        try:
-            code = proc.wait(timeout=max(0.0, _remaining(deadline, clock)))
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                pass
-            raise SetupFailure(
-                "build", "build_timeout",
-                "cabal build did not finish inside the setup budget; "
-                f"see {os.path.basename(log_path)}",
-                timed_out=True) from None
+        code, _, _ = _run_setup_command(
+            ["cabal", "build", "exe:synarchy"], repo_root, deadline, clock,
+            stdout=logf)
     if code != 0:
         raise SetupFailure(
             "build", "build_failed",
@@ -185,36 +225,20 @@ def build_executable(repo_root: str, log_path: str, deadline: float,
 
 def _locate_executable(repo_root: str, log_path: str, deadline: float,
                        clock) -> str:
-    left = _remaining(deadline, clock)
-    if left <= 0:
-        raise SetupFailure(
-            "build", "build_timeout",
-            "the setup budget ran out before the built executable could "
-            "be located", timed_out=True)
-    try:
-        done = subprocess.run(["cabal", "list-bin", "exe:synarchy"],
-                              cwd=repo_root, capture_output=True, text=True,
-                              timeout=left)
-    except subprocess.TimeoutExpired:
-        raise SetupFailure(
-            "build", "build_timeout",
-            "cabal list-bin did not answer inside the setup budget",
-            timed_out=True) from None
-    except (OSError, subprocess.SubprocessError) as e:
-        raise SetupFailure("build", "build_failed",
-                           f"cabal list-bin failed: {e}") from e
+    code, out, err = _run_setup_command(
+        ["cabal", "list-bin", "exe:synarchy"], repo_root, deadline, clock,
+        capture=True)
     with open(log_path, "a") as logf:
-        logf.write(f"\n$ cabal list-bin exe:synarchy -> {done.returncode}\n")
-        logf.write(done.stdout)
-        logf.write(done.stderr)
-    lines = [ln.strip() for ln in done.stdout.splitlines() if ln.strip()]
+        logf.write(f"\n$ cabal list-bin exe:synarchy -> {code}\n")
+        logf.write(out)
+        logf.write(err)
+    lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
     exe = lines[-1] if lines else ""
-    if done.returncode != 0 or not exe or not os.path.isfile(exe):
+    if code != 0 or not exe or not os.path.isfile(exe):
         raise SetupFailure(
             "build", "build_failed",
             f"cabal list-bin did not name a built executable (exit "
-            f"{done.returncode}, got {exe!r}); see "
-            f"{os.path.basename(log_path)}")
+            f"{code}, got {exe!r}); see {os.path.basename(log_path)}")
     return exe
 
 
@@ -287,7 +311,8 @@ def start_engine(eng, exe: str, deadline: float, *, repo_root: str = REPO_ROOT,
 # --------------------------------------------------------------------------
 # Phase 3: the player-ready boundary
 # --------------------------------------------------------------------------
-def probe_player_ready(eng, screenshot_path: str) -> bool:
+def probe_player_ready(eng, screenshot_path: str, deadline: float | None = None,
+                       clock=time.monotonic) -> bool:
     """POSITIVE evidence that a first frame could be handed to a player.
 
     All three must hold, and elapsed time counts for nothing:
@@ -301,34 +326,64 @@ def probe_player_ready(eng, screenshot_path: str) -> bool:
     Both console reads are harness-side ORACLE reads: they are recorded
     for the critic and never surfaced to the player, so using them here
     leaves the oracle-blindness contract exactly as it was — that rule
-    forbids showing oracle data to the player, not reading it.
+    forbids showing oracle data to the player, not reading it. The
+    ui_manager singleton is read through `package.loaded`, not `require`:
+    this runs DURING boot, and `require` would force-load a module the
+    engine has not dofile'd yet (ui_manager.lua self-registers into
+    package.loaded, and its own submodule requires would run early). A
+    read that can only observe is the right shape for a readiness probe.
+    The registry is a leaf helper with no such ordering, so it keeps the
+    oracle's own spelling.
 
     ``screenshot_path`` is a SETUP artifact (`trace.setup_frame_path()`),
     deliberately not `frames/turn_0001.png`: this frame is never a turn
     observation, produces no `turns.jsonl`/`replay.jsonl` record, and is
     never shown to the player.
 
+    ``deadline`` is the setup budget's own monotonic deadline, and every
+    console read and the screenshot is bounded by whatever is LEFT of it
+    — re-measured before each one. Their engine-side defaults are 15 s
+    and 20 s, so a stalled-but-alive console would otherwise run one
+    probe cycle 50 s past a smaller `--setup-timeout`. Readiness proven
+    only after the deadline has passed does not count either: the probe
+    answers False, and the caller reports the setup timeout.
+
     A console error means "not ready yet", so the caller keeps polling
     until its own budget decides; only the caller's liveness check ends
     the wait early.
     """
+    def left() -> float | None:
+        return None if deadline is None else deadline - clock()
+
+    def spent() -> bool:
+        remaining = left()
+        return remaining is not None and remaining <= 0
+
+    def budgeted(default: float) -> float:
+        remaining = left()
+        return default if remaining is None else min(default, remaining)
+
     try:
-        # package.loaded, NOT require, for the ui_manager singleton: this
-        # runs DURING boot, and `require` would force-load a module the
-        # engine has not dofile'd yet (ui_manager.lua self-registers into
-        # package.loaded, and its own submodule requires would run early).
-        # A read that can only observe is the right shape for a readiness
-        # probe. The registry below is a leaf helper with no such
-        # ordering, so it keeps the oracle's own spelling.
+        if spent():
+            return False
         menu = eng.lua('local m = package.loaded["scripts.ui_manager"]; '
-                       'return m and m.currentMenu or nil')
+                       'return m and m.currentMenu or nil',
+                       timeout=budgeted(CONSOLE_READ_TIMEOUT))
         if not isinstance(menu, str) or not menu.strip():
             return False
-        widgets = eng.lua('return require("scripts.ui.registry").dumpWidgets()')
+        if spent():
+            return False
+        widgets = eng.lua('return require("scripts.ui.registry").dumpWidgets()',
+                          timeout=budgeted(CONSOLE_READ_TIMEOUT))
         if not isinstance(widgets, list) or not widgets:
             return False
-        size = eng.screenshot(screenshot_path)
+        if spent():
+            return False
+        size = eng.screenshot(screenshot_path,
+                              timeout=budgeted(SCREENSHOT_TIMEOUT))
     except EngineCrash:
+        return False
+    if spent():
         return False
     return bool(size) and size[0] > 0 and size[1] > 0
 
@@ -371,21 +426,32 @@ def launch_player_ready(eng, trace, *,
 
     log("playtest: setup 3/3 — waiting for the first player-ready frame")
     probe = ready if ready is not None else (
-        lambda: probe_player_ready(eng, trace.setup_frame_path()))
+        lambda: probe_player_ready(eng, trace.setup_frame_path(),
+                                   deadline=deadline, clock=clock))
     while True:
         if not eng.alive():
             raise SetupFailure(
                 "render", "render_engine_exited",
                 "the engine exited after READY but before it could render a "
                 "player-ready frame; see engine.log")
-        if probe():
-            break
+        # The budget is checked BEFORE probing and again after: a probe
+        # cycle is itself I/O, so readiness that only arrives once the
+        # watchdog has expired must not be allowed to cross the boundary
+        # (the default probe additionally bounds each of its own reads by
+        # what is left of this same deadline).
         if _remaining(deadline, clock) <= 0:
             raise SetupFailure(
                 "render", "render_timeout",
                 "the game never became player-ready (menu surface + widgets "
                 "+ a successful screenshot) inside the setup budget",
                 timed_out=True)
+        if probe():
+            if _remaining(deadline, clock) <= 0:
+                raise SetupFailure(
+                    "render", "render_timeout",
+                    "the game became player-ready only after the setup "
+                    "budget had already expired", timed_out=True)
+            break
         sleep(poll_interval)
 
     elapsed = clock() - started

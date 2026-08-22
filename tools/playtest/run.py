@@ -1419,7 +1419,7 @@ def selftest() -> int:
                 super().__init__()
                 self._shots = 0
 
-            def screenshot(self, path):
+            def screenshot(self, path, timeout=None):
                 self._shots += 1
                 data = self._PNG + (b"\x00" if self._shots == 2 else b"")
                 with open(path, "wb") as f:
@@ -1575,18 +1575,22 @@ def selftest() -> int:
                 self._widgets = [{"name": "start"}] if widgets is None else widgets
                 self._shoot = shoot
                 self.shot_paths: list[str] = []
+                self.shot_timeouts: list = []
+                self.lua_timeouts: list = []
 
             def lua(self, code, timeout=0):
+                self.lua_timeouts.append(timeout)
                 if "currentMenu" in code:
                     return self._menu
                 if "dumpWidgets" in code:
                     return self._widgets
                 return {"ok": True}
 
-            def screenshot(self, path):
+            def screenshot(self, path, timeout=None):
                 if not self._shoot:
                     raise EngineCrash("screenshot failed: no swapchain yet")
                 self.shot_paths.append(path)
+                self.shot_timeouts.append(timeout)
                 return super().screenshot(path)
 
         probe_dir, probe_trace = fresh("ready_probe")
@@ -1609,6 +1613,52 @@ def selftest() -> int:
               and not os.path.isfile(os.path.join(probe_dir, "turns.jsonl"))
               and not os.path.isfile(os.path.join(probe_dir, "replay.jsonl")),
               str(ok_eng.shot_paths))
+
+        # ...and the probe's own I/O is bounded by what is LEFT of the
+        # setup deadline, not by the engine's 15 s / 20 s per-call
+        # defaults: a stalled-but-alive console must not run one probe
+        # cycle far past a small --setup-timeout.
+        budget_eng = ReadyEngine()
+        io_clock = FakeClock(step=0.0)
+        launch_mod.probe_player_ready(
+            budget_eng, probe_trace.setup_frame_path(),
+            deadline=io_clock() + 2.0, clock=io_clock)
+        io_timeouts = budget_eng.lua_timeouts + budget_eng.shot_timeouts
+        check("every readiness read is bounded by the remaining setup budget",
+              len(io_timeouts) == 3
+              and all(0 < t <= 2.0 for t in io_timeouts),
+              str(io_timeouts))
+        spent_eng = ReadyEngine()
+        spent_clock = FakeClock(step=0.0)
+        check("an expired setup budget makes the probe answer False without "
+              "issuing a single read",
+              launch_mod.probe_player_ready(
+                  spent_eng, probe_trace.setup_frame_path(),
+                  deadline=spent_clock() - 1.0, clock=spent_clock) is False
+              and spent_eng.lua_timeouts == []
+              and spent_eng.shot_paths == [])
+
+        # ...and readiness that only arrives AFTER the watchdog expired
+        # is rejected rather than allowed to cross the boundary.
+        late_dir, late_trace = fresh("ready_late")
+        late_clock = FakeClock(step=0.0)
+
+        def _ready_but_late():
+            late_clock.now += 500.0     # the probe itself outlives the budget
+            return True
+
+        try:
+            launch_offline(late_trace, ready=_ready_but_late,
+                           clock=late_clock, setup_timeout=10.0)
+            late_exc = None
+        except launch_mod.SetupFailure as e:
+            late_exc = e
+        late_trace.finish(late_exc.stop_reason if late_exc else "error")
+        check("readiness proven after the setup budget expired never crosses "
+              "the boundary",
+              late_exc is not None and late_exc.kind == "render_timeout"
+              and load_meta(late_dir).get("loaded_at") is None,
+              str(late_exc))
 
         # ...and second: elapsed time alone never satisfies it. The
         # clock runs far past the budget while readiness stays False.
@@ -1826,6 +1876,73 @@ def selftest() -> int:
               still_held is False
               and launch_mod.wait_port_released(held_port, timeout=5.0) is True,
               f"held -> {still_held}")
+
+        # 8e-quater. the BUILD is a process TREE (cabal spawns ghc,
+        # which spawns more), so a pre-ready failure has to reap its
+        # whole group too — on the setup timeout AND on a Ctrl-C, which
+        # lands inside the build's own wait and never reaches the
+        # engine-side teardown. Both paths are driven here with a stub
+        # that leaves a background child behind.
+        def _tree_stub(name):
+            path = os.path.join(tmp, f"{name}.sh")
+            pid_file = os.path.join(tmp, f"{name}.pid")
+            with open(path, "w") as f:
+                f.write("#!/bin/sh\nsleep 120 &\necho $! > "
+                        f"'{pid_file}'\nsleep 120\n")
+            os.chmod(path, 0o755)
+            return path, pid_file
+
+        def _await_pid(pid_file):
+            for _ in range(200):
+                try:
+                    with open(pid_file) as f:
+                        return int(f.read().strip())
+                except (OSError, ValueError):
+                    time.sleep(0.05)
+            return None
+
+        for case, interrupt in (("build_timeout", False),
+                                ("build_interrupt", True)):
+            stub_path, stub_pids = _tree_stub(case)
+            real_communicate = subprocess.Popen.communicate
+
+            def _interrupting_communicate(self, *a, **kw):
+                # Only the first call: the reap below needs the real one.
+                subprocess.Popen.communicate = real_communicate
+                _await_pid(stub_pids)
+                raise KeyboardInterrupt()
+
+            if interrupt:
+                subprocess.Popen.communicate = _interrupting_communicate
+            raised = None
+            try:
+                with open(os.devnull, "w") as sink:
+                    launch_mod._run_setup_command(
+                        [stub_path], tmp,
+                        deadline=time.monotonic() + (60.0 if interrupt else 0.5),
+                        clock=time.monotonic, stdout=sink)
+            except BaseException as e:
+                raised = e
+            finally:
+                subprocess.Popen.communicate = real_communicate
+            build_child = _await_pid(stub_pids)
+            reaped = _settles(lambda: _not_running(build_child))
+            if interrupt:
+                ok = isinstance(raised, KeyboardInterrupt)
+            else:
+                ok = (isinstance(raised, launch_mod.SetupFailure)
+                      and raised.kind == "build_timeout"
+                      and raised.phase == "build")
+            check(f"a setup {'interruption' if interrupt else 'timeout'} "
+                  "reaps the build's whole process tree",
+                  ok and reaped,
+                  f"raised {type(raised).__name__}, child {build_child} "
+                  f"reaped={reaped}")
+            if not reaped and build_child is not None:
+                try:
+                    os.kill(build_child, _signal.SIGKILL)
+                except OSError:
+                    pass
 
         # 8f. older traces, which carry only started_at/ended_at, must
         # still load and still collate in the usage ledger.
