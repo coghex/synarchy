@@ -20,7 +20,7 @@ concrete precondition
 - [ ] CIR-2. Decode save-compat fixture descriptors once per self-test run
 - [ ] CIR-3. Reproduce and localize headless-suite hangs without timers
 - [ ] CIR-7. Isolate parallel probes behind one prebuilt executable
-- [ ] CIR-4. Automate immutable weekly CI image and cache refreshes
+- [ ] CIR-4. Rotate the project cache every eight build-relevant master changes
 - [ ] CIR-8. Prove and adopt only safe Hspec parallel regions
 - [ ] CIR-5. Run post-build gate families on independent critical paths
 - [ ] CIR-6. Reassess full-suite and behavior-probe selection from measured coverage
@@ -80,10 +80,10 @@ concrete precondition
   explains why the CI step documented as a cheap static audit consistently
   costs about 2m20s. The production audit still needs one real fixture decode;
   synthetic unit cases do not need to pay for a fresh Cabal REPL each time.
-- The `dist-newstyle` cache key is intentionally stable for a dependency plan.
-  Because GitHub cache entries are immutable, the first snapshot for a plan is
-  frozen and later runs rebuild every project change since that snapshot. This
-  bounds cache count but lets incremental compilation drift upward throughout a
+- The pre-CIR-4 `dist-newstyle` cache key was stable for a dependency plan.
+  Because GitHub cache entries are immutable, the first snapshot for a plan was
+  frozen and later runs rebuilt every project change since that snapshot. This
+  bounded cache count but let incremental compilation drift upward throughout a
   long-lived plan window.
 - Behavior probes already have per-probe 900-second timeouts and process-group
   termination in `tools/run_probes.py`. The aggregate runs up to two probes in
@@ -122,8 +122,9 @@ concrete precondition
   published only once. The Dockerfile nevertheless resolves moving external
   inputs (`ubuntu:22.04`, `apt-get`, and the ghcup download), and the image
   workflow explicitly notes that identical instructions are not guaranteed to
-  rebuild to identical bytes. A recurring refresh must therefore mint a new
-  immutable identity, never overwrite the current content tag.
+  rebuild to identical bytes. Image refresh remains content-change-driven: an
+  intentional recipe or base refresh must mint a new immutable identity, never
+  overwrite the current content tag.
 - The checked-in Hspec version is 2.11.17. Its runner supports `--jobs=N`, but
   Hspec only schedules specs explicitly marked with its `parallel` combinator;
   `test-headless/Spec.hs` marks none today. The large shared-world
@@ -159,9 +160,9 @@ concrete precondition
 6. Parallel work should start from one verified build. Each worker gets an
    isolated execution/resource tree and immutable binaries rather than a copy
    of mutable Cabal state.
-7. Cache and image freshness should be automatic and observable. A maintainer
-   may dispatch the maintenance workflow manually, but ordinary freshness must
-   not depend on remembering a personal weekly checklist.
+7. Project-cache freshness should be automatic and observable without spending
+   Actions minutes on a scheduled warmer. Cache deletion remains a deliberate,
+   dry-run-first maintainer action after the replacement is proven usable.
 
 ## Scope
 
@@ -170,8 +171,7 @@ concrete precondition
 - GitHub Actions workflow structure, summaries, and artifact handoff.
 - Ephemeral worktree/resource-root isolation for concurrent consumers of one
   build.
-- Scheduled and manually dispatched CI maintenance for immutable image/cache
-  rotation.
+- Git-history-derived project-cache epochs and manual bounded retention.
 - Cabal build-product cache freshness and bounded retention strategy.
 - Headless Hspec diagnostics, grouping, reruns, and local reproduction.
 - Static-audit startup cost, beginning with save compatibility.
@@ -265,40 +265,33 @@ latency and a green result.
 
 ### Keep build caches fresh without recreating cache explosion
 
-Replace the indefinitely frozen per-plan project snapshot with a bounded epoch,
-initially plan plus calendar week, while retaining a restore prefix that can
-reuse the newest older compatible snapshot on an epoch miss. A scheduled
-default-branch maintenance workflow runs once per week at a non-peak cron
-minute and exposes `workflow_dispatch` for a manual repair run. It restores the
-newest compatible prior snapshot, performs the warning-clean application and
-test-suite builds, and saves the new epoch in master scope so pull requests can
-restore it. Normal pull-request workflows remain restore-only consumers of the
-master cache.
+Replace the indefinitely frozen per-plan project snapshot with an immutable
+eight-change epoch. `tools/ci_cache_epoch.py` derives that epoch from
+first-parent master history after a checked-in anchor: it counts only changes
+to compiled-product inputs, so docs, Lua, assets, data and other runtime-only
+edits do not spend the freshness budget. The anchor starts epoch zero; each
+eighth relevant change advances the epoch. Pull requests derive the epoch from their
+base SHA and are restore-only consumers. A successful master push is the sole
+writer, which makes the new snapshot available in default-branch scope without
+a scheduled warmer or mutable API counter.
 
-Weekly is the first operating cadence, not a promise that seven days of drift
-will always meet the latency target. The observed six-minute increase after 81
-first-parent commits in less than two days means CIR-1 must report snapshot age
-and changed-commit count. If the build budget is exceeded before the weekly
-run, shortening the automatic cadence to daily or adding a bounded
-commit-count trigger is an operational adjustment, not a redesign.
+On an epoch miss, restore the newest compatible older epoch before compiling,
+then save the refreshed tree only after all blocking work succeeds. Compatibility
+includes the exact immutable image reference, so an image-only change cannot
+reuse old project objects. Retain the legacy per-plan key as the final bootstrap
+fallback only for the image known to have written it. Concurrent first writers
+remain benign because cache keys are immutable. A pre-anchor or unavailable PR
+base warns and selects epoch 0 rather than failing the PR, and the growing
+first-parent range is classified in one Git process rather than one per commit.
 
-The same maintenance workflow may refresh the CI image, but only by minting a
-new immutable epoch identity, for example
-`ci-<recipe-content-hash>-<YYYY-Www>`, validating it, publishing it once, and
-recording its digest. It must never overwrite an existing content tag. Retain
-the prior image long enough for rollback and make cache keys include the
-selected image identity (or the complete ABI/toolchain inputs it represents),
-so a refreshed operating-system image cannot restore incompatible project
-objects. This deliberately accepts a weekly environment-freshness boundary;
-the run summary must make that boundary visible when comparing historical
-runs.
-
-The maintenance workflow is repository automation, not another manual chore
-beside janitor or documentation publication. A maintainer uses the dispatch
-button only when the scheduled run was missed or a refresh needs to be forced.
-The key must remain compiler-, Cabal-, OS-, plan-, image-, and epoch-sensitive,
-and concurrent first writers must remain benign. Cache age, image age/digest,
-and whether the restore was exact or fallback must appear in the run summary.
+Retention is intentionally manual. `tools/ci_cache_cleanup.py` lists exact
+cache IDs and proposed reasons in a dry run by default, keeps the newest three
+snapshots per compatible image/toolchain, and never selects dependency caches or PR refs
+under its default master scope. Legacy selection is a separate opt-in and is
+refused until a v3 master cache exists; deletion requires another explicit
+`--delete`. GitHub's normal expiry still handles unused branch-scoped entries.
+The CI image remains independently content-addressed and refreshes only when
+its recipe changes.
 
 ### Prove safe Hspec parallel regions
 
@@ -406,14 +399,16 @@ ephemeral Git worktree/resource root. No consumer receives a cloned,
 hard-linked, or concurrently mutable `dist-newstyle`; any remaining GHCi user
 runs exclusively until it is replaced by a prebuilt helper.
 
-### D-6. Make CI freshness a scheduled weekly program with a manual fallback
+### D-6. Rotate after eight build-relevant master changes
 
-The repository owns a weekly scheduled maintenance workflow that runs from
-master, refreshes a new immutable image/cache epoch, validates it, and reports
-what changed. It also supports `workflow_dispatch` for repair or an intentional
-early refresh. This is automation, not a maintainer checklist. Weekly is the
-starting cadence; measured age/build drift may shorten it without reopening the
-architecture.
+The project-cache epoch is derived reproducibly from first-parent master
+history, with eight compiled-input changes per epoch. Pull requests use their
+base's epoch and never publish; successful master CI is the only writer. A
+pre-anchor or unavailable base degrades visibly to epoch 0. The exact resolved
+image is a separate compatibility component of every v3 key and restore prefix.
+This bounds compile drift without a scheduled workflow. Retention is a separate
+manual, dry-run-first operation, and legacy caches cannot be selected until a
+replacement has been seeded.
 
 ### D-7. Prefer bounded parallel critical paths over minimum runner minutes
 
@@ -460,10 +455,11 @@ feedback.
 
 ### Q-4. What is the right cache refresh epoch?
 
-Resolved by D-6 for the first deployment: use a weekly epoch and an automated
-master-scoped warmer. CIR-1 must measure whether the build-time budget is
-exceeded before the week ends; if so, shorten the cadence to daily or a bounded
-commit-count policy without changing the immutable-epoch design.
+Resolved by D-6 for the first deployment: eight build-relevant first-parent
+master changes per immutable epoch. This deliberately spends no scheduled
+runner minutes. CIR-1 must measure whether the build-time budget is exceeded
+before the eighth change; changing the count later does not alter the
+master-writer or immutable-epoch design.
 
 ### Q-5. How should the headless suite expose its last active example?
 
@@ -507,9 +503,9 @@ minimal binary bundle cannot run without copying Cabal's build database.
   remain independent, and the prior solo-retry tax disappears.
 - Validate cache keys and fallback ordering with a pure self-test or dry-run
   script, then inspect exact-hit/fallback evidence on successive workflow runs.
-  Exercise both the weekly `schedule` path and `workflow_dispatch`, verify the
-  cache is written in master scope, and prove an image refresh creates a new
-  immutable tag/digest rather than overwriting one.
+  Prove that change seven retains its epoch, change eight advances it, and
+  docs/runtime-only changes do not count; verify that PRs cannot save and the
+  replacement is written in master scope before legacy cleanup is allowed.
 - For artifact handoff, execute downloaded binaries in the same container and
   prove Hspec, one representative behavior probe, and world check can locate
   all repo-relative resources.
@@ -595,26 +591,26 @@ minimal binary bundle cannot run without copying Cabal's build database.
   overall workflow job graph, or changing probe assertions.
 - **Open questions:** `None`
 
-### CIR-4. Automate immutable weekly CI image and cache refreshes
+### CIR-4. Rotate the project cache every eight build-relevant master changes
 
-- **Outcome:** Master automatically produces a fresh, validated, immutable CI
-  image/cache epoch each week, with a manual repair button and compatible
-  fallback to the previous epoch.
-- **Scope:** A default-branch `schedule` plus `workflow_dispatch`, immutable
-  image tag/digest publication, image-aware cache keys, restore order, build
-  warming, run-summary diagnostics, retention/rollback policy, and focused
-  self-tests where practical.
+- **Outcome:** Successful master CI automatically seeds a fresh immutable
+  project-cache epoch after each group of eight compiled-input changes, while
+  pull requests consume master caches without publishing their own.
+- **Scope:** A deterministic Git-history epoch, master-only cache writes,
+  compatible older-epoch and legacy restore order, run-summary diagnostics,
+  a dry-run-first exact-ID cleanup command, and focused self-tests.
 - **Phase:** 2 — shorten compilation
 - **Depends on:** `CIR-1`
 - **Ordering:** `not on the critical path`
 - **Relevant decisions:** D-1, D-6
-- **Acceptance signals:** Scheduled and manually dispatched runs both work from
-  master scope; image refreshes mint rather than overwrite tags and record the
-  digest; same-epoch exact hits and compatible prior-epoch fallback are
-  observable; compile drift is measured and stays within the chosen budget or
-  triggers a documented cadence adjustment.
-- **Out of scope:** Adding refresh steps to the maintainer's janitor/docs
-  routine, mutable image tags, and self-hosted persistent build directories.
+- **Acceptance signals:** The seventh relevant change remains on its current
+  epoch and the eighth advances; docs/runtime-only changes do not advance it;
+  PRs derive from the base and cannot save; master saves only after success;
+  same-epoch exact hits and compatible prior-epoch fallback are observable;
+  cleanup previews exact IDs and protects dependency, PR and un-replaced
+  legacy caches.
+- **Out of scope:** Scheduled warmers, automatic deletion, mutable image tags,
+  and self-hosted persistent build directories.
 - **Open questions:** `None`
 
 ### CIR-8. Prove and adopt only safe Hspec parallel regions
