@@ -92,8 +92,7 @@
 --   rotation, trading a cosmetic mismatch for real I\/O and a fresh
 --   corruption window on bytes that are already durable.
 module World.Save.Autosave
-    ( autosaveSlotPrefix
-    , autosaveSlotName
+    ( autosaveSlotName
     , autosaveIncomingSlotName
     , autosaveRetiredSlotName
     , autosaveStagingSlotNames

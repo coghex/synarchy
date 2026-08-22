@@ -3,8 +3,6 @@
 --   and pixel-to-chunk-origin conversion.
 module World.Render.Zoom.Cursor
     ( makeCursorQuad
-    , makeSelectQuad
-    , makeHoverQuad
     , pixelToChunkOrigin
     ) where
 
@@ -124,19 +122,6 @@ makeSelectQuad facing _worldSize cs lookupSlot defFmSlot =
         (Just (baseGX, baseGY), Just selectTexture) →
             emitCursorQuad facing baseGX baseGY selectTexture lookupSlot defFmSlot 0.8 99
         _ → V.empty
-
-makeHoverQuad ∷ CameraFacing → Camera2D → Int → Int → Int → Int → Int
-              → CursorState → (TextureHandle → Int) → Float → V.Vector SortableQuad
-makeHoverQuad facing camera winW winH fbW fbH worldSize cs lookupSlot defFmSlot =
-    case zoomCursorPos cs of
-        Nothing → V.empty
-        Just (pixX, pixY) → case zoomHoverTexture cs of
-            Nothing → V.empty
-            Just hoverTexture →
-                case pixelToChunkOrigin facing camera winW winH fbW fbH worldSize pixX pixY of
-                    Nothing → V.empty
-                    Just (baseGX, baseGY) →
-                        emitCursorQuad facing baseGX baseGY hoverTexture lookupSlot defFmSlot 0.6 100
 
 -- | Shared helper to avoid the quad-emission boilerplate being repeated 3×.
 emitCursorQuad ∷ CameraFacing → Int → Int → TextureHandle

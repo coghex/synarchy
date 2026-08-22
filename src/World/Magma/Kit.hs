@@ -2,7 +2,6 @@
 module World.Magma.Kit
     ( perTypeKit
     , hotspotBoostFor
-    , hashRange
     , TerrainSampler
     ) where
 
@@ -20,8 +19,8 @@ import World.Geology.Timeline.Types
     )
 import World.Magma.Types (LavaShape(..))
 
--- | Surface elevation lookup, supplied by the caller in
---   'World.Magma.Init.buildMagmaSource'. Used by kits whose
+-- | Surface elevation lookup, supplied by the caller while
+--   "World.Magma.Init" builds a source. Used by kits whose
 --   surface placement depends on the local terrain — fissures,
 --   currently the only ones (other variants carry their own
 --   per-feature @CenterElev@ field).

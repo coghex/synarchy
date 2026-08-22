@@ -10,7 +10,6 @@ module World.Generate.Chunk.SoilGates
     , saltFlatKeep
     , nearFlat
     , applyFluidWt
-    , wtHaloRadius
     ) where
 
 import UPrelude
@@ -118,7 +117,7 @@ nearFlat outElev terrain idx =
 --   1. UNDER-FLUID BUMP — tiles under any water body (lake, river,
 --      ocean) get @wt ≥ fluid surface@, so a dig through the bed
 --      exposes water. Lava pools get no bump.
---   2. FRESH-WATER HALO — dry tiles within 'wtHaloRadius' (Chebyshev)
+--   2. FRESH-WATER HALO — dry tiles within @wtHaloRadius@ (Chebyshev)
 --      of a lake or river tile get @wt = surface + 1 − distance@:
 --      riparian groundwater that decays away from the shore. This is
 --      what lets 'wetlandKeep' pass on dry land at all — the climate

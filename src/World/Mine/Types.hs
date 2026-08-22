@@ -14,9 +14,7 @@
 module World.Mine.Types
     ( MineDesignation(..)
     , MineDesignations
-    , newMineDesignation
     , designationFromSlope
-    , digThreshold
     , drainCorners
     , cornersDone
     , digSlopeMask
@@ -52,10 +50,6 @@ data MineDesignation = MineDesignation
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
 type MineDesignations = HM.HashMap (Int, Int) MineDesignation
-
--- | Fresh designation: full corners, no yield progress.
-newMineDesignation ∷ Int → MineDesignation
-newMineDesignation z = MineDesignation z (1.0, 1.0, 1.0, 1.0) 0.0
 
 -- | Designation for a tile that's ALREADY sloped at generation time:
 --   the lowered side is pre-dug, so its corners start at zero. The
@@ -129,7 +123,7 @@ cornersDone (a, b, c, d) = a ≤ 0 ∧ b ≤ 0 ∧ c ≤ 0 ∧ d ≤ 0
 -- | Map corner dig state onto the slope-id edge mask the renderer
 --   already understands (N=1, E=2, S=4, W=8 = "slopes down toward
 --   that side"; see World.Slope.computeTileSlope). An edge slopes
---   once BOTH its corners are below 'digThreshold'.
+--   once BOTH its corners are below @digThreshold@.
 --
 --   When ALL FOUR corners are below threshold the raw mask would be
 --   15, which the renderer treats as flat — the tile would flash back

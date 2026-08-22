@@ -36,14 +36,10 @@ module World.Save.Component.Knowledge
     , ContainerKnowledgeDTO(..)
     , PageContainerKnowledgeDTO(..)
     , ContainerRecordDTO(..)
-    , toContainerRecordDTO
-    , fromContainerRecordDTO
     , ContainerRecordDTOv1(..)
     , PageContainerKnowledgeDTOv1(..)
     , ContainerKnowledgeDTOv1(..)
     , toContainerRecordDTOv1
-    , migrateContainerRecordDTOv1
-    , migrateContainerKnowledgeDTOv1
     ) where
 
 import UPrelude

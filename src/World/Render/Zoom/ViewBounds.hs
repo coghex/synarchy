@@ -47,7 +47,7 @@ isChunkInView vb drawX drawY w h =
          ∨ bottom < zvTop vb
          ∨ drawY  > zvBottom vb)
 
--- | Zoom-render twin of 'World.Render.ChunkCulling.bestWrapOffset'. The
+-- | Zoom-render twin of @World.Render.ChunkCulling.bestWrapOffset@. The
 --   two renderers keep separate bounds types and culling, but the
 --   world's own wrap period is one fact: both read it from
 --   'World.Grid.worldWrapPeriod' (#1176) rather than restating the

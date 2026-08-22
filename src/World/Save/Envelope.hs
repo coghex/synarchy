@@ -63,7 +63,6 @@ module World.Save.Envelope
     ( currentEnvelopeVersion
     , metadataComponentId
     , metadataComponentVersion
-    , metadataComponentInputVersions
     , legacyMetadataComponentVersion
     , LuaComponentSpec(..)
     , encodeSessionSnapshot
@@ -71,7 +70,6 @@ module World.Save.Envelope
     , decodeSaveEnvelopeMetadata
     , GenerationFailure(..)
     , renderGenerationFailure
-    , isRecoverableEnvelopeError
     , decodeSessionEnvelopeClassified
     , decodeSaveEnvelopeMetadataClassified
     , foreignOptionalComponentIds
@@ -113,7 +111,7 @@ currentEnvelopeVersion = 1
 --
 --   v2 (#913) appended 'World.Save.Types.smAutosave'. v1 payloads are
 --   still decoded, through the frozen "World.Save.Compat.MetadataV1"
---   mirror — see 'metadataComponentInputVersions'.
+--   mirror — see @metadataComponentInputVersions@.
 metadataComponentVersion ∷ Word32
 metadataComponentVersion = 2
 
@@ -892,7 +890,7 @@ decodeSessionEnvelopeClassified luaKnownNames luaRequiredNames bytes =
 --   cases are unreachable — metadata is always in the reader's required
 --   set.
 --
---   Two versions are accepted ('metadataComponentInputVersions'): the
+--   Two versions are accepted (@metadataComponentInputVersions@): the
 --   current one, decoded straight into 'SaveMetadata', and the frozen v1
 --   shape, decoded through "World.Save.Compat.MetadataV1" and migrated.
 --   The version is matched EXACTLY against that list rather than by an
