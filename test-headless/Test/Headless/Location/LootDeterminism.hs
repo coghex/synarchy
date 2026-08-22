@@ -181,15 +181,21 @@ spec = describe "Location loot determinism" $ do
                 `shouldNotBe` sequenceFor ruinCommon 43 1 3 4
 
         -- scripts/locations.lua keys a HAND-STAMPED location (no placed
-        -- instance) on a negative anchor-derived id. Those must stay
-        -- defined, in range, and stable — not wrap into a crash or
-        -- collide with instance 1's stream.
-        it "handles the negative anchor-derived fallback ids" $ do
+        -- instance) on a negative anchor-derived id, which
+        -- 'lootRollHash' absorbs by wrapping two's-complement into
+        -- 'Word64'. These two goldens pin the whole of that path — the
+        -- mixer's draw and the entry it then selects — so a change to
+        -- the signed-to-'Word64' conversion fails here. They SUBSUME
+        -- the definedness, range and stability assertions this example
+        -- used to make: an exact expected value is by construction
+        -- defined, in [0, 1), and identical on every evaluation. The
+        -- non-collision half is evidence too — instance 1's draw at
+        -- this same entry and roll is pinned above as 3.4748614e-2,
+        -- which this value is not.
+        it "pins the negative anchor-derived fallback id" $ do
             let neg = ctxAt 42 (-1234567) 3 1
-            rollLootTableFor ruinCommon neg
-                `shouldBe` rollLootTableFor ruinCommon neg
-            rollLootTableFor ruinCommon neg `shouldSatisfy` isJust
-            lootRollUnit neg `shouldSatisfy` \u → u ≥ 0 ∧ u < 1
+            lootRollUnit neg `shouldBe` 0.60222095
+            rollLootTableFor ruinCommon neg `shouldBe` Just "shovel_steel"
 
         it "keeps every unit draw in [0, 1)" $
             [ lootRollUnit (ctxAt s i e r)
@@ -217,10 +223,6 @@ spec = describe "Location loot determinism" $ do
             [ pickByWeight u scaled | u ← [0, 0.25, 0.2501, 0.9999] ]
                 `shouldBe` [ Just "rations", Just "rations"
                            , Just "quinoa_sack", Just "steel_dagger" ]
-
-        it "selects at most one item definition per roll" $
-            all (maybe True (const True)) (sequenceFor ruinCommon 42 1 3 8)
-                `shouldBe` True
 
         it "tracks the declared weights over many contexts" $ do
             -- 60000 draws: rations (weight 3/12) ~15000, steel_dagger
