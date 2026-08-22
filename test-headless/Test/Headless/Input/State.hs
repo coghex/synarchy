@@ -1,4 +1,4 @@
-module Test.Engine.Input.State (spec) where
+module Test.Headless.Input.State (spec) where
 
 import UPrelude
 import Test.Hspec
