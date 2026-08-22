@@ -422,7 +422,17 @@ end-to-end UI verification.
 
 - `src/` — Library source (~730 modules)
 - `app/Main.hs` — Executable entry point (draw loop)
-- `test/` — hspec unit tests (engine core and Vulkan primitives)
+- `test/` — the `synarchy-test-graphical` hspec suite: display-requiring
+  GLFW-window and Vulkan window-target specs. **Automated gates only
+  COMPILE it** — CI and `make ci` both `cabal build` it and neither ever
+  `cabal test`s it — because `test/Spec.hs` calls `GLFW.init` and creates
+  a real window before `hspec` runs, so with no display it yields no
+  assertions at all rather than a partial run. Running it by hand on a
+  graphics-capable desktop is the only way it executes. Every GPU-free
+  spec belongs in `test-headless/` instead (#1153), which every CI run
+  does run
+- `test-headless/` — the `synarchy-test-headless` hspec suite: the
+  running gate, executed on every CI run (see **Testing Tiers**)
 - `cbits/` — C code (stb_truetype font rasterization, Lua debug FFI)
 - `config/` — YAML config: tracked `*_default.yaml` templates +
   gitignored `*.local.yaml` runtime state (see "Config state" below)
