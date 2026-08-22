@@ -23,7 +23,7 @@ approval.
 - [x] NCT-1. Graphical GLFW “set time” test does not test setting time — [#1400]
 - [x] NCT-2. Graphical Vulkan lifecycle tests never destroy their raw instances — [#1401]
 - [x] NCT-3. Vulkan extension tests require optional, platform-specific capabilities — [#1402]
-- [ ] NCT-4. Most graphical GLFW tests validate the upstream binding, not game behavior — [deferred]: awaits #1153's build-only record
+- [x] NCT-4. Most graphical GLFW tests validate the upstream binding, not game behavior — [#1573]
 - [ ] NCT-5. Graphical device test bypasses the engine's GPU-selection contract
 - [ ] NCT-6. Injury-log probe accepts a `unit.injure` event for the wrong unit
 - [ ] NCT-7. Injury-log probe never gates a real fall's event emission
@@ -177,17 +177,7 @@ machine's driver inventory rather than the engine's cross-platform contract.
 - **Remaining uncertainty:** The exact extension inventory varies by Vulkan
   loader/driver, which is precisely why an unconditional test is unsuitable.
 
-### [deferred] NCT-4. Most graphical GLFW tests validate the upstream binding, not game behavior
-
-> **Deferred:** The retained smoke set is a policy question #1153 has not
-> answered — it explicitly puts "running the graphical suite anywhere" out of
-> scope while committing to record `test/` as build-only. Filing now would guess
-> between deleting these examples, relabelling them a manual preflight, and
-> writing project-owned coverage that could only run in a suite nothing
-> executes; the pure part is already covered headless by
-> `Test.Headless.Graphics.WindowMode` (27 examples, incl. `appliedModeAtCreation`).
-> Clears when #1153 lands and `test/`'s build-only status is recorded in
-> `CLAUDE.md` and the cabal stanza.
+### [#1573] NCT-4. Most graphical GLFW tests validate the upstream binding, not game behavior
 
 Most of the graphical GLFW suite unwraps the raw GLFW handle and calls the
 upstream `Graphics.UI.GLFW` API directly.  Beyond the one-time suite setup
