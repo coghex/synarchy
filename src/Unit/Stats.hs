@@ -11,7 +11,6 @@
 -- Range = 0 returns @base@ unchanged (no roll, no RNG consumption).
 module Unit.Stats
     ( rollStat
-    , boxMuller
     , effectiveStat
     , applySkillXP
     , applyItemBuffs

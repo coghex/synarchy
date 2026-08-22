@@ -21,7 +21,6 @@ module Combat.Wounds.Infection
     , woundHealFloor
     , kindInfectFactor
     , climateOnsetFactor
-    , climateMatchWeight
     , woundSiteClass
     , selectInfectionType
     , aggressivenessOf

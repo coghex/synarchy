@@ -466,6 +466,7 @@ library
                      Unit.Pathing.Hazard
                      Unit.Pathing.Cost
                      Unit.Pathing.AStar
+                     Unit.Physics
                      Unit.Fall
                      Unit.Injury
                      Unit.Command.Types
