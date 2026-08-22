@@ -105,11 +105,13 @@ partition it: `--without-reproducibility` runs every member except
 spawns its own `cabal repl test:synarchy-test-headless` to build two
 envelopes differing only in `smTimestamp` — ~26 s of a ~58 s module on a
 warm tree — and it exercises fixture GENERATION, which only a
-save-format, fixture, save-tooling or Cabal change can move. So both
-files run `--without-reproducibility` unconditionally and reach
-`--only-reproducibility` through `ci_expensive_gates.py`'s `save-compat`
-gate. A bare `python3 tools/test_save_compat_audit.py` still runs
-everything, which is what a developer running the module by hand gets.
+save-format, fixture, save-tooling or Cabal change can move. Local
+`make ci` runs `--without-reproducibility` unconditionally; CI runs it
+for every non-docs-only change and every save-compat input change. Both
+sides reach `--only-reproducibility` through
+`ci_expensive_gates.py`'s `save-compat` gate. A bare `python3
+tools/test_save_compat_audit.py` still runs everything, which is what a
+developer running the module by hand gets.
 
 This is the ONE case where `make ci` is path-selective rather than
 unconditional, so it needs its own local changed-path notion:
@@ -132,40 +134,48 @@ were the candidate's. `ci_parity_audit.py` checks that ordering, and the
 marked block reads the already-resolved `$SAVE_COMPAT_PATHS` rather than
 re-deriving it, which would put the resolution back after the write.
 
-Two things stayed deliberately unconditional. `save_compat_audit.py`
-runs in full on every pull request, and so does every other member of
-the self-test module — this narrows ONE member, not the step. And the
-step is still not cabal-free: `save_compat_audit.py`'s real-manifest run
-decodes the tracked fixtures' envelope descriptors through a `cabal
-repl` of its own (`verify_fixture_descriptors` →
-`dump_fixture_descriptors`), and `test_real_manifest_passes_the_audit`
-runs that same audit. The saving is one ADDITIONAL repl, not all of
-them.
+Outside CI's ordinary-docs fast path, the main save-compat step stays
+deliberately blocking: `save_compat_audit.py` runs in full, as does every
+other member selected by `--without-reproducibility`. Local `make ci`
+always runs that step. It is not cabal-free:
+`save_compat_audit.py`'s real-manifest run decodes the tracked fixtures'
+envelope descriptors through a `cabal repl` of its own
+(`verify_fixture_descriptors` → `dump_fixture_descriptors`), and
+`test_real_manifest_passes_the_audit` runs that same audit. Therefore CI
+skips the whole step only when `ci_docs_fast_path.py` has proved that the
+change is ordinary documentation outside `docs/save_compat/`.
 
-The condition itself is gated, not just the command set:
-`ci_parity_audit.py` pins CI's `if:` to its exact canonical text
-(including the `github.event_name != 'pull_request'` post-merge
-backstop), checks that guard reads the output the selector step writes
-from `--gate save-compat`, refuses a bare invocation on either side, and
-— because a set comparison cannot see a condition — EXTRACTS the marked
-selection block from `ci-local.sh` and EXECUTES it against a positive
-and a negative changed-path sample with `python3` shimmed, so a block
-that stopped guarding the member fails there rather than after a push.
+The conditions themselves are gated, not just the command set:
+`ci_parity_audit.py` pins the main audit's docs-only exception and the
+reproducibility member's `save-compat` guard to their exact canonical
+text, checks that the latter reads the output the selector step writes,
+and refuses a bare invocation on either side. The post-merge backstop is
+now supplied by the selector input: an ordinary-docs push uses its real
+changed range, while every other master push supplies `git ls-files`,
+which necessarily selects `save-compat` through the workflow, Cabal and
+Makefile entries in `SAVE_COMPAT_GLOBS`. Because a set comparison cannot
+see a condition, the parity audit also EXTRACTS the marked selection
+block from `ci-local.sh` and EXECUTES it against a positive and a
+negative changed-path sample with `python3` shimmed, so a block that
+stopped guarding the member fails there rather than after a push.
 
 **Same gate SET, not the same conditional control flow:** CI
 path-selects the graphical suite build, the unit-asset gate and
 `world_check` on PRs, while `make ci` runs all three unconditionally.
-Since #1490 CI also has a **docs-only fast path on master pushes**: when
-every path in the complete pushed range is documentation — under
-`docs/`, a plain add or modify, and never
-`docs/save_compat/manifest.json`, the one doc a Haskell target reads at
-runtime — the cabal build, both test-suite builds, the headless hspec
-suite and `world_check` are skipped. **Every Python audit still runs,
-self-tests included.** That asymmetry is the point rather than an
-oversight: #1490's cause was a docs-only push breaking
-`test_findings_report_audit.py`, so a fast path that skipped the audits
-would hide the very failure it was built for. `make ci` has no push
-range and so has no fast path; it always runs everything.
+Since #1490 CI also has a **docs-only fast path on pull requests and
+master pushes**: when every path in the complete base/pushed range is
+documentation — under `docs/`, a plain add or modify, and never under
+`docs/save_compat/`, whose machine-readable contracts require the real
+codec — dependency-plan resolution, both caches, the cabal build, both
+test-suite builds, the headless hspec suite, `world_check`, and both
+Cabal-backed save-compat steps are skipped. **Every engine-free Python
+audit still runs, self-tests included.** That asymmetry is the point
+rather than an oversight: #1490's cause was a docs-only push breaking
+`test_findings_report_audit.py`, so a fast path that skipped all audits
+would hide the very failure it was built for. The separate PR-only
+behavior-probe job also selects no probes for documentation. `make ci`
+has no event change range and so has no fast path; it always runs
+everything.
 The CI-only members of `test-and-audits` are its path SELECTORS
 (`ci_expensive_gates.py --stdin --gate worldgen|graphical|unit-assets`
 and `ci_docs_fast_path.py --stdin --explain`), which have nothing to select
