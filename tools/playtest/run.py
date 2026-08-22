@@ -11,6 +11,17 @@ unattended and in parallel on distinct ports. The windowed default is
 the one sanctioned exception to the never-launch-graphical rule: the
 graphical instance IS the system under test.
 
+A session is two halves separated by one observable boundary (#1539).
+SETUP — build, engine + debug-console startup, and the wait for the
+first frame that could really be handed to a player — runs under its
+own `--setup-timeout` watchdog and is not play: however long it takes
+(a cold worktree compiles the whole game), it consumes none of the
+player-session budget, and a failure there is reported as the setup
+phase it happened in, never as a player-session outcome. PLAY begins
+only after that boundary, and every session budget — wall clock,
+turns, decision timeout, player tokens, stuck detection, lockstep dt —
+is anchored to it.
+
 The lockstep loop per turn: pause -> screenshot (F1) -> player agent
 decides from pixels alone -> inject its action (F2) -> record the
 pre-step oracle context (F3 widgets, menu, pause state — stored for
@@ -49,6 +60,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 
+import launch as launch_mod  # noqa: E402
 from engine import EngineCrash, FakeEngine, PlaytestEngine, translate_action  # noqa: E402
 from personas import load_persona  # noqa: E402
 from trace import SessionTrace, load_meta, load_replay, load_turns  # noqa: E402
@@ -62,6 +74,10 @@ DEFAULT_MAX_SECONDS = 600.0
 DEFAULT_PLAYER_TOKEN_BUDGET = 200_000
 DEFAULT_MANUAL = os.path.join(os.path.dirname(os.path.dirname(HERE)),
                               "docs", "player_manual.md")
+# Non-zero exit: the harness never got a session, either because setup
+# failed before the player-ready boundary (#1539) or because something
+# unclassified went wrong.
+FAILED_STOP_REASONS = frozenset({"error"}) | launch_mod.SETUP_STOP_REASON_SET
 MANUAL_STUB = ("(No manual was provided. You know nothing about this game "
                "beyond what you can see on screen.)")
 
@@ -218,7 +234,16 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
                 turns: int, dt: float, max_seconds: float | None,
                 memory_turns: int, stuck_k: int, settle: float = 0.3,
                 max_player_tokens: int | None = None) -> str:
-    """The lockstep loop. Returns the stop reason."""
+    """The lockstep loop. Returns the stop reason.
+
+    Every player-session budget below — wall clock, turns, decision
+    timeout, player tokens and their projected reserve, stuck detection
+    and the lockstep `dt` — is anchored HERE, at the first statement of
+    the session (#1539), never at process start. Setup ran before this
+    was ever called, so however long the build, boot and UI load took,
+    the configured session budget arrives intact.
+    """
+    trace.mark_session_started()
     memory: list[str] = []
     prev_sig = None
     prev_frame_hash = None
@@ -442,6 +467,7 @@ def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
     so replay doesn't invent them; only a "completed" turn replays its
     post calls too. Wall-clock dt means it is still NOT guaranteed
     bit-identical (accepted tradeoff — see README)."""
+    trace.mark_session_started()
     entries = load_replay(source_dir)
     if not entries:
         print(f"  [warn] {source_dir} has no replay.jsonl entries")
@@ -556,6 +582,7 @@ def selftest() -> int:
     """Offline check of the loop, trace write, stuck detection, and
     replay — FakeEngine, ScriptedAgent, no window, no API, no build."""
     import inspect
+    import socket
     import tempfile
     failures = []
 
@@ -1428,6 +1455,411 @@ def selftest() -> int:
         check("replay's own final turn also retains post-step evidence",
               load_turns(rdir)[-1]["oracle"].get("post_screenshot") is not None)
 
+        # ------------------------------------------------------------
+        # 8. the player-ready boundary and the setup/session split
+        # (#1539). All of it offline: the three setup phases and the
+        # wall clock are injected, so none of this builds, boots, opens
+        # a window, or calls a model.
+        # ------------------------------------------------------------
+        class FakeClock:
+            """A monotonic clock the test advances by hand."""
+
+            def __init__(self, step=10.0):
+                self.now = 0.0
+                self.step = step
+
+            def __call__(self):
+                return self.now
+
+            def sleep(self, _seconds):
+                self.now += self.step
+
+        class ReadyAfter:
+            """Player-readiness that arrives only on the Nth probe —
+            positive evidence, never elapsed time."""
+
+            def __init__(self, probes):
+                self.left = probes
+                self.calls = 0
+
+            def __call__(self):
+                self.calls += 1
+                self.left -= 1
+                return self.left <= 0
+
+        def fresh(name, meta=None):
+            d = os.path.join(tmp, name)
+            return d, SessionTrace(d, dict(meta or {"mode": "selftest-ready"}))
+
+        def launch_offline(trace, *, ready, clock, setup_timeout=100000.0,
+                           build=None, start=None, eng=None):
+            return launch_mod.launch_player_ready(
+                eng or FakeEngine(), trace, setup_timeout=setup_timeout,
+                build=build or (lambda: "/nonexistent/synarchy"),
+                start=start or (lambda exe: None),
+                ready=ready, clock=clock, sleep=clock.sleep,
+                poll_interval=0.0, log=lambda *a, **k: None)
+
+        # 8a. a setup FAR longer than --max-seconds still hands the
+        # session its complete budget. The fake clock burns 5000 s
+        # before readiness; the session that follows is given 1 s and
+        # must still run its whole turn budget, which it could not do if
+        # the session clock had been anchored anywhere in setup.
+        slow_dir, slow_trace = fresh("ready_slow_setup")
+        slow_clock = FakeClock(step=1000.0)
+        slow_setup = launch_offline(slow_trace, ready=ReadyAfter(5),
+                                    clock=slow_clock)
+        slow_reason = run_session(FakeEngine(), agent_mod.ScriptedAgent(
+            [{"do": "wait"}]), slow_trace, turns=3, dt=0.0, max_seconds=1.0,
+            memory_turns=4, stuck_k=99, settle=0.0)
+        slow_trace.finish(slow_reason, time_budget_seconds=1.0)
+        slow_meta = load_meta(slow_dir)
+        check("setup longer than --max-seconds leaves the session budget whole",
+              slow_setup > 1.0 and slow_reason == "turn_budget_exhausted"
+              and slow_meta.get("turns") == 3,
+              f"{slow_setup:.0f}s setup, {slow_reason}, "
+              f"{slow_meta.get('turns')} turn(s)")
+
+        # 8b. no player call before the boundary. The agent records what
+        # the trace knew when it was asked; a non-null loaded_at proves
+        # the boundary was already crossed on its very first decision.
+        class BoundaryWitness(agent_mod.ScriptedAgent):
+            def __init__(self, watched):
+                super().__init__([{"do": "wait"}])
+                self.watched = watched
+                self.loaded_at_first_call = "never called"
+
+            def decide(self, *a, **kw):
+                if self.loaded_at_first_call == "never called":
+                    self.loaded_at_first_call = self.watched.meta.get("loaded_at")
+                return super().decide(*a, **kw)
+
+        wit_dir, wit_trace = fresh("ready_witness")
+        wit_clock = FakeClock()
+        launch_offline(wit_trace, ready=ReadyAfter(3), clock=wit_clock)
+        witness = BoundaryWitness(wit_trace)
+        wit_reason = run_session(FakeEngine(), witness, wit_trace, turns=2,
+                                 dt=0.0, max_seconds=None, memory_turns=4,
+                                 stuck_k=99, settle=0.0)
+        wit_trace.finish(wit_reason)
+        check("no player decision happens before the player-ready boundary",
+              isinstance(witness.loaded_at_first_call, float),
+              str(witness.loaded_at_first_call))
+
+        # 8c. chronological lifecycle metadata on a successful session,
+        # and all four are unix epoch floats (the clock domain the
+        # acceptance arithmetic depends on).
+        life = load_meta(wit_dir)
+        stamps = [life.get("setup_started_at"), life.get("loaded_at"),
+                  life.get("session_started_at"), life.get("ended_at")]
+        check("lifecycle stamps are four epoch floats in chronological order",
+              all(isinstance(v, float) for v in stamps)
+              and stamps == sorted(stamps)
+              and abs(stamps[0] - time.time()) < 86400,
+              str(stamps))
+        check("setup and play durations are independently derivable",
+              life["loaded_at"] - life["setup_started_at"] >= 0
+              and life["ended_at"] - life["session_started_at"] >= 0)
+        check("started_at is retained and still means the start of setup",
+              life.get("started_at") == life.get("setup_started_at"))
+
+        # 8d. readiness needs POSITIVE rendered/UI evidence. First: the
+        # probe itself against stub engines that each withhold exactly
+        # one of the three signals.
+        class ReadyEngine(FakeEngine):
+            """Menu + widgets + a working screenshot: player-ready."""
+
+            def __init__(self, menu="main", widgets=None, shoot=True):
+                super().__init__()
+                self._menu = menu
+                self._widgets = [{"name": "start"}] if widgets is None else widgets
+                self._shoot = shoot
+                self.shot_paths: list[str] = []
+
+            def lua(self, code, timeout=0):
+                if "currentMenu" in code:
+                    return self._menu
+                if "dumpWidgets" in code:
+                    return self._widgets
+                return {"ok": True}
+
+            def screenshot(self, path):
+                if not self._shoot:
+                    raise EngineCrash("screenshot failed: no swapchain yet")
+                self.shot_paths.append(path)
+                return super().screenshot(path)
+
+        probe_dir, probe_trace = fresh("ready_probe")
+        ok_eng = ReadyEngine()
+        check("readiness demands a menu surface, widgets AND a real frame",
+              launch_mod.probe_player_ready(
+                  ReadyEngine(menu=None), probe_trace.setup_frame_path()) is False
+              and launch_mod.probe_player_ready(
+                  ReadyEngine(widgets=[]), probe_trace.setup_frame_path()) is False
+              and launch_mod.probe_player_ready(
+                  ReadyEngine(shoot=False), probe_trace.setup_frame_path()) is False
+              and launch_mod.probe_player_ready(
+                  ok_eng, probe_trace.setup_frame_path()) is True)
+        check("the readiness frame is a setup artifact, never turn 1's frame",
+              ok_eng.shot_paths == [probe_trace.setup_frame_path()]
+              and probe_trace.setup_frame_path()
+              != probe_trace.frame_path(1)
+              and os.path.isfile(probe_trace.setup_frame_path())
+              and not os.path.isfile(probe_trace.frame_path(1))
+              and not os.path.isfile(os.path.join(probe_dir, "turns.jsonl"))
+              and not os.path.isfile(os.path.join(probe_dir, "replay.jsonl")),
+              str(ok_eng.shot_paths))
+
+        # ...and second: elapsed time alone never satisfies it. The
+        # clock runs far past the budget while readiness stays False.
+        never_dir, never_trace = fresh("ready_never")
+        never_clock = FakeClock(step=50.0)
+        try:
+            launch_offline(never_trace, ready=lambda: False,
+                           clock=never_clock, setup_timeout=120.0)
+            never_exc = None
+        except launch_mod.SetupFailure as e:
+            never_exc = e
+        never_trace.finish(never_exc.stop_reason if never_exc else "error")
+        check("elapsed time alone never satisfies the player-ready boundary",
+              never_exc is not None and never_exc.phase == "render"
+              and never_exc.kind == "render_timeout"
+              and never_exc.timed_out is True
+              and never_clock.now > 120.0,
+              str(never_exc))
+
+        # 8e. every pre-ready failure: zero turns, no replay entries,
+        # a phase-specific stop reason, and null lifecycle stamps.
+        setup_cases = [
+            ("build", launch_mod.SetupFailure(
+                "build", "build_failed", "cabal build exited 1"),
+             "setup_build_failed"),
+            ("engine", launch_mod.SetupFailure(
+                "engine", "engine_exited", "engine exited 1 before READY"),
+             "setup_engine_failed"),
+            ("render", None, "setup_render_failed"),
+        ]
+        articles = {"build": "a", "engine": "an", "render": "a"}
+        for phase, planted, expected_reason in setup_cases:
+            article = articles[phase]
+            fdir, ftrace = fresh(f"setup_fail_{phase}")
+            fclock = FakeClock(step=25.0)
+
+            def boom(*_a, _planted=planted):
+                raise _planted
+
+            try:
+                launch_offline(
+                    ftrace,
+                    build=(boom if phase == "build" else None),
+                    start=(boom if phase == "engine" else None),
+                    ready=(lambda: False) if phase == "render" else (lambda: True),
+                    clock=fclock, setup_timeout=60.0)
+                failure = None
+            except launch_mod.SetupFailure as e:
+                failure = e
+            ftrace.meta["setup_failure"] = failure.as_meta() if failure else None
+            ftrace.finish(failure.stop_reason if failure else "error")
+            fmeta = load_meta(fdir)
+            check(f"{article} {phase}-phase setup failure is an infrastructure outcome",
+                  failure is not None
+                  and fmeta.get("stop_reason") == expected_reason
+                  and fmeta["stop_reason"] not in (
+                      "time_budget_exhausted", "decision_timeout",
+                      "token_budget_reserved", "stuck_loop")
+                  and fmeta.get("turns") == 0
+                  and not os.path.isfile(os.path.join(fdir, "turns.jsonl"))
+                  and not os.path.isfile(os.path.join(fdir, "replay.jsonl")),
+                  str(fmeta.get("stop_reason")))
+            check(f"{article} {phase}-phase failure names its phase and kind",
+                  (fmeta.get("setup_failure") or {}).get("phase") == phase
+                  and bool((fmeta.get("setup_failure") or {}).get("kind"))
+                  and bool((fmeta.get("setup_failure") or {}).get("detail")),
+                  str(fmeta.get("setup_failure")))
+            check(f"{article} {phase}-phase failure leaves both boundary stamps null",
+                  fmeta.get("loaded_at") is None
+                  and fmeta.get("session_started_at") is None
+                  and isinstance(fmeta.get("setup_started_at"), float))
+
+        # 8e-bis. a build/setup TIMEOUT is its own retained kind, told
+        # apart from a build that ran and failed. Driven through the
+        # real function with a spent budget, so nothing compiles.
+        spent = FakeClock(step=1.0)
+        try:
+            launch_mod.build_executable(
+                launch_mod.REPO_ROOT,
+                os.path.join(tmp, "unused_setup.log"),
+                deadline=spent() - 1.0, clock=spent)
+            build_timeout = None
+        except launch_mod.SetupFailure as e:
+            build_timeout = e
+        check("a setup timeout is distinguishable from a build failure",
+              build_timeout is not None
+              and build_timeout.phase == "build"
+              and build_timeout.kind == "build_timeout"
+              and build_timeout.timed_out is True
+              and build_timeout.stop_reason == "setup_build_failed",
+              str(build_timeout))
+
+        # 8e-ter. the pre-ready teardown really reaps the whole spawned
+        # GROUP and really waits for the port. A stub "engine" that
+        # never prints READY is spawned with a background child of its
+        # own; killing the immediate process alone would leave that
+        # child (and, for a real engine, its listener) behind.
+        import signal as _signal
+        import subprocess
+
+        stub = os.path.join(tmp, "stub_engine.sh")
+        child_pid_file = os.path.join(tmp, "stub_child.pid")
+        with open(stub, "w") as f:
+            f.write("#!/bin/sh\nsleep 120 &\necho $! > "
+                    f"'{child_pid_file}'\nsleep 120\n")
+        os.chmod(stub, 0o755)
+
+        class StubEngine(FakeEngine):
+            def __init__(self, log_path):
+                super().__init__()
+                self.port = 0          # no listener: teardown skips the wait
+                self.log_path = log_path
+
+            def boot_mode(self):
+                return ()
+
+            def alive(self):
+                return self.proc is not None and self.proc.poll() is None
+
+        stub_eng = StubEngine(os.path.join(tmp, "stub_engine.log"))
+        stub_clock = FakeClock(step=1.0)
+        try:
+            launch_mod.start_engine(stub_eng, stub, deadline=stub_clock(),
+                                    repo_root=tmp, clock=stub_clock,
+                                    sleep=lambda _s: None)
+            stub_exc = None
+        except launch_mod.SetupFailure as e:
+            stub_exc = e
+        spawned = stub_eng.proc
+        for _ in range(100):           # the stub writes its child's pid
+            if os.path.isfile(child_pid_file):
+                break
+            time.sleep(0.05)
+        try:
+            with open(child_pid_file) as f:
+                child_pid = int(f.read().strip())
+        except (OSError, ValueError):
+            child_pid = None
+        launch_mod.teardown_setup(stub_eng)
+
+        def _not_running(pid):
+            """True once `pid` holds no running process.
+
+            A ZOMBIE counts as gone — it has already exited and released
+            its port and every other resource, and only waits to be
+            reaped by an init that may never do so. That is exactly the
+            distinction `run_probes` draws, and asserting on `os.kill(pid,
+            0)` instead would read a not-yet-reaped orphan as alive."""
+            if pid is None:
+                return False
+            done = subprocess.run(["ps", "-o", "state=", "-p", str(pid)],
+                                  capture_output=True, text=True)
+            state = done.stdout.strip()
+            return not state or state.startswith("Z")
+
+        def _settles(predicate, budget=30.0):
+            """Poll a teardown predicate — a loaded machine (a parallel
+            build, say) can take seconds to finish tearing a group
+            down, and this gate must not be a race."""
+            end = time.monotonic() + budget
+            while True:
+                if predicate():
+                    return True
+                if time.monotonic() >= end:
+                    return False
+                time.sleep(0.1)
+
+        check("a console-readiness timeout is its own retained kind",
+              stub_exc is not None and stub_exc.phase == "engine"
+              and stub_exc.kind == "console_timeout"
+              and stub_exc.timed_out is True,
+              str(stub_exc))
+        reaped_leader = spawned is not None and _settles(
+            lambda: spawned.poll() is not None)
+        reaped_child = _settles(lambda: _not_running(child_pid))
+        check("pre-ready teardown reaps the whole spawned group, not just "
+              "the process it started",
+              reaped_leader and reaped_child and stub_eng.proc is None,
+              f"child {child_pid}: leader reaped={reaped_leader}, "
+              f"child reaped={reaped_child}")
+        if not reaped_child and child_pid is not None:
+            try:                        # never leave the stub behind
+                os.kill(child_pid, _signal.SIGKILL)
+            except OSError:
+                pass
+
+        # ...and the port wait is a real observation of the listener,
+        # not a sleep. A live accept loop stands in for the engine's
+        # debug console: while it answers, the port must read as held.
+        import threading
+        holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        holder.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        holder.bind(("127.0.0.1", 0))
+        holder.listen(8)
+        holder.settimeout(0.1)
+        held_port = holder.getsockname()[1]
+        listening = threading.Event()
+        listening.set()
+
+        def _accept_loop():
+            while listening.is_set():
+                try:
+                    conn, _ = holder.accept()
+                    conn.close()
+                except OSError:
+                    pass
+
+        accepter = threading.Thread(target=_accept_loop, daemon=True)
+        accepter.start()
+        still_held = launch_mod.wait_port_released(held_port, timeout=1.0)
+        listening.clear()
+        accepter.join(timeout=3.0)
+        holder.close()
+        check("the pre-ready teardown waits on the port itself",
+              still_held is False
+              and launch_mod.wait_port_released(held_port, timeout=5.0) is True,
+              f"held -> {still_held}")
+
+        # 8f. older traces, which carry only started_at/ended_at, must
+        # still load and still collate in the usage ledger.
+        legacy_root = os.path.join(tmp, "legacy_artifacts")
+        legacy_dir = os.path.join(legacy_root, "legacy-run")
+        os.makedirs(os.path.join(legacy_dir, "frames"))
+        with open(os.path.join(legacy_dir, "meta.json"), "w") as f:
+            json.dump({"started_at": 1_700_000_000.0,
+                       "ended_at": 1_700_000_030.0,
+                       "turns": 1, "stop_reason": "turn_budget_exhausted",
+                       "player_token_budget": 200_000,
+                       "player_model": {"backend": "codex-cli",
+                                        "model": "luna", "effort": "medium"},
+                       "usage_totals": {"input_tokens": 900,
+                                        "output_tokens": 100}}, f)
+        with open(os.path.join(legacy_dir, "turns.jsonl"), "w") as f:
+            f.write(json.dumps({"turn": 1, "screenshot": "frames/turn_0001.png",
+                                "player": {"observation": "", "action":
+                                           {"do": "wait"}, "expectation": "",
+                                           "note": ""},
+                                "injected": [], "acks": [], "oracle": {},
+                                "stuck": False}) + "\n")
+        legacy_meta = load_meta(legacy_dir)
+        legacy_ledger = os.path.join(tmp, "legacy_usage.md")
+        update_usage_log(legacy_ledger, legacy_root)
+        with open(legacy_ledger) as f:
+            legacy_text = f.read()
+        legacy_plan = write_inspection_plan(legacy_dir)
+        check("a pre-#1539 trace still loads, collates and pre-analyzes",
+              "loaded_at" not in legacy_meta
+              and "session_started_at" not in legacy_meta
+              and "legacy-run" in legacy_text and "1K" in legacy_text
+              and os.path.isfile(legacy_plan))
+
     if failures:
         print(f"selftest: FAILED ({len(failures)}): {', '.join(failures)}")
         return 1
@@ -1457,7 +1889,17 @@ def main() -> int:
                     help="fixed medium-effort player profile")
     ap.add_argument("--turns", type=int, default=DEFAULT_TURNS)
     ap.add_argument("--max-seconds", type=float, default=DEFAULT_MAX_SECONDS,
-                    help="wall-clock session budget (default: 600)")
+                    help="wall-clock PLAYER-SESSION budget, counted from the "
+                         "player-ready boundary (default: 600)")
+    ap.add_argument("--setup-timeout", type=float,
+                    default=launch_mod.DEFAULT_SETUP_TIMEOUT,
+                    help="pre-ready setup watchdog in seconds, covering the "
+                         "build, the engine/debug-console startup and the "
+                         "wait for a first player-ready frame (default: "
+                         f"{launch_mod.DEFAULT_SETUP_TIMEOUT:.0f}). An "
+                         "infrastructure safety limit, NOT a playtest budget: "
+                         "it is independent of --max-seconds and generous "
+                         "enough for a full cold-worktree build")
     ap.add_argument("--max-player-tokens", type=int,
                     default=DEFAULT_PLAYER_TOKEN_BUDGET,
                     help="input+output token ceiling with projected next-turn "
@@ -1488,6 +1930,11 @@ def main() -> int:
         ap.error("--max-player-tokens must be positive")
     if args.max_seconds <= 0:
         ap.error("--max-seconds must be positive")
+    if args.setup_timeout <= 0:
+        ap.error("--setup-timeout must be positive")
+    if args.port == launch_mod.GUI_PORT:
+        ap.error(f"--port {launch_mod.GUI_PORT} is the graphical instance's "
+                 "port; pass a 9xxx port")
 
     if args.smoke:
         args.agent = "scripted"
@@ -1520,6 +1967,10 @@ def main() -> int:
         "dt": args.dt,
         "turn_budget": args.turns,
         "time_budget_seconds": args.max_seconds,
+        # The pre-ready watchdog, recorded beside the session budgets so a
+        # trace says which limit could have ended it (#1539). It is not one
+        # of the player-session budgets and never shortens them.
+        "setup_timeout_seconds": args.setup_timeout,
         "player_token_budget": args.max_player_tokens,
         "usage_log_path": usage_log_path,
         "usage_artifacts_root": usage_artifacts_root,
@@ -1582,9 +2033,11 @@ def main() -> int:
                          render_mode=args.render_mode)
     stop_reason = "error"
     try:
-        eng.launch()
-        # let the loading screen finish assembling the main menu
-        time.sleep(3.0)
+        # Build, boot and UI-load under their OWN watchdog, then cross the
+        # player-ready boundary (#1539). Only after this returns does any
+        # player-session budget begin, and no player call has happened yet.
+        launch_mod.launch_player_ready(eng, trace,
+                                       setup_timeout=args.setup_timeout)
         if replaying:
             stop_reason = run_replay(eng, args.replay, trace, dt=args.dt)
         else:
@@ -1593,6 +2046,22 @@ def main() -> int:
                 max_seconds=args.max_seconds, memory_turns=args.memory_turns,
                 stuck_k=args.stuck_k,
                 max_player_tokens=args.max_player_tokens)
+    except launch_mod.SetupFailure as e:
+        # An INFRASTRUCTURE failure, never a player-session outcome: zero
+        # turns, no replay entries, no player call, no tokens, and a
+        # stop_reason naming which of the three setup phases failed. The
+        # retained setup.log / engine.log are what tell a build failure,
+        # a build timeout, an executable exit, a console-readiness
+        # failure and a rendered-readiness failure apart.
+        print(f"  [setup] {e}")
+        stop_reason = e.stop_reason
+        trace.meta["setup_failure"] = e.as_meta()
+        trace.meta["setup_log_tail"] = launch_mod.log_tail(
+            trace.setup_log_path()) or None
+        trace.meta["engine_log_tail"] = eng.log_tail() or None
+        if not launch_mod.teardown_setup(eng):
+            print(f"  [setup] warning: port {args.port} was still held after "
+                  "teardown; the next run on it may fail to bind")
     except EngineCrash as e:
         # a crash mid-session is a finding: keep the partial trace + logs
         print(f"  [crash] {e}")
@@ -1601,6 +2070,12 @@ def main() -> int:
         trace.meta["engine_log_tail"] = eng.log_tail()
     except KeyboardInterrupt:
         stop_reason = "interrupted"
+        if trace.meta.get("loaded_at") is None:
+            # Interrupted before the boundary: the instance was never a
+            # session, so tear it down the pre-ready way — reap the whole
+            # group and wait for the port — rather than leaving an orphan
+            # holding it (#1323).
+            launch_mod.teardown_setup(eng)
     finally:
         try:
             eng.quit()
@@ -1624,8 +2099,12 @@ def main() -> int:
             except Exception as e:
                 print(f"  [warn] could not update usage ledger: {e}")
 
-    print(f"playtest: session ended ({stop_reason}); trace at {trace_dir}")
-    return 0 if stop_reason not in ("error",) else 1
+    if stop_reason in launch_mod.SETUP_STOP_REASON_SET:
+        print(f"playtest: setup failed ({stop_reason}) before any player "
+              f"session started; trace at {trace_dir}")
+    else:
+        print(f"playtest: session ended ({stop_reason}); trace at {trace_dir}")
+    return 0 if stop_reason not in FAILED_STOP_REASONS else 1
 
 
 if __name__ == "__main__":

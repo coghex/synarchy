@@ -1,0 +1,448 @@
+"""Cold-boot setup and the PLAYER-READY boundary for the playtest harness (#1539).
+
+A playtest starts from a cold worktree: `cabal` may compile the whole
+game, the process then has to come up, and the real UI flow (loading
+screen -> title/main menu) has to assemble before a screenshot means
+anything to a player. None of that is play, and none of it may be
+charged to the player's session budget.
+
+This module owns that pre-ready sequence and the one observable
+boundary that ends it. It is deliberately playtest-LOCAL rather than a
+change to `probelib.boot`: ~85 behavior probes call `boot` directly and
+its contract for them (a 180 s `ready_timeout` default, `sys.exit` on
+failure, per-port log defaulting) is unchanged by this file.
+
+Three phases, in order, each with its own name in the trace:
+
+1. ``build``  — `cabal build exe:synarchy`, then `cabal list-bin` for the
+   executable. `probelib.boot` runs `cabal run -v0`, which both hides the
+   build output and counts compilation against the READY deadline; this
+   phase separates the two, and its output lands in the trace's
+   ``setup.log`` where `-v0` cannot suppress it.
+2. ``engine`` — spawn the built executable and wait for the debug
+   console's ``READY``. The process is recorded on the engine object the
+   instant it exists, so even a failure in this phase can still reap it.
+3. ``render`` — poll for POSITIVE evidence that a first frame could
+   actually be handed to a player: an initialized menu surface, a
+   non-empty widget registry, and a screenshot that really succeeds.
+   Elapsed time never satisfies this.
+
+The whole sequence runs under ONE budget (``--setup-timeout``), which is
+neither `probelib`'s 180 s probe default nor derived from
+``--max-seconds``: a setup longer than the entire session budget must
+still leave that session budget whole. It exists only so a wedged
+compiler or engine cannot hang forever — it is an infrastructure
+watchdog, never a playtest timer, and tripping it is reported as a
+setup failure, never as ``time_budget_exhausted``.
+
+A pre-ready failure reaps the WHOLE spawned process group (the engine is
+its own session leader, so `run_probes.reap_group` addresses it even
+when the immediate child is already gone) and waits for the listener
+port to actually release, so the next attempt does not fail as an
+unrelated "exited before READY" (#1190/#1323).
+"""
+from __future__ import annotations
+
+import os
+import socket
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+TOOLS = os.path.dirname(HERE)
+REPO_ROOT = os.path.dirname(TOOLS)
+for _path in (HERE, TOOLS):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
+
+from engine import EngineCrash  # noqa: E402
+from probelib import GUI_PORT  # noqa: E402
+from run_probes import reap_group  # noqa: E402
+
+# The pre-ready budget. NOT probelib's 180 s probe READY default (which
+# is exactly what killed the cold-worktree run in #1539) and never
+# derived from --max-seconds: it has to admit a full from-scratch build
+# of this repository. Overridable with --setup-timeout.
+DEFAULT_SETUP_TIMEOUT = 1800.0
+
+# How often the render phase re-probes for player-readiness.
+READY_POLL_INTERVAL = 0.5
+
+# How long a pre-ready teardown waits for the listener socket to free.
+PORT_RELEASE_TIMEOUT = 10.0
+
+# The three pre-ready phases, in order. Requirement 4 of #1539: a setup
+# failure must say unambiguously which one it happened in.
+SETUP_PHASES = ("build", "engine", "render")
+
+# One stop_reason per phase. All three are SETUP outcomes: they are never
+# time_budget_exhausted / decision_timeout / any other player-session
+# reason, because no player session ever started.
+SETUP_STOP_REASONS = {
+    "build": "setup_build_failed",
+    "engine": "setup_engine_failed",
+    "render": "setup_render_failed",
+}
+SETUP_STOP_REASON_SET = frozenset(SETUP_STOP_REASONS.values())
+
+
+class SetupFailure(Exception):
+    """A failure BEFORE the player-ready boundary.
+
+    ``phase`` is one of SETUP_PHASES and picks the stop reason. ``kind``
+    is the finer classification requirement 6 asks the trace to preserve
+    — a build failure, a build/setup timeout, an executable exit, a
+    debug-console readiness failure and a rendered-readiness failure are
+    each their own value, so the retained logs are read with the right
+    question in mind.
+    """
+
+    def __init__(self, phase: str, kind: str, detail: str,
+                 *, timed_out: bool = False):
+        if phase not in SETUP_PHASES:
+            raise ValueError(f"unknown setup phase {phase!r}")
+        super().__init__(f"setup {phase} failed ({kind}): {detail}")
+        self.phase = phase
+        self.kind = kind
+        self.detail = detail
+        self.timed_out = timed_out
+        self.stop_reason = SETUP_STOP_REASONS[phase]
+
+    def as_meta(self, **extra) -> dict:
+        """The trace record for this failure."""
+        record = {
+            "phase": self.phase,
+            "kind": self.kind,
+            "detail": self.detail,
+            "timed_out": self.timed_out,
+            "stop_reason": self.stop_reason,
+        }
+        record.update(extra)
+        return record
+
+
+def log_tail(path: str, lines: int = 80) -> str:
+    """The last ``lines`` of a setup/engine log, or "" if unreadable."""
+    try:
+        with open(path, errors="replace") as f:
+            return "".join(f.readlines()[-lines:])
+    except OSError:
+        return ""
+
+
+def _remaining(deadline: float, clock) -> float:
+    return deadline - clock()
+
+
+# --------------------------------------------------------------------------
+# Phase 1: build
+# --------------------------------------------------------------------------
+def build_executable(repo_root: str, log_path: str, deadline: float,
+                     clock=time.monotonic) -> str:
+    """Compile the game and answer with the executable's path.
+
+    Runs at cabal's DEFAULT verbosity (not `probelib.boot`'s `-v0`) with
+    stdout+stderr captured into ``log_path``, which is the trace's own
+    ``setup.log``: a build failure or a build that ran out of budget
+    leaves its real output behind instead of an unexplained empty engine
+    log.
+    """
+    if _remaining(deadline, clock) <= 0:
+        raise SetupFailure(
+            "build", "build_timeout",
+            "the setup budget was already spent before the build began",
+            timed_out=True)
+    with open(log_path, "w") as logf:
+        logf.write(f"$ cabal build exe:synarchy    (cwd {repo_root})\n")
+        logf.flush()
+        try:
+            proc = subprocess.Popen(
+                ["cabal", "build", "exe:synarchy"], cwd=repo_root,
+                stdout=logf, stderr=subprocess.STDOUT)
+        except OSError as e:
+            raise SetupFailure("build", "build_failed",
+                               f"could not run cabal: {e}") from e
+        try:
+            code = proc.wait(timeout=max(0.0, _remaining(deadline, clock)))
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+            raise SetupFailure(
+                "build", "build_timeout",
+                "cabal build did not finish inside the setup budget; "
+                f"see {os.path.basename(log_path)}",
+                timed_out=True) from None
+    if code != 0:
+        raise SetupFailure(
+            "build", "build_failed",
+            f"cabal build exited {code}; see {os.path.basename(log_path)}")
+    return _locate_executable(repo_root, log_path, deadline, clock)
+
+
+def _locate_executable(repo_root: str, log_path: str, deadline: float,
+                       clock) -> str:
+    left = _remaining(deadline, clock)
+    if left <= 0:
+        raise SetupFailure(
+            "build", "build_timeout",
+            "the setup budget ran out before the built executable could "
+            "be located", timed_out=True)
+    try:
+        done = subprocess.run(["cabal", "list-bin", "exe:synarchy"],
+                              cwd=repo_root, capture_output=True, text=True,
+                              timeout=left)
+    except subprocess.TimeoutExpired:
+        raise SetupFailure(
+            "build", "build_timeout",
+            "cabal list-bin did not answer inside the setup budget",
+            timed_out=True) from None
+    except (OSError, subprocess.SubprocessError) as e:
+        raise SetupFailure("build", "build_failed",
+                           f"cabal list-bin failed: {e}") from e
+    with open(log_path, "a") as logf:
+        logf.write(f"\n$ cabal list-bin exe:synarchy -> {done.returncode}\n")
+        logf.write(done.stdout)
+        logf.write(done.stderr)
+    lines = [ln.strip() for ln in done.stdout.splitlines() if ln.strip()]
+    exe = lines[-1] if lines else ""
+    if done.returncode != 0 or not exe or not os.path.isfile(exe):
+        raise SetupFailure(
+            "build", "build_failed",
+            f"cabal list-bin did not name a built executable (exit "
+            f"{done.returncode}, got {exe!r}); see "
+            f"{os.path.basename(log_path)}")
+    return exe
+
+
+# --------------------------------------------------------------------------
+# Phase 2: engine process + debug console
+# --------------------------------------------------------------------------
+def start_engine(eng, exe: str, deadline: float, *, repo_root: str = REPO_ROOT,
+                 clock=time.monotonic, sleep=time.sleep) -> None:
+    """Spawn the built executable on ``eng.port`` and block until READY.
+
+    The process is recorded on ``eng.proc`` the instant `Popen` returns,
+    BEFORE the READY wait, so a failure in this phase is still reapable
+    by `teardown_setup` — the leak `probelib.boot`'s bare `proc.kill()`
+    leaves behind (#1323).
+
+    It is spawned into its OWN session (`start_new_session=True`), which
+    makes its pid its process-group id and lets `reap_group` address
+    every descendant, and it is given the resource root explicitly so a
+    playtest launched from any working directory finds `scripts/`,
+    `assets/`, `data/` and `config/`.
+    """
+    if eng.port == GUI_PORT:
+        # `probelib.boot`'s own guard, kept: 8008 is the user's graphical
+        # instance. `main()` rejects it at argument-parse time; this is
+        # the backstop for any other caller.
+        raise SetupFailure(
+            "engine", "refused_port",
+            f"refusing to boot on port {GUI_PORT} (the GUI port); "
+            "pass a 9xxx --port")
+    cmd = [exe, *eng.boot_mode(), "--port", str(eng.port),
+           "--resource-root", repo_root]
+    try:
+        logf = open(eng.log_path, "w")
+    except OSError as e:
+        raise SetupFailure("engine", "engine_exited",
+                           f"could not open the engine log: {e}") from e
+    try:
+        eng.proc = subprocess.Popen(cmd, cwd=repo_root, stdout=logf,
+                                    stderr=subprocess.STDOUT,
+                                    start_new_session=True)
+    except OSError as e:
+        raise SetupFailure("engine", "engine_exited",
+                           f"could not start {exe}: {e}") from e
+    finally:
+        # The child holds its own dup; the parent's copy would otherwise
+        # stay open for the whole session.
+        logf.close()
+    while True:
+        try:
+            with open(eng.log_path, errors="replace") as f:
+                if "READY" in f.read():
+                    return
+        except OSError:
+            pass
+        code = eng.proc.poll()
+        if code is not None:
+            raise SetupFailure(
+                "engine", "engine_exited",
+                f"the engine exited {code} before the debug console printed "
+                f"READY; see engine.log")
+        if _remaining(deadline, clock) <= 0:
+            raise SetupFailure(
+                "engine", "console_timeout",
+                "the engine is still running but its debug console never "
+                "printed READY inside the setup budget; see engine.log",
+                timed_out=True)
+        sleep(0.4)
+
+
+# --------------------------------------------------------------------------
+# Phase 3: the player-ready boundary
+# --------------------------------------------------------------------------
+def probe_player_ready(eng, screenshot_path: str) -> bool:
+    """POSITIVE evidence that a first frame could be handed to a player.
+
+    All three must hold, and elapsed time counts for nothing:
+
+    * an initialized title/main-menu interaction surface
+      (`ui_manager.currentMenu` names one), and
+    * a non-empty widget registry (`ui.registry.dumpWidgets()` — the
+      menu's interactive surface actually exists), and
+    * a screenshot that really succeeds and reports a positive size.
+
+    Both console reads are harness-side ORACLE reads: they are recorded
+    for the critic and never surfaced to the player, so using them here
+    leaves the oracle-blindness contract exactly as it was — that rule
+    forbids showing oracle data to the player, not reading it.
+
+    ``screenshot_path`` is a SETUP artifact (`trace.setup_frame_path()`),
+    deliberately not `frames/turn_0001.png`: this frame is never a turn
+    observation, produces no `turns.jsonl`/`replay.jsonl` record, and is
+    never shown to the player.
+
+    A console error means "not ready yet", so the caller keeps polling
+    until its own budget decides; only the caller's liveness check ends
+    the wait early.
+    """
+    try:
+        # package.loaded, NOT require, for the ui_manager singleton: this
+        # runs DURING boot, and `require` would force-load a module the
+        # engine has not dofile'd yet (ui_manager.lua self-registers into
+        # package.loaded, and its own submodule requires would run early).
+        # A read that can only observe is the right shape for a readiness
+        # probe. The registry below is a leaf helper with no such
+        # ordering, so it keeps the oracle's own spelling.
+        menu = eng.lua('local m = package.loaded["scripts.ui_manager"]; '
+                       'return m and m.currentMenu or nil')
+        if not isinstance(menu, str) or not menu.strip():
+            return False
+        widgets = eng.lua('return require("scripts.ui.registry").dumpWidgets()')
+        if not isinstance(widgets, list) or not widgets:
+            return False
+        size = eng.screenshot(screenshot_path)
+    except EngineCrash:
+        return False
+    return bool(size) and size[0] > 0 and size[1] > 0
+
+
+def launch_player_ready(eng, trace, *,
+                        setup_timeout: float = DEFAULT_SETUP_TIMEOUT,
+                        repo_root: str = REPO_ROOT,
+                        build=None, start=None, ready=None,
+                        clock=time.monotonic, sleep=time.sleep,
+                        poll_interval: float = READY_POLL_INTERVAL,
+                        log=print) -> float:
+    """Take a cold instance through all three setup phases to player-ready.
+
+    Returns the setup duration in seconds and stamps `trace.mark_loaded()`
+    — the boundary itself. Every player-session budget starts strictly
+    after this returns; nothing here consumes any of them.
+
+    ``build`` / ``start`` / ``ready`` replace the three phases' real
+    implementations and ``clock`` / ``sleep`` replace the wall clock, so
+    the whole sequence — including a setup far longer than the session
+    budget, and each phase's failure — is drivable offline by
+    `run.py --selftest` with no build, no GPU, no window and no network.
+    """
+    if setup_timeout <= 0:
+        raise ValueError("setup_timeout must be positive")
+    started = clock()
+    deadline = started + setup_timeout
+
+    log(f"playtest: setup 1/3 — building (setup budget {setup_timeout:.0f}s, "
+        "separate from the player-session budget)")
+    exe = build() if build is not None else build_executable(
+        repo_root, trace.setup_log_path(), deadline, clock=clock)
+
+    log("playtest: setup 2/3 — engine process + debug console")
+    if start is not None:
+        start(exe)
+    else:
+        start_engine(eng, exe, deadline, repo_root=repo_root,
+                     clock=clock, sleep=sleep)
+
+    log("playtest: setup 3/3 — waiting for the first player-ready frame")
+    probe = ready if ready is not None else (
+        lambda: probe_player_ready(eng, trace.setup_frame_path()))
+    while True:
+        if not eng.alive():
+            raise SetupFailure(
+                "render", "render_engine_exited",
+                "the engine exited after READY but before it could render a "
+                "player-ready frame; see engine.log")
+        if probe():
+            break
+        if _remaining(deadline, clock) <= 0:
+            raise SetupFailure(
+                "render", "render_timeout",
+                "the game never became player-ready (menu surface + widgets "
+                "+ a successful screenshot) inside the setup budget",
+                timed_out=True)
+        sleep(poll_interval)
+
+    elapsed = clock() - started
+    trace.mark_loaded()
+    log(f"playtest: player-ready after {elapsed:.1f}s of setup — the "
+        "player-session budgets start now")
+    return elapsed
+
+
+# --------------------------------------------------------------------------
+# Pre-ready teardown
+# --------------------------------------------------------------------------
+def wait_port_released(port: int, timeout: float = PORT_RELEASE_TIMEOUT,
+                       clock=time.monotonic, sleep=time.sleep) -> bool:
+    """Block until nothing answers on ``port``. True if it actually freed.
+
+    Killing the process is not the same as the listener being gone, and
+    a port still held by a dying engine is what makes the NEXT attempt
+    fail as an unrelated "exited before READY" under #1190.
+    """
+    deadline = clock() + timeout
+    while True:
+        # A timed BLOCKING connect. `socket.settimeout` + `connect_ex`
+        # looks equivalent and is not: the timeout puts the socket in
+        # non-blocking mode, so `connect_ex` answers EINPROGRESS at once
+        # and every held port reads as free.
+        try:
+            with socket.create_connection(("localhost", port), timeout=0.5):
+                pass
+        except OSError:
+            return True
+        if clock() >= deadline:
+            return False
+        sleep(0.2)
+
+
+def teardown_setup(eng, *, port_timeout: float = PORT_RELEASE_TIMEOUT) -> bool:
+    """Tear a pre-ready instance down: reap the group, then free the port.
+
+    `probelib.boot`'s failure path kills only the process it spawned; the
+    engine below it survives holding the listener. This reaps the whole
+    spawned process group (`run_probes.reap_group`, #1323) and does not
+    return until the port is observed released — or the wait runs out,
+    which it reports rather than hiding.
+    """
+    proc = getattr(eng, "proc", None)
+    released = True
+    if proc is not None:
+        try:
+            reap_group(proc.pid)
+        except (OSError, ValueError):
+            pass
+        try:
+            proc.wait(timeout=5)
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            pass
+        eng.proc = None
+        if getattr(eng, "port", 0):
+            released = wait_port_released(eng.port, port_timeout)
+    return released

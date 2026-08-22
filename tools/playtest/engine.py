@@ -1,6 +1,6 @@
 """Engine connection for the playtest harness (#647).
 
-Owns the game-instance lifecycle — windowed (the original substrate,
+Owns the launched game instance — windowed (the original substrate,
 steals focus) or offscreen (#650: GPU on, window off, unattended /
 parallel-safe) — and every debug-console interaction the lockstep
 loop needs: pause control, F1 screenshots, F2 input injection, and the
@@ -15,6 +15,12 @@ what the step itself produced, #775). Both render modes serve the
 identical render + input pipeline, so everything below the launch
 flags is mode-blind.
 
+Getting an instance TO that point is `launch.py`'s job (#1539): the
+build, the process/console startup and the wait for a first
+player-ready frame are three separately-budgeted setup phases, and the
+boundary between them and play is what every player-session budget
+starts from.
+
 Also owns the action->input.* translation: the player acts in
 screenshot pixel space (F1's framebuffer pixels), which is exactly the
 space the input.* verbs accept, so no coordinate conversion happens
@@ -26,7 +32,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from probelib import boot, quit_engine, send, send_json  # noqa: E402
+from probelib import quit_engine, send, send_json  # noqa: E402
 
 
 class EngineCrash(Exception):
@@ -181,18 +187,18 @@ class PlaytestEngine:
     # -- lifecycle ---------------------------------------------------
 
     def boot_mode(self) -> tuple[str, ...]:
-        """The probelib.boot mode flags this render mode maps to."""
+        """The boot-profile flag(s) this render mode launches with —
+        `launch.start_engine` passes them straight to the executable."""
         return () if self.render_mode == "windowed" else ("--offscreen",)
 
-    def launch(self, ready_timeout: float = 180.0) -> None:
-        """Boot the instance — F1/F2 need a real render + input
-        pipeline, which both modes provide: windowed (mode=())
-        deliberately opens and focuses a game window; offscreen
-        (--offscreen, #650) renders windowless so sessions can run
-        unattended and in parallel. probelib.boot blocks until READY."""
-        self.proc = boot(self.port, log=self.log_path, mode=self.boot_mode(),
-                         ready_timeout=ready_timeout,
-                         label=f"playtest engine ({self.render_mode})")
+    # Launching is NOT here: `launch.py` owns the cold-boot sequence and
+    # the player-ready boundary (#1539). It builds, spawns and waits in
+    # three separately-classified phases under their own budget, and
+    # records the process on `self.proc` exactly as this used to — so
+    # `quit`/`alive`/`log_tail` below are unchanged. probelib.boot's
+    # single 180 s READY deadline (which counted compilation against
+    # itself) is deliberately no longer on the playtest path, while its
+    # contract for the ~85 behavior probes that DO call it is untouched.
 
     def quit(self) -> None:
         if self.proc is not None and self.proc.poll() is None:
@@ -323,9 +329,6 @@ class FakeEngine(PlaytestEngine):
         self.fired: list[str] = []
         self.paused = True
         self.unpauses = 0  # sim steps taken — selftest counts them (#698)
-
-    def launch(self, ready_timeout: float = 0) -> None:
-        self.proc = None
 
     def alive(self) -> bool:
         return True
