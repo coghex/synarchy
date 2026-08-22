@@ -146,14 +146,18 @@ vowelCapable prof c = c `elem` profVowels prof
 -- | Whether a visible glyph is UNAMBIGUOUSLY a consonant in this
 --   profile — consonant-capable and not also vowel-capable.
 --
---   THE one definition of "this adjacency is a consonant cluster",
---   shared by #1095's boundary repair
---   ('Language.Generated.Boundary') and #1096's bound-form legality
---   ('Language.Generated.Bound'). A dual-role @y@ (requirement 6) sits
+--   The scoping #1095's boundary repair
+--   ('Language.Generated.Boundary') asks 'admissibleOnset' about, and
+--   its ONLY production consumer. A dual-role @y@ (requirement 6) sits
 --   in both inventories and a rendered root is flat text with no slot
---   provenance, so a pair involving one is deliberately NOT treated as
---   a cluster; keeping that scoping in one place is what stops two
---   consumers of 'admissibleOnset' from disagreeing about which
---   adjacencies the relation is even being asked about.
+--   provenance, so for that rewrite rule a pair involving one is
+--   deliberately NOT treated as a cluster.
+--
+--   This is NOT a shared definition of "this adjacency is a consonant
+--   cluster": #1096's bound-form legality
+--   ('Language.Generated.Bound.boundFormAdmissible') filters over the
+--   wider consonant-CAPABLE scope instead, and its own contract is the
+--   canonical explanation of why the two deliberately diverge. Do not
+--   unify them onto this helper.
 consonantOnly ∷ Profile → Char → Bool
 consonantOnly prof c = consonantCapable prof c ∧ not (vowelCapable prof c)

@@ -8,14 +8,14 @@ The glacier-pair cleanup, thought and unified state-of-mind systems, data-driven
 
 ## Status
 
-- [ ] PRR-1. Parallel probes race while mutating the shared Cabal build directory
-- [ ] PRR-2. `make ci` no longer runs every locally reproducible CI gate it claims to mirror
-- [ ] PRR-3. Coffee's consumable effects have no production gameplay caller
-- [ ] PRR-4. Auto-harvest ignores the farming skill it claims to scale by
+- [x] PRR-1. Parallel probes race while mutating the shared Cabal build directory — [#1570]
+- [x] PRR-2. `make ci` no longer runs every locally reproducible CI gate it claims to mirror — [no-issue]
+- [x] PRR-3. Coffee's consumable effects have no production gameplay caller — [#1580]
+- [x] PRR-4. Auto-harvest ignores the farming skill it claims to scale by — [#1582]
 
 ## 1. Parallel probe build isolation
 
-### PRR-1. Parallel probes race while mutating the shared Cabal build directory
+### [#1570] PRR-1. Parallel probes race while mutating the shared Cabal build directory
 
 > **Captured note:** Stop the aggregate probe runner from launching multiple `cabal run` processes against the same `dist-newstyle` at once. Parallel probes need execution isolation as well as distinct engine ports: the runner can build or resolve one executable before fan-out, or each Cabal invocation must have an isolated build directory, but concurrent tasks must not mutate the same inplace package database.
 
@@ -41,7 +41,9 @@ The glacier-pair cleanup, thought and unified state-of-mind systems, data-driven
 
 ## 2. Local CI gate drift
 
-### PRR-2. `make ci` no longer runs every locally reproducible CI gate it claims to mirror
+### [no-issue] PRR-2. `make ci` no longer runs every locally reproducible CI gate it claims to mirror
+
+> **Disposition:** No issue — fixed by #1355 (closed 2026-08-20). `tools/ci-local.sh:220-221` now runs both `ci_probes.py --self-test` and `ci_expensive_gates.py --self-test`; `tools/ci_parity_audit.py` compares the two files' `python3 tools/*.py` invocations in both directions on both sides (42 identical, 7 reason-carrying exemptions on a current run) so the set cannot silently drift again; and the claim is narrowed to `ci.yml`'s `test-and-audits` worker in both the script and `CLAUDE.md`. Behavior probes now have the explicit answer the finding asked for: a separate PR-only `behavior-probes` job that `make ci` deliberately excludes, with that three-job wiring and its two required commands structurally pinned by the same audit.
 
 > **Captured note:** Reconcile `make ci` with the current CI workflow, or narrow the promise made by the script and repository instructions. At minimum, the cheap probe-policy and expensive-gate self-tests that CI runs unconditionally should not be absent from a command documented as the exact same gate set; the intended local contract for CI's path-selected behavior probes also needs an explicit answer.
 
@@ -67,7 +69,7 @@ The glacier-pair cleanup, thought and unified state-of-mind systems, data-driven
 
 ## 3. Consumable gameplay integration
 
-### PRR-3. Coffee's consumable effects have no production gameplay caller
+### [#1580] PRR-3. Coffee's consumable effects have no production gameplay caller
 
 > **Captured note:** Connect `scripts.consumable.drink` to an actual gameplay action for a held coffee instance. The quality-, temperature-, hydration-, caffeine-, and mood-effect mechanism currently works only when a probe or debug-console caller invokes it directly, so the cooking epic's final payoff cannot be reached through normal play.
 
@@ -92,7 +94,7 @@ The glacier-pair cleanup, thought and unified state-of-mind systems, data-driven
 
 ## 4. Farming-skill effect on harvest
 
-### PRR-4. Auto-harvest ignores the farming skill it claims to scale by
+### [#1582] PRR-4. Auto-harvest ignores the farming skill it claims to scale by
 
 > **Captured note:** Make farming skill observably gate or scale automatic harvesting, and add a comparative regression that distinguishes low- and high-skill workers. The current action is instant for every eligible unit; farming affects later role derivation and gains XP after success, but it does not change harvest eligibility, duration, or yield.
 
