@@ -1,0 +1,275 @@
+{
+  "artifact_root": "/Users/vincentcoghlan/probe-flake-1427-artifacts",
+  "check_counts": {
+    "demote_laborer": {
+      "FAIL": 2,
+      "MISSING": 0,
+      "PASS": 6
+    },
+    "derive_initial": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 8
+    },
+    "derive_miner": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 8
+    },
+    "hysteresis_flip": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 8
+    },
+    "hysteresis_hold": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 8
+    },
+    "steer_miner": {
+      "FAIL": 3,
+      "MISSING": 0,
+      "PASS": 5
+    },
+    "steer_woodcutter": {
+      "FAIL": 1,
+      "MISSING": 0,
+      "PASS": 7
+    },
+    "technomule_no_role": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 8
+    },
+    "xp_construction": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 8
+    },
+    "xp_woodcutting": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 8
+    }
+  },
+  "checks": [
+    {
+      "id": "derive_initial",
+      "label": "fresh acolyte derives a role from spawn skill rolls"
+    },
+    {
+      "id": "derive_miner",
+      "label": "mining 60 -> miner"
+    },
+    {
+      "id": "hysteresis_hold",
+      "label": "woodcutting 63 vs mining 60 stays miner (hysteresis)"
+    },
+    {
+      "id": "hysteresis_flip",
+      "label": "woodcutting 70 -> woodcutter"
+    },
+    {
+      "id": "demote_laborer",
+      "label": "all skills 10 -> laborer"
+    },
+    {
+      "id": "technomule_no_role",
+      "label": "technomule has no role"
+    },
+    {
+      "id": "steer_woodcutter",
+      "label": "woodcutter picks the chop job first"
+    },
+    {
+      "id": "steer_miner",
+      "label": "miner picks the dig job first (same geometry)"
+    },
+    {
+      "id": "xp_woodcutting",
+      "label": "felling grants woodcutting XP"
+    },
+    {
+      "id": "xp_construction",
+      "label": "placing a floor grants construction XP"
+    }
+  ],
+  "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+  "completed_runs": 8,
+  "error": null,
+  "error_run": null,
+  "failure_count": 5,
+  "failure_rate": 0.625,
+  "invocation_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T034133Z-36507-38c2c49f",
+  "peak_concurrency": 1,
+  "probe": "role",
+  "requested_runs": 8,
+  "retained_artifacts": [
+    "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T034133Z-36507-38c2c49f/run-002",
+    "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T034133Z-36507-38c2c49f/run-003",
+    "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T034133Z-36507-38c2c49f/run-005",
+    "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T034133Z-36507-38c2c49f/run-006",
+    "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T034133Z-36507-38c2c49f/run-008"
+  ],
+  "rts_capabilities": 4,
+  "runs": [
+    {
+      "artifact_dir": null,
+      "checks": {
+        "demote_laborer": "PASS",
+        "derive_initial": "PASS",
+        "derive_miner": "PASS",
+        "hysteresis_flip": "PASS",
+        "hysteresis_hold": "PASS",
+        "steer_miner": "PASS",
+        "steer_woodcutter": "PASS",
+        "technomule_no_role": "PASS",
+        "xp_construction": "PASS",
+        "xp_woodcutting": "PASS"
+      },
+      "elapsed_seconds": 137.808,
+      "index": 1,
+      "outcome": "PASS",
+      "port": 8009
+    },
+    {
+      "artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T034133Z-36507-38c2c49f/run-002",
+      "checks": {
+        "demote_laborer": "PASS",
+        "derive_initial": "PASS",
+        "derive_miner": "PASS",
+        "hysteresis_flip": "PASS",
+        "hysteresis_hold": "PASS",
+        "steer_miner": "FAIL",
+        "steer_woodcutter": "PASS",
+        "technomule_no_role": "PASS",
+        "xp_construction": "PASS",
+        "xp_woodcutting": "PASS"
+      },
+      "elapsed_seconds": 127.056,
+      "index": 2,
+      "outcome": "FAIL",
+      "port": 8010
+    },
+    {
+      "artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T034133Z-36507-38c2c49f/run-003",
+      "checks": {
+        "demote_laborer": "FAIL",
+        "derive_initial": "PASS",
+        "derive_miner": "PASS",
+        "hysteresis_flip": "PASS",
+        "hysteresis_hold": "PASS",
+        "steer_miner": "PASS",
+        "steer_woodcutter": "PASS",
+        "technomule_no_role": "PASS",
+        "xp_construction": "PASS",
+        "xp_woodcutting": "PASS"
+      },
+      "elapsed_seconds": 175.535,
+      "index": 3,
+      "outcome": "FAIL",
+      "port": 8011
+    },
+    {
+      "artifact_dir": null,
+      "checks": {
+        "demote_laborer": "PASS",
+        "derive_initial": "PASS",
+        "derive_miner": "PASS",
+        "hysteresis_flip": "PASS",
+        "hysteresis_hold": "PASS",
+        "steer_miner": "PASS",
+        "steer_woodcutter": "PASS",
+        "technomule_no_role": "PASS",
+        "xp_construction": "PASS",
+        "xp_woodcutting": "PASS"
+      },
+      "elapsed_seconds": 138.607,
+      "index": 4,
+      "outcome": "PASS",
+      "port": 8012
+    },
+    {
+      "artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T034133Z-36507-38c2c49f/run-005",
+      "checks": {
+        "demote_laborer": "FAIL",
+        "derive_initial": "PASS",
+        "derive_miner": "PASS",
+        "hysteresis_flip": "PASS",
+        "hysteresis_hold": "PASS",
+        "steer_miner": "FAIL",
+        "steer_woodcutter": "PASS",
+        "technomule_no_role": "PASS",
+        "xp_construction": "PASS",
+        "xp_woodcutting": "PASS"
+      },
+      "elapsed_seconds": 152.463,
+      "index": 5,
+      "outcome": "FAIL",
+      "port": 8013
+    },
+    {
+      "artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T034133Z-36507-38c2c49f/run-006",
+      "checks": {
+        "demote_laborer": "PASS",
+        "derive_initial": "PASS",
+        "derive_miner": "PASS",
+        "hysteresis_flip": "PASS",
+        "hysteresis_hold": "PASS",
+        "steer_miner": "FAIL",
+        "steer_woodcutter": "PASS",
+        "technomule_no_role": "PASS",
+        "xp_construction": "PASS",
+        "xp_woodcutting": "PASS"
+      },
+      "elapsed_seconds": 146.441,
+      "index": 6,
+      "outcome": "FAIL",
+      "port": 8014
+    },
+    {
+      "artifact_dir": null,
+      "checks": {
+        "demote_laborer": "PASS",
+        "derive_initial": "PASS",
+        "derive_miner": "PASS",
+        "hysteresis_flip": "PASS",
+        "hysteresis_hold": "PASS",
+        "steer_miner": "PASS",
+        "steer_woodcutter": "PASS",
+        "technomule_no_role": "PASS",
+        "xp_construction": "PASS",
+        "xp_woodcutting": "PASS"
+      },
+      "elapsed_seconds": 131.654,
+      "index": 7,
+      "outcome": "PASS",
+      "port": 8015
+    },
+    {
+      "artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T034133Z-36507-38c2c49f/run-008",
+      "checks": {
+        "demote_laborer": "PASS",
+        "derive_initial": "PASS",
+        "derive_miner": "PASS",
+        "hysteresis_flip": "PASS",
+        "hysteresis_hold": "PASS",
+        "steer_miner": "PASS",
+        "steer_woodcutter": "FAIL",
+        "technomule_no_role": "PASS",
+        "xp_construction": "PASS",
+        "xp_woodcutting": "PASS"
+      },
+      "elapsed_seconds": 145.066,
+      "index": 8,
+      "outcome": "FAIL",
+      "port": 8016
+    }
+  ],
+  "schema": "probe-flake-result/v1",
+  "status": "ok",
+  "timeout_count": 0,
+  "timestamp_utc": "2026-08-22T03:41:33Z",
+  "total_elapsed_seconds": 1154.631,
+  "worst_elapsed_seconds": 175.535
+}

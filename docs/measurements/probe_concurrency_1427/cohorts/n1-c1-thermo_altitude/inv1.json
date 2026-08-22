@@ -1,0 +1,184 @@
+{
+  "artifact_root": "/Users/vincentcoghlan/probe-flake-1427-artifacts",
+  "check_counts": {
+    "arena_safety": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 8
+    },
+    "bug_fix": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 8
+    },
+    "ice_agreement": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 8
+    },
+    "monotone": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 8
+    },
+    "safety": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 8
+    }
+  },
+  "checks": [
+    {
+      "id": "safety",
+      "label": "getAmbientAt is never warmer than the regional mean"
+    },
+    {
+      "id": "bug_fix",
+      "label": "a temperate region's high ground reads below freezing"
+    },
+    {
+      "id": "monotone",
+      "label": "the coldest-by-altitude tile reads colder than a lowland reference"
+    },
+    {
+      "id": "arena_safety",
+      "label": "getAmbientAt on the flat arena returns the regional mean without crashing"
+    },
+    {
+      "id": "ice_agreement",
+      "label": "worldgen ice tiles read at or below freezing"
+    }
+  ],
+  "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+  "completed_runs": 8,
+  "error": null,
+  "error_run": null,
+  "failure_count": 0,
+  "failure_rate": 0.0,
+  "invocation_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/thermo_altitude-20260822T043552Z-29269-f58b9151",
+  "peak_concurrency": 1,
+  "probe": "thermo_altitude",
+  "requested_runs": 8,
+  "retained_artifacts": [],
+  "rts_capabilities": 1,
+  "runs": [
+    {
+      "artifact_dir": null,
+      "checks": {
+        "arena_safety": "PASS",
+        "bug_fix": "PASS",
+        "ice_agreement": "PASS",
+        "monotone": "PASS",
+        "safety": "PASS"
+      },
+      "elapsed_seconds": 214.663,
+      "index": 1,
+      "outcome": "PASS",
+      "port": 8009
+    },
+    {
+      "artifact_dir": null,
+      "checks": {
+        "arena_safety": "PASS",
+        "bug_fix": "PASS",
+        "ice_agreement": "PASS",
+        "monotone": "PASS",
+        "safety": "PASS"
+      },
+      "elapsed_seconds": 204.886,
+      "index": 2,
+      "outcome": "PASS",
+      "port": 8010
+    },
+    {
+      "artifact_dir": null,
+      "checks": {
+        "arena_safety": "PASS",
+        "bug_fix": "PASS",
+        "ice_agreement": "PASS",
+        "monotone": "PASS",
+        "safety": "PASS"
+      },
+      "elapsed_seconds": 177.048,
+      "index": 3,
+      "outcome": "PASS",
+      "port": 8011
+    },
+    {
+      "artifact_dir": null,
+      "checks": {
+        "arena_safety": "PASS",
+        "bug_fix": "PASS",
+        "ice_agreement": "PASS",
+        "monotone": "PASS",
+        "safety": "PASS"
+      },
+      "elapsed_seconds": 190.07,
+      "index": 4,
+      "outcome": "PASS",
+      "port": 8012
+    },
+    {
+      "artifact_dir": null,
+      "checks": {
+        "arena_safety": "PASS",
+        "bug_fix": "PASS",
+        "ice_agreement": "PASS",
+        "monotone": "PASS",
+        "safety": "PASS"
+      },
+      "elapsed_seconds": 180.414,
+      "index": 5,
+      "outcome": "PASS",
+      "port": 8013
+    },
+    {
+      "artifact_dir": null,
+      "checks": {
+        "arena_safety": "PASS",
+        "bug_fix": "PASS",
+        "ice_agreement": "PASS",
+        "monotone": "PASS",
+        "safety": "PASS"
+      },
+      "elapsed_seconds": 178.427,
+      "index": 6,
+      "outcome": "PASS",
+      "port": 8014
+    },
+    {
+      "artifact_dir": null,
+      "checks": {
+        "arena_safety": "PASS",
+        "bug_fix": "PASS",
+        "ice_agreement": "PASS",
+        "monotone": "PASS",
+        "safety": "PASS"
+      },
+      "elapsed_seconds": 182.484,
+      "index": 7,
+      "outcome": "PASS",
+      "port": 8015
+    },
+    {
+      "artifact_dir": null,
+      "checks": {
+        "arena_safety": "PASS",
+        "bug_fix": "PASS",
+        "ice_agreement": "PASS",
+        "monotone": "PASS",
+        "safety": "PASS"
+      },
+      "elapsed_seconds": 181.868,
+      "index": 8,
+      "outcome": "PASS",
+      "port": 8016
+    }
+  ],
+  "schema": "probe-flake-result/v1",
+  "status": "ok",
+  "timeout_count": 0,
+  "timestamp_utc": "2026-08-22T04:35:52Z",
+  "total_elapsed_seconds": 1509.86,
+  "worst_elapsed_seconds": 214.663
+}

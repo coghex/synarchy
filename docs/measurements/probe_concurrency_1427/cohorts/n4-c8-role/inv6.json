@@ -1,0 +1,138 @@
+{
+  "artifact_root": "/Users/vincentcoghlan/probe-flake-1427-artifacts",
+  "check_counts": {
+    "demote_laborer": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 1
+    },
+    "derive_initial": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 1
+    },
+    "derive_miner": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 1
+    },
+    "hysteresis_flip": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 1
+    },
+    "hysteresis_hold": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 1
+    },
+    "steer_miner": {
+      "FAIL": 1,
+      "MISSING": 0,
+      "PASS": 0
+    },
+    "steer_woodcutter": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 1
+    },
+    "technomule_no_role": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 1
+    },
+    "xp_construction": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 1
+    },
+    "xp_woodcutting": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 1
+    }
+  },
+  "checks": [
+    {
+      "id": "derive_initial",
+      "label": "fresh acolyte derives a role from spawn skill rolls"
+    },
+    {
+      "id": "derive_miner",
+      "label": "mining 60 -> miner"
+    },
+    {
+      "id": "hysteresis_hold",
+      "label": "woodcutting 63 vs mining 60 stays miner (hysteresis)"
+    },
+    {
+      "id": "hysteresis_flip",
+      "label": "woodcutting 70 -> woodcutter"
+    },
+    {
+      "id": "demote_laborer",
+      "label": "all skills 10 -> laborer"
+    },
+    {
+      "id": "technomule_no_role",
+      "label": "technomule has no role"
+    },
+    {
+      "id": "steer_woodcutter",
+      "label": "woodcutter picks the chop job first"
+    },
+    {
+      "id": "steer_miner",
+      "label": "miner picks the dig job first (same geometry)"
+    },
+    {
+      "id": "xp_woodcutting",
+      "label": "felling grants woodcutting XP"
+    },
+    {
+      "id": "xp_construction",
+      "label": "placing a floor grants construction XP"
+    }
+  ],
+  "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+  "completed_runs": 1,
+  "error": null,
+  "error_run": null,
+  "failure_count": 1,
+  "failure_rate": 1.0,
+  "invocation_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T033157Z-29942-f934be4d",
+  "peak_concurrency": 8,
+  "probe": "role",
+  "requested_runs": 1,
+  "retained_artifacts": [
+    "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T033157Z-29942-f934be4d/run-001"
+  ],
+  "rts_capabilities": 4,
+  "runs": [
+    {
+      "artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T033157Z-29942-f934be4d/run-001",
+      "checks": {
+        "demote_laborer": "PASS",
+        "derive_initial": "PASS",
+        "derive_miner": "PASS",
+        "hysteresis_flip": "PASS",
+        "hysteresis_hold": "PASS",
+        "steer_miner": "FAIL",
+        "steer_woodcutter": "PASS",
+        "technomule_no_role": "PASS",
+        "xp_construction": "PASS",
+        "xp_woodcutting": "PASS"
+      },
+      "elapsed_seconds": 180.983,
+      "index": 1,
+      "outcome": "FAIL",
+      "port": 8011
+    }
+  ],
+  "schema": "probe-flake-result/v1",
+  "status": "ok",
+  "timeout_count": 0,
+  "timestamp_utc": "2026-08-22T03:31:57Z",
+  "total_elapsed_seconds": 180.983,
+  "worst_elapsed_seconds": 180.983
+}
