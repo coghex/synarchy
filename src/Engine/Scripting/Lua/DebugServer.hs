@@ -106,11 +106,11 @@ debugListenerFailureMessage mode port failure =
   where
     reason = case failure of
         ListenerPortZero →
-            "the effective debug port is " <> T.pack (show port)
+            "the effective debug port is " <> tshow port
               <> ", which requests no TCP listener at all (that sentinel "
               <> "belongs to --dump only)"
         ListenerBindFailed err →
-            "the debug listener on port " <> T.pack (show port)
+            "the debug listener on port " <> tshow port
               <> " failed to start: " <> err
 
 -- | Write 'debugListenerFailureMessage' to stderr.
@@ -189,7 +189,7 @@ startDebugServer port builtin = do
             listen sock 4) `onException` close sock
         return sock
     case r of
-        Left (e ∷ SomeException) → return (Left (T.pack (show e)))
+        Left (e ∷ SomeException) → return (Left (tshow e))
         Right sock → do
             -- Ready signal on stdout — agents can wait for this line
             -- to know the debug console is accepting connections.

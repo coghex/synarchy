@@ -76,9 +76,6 @@ sdfAtlasErrorMessage err = case err of
   where
     prefix path = "SDF atlas for " <> T.pack path <> ": "
 
-tshow ∷ Show α ⇒ α → Text
-tshow = T.pack . show
-
 -- * Coverage
 
 -- | What one generated atlas ended up covering, reported once per

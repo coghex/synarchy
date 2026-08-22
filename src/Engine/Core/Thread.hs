@@ -152,9 +152,9 @@ startWorkerThreadEither spec = do
         )
         (\(e ∷ SomeException) → do
             logStartFailure spec logger $
-                wsFailMsg spec <> T.pack (show e)
+                wsFailMsg spec <> tshow e
             throwIO $ EngineException
-                (ExSystem (IOError (T.pack (show e))))
+                (ExSystem (IOError (tshow e)))
                 (wsFailFatal spec)
                 mkErrorContext
         )

@@ -58,7 +58,7 @@ loadUnitYamlFn env backendState = do
                 total ← registerUnitDefs env (lbsAssetPool backendState) lteq
                             resolveUnitAtlases filePath defs
                 logInfo logger CatAsset $
-                    "loadUnitYaml: loaded " <> T.pack (show total)
+                    "loadUnitYaml: loaded " <> tshow total
                     <> " unit definitions from " <> T.pack filePath
                 return total
 
@@ -290,10 +290,10 @@ registerUnitDefs env poolRef lteq resolveAtlases filePath defs = do
 
             logDebug logger CatAsset $
                 "Registered unit def: " <> name
-                <> " (handle " <> T.pack (show handle) <> ")"
-                <> " (" <> T.pack (show (Map.size dirMap))
+                <> " (handle " <> tshow handle <> ")"
+                <> " (" <> tshow (Map.size dirMap)
                 <> " directional sprites, "
-                <> T.pack (show (HM.size animMap))
+                <> tshow (HM.size animMap)
                 <> " animations)"
 
             return (acc + 1)

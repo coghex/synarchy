@@ -238,7 +238,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 capped   = take integrityErrorCap rendered
                                 omitted  = max 0 (total - length capped)
                                 trailer  =
-                                    [ T.pack (show omitted)
+                                    [ tshow omitted
                                         <> " additional snapshot finding(s) \
                                            \omitted (see \
                                            \World.Save.Integrity.integrityErrorCap)"
@@ -336,7 +336,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 case encodedOrErr of
                                   Left (e ∷ SomeException) → do
                                     let msg = "session snapshot failed to encode: "
-                                            <> T.pack (show e)
+                                            <> tshow e
                                     logWarn logger CatWorld msg
                                     failTransaction env isAutosave msg
                                   Right encoded → do

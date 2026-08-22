@@ -20,7 +20,6 @@ module World.Thread.Command.Cursor.Till
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
-import qualified Data.Text as T
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle)
 import Engine.Core.Capability.WorldSim
@@ -104,10 +103,10 @@ handleWorldDesignateTillCommand env logger pageId gx1 gy1 gx2 gy2 = do
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                 (cs { tillAnchor = Nothing }, ())
             logDebug logger CatWorld $
-                "Till designation: +" <> T.pack (show (length entries))
-                <> " tiles (" <> T.pack (show xLo) <> ","
-                <> T.pack (show yLo) <> ")–(" <> T.pack (show xHi)
-                <> "," <> T.pack (show yHi) <> ")"
+                "Till designation: +" <> tshow (length entries)
+                <> " tiles (" <> tshow xLo <> ","
+                <> tshow yLo <> ")–(" <> tshow xHi
+                <> "," <> tshow yHi <> ")"
             recordDesignationOutcome env "till.designate"
                 "anchor tile ineligible or unloaded" xLo yLo
                 ((xHi - xLo + 1) * (yHi - yLo + 1)) (length entries)

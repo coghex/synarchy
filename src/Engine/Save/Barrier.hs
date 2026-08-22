@@ -13,7 +13,6 @@ module Engine.Save.Barrier
 
 import UPrelude
 import qualified Data.Set as Set
-import qualified Data.Text as T
 import Control.Concurrent.STM
 
 data SaveOwner = SaveLua | SaveWorld | SaveUnit | SaveBuilding | SaveCombat
@@ -116,7 +115,7 @@ waitForOwners micros (SaveBarrier _ status) n = do
                 let missing = maybe [] (\s → Set.toList
                         (ssOwners s Set.\\ ssAcknowledged s)) current
                 pure $ Left $ "timed out waiting for save state owners: "
-                    <> T.pack (show missing)
+                    <> tshow missing
 
 reachSnapshot ∷ SaveBarrier → Int → IO ()
 reachSnapshot (SaveBarrier _ status) n = atomically $ modifyTVar' status $ fmap $ \s →

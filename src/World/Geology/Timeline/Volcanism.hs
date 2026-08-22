@@ -4,7 +4,6 @@ module World.Geology.Timeline.Volcanism
     , applyVolcanicEvolution
     ) where
 import UPrelude
-import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import World.Types
 import World.Geology.Hash
@@ -67,7 +66,7 @@ applyPeriodVolcanism seed worldSize plates periodIdx tbs grid =
             }
 
         period = mkGeoPeriod worldSize
-            ("Volcanism " <> T.pack (show periodIdx))
+            ("Volcanism " <> tshow periodIdx)
             Period 50 currentDate
             events
             (ErosionParams 0.5 0.5 0.4 0.2 0.3 (seed + 4000)

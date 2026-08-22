@@ -221,10 +221,12 @@ needsRepair scope prof left right = case scope of
   where
     l = T.last left
     r = T.head right
-    -- "Unambiguously a consonant" — the shared
-    -- 'Language.Generated.Onset.consonantOnly' scoping, so this and
-    -- #1096's bound-form legality ask the admissibility relation about
-    -- exactly the same adjacencies.
+    -- "Unambiguously a consonant" — boundary repair's OWN
+    -- 'Language.Generated.Onset.consonantOnly' scoping, narrower than
+    -- the consonant-CAPABLE scope #1096's bound-form legality asks the
+    -- same relation about. See
+    -- 'Language.Generated.Bound.boundFormAdmissible' for why the two
+    -- deliberately differ.
     bothConsonantal = consonantOnly prof l ∧ consonantOnly prof r
 
 -- | Apply the language's repair. Cluster simplification is a MORPHEME

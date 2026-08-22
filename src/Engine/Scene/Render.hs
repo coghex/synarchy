@@ -54,13 +54,13 @@ updateSceneForRender = do
             Just graph → do
                 let nodeCount = Map.size $ sgNodes graph
                 logDebugSM CatRender "Processing scene graph"
-                    [("sceneId", T.pack $ show sceneId)
-                    ,("nodes", T.pack $ show nodeCount)]
+                    [("sceneId", tshow sceneId)
+                    ,("nodes", tshow nodeCount)]
 
                 textRenderBatches ← collectTextBatches graph screenW screenH
 
                 logDebugSM CatRender "Collected text batches"
-                    [("textBatches", T.pack $ show $ V.length textRenderBatches)]
+                    [("textBatches", tshow $ V.length textRenderBatches)]
 
                 let updatedBatchMgr = updateTextBatches textRenderBatches (smBatchManager updatedSceneMgr)
                     spriteBatches = getCurrentBatches updatedSceneMgr
@@ -68,10 +68,10 @@ updateSceneForRender = do
                     drawCallCount = V.length spriteBatches + V.length textRenderBatches
 
                 logDebugSM CatScene "Batch generation complete"
-                    [("spriteBatches", T.pack $ show $ V.length spriteBatches)
-                    ,("spriteVertices", T.pack $ show spriteCount)
-                    ,("textBatches", T.pack $ show $ V.length textRenderBatches)
-                    ,("totalDrawCalls", T.pack $ show drawCallCount)]
+                    [("spriteBatches", tshow $ V.length spriteBatches)
+                    ,("spriteVertices", tshow spriteCount)
+                    ,("textBatches", tshow $ V.length textRenderBatches)
+                    ,("totalDrawCalls", tshow drawCallCount)]
 
                 let finalSceneMgr = updatedSceneMgr
                                         { smBatchManager = updatedBatchMgr }
@@ -88,7 +88,7 @@ getCurrentRenderBatches = do
     sceneMgr ← gets sceneManager
     let batches = getCurrentBatches sceneMgr
     logDebugSM CatRender "Retrieved current batches"
-        [("count", T.pack $ show $ V.length batches)]
+        [("count", tshow $ V.length batches)]
     pure batches
 
 -- | Create or resize dynamic vertex buffer for scene rendering.
@@ -105,8 +105,8 @@ ensureDynamicVertexBuffer frameIdx requiredVertices = do
     case mExisting of
         Just existing | sdbCapacity existing ≥ requiredVertices → do
             logDebugSM CatRender "Reusing existing dynamic vertex buffer"
-                [("capacity", T.pack $ show $ sdbCapacity existing)
-                ,("required", T.pack $ show requiredVertices)]
+                [("capacity", tshow $ sdbCapacity existing)
+                ,("required", tshow requiredVertices)]
             pure existing
         mOld → do
             device ← case vulkanDevice state of
@@ -121,7 +121,7 @@ ensureDynamicVertexBuffer frameIdx requiredVertices = do
             case mOld of
                 Just old → do
                     logDebugSM CatRender "Destroying old dynamic vertex buffer"
-                        [("oldCapacity", T.pack $ show $ sdbCapacity old)]
+                        [("oldCapacity", tshow $ sdbCapacity old)]
                     liftIO $ do
                         destroyBuffer device (sdbBuffer old) Nothing
                         freeMemory device (sdbMemory old) Nothing
@@ -133,8 +133,8 @@ ensureDynamicVertexBuffer frameIdx requiredVertices = do
                 paddedCapacity = requiredVertices + (requiredVertices `div` 2)
 
             logDebugSM CatRender "Creating dynamic vertex buffer"
-                [("vertices", T.pack $ show requiredVertices)
-                ,("sizeBytes", T.pack $ show paddedSize)]
+                [("vertices", tshow requiredVertices)
+                ,("sizeBytes", tshow paddedSize)]
 
             -- Manual lifetime management (not auto-collected)
             (memory, buffer) ← createVulkanBufferManual
@@ -169,8 +169,8 @@ uploadBatchesToBuffer frameIdx batches dynamicBuffer = do
     let totalVertices = V.sum $ V.map (fromIntegral . VS.length . rbVertices) batches
 
     logDebugSM CatRender "Uploading batches to buffer"
-        [("batches", T.pack $ show $ V.length batches)
-        ,("totalVertices", T.pack $ show totalVertices)]
+        [("batches", tshow $ V.length batches)
+        ,("totalVertices", tshow totalVertices)]
 
     -- Buffer is resized to fit totalVertices (with 50% padding) before any
     -- writes, so the pointer arithmetic below is bounded by the allocation.

@@ -14,7 +14,6 @@ module Engine.Scripting.Lua.Message.Video
     ) where
 
 import UPrelude
-import qualified Data.Text as T
 import Data.IORef (readIORef, atomicModifyIORef', modifyIORef', writeIORef)
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM)
@@ -50,7 +49,7 @@ handleSetResolution w h = do
                                            (luaQueue env) win
 
             logInfoM CatGraphics $ "Window resized to "
-                <> T.pack (show w) <> "x" <> T.pack (show h) <> " (logical pixels)"
+                <> tshow w <> "x" <> tshow h <> " (logical pixels)"
 
 -- | Republish the live GLFW window\/framebuffer geometry: both size refs,
 --   the position ref, and both Lua resize notifications. Every successful
@@ -174,7 +173,7 @@ handleSetMSAA msaa = do
         Nothing → logWarnM CatGraphics "Cannot set MSAA: no window"
         Just window → do
             logInfoM CatGraphics $ "Recreating swapchain for MSAA change: "
-                <> T.pack (show msaa) <> "x"
+                <> tshow msaa <> "x"
             recreateSwapchain window
 
 handleSetBrightness ∷ Int → EngineM σ ()
@@ -182,7 +181,7 @@ handleSetBrightness pct = do
     env ← ask
     let brightness = max 50 (min 300 pct)
     liftIO $ writeIORef (rcBrightnessRef (toRenderCapability env)) brightness
-    logDebugM CatGraphics $ "Brightness set to " <> T.pack (show pct) <> "%"
+    logDebugM CatGraphics $ "Brightness set to " <> tshow pct <> "%"
 
 handleSetPixelSnap ∷ Bool → EngineM σ ()
 handleSetPixelSnap enabled = do

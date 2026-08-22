@@ -811,7 +811,4 @@ spec = do
                 rendered = renderIntegrityError e
             T.isInfixOf "craft-bills" rendered `shouldBe` True
             T.isInfixOf "wrong-page" rendered `shouldBe` True
-  where
-    tshow ∷ Show a ⇒ a → Text
-    tshow = T.pack . show
 

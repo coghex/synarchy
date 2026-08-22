@@ -385,7 +385,7 @@ loadScriptFn env backendState = do
                   (dup:_) → do
                     logDebug logger CatLua $
                         "loadScript: already loaded, reusing ID "
-                        <> T.pack (show (scriptId dup)) <> ": " <> pathStr
+                        <> tshow (scriptId dup) <> ": " <> pathStr
                     return (Just (scriptId dup))
                   [] → do
                     logDebug logger CatLua $ "Loading Lua script: " <> pathStr
@@ -401,7 +401,7 @@ loadScriptFn env backendState = do
                                 dropDir _          = ""
                             logDebug logger CatLua $ "loaded: "
                                                   <> (dropDir (T.unpack (pathStr)))
-                            logDebug logger CatLua $ " with ID " <> T.pack (show sid)
+                            logDebug logger CatLua $ " with ID " <> tshow sid
 
                             currentSecs ← nowSeconds
                             let script = LuaScript
@@ -420,7 +420,7 @@ loadScriptFn env backendState = do
                                 void $ callModuleFunction backendState modRef "init" []
 
                             logDebug logger CatLua $ "Lua script initialized with ID "
-                                           <> T.pack (show sid)
+                                           <> tshow sid
 
                             return (Just sid)
                         Left errMsg → do
@@ -444,7 +444,7 @@ killScriptFn env backendState = do
         Just sid → Lua.liftIO $ do
             logger ← readIORef (ccLoggerRef (toCoreCapability env))
             logDebug logger CatLua $ "Destroying Lua script with ID " 
-                           <> T.pack (show sid)
+                           <> tshow sid
             scriptsMap ← readTVarIO (lbsScripts backendState)
             case Map.lookup (fromIntegral sid) scriptsMap of
                 Just script → do
@@ -454,7 +454,7 @@ killScriptFn env backendState = do
                     atomically $ modifyTVar' (lbsScripts backendState) $
                         Map.delete (fromIntegral sid)
                     logDebug logger CatLua $ "Lua script destroyed: ID " 
-                                   <> T.pack (show sid)
+                                   <> tshow sid
                 Nothing → return ()
         _ → return ()
     return 0

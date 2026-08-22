@@ -113,7 +113,7 @@ showScale Age    = "Age"
 formatPlatesSummary ∷ Word64 → Int → Int → MaterialRegistry → [Text]
 formatPlatesSummary seed worldSize plateCount registry =
     let plates = generatePlates seed worldSize plateCount
-        header = "═══ Tectonic Plates (" <> T.pack (show plateCount) <> ") ═══"
+        header = "═══ Tectonic Plates (" <> tshow plateCount <> ") ═══"
         plateMsgs = zipWith (formatOnePlate registry) [0..] plates
     in header : plateMsgs
 
@@ -122,11 +122,11 @@ formatOnePlate registry idx plate =
     let landType = if plateIsLand plate then "Continental" else "Oceanic"
         matName' = mpName (getMaterialProps registry (plateMaterial plate))
         GeoCoord cx cy = plateCoord plate
-    in "  Plate #" <> T.pack (show idx) <> ": "
+    in "  Plate #" <> tshow idx <> ": "
        <> padR 14 landType
        <> matName' <> " "
-       <> "(" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ") "
-       <> "elev=" <> T.pack (show (plateBaseElev plate))
+       <> "(" <> tshow cx <> ", " <> tshow cy <> ") "
+       <> "elev=" <> tshow (plateBaseElev plate)
 
 -- | Helper to extract a GeoCoord from a plate
 plateCoord ∷ TectonicPlate → GeoCoord
@@ -152,14 +152,14 @@ formatSummaryLines ts =
     [ "╔══════════════════════════════════════════════════════════╗"
     , "║              GEOLOGICAL TIMELINE SUMMARY                ║"
     , "╠══════════════════════════════════════════════════════════╣"
-    , "║  Total geological time: " <> padR 31 (T.pack (show (tsTotalDuration ts)) <> " MY") <> "║"
-    , "║  Timeline periods:      " <> padR 31 (T.pack (show (tsNumPeriods ts))) <> "║"
-    , "║  Total events:          " <> padR 31 (T.pack (show (tsTotalEvents ts))) <> "║"
-    , "║  Total craters:         " <> padR 31 (T.pack (show (tsTotalCraters ts))) <> "║"
-    , "║  Persistent features:   " <> padR 31 (T.pack (show (tsFeatureCount ts))) <> "║"
-    , "║    Active:              " <> padR 31 (T.pack (show (tsActiveFeatures ts))) <> "║"
-    , "║    Dormant:             " <> padR 31 (T.pack (show (tsDormantFeatures ts))) <> "║"
-    , "║    Extinct/Collapsed:   " <> padR 31 (T.pack (show (tsExtinctFeatures ts))) <> "║"
+    , "║  Total geological time: " <> padR 31 (tshow (tsTotalDuration ts) <> " MY") <> "║"
+    , "║  Timeline periods:      " <> padR 31 (tshow (tsNumPeriods ts)) <> "║"
+    , "║  Total events:          " <> padR 31 (tshow (tsTotalEvents ts)) <> "║"
+    , "║  Total craters:         " <> padR 31 (tshow (tsTotalCraters ts)) <> "║"
+    , "║  Persistent features:   " <> padR 31 (tshow (tsFeatureCount ts)) <> "║"
+    , "║    Active:              " <> padR 31 (tshow (tsActiveFeatures ts)) <> "║"
+    , "║    Dormant:             " <> padR 31 (tshow (tsDormantFeatures ts)) <> "║"
+    , "║    Extinct/Collapsed:   " <> padR 31 (tshow (tsExtinctFeatures ts)) <> "║"
     , "╠══════════════════════════════════════════════════════════╣"
     , "║  Event breakdown:                                       ║"
     ] <> formatEventCountLines (tsEventCounts ts)
@@ -173,7 +173,7 @@ padR n t = t <> T.replicate (max 0 (n - T.length t)) " "
 
 formatEventCountLines ∷ Map.Map Text Int → [Text]
 formatEventCountLines m =
-    [ "║    " <> padR 22 name <> padR 32 (T.pack (show c)) <> "║"
+    [ "║    " <> padR 22 name <> padR 32 (tshow c) <> "║"
     | (name, c) ← Map.toAscList m
     ]
 
@@ -186,7 +186,7 @@ formatPeriodChronological period =
     let dateStr = formatMyDate (gpDate period)
         scaleStr = showScale (gpScale period)
         header = dateStr <> " [" <> padR 6 scaleStr <> "] "
-              <> gpName period <> " (" <> T.pack (show (gpDuration period)) <> " MY)"
+              <> gpName period <> " (" <> tshow (gpDuration period) <> " MY)"
         events = gpEvents period
         eventLines = if null events
             then ["  └─ (erosion only)"]
@@ -217,9 +217,9 @@ showFFloat1 f =
 formatEventDetailed ∷ GeoEvent → Text
 formatEventDetailed (CraterEvent cp) =
     let GeoCoord cx cy = cpCenter cp
-    in "Crater r=" <> T.pack (show (cpRadius cp))
-       <> " depth=" <> T.pack (show (cpDepth cp))
-       <> " (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
+    in "Crater r=" <> tshow (cpRadius cp)
+       <> " depth=" <> tshow (cpDepth cp)
+       <> " (" <> tshow cx <> ", " <> tshow cy <> ")"
        <> case cpMeteorite cp of
             Just _mat → " *meteorite*"
             Nothing  → ""
@@ -228,26 +228,26 @@ formatEventDetailed (VolcanicEvent feature) =
     formatFeatureEvent feature
 
 formatEventDetailed (VolcanicModify (GeoFeatureId fid) evo) =
-    "Feature #" <> T.pack (show fid) <> " " <> formatEvolution evo
+    "Feature #" <> tshow fid <> " " <> formatEvolution evo
 
 formatEventDetailed (LandslideEvent _) = "Landslide"
 formatEventDetailed (GlaciationEvent _) = "Glaciation"
 formatEventDetailed (FloodEvent _) = "Flood"
 formatEventDetailed (HydroEvent _) = "Hydro Event"
 formatEventDetailed (HydroModify (GeoFeatureId fid) desc) =
-    "Hydro modification at Feature #" <> T.pack (show fid) <> ": " <> T.pack (show desc)
+    "Hydro modification at Feature #" <> tshow fid <> ": " <> tshow desc
 formatEventDetailed (RiverSegmentEvent rsc) =
     let seg = rscSegment rsc
         GeoCoord sx sy = rsStart seg
         GeoCoord ex ey = rsEnd seg
-    in "River Segment w=" <> T.pack (show (rsWidth seg))
-       <> " (" <> T.pack (show sx) <> ", " <> T.pack (show sy) <> ")"
-       <> "→(" <> T.pack (show ex) <> ", " <> T.pack (show ey) <> ")"
+    in "River Segment w=" <> tshow (rsWidth seg)
+       <> " (" <> tshow sx <> ", " <> tshow sy <> ")"
+       <> "→(" <> tshow ex <> ", " <> tshow ey <> ")"
 formatEventDetailed (RiverDeltaEvent rdp) =
     let seg = rdpLastSegment rdp
         GeoCoord mx my = rsEnd seg
-    in "River Delta flow=" <> T.pack (show (rdpFlowRate rdp))
-       <> " (" <> T.pack (show mx) <> ", " <> T.pack (show my) <> ")"
+    in "River Delta flow=" <> tshow (rdpFlowRate rdp)
+       <> " (" <> tshow mx <> ", " <> tshow my <> ")"
 formatEventDetailed (OreSheetEvent _) = "Ore Sheet"
 formatEventDetailed (GlacierMoraineEvent _) = "Glacier Moraine"
 
@@ -255,55 +255,55 @@ formatEventDetailed (GlacierMoraineEvent _) = "Glacier Moraine"
 formatFeatureEvent ∷ FeatureShape → Text
 formatFeatureEvent (VolcanicShape (ShieldVolcano p)) =
     let GeoCoord cx cy = shCenter p
-    in "Shield Volcano baseR=" <> T.pack (show (shBaseRadius p))
-       <> " height=" <> T.pack (show (shPeakHeight p))
-       <> " (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
+    in "Shield Volcano baseR=" <> tshow (shBaseRadius p)
+       <> " height=" <> tshow (shPeakHeight p)
+       <> " (" <> tshow cx <> ", " <> tshow cy <> ")"
 
 formatFeatureEvent (VolcanicShape (CinderCone p)) =
     let GeoCoord cx cy = ccCenter p
-    in "Cinder Cone baseR=" <> T.pack (show (ccBaseRadius p))
-       <> " height=" <> T.pack (show (ccPeakHeight p))
-       <> " (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
+    in "Cinder Cone baseR=" <> tshow (ccBaseRadius p)
+       <> " height=" <> tshow (ccPeakHeight p)
+       <> " (" <> tshow cx <> ", " <> tshow cy <> ")"
 
 formatFeatureEvent (VolcanicShape (LavaDome p)) =
     let GeoCoord cx cy = ldCenter p
-    in "Lava Dome baseR=" <> T.pack (show (ldBaseRadius p))
-       <> " height=" <> T.pack (show (ldHeight p))
-       <> " (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
+    in "Lava Dome baseR=" <> tshow (ldBaseRadius p)
+       <> " height=" <> tshow (ldHeight p)
+       <> " (" <> tshow cx <> ", " <> tshow cy <> ")"
 
 formatFeatureEvent (VolcanicShape (Caldera p)) =
     let GeoCoord cx cy = caCenter p
-    in "Caldera outerR=" <> T.pack (show (caOuterRadius p))
-       <> " rimH=" <> T.pack (show (caRimHeight p))
-       <> " (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
+    in "Caldera outerR=" <> tshow (caOuterRadius p)
+       <> " rimH=" <> tshow (caRimHeight p)
+       <> " (" <> tshow cx <> ", " <> tshow cy <> ")"
 
 formatFeatureEvent (VolcanicShape (FissureVolcano p)) =
     let GeoCoord sx sy = fpStart p
         GeoCoord ex ey = fpEnd p
-    in "Fissure width=" <> T.pack (show (fpWidth p))
-       <> " ridgeH=" <> T.pack (show (fpRidgeHeight p))
-       <> " (" <> T.pack (show sx) <> ", " <> T.pack (show sy) <> ")"
-       <> "→(" <> T.pack (show ex) <> ", " <> T.pack (show ey) <> ")"
+    in "Fissure width=" <> tshow (fpWidth p)
+       <> " ridgeH=" <> tshow (fpRidgeHeight p)
+       <> " (" <> tshow sx <> ", " <> tshow sy <> ")"
+       <> "→(" <> tshow ex <> ", " <> tshow ey <> ")"
 
 formatFeatureEvent (VolcanicShape (LavaTube p)) =
     let GeoCoord sx sy = ltStart p
         GeoCoord ex ey = ltEnd p
-    in "Lava Tube width=" <> T.pack (show (ltWidth p))
-       <> " collapses=" <> T.pack (show (ltCollapses p))
-       <> " (" <> T.pack (show sx) <> ", " <> T.pack (show sy) <> ")"
-       <> "→(" <> T.pack (show ex) <> ", " <> T.pack (show ey) <> ")"
+    in "Lava Tube width=" <> tshow (ltWidth p)
+       <> " collapses=" <> tshow (ltCollapses p)
+       <> " (" <> tshow sx <> ", " <> tshow sy <> ")"
+       <> "→(" <> tshow ex <> ", " <> tshow ey <> ")"
 
 formatFeatureEvent (VolcanicShape (SuperVolcano p)) =
     let GeoCoord cx cy = svCenter p
-    in "★ SUPERVOLCANO calderaR=" <> T.pack (show (svCalderaRadius p))
-       <> " ejectaR=" <> T.pack (show (svEjectaRadius p))
-       <> " (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
+    in "★ SUPERVOLCANO calderaR=" <> tshow (svCalderaRadius p)
+       <> " ejectaR=" <> tshow (svEjectaRadius p)
+       <> " (" <> tshow cx <> ", " <> tshow cy <> ")"
 
 formatFeatureEvent (VolcanicShape (HydrothermalVent p)) =
     let GeoCoord cx cy = htCenter p
-    in "Hydrothermal Vent r=" <> T.pack (show (htRadius p))
-       <> " chimneyH=" <> T.pack (show (htChimneyHeight p))
-       <> " (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
+    in "Hydrothermal Vent r=" <> tshow (htRadius p)
+       <> " chimneyH=" <> tshow (htChimneyHeight p)
+       <> " (" <> tshow cx <> ", " <> tshow cy <> ")"
 -- This volcanic formatter only ever sees 'VolcanicShape' (from
 -- 'VolcanicEvent'). The catch-all keeps the match total without a
 -- crash if that ever changes.
@@ -312,26 +312,26 @@ formatFeatureEvent (HydroShape _) = "Hydro feature"
 -- | Format an evolution event.
 formatEvolution ∷ FeatureEvolution → Text
 formatEvolution (Reactivate hGain _ (GeoCoord cx cy) _ _) =
-    "Reactivated +" <> T.pack (show hGain) <> "m"
-    <> " (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
+    "Reactivated +" <> tshow hGain <> "m"
+    <> " (" <> tshow cx <> ", " <> tshow cy <> ")"
 formatEvolution (GoDormant (GeoCoord cx cy) _) =
-    "Went Dormant (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
+    "Went Dormant (" <> tshow cx <> ", " <> tshow cy <> ")"
 formatEvolution (GoExtinct (GeoCoord cx cy) _) =
-    "Went Extinct (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
+    "Went Extinct (" <> tshow cx <> ", " <> tshow cy <> ")"
 formatEvolution (CollapseToCaldera depth _ (GeoCoord cx cy) _ _) =
-    "Collapsed to Caldera depth=" <> T.pack (show depth)
-    <> " (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
+    "Collapsed to Caldera depth=" <> tshow depth
+    <> " (" <> tshow cx <> ", " <> tshow cy <> ")"
 formatEvolution (ParasiticEruption _ _ (GeoCoord cx cy) _) =
-    "Parasitic Eruption (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
+    "Parasitic Eruption (" <> tshow cx <> ", " <> tshow cy <> ")"
 formatEvolution (FlankCollapse _ _ _ (GeoCoord cx cy) _) =
-    "Flank Collapse (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
+    "Flank Collapse (" <> tshow cx <> ", " <> tshow cy <> ")"
 
 -- * Feature List
 
 formatFeatureLines ∷ [PersistentFeature] → [Text]
 formatFeatureLines features =
     let header = ""
-        header2 = "═══ Persistent Features (" <> T.pack (show (length features)) <> ") ═══"
+        header2 = "═══ Persistent Features (" <> tshow (length features) <> ") ═══"
     in [header, header2] <> map formatOneFeature features
 
 formatOneFeature ∷ PersistentFeature → Text
@@ -345,63 +345,63 @@ formatOneFeature pf =
             FExtinct   → "[EXTINCT] "
             FCollapsed → "[COLLAPS] "
         parent = case pfParentId pf of
-            Just (GeoFeatureId pid) → " parent=#" <> T.pack (show pid)
+            Just (GeoFeatureId pid) → " parent=#" <> tshow pid
             Nothing → ""
         eruptions = if pfEruptionCount pf > 1
-            then " eruptions=" <> T.pack (show (pfEruptionCount pf))
+            then " eruptions=" <> tshow (pfEruptionCount pf)
             else ""
-    in "  #" <> padR 4 (T.pack (show fid))
+    in "  #" <> padR 4 (tshow fid)
        <> activity <> padR 20 name
-       <> " (" <> T.pack (show fx) <> ", " <> T.pack (show fy) <> ") "
+       <> " (" <> tshow fx <> ", " <> tshow fy <> ") "
        <> details <> parent <> eruptions
 
 describeFeature' ∷ FeatureShape → (Text, GeoCoord, Text)
 describeFeature' (VolcanicShape (ShieldVolcano p)) =
     ("Shield Volcano", shCenter p,
-     "baseR=" <> T.pack (show (shBaseRadius p))
-     <> " height=" <> T.pack (show (shPeakHeight p)))
+     "baseR=" <> tshow (shBaseRadius p)
+     <> " height=" <> tshow (shPeakHeight p))
 describeFeature' (VolcanicShape (CinderCone p)) =
     ("Cinder Cone", ccCenter p,
-     "baseR=" <> T.pack (show (ccBaseRadius p))
-     <> " height=" <> T.pack (show (ccPeakHeight p)))
+     "baseR=" <> tshow (ccBaseRadius p)
+     <> " height=" <> tshow (ccPeakHeight p))
 describeFeature' (VolcanicShape (LavaDome p)) =
     ("Lava Dome", ldCenter p,
-     "baseR=" <> T.pack (show (ldBaseRadius p))
-     <> " height=" <> T.pack (show (ldHeight p)))
+     "baseR=" <> tshow (ldBaseRadius p)
+     <> " height=" <> tshow (ldHeight p))
 describeFeature' (VolcanicShape (Caldera p)) =
     ("Caldera", caCenter p,
-     "outerR=" <> T.pack (show (caOuterRadius p))
-     <> " rimH=" <> T.pack (show (caRimHeight p)))
+     "outerR=" <> tshow (caOuterRadius p)
+     <> " rimH=" <> tshow (caRimHeight p))
 describeFeature' (VolcanicShape (FissureVolcano p)) =
     ("Fissure", fpStart p,
-     "width=" <> T.pack (show (fpWidth p))
-     <> " ridgeH=" <> T.pack (show (fpRidgeHeight p)))
+     "width=" <> tshow (fpWidth p)
+     <> " ridgeH=" <> tshow (fpRidgeHeight p))
 describeFeature' (VolcanicShape (LavaTube p)) =
     ("Lava Tube", ltStart p,
-     "width=" <> T.pack (show (ltWidth p))
-     <> " collapses=" <> T.pack (show (ltCollapses p)))
+     "width=" <> tshow (ltWidth p)
+     <> " collapses=" <> tshow (ltCollapses p))
 describeFeature' (VolcanicShape (SuperVolcano p)) =
     ("SUPERVOLCANO", svCenter p,
-     "calderaR=" <> T.pack (show (svCalderaRadius p))
-     <> " ejectaR=" <> T.pack (show (svEjectaRadius p)))
+     "calderaR=" <> tshow (svCalderaRadius p)
+     <> " ejectaR=" <> tshow (svEjectaRadius p))
 describeFeature' (VolcanicShape (HydrothermalVent p)) =
     ("Hydrothermal Vent", htCenter p,
-     "radius=" <> T.pack (show (htRadius p))
-     <> " chimneyH=" <> T.pack (show (htChimneyHeight p)))
+     "radius=" <> tshow (htRadius p)
+     <> " chimneyH=" <> tshow (htChimneyHeight p))
 describeFeature' (HydroShape (RiverFeature p)) =
     ("River", rpSourceRegion p,
-     "mouth=" <> T.pack (show (rpMouthRegion p))
-     <> " flow=" <> T.pack (show (rpFlowRate p)))
+     "mouth=" <> tshow (rpMouthRegion p)
+     <> " flow=" <> tshow (rpFlowRate p))
 describeFeature' (HydroShape (GlacierFeature p)) =
     ("Glacier", glCenter p,
-     "length=" <> T.pack (show (glLength p))
-     <> " width=" <> T.pack (show (glWidth p))
-     <> " thickness=" <> T.pack (show (glThickness p)))
+     "length=" <> tshow (glLength p)
+     <> " width=" <> tshow (glWidth p)
+     <> " thickness=" <> tshow (glThickness p))
 describeFeature' (HydroShape (LakeFeature p)) =
     ("Lake", lkCenter p,
-     "radius=" <> T.pack (show (lkRadius p))
-     <> " surface=" <> T.pack (show (lkSurface p))
-     <> " depth=" <> T.pack (show (lkDepth p)))
+     "radius=" <> tshow (lkRadius p)
+     <> " surface=" <> tshow (lkSurface p)
+     <> " depth=" <> tshow (lkDepth p))
 
 -- * IO Logging Functions
 

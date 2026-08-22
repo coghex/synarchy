@@ -99,7 +99,7 @@ loadItemYamlFn core regs env backendState = do
                             (lbsAssetPool backendState) lteq
                             (crItemManagerRef regs) filePath defs
                 logInfo logger CatAsset $
-                    "loadItemYaml: loaded " <> T.pack (show total)
+                    "loadItemYaml: loaded " <> tshow total
                     <> " item definitions from " <> T.pack filePath
                 return total
 

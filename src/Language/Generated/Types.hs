@@ -79,7 +79,7 @@ newtype LangSeed = LangSeed { langSeedWord ∷ Word64 }
 --   back negative (or rounded) through either. Text is exact for the
 --   whole 'Word64' range.
 langSeedText ∷ LangSeed → Text
-langSeedText (LangSeed s) = T.pack (show s)
+langSeedText (LangSeed s) = tshow s
 
 -- | The generator algorithm's version. A future breaking change to
 --   profile/root/rendering behavior adds a new version rather than
@@ -309,7 +309,7 @@ data GeneratorError = UnsupportedGeneratorVersion Int
 
 generatorErrorText ∷ GeneratorError → Text
 generatorErrorText (UnsupportedGeneratorVersion v) =
-    "unsupported language-generator version " <> T.pack (show v)
+    "unsupported language-generator version " <> tshow v
     <> " (supported: " <> supported <> ")"
   where
     -- Enumerates every DEFINED version, not just the current one: once
@@ -317,4 +317,4 @@ generatorErrorText (UnsupportedGeneratorVersion v) =
     -- the current one would mislabel a perfectly constructible version
     -- as the sole supported one.
     supported = T.intercalate ", "
-        [ T.pack (show (generatorVersionInt g)) | g ← supportedGeneratorVersions ]
+        [ tshow (generatorVersionInt g) | g ← supportedGeneratorVersions ]

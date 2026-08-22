@@ -16,7 +16,6 @@ module Combat.Resolution.Wear
 import UPrelude
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
-import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (atomicModifyIORef')
 import Combat.Types (AttackMode(..))
@@ -90,7 +89,7 @@ applyWeaponWear env logger im sm atkRaw load = do
                         _ → (um, Nothing)
     case mBroke of
         Just nm → logDebug logger CatThread $
-            "weapon broke: " <> nm <> " (unit " <> T.pack (show atkRaw) <> ")"
+            "weapon broke: " <> nm <> " (unit " <> tshow atkRaw <> ")"
         Nothing → pure ()
   where
     findWeaponSlot eq = go ["right_hand", "left_hand"]
@@ -133,7 +132,7 @@ applyArmorWear env logger im sm tgtRaw partId driver weaponHardness = do
                             HM.insert (UnitId tgtRaw) inst' (umInstances um) }
                    , brk )
     mapM_ (\nm → logDebug logger CatThread
-              ("armor broke: " <> nm <> " (unit " <> T.pack (show tgtRaw) <> ")"))
+              ("armor broke: " <> nm <> " (unit " <> tshow tgtRaw <> ")"))
           broken
 
 -- | Stamina cost per swing as a fraction of the attacker's

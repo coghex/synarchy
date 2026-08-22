@@ -51,7 +51,7 @@ processLuaMessages = do
 
     when (not $ null messages) $
         logDebugSM CatLua "Processing Lua messages"
-            [("count", T.pack $ show $ length messages)]
+            [("count", tshow $ length messages)]
 
     process messages
     whenGraphical handleWorldPreview
@@ -120,13 +120,13 @@ handleLuaMessage ∷ LuaToEngineMsg → EngineM σ ()
 handleLuaMessage msg = do
     case msg of
         LuaSetWindowMode mode → whenGraphical $ do
-            logDebugM CatLua $ "Setting window mode: " <> T.pack (show mode)
+            logDebugM CatLua $ "Setting window mode: " <> tshow mode
             handleSetWindowMode mode
 
         LuaSetResolution w h → whenGraphical $ do
             logDebugSM CatLua "Setting resolution"
-                [("width", T.pack $ show w)
-                ,("height", T.pack $ show h)]
+                [("width", tshow w)
+                ,("height", tshow h)]
             handleSetResolution w h
 
         LuaSetVSync enabled → whenGraphical $ do
@@ -136,12 +136,12 @@ handleLuaMessage msg = do
 
         LuaSetMSAA msaa → whenGraphical $ do
             logDebugSM CatLua "Setting MSAA"
-                [("samples", T.pack $ show msaa)]
+                [("samples", tshow msaa)]
             handleSetMSAA msaa
 
         LuaSetBrightness brightness → do
             logDebugSM CatLua "Setting brightness"
-                [("brightness", T.pack $ show brightness)]
+                [("brightness", tshow brightness)]
             handleSetBrightness brightness
 
         LuaSetPixelSnap enabled → do
@@ -154,69 +154,69 @@ handleLuaMessage msg = do
         LuaLoadFontRequest handle path size → whenGraphical $ do
             logDebugSM CatLua "Loading font"
                 [("path", T.pack path)
-                ,("size", T.pack $ show size)
-                ,("handle", T.pack (show handle))]
+                ,("size", tshow size)
+                ,("handle", tshow handle)]
             handleLoadFont handle path size
 
         LuaLoadTextureRequest handle path → whenGraphical $ do
             logDebugSM CatLua "Loading texture"
                 [("path", T.pack path)
-                ,("handle", T.pack (show handle))]
+                ,("handle", tshow handle)]
             handleLoadTexture handle path
 
         LuaLoadAtlasTextureRequest handle path → whenGraphical $ do
             logDebugSM CatLua "Loading unit animation atlas"
                 [("path", T.pack path)
-                ,("handle", T.pack (show handle))]
+                ,("handle", tshow handle)]
             handleLoadAtlasTextureBatch [(handle, path)]
 
         LuaSpawnTextRequest objId x y font text color layer size → do
             logDebugSM CatLua "Spawning text"
-                [("objId", T.pack (show objId))
-                ,("pos", T.pack (show x) <> "," <> T.pack (show y))
+                [("objId", tshow objId)
+                ,("pos", tshow x <> "," <> tshow y)
                 ,("text", T.take 20 text)
-                ,("layer", T.pack (show layer))
-                ,("size", T.pack (show size))]
+                ,("layer", tshow layer)
+                ,("size", tshow size)]
             handleSpawnText objId x y font text color layer size
 
         LuaSetTextRequest objId text → do
             logDebugSM CatLua "Setting text"
-                [("objId", T.pack (show objId))
+                [("objId", tshow objId)
                 ,("text", T.take 20 text)]
             handleSetText objId text
 
         LuaSpawnSpriteRequest objId x y w h tex layer → do
             logDebugSM CatLua "Spawning sprite"
-                [("objId", T.pack (show objId))
-                ,("pos", T.pack (show x) <> "," <> T.pack (show y))
-                ,("size", T.pack (show w) <> "x" <> T.pack (show h))
-                ,("layer", T.pack (show layer))]
+                [("objId", tshow objId)
+                ,("pos", tshow x <> "," <> tshow y)
+                ,("size", tshow w <> "x" <> tshow h)
+                ,("layer", tshow layer)]
             handleSpawnSprite objId x y w h tex layer
 
         LuaSetPosRequest objId x y → do
             logDebugSM CatLua "Moving object"
-                [("objId", T.pack $ show objId)
-                ,("pos", T.pack (show x) <> "," <> T.pack (show y))]
+                [("objId", tshow objId)
+                ,("pos", tshow x <> "," <> tshow y)]
             handleSetPos objId x y
 
         LuaSetColorRequest objId color → do
-            logDebugM CatLua $ "Setting color for object " <> T.pack (show objId)
+            logDebugM CatLua $ "Setting color for object " <> tshow objId
             handleSetColor objId color
 
         LuaSetSizeRequest objId w h → do
             logDebugSM CatLua "Setting size"
-                [("objId", T.pack $ show objId)
-                ,("size", T.pack (show w) <> "x" <> T.pack (show h))]
+                [("objId", tshow objId)
+                ,("size", tshow w <> "x" <> tshow h)]
             handleSetSize objId w h
 
         LuaSetVisibleRequest objId visible → do
             logDebugSM CatLua "Setting visibility"
-                [("objId", T.pack $ show objId)
+                [("objId", tshow objId)
                 ,("visible", if visible then "true" else "false")]
             handleSetVisible objId visible
 
         LuaDestroyRequest objId → do
-            logDebugM CatLua $ "Destroying object " <> T.pack (show objId)
+            logDebugM CatLua $ "Destroying object " <> tshow objId
             handleDestroy objId
 
         -- The remaining 'LuaToEngineMsg' constructors (logging, focus,
@@ -227,4 +227,4 @@ handleLuaMessage msg = do
         other →
             logWarnM CatLua $
                 "handleLuaMessage: unexpected message on engine queue: "
-                <> T.pack (show other)
+                <> tshow other

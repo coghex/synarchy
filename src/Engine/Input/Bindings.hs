@@ -104,12 +104,12 @@ loadKeyBindings logger path = do
     case result of
         Left err → do
             logWarn logger CatInput $ "Failed to load keybindings from "
-                                    <> T.pack path <> ": " <> T.pack (show err)
+                                    <> T.pack path <> ": " <> tshow err
                                     <> ". Using default keybindings."
             return defaultKeyBindings
         Right config → do
             let bindings = kbcBindings config
-            logDebug logger CatInput $ "Key bindings loaded: " <> T.pack (show (Map.size bindings)) <> " actions"
+            logDebug logger CatInput $ "Key bindings loaded: " <> tshow (Map.size bindings) <> " actions"
             return bindings
 
 -- | Save keybindings back to a YAML file as @keybinds:@ arrays.
@@ -117,7 +117,7 @@ saveKeyBindings ∷ LoggerState → FilePath → KeyBindings → IO ()
 saveKeyBindings logger path bindings = do
     Yaml.encodeFile path (KeyBindingConfig bindings)
     logInfo logger CatInput $ "Saved keybindings to " <> T.pack path
-                            <> " (" <> T.pack (show (Map.size bindings)) <> " actions)"
+                            <> " (" <> tshow (Map.size bindings) <> " actions)"
 
 -- | True when *any* key bound to the action is currently held.
 isActionDown ∷ Text → KeyBindings → InputState → Bool

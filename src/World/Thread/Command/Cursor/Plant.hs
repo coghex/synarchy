@@ -25,7 +25,6 @@ import Engine.Core.State (EngineEnv, actionOutcomeRef)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import qualified Data.Text as T
 import World.Types
 import World.Generate.Coordinates (canonicalTile, canonicalTileFrame)
 import World.Plant.Types (newPlantDesignation)
@@ -89,8 +88,8 @@ handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
                     atomicModifyIORef' (wsPlantDesignationsRef worldState) $
                         \m → (HM.insert (cgx, cgy) (newPlantDesignation z fid) m, ())
                     logDebug logger CatWorld $
-                        "Plant designation: (" <> T.pack (show gx) <> ","
-                        <> T.pack (show gy) <> ") crop=" <> cropName
+                        "Plant designation: (" <> tshow gx <> ","
+                        <> tshow gy <> ") crop=" <> cropName
                     pushActionOutcome (actionOutcomeRef env) ActionOutcome
                         { aoTs = gt, aoKind = "plant.designate"
                         , aoOutcome = "accepted"
@@ -101,8 +100,8 @@ handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
                         }
                 _ → do
                     logDebug logger CatWorld $
-                        "Plant designation refused at (" <> T.pack (show gx)
-                        <> "," <> T.pack (show gy) <> ") crop=" <> cropName
+                        "Plant designation refused at (" <> tshow gx
+                        <> "," <> tshow gy <> ") crop=" <> cropName
                     let reason
                             | isNothing resolvedCrop =
                                 "unknown or non-plantable crop: " <> cropName

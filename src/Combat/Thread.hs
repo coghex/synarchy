@@ -20,7 +20,6 @@ import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
-import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef)
 import Control.Concurrent (threadDelay)
 import Engine.Core.Thread
@@ -62,7 +61,7 @@ startCombatThread env = startWorkerThread WorkerSpec
     , wsOnCrash     = \_ e → do
         logger ← readIORef (loggerRef env)
         logError logger CatThread $ "Combat thread crashed: "
-            <> T.pack (show e)
+            <> tshow e
         -- Fail-stop, like every other worker thread (world,
         -- unit, input). Re-entering the loop here skipped the
         -- threadDelay, so a persistent fault tight-looped at

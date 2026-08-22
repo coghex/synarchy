@@ -66,8 +66,8 @@ implementation, test, tracker item, or remote state was changed.
 - [x] TEST-4. The save-migration probe continues after a prerequisite load failure — [#1486]
 - [x] TEST-5. The unified-transfer probe ignores persistence integrity diagnostics — [#1487]
 - [x] TEST-6. Fresh-world entry hides the portal-placement toolbar — [#1488]
-- [ ] TEST-7. Randbox focus styling falsely signals replacement selection
-- [ ] TEST-8. Retaliation-swap fixture carries injury state into its stale-window case
+- [x] TEST-7. Randbox focus styling falsely signals replacement selection — [no-issue]
+- [x] TEST-8. Retaliation-swap fixture carries injury state into its stale-window case — [#1578]
 
 ---
 
@@ -316,7 +316,20 @@ first required action until the player discovered the map-mode transition.
 - **Remaining uncertainty:** One offscreen naive-player session establishes the
   mismatch but not its prevalence or the best presentation remedy.
 
-### TEST-7. Randbox focus styling falsely signals replacement selection
+### [no-issue] TEST-7. Randbox focus styling falsely signals replacement selection
+
+> **Disposition:** No issue — the focused appearance is a border-only focus
+> ring, not a selection highlight. `boxTextures.load` maps `<prefix>.png` to
+> the 9-slice CENTER tile that covers the field interior, and
+> `assets/textures/ui/textboxselected/textbox.png` is byte-identical to the
+> unfocused set's; only the eight border tiles differ, adding a yellow
+> `(249,255,12)` ring. Nothing renders as replacement selection, so a focus
+> ring plus a blinking end cursor already is this finding's own second
+> acceptable outcome. Focus-at-end is the project-wide convention shared by
+> `scripts/ui/textbox.lua:384-393` and `scripts/ui/dropdown.lua:41`, pinned by
+> `test-headless/Test/Headless/UI/UnicodeTextEditing.hs:40`, and the engine has
+> no text-selection concept at all. The `texSetSelected` variable name, not the
+> pixels, is what signals selection.
 
 Focusing the generated world-name control applies its selected texture to the
 whole field but places the text cursor at the end of the existing value. The
@@ -359,7 +372,7 @@ replacement produced a composite generated-plus-typed name.
 
 ## Behavior probe validity
 
-### TEST-8. Retaliation-swap fixture carries injury state into its stale-window case
+### [#1578] TEST-8. Retaliation-swap fixture carries injury state into its stale-window case
 
 > **Captured note:** Shared combat fixture collapses before the stale-window oracle
 

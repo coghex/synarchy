@@ -106,7 +106,7 @@ loadNotificationCfg logger registryPath overridesPath = do
             logWarn logger CatEvent $
                 "Failed to load notification registry "
                   <> T.pack registryPath <> ": "
-                  <> T.pack (show err)
+                  <> tshow err
             return (HM.empty, [])
         Right (RegistryFile entries) → do
             overrides ← loadOverrides logger overridesPath entries
@@ -116,7 +116,7 @@ loadNotificationCfg logger registryPath overridesPath = do
                 order    = map reId entries
             logInfo logger CatEvent $
                 "Notification registry loaded: "
-                  <> T.pack (show (HM.size resolved))
+                  <> tshow (HM.size resolved)
                   <> " categories"
             return (resolved, order)
 
@@ -182,7 +182,7 @@ loadOverrides logger path entries = do
                     logWarn logger CatEvent $
                         "Failed to parse notification overrides "
                           <> T.pack path <> ": "
-                          <> T.pack (show err)
+                          <> tshow err
                           <> "; using registry defaults"
                     return HM.empty
                 Right (OverridesFile cats) → do

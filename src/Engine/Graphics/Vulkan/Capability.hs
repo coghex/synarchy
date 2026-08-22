@@ -145,6 +145,6 @@ determineTextureCapability support reservedSlots =
 -- | Human-readable description of capability
 describeCapability ∷ TextureSystemCapability → Text
 describeCapability (BindlessTextures n) = 
-  "Bindless textures enabled (max " <> T.pack (show n) <> " slots)"
+  "Bindless textures enabled (max " <> tshow n <> " slots)"
 describeCapability (BoundedTextureArray n) = 
-  "Bounded texture array fallback (" <> T.pack (show n) <> " textures)"
+  "Bounded texture array fallback (" <> tshow n <> " textures)"

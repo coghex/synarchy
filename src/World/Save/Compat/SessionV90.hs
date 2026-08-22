@@ -309,7 +309,7 @@ migrateSessionV90 meta sd = do
     when (not (HM.null (sd90LuaModules sd))) $
         Left [ComponentError sessionComponentId sessionComponentVersion
                 MigratePhase
-                ("legacy save carries " <> T.pack (show (HM.size (sd90LuaModules sd)))
+                ("legacy save carries " <> tshow (HM.size (sd90LuaModules sd))
                  <> " non-empty Lua module blob(s) (" <> luaModuleNames sd
                  <> ") that this build can no longer interpret (the pre-#761 \
                     \Lua deserializer was removed) -- refusing to migrate \
@@ -398,7 +398,7 @@ luaModuleNames ∷ SaveDataV90 → Text
 luaModuleNames sd = T.intercalate ", " (take 5 (HM.keys (sd90LuaModules sd)))
 
 snapErr ∷ Show e ⇒ e → ComponentError
-snapErr e = ComponentError coreSessionComponentId 1 AssemblePhase (T.pack (show e))
+snapErr e = ComponentError coreSessionComponentId 1 AssemblePhase (tshow e)
 
 integrityErr ∷ IntegrityError → ComponentError
 integrityErr e = ComponentError (ieComponent e) (ieVersion e) AssemblePhase

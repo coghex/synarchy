@@ -51,7 +51,7 @@ glyphIsCovered char inCmap w h
 generateFontAtlas ∷ LoggerState → FilePath → Int → IO FontAtlas
 generateFontAtlas logger fontPath fontSize = do
     logDebug logger CatFont $ "Generating font atlas for: " <> T.pack fontPath
-                            <> " size=" <> T.pack (show fontSize)
+                            <> " size=" <> tshow fontSize
 
     maybeFont ← loadSTBFont logger fontPath
     case maybeFont of
@@ -69,9 +69,9 @@ generateFontAtlas logger fontPath fontSize = do
                 -- Log metrics for first few glyphs
                 when (idx < 3) $
                     logDebug logger CatFont $ "Glyph metrics: char='" <> T.singleton c <> "' "
-                        <> "size=" <> T.pack (show w) <> "x" <> T.pack (show h)
-                        <> " bearing=(" <> T.pack (show xoff) <> "," <> T.pack (show yoff) <> ")"
-                        <> " advance=" <> T.pack (show advance)
+                        <> "size=" <> tshow w <> "x" <> tshow h
+                        <> " bearing=(" <> tshow xoff <> "," <> tshow yoff <> ")"
+                        <> " advance=" <> tshow advance
                 return $ BakedGlyph
                     { bgChar = c, bgWidth = w, bgHeight = h
                     , bgBearingX = xoff, bgBearingY = yoff
@@ -84,14 +84,14 @@ generateFontAtlas logger fontPath fontSize = do
                 mark = fallbackMark fontSize 0 (alMaxWidth layout) (alMaxHeight layout)
 
             logDebug logger CatFont $
-                "Font atlas size: " <> T.pack (show (alAtlasWidth layout))
-                <> "x" <> T.pack (show (alAtlasHeight layout))
+                "Font atlas size: " <> tshow (alAtlasWidth layout)
+                <> "x" <> tshow (alAtlasHeight layout)
 
             (atlasBitmap, glyphMap, fallbackInfo) ←
                 packGlyphsSTBWithMetrics layout mark glyphs
 
             logDebug logger CatFont $
-                "Font atlas generated with " <> T.pack (show $ Map.size glyphMap)
+                "Font atlas generated with " <> tshow (Map.size glyphMap)
                                              <> " glyphs."
 
             return $ FontAtlas

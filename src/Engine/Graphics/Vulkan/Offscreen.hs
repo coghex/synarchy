@@ -12,7 +12,6 @@ module Engine.Graphics.Vulkan.Offscreen
   ) where
 
 import UPrelude
-import qualified Data.Text as T
 import qualified Data.Vector as V
 import Engine.Core.Monad
 import Engine.Core.Log (LogCategory(..))
@@ -101,8 +100,8 @@ createOffscreenTarget pDevice device (w, h) count = do
         } }
 
   logDebugSM CatGraphics "Offscreen render target created"
-    [("extent", T.pack (show w) <> "x" <> T.pack (show h))
-    ,("image_count", T.pack (show count))]
+    [("extent", tshow w <> "x" <> tshow h)
+    ,("image_count", tshow count)]
 
   pure SwapchainInfo
     { siTarget          = TargetOffscreen memories

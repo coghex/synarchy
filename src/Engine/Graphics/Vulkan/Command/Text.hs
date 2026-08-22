@@ -9,7 +9,6 @@ module Engine.Graphics.Vulkan.Command.Text
 import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Map.Strict as Map
-import qualified Data.Text as T
 import Data.IORef (readIORef)
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugSM, logWarnM)
@@ -33,14 +32,14 @@ ensureTextInstanceBuffer device pDevice requiredInstances mOld = do
     case mOld of
         Just existing | tibCapacity existing ≥ requiredInstances → do
             logDebugSM CatRender "Reusing text instance buffer"
-                [("capacity", T.pack $ show $ tibCapacity existing)
-                ,("required", T.pack $ show requiredInstances)]
+                [("capacity", tshow $ tibCapacity existing)
+                ,("required", tshow requiredInstances)]
             pure existing
         _ → do
             case mOld of
                 Just old → do
                     logDebugSM CatRender "Destroying old text instance buffer"
-                        [("oldCapacity", T.pack $ show $ tibCapacity old)]
+                        [("oldCapacity", tshow $ tibCapacity old)]
                     liftIO $ do
                         destroyBuffer device (tibBuffer old) Nothing
                         freeMemory device (tibMemory old) Nothing
@@ -51,9 +50,9 @@ ensureTextInstanceBuffer device pDevice requiredInstances mOld = do
                 bufferSize = paddedCapacity * fromIntegral instanceSize
 
             logDebugSM CatRender "Creating text instance buffer"
-                [("instances", T.pack $ show requiredInstances)
-                ,("paddedCapacity", T.pack $ show paddedCapacity)
-                ,("sizeBytes", T.pack $ show bufferSize)]
+                [("instances", tshow requiredInstances)
+                ,("paddedCapacity", tshow paddedCapacity)
+                ,("sizeBytes", tshow bufferSize)]
 
             (!memory, !buffer) ← createVulkanBufferManual device pDevice
                 (fromIntegral bufferSize)
@@ -82,8 +81,8 @@ uploadTextInstances device tib batches = do
         totalSize = fromIntegral totalInstances * instanceSize
 
     logDebugSM CatRender "Uploading text instances"
-        [("totalInstances", T.pack $ show totalInstances)
-        ,("batches", T.pack $ show $ V.length batches)]
+        [("totalInstances", tshow totalInstances)
+        ,("batches", tshow $ V.length batches)]
 
     if totalInstances ≡ 0
         then pure (tib { tibUsed = 0 }, drawInfos)
@@ -128,7 +127,7 @@ renderTextBatches cmdBuf quadBuffer layout uniformSet tib batchesWithOffsets = d
                 else case Map.lookup (trbFont trb) (fcFonts cache) of
                     Nothing → do
                         logWarnM CatFont $ "Font handle not found: "
-                                         <> T.pack (show (trbFont trb))
+                                         <> tshow (trbFont trb)
                         pure boundFont
                     Just atlas → case faDescriptorSet atlas of
                         Nothing → do

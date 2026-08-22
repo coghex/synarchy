@@ -13,7 +13,6 @@ module Engine.Graphics.Vulkan.Device
 import UPrelude
 import qualified Data.ByteString as BS
 import qualified Data.Vector as V
-import qualified Data.Text as T
 import Engine.Core.Error.Exception
   (ExceptionType(..), GraphicsError(..), InitError(..))
 import Engine.Core.Log (LogCategory(..))
@@ -56,8 +55,8 @@ createVulkanDevice _inst physicalDevice mSurface = do
                 "Selected device has no graphics/present queue family"
 
   logDebugSM CatVulkan "Queue families found"
-    [("graphics_family", T.pack $ show $ graphicsFamily indices)
-    ,("present_family", T.pack $ show $ presentFamily indices)]
+    [("graphics_family", tshow $ graphicsFamily indices)
+    ,("present_family", tshow $ presentFamily indices)]
   
   let queuePriority = 1.0
       uniqueFamilies = if graphicsFamily indices ≡ presentFamily indices
@@ -69,7 +68,7 @@ createVulkanDevice _inst physicalDevice mSurface = do
         })) uniqueFamilies
   
   logDebugSM CatVulkan "Creating device queues"
-    [("queue_count", T.pack $ show $ length uniqueFamilies)]
+    [("queue_count", tshow $ length uniqueFamilies)]
   
   -- VK_KHR_portability_subset only exists on non-conformant
   -- implementations (MoltenVK); the spec requires enabling it iff the
@@ -85,7 +84,7 @@ createVulkanDevice _inst physicalDevice mSurface = do
            | KHR_PORTABILITY_SUBSET_EXTENSION_NAME `elem` availableDevExtNames]
 
   logDebugSM CatVulkan "Enabled device extensions"
-    [("extensions", T.pack $ show $ map (\bs → BS.take 30 bs) deviceExtensions)]
+    [("extensions", tshow $ map (\bs → BS.take 30 bs) deviceExtensions)]
   
   -- Enable exactly the descriptor-indexing features the bindless shaders and
   -- layout actually use ('requiredVulkan12Features'), and only once the
@@ -164,8 +163,8 @@ pickPhysicalDevice inst mSurface = do
   PhysicalDeviceProperties { deviceName = chosenName }
     ← liftIO $ getPhysicalDeviceProperties bestPDevice
   logInfoSM CatVulkan "Selected physical device"
-    [("device", T.pack $ show chosenName)
-    ,("score", T.pack $ show bestScore)]
+    [("device", tshow chosenName)
+    ,("score", tshow bestScore)]
   return bestPDevice
 
 -- | Rate a physical device's suitability (higher is better, 0 = unusable),
@@ -184,10 +183,10 @@ rateDevice mSurface device = do
       PhysicalDeviceProperties { deviceName = dname } = props
 
   logDebugSM CatVulkan "Rated physical device"
-    [("device", T.pack $ show dname)
-    ,("score", T.pack $ show score)
-    ,("bindless_capable", T.pack $ show $ isBindlessSupported support)
-    ,("missing_features", T.pack $ show $ bsMissingFeatures support)]
+    [("device", tshow dname)
+    ,("score", tshow score)
+    ,("bindless_capable", tshow $ isBindlessSupported support)
+    ,("missing_features", tshow $ bsMissingFeatures support)]
   return (score, support)
 
 -- | How much a bindless-capable candidate is worth. Strictly greater than

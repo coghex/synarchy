@@ -8,11 +8,11 @@ PR #249's mine-anchor teardown, #247/#242's debug-animation view gates, #246's c
 
 ## Status
 
-- [ ] PRR-1. Post-load unit-AI reconciliation scrubs only a subset of its persisted references
+- [x] PRR-1. Post-load unit-AI reconciliation scrubs only a subset of its persisted references — [#1589]
 
 ## 1. Unit-AI post-load reference reconciliation
 
-### PRR-1. Post-load unit-AI reconciliation scrubs only a subset of its persisted references
+### [#1589] PRR-1. Post-load unit-AI reconciliation scrubs only a subset of its persisted references
 
 > **Captured note:** Make `unitAi.onSaveLoaded` reconcile the same complete typed-reference schema that `unit_ai_save_refs.lua` persists and reports. A surviving AI row must not leave stale craft, repair, pickup, forage, or harvest references merely because the original #195 scrub predates those fields.
 

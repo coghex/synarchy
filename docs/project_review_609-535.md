@@ -8,13 +8,13 @@ The current furnace/machine-shop content, recipe-dependent power accounting, inf
 
 ## Status
 
-- [ ] PRR-1. Parallel probe assignments can overlap a neighboring probe's secondary port
-- [ ] PRR-2. A direct CI rewrite removed accepted feature-gate coverage without per-probe evidence
-- [ ] PRR-3. The probe-runner README still carries the drifting count #594 meant to remove
+- [x] PRR-1. Parallel probe assignments can overlap a neighboring probe's secondary port — [#1571]
+- [x] PRR-2. A direct CI rewrite removed accepted feature-gate coverage without per-probe evidence — [#1577]
+- [x] PRR-3. The probe-runner README still carries the drifting count #594 meant to remove — [#1584]
 
 ## 1. Parallel probe port allocation
 
-### PRR-1. Parallel probe assignments can overlap a neighboring probe's secondary port
+### [#1571] PRR-1. Parallel probe assignments can overlap a neighboring probe's secondary port
 
 > **Captured note:** Make `run_probes.py --jobs` allocate non-overlapping port reservations, not merely distinct base integers. A registered probe that legitimately binds `--port + 1` must not collide with the next probe's assigned base, and an explicit aggregate `--port` must either participate in the parallel allocation or be rejected instead of being silently ignored.
 
@@ -39,7 +39,7 @@ The current furnace/machine-shop content, recipe-dependent power accounting, inf
 
 ## 2. Behavior-probe gate coverage
 
-### PRR-2. A direct CI rewrite removed accepted feature-gate coverage without per-probe evidence
+### [#1577] PRR-2. A direct CI rewrite removed accepted feature-gate coverage without per-probe evidence
 
 > **Captured note:** Re-evidence the behavior probes demoted by direct commit `b09c1518` against the repository's current promotion criteria, and make the resulting coverage decisions explicit. In particular, a power-only change should not be routed to a green behavior-probe gate that executes zero power behavior unless maintainers have deliberately accepted and recorded that gap; previously reviewed cooking and infection coverage should not remain removed solely because the rewrite labeled it narrow or scenario-heavy without supporting measurements.
 
@@ -66,7 +66,7 @@ The current furnace/machine-shop content, recipe-dependent power accounting, inf
 
 ## 3. Probe-runner inventory documentation
 
-### PRR-3. The probe-runner README still carries the drifting count #594 meant to remove
+### [#1584] PRR-3. The probe-runner README still carries the drifting count #594 meant to remove
 
 > **Captured note:** Remove the remaining prose assertion about the current number of registered probes, or derive it from the registry. The README already names `run_probes.py --list` as authoritative; it should not immediately undercut that source of truth with another hand-maintained estimate that has fallen almost thirty probes behind.
 

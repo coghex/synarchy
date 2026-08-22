@@ -7,7 +7,6 @@ import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Map.Strict as Map
 import qualified Data.List as List
-import qualified Data.Text as T
 import Data.IORef (readIORef)
 import Engine.Scene.Base (NodeType(..), LayerId(..), Transform2D(..))
 import Engine.Scene.Types.Node (SceneNode(..))
@@ -32,7 +31,7 @@ collectTextBatches graph screenW screenH = do
       textNodes = filter (\n → nodeType n ≡ TextObject ∧ nodeVisible n) allNodes
   
   logDebugSM CatScene "Text batch collection started"
-      [("totalTextNodes", T.pack $ show $ length textNodes)]
+      [("totalTextNodes", tshow $ length textNodes)]
   
   cacheRef ← asks (rcFontCacheRef . toRenderCapability)
   cache ← liftIO $ readIORef cacheRef
@@ -40,11 +39,11 @@ collectTextBatches graph screenW screenH = do
   batches ← forM grouped $ \((fontHandle, layerId), nodes) → do
     case Map.lookup fontHandle (fcFonts cache) of
       Nothing → do
-        logDebugM CatFont $ "Font cache miss: Font " <> T.pack (show fontHandle)
+        logDebugM CatFont $ "Font cache miss: Font " <> tshow fontHandle
                                      <> " not found in cache."
         return Nothing
       Just atlas → do
-          logDebugM CatFont $ "Font cache hit: Found font " <> T.pack (show fontHandle)
+          logDebugM CatFont $ "Font cache hit: Found font " <> tshow fontHandle
           allInstances ← fmap V.concat $ forM nodes $ \node → do
               case nodeText node of
                   Just text → do
@@ -69,9 +68,9 @@ collectTextBatches graph screenW screenH = do
                       return instances
                   Nothing → do
                       logDebugM CatFont $ "      No text for node "
-                                        <> T.pack (show (nodeId node))
+                                        <> tshow (nodeId node)
                       return V.empty
-          logDebugM CatFont $ "Text layout generated " <> T.pack (show $ V.length allInstances) <> " vertices"
+          logDebugM CatFont $ "Text layout generated " <> tshow (V.length allInstances) <> " vertices"
           return $ Just $ TextRenderBatch
               { trbFont = fontHandle
               , trbLayer = layerId
@@ -81,8 +80,8 @@ collectTextBatches graph screenW screenH = do
       totalVertices = V.sum $ V.map (V.length . trbInstances) result
   
   logDebugSM CatScene "Text batch generation complete"
-      [("batches", T.pack $ show $ V.length result)
-      ,("totalVertices", T.pack $ show totalVertices)]
+      [("batches", tshow $ V.length result)
+      ,("totalVertices", tshow totalVertices)]
   
   return result
 

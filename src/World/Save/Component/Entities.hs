@@ -155,7 +155,6 @@ module World.Save.Component.Entities
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.List as L
-import qualified Data.Text as T
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import World.Page.Types (WorldPageId)
@@ -181,9 +180,6 @@ import World.Save.Reference (SamePageRef(..))
 
 orderedPages ∷ SessionSnapshot → [PageSnapshot]
 orderedPages = L.sortOn pgsPageId . HM.elems . snapPages
-
-tshow ∷ Show a ⇒ a → Text
-tshow = T.pack . show
 
 -- buildings ---------------------------------------------------------
 

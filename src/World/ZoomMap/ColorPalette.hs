@@ -101,8 +101,8 @@ buildColorPalette logger matDir vegDir = do
     vegPalette ← buildVegPalette logger vegDefs
 
     logInfo logger CatWorld $ "Palette built: "
-        <> T.pack (show (Map.size matPalette)) <> " materials, "
-        <> T.pack (show (Map.size vegPalette)) <> " vegetation"
+        <> tshow (Map.size matPalette) <> " materials, "
+        <> tshow (Map.size vegPalette) <> " vegetation"
 
     pure $ ZoomColorPalette matPalette vegPalette
 

@@ -1216,9 +1216,6 @@ seamLocalizeStub step = T.concat
     , "end; "
     ]
 
-tshow ∷ Int → Text
-tshow = T.pack . show
-
 dshow ∷ Double → Text
 dshow = T.pack . show
 

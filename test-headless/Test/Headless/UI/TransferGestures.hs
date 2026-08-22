@@ -178,9 +178,6 @@ isLuaError t = "error:" `T.isPrefixOf` t ∨ "syntax error:" `T.isPrefixOf` t
 luaLines ∷ [Text] → Text
 luaLines = T.intercalate " "
 
-tshow ∷ Int → Text
-tshow = T.pack . show
-
 -- * The scene's Lua half
 
 -- | Stands the container window up on a real page, preloads the
