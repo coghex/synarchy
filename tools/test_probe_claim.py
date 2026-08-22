@@ -427,6 +427,62 @@ def test_owner_safe_late_release() -> None:
                "the successor's token is still the one on disk")
 
 
+def test_expiry_is_one_way() -> None:
+    """An expired claim cannot be renewed back to life by its own holder.
+
+    A review found this: renewal checked only the TOKEN, so a process
+    that stalled past its own lease — suspended, swapped out, stopped in
+    a debugger — had a renewer that woke up eventually and revived a
+    claim that had already lapsed. Nobody need have taken the probe for
+    that to be wrong: it denies a claimant entitled to reclaim it, and
+    it makes the lease mean nothing whenever the holder is merely slow.
+    """
+    print("\n-- expiry is one-way, even with no successor --")
+    with registry(), claim_root() as root:
+        claim = probe_claim.acquire("alpha", root=root, lease_seconds=600)
+        past = probe_claim.utc_now() + timedelta(seconds=601)
+
+        # Nobody else has touched it. The token still matches. It is
+        # still expired, and that is the whole point.
+        expect(probe_claim.read_claim("alpha", root=root)["token"]
+               == claim.token,
+               "the lapsed claim is still on disk, still carrying our token")
+        expect_raises(probe_claim.ClaimLost,
+                      lambda: claim.renew(now=past),
+                      "an expired claim refuses to renew even with no "
+                      "successor", "expired", "acquired again")
+        expect_raises(probe_claim.ClaimLost,
+                      lambda: claim.reassert(now=past),
+                      "and refuses to reassert")
+        expect(probe_claim.read_claim("alpha", root=root)["expires_at"]
+               == claim.payload["expires_at"],
+               "...having moved the stored expiry not one microsecond")
+
+        # And the reclaim it was blocking really does succeed.
+        successor = probe_claim.acquire("alpha", root=root, lease_seconds=600,
+                                        now=past)
+        expect(successor.token != claim.token,
+               "so the probe is reclaimable, which is what the refusal "
+               "protects")
+
+        # A live claim renews exactly as before — a rule that refused
+        # every renewal would be a different bug wearing this one's face.
+        live = probe_claim.acquire("beta", root=root, lease_seconds=600)
+        before = probe_claim.read_claim("beta", root=root)["expires_at"]
+        live.renew(now=probe_claim.utc_now() + timedelta(seconds=599))
+        expect(probe_claim.read_claim("beta", root=root)["expires_at"] > before,
+               "a claim renewed one second before expiry still extends")
+
+        # The renewer thread reports the loss rather than reviving it.
+        stalled = probe_claim.acquire("gamma", root=root, lease_seconds=0.3)
+        time.sleep(0.5)
+        with probe_claim.Renewer(stalled, interval=0.05) as renewer:
+            time.sleep(0.3)
+        expect(renewer.lost is not None and renewer.renewals == 0,
+               "a stalled holder's renewer reports the loss instead of "
+               "reviving the lease")
+
+
 def test_malformed_claim() -> None:
     """Empty, partial and unparseable claims are occupied until they age out."""
     print("\n-- a malformed claim is occupied, then reclaimable --")
@@ -451,12 +507,15 @@ def test_malformed_claim() -> None:
     # what happens to malformed claims — so a stray or truncated write
     # would wedge the probe permanently. Each is built from a complete
     # payload so exactly one thing is wrong with it.
+    # Internally CONSISTENT — `expires_at` really is `renewed_at` plus
+    # `lease_seconds` — so each case below isolates exactly the one
+    # thing it changes rather than being rejected for a second reason.
     complete = {"schema": "probe-claim/v1", "probe": "alpha", "token": "t",
                 "owner": "dev@host:1", "host": "host", "pid": 1,
                 "worktree": "/repo",
                 "acquired_at": "2099-01-01T00:00:00.000000Z",
                 "renewed_at": "2099-01-01T00:00:00.000000Z",
-                "expires_at": "2099-01-01T00:00:00.000000Z",
+                "expires_at": "2099-01-01T01:00:00.000000Z",
                 "lease_seconds": 3600.0}
     for missing in ("schema", "owner", "host", "pid", "worktree",
                     "acquired_at", "renewed_at", "lease_seconds"):
@@ -466,6 +525,18 @@ def test_malformed_claim() -> None:
                                            "schema": "probe-claim/v99"})
     payloads["boolean pid"] = json.dumps({**complete, "pid": True})
     payloads["zero lease"] = json.dumps({**complete, "lease_seconds": 0})
+    payloads["oversized lease"] = json.dumps(
+        {**complete, "lease_seconds": probe_claim.MAX_LEASE_SECONDS + 1})
+    # INTERNALLY INCONSISTENT, and this is the shape that would wedge a
+    # probe forever: every field well-typed, a one-second lease, and an
+    # expiry years away. It never expires, and it never ages out either,
+    # because ageing out is what happens to malformed claims.
+    payloads["a one-second lease expiring in 2099"] = json.dumps(
+        {**complete, "lease_seconds": 1.0})
+    payloads["an expiry before its own renewal"] = json.dumps(
+        {**complete, "expires_at": "2098-01-01T00:00:00.000000Z"})
+    payloads["acquired after it was renewed"] = json.dumps(
+        {**complete, "acquired_at": "2099-06-01T00:00:00.000000Z"})
     for name, text in payloads.items():
         with registry(), claim_root() as root:
             root.mkdir(parents=True, exist_ok=True)
@@ -1073,17 +1144,25 @@ def test_a_short_lease_means_what_it_says() -> None:
         expect(taken.token != claim.token,
                "and it really does lapse once that half-second is gone")
 
-        # A second-precision claim from an older build still reads.
-        legacy = dict(stored)
-        legacy["expires_at"] = probe_claim.stamp_second(
-            probe_claim.utc_now() + timedelta(seconds=600))
-        legacy["token"] = "legacy-token"
+        # A second-precision claim from an older build still reads, and
+        # its timestamps still agree with its lease to within the
+        # rounding that precision carries.
+        moment = probe_claim.utc_now()
+        legacy = {**stored, "probe": "beta", "token": "legacy-token",
+                  "lease_seconds": 600.0,
+                  "acquired_at": probe_claim.stamp_second(moment),
+                  "renewed_at": probe_claim.stamp_second(moment),
+                  "expires_at": probe_claim.stamp_second(
+                      moment + timedelta(seconds=600))}
         probe_claim.claim_path("beta", root).write_text(
-            json.dumps({**legacy, "probe": "beta"}), encoding="utf-8")
+            json.dumps(legacy), encoding="utf-8")
         expect_raises(probe_claim.ClaimDenied,
                       lambda: probe_claim.acquire("beta", root=root,
                                                   lease_seconds=600),
                       "a second-precision claim file is still honoured")
+        expect(probe_claim.read_claim("beta", root=root) is not None,
+               "...as a live claim, not aged out as malformed: the "
+               "consistency check tolerates exactly that rounding")
 
         # The renewer's own cadence must sit INSIDE the lease it renews.
         for lease in (0.3, 2.0, 600.0, probe_claim.LEASE_SECONDS):
@@ -1526,24 +1605,49 @@ def test_a_completed_measurement_is_never_lost() -> None:
             expect(wanted.exists(),
                    "...but the measurement it refused is retained all the same")
 
-    # (d) An unwritable --result is refused BEFORE anything is claimed.
+    # (d) An unusable --result is refused BEFORE anything is claimed —
+    # the TARGET itself, not merely its directory. Every shape here has
+    # a perfectly writable parent, which is exactly why checking the
+    # parent alone let the probe be claimed and run first.
     with registry(), scratch_repo() as (main_wt, _other, census):
         seeded_census(census)
         with claim_root() as root, scratch() as out:
-            blocker = out / "a-file"
-            blocker.write_text("not a directory", encoding="utf-8")
-            ran = []
-            expect_raises(
-                probe_claim.ClaimError,
-                lambda: probe_claim.run_claimed_measurement(
-                    "alpha", 2, root=root, census_path=census,
-                    result_path=blocker / "result.json",
-                    measure=lambda *a, **k: ran.append(1) or fake_measurement(),
-                    repo_root=str(main_wt)),
-                "an unwritable --result is refused up front, not after an "
-                "hour of engine time", "result document cannot be written")
-            expect(not ran and probe_claim.read_claim("alpha", root=root) is None,
-                   "...having run nothing and claimed nothing")
+            a_file = out / "a-file"
+            a_file.write_text("not a directory", encoding="utf-8")
+            a_directory = out / "a-directory"
+            a_directory.mkdir()
+            read_only = out / "read-only.json"
+            read_only.write_text("{}", encoding="utf-8")
+            read_only.chmod(0o444)
+            dangling = out / "dangling.json"
+            dangling.symlink_to(out / "nothing-here")
+            cases = [
+                (a_file / "result.json", "a path under a plain file"),
+                (a_directory, "an existing DIRECTORY at the target"),
+                (read_only, "an existing unwritable file"),
+                (dangling, "a dangling symlink"),
+            ]
+            for target, why in cases:
+                ran = []
+                expect_raises(
+                    probe_claim.ClaimError,
+                    lambda p=target: probe_claim.run_claimed_measurement(
+                        "alpha", 2, root=root, census_path=census,
+                        result_path=p,
+                        measure=lambda *a, **k: (ran.append(1)
+                                                 or fake_measurement()),
+                        repo_root=str(main_wt)),
+                    f"{why} is refused up front, not after an hour of engine "
+                    f"time", "result document cannot be written")
+                expect(not ran
+                       and probe_claim.read_claim("alpha", root=root) is None,
+                       f"...having run nothing and claimed nothing ({why})")
+            # And an ordinary writable existing file is still fine: a
+            # rule that refused every target would be a different bug.
+            reusable = out / "reusable.json"
+            reusable.write_text("{}", encoding="utf-8")
+            expect(probe_claim.check_result_path(reusable) == reusable,
+                   "an existing writable file is still a usable destination")
 
     # (e) The happy path writes it too, and says so.
     with registry(), scratch_repo() as (main_wt, _other, census):
@@ -1643,7 +1747,8 @@ def main() -> int:
     for test in (test_namespace, test_exclusive_acquisition,
                  test_independent_process_contention,
                  test_expiry_and_reclaim, test_concurrent_stale_reclaimers,
-                 test_owner_safe_late_release, test_malformed_claim,
+                 test_owner_safe_late_release, test_expiry_is_one_way,
+                 test_malformed_claim,
                  test_release_on_every_managed_exit,
                  test_crash_recovery_through_ttl,
                  test_renewer_keeps_a_long_measurement_alive,

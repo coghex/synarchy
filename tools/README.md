@@ -1129,14 +1129,22 @@ positive and still overflow `timedelta`, and one the acquisition record could
 not hold would only move the refusal to after the probe was claimed. Every acquisition mints a unique token, and release, renewal and
 takeover are all checked against it: concurrent reclaimers of one lapsed claim
 yield exactly one successor, and an expired owner that exits late finds a
-token that is not its own and leaves the successor alone. An empty, truncated,
+token that is not its own and leaves the successor alone. EXPIRY IS ONE-WAY:
+a holder that stalled past its own lease cannot renew back to life, because
+that would deny a claimant entitled to reclaim the probe and make the lease
+meaningless whenever the holder is merely slow rather than dead. An empty,
+truncated,
 unparseable or INCOMPLETE claim is treated as OCCUPIED until its own
 filesystem age reaches the lease — which covers a crash between the exclusive
 create and the payload write without letting a competitor straight in.
 Completeness is checked against every field a claim carries, not merely the
 ones an ownership decision reads: a partial file holding a probe, a token and
 a far-future expiry would otherwise read as live forever, never aged out, and
-one stray write would wedge the probe.
+one stray write would wedge the probe. Well-typed fields can still contradict
+each other, so consistency is checked too: a one-second `lease_seconds` beside
+an expiry years away is the same wedge, and the lease has to be the distance
+between the two timestamps that describe it, within exactly the rounding a
+legacy second-precision file carries.
 
 `run_claimed_measurement` is the orchestration boundary, in order: reject an
 unmeasurable probe before claiming anything; acquire, where a DENIED claimant
@@ -1175,8 +1183,10 @@ failure — before the probe ran, the acquisition was not recordable so nothing
 ran; after it ran, the measurement happened and its retained file is named in
 the diagnostic, and re-running the probe is never the recovery; 6 no leasable
 port; 7 the claim was lost — before the probe started, so it was never run, or
-while it ran, so nothing was ingested. An unwritable `--result` is refused up
-front, before anything is claimed.
+while it ran, so nothing was ingested. An unusable `--result` is refused up
+front, before anything is claimed — the target itself, not merely its
+directory, so an existing directory, an unwritable file or a dangling symlink
+fails in the first second rather than after an hour of engine time.
 
 Gate: `python3 tools/test_probe_claim.py` (in CI and `make ci`) — engine-free
 and GPU-free, but genuinely multi-process: its concurrency cases race real

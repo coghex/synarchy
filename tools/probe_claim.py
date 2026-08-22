@@ -81,6 +81,15 @@ late and exits cleanly finds a token that is not its own and leaves the
 successor's claim alone rather than deleting it — the failure mode that
 would hand one probe to two agents at once.
 
+EXPIRY IS ONE-WAY, and the token alone does not undo it. A process that
+stalled past its own lease — suspended, swapped out, stopped in a
+debugger — has a renewer that wakes up eventually, and renewing there
+would revive a claim that had already lapsed. Nobody need have taken
+the probe for that to be wrong: it denies a claimant entitled to
+reclaim it, and it makes the lease mean nothing whenever the holder is
+merely slow rather than dead. A lapsed claim is acquired again, by
+whoever gets there first, or not at all.
+
 A claim file that is empty, truncated, unparseable or INCOMPLETE is
 treated as OCCUPIED until its own filesystem age reaches the lease, then
 becomes reclaimable. That covers a crash between the exclusive create
@@ -91,6 +100,13 @@ a partial file holding nothing but a probe, a token and a far-future
 expiry would otherwise read as a live claim forever — never aged out,
 because ageing out is what happens to malformed claims — and one stray
 write would wedge the probe permanently.
+
+CONSISTENCY is checked alongside completeness, because well-typed
+fields can still contradict each other. A one-second `lease_seconds`
+beside an `expires_at` years away is a file that never expires and
+never ages out either; so the lease has to be the distance between the
+two timestamps that describe it, within exactly the rounding a legacy
+second-precision file carries.
 
 The orchestration boundary
 --------------------------
@@ -238,6 +254,14 @@ MAX_LEASE_SECONDS = 1_000_000_000.0
 # `--result` path of its own: beside the run's own artifacts, under the
 # invocation directory `probe_flake` already created for it.
 RETAINED_RESULT_NAME = "probe-flake-result.json"
+
+# How far a claim's own timestamps may disagree with its lease before it
+# is treated as malformed. Not slack for sloppy writers: it is exactly
+# the rounding a SECOND-precision file carries, since `renewed_at` and
+# `expires_at` were each truncated independently before this module
+# started writing microseconds. Anything past it is a file whose fields
+# contradict each other.
+STAMP_TOLERANCE_SECONDS = 2.0
 
 EXIT_OK = 0
 EXIT_REJECTED = 2
@@ -640,9 +664,28 @@ def _read_payload(path: Path, expected: str | None = None):
     if (isinstance(lease, bool) or not isinstance(lease, (int, float))
             or not math.isfinite(lease) or not 0 < lease <= MAX_LEASE_SECONDS):
         return None, mtime
+    stamps = {}
     for field in ("acquired_at", "renewed_at", "expires_at"):
-        if parse_stamp(document.get(field)) is None:
+        stamps[field] = parse_stamp(document.get(field))
+        if stamps[field] is None:
             return None, mtime
+    # A claim whose own fields contradict each other is malformed too,
+    # and this is the shape that would otherwise wedge a probe FOREVER:
+    # `lease_seconds: 1` beside an `expires_at` years away is a file
+    # that never expires and never ages out, because ageing out is what
+    # happens to malformed claims. Every field being individually
+    # well-typed is not enough — the lease has to be the distance
+    # between the two timestamps that describe it.
+    if stamps["acquired_at"] > stamps["renewed_at"] + timedelta(
+            seconds=STAMP_TOLERANCE_SECONDS):
+        return None, mtime
+    try:
+        implied = stamps["renewed_at"] + timedelta(seconds=lease)
+    except (OverflowError, OSError, ValueError):
+        return None, mtime
+    if abs((stamps["expires_at"] - implied).total_seconds()) > (
+            STAMP_TOLERANCE_SECONDS):
+        return None, mtime
     return document, mtime
 
 
@@ -781,12 +824,28 @@ class Claim:
 
     # -- operations ---------------------------------------------------------
     def _renew_locked(self, moment: datetime) -> dict:
-        """`renew`'s body. The sidecar lock must already be held."""
+        """`renew`'s body. The sidecar lock must already be held.
+
+        An EXPIRED claim is not renewable, even when the token still
+        matches and nobody has taken it yet. A process that stalled past
+        its own lease — suspended, swapped out, stopped in a debugger —
+        has a renewer that wakes up eventually, and letting it revive a
+        lapsed claim would deny a claimant entitled to reclaim the probe
+        and would make the lease mean nothing whenever the holder is
+        slow rather than dead. Expiry is one-way: the claim must be
+        acquired again, by whoever gets there first.
+        """
         document, _mtime = _read_payload(self.path, self.probe)
         if document is None or document.get("token") != self.token:
             raise ClaimLost(
                 f"the claim on {self.probe!r} is no longer ours "
                 f"(token {self.token!r} is not the one on disk)")
+        expires = parse_stamp(document.get("expires_at"))
+        if expires is None or moment >= expires:
+            raise ClaimLost(
+                f"the claim on {self.probe!r} expired at "
+                f"{document.get('expires_at')!r} and cannot be renewed; it "
+                f"has to be acquired again")
         payload = dict(document)
         payload["renewed_at"] = stamp(moment)
         payload["expires_at"] = stamp(
@@ -811,7 +870,7 @@ class Claim:
         token: an expired owner must never write over its successor.
         """
         with _serialized(self.probe, self.root):
-            return self._renew_locked(now or utc_now())
+            return self._renew_locked(now if now is not None else utc_now())
 
     def release(self) -> bool:
         """Give the claim back. Token-checked; True when we removed it.
@@ -853,7 +912,7 @@ class Claim:
         `commit_while_held` instead.
         """
         with _serialized(self.probe, self.root):
-            return self._holds_locked(now or utc_now())
+            return self._holds_locked(now if now is not None else utc_now())
 
     def commit_while_held(self, commit, now: datetime | None = None):
         """Run `commit()` while this claim is provably, exclusively ours.
@@ -873,8 +932,11 @@ class Claim:
         and the lock ORDER is claim-then-census everywhere, so the two
         never wait on each other.
         """
-        moment = now or utc_now()
         with _serialized(self.probe, self.root):
+            # Read INSIDE the hold: waiting for the lock can take as
+            # long as the writer ahead of us, and an instant sampled
+            # before that wait is stale in the permissive direction.
+            moment = now if now is not None else utc_now()
             if not self._holds_locked(moment):
                 raise ClaimLost(
                     f"the claim on {self.probe!r} is no longer ours "
@@ -1054,12 +1116,40 @@ def check_result_path(result_path):
     if result_path is None:
         return None
     target = Path(result_path)
+    # The TARGET, not merely its directory. An existing directory at
+    # that path, an existing file nobody may write, a broken symlink —
+    # each has a perfectly writable parent and each fails only when the
+    # measurement is already an hour old.
+    if os.path.lexists(target):
+        try:
+            info = os.stat(target)
+        except OSError as error:
+            raise ClaimError(
+                f"the result document cannot be written to {target} "
+                f"({error}); a dangling symlink is not a destination") from None
+        if stat.S_ISDIR(info.st_mode):
+            raise ClaimError(
+                f"the result document cannot be written to {target}: it is a "
+                f"directory")
+        if not stat.S_ISREG(info.st_mode):
+            raise ClaimError(
+                f"the result document cannot be written to {target}: it must "
+                f"be a regular file (got mode {stat.S_IFMT(info.st_mode):#o})")
+        if not os.access(target, os.W_OK):
+            raise ClaimError(
+                f"the result document cannot be written to {target}: it is "
+                f"not writable")
+        return target
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
     except OSError as error:
         raise ClaimError(
             f"the result document cannot be written to {target}: its "
             f"directory could not be created ({error})") from None
+    if not target.parent.is_dir():
+        raise ClaimError(
+            f"the result document cannot be written to {target}: "
+            f"{target.parent} is not a directory")
     if not os.access(target.parent, os.W_OK | os.X_OK):
         raise ClaimError(
             f"the result document cannot be written to {target}: "
