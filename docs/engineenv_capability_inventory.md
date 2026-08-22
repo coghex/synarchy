@@ -572,7 +572,7 @@ field documentation restates the reader/writer/lifecycle facts below.
 | Field | Lifecycle | Readers | Writers | Sync | Init | Shutdown | Notes |
 |---|---|---|---|---|---|---|---|
 | `uiManagerRef` | session-replaced | `MainRender` (`UI.Render`), `InputThread` (`Input.Thread.Keyboard:109`'s `validateFocus`, read on every keyboard dispatch), `LuaThread` (`API.UI.TextInput:48`'s `UI.getText`, `API.UI.Hierarchy:105`'s `UI.findElementAt`, and every other direct `UI.*` query) | `LuaThread` (every `UI.*` API module — `API.UI.Focus/Property/Tooltip/Hierarchy`, `API.Config`), `WorldThread` (load publish `World.Load.Publish:286`), `InputThread` (`Input.Thread.Keyboard:109,250`, atomic focus/control-focus validation on every keyboard dispatch — round 4 review notes this races the Lua thread's own concurrent element mutations, hence the atomic transition rather than a separate read/write pair), `MainRender` (`UI.Tooltip.State:64`'s `updateTooltipState`, the per-frame tooltip tick called from `Engine.Loop.Frame`, `atomicModifyIORef'`) | `IORef UIPageManager`, multi-writer via `atomicModifyIORef'` | `emptyUIPageManager` (`src/Engine/Core/Init.hs:196`) | None | Entire UI tree is rebuilt by Lua on load, per `docs/persistence_state_inventory.md`. |
-| `focusManagerRef` | session-replaced | `InputThread` (`Thread.Keyboard`/`Thread.Char` — Tab/Shift+Tab control-focus navigation, #745), `LuaThread` (`API.Focus`) | `InputThread`/`LuaThread` (the same two roles as Readers), `WorldThread` (load publish, `src/World/Load/Publish.hs:284`) | `IORef FocusManager` | `createFocusManager` (`src/Engine/Core/Init.hs:201`) | None | — |
+| `focusManagerRef` | session-replaced | `InputThread` (`Thread.Keyboard`/`Thread.Char` — Tab/Shift+Tab control-focus navigation, #745), `LuaThread` (`API.ShellFocus`) | `InputThread`/`LuaThread` (the same two roles as Readers), `WorldThread` (load publish, `src/World/Load/Publish.hs:284`) | `IORef FocusManager` | `createFocusManager` (`src/Engine/Core/Init.hs:201`) | None | — |
 | `hudActivePageRef` | session-replaced | `WorldThread` (`Thread.Cursor` — HUD refresh-on-active-world-change, #129) | `WorldThread` (also load publish, `World.Load.Publish:283`, resynced from `wmVisible`) | `IORef (Maybe WorldPageId)` | `Nothing` (`src/Engine/Core/Init.hs:198`) | None | — |
 | `textBuffersRef` | boot-process | `LuaThread` (only; `API.Text`, direct queries) | `MainRender` (only; `Engine.Scripting.Lua.Message.Scene`, dispatched via `processLuaMessages` — never the Lua thread itself) | `IORef (Map ObjectId Text)` | `Map.empty` (`src/Engine/Core/Init.hs:202`) | None | Editable-widget text keyed by `ObjectId`, per the UI text-buffer coordinate contract. |
 | `eventStoreRef` | session-replaced | `LuaThread` (`API.PlayerEvent:101`'s `readEventLog` — `engine.getEventLog()`, the event-log panel's query) | `WorldThread` (`World.Thread.Discovery`'s `emitEventFullOnPage`, `World.Thread.Command.Save.WriteWorld`'s `emitEvent`, and load publish `World.Load.Publish:295`, reset to empty), `LuaThread` (`API.PlayerEvent`'s `emitEvent`/`emitEventAt`/`emitEventFull` — `engine.emitEvent`/`emitEventAt`/`emitEventForUnit` — and `API.Save`'s save/load-lifecycle emits) | `TVar (Seq PlayerEvent)`, multi-writer STM, ~1000-entry ring | `newTVarIO Seq.empty` (`src/Engine/Core/Init.hs:261`) | None | Explicitly session-only, never serialized. No live `Unit.Thread`/`Combat.Thread` call site emits a player event today — verified by grepping every real `emitEvent*` call site. `Engine.PlayerEvent.Emit`'s module comment, `EngineEnv`'s own field doc and `Engine.Core.Init`'s seeding comment all used to read as if unit-thread emitters existed; #898 corrected all three to state the STM primitive's any-thread safety separately from the world-and-Lua-thread call sites that actually exist. |
@@ -774,8 +774,8 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 205
 #   11 × the #897-narrowed `ui-hud-events` modules, all of which still
 #        import `Engine.Core.State` narrowly: the seven
 #        `Engine.Scripting.Lua.API.UI.*` modules and
-#        `Engine.Scripting.Lua.API.Focus` for the bare `EngineEnv` type
-#        alone; `Engine.Scripting.Lua.Message.Scene` and
+#        `Engine.Scripting.Lua.API.ShellFocus` for the bare `EngineEnv`
+#        type alone; `Engine.Scripting.Lua.Message.Scene` and
 #        `UI.Tooltip.State` for `EngineState(..)`/`TimingState(..)` (the
 #        CPS state σ, not `EngineEnv`); and `Engine.Input.Thread.Mouse`
 #        for the type plus the one `actionOutcomeRef` accessor §7.5's
@@ -1785,8 +1785,8 @@ containers.
   sharing one prefix would be actively misleading in any module
   holding both, so this record uses `ui` + `c`.
 - **Fully narrowed:** all 11 of this row's UI-dominant §6.2 entries —
-  `Engine.Input.Thread.Mouse`, `Engine.Scripting.Lua.API.Focus`, the
-  seven `Engine.Scripting.Lua.API.UI.*` modules (`Element`, `Focus`,
+  `Engine.Input.Thread.Mouse`, `Engine.Scripting.Lua.API.ShellFocus`,
+  the seven `Engine.Scripting.Lua.API.UI.*` modules (`Element`, `Focus`,
   `Hierarchy`, `Page`, `Property`, `TextInput`, `Tooltip`),
   `Engine.Scripting.Lua.Message.Scene` and `UI.Tooltip.State`. All 11
   still import `Engine.Core.State`, but narrowly (see §6's accounting

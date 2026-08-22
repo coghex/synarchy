@@ -36,7 +36,7 @@ import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
 import qualified Engine.Core.Queue as Q
 import UI.Manager (validateFocus)
 import UI.Types (ElementHandle(..))
-import UI.Focus (FocusId(..), fmCurrentFocus)
+import UI.ShellFocus (FocusId(..), fmCurrentFocus)
 
 -- | F4 (#730): push the pending char-batch aggregate (if any) as ONE
 --   ActionOutcome record and clear it — so a synthetic multi-character

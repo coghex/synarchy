@@ -44,8 +44,8 @@ import Engine.Scripting.Lua.API.Keybinds (getKeybindsFn, setActionKeysFn,
                                           keyMatchesActionFn, getCurrentKeyNameFn)
 import Engine.Scripting.Lua.API.Text (loadFontFn, spawnTextFn, setTextFn,
                                        getTextFn, getTextWidthFn)
-import Engine.Scripting.Lua.API.Focus (registerFocusableFn, requestFocusFn,
-                                        releaseFocusFn, getFocusIdFn)
+import Engine.Scripting.Lua.API.ShellFocus (registerFocusableFn, requestFocusFn,
+                                            releaseFocusFn, getFocusIdFn)
 import Engine.Scripting.Lua.API.Shell (shellExecuteFn)
 import Engine.Scripting.Lua.API.Save
     (saveListFn, saveWorldFn, saveStatusFn, loadSaveFn, loadStatusFn

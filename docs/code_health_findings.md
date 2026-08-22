@@ -3408,10 +3408,10 @@ were checked rather than assumed.
   (`emptyTooltipState`).
   `submitBuffer` is the one worth a look — a text-submission entry point on a
   documented contract (`UI.TextBuffer`) that nothing calls.
-- **`UI.Focus` re-exports `TextBuffer` and `emptyBuffer` from `UI.Types`**, so
-  both are importable from two modules. Given CH-120's confusion about which
-  focus system is which, the re-export adds a third path to a type that has
-  nothing to do with shell focus.
+- **`UI.ShellFocus` re-exports `TextBuffer` and `emptyBuffer` from
+  `UI.Types`**, so both are importable from two modules. Given CH-120's
+  confusion about which focus system is which, the re-export adds a third
+  path to a type that has nothing to do with shell focus.
 - `UI/Types.hs` (488 lines) is the tree's largest module and holds
   `UIPageManager`, `UIPage`, `UIElement`, `UILayer`, `uiLayerBand`,
   `TextBuffer`, and tooltip state. It is well under budget, but it is the one

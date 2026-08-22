@@ -69,7 +69,7 @@ import UPrelude
 import qualified Data.Map.Strict as Map
 import Data.IORef (IORef)
 import Engine.Scene.Base (ObjectId)
-import UI.Focus (FocusManager)
+import UI.ShellFocus (FocusManager)
 import UI.Types (UIPageManager)
 import World.Types (WorldPageId)
 import Engine.Core.State
@@ -91,7 +91,7 @@ data UiCapability = UiCapability
     --   focus, and Lua rebuilds the tree).
     uicUiManagerRef      ∷ IORef UIPageManager
     -- | @InputThread@\/@LuaThread@ read and write it (#745 Tab\/
-    --   Shift+Tab navigation, @API.Focus@); @session-replaced@ — a
+    --   Shift+Tab navigation, @API.ShellFocus@); @session-replaced@ — a
     --   load publish clears the CURRENT focus only, keeping
     --   registered targets.
   , uicFocusManagerRef   ∷ IORef FocusManager
