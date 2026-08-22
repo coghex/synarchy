@@ -28,7 +28,7 @@ approval.
 - [x] NCT-6. Injury-log probe accepts a `unit.injure` event for the wrong unit — [#1579]
 - [x] NCT-7. Injury-log probe never gates a real fall's event emission — [#1583]
 - [x] NCT-8. Listing movement courses unnecessarily boots the engine — [#1586]
-- [ ] NCT-9. Legacy river diagnostics present anomalies as tests but never fail
+- [x] NCT-9. Legacy river diagnostics present anomalies as tests but never fail — [#1590]
 - [ ] NCT-10. Legacy water diagnostics present anomalies as tests but never fail
 - [ ] NCT-11. Baseline capture accepts variation in its strict worldgen invariants
 - [ ] NCT-12. Thermo probe treats a failed ice dump as absent evidence
@@ -382,7 +382,7 @@ runtime reasons without exercising any movement behavior.
 
 ## Standalone river-analysis utilities
 
-### NCT-9. Legacy river diagnostics present anomalies as tests but never fail
+### [#1590] NCT-9. Legacy river diagnostics present anomalies as tests but never fail
 
 Five standalone scripts are named `test_river_*` and identify concrete river
 or lake defects, but they only print measurements and examples.  They have no
