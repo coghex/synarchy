@@ -24,7 +24,7 @@ approval.
 - [x] NCT-2. Graphical Vulkan lifecycle tests never destroy their raw instances — [#1401]
 - [x] NCT-3. Vulkan extension tests require optional, platform-specific capabilities — [#1402]
 - [x] NCT-4. Most graphical GLFW tests validate the upstream binding, not game behavior — [#1573]
-- [ ] NCT-5. Graphical device test bypasses the engine's GPU-selection contract
+- [x] NCT-5. Graphical device test bypasses the engine's GPU-selection contract — [#1576]
 - [ ] NCT-6. Injury-log probe accepts a `unit.injure` event for the wrong unit
 - [ ] NCT-7. Injury-log probe never gates a real fall's event emission
 - [ ] NCT-8. Listing movement courses unnecessarily boots the engine
@@ -222,7 +222,7 @@ This concern is the usefulness of the surrounding group as regression tests.
   policy decision, but the current tests' lack of project-owned assertions is
   directly observable.
 
-### NCT-5. Graphical device test bypasses the engine's GPU-selection contract
+### [#1576] NCT-5. Graphical device test bypasses the engine's GPU-selection contract
 
 The graphical device smoke test takes the first physical device returned by
 the Vulkan driver and attempts to create a logical device from it.  Production
