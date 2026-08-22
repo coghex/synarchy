@@ -32,37 +32,31 @@
 #   1. the cabal dependency store (at the image-pinned CABAL_DIR), and
 #   2. the project build products (dist-newstyle), so GHC's recompilation
 #      avoidance rebuilds only dirty modules + their reverse-deps.
-# The dist-newstyle key includes the GHC and Cabal versions and the
-# dependency plan hash (so a compiler/Cabal bump or a dependency change
-# invalidates it) — and NOTHING per-commit (#790). GitHub cache keys
-# are immutable, and both caches below restore and save as SEPARATE
-# steps whose save is conditioned on the exact key having missed, so an
-# exact-key hit never re-saves. A stable plan-hash key therefore means
-# the FIRST run for a given plan freezes one snapshot and every later
-# run on that same plan just restores it and saves nothing. Retained
-# build-product snapshots are therefore BOUNDED by the number of
-# distinct dependency plans in flight (a handful that only turns over
-# when dependencies change), not by commit count. This mirrors the
-# dependency-store cache below, which has always been keyed this same
-# stable way. When the plan DOES change the exact key misses and
-# restore-keys fall back to the most recent snapshot for this GHC/Cabal
-# for partial reuse, after which exactly one new snapshot is saved
-# under the new plan key. Trade-off (accepted for #790, and the same
-# one the deps cache already makes): within one plan window the
-# snapshot is frozen at that window's first commit, so a warm run
-# rebuilds everything changed since then rather than only since the
-# previous commit — still incremental (deps + unchanged modules
-# restored), never a cold build. Concurrent runs on the same plan are
-# safe with no delete step at all: a second saver of an existing key
-# gets a benign "already exists" and no run can evict a cache another
-# is restoring.
-# Both key families carry a v2 marker BEFORE the variable parts: caches
-# captured before #671 hold content archived under the old toolchain
-# paths (actions/cache preserves absolute paths), so restoring one would
-# extract to a location nothing reads from — the marker keeps
-# prefix-matched restore-keys from ever picking them up.
-# Bounding this churn also stops build-product caches from crowding the
-# shared repo cache quota and LRU-evicting the deps-store cache (#790).
+# The dist-newstyle key includes the exact immutable CI image reference,
+# GHC/Cabal versions, dependency plan hash and a deterministic eight-change
+# epoch. `ci_cache_epoch.py`
+# counts only first-parent master changes that touch compiled-product
+# inputs after its checked-in anchor; docs, Lua and runtime resources do
+# not age this cache. Pull requests derive the epoch from their BASE SHA
+# and are restore-only, so the entry they consume is always master-scoped.
+# A successful master push is the sole writer. Each eighth relevant change
+# advances the key, restores the newest compatible older epoch, and saves
+# the freshly built tree at the very end of the job. This bounds compile
+# drift without a cron workflow or one cache per commit.
+#
+# `actions/cache` entries are immutable, so restore and save remain
+# separate and an exact hit never re-saves. Concurrent master writers of
+# a new epoch are benign: one wins the immutable key and the other gets
+# "already exists". v3 restore prefixes first prefer an older epoch of
+# the same plan, then any v3 plan for this exact image/toolchain. Legacy v2
+# is allowed only for the immutable image known to have created it, so the
+# first v3 epoch can bootstrap without letting a later image reuse incompatible
+# products. The `ci-9eaa...` comparison below is therefore HISTORICAL and must
+# not be updated when the image recipe changes. `tools/ci_cache_cleanup.py` is
+# the explicit, dry-run-first
+# retention tool. It keeps the newest three compatible snapshots by default,
+# never selects dependency or PR caches, and refuses to select legacy v2
+# until it can see a successfully seeded v3 replacement on master.
 #
 # CI-image publication ordering (#784): this file and ci-image.yml used
 # to race as two fully independent workflows — both fired on the same
@@ -275,6 +269,21 @@ jobs:
           echo "docs_only=$DOCS_ONLY" >> "$GITHUB_OUTPUT"
           echo "docs-only fast path: $DOCS_ONLY"
 
+      # Pull requests consume the epoch already established by their base;
+      # only a post-merge master build is allowed to advance and publish it.
+      # The history-derived selection is CI orchestration and has no local
+      # cache counterpart; its self-test runs with the engine-free audits.
+      - name: Select project build cache epoch
+        if: steps.docs-fast-path.outputs.docs_only != 'true'
+        id: cache-epoch
+        run: |
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            CACHE_REF='${{ github.event.pull_request.base.sha }}'
+          else
+            CACHE_REF='${{ github.sha }}'
+          fi
+          python3 tools/ci_cache_epoch.py --ref "$CACHE_REF" --github-output "$GITHUB_OUTPUT" --github-summary "$GITHUB_STEP_SUMMARY"
+
       - name: Resolve dependency plan
         if: steps.docs-fast-path.outputs.docs_only != 'true'
         run: |
@@ -341,15 +350,13 @@ jobs:
           key: deps-v2-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
           restore-keys: deps-v2-${{ runner.os }}-ghc9.12.2-
 
-      # Cache the project build products so GHC recompiles only dirty
-      # modules. plan.json (from the --dry-run above) exists now, so its
-      # hash keys the cache alongside the GHC/Cabal versions. The key is
-      # stable per plan (no per-commit component, #790): this restores
-      # here and the save step at the very END of this job writes
-      # dist-newstyle ONLY when the exact key missed — so an unchanged
-      # plan re-saves nothing (one frozen snapshot per plan), while a
-      # changed plan restores the newest prior snapshot for this
-      # GHC/Cabal via restore-keys and then saves exactly one new entry.
+      # Cache project products so GHC recompiles only dirty modules.
+      # plan.json keys compatibility; the eight-change epoch bounds how
+      # stale an immutable snapshot can become. Same-plan older epochs are
+      # preferred, then any v3 plan for partial reuse. Legacy v2 is a final
+      # bootstrap only while the resolved image is the exact image that wrote
+      # those entries; an image-only change therefore starts from compatible
+      # dependencies but never restores old project objects.
       #
       # Split out of the combined `actions/cache` action (#1358), which
       # is the only way to learn WHICH key a prefix hit restored: the
@@ -366,9 +373,11 @@ jobs:
         id: dist-cache
         with:
           path: dist-newstyle
-          key: dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}
+          key: dist-v3-${{ runner.os }}-${{ needs.resolve-image.outputs.image }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-epoch-${{ steps.cache-epoch.outputs.epoch }}
           restore-keys: |
-            dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-
+            dist-v3-${{ runner.os }}-${{ needs.resolve-image.outputs.image }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-epoch-
+            dist-v3-${{ runner.os }}-${{ needs.resolve-image.outputs.image }}-ghc-9.12.2-cabal-3.16.1.0-
+            ${{ needs.resolve-image.outputs.image == 'ghcr.io/coghex/synarchy-ci:ci-9eaa6afb33b34025' && format('dist-v2-{0}-ghc-9.12.2-cabal-3.16.1.0-', runner.os) || 'dist-v2-disabled-for-incompatible-image-' }}
 
       # Classify what each of the two restores above actually got: exact
       # hit, prefix hit (naming the key it restored), or full miss
@@ -406,6 +415,8 @@ jobs:
           CI_CACHE_DIST_PRIMARY_KEY: ${{ steps.dist-cache.outputs.cache-primary-key }}
           CI_CACHE_DIST_MATCHED_KEY: ${{ steps.dist-cache.outputs.cache-matched-key }}
         run: |
+          python3 tools/ci_cache_epoch.py --self-test
+          python3 tools/ci_cache_cleanup.py --self-test
           python3 tools/ci_cache_report.py --self-test
           python3 tools/ci_cache_report.py
 
@@ -758,10 +769,12 @@ jobs:
       #     exactly as that post step was.
       #   * LAST step in the job, so dist-newstyle is captured in the
       #     same final state a post step would have seen.
-      #   * Save only when the EXACT key missed. The combined action's
+      #   * Save only on successful MASTER pushes when the EXACT key missed.
+      #     Pull requests are intentionally restore-only so every reusable
+      #     project snapshot lives in default-branch scope. The combined action's
       #     save half compares its primary key against the key it
       #     restored and skips on an exact match — that is what keeps one
-      #     frozen snapshot per plan (#790). `actions/cache/save` has no
+      #     immutable snapshot per plan/epoch. `actions/cache/save` has no
       #     such check of its own, so the cache-hit term is load-bearing
       #     here exactly as it is on the dependency save above.
       #   * `key:` is the restore step's OWN `cache-primary-key` output,
@@ -779,7 +792,9 @@ jobs:
       # EMPTY, which satisfies `!= 'true'`.
       - name: Save project build cache (dist-newstyle)
         if: >-
-          steps.dist-cache.outputs.cache-hit != 'true'
+          github.event_name == 'push'
+          && github.ref == 'refs/heads/master'
+          && steps.dist-cache.outputs.cache-hit != 'true'
           && steps.dist-cache.outputs.cache-primary-key != ''
           && steps.docs-fast-path.outputs.docs_only != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -836,6 +851,17 @@ jobs:
             echo "only=$ONLY" >> "$GITHUB_OUTPUT"
           fi
 
+      # This PR worker restores exactly the master epoch selected from its
+      # base SHA. It never saves project caches.
+      - name: Select project build cache epoch
+        if: steps.probe-selection.outputs.selected == 'true'
+        id: cache-epoch
+        run: >-
+          python3 tools/ci_cache_epoch.py
+          --ref '${{ github.event.pull_request.base.sha }}'
+          --github-output "$GITHUB_OUTPUT"
+          --github-summary "$GITHUB_STEP_SUMMARY"
+
       - name: Toolchain (baked into the CI image)
         if: steps.probe-selection.outputs.selected == 'true'
         run: |
@@ -864,11 +890,14 @@ jobs:
       - name: Restore project build cache (dist-newstyle)
         if: steps.probe-selection.outputs.selected == 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: probe-dist-cache
         with:
           path: dist-newstyle
-          key: dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}
+          key: dist-v3-${{ runner.os }}-${{ needs.resolve-image.outputs.image }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-epoch-${{ steps.cache-epoch.outputs.epoch }}
           restore-keys: |
-            dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-
+            dist-v3-${{ runner.os }}-${{ needs.resolve-image.outputs.image }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-epoch-
+            dist-v3-${{ runner.os }}-${{ needs.resolve-image.outputs.image }}-ghc-9.12.2-cabal-3.16.1.0-
+            ${{ needs.resolve-image.outputs.image == 'ghcr.io/coghex/synarchy-ci:ci-9eaa6afb33b34025' && format('dist-v2-{0}-ghc-9.12.2-cabal-3.16.1.0-', runner.os) || 'dist-v2-disabled-for-incompatible-image-' }}
 
       # This runner has its own restored build tree. Besides the executable
       # every probe launches, persistence_contract shells out to

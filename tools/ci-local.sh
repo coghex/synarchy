@@ -236,7 +236,9 @@ python3 tools/test_probe_claim.py
 # either cache step to the combined `actions/cache` action would empty
 # `cache-matched-key` and turn every prefix hit into a reported cold
 # cache, with nothing failing.
-echo "==> [19/20] CI cache report self-test"
+echo "==> [19/20] CI cache policy and report self-tests"
+python3 tools/ci_cache_epoch.py --self-test
+python3 tools/ci_cache_cleanup.py --self-test
 python3 tools/ci_cache_report.py --self-test
 
 # The gate that keeps this file honest (#1355): fails if a
