@@ -29,6 +29,7 @@ import qualified Data.Vector.Unboxed.Mutable as VUM
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
 import World.Types
+import World.Generate.Coordinates (globalToChunk)
 import World.Plate (elevationAtGlobal)
 import World.Magma.Types (MagmaOverlay(..))
 import World.Fluid.Lake.Types
@@ -310,17 +311,11 @@ lavaShellMask params coord terrAt fluid =
 poolSurfAtGlobal ∷ WorldGenParams → Int → Int → Maybe Int
 poolSurfAtGlobal params gx gy =
     let pools = gtWorldLavaPools (wgpGeoTimeline params)
-        floorDivCS a =
-            let (q, r) = a `divMod` chunkSize
-            in if r < 0 then q - 1 else q
-        cx = floorDivCS gx
-        cy = floorDivCS gy
-        lx = gx - cx * chunkSize
-        ly = gy - cy * chunkSize
+        (cc, (lx, ly)) = globalToChunk gx gy
         idx = ly * chunkSize + lx
         surfs = [ WL.lkSurface (wlLakes pools V.! WL.lceLakeId lce)
                 | lce ← V.toList
-                    (lakesInChunk pools (ChunkCoord cx cy))
+                    (lakesInChunk pools cc)
                 , WL.lceBitmask lce VU.! idx
                 ]
     in case surfs of

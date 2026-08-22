@@ -36,7 +36,7 @@ module World.Grid
     ) where
 
 import UPrelude
-import World.Types (chunkSize)
+import World.Chunk.Types (chunkSize)
 import Engine.Scene.Base (LayerId(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 

@@ -7,6 +7,7 @@ module Test.Headless.Location.Bounds
     ( spec
     , decodeDef
     , rejectedNaming
+    , rejectedNamingFields
     , isRight'
     ) where
 
@@ -35,6 +36,21 @@ isRight' = either (const False) (const True)
 rejectedNaming ∷ Text → Either String a → Bool
 rejectedNaming lid = either (T.isInfixOf ("location '" <> lid <> "'") . T.pack)
                             (const False)
+
+-- | 'rejectedNaming' plus #777's OTHER half: the message must also name
+--   the offending FIELD. The id alone cannot distinguish "min_x > max_x"
+--   from any other rejection this def could earn, so an axis case that
+--   checked only the id would still pass if the two axes' messages were
+--   swapped or collapsed into one generic "bad bounds" string (#1151).
+rejectedNamingFields ∷ Text → [Text] → Either String a → Bool
+rejectedNamingFields lid fields =
+    either (\err → let msg = T.pack err
+                   in T.isInfixOf ("location '" <> lid <> "'") msg
+                      ∧ all (`T.isInfixOf` msg) fields)
+           (const False)
+
+decodeFile ∷ BS.ByteString → Either String LocationYamlFile
+decodeFile = either (Left . show) Right . Yaml.decodeEither'
 
 spec ∷ Spec
 spec = describe "Location spatial bounds" $ do
@@ -103,17 +119,61 @@ spec = describe "Location spatial bounds" $ do
                 \  bounds: { min_x: nope, min_y: -2, max_x: 2, max_y: 2 } }"
                 `shouldSatisfy` rejectedNaming "t"
 
-        it "rejects inverted bounds (min_x > max_x), naming the location" $
+        it "rejects inverted bounds (min_x > max_x), naming the location \
+           \AND the x-axis fields" $
             decodeDef
                 "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
                 \  bounds: { min_x: 5, min_y: -2, max_x: 2, max_y: 2 } }"
-                `shouldSatisfy` rejectedNaming "t"
+                `shouldSatisfy`
+                    rejectedNamingFields "t" ["bounds.min_x", "bounds.max_x"]
 
-        it "rejects inverted bounds (min_y > max_y), naming the location" $
+        it "rejects inverted bounds (min_y > max_y), naming the location \
+           \AND the y-axis fields" $
             decodeDef
                 "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
                 \  bounds: { min_x: -2, min_y: 5, max_x: 2, max_y: 2 } }"
-                `shouldSatisfy` rejectedNaming "t"
+                `shouldSatisfy`
+                    rejectedNamingFields "t" ["bounds.min_y", "bounds.max_y"]
+
+        it "ACCEPTS a degenerate single-tile box (min_x == max_x, \
+           \min_y == max_y) -- the rule is min <= max, and this is the \
+           \case that fails the moment it is tightened to strict <" $
+            decodeDef
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                \  bounds: { min_x: 0, min_y: 0, max_x: 0, max_y: 0 } }"
+                `shouldSatisfy` isRight'
+
+        it "ACCEPTS a box degenerate on ONE axis only" $ do
+            decodeDef
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                \  bounds: { min_x: -2, min_y: 3, max_x: 2, max_y: 3 } }"
+                `shouldSatisfy` isRight'
+            decodeDef
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                \  bounds: { min_x: 3, min_y: -2, max_x: 3, max_y: 2 } }"
+                `shouldSatisfy` isRight'
+
+        it "one inverted definition fails the WHOLE file's load (#777) -- \
+           \the surviving defs are not returned without it" $ do
+            let goodOnly = "{ locations: [\
+                    \ { id: ok, builder: b,\
+                    \   naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \   bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 } } ] }"
+                withBad = "{ locations: [\
+                    \ { id: ok, builder: b,\
+                    \   naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \   bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 } },\
+                    \ { id: bad, builder: b,\
+                    \   naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \   bounds: { min_x: 5, min_y: -2, max_x: 2, max_y: 2 } } ] }"
+            -- The control: the same file WITHOUT the inverted def decodes,
+            -- so the failure below is the inverted bounds and not the
+            -- fixture's own shape.
+            fmap (map lydId . lyfLocations) (decodeFile goodOnly)
+                `shouldBe` Right ["ok"]
+            decodeFile withBad
+                `shouldSatisfy`
+                    rejectedNamingFields "bad" ["bounds.min_x", "bounds.max_x"]
 
         it "rejects a fixed content position outside the declared bounds, naming the location" $
             decodeDef

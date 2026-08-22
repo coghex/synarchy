@@ -557,6 +557,51 @@ def test_ingest_accepted() -> None:
 
 
 # ==========================================================================
+def test_ci_eligible_takes_no_measurement() -> None:
+    """#1431: "no further samples" is a STORAGE invariant, not a display one.
+
+    `probe_flake.resolve_probe` refuses to RUN a CI-eligible probe, but
+    a result document outlives its run: one measured before a promotion
+    is still a well-formed, schema-valid document afterwards.
+    """
+    print("\n-- a CI-eligible probe takes no census measurement --")
+    with registry(), scratch() as root:
+        path = root / "probe_census.json"
+        seeded(path)
+        probe_census.record_result(path, result_document())
+        before = path.read_bytes()
+
+        # Eligibility is read LIVE, so the same document that was just
+        # accepted is refused once the registry promotes its probe --
+        # and the stored row's own (not yet reconciled) classification
+        # is not what decides it.
+        with registry(ci_eligible={"alpha"}):
+            stored = json.loads(before.decode("utf-8"))["probes"][0]
+            expect(stored["classification"] == "manual-only",
+                   "the stored row still says manual-only before --seed "
+                   "reconciles it")
+            expect_refusal(
+                lambda: probe_census.record_result(path, result_document()),
+                "an accepted measurement for a live CI-eligible probe is "
+                "refused",
+                "alpha", "CI-eligible")
+            unchanged(path, before, "and nothing at all is written")
+            expect_refusal(
+                lambda: probe_census.record_result(
+                    path, result_document(status="harness-error")),
+                "so is a harness error for one: nothing about a promoted "
+                "probe enters the append-only record",
+                "alpha", "CI-eligible")
+            unchanged(path, before, "again writing nothing")
+
+        probe_census.record_result(path, result_document())
+        expect(path.read_bytes() != before,
+               "and the same document is accepted again once the probe is "
+               "manual-only, so the refusal is live eligibility rather than "
+               "a property of the document")
+
+
+# ==========================================================================
 def test_ingest_harness_error() -> None:
     print("\n-- harness-error ingestion --")
     with registry(), scratch() as root:
@@ -3737,6 +3782,7 @@ def test_summary_cli() -> None:
 def main() -> int:
     for test in (test_record_shape, test_migration, test_seed_and_noop,
                  test_reconciliation, test_ingest_accepted,
+                 test_ci_eligible_takes_no_measurement,
                  test_ingest_harness_error, test_policy,
                  test_acceptable_failure_policy_defaults,
                  test_acceptable_failure_policy_rules,

@@ -180,6 +180,14 @@ instance FromJSON LocationYamlDef where
         -- contract, so a bad YAML fails the whole file's load with a
         -- message naming the def and the offending field rather than
         -- silently substituting geometry downstream (#777).
+        --
+        -- The two comparisons below are the ONE implementation of the
+        -- "min ≤ max on both axes" rule (#1151): they are per-axis only
+        -- so each failure can name its own offending field, and being
+        -- strict '>' they accept the degenerate single-tile box
+        -- (min == max) the inclusive contract allows. Nothing
+        -- downstream re-checks the shape — 'Location.Bounds.RelBounds'
+        -- is only ever built from a box that has passed here.
         when (lybMinX bounds > lybMaxX bounds) $
             fail (T.unpack ("location '" <> lid <> "': bounds.min_x ("
                 <> T.pack (show (lybMinX bounds)) <> ") > bounds.max_x ("
