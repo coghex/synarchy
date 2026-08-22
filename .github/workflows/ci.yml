@@ -844,16 +844,21 @@ jobs:
           restore-keys: |
             dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-
 
-      # This runner has its own restored build tree. It builds only the
-      # executable the probes launch and never saves either cache; build-test
-      # remains the sole cache writer for the workflow.
-      - name: Build executable for behavior probes
+      # This runner has its own restored build tree. Besides the executable
+      # every probe launches, persistence_contract shells out to
+      # `cabal repl test:synarchy-test-headless`; compile that target here so
+      # it cannot consume the probe's timeout rebuilding a stale cached suite.
+      # This job never saves either cache; build-test remains the sole cache
+      # writer for the workflow.
+      - name: Build behavior probe prerequisites
         if: steps.probe-selection.outputs.selected == 'true'
-        run: cabal build exe:synarchy
+        run: cabal build exe:synarchy synarchy-test-headless
 
       # --jobs 2 pairs probes on the 4-vCPU runner. --retries 1 reruns a
       # failed probe solo, absorbing the contention flakes this concurrency
-      # can introduce without weakening the final blocking verdict.
+      # can introduce without weakening the final blocking verdict. If retries
+      # start firing regularly, reduce this to --jobs 1 rather than increasing
+      # the retry count.
       - name: Behavior probes (path-selective)
         if: steps.probe-selection.outputs.selected == 'true'
         run: >-

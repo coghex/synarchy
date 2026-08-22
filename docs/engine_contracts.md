@@ -172,8 +172,9 @@ and `ci_docs_fast_path.py --stdin --explain`), which have nothing to select
 for locally. The separate `behavior-probes` job owns
 `ci_probes.py --stdin` and the engine-booting `run_probes.py` sweep; neither
 is part of the `build-test` / `make ci` parity contract because CLAUDE.md
-keeps behavior probes opt-in locally. One invocation is LOCAL-only for the
-mirror-image reason:
+keeps behavior probes opt-in locally. Branch protection requires both jobs,
+so moving the sweep out of `build-test` does not weaken its blocking PR
+verdict. One invocation is LOCAL-only for the mirror-image reason:
 `ci_expensive_gates.py --local-changed-paths`, because CI is handed a
 pull-request base sha and `make ci` has to resolve its own. The
 `--stdin --gate save-compat` decision both of them feed is NOT exempt —

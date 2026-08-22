@@ -20,9 +20,14 @@ That "same gate set" claim is now enforced rather than maintained by hand:
 invocations against those of `.github/workflows/ci.yml`'s `build-test` job,
 at command-and-arguments granularity and in both directions, and fails on
 any difference outside a hard-coded exemption list carrying a reason per
-entry (CI's path selectors, which `make ci` has nothing to select for, and
-`run_probes.py`'s engine-booting sweep). It runs last in both files and has
-its own `--self-test`.
+entry (CI's path selectors, which `make ci` has nothing to select for). It
+runs last in both files and has its own `--self-test`.
+
+The PR-only `behavior-probes` job is deliberately outside that parity
+contract: it owns `ci_probes.py --stdin` and `run_probes.py`, restores the
+same build caches on an independent runner, and runs in parallel with
+`build-test`. Behavior probes remain opt-in locally, while branch protection
+requires both CI jobs on pull requests.
 
 `-Werror` itself lives in `synarchy.cabal`'s checked-in warning policy, so
 every build already carries it; `ci-local.sh` only scopes a temporary
