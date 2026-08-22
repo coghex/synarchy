@@ -1135,11 +1135,36 @@ classification `engine.listSaves()` exposes. Full contract: **Subsystem probes
 
 **Enum schema policy:** `Direction`, `Pose`, `UnitActivity` (and any
 enum serialized via `Generic Serialize`) are positional by constructor
-tag — **append-only**. Inserting/reordering silently corrupts saves;
-anything beyond appending requires a `currentSaveVersion` bump. A
+tag — **append-only**. Inserting/reordering silently corrupts saves. A
 constructor's own FIELDS are positional too, so reordering them or
 changing one field's serialized type corrupts saves the same way while
 moving no tag (#1270).
+
+Anything beyond appending is a **per-component migration**, never a
+`currentSaveVersion` change — that marker does not gate on-disk
+compatibility (see the architecture note below). Find EVERY component
+storing the enum — `Direction` is stored by both `units`
+(`UnitInstanceDTO.uidFacing`) and `unit-sim`
+(`UnitSimStateDTO.simFacing`), while `Pose` and `UnitActivity` are
+`unit-sim`'s alone — and for each: raise its `csVersion`, freeze the
+outgoing DTO, and register that frozen type in `csOlderVersions` via
+`atVersion` with an explicit migration. `componentCodec` derives
+`ccInputVers` from those declarations, so the reader gains the new
+version while retaining every version it already accepted.
+
+Retaining a version means still DECODING it, so freezing the OUTGOING
+DTO is only half the job: **every** version left in `csOlderVersions`
+needs a wire type that reaches a frozen COPY of the constructor order
+that version was written with — transitively, the `Pose` nested in
+`UnitActivity` included. Today's frozen DTOs do not satisfy that.
+`UnitSimStateDTOv1` (which `unit-sim` v1 AND v2 both decode through)
+still names the live `Pose`/`UnitActivity`/`Direction`, and
+`UnitInstanceDTOv1.uid1Facing` still names the live `Direction`, so a
+reorder that froze only the current shape would decode every retained
+legacy payload against the new order anyway. `unitSimCodec`'s v1/v2
+entries are the exemplar for version dispatch and explicit migration
+only — no codec has needed a frozen enum yet, so they do not
+demonstrate that half.
 
 Enforced since #1145 by `tools/enum_append_only_audit.py` (CI + `make
 ci`, with its own `--self-test`), which is the authority on which types

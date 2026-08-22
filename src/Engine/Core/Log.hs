@@ -124,10 +124,14 @@ extractCallSite cs = case reverse (getCallStack cs) of
 
 -- | Shared entry-construction assembly for the normal and thread logging
 --   paths (CH-8, #944): @write@ selects the backend dispatch
---   ('writeLogEntry' vs 'writeThreadLogEntry') and @srcLoc@ is computed by
---   the caller rather than here, so this helper needs no 'HasCallStack'
---   constraint of its own and 'extractCallSite''s skip list stays
---   unchanged — there is no new internal frame for it to see.
+--   ('writeLogEntry' vs 'writeThreadLogEntry').
+--
+--   @srcLoc@ is computed by the caller, while it is still inside the
+--   'HasCallStack' chain, rather than here — so this helper needs no such
+--   constraint of its own, and the standing requirement stays where it
+--   belongs, on the public logging entry points that do carry one. How a
+--   location is chosen from that chain is 'extractCallSite''s contract
+--   above; this helper only carries the result through.
 logEntryWith ∷ MonadIO m
              ⇒ (LogBackend → LogEntry → IO ())
              → Maybe SrcLoc
