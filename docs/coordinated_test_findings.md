@@ -67,7 +67,7 @@ implementation, test, tracker item, or remote state was changed.
 - [x] TEST-5. The unified-transfer probe ignores persistence integrity diagnostics — [#1487]
 - [x] TEST-6. Fresh-world entry hides the portal-placement toolbar — [#1488]
 - [x] TEST-7. Randbox focus styling falsely signals replacement selection — [no-issue]
-- [ ] TEST-8. Retaliation-swap fixture carries injury state into its stale-window case
+- [x] TEST-8. Retaliation-swap fixture carries injury state into its stale-window case — [#1578]
 
 ---
 
@@ -372,7 +372,7 @@ replacement produced a composite generated-plus-typed name.
 
 ## Behavior probe validity
 
-### TEST-8. Retaliation-swap fixture carries injury state into its stale-window case
+### [#1578] TEST-8. Retaliation-swap fixture carries injury state into its stale-window case
 
 > **Captured note:** Shared combat fixture collapses before the stale-window oracle
 
