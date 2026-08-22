@@ -10,7 +10,7 @@ The glacier-pair cleanup, thought and unified state-of-mind systems, data-driven
 
 - [x] PRR-1. Parallel probes race while mutating the shared Cabal build directory — [#1570]
 - [x] PRR-2. `make ci` no longer runs every locally reproducible CI gate it claims to mirror — [no-issue]
-- [ ] PRR-3. Coffee's consumable effects have no production gameplay caller
+- [x] PRR-3. Coffee's consumable effects have no production gameplay caller — [#1580]
 - [ ] PRR-4. Auto-harvest ignores the farming skill it claims to scale by
 
 ## 1. Parallel probe build isolation
@@ -69,7 +69,7 @@ The glacier-pair cleanup, thought and unified state-of-mind systems, data-driven
 
 ## 3. Consumable gameplay integration
 
-### PRR-3. Coffee's consumable effects have no production gameplay caller
+### [#1580] PRR-3. Coffee's consumable effects have no production gameplay caller
 
 > **Captured note:** Connect `scripts.consumable.drink` to an actual gameplay action for a held coffee instance. The quality-, temperature-, hydration-, caffeine-, and mood-effect mechanism currently works only when a probe or debug-console caller invokes it directly, so the cooking epic's final payoff cannot be reached through normal play.
 
