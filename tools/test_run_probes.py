@@ -50,10 +50,13 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import probe_resource_lock  # type: ignore
 import run_probes  # type: ignore
 
 TOOLS_DIR = str(Path(__file__).resolve().parent)
@@ -369,23 +372,60 @@ def wait_file(path: Path, seconds: float = 60.0) -> bool:
 
 
 class patched:
-    """Point the real runner at the synthetic tree for one test."""
+    """Point the real runner at the synthetic tree for one test.
 
-    def __init__(self, tree: Tree, grace: float = TEST_GRACE) -> None:
+    The cross-process resource namespace (#1436) is redirected to a
+    SYNTHETIC token as well, and that is not cosmetic: the synthetic
+    probes are named `config_migration` and `config_state`, so under the
+    real namespace this suite would take the repository's real EXCLUSIVE
+    `repo-config` lock and stall — or be stalled by — a genuine probe
+    sweep or `/deflake` measurement running beside it. A token per test
+    also keeps the suite's own cases from coordinating with each other.
+    """
+
+    def __init__(self, tree: Tree, grace: float = TEST_GRACE,
+                 namespace: str | None = None) -> None:
         self.tree, self.grace = tree, grace
+        self.namespace = namespace or f"selftest{uuid.uuid4().hex[:12]}"
 
     def __enter__(self):
         self._saved = (run_probes.REPO_ROOT, run_probes.PROBES,
-                       run_probes.GROUP_GRACE)
+                       run_probes.GROUP_GRACE, run_probes.RESOURCE_NAMESPACE)
         run_probes.REPO_ROOT = str(self.tree.root)
         run_probes.PROBES = list(self.tree.probes)
         run_probes.GROUP_GRACE = self.grace
+        run_probes.RESOURCE_NAMESPACE = self.namespace
         return self
 
     def __exit__(self, *exc):
-        (run_probes.REPO_ROOT, run_probes.PROBES,
-         run_probes.GROUP_GRACE) = self._saved
+        (run_probes.REPO_ROOT, run_probes.PROBES, run_probes.GROUP_GRACE,
+         run_probes.RESOURCE_NAMESPACE) = self._saved
+        clear_namespace(self.namespace)
         return False
+
+
+def clear_namespace(namespace: str) -> None:
+    """Remove one synthetic namespace's lock and note files from /tmp.
+
+    Scoped to the literal `synarchy-probe-resource-<namespace>-` prefix of
+    a token this suite minted, and run only once every hold it took has
+    been released, so nothing another process could be holding is touched.
+    The real runner never unlinks a lock file — see
+    `probe_resource_lock`'s module docstring for why — but the tokens here
+    are per-test and would otherwise accumulate in /tmp forever.
+    """
+    prefix = f"{probe_resource_lock.SHARED_PREFIX}-{namespace}-"
+    try:
+        entries = list(probe_resource_lock.LOCK_ROOT.glob(f"{prefix}*"))
+    except OSError:
+        return
+    for entry in entries:
+        if not entry.name.startswith(prefix):
+            continue
+        try:
+            entry.unlink()
+        except OSError:
+            pass
 
 
 # --------------------------------------------------------------------------
@@ -540,6 +580,27 @@ def test_reap_group_on_a_dead_group_is_a_noop() -> None:
 # --------------------------------------------------------------------------
 # Aggregate behaviour: statuses and the aggregate exit code are unchanged
 # --------------------------------------------------------------------------
+def _main_with_open(tree: Tree, argv: list[str]) -> tuple[int, str]:
+    """`_main_with`'s body WITHOUT entering `patched`.
+
+    The cross-process cases hold `patched` open across a background
+    thread, so they cannot have it entered a second time underneath them:
+    the namespace would be restored by the inner exit while the sweep was
+    still running.
+    """
+    import io
+    import contextlib as _contextlib
+    buf = io.StringIO()
+    saved = sys.argv
+    sys.argv = ["run_probes.py", *argv]
+    try:
+        with _contextlib.redirect_stdout(buf), _contextlib.redirect_stderr(buf):
+            rc = run_probes.main()
+    finally:
+        sys.argv = saved
+    return rc, buf.getvalue()
+
+
 def _main_with(tree: Tree, argv: list[str]) -> tuple[int, str]:
     import io
     import contextlib
@@ -870,6 +931,244 @@ def test_resource_ledger_is_a_reader_writer_lock() -> None:
 # Exact selection: unknown keys are rejected rather than silently dropped
 # (#1321)
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# The cross-process half of the same reader/writer model (#1436)
+# --------------------------------------------------------------------------
+FOREIGN_HOLDER_SRC = textwrap.dedent("""\
+    # A separate PROCESS holding one probe resource, because that is the
+    # thing the in-process ledger cannot see. Signals readiness by
+    # creating a file, then holds until a release file appears.
+    import sys, time
+    from pathlib import Path
+    sys.path.insert(0, sys.argv[1])
+    import probe_resource_lock as lock
+    namespace, interest, resource, ready, release = sys.argv[2:7]
+    kwargs = ({"exclusive": {resource}} if interest == "exclusive"
+              else {"shared": {resource}})
+    hold = lock.acquire(namespace=namespace, purpose="foreign holder", **kwargs)
+    Path(ready).write_text("held")
+    deadline = time.time() + 120
+    while not Path(release).exists() and time.time() < deadline:
+        time.sleep(0.05)
+    hold.release()
+""")
+
+
+class ForeignHolder:
+    """A real second process holding one resource for the duration."""
+
+    def __init__(self, namespace: str, interest: str,
+                 resource: str = "repo-config") -> None:
+        self.dir = Path(tempfile.mkdtemp(prefix="foreign_holder_"))
+        script = self.dir / "holder.py"
+        script.write_text(FOREIGN_HOLDER_SRC)
+        self.ready = self.dir / "ready"
+        self.release_flag = self.dir / "release"
+        self.proc = subprocess.Popen(
+            [sys.executable, str(script), TOOLS_DIR, namespace, interest,
+             resource, str(self.ready), str(self.release_flag)])
+
+    def wait_until_held(self, seconds: float = 30.0) -> bool:
+        return wait_file(self.ready, seconds)
+
+    def stop(self) -> None:
+        try:
+            self.release_flag.write_text("go")
+        except OSError:
+            pass
+        try:
+            self.proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait(timeout=10)
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+
+def test_a_foreign_exclusive_holder_makes_the_sweep_wait() -> None:
+    print("\n-- a foreign EXCLUSIVE holder stalls every probe without "
+          "crashing the scheduler")
+    tree = Tree()
+    namespace = f"selftest{uuid.uuid4().hex[:12]}"
+    holder = ForeignHolder(namespace, "exclusive")
+    seen: dict = {}
+    try:
+        seen["took_lock"] = holder.wait_until_held()
+        # Every registered probe holds `repo-config` SHARED, so ONE foreign
+        # exclusive holder conflicts with the whole roster. Before #1436 the
+        # scheduler's "nothing running, work pending" guard raised
+        # RuntimeError here and took the sweep down.
+        tree.add("unrelated_a", dwell=0.2, descendant=False)
+        tree.add("unrelated_b", dwell=0.2, descendant=False)
+        saved_poll = run_probes.RESOURCE_WAIT_POLL
+        run_probes.RESOURCE_WAIT_POLL = 0.2
+        result: dict = {}
+
+        def sweep() -> None:
+            with patched(tree, namespace=namespace):
+                result["rc"], result["out"] = _main_with_open(tree, ["--jobs", "2"])
+
+        thread = threading.Thread(target=sweep, daemon=True)
+        thread.start()
+        # Nothing is asserted while the sweep runs: it has redirected
+        # stdout, so a message printed here would land in its buffer.
+        # Observations are recorded and judged after the join.
+        time.sleep(2.0)
+        seen["still_waiting"] = thread.is_alive()
+        seen["nothing_started"] = (not tree.started("unrelated_a")
+                                   and not tree.started("unrelated_b"))
+        holder.stop()
+        thread.join(timeout=90)
+        run_probes.RESOURCE_WAIT_POLL = saved_poll
+
+        expect(seen["took_lock"], "the foreign process took the lock")
+        expect(seen["still_waiting"],
+               "the sweep is still waiting rather than having crashed or "
+               "finished")
+        expect(seen["nothing_started"],
+               "and no probe started while the foreign holder was in the way")
+        expect(not thread.is_alive(), "the sweep finishes once the lock frees")
+        expect(result.get("rc") == 0,
+               f"and every probe then passes (exit {result.get('rc')})")
+        expect("waiting for 'repo-config'" in (result.get("out") or "")
+               and "exclusive" in (result.get("out") or ""),
+               "the runner said WHICH resource it was waiting on and in which "
+               "interest")
+        for name in ("unrelated_a", "unrelated_b"):
+            got = tree.intervals(name)
+            expect(len(got) == 1 and got[0][1] is not None,
+                   f"{name} ran exactly once, after the wait (windows: {got})")
+    finally:
+        holder.stop()
+        clear_namespace(namespace)
+        tree.cleanup()
+
+
+def test_waiting_for_a_foreign_holder_is_not_charged_to_the_probe() -> None:
+    print("\n-- a queued probe's elapsed time and timeout cover execution "
+          "only, never the wait")
+    tree = Tree()
+    namespace = f"selftest{uuid.uuid4().hex[:12]}"
+    holder = ForeignHolder(namespace, "exclusive")
+    seen: dict = {}
+    try:
+        seen["took_lock"] = holder.wait_until_held()
+        tree.add("unrelated_a", dwell=0.2, descendant=False)
+        saved_poll = run_probes.RESOURCE_WAIT_POLL
+        run_probes.RESOURCE_WAIT_POLL = 0.2
+        result: dict = {}
+
+        def sweep() -> None:
+            with patched(tree, namespace=namespace):
+                # SEQUENTIAL, and with a timeout far shorter than the wait
+                # below: if the wait were inside the probe's own clock this
+                # would be reported TIMEOUT instead of PASS.
+                result["rc"], result["out"] = _main_with_open(
+                    tree, ["--jobs", "1", "--timeout", "5"])
+
+        thread = threading.Thread(target=sweep, daemon=True)
+        thread.start()
+        time.sleep(8.0)
+        seen["still_waiting"] = thread.is_alive()
+        holder.stop()
+        thread.join(timeout=90)
+        run_probes.RESOURCE_WAIT_POLL = saved_poll
+        out = result.get("out") or ""
+
+        expect(seen["took_lock"], "the foreign process took the lock")
+        expect(seen["still_waiting"], "the sweep waited rather than running")
+        expect(result.get("rc") == 0,
+               f"the probe passes after an 8s wait against a 5s timeout "
+               f"(exit {result.get('rc')})")
+        expect("TIMEOUT" not in out,
+               "and the wait is never reported as a TIMEOUT")
+        window = tree.window("unrelated_a")
+        expect(window[1] is not None and (window[1] - window[0]) < 5.0,
+               f"the probe's own occupancy window is its execution alone "
+               f"({window})")
+    finally:
+        holder.stop()
+        clear_namespace(namespace)
+        tree.cleanup()
+
+
+def test_a_foreign_shared_holder_never_blocks_a_shared_probe() -> None:
+    print("\n-- a foreign SHARED holder does not serialize ordinary probes")
+    tree = Tree()
+    namespace = f"selftest{uuid.uuid4().hex[:12]}"
+    holder = ForeignHolder(namespace, "shared")
+    try:
+        took = holder.wait_until_held()
+        tree.add("unrelated_a", dwell=0.8, descendant=False)
+        tree.add("unrelated_b", dwell=0.8, descendant=False)
+        with patched(tree, namespace=namespace):
+            rc, out = _main_with_open(tree, ["--jobs", "2"])
+        expect(took, "the foreign process took the lock")
+        expect(rc == 0, f"both probes pass beside the shared holder (exit {rc})")
+        first, second = tree.window("unrelated_a"), tree.window("unrelated_b")
+        expect(overlaps(first, second),
+               f"and they still run concurrently: shared holders coexist "
+               f"(unrelated_a {first}, unrelated_b {second})")
+        expect("waiting for" not in out, "nothing waited on anything")
+    finally:
+        holder.stop()
+        clear_namespace(namespace)
+        tree.cleanup()
+
+
+def test_a_run_probes_exclusive_probe_blocks_a_foreign_shared_acquirer() -> None:
+    print("\n-- the conflict is detected in the other direction too: a "
+          "run_probes exclusive probe blocks a foreign shared acquirer")
+    tree = Tree()
+    namespace = f"selftest{uuid.uuid4().hex[:12]}"
+    seen: dict = {}
+    try:
+        tree.add("config_state", dwell=3.0, descendant=False)
+        result: dict = {}
+
+        def sweep() -> None:
+            with patched(tree, namespace=namespace):
+                result["rc"], result["out"] = _main_with_open(tree, ["--jobs", "1"])
+
+        thread = threading.Thread(target=sweep, daemon=True)
+        thread.start()
+        seen["started"] = wait_file(tree.root / "config_state.started", 60.0)
+        # While it runs, a /deflake-shaped acquirer must be refused even for
+        # a SHARED interest -- the direction the in-process ledger could
+        # never enforce, because the acquirer is not in its process.
+        try:
+            spurious = probe_resource_lock.acquire(
+                shared={"repo-config"}, namespace=namespace,
+                purpose="foreign shared acquirer")
+        except probe_resource_lock.ResourceBusy as busy:
+            seen["busy"] = busy
+        else:
+            spurious.release()
+        thread.join(timeout=120)
+
+        expect(seen.get("started") is True, "the exclusive probe started")
+        expect("busy" in seen,
+               "a foreign SHARED acquirer is refused while run_probes holds "
+               "the resource exclusively")
+        busy = seen.get("busy")
+        if busy is not None:
+            expect(busy.resource == "repo-config" and busy.interest == "shared",
+                   f"and the refusal names the resource and the interest "
+                   f"({busy.resource!r}, {busy.interest})")
+            expect(any(holder.get("interest") == "exclusive"
+                       for holder in busy.holders),
+                   f"and reports the exclusive holder ({busy.holders})")
+        expect(result.get("rc") == 0,
+               f"the sweep itself is unaffected (exit {result.get('rc')})")
+        # And once it is over, the same acquisition succeeds.
+        after = probe_resource_lock.acquire(shared={"repo-config"},
+                                            namespace=namespace)
+        after.release()
+        expect(True, "the same acquisition succeeds once the probe is done")
+    finally:
+        clear_namespace(namespace)
+        tree.cleanup()
+
+
 def test_exact_mixed_selection_is_rejected_before_listing() -> None:
     print("\n-- --exact + --list with unknown keys alongside a valid one is "
           "rejected, not partially listed")
@@ -982,6 +1281,11 @@ DRIVER_SRC = textwrap.dedent("""\
     run_probes.REPO_ROOT = {root!r}
     run_probes.PROBES = {probes!r}
     run_probes.GROUP_GRACE = {grace!r}
+    # The synthetic tree is not a git checkout, so the cross-process
+    # resource namespace (#1436) has to be supplied the same way the
+    # in-process `patched` fixture supplies it -- otherwise the runner
+    # refuses to start and the interrupt below has nothing to interrupt.
+    run_probes.RESOURCE_NAMESPACE = {namespace!r}
     submit_delay = {submit_delay!r}
     if submit_delay:
         # Widen the SUBMISSION window so an interrupt can land inside it.
@@ -1005,9 +1309,11 @@ def _run_driver(tree: Tree, argv: list[str], wait_for: list[str],
                 submit_delay: float = 0.0):
     """Start the real runner in its own session and SIGINT it mid-run."""
     driver = tree.root / "driver.py"
+    namespace = f"selftest{uuid.uuid4().hex[:12]}"
     driver.write_text(DRIVER_SRC.format(
         tools=TOOLS_DIR, root=str(tree.root), probes=list(tree.probes),
-        grace=grace, argv=argv, submit_delay=submit_delay))
+        grace=grace, argv=argv, submit_delay=submit_delay,
+        namespace=namespace))
     proc = subprocess.Popen(
         [sys.executable, str(driver)],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -1030,6 +1336,8 @@ def _run_driver(tree: Tree, argv: list[str], wait_for: list[str],
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         out, _ = proc.communicate(timeout=30)
         rc = None
+    # The runner process is gone by here, so nothing it held is still held.
+    clear_namespace(namespace)
     return ready, rc, out
 
 
@@ -1443,6 +1751,10 @@ def main() -> int:
     test_a_solo_probe_waits_for_work_already_running()
     test_conflict_is_released_after_a_failure()
     test_conflict_is_released_after_a_timeout()
+    test_a_foreign_exclusive_holder_makes_the_sweep_wait()
+    test_waiting_for_a_foreign_holder_is_not_charged_to_the_probe()
+    test_a_foreign_shared_holder_never_blocks_a_shared_probe()
+    test_a_run_probes_exclusive_probe_blocks_a_foreign_shared_acquirer()
     test_exact_mixed_selection_is_rejected_before_listing()
     test_exact_mixed_selection_never_runs_the_valid_probe()
     test_exact_all_invalid_selection_keeps_existing_diagnostic()
