@@ -4,6 +4,7 @@ import UPrelude
 import Test.Hspec
 import Test.Headless.Harness (withHeadlessEngine, withHeadlessEngineNoWorld)
 import qualified Test.Headless.Harness.WorkerHealth as HarnessWorkerHealth
+import qualified Test.Headless.UPrelude as UPreludeSpec
 import qualified Test.Headless.WorldGen as WorldGen
 import qualified Test.Headless.WorldGen.Geology as Geology
 import qualified Test.Headless.WorldGen.Parity as Parity
@@ -81,6 +82,7 @@ import qualified Test.Headless.Magma.Shape as MagmaShape
 import qualified Test.Headless.Sim.Seam as SimSeam
 import qualified Test.Headless.Input.KeyNames as InputKeyNames
 import qualified Test.Headless.Input.Bindings as InputBindings
+import qualified Test.Headless.Input.State as InputState
 import qualified Test.Headless.Input.Inject as InputInject
 import qualified Test.Headless.Input.Followup as InputFollowup
 import qualified Test.Headless.Lua.DebugQueue as LuaDebugQueue
@@ -164,6 +166,7 @@ import qualified Test.Headless.Render.ViewportGuard as ViewportGuard
 import qualified Test.Headless.Graphics.BindlessRebind as BindlessRebind
 import qualified Test.Headless.Graphics.BindlessRelease as BindlessRelease
 import qualified Test.Headless.Core.ConfigState as ConfigState
+import qualified Test.Headless.Core.Queue as CoreQueue
 import qualified Test.Headless.Core.LogMonad as LogMonad
 import qualified Test.Headless.Core.LogParity as LogParity
 import qualified Test.Headless.Core.LoopStartup as LoopStartup
@@ -423,6 +426,14 @@ main = hspec $ do
     describe "Input.Bindings" InputBindings.spec
     describe "Input.Inject" InputInject.spec
     describe "Input.WheelPolicy" InputWheelPolicy.spec
+    -- #1153: three GPU-free specs relocated out of the graphical suite,
+    -- which automated gates only ever COMPILE. Each already supplies its
+    -- own top-level describe except UPrelude, so `--match "UPrelude"`,
+    -- `--match "Engine.Core.Queue"` and `--match "Engine.Input.State"`
+    -- all still reach them.
+    describe "UPrelude" UPreludeSpec.spec
+    CoreQueue.spec
+    InputState.spec
     describe "Graphics.VideoConfig" VideoConfig.spec
     describe "Graphics.VulkanAppIdentity" VulkanAppIdentity.spec
     BindlessFeatures.spec

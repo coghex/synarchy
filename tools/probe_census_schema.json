@@ -63,8 +63,8 @@
       "additionalProperties": false,
       "properties": {
         "acceptable_failures": {
-          "$comment": "X. Nullable until a maintainer sets one; choosing it is #1430's.",
-          "type": ["integer", "null"], "minimum": 0, "maximum": 1000000
+          "$comment": "X (#1430): the failures a complete 10-run measurement may show and still be acceptable, so 0 through 9 -- an X of 10 would declare a probe that never passes acceptable. Still null-INCLUSIVE here, and only here: a census written before the policy existed holds nulls, and tools/probe_census.py's --seed has to be able to read one in order to initialize it to 0. policy_invariants() is what refuses a null on every candidate and on --validate.",
+          "type": ["integer", "null"], "minimum": 0, "maximum": 9
         },
         "acceptable_failures_justification": {
           "type": ["string", "null"], "maxLength": 4000

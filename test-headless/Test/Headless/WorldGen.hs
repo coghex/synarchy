@@ -13,6 +13,10 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Serialize as Cereal
 import Control.Concurrent (threadDelay)
+import Control.Exception (bracket)
+import Data.IORef (readIORef, writeIORef)
+import Engine.Core.Capability.ContentRegistries
+    (crLocationDefsRef, toContentRegistriesCapability)
 import Engine.Core.State (EngineEnv)
 import Test.Headless.Harness
 import World.Generate.Config
@@ -31,8 +35,8 @@ import qualified Data.Vector as V
 import World.Fluid.Lake.Types (lakesInChunk)
 import World.Fluid.River.Types (riversInChunk)
 import Location.Types
-    ( LocationDef(..), LocationNaming(..), emptyLocationRegistry
-    , registerLocation )
+    ( LocationDef(..), LocationNaming(..), allLocations
+    , emptyLocationRegistry, registerLocation )
 import Location.Instance
     ( LocationInstance(..), LocationLifecycle(..)
     , buildLocationInstances, instancesToList )
@@ -149,12 +153,16 @@ spec = do
 
     describe "Location overlay (#89)" $ do
 
-        -- The headless harness boots no Lua, so the location registry is
-        -- empty and the stored overlay is empty — these specs exercise
-        -- the pure placement pass directly against the shared world's
-        -- real plates / ocean data, with synthetic defs. The full
-        -- load-defs → init → listPlaced integration lives in the python
-        -- probe (tools/location_overlay_probe.py).
+        -- The headless harness boots no Lua, so the location registry
+        -- is empty and the SHARED world's stored overlay is empty —
+        -- most specs here therefore exercise the pure placement pass
+        -- directly against that world's real plates / ocean data, with
+        -- synthetic defs. The one exception is the init-wiring example
+        -- below (#1375), which populates the registry itself and runs a
+        -- private world, so the stored fields have something to hold.
+        -- The full load-YAML → init → listPlaced integration still
+        -- lives in tools/location_overlay_probe.py, which is
+        -- manual-only; this group is the always-blocking tier.
         let mkDef lid anchors = LocationDef
                 { ldId = lid, ldLabel = lid, ldType = "test"
                 , ldBuilder = "noop", ldAnchor = anchors
@@ -209,12 +217,70 @@ spec = do
                 `shouldSatisfy` (not ∘ null)
             rvnById (wgpRiverNames p) `shouldBe` HM.empty
 
-        it "world init wires a serializable overlay field" $ \env → do
-            ws ← sharedWorld env 42 64 3
-            mp ← getWorldGenParams ws
-            case mp of
-                Just p  → HM.size (wgpLocationOverlay p) `shouldSatisfy` (≥ 0)
-                Nothing → expectationFailure "params should exist"
+        -- #1375: the ONE example in this group that drives the real
+        -- integration seam. Every other example here recomputes the
+        -- pure pass against the shared world's data, so none of them
+        -- can tell whether 'World.Thread.Command.Init' actually reads
+        -- the live registry, stores the placement it computed, and
+        -- hands that SAME overlay to the instance allocator — the
+        -- assertion this replaces (`HM.size … ≥ 0`) held for every
+        -- possible overlay, including one init never stored.
+        --
+        -- Private eight-wide page, because this example MUTATES engine
+        -- state: the registry write is the only reason init places
+        -- anything here, and eight is 'minimumWorldSize' (the smallest
+        -- world 'WorldInit' will normalize to). Seed 13 is chosen for
+        -- being the cheapest eight-wide world that places TWO
+        -- locations, so the instance comparison spans more than one
+        -- entry and the allocator's sequential ids actually mean
+        -- something; most seeds this size place one, and a few (2,
+        -- 909) place none at all — 909's eight-wide world has no land
+        -- whatsoever, so init reports NoLand. The 'bracket' spans the
+        -- whole init/wait/assert sequence so a throwing expectation or
+        -- a 'waitForWorldInit' timeout still restores the registry the
+        -- rest of this engine's specs share.
+        it "world init stores the placement it computed from the live \
+           \registry, and allocates its instances from that same overlay" $
+                \env → do
+            let registry = registerLocation flatDef emptyLocationRegistry
+                defsRef  = crLocationDefsRef (toContentRegistriesCapability env)
+                pageId   = WorldPageId "loc_wiring_1375"
+            bracket (readIORef defsRef) (writeIORef defsRef) $ \_ → do
+                writeIORef defsRef registry
+                sendWorldCommand env (WorldInit pageId 13 8 3 Nothing)
+                ws ← waitForWorldInit env pageId 120
+                mp ← getWorldGenParams ws
+                case mp of
+                    Nothing → expectationFailure "params should exist"
+                    Just p → do
+                        -- Recomputed from the params init STORED, over
+                        -- the registry's own 'allLocations' ordering —
+                        -- the same inputs 'Init.hs' passes, derived
+                        -- independently of the field under test.
+                        let placement = placementFor p (allLocations registry)
+                            expected  = lpOverlay placement
+                        -- Pins the fixture itself: two entries can only
+                        -- come from the strict pass (#997's fallback
+                        -- places exactly one), so this world is a real
+                        -- placement and not the guarantee.
+                        lpOutcome placement `shouldBe` PlacedStrict
+                        -- Load-bearing: without a pinned nonempty
+                        -- expectation, two empty maps would satisfy the
+                        -- equality below and this example would be
+                        -- vacuous in the same way the one it replaces
+                        -- was — a landless eight-wide world (seed 909)
+                        -- would sail through it.
+                        HM.size expected `shouldBe` 2
+                        wgpLocationOverlay p `shouldBe` expected
+                        -- … and the allocator (#911) saw that overlay
+                        -- and no other: comparing the whole table pins
+                        -- every entry's def id, chunk, anchor, bounds
+                        -- and sequential 'LocationInstanceId'. The
+                        -- namer is 'Nothing' on both sides because this
+                        -- page is initialized with no identity, so it
+                        -- has no language provenance (#1092/#1101).
+                        wgpLocationInstances p `shouldBe`
+                            buildLocationInstances Nothing registry expected
 
         it "places flat-anchored locations on land" $ \env → do
             ws ← sharedWorld env 42 64 3

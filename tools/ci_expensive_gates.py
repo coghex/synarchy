@@ -490,7 +490,7 @@ def self_test() -> int:
         ("worldgen", ["scripts/unit_ai.lua"], False),
         ("worldgen", ["data/materials/stone.yaml"], True),
         ("graphical", ["src/Engine/Graphics/Vulkan/Device.hs"], True),
-        ("graphical", ["test/Test/Engine/Core/Queue.hs"], True),
+        ("graphical", ["test/Test/Engine/Graphics/Vulkan/Device.hs"], True),
         ("graphical", ["scripts/crafting_panel.lua"], False),
         ("graphical", ["synarchy.cabal"], True),
         # unit-assets (#1257). The positives below deliberately lead with

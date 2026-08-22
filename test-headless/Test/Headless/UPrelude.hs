@@ -1,5 +1,5 @@
 {-# LANGUAGE ExplicitForAll #-}
-module Test.UPrelude (spec) where
+module Test.Headless.UPrelude (spec) where
 
 -- Import the testing framework
 import Test.Hspec

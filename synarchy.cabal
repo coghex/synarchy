@@ -1002,22 +1002,30 @@ executable synarchy
     ghc-options: -rtsopts
                  "-with-rtsopts=-N -A128M"
 
+-- BUILD-ONLY IN AUTOMATED GATES, AND REQUIRES A REAL DISPLAY (#1153).
+-- `.github/workflows/ci.yml` and `make ci` (`tools/ci-local.sh`) both
+-- `cabal build` this suite and neither ever `cabal test`s it, so it is a
+-- compile gate, not a running one. That is not an oversight to fix by
+-- adding a test step: `test/Spec.hs` calls `GLFW.init` and creates a real
+-- window, `error`ing on either failure, before `hspec` runs -- on a
+-- machine with no display it yields no assertions at all. Running it by
+-- hand on a graphics-capable desktop is the only way it executes.
+--
+-- Consequently every spec here MUST need a display. The GPU-free specs
+-- moved to `synarchy-test-headless` (which every CI run does execute) in
+-- #1153; do not add another one here.
 test-suite synarchy-test-graphical
     import: warnings, lang, build-policy
     type: exitcode-stdio-1.0
     hs-source-dirs: test
     main-is: Spec.hs
-    other-modules: Test.UPrelude
-                   Test.Engine.Core.Queue
-                   Test.Engine.Input.State
-                   Test.Engine.Graphics.Window.GLFW
+    other-modules: Test.Engine.Graphics.Window.GLFW
                    Test.Engine.Graphics.Vulkan.Instance
                    Test.Engine.Graphics.Vulkan.Surface
                    Test.Engine.Graphics.Vulkan.Helpers
                    Test.Engine.Graphics.Vulkan.Device
     build-depends: base >=4.20 && <5
                 , base-unicode-symbols
-                , async
                 , bytestring
                 , containers
                 , directory
@@ -1059,6 +1067,7 @@ test-suite synarchy-test-headless
     hs-source-dirs: test-headless, app
     main-is: Spec.hs
     other-modules: App.Cli
+                   Test.Headless.UPrelude
                    Test.Headless.Harness
                    Test.Headless.Harness.Isolation
                    Test.Headless.Harness.WorkerHealth
@@ -1144,6 +1153,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Sim.Seam
                    Test.Headless.Input.KeyNames
                    Test.Headless.Input.Bindings
+                   Test.Headless.Input.State
                    Test.Headless.Input.Inject
                    Test.Headless.Input.Followup
                    Test.Headless.Input.LayerA
@@ -1213,6 +1223,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Render.ZoomBakeUV
                    Test.Headless.Render.ViewportGuard
                    Test.Headless.Core.ConfigState
+                   Test.Headless.Core.Queue
                    Test.Headless.Core.DebugListener
                    Test.Headless.App.Cli
                    Test.Headless.App.ChunkRegion
@@ -1273,6 +1284,9 @@ test-suite synarchy-test-headless
                    Test.Headless.Graphics.BindlessRelease
     build-depends: base >=4.20 && <5
                 , base-unicode-symbols
+                -- Test.Headless.Core.Queue's concurrent read/write case
+                -- uses Control.Concurrent.Async.concurrently (#1153).
+                , async
                 , containers
                 , GLFW-b
                 , hslua
