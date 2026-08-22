@@ -10,7 +10,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import World.Constants (seaLevel)
 import World.Base (GeoCoord(..))
-import World.Chunk.Types (ChunkCoord(..), chunkSize)
+import World.Generate.Coordinates (globalToChunk)
 import World.Fluid.Internal (wrapChunkCoordU)
 import World.Geology.Hash (valueNoise2D, wrappedDeltaUV)
 import World.Magma.Types
@@ -54,14 +54,10 @@ mantleNoise gx gy seed =
 sumHotspots ∷ VolcanoCtx → Int → Int → Float
 sumHotspots ctx gx gy =
     let worldSize = vcWorldSize ctx
-        cc = wrapChunkCoordU worldSize
-               (ChunkCoord (gx `floorDiv` chunkSize)
-                           (gy `floorDiv` chunkSize))
+        cc = wrapChunkCoordU worldSize (fst (globalToChunk gx gy))
         candidates = HM.lookupDefault [] cc (vcHotspotIndex ctx)
     in sum [ contrib (vcSources ctx V.! i) | i ← candidates ]
   where
-    floorDiv a b = let (q, r) = a `divMod` b
-                   in if r < 0 then q - 1 else q
     contrib s =
         let GeoCoord cx cy = msCenter s
             (dx, dy) = wrappedDeltaUV (vcWorldSize ctx) gx gy cx cy

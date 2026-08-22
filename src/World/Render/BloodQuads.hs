@@ -62,8 +62,7 @@ import World.Generate (viewDepth)
 import World.Generate.Coordinates (globalToChunk)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
-                  , worldLayer, applyFacing, GridConfig(..)
-                  , defaultGridConfig)
+                  , worldLayer, applyFacing, baseTileW, baseTileH)
 import World.Render.ChunkCulling (isChunkVisibleWrapped)
 import World.Render.ViewBounds (computeViewBounds)
 import World.Blood.Teardown (drainBloodDisposalRecords)
@@ -206,12 +205,6 @@ uploadOne dev pdev cmdPool queue (bl, known) d = do
             pure (bl', known)
 
 -- * Quad building (pure IO, per frame — same shape as GroundItemQuads)
-
-baseTileW ∷ Float
-baseTileW = fromIntegral (gcTilePixelWidth defaultGridConfig)
-
-baseTileH ∷ Float
-baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)
 
 -- | How large a fresh blood mark reads relative to a tile at
 --   'brrScale' == 1 — big enough to be legible, small enough not to

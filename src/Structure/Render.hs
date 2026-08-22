@@ -43,19 +43,14 @@ import World.Grid (tileWidth
                    , tileHeight
                    , tileSideHeight
                    , worldLayer
-                   , GridConfig(..)
-                   , defaultGridConfig
+                   , baseTileW
+                   , baseTileH
                    , applyFacingF
                    , gridToScreen)
 import World.Types (WorldState, wsTilesRef)
 import World.Tile.Types (WorldTileData(..))
 import World.Chunk.Types (LoadedChunk(..))
 import Structure.Types
-
-baseTileW ∷ Float
-baseTileW = fromIntegral (gcTilePixelWidth defaultGridConfig)
-baseTileH ∷ Float
-baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)
 
 -- | Gather structure quads for ONE world's state. The caller iterates the
 --   visible-world list (same source of truth as the terrain / ground-item /

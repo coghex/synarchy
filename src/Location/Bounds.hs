@@ -21,7 +21,6 @@
 module Location.Bounds
     ( RelBounds(..)
     , AbsBounds(..)
-    , validRelBounds
     , translateBounds
     , boundsContainsPoint
     , boundsIntersect
@@ -39,6 +38,16 @@ import World.Plate (worldWidthTiles)
 
 -- | An inclusive, axis-aligned tile box in offsets relative to a
 --   location's anchor tile.
+--
+--   Every authored box satisfies min ≤ max on both axes, and that rule
+--   has exactly ONE implementation in the tree: the inverted-bounds
+--   rejection in 'Engine.Asset.YamlLocations' 's 'LocationYamlDef'
+--   parser, which fails the whole file's load naming the def and the
+--   offending field (#777). A 'RelBounds' only ever exists downstream
+--   of that gate — the single production construction site is the
+--   API loader's @toBounds@ conversion from an already-validated
+--   'Engine.Asset.YamlLocations.LocationYamlBounds' — so nothing here
+--   re-states or re-checks the rule (#1151).
 data RelBounds = RelBounds
     { rbMinX ∷ !Int
     , rbMinY ∷ !Int
@@ -54,12 +63,6 @@ data AbsBounds = AbsBounds
     , abMaxX ∷ !Int
     , abMaxY ∷ !Int
     } deriving (Show, Eq, Generic, NFData, Serialize)
-
--- | True iff min ≤ max on both axes — the shape every location's
---   authored bounds must satisfy. 'Engine.Asset.YamlLocations' rejects
---   any definition whose bounds fail this at YAML load time.
-validRelBounds ∷ RelBounds → Bool
-validRelBounds b = rbMinX b ≤ rbMaxX b ∧ rbMinY b ≤ rbMaxY b
 
 -- | Anchor a relative bounds box at an absolute tile.
 translateBounds ∷ (Int, Int) → RelBounds → AbsBounds
