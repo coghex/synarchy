@@ -8,7 +8,7 @@ PR #167's shell `quit`/`exit` commands still call the real lifecycle transition,
 
 ## Status
 
-- [ ] PRR-1. Per-world units still move, re-ground, and infect against another page's environment
+- [x] PRR-1. Per-world units still move, re-ground, and infect against another page's environment — [#1593]
 - [ ] PRR-2. A queued fluid writeback can overtake a live edit's sim re-seed
 - [ ] PRR-3. Notification pauses discard the player's non-default world speed on resume
 - [ ] PRR-4. Build placement does not bind pick, validation, and commit to one world page
@@ -18,7 +18,7 @@ PR #167's shell `quit`/`exit` commands still call the real lifecycle transition,
 
 ## 1. Unit simulation page ownership
 
-### PRR-1. Per-world units still move, re-ground, and infect against another page's environment
+### [#1593] PRR-1. Per-world units still move, re-ground, and infect against another page's environment
 
 > **Captured note:** PRs #109/#113 gave units an owning page and moved boundary reads onto the canonical active-world resolver, but several internal simulation paths still choose one active/first-visible environment for every unit. A unit on another visible page can path through the wrong terrain, a teleport or terrain edit can snap it to another page's surface, and wound infection uses the active page's climate rather than the unit's own.
 
