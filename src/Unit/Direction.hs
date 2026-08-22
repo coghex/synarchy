@@ -33,11 +33,20 @@ import Data.Serialize (Serialize)
 --   type in `csOlderVersions` via `atVersion` with an explicit
 --   migration — `componentCodec` derives `ccInputVers` from those
 --   declarations, so the reader gains the new version while retaining
---   every version it already accepted. The frozen DTO must carry a
---   frozen COPY of the old constructor order, not this live type;
---   reusing the live enum decodes the old tags against the new order,
---   which is the corruption the migration exists to prevent.
---   `unitSimCodec`'s existing v1/v2 entries are the shape to copy.
+--   every version it already accepted.
+--
+--   Retaining a version means still DECODING it, so freezing the
+--   OUTGOING shape is only half the job: EVERY version left in
+--   `csOlderVersions` needs a wire type reaching a frozen COPY of the
+--   constructor order that version was written with. Today's frozen
+--   DTOs do not satisfy that — `UnitInstanceDTOv1.uid1Facing`, and
+--   `UnitSimStateDTOv1.sim1Facing` which `unit-sim` v1 AND v2 both
+--   decode through, still name this live type, so a reorder that froze
+--   only the current shape would decode every retained legacy payload
+--   against the new order anyway. `unitSimCodec`'s v1/v2 entries are
+--   the shape to copy for version dispatch and explicit migration
+--   only — no codec has needed a frozen enum yet, so they do not
+--   demonstrate that half.
 data Direction = DirS | DirSW | DirW | DirNW | DirN | DirNE | DirE | DirSE
     deriving (Show, Eq, Ord, Enum, Bounded, Generic, Serialize)
 
