@@ -24,7 +24,7 @@ import Engine.Input.Inject (noMods, fbToWindow)
 import Engine.Input.Thread (processInputs)
 import Engine.Input.Types
 import qualified Engine.Core.Queue as Q
-import UI.Focus (createFocusManager, FocusId(..), registerFocusTarget, setFocus)
+import UI.ShellFocus (createFocusManager, FocusId(..), registerFocusTarget, setFocus)
 import UI.Manager (createPage, createElement, addElementToPage, showPage,
                     setElementClickable, setElementOnClick, enableTextInput,
                     setElementFocus, setElementCapturesScroll)

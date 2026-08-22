@@ -8,7 +8,6 @@ module World.Chunk.Types
     , columnIndex
     , chunkSize
     , ColumnTiles(..)
-    , emptyColumn
     , ColumnStrata(..)
     , LoadedChunk(..)
     ) where
@@ -87,9 +86,6 @@ instance NFData ColumnTiles where
 -- | A chunk is a flat vector of 16×16 columns.
 --   Index with: columnIndex lx ly = ly * chunkSize + lx
 type Chunk = V.Vector ColumnTiles
-
-emptyColumn ∷ ColumnTiles
-emptyColumn = ColumnTiles 0 VU.empty VU.empty VU.empty
 
 chunkSize ∷ Int
 chunkSize = 16

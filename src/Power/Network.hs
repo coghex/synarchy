@@ -368,7 +368,7 @@ wireTilesOn td = HS.fromList
 --   Wire is persistent: 'World.Thread.Command.Edit.Structure' writes
 --   every placement/clear to the loaded overlay AND to the per-chunk
 --   edit log, and chunks evict by camera distance with edited chunks
---   included ('World.Tile.Types.evictDistantChunks'). Reading only the
+--   included ('World.Tile.Types.evictDistantChunksWithReport'). Reading only the
 --   resident overlay therefore made merely LOOKING somewhere else
 --   dismantle a network and freeze its batteries until the player
 --   looked back.

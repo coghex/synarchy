@@ -32,9 +32,6 @@ module Unit.Fall
     ( FallInjury(..)
     , fallInjuries
     , fallStunFor
-    -- * Tunables
-    , metresPerZ
-    , gravity
     ) where
 
 import UPrelude
@@ -42,6 +39,7 @@ import Data.Maybe (mapMaybe)
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import Unit.Types (UnitDef(..), BodyPart(..))
+import Unit.Physics (gravity, metresPerZ)
 import Unit.Injury (tissueInjuryKind, injuryFloor, capInjurySeverity
                    , allocateSubparts)
 import Substance.Types (SubstanceManager)
@@ -55,15 +53,11 @@ data FallInjury = FallInjury
     } deriving (Show, Eq)
 
 -- * Tunables ---------------------------------------------------------
-
--- | Metres of real height per world z-level. A z-step is roughly a
---   floor/step — human-scale — so a 2-z drop ≈ 3 m. Drives the whole
---   energy calc; raise it to make every fall more dangerous.
-metresPerZ ∷ Float
-metresPerZ = 1.5
-
-gravity ∷ Float
-gravity = 9.81
+--
+--   The two shared physics constants this model runs on — 'metresPerZ'
+--   (how tall a z-level is) and 'gravity' — live in "Unit.Physics", so
+--   the motion that brings a unit down and the injuries the landing
+--   causes read one definition (#1146).
 
 -- | Global calibration: scales delivered impact energy into the
 --   severity domain. Tuned (with the per-tissue densities below) against

@@ -2,9 +2,6 @@
 -- | Generate zoom-map quads (the main zoomed-out world view).
 module World.Render.Zoom.Quads
     ( generateZoomMapQuads
-    , renderFromBaked
-    , makeMapQuads
-    , emitQuad
     ) where
 
 import UPrelude

@@ -1,13 +1,6 @@
 {-# LANGUAGE Strict #-}
 module World.Magma.Init
     ( buildVolcanoCtx
-    , buildSpatialIndex
-    , buildMagmaSource
-    , msBBoxFromShapes
-    , maxChuteReach
-    , unionBoxes
-    , squareAt
-    , padBox
     , discoverChunkLava
     ) where
 
@@ -103,7 +96,7 @@ buildMagmaSource terrainAt worldSeed worldSize pf = case pfFeature pf of
                 GeoCoord cx cy = centerCoord
                 -- Use the noise-only baseline for kit construction:
                 -- chutes run from the baseline up to the surface, and
-                -- 'lavaAt' applies the full noisy + hotspot-uplifted
+                -- @lavaAt@ applies the full noisy + hotspot-uplifted
                 -- mantle ceiling at query time. (Skipping the hotspot
                 -- term avoids a chicken-and-egg ordering — we are in
                 -- the middle of building the source list it would
@@ -154,7 +147,7 @@ segmentMidpoint worldSize (GeoCoord sx sy) (GeoCoord ex ey) =
 
 -- * Bounding boxes
 
--- | Union of every shape's xy footprint, padded by 'maxChuteReach'
+-- | Union of every shape's xy footprint, padded by @maxChuteReach@
 --   to absorb perturbed-chute wobble. Z extent is tracked per-shape
 --   inside the shape itself.
 msBBoxFromShapes ∷ Int → [LavaShape] → EventBBox
@@ -204,7 +197,7 @@ padBox (EventBBox a b c d) n = EventBBox (a - n) (b - n) (c + n) (d + n)
 
 -- | Bucket sources by chunk so per-tile lookups iterate at most a
 --   handful of candidates. Build cost is @O(sources × chunks-in-bbox)@;
---   chunks-in-bbox is bounded by the bbox padded by 'maxChuteReach'.
+--   chunks-in-bbox is bounded by the bbox padded by @maxChuteReach@.
 --
 --   Chunk coords are u-axis wrapped before insertion so a source near
 --   the seam has the wrapped-around chunk on the other side in its
@@ -214,7 +207,7 @@ buildSpatialIndex ∷ Int → [MagmaSource] → HM.HashMap ChunkCoord [Int]
 buildSpatialIndex worldSize sources =
     indexFromBoxes worldSize (zipWith (\i s → (i, msBBox s)) [0..] sources)
 
--- | Wider index used by 'sumHotspots'. Each source's bbox is padded
+-- | Wider index used by @sumHotspots@. Each source's bbox is padded
 --   by @3σ@ where @σ = 2 × surface radius@, i.e. @6 ×@ the surface
 --   radius — beyond that distance @exp(-d²/σ²)@ contributes <1%.
 buildHotspotIndex ∷ Int → [MagmaSource]
@@ -240,7 +233,7 @@ hotspotReach s = ceiling (6.0 * surfaceRadius)
         FissureVolcano   p → fromIntegral (fpWidth p)
         LavaTube         p → fromIntegral (ltWidth p)
 
--- | Shared chunk-bucketing helper used by both 'buildSpatialIndex'
+-- | Shared chunk-bucketing helper used by both @buildSpatialIndex@
 --   and 'buildHotspotIndex'. Wraps chunk coords on the u-axis so
 --   sources near the seam appear under their canonical neighbour
 --   coords.

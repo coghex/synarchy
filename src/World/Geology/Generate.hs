@@ -3,13 +3,9 @@ module World.Geology.Generate
     ( -- * Feature generation and registration
       generateShieldVolcano
     , generateCinderCone
-    , generateLavaDome
-    , generateCaldera
     , generateFissure
-    , generateLavaTube
     , generateSuperVolcano
     , generateHydrothermalVent
-    , generateAndRegister
     , generateAndRegisterN
     ) where
 
@@ -35,47 +31,9 @@ scaleVolcanoHeight _worldSize h = h
 
 -- * Feature Generation Helpers
 
--- | Generate and register a batch of volcanic features.
---   Returns the list of new PersistentFeatures and updated state.
-generateAndRegister ∷ Word64 → Int → [TectonicPlate]
-                    → VolcanoEra
-                    → (Word64 → Int → [TectonicPlate] → Int → Int
-                        → Maybe FeatureShape)
-                    → Int  -- ^ period index
-                    → TimelineBuildState
-                    → ([PersistentFeature], TimelineBuildState)
-generateAndRegister seed worldSize plates _era mkFeature periodIdx tbs0 =
-    let halfTiles = (worldSize * 16) `div` 2
-        maxFeatures = scaleCount worldSize 4
-        maxAttempts = maxFeatures * 5
-
-        go attemptIdx count tbs acc
-            | attemptIdx ≥ maxAttempts = (acc, tbs)
-            | count ≥ maxFeatures     = (acc, tbs)
-            | otherwise =
-                let h1 = hashGeo seed attemptIdx 70
-                    h2 = hashGeo seed attemptIdx 71
-                    gx = hashToRangeGeo h1 (-halfTiles) (halfTiles - 1)
-                    gy = hashToRangeGeo h2 (-halfTiles) (halfTiles - 1)
-                in case mkFeature seed worldSize plates gx gy of
-                    Nothing → go (attemptIdx + 1) count tbs acc
-                    Just feature →
-                        let (fid, tbs') = allocFeatureId tbs
-                            pf = PersistentFeature
-                                { pfId               = fid
-                                , pfFeature          = feature
-                                , pfActivity         = FActive
-                                , pfFormationPeriod   = periodIdx
-                                , pfLastActivePeriod  = periodIdx
-                                , pfEruptionCount     = 1
-                                , pfParentId          = Nothing
-                                }
-                            tbs'' = registerFeature pf tbs'
-                        in go (attemptIdx + 1) (count + 1) tbs'' (pf : acc)
-
-    in go 0 0 tbs0 []
-
--- | Like generateAndRegister but with explicit max attempts and max features.
+-- | Generate and register a batch of volcanic features, with explicit
+--   max attempts and max features. Returns the new 'PersistentFeature's
+--   and the updated state.
 generateAndRegisterN ∷ Int → Int → Word64 → Int → [TectonicPlate]
                      → VolcanoEra
                      → (Word64 → Int → [TectonicPlate] → Int → Int
@@ -114,7 +72,7 @@ generateAndRegisterN baseMaxAttempts baseMaxFeatures seed worldSize plates
 
     in go 0 0 tbs0 []
 
--- * Feature Constructors (called by generateAndRegister)
+-- * Feature Constructors (called by @generateAndRegisterN@)
 
 -- | Shield volcanos should be large but not world-dominating.
 --   At worldSize=128 (2048 tiles), baseRadius 30-60 means
@@ -167,51 +125,6 @@ generateCinderCone seed worldSize plates gx gy =
                 , ccCenterElev   = elev
                 }
 
--- | Lava domes: small-medium, steep.
-generateLavaDome ∷ Word64 → Int → [TectonicPlate]
-                 → Int → Int → Maybe FeatureShape
-generateLavaDome seed worldSize plates gx gy =
-    let (elev, _) = elevationAtGlobal seed plates worldSize gx gy
-    in if elev < -100 ∨ isBeyondGlacier worldSize gx gy
-       then Nothing
-       else let h1 = hashGeo seed gx 100
-                h2 = hashGeo seed gy 101
-                baseR = hashToRangeGeo h1 6 15
-                height = scaleVolcanoHeight worldSize (hashToRangeGeo h2 30 100)
-            in Just $ VolcanicShape $ LavaDome LavaDomeParams
-                { ldCenter     = GeoCoord gx gy
-                , ldBaseRadius = baseR
-                , ldHeight     = height
-                , ldCenterElev = elev
-                }
-
--- | Calderas: medium features.
-generateCaldera ∷ Word64 → Int → [TectonicPlate]
-                → Int → Int → Maybe VolcanicFeature
-generateCaldera seed worldSize plates gx gy =
-    let (elev, _) = elevationAtGlobal seed plates worldSize gx gy
-    in if elev < -100 ∨ isBeyondGlacier worldSize gx gy
-       then Nothing
-       else let h1 = hashGeo seed gx 110
-                h2 = hashGeo seed gy 111
-                h3 = hashGeo seed (gx + gy) 112
-                h4 = hashGeo seed (gx * gy) 113
-                h5 = hashGeo seed (abs gx + abs gy) 114
-                outerR  = hashToRangeGeo h1 15 40
-                innerR  = hashToRangeGeo h2 (outerR `div` 2) (outerR * 3 `div` 4)
-                rimH    = scaleVolcanoHeight worldSize (hashToRangeGeo h3 20 80)
-                floorD  = scaleVolcanoHeight worldSize (hashToRangeGeo h4 30 100)
-                hasLake = hashToFloatGeo h5 > 0.6
-            in Just $ Caldera CalderaParams
-                { caCenter      = GeoCoord gx gy
-                , caOuterRadius = outerR
-                , caInnerRadius = innerR
-                , caRimHeight   = rimH
-                , caFloorDepth  = floorD
-                , caHasLake     = hasLake
-                , caCenterElev  = elev
-                }
-
 -- | Fissures: shorter.
 generateFissure ∷ Word64 → Int → [TectonicPlate]
                 → Int → Int → Maybe FeatureShape
@@ -240,37 +153,6 @@ generateFissure seed worldSize _plates gx gy =
              , fpRidgeHeight = ridgeH
              , fpHasMagma    = hasMagma
              }
-
--- | Lava tubes: shorter, subtler.
-generateLavaTube ∷ Word64 → Int → [TectonicPlate]
-                 → Int → Int → Maybe VolcanicFeature
-generateLavaTube seed worldSize plates gx gy =
-    let (elev, _) = elevationAtGlobal seed plates worldSize gx gy
-    in if elev < -100 ∨ isBeyondGlacier worldSize gx gy
-       then Nothing
-       else let h1 = hashGeo seed gx 130
-                h2 = hashGeo seed gy 131
-                h3 = hashGeo seed (gx + gy) 132
-                h4 = hashGeo seed (gx * gy) 133
-                h5 = hashGeo seed (abs gx) 134
-                angle = hashToFloatGeo h1 * 2.0 * π
-                tubeLen = hashToRangeGeo h2 20 60
-                halfLen = fromIntegral tubeLen / 2.0 ∷ Float
-                ex = gx + round (halfLen * cos angle)
-                ey = gy + round (halfLen * sin angle)
-                sxCoord = gx - round (halfLen * cos angle)
-                syCoord = gy - round (halfLen * sin angle)
-                width = hashToRangeGeo h3 2 4
-                ridgeH = scaleVolcanoHeight worldSize (hashToRangeGeo h4 3 10)
-                collapses = hashToRangeGeo h5 1 4
-            in Just $ LavaTube LavaTubeParams
-                { ltStart        = GeoCoord sxCoord syCoord
-                , ltEnd          = GeoCoord ex ey
-                , ltWidth        = width
-                , ltRidgeHeight  = ridgeH
-                , ltCollapses    = collapses
-                , ltCollapseSeed = fromIntegral (gx * 31 + gy * 17) `xor` seed
-                }
 
 -- | Super volcano: large but not absurd.
 --   Caldera 50-100, ejecta 120-250.

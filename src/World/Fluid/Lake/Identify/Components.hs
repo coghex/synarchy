@@ -12,7 +12,6 @@ module World.Fluid.Lake.Identify.Components
     , buildLakes
     , LakeWithId(..)
     , dropOldId
-    , clampFloorTolerance
     ) where
 
 import UPrelude
@@ -171,7 +170,7 @@ buildLakes nLabels terrain filled labels worldTiles coastalMask oceanMap = runST
             -- water plane still finds tiles to render at @seaLevel@.
             --
             -- The clamp is gated on the basin FLOOR sitting at or
-            -- barely above sea level ('clampFloorTolerance'). The
+            -- barely above sea level (@clampFloorTolerance@). The
             -- coastal test alone is chunk-dilated geography — it
             -- reaches 3 chunks inland and through dry sub-sea
             -- basins, so without the floor gate a 1-tile mountain

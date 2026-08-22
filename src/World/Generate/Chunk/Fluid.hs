@@ -8,8 +8,6 @@ module World.Generate.Chunk.Fluid
     , chunkWaterSurfMap
     , applyBasaltCaps
     , lavaShellMask
-    , poolSurfAtGlobal
-    , isLavaAtGlobal
     , mergeRimCaps
     , poolRimCaps
     , chunkOrNeighborOceanic

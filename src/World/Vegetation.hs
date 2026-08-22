@@ -6,30 +6,22 @@ module World.Vegetation
       -- * Texture lookup
     , getVegTexture
       -- * Vegetation ID constants
-    , vegNone
-    , vegSparseGrass
+      --
+      -- Every id here is a row of the catalogue data/vegetation/*.yaml
+      -- declares; the ones this module also uses internally are not
+      -- exported (#1119). vegHeavyIvy, vegFallenLeaves and
+      -- vegPineNeedles have no in-module use, so they are kept exported
+      -- for the same reason World.Material's table is: un-exporting them
+      -- under -Werror would mean deleting catalogue rows 29 / 49 / 53
+      -- from the Haskell side.
     , vegMediumGrass
-    , vegDenseGrass
-    , vegTallGrass
-    , vegThinMoss
-    , vegThickMoss
-    , vegLightIvy
     , vegHeavyIvy
-    , vegLichen
-    , vegDesertScrub
-    , vegMarshGrass
-    , vegDeadGrass
     , vegFallenLeaves
     , vegPineNeedles
-    , vegMushroomPatch
-    , vegWildflowers
     , vegSnow
-    , vegDesertSand
-    , vegGravelTundra
     , vegTilledSoil
     , vegVariants
       -- * Per-tile vegetation selection
-    , selectVegetation
     , vegHash
       -- * Classification helpers
     , isBarrenMaterial
@@ -108,7 +100,7 @@ vegGravelTundra ∷ Word8
 vegGravelTundra = 73
 
 -- | Tilled-soil surface state (#333): set by the till AI via
---   @world.setVegAt@, never by natural placement ('selectVegetation'
+--   @world.setVegAt@, never by natural placement (@selectVegetation@
 --   never emits it) — a farmed tile is a player-authored edit, not a
 --   biome outcome. One texture regardless of soil type or climate (the
 --   epic left "tilled texture by soil type" open; simplest default,

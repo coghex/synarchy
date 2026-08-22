@@ -19,9 +19,12 @@
 --   shore halo (riparian groundwater; feeds the wetland-soil gate).
 module World.Hydrology.WaterTable
     ( computeWaterTable
-    , depthFromClimate
-    , isSubsurfaceWet
     , waterTableAtTile
+      -- Kept exported with no code consumer (#1119):
+      -- docs/hydrology_pipeline.md §11 names it, beside waterTableAtTile,
+      -- as one of the two queries the finalized lcWaterTableMap is read
+      -- through.
+    , isSubsurfaceWet
     ) where
 
 import UPrelude

@@ -303,7 +303,7 @@ library
                      Engine.Scripting.Lua.API.Input
                      Engine.Scripting.Lua.API.Keybinds
                      Engine.Scripting.Lua.API.Text
-                     Engine.Scripting.Lua.API.Focus
+                     Engine.Scripting.Lua.API.ShellFocus
                      Engine.Scripting.Lua.API.Shell
                      Engine.Scripting.Lua.API.UI
                      Engine.Scripting.Lua.API.UI.Page
@@ -416,7 +416,7 @@ library
                      Engine.Loop.Shutdown
                      UI
                      UI.Types
-                     UI.Focus
+                     UI.ShellFocus
                      UI.InputOwnership
                      UI.ControlActivation
                      UI.FocusNavigation
@@ -466,6 +466,7 @@ library
                      Unit.Pathing.Hazard
                      Unit.Pathing.Cost
                      Unit.Pathing.AStar
+                     Unit.Physics
                      Unit.Fall
                      Unit.Injury
                      Unit.Command.Types
@@ -778,7 +779,6 @@ library
                      World.Hydrology.River.Meander
                      World.Hydrology.River.Tributary
                      World.Hydrology.River.Carving
-                     World.Hydrology.River.Common
                      World.Hydrology.Glacier
                      World.Hydrology.Glacier.Common
                      World.Hydrology.Glacier.Generation

@@ -3,7 +3,6 @@ module World.SideFace.Base
     ( SideDecoType(..)
     , sideDecoBase
     , sideDecoVariants
-    , isWaterfallDeco
     ) where
 
 import UPrelude
@@ -30,7 +29,3 @@ sideDecoBase DecoMoss      = 5
 sideDecoBase DecoIce       = 9
 sideDecoBase DecoMineral   = 13
 sideDecoBase DecoWaterfall = 17
-
--- | Check if a deco ID is a waterfall (17-20).
-isWaterfallDeco ∷ Word8 → Bool
-isWaterfallDeco d = d ≥ 17 ∧ d ≤ 20

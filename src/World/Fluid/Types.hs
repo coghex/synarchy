@@ -7,7 +7,6 @@ module World.Fluid.Types
     , IceMap
     , emptyIceMap
     , IceLevelGrid(..)
-    , emptyIceLevelGrid
     , renderedSurfaceZ
     ) where
 
@@ -107,6 +106,3 @@ instance Serialize IceLevelGrid where
         s ← Serialize.get
         xs ← Serialize.get
         pure (IceLevelGrid w s (VU.fromList xs))
-
-emptyIceLevelGrid ∷ IceLevelGrid
-emptyIceLevelGrid = IceLevelGrid 0 1 VU.empty

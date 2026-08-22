@@ -40,7 +40,7 @@ import Engine.Scene.Types
 import qualified Vulkan.Core10 as Vk
 import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR)
 import UI.Types (UIPageManager)
-import UI.Focus (FocusManager)
+import UI.ShellFocus (FocusManager)
 import Unit.Types (UnitManager)
 import Unit.Sim.Types (UnitThreadState)
 import Unit.Command.Types (UnitCommand)

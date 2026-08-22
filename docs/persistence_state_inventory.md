@@ -465,7 +465,7 @@ referenced below rather than re-audited here).
 | `UICamera` (`uiCamWidth`, `uiCamHeight`) | `src/Engine/Graphics/Camera.hs:66` | global | Exclude | window size | derived from window size at boot | none yet |
 | `CursorState` | `src/World/Cursor/Types.hs:9` | per-page | Exclude | — | already covered as `wsCursorRef` in §3 (contract §1 exclusion list: hover state) | none yet |
 | `UIPageManager` | `src/UI/Types.hs:321` | global | Exclude | — | already covered as `uiManagerRef` in §1 | none yet |
-| `FocusManager` | `src/UI/Focus.hs:34` | global | Exclude | — | already covered as `focusManagerRef` in §1 | none yet |
+| `FocusManager` | `src/UI/ShellFocus.hs:52` | global | Exclude | — | already covered as `focusManagerRef` in §1 | none yet |
 | `ToolMode` (per-page) | `src/World/Tool/Types.hs:12` | per-page | Reset to default | — | already covered as `wsToolModeRef`/`wpsToolMode` in §3/§4 | none yet |
 | `UnitManager.umSelected` | `src/Unit/Types.hs:626` | global | Exclude | — | already covered in §5 | none yet |
 | `BuildingManager.bmSelected` | `src/Building/Types.hs:183` | global | Exclude | — | already covered in §5 | none yet |

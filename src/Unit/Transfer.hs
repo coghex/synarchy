@@ -76,7 +76,6 @@ module Unit.Transfer
     , allTransferRequestErrors
     , TransferCompletion(..)
     , transferCompletionId
-    , completionOf
       -- * Per-item queue state
     , TransferState(..)
     , QueuedTransfer(..)
@@ -104,7 +103,6 @@ module Unit.Transfer
     , planItemWith
     , commitItem
     , commitItemWith
-    , applyTransferCommit
       -- * Batch lifecycle
     , checkBatch
     , checkBatchWith

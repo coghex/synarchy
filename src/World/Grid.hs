@@ -6,19 +6,16 @@ module World.Grid
       -- * Derived constants (from defaultGridConfig)
     , tileWidth
     , tileHeight
-    , tileDiamondHeight
     , tileSideHeight
     , tileHalfWidth
     , tileHalfDiamondHeight
       -- * Layer constants
     , worldLayer
     , uiLayerThreshold
-    , backgroundMapLayer
       -- * Coordinate conversions
     , gridToWorld
     , gridToScreen
     , worldToGrid
-    , worldScreenWidth
     , worldWrapPeriod
       -- * Camera constants
     , cameraPanSpeed
@@ -32,10 +29,8 @@ module World.Grid
     , applyFacing
     , unapplyFacing
     -- * Float-precision versions of facing and coordinate conversions
-    , gridToWorldF
     , worldToGridF
     , applyFacingF
-    , unapplyFacingF
     ) where
 
 import UPrelude
@@ -125,10 +120,6 @@ cameraPanAccel = gcCameraPanAccel defaultGridConfig
 cameraPanFriction ∷ Float
 cameraPanFriction = gcCameraPanFriction defaultGridConfig
 
--- | Layer for background map chunks (renders below world tiles)
-backgroundMapLayer ∷ LayerId
-backgroundMapLayer = LayerId 0
-
 -- | Layer for zoom map chunks (renders above world tiles)
 zoomMapLayer ∷ LayerId
 zoomMapLayer = LayerId 2
@@ -151,11 +142,6 @@ zoomFadeEnd = 1.6
 
 -- * World Screen Width (wrapping period in screen-space X)
 
-worldScreenWidth ∷ Int → Float
-worldScreenWidth worldSizeChunks =
-    let worldTiles = worldSizeChunks * chunkSize
-    in fromIntegral worldTiles * tileHalfWidth
-
 -- | Screen-space displacement of ONE u-wrap, per camera facing (#1176).
 --
 --   A u-wrap shifts u by a whole world and PRESERVES v = gx + gy, while
@@ -167,10 +153,9 @@ worldScreenWidth worldSizeChunks =
 --       sy = ∓u·tileHalfDiamondHeight, so it displaces screen Y instead.
 --
 --   The untouched component is exactly 0, not merely small: v does not
---   move. This is the one statement of both periods — 'worldScreenWidth'
---   is the X one under its historical name, and
+--   move. This is the one statement of both periods —
 --   'World.Render.Zoom.ViewBounds.bestZoomWrapOffset' and
---   'World.Render.ChunkCulling.bestWrapOffset' both read them from here
+--   @World.Render.ChunkCulling.bestWrapOffset@ both read them from here
 --   so the full-detail and zoom renderers cannot disagree about the
 --   world's own period.
 worldWrapPeriod ∷ CameraFacing → Int → (Float, Float)
@@ -222,12 +207,6 @@ worldToGridF facing sx sy =
     let a = (sx / tileHalfWidth + sy / tileHalfDiamondHeight) / 2.0
         b = (sy / tileHalfDiamondHeight - sx / tileHalfWidth) / 2.0
     in unapplyFacingF facing a b
-
--- | Float grid coords → screen-space (NO rounding)
-gridToWorldF ∷ CameraFacing → Float → Float → (Float, Float)
-gridToWorldF facing gx gy =
-    let (a, b) = applyFacingF facing gx gy
-    in ((a - b) * tileHalfWidth, (a + b) * tileHalfDiamondHeight)
 
 -- * Coordinate Conversions
 

@@ -5,8 +5,6 @@ module World.Tile.Types
     , emptyWorldTileData
     , lookupChunk
     , insertChunk
-    , chunkCount
-    , evictDistantChunks
     , evictDistantChunksWithReport
     ) where
 
@@ -41,37 +39,11 @@ insertChunk ∷ LoadedChunk → WorldTileData → WorldTileData
 insertChunk lc wtd =
     wtd { wtdChunks = HM.insert (lcCoord lc) lc (wtdChunks wtd) }
 
-chunkCount ∷ WorldTileData → Int
-chunkCount = HM.size . wtdChunks
-
--- | Evict chunks that are far from the camera, keeping at most wtdMaxChunks.
---   Keeps all chunks within the keep radius, evicts furthest-first beyond that.
---   Edited chunks evict freely now — the world's edit log preserves their
---   changes, and replay on regeneration restores them.
-evictDistantChunks ∷ ChunkCoord → Int → WorldTileData → WorldTileData
-evictDistantChunks (ChunkCoord camCX camCY) keepRadius wtd =
-    let chunks = wtdChunks wtd
-        maxC   = wtdMaxChunks wtd
-    in if HM.size chunks ≤ maxC
-       then wtd
-       else
-         let keep = HM.filterWithKey (\coord _ →
-                 let ChunkCoord cx cy = coord
-                     dx = abs (cx - camCX)
-                     dy = abs (cy - camCY)
-                 in dx ≤ keepRadius ∧ dy ≤ keepRadius
-                 ) chunks
-             candidates = HM.filterWithKey (\coord _ → not (HM.member coord keep)) chunks
-             candidateList = sortOn (\lc →
-                 let ChunkCoord cx cy = lcCoord lc
-                 in negate (abs (cx - camCX) + abs (cy - camCY))
-                 ) (HM.elems candidates)
-             roomLeft = max 0 (maxC - HM.size keep)
-             kept = take roomLeft candidateList
-             keptMap = HM.fromList [(lcCoord lc, lc) | lc ← kept]
-         in wtd { wtdChunks = HM.union keep keptMap }
-
--- | Like evictDistantChunks but also returns the coords of evicted chunks.
+-- | Evict chunks that are far from the camera, keeping at most
+--   'wtdMaxChunks'. Keeps every chunk within the keep radius and evicts
+--   furthest-first beyond that, returning the coords of the evicted
+--   chunks. Edited chunks evict freely — the world's edit log preserves
+--   their changes, and replay on regeneration restores them.
 evictDistantChunksWithReport ∷ ChunkCoord → Int → WorldTileData
                              → (WorldTileData, [ChunkCoord])
 evictDistantChunksWithReport (ChunkCoord camCX camCY) keepRadius wtd =

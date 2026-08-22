@@ -10,7 +10,7 @@
 --   / 'Test.Headless.Location.Discovery' fixture style. No engine
 --   needed: 'makeLocationIconQuads' is a pure function over world/
 --   camera/lifecycle params, exactly like the existing terrain
---   'World.Render.Zoom.Quads.makeMapQuads' it sits beside.
+--   @World.Render.Zoom.Quads.makeMapQuads@ it sits beside.
 module Test.Headless.Location.MapIcons (spec) where
 
 import UPrelude

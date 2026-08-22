@@ -1,5 +1,20 @@
 {-# LANGUAGE Strict #-}
--- | Lua bindings for keyboard/input focus management.
+-- | Lua bindings for BOTH game-UI focus systems, which
+--   "UI.Manager.Focus" owns on 'UI.Types.UIPageManager':
+--
+--     * element TEXT focus — @UI.setFocus@, @UI.clearFocus@,
+--       @UI.getFocus@, @UI.hasFocus@, over @upmGlobalFocus@, deciding
+--       which widget's text buffer receives typed characters.
+--     * keyboard CONTROL focus (#745) — @UI.setControlFocus@,
+--       @UI.clearControlFocus@, @UI.getControlFocus@,
+--       @UI.hasControlFocus@, over @upmControlFocus@, deciding which
+--       non-text control Enter\/Space activates. These report
+--       separately to Lua as @UI.getElementInfo@'s @focused@ versus
+--       @controlFocused@.
+--
+--   Neither is the THIRD system: shell\/console text focus, bound as
+--   the @engine.*@ family in "Engine.Scripting.Lua.API.ShellFocus"
+--   over "UI.ShellFocus"'s 'UI.ShellFocus.FocusManager'.
 module Engine.Scripting.Lua.API.UI.Focus
   ( uiSetFocusFn
   , uiClearFocusFn

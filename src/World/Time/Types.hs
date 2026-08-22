@@ -3,7 +3,6 @@ module World.Time.Types
     ( WorldTime(..)
     , defaultWorldTime
     , worldTimeToSunAngle
-    , advanceWorldTime
     , advanceWorldClock
     , WorldDate(..)
     , defaultWorldDate
@@ -46,21 +45,8 @@ worldTimeToSunAngle (WorldTime h m) =
     let totalMinutes = fromIntegral h * 60.0 + fromIntegral m ∷ Float
     in totalMinutes / 1440.0   -- 1440 = 24 * 60
 
--- | Advance world time by a number of real seconds, scaled by a speed factor.
---   Returns the new time (wraps at 24:00).
---   timeScale: how many game-minutes pass per real-second.
-advanceWorldTime ∷ Float → Float → WorldTime → WorldTime
-advanceWorldTime timeScale dtSeconds (WorldTime h m) =
-    let totalMinutes = fromIntegral h * 60 + fromIntegral m ∷ Float
-        newTotal = totalMinutes + timeScale * dtSeconds
-        -- Wrap around 1440 minutes (24 hours)
-        wrapped = newTotal - 1440.0 * fromIntegral (floor (newTotal / 1440.0) ∷ Int)
-        newH = floor wrapped `div` 60
-        newM = floor wrapped `mod` 60
-    in WorldTime (newH `mod` 24) (newM `mod` 60)
-
 -- | Advance the full world clock — time of day AND calendar date (#332).
---   'advanceWorldTime' wraps at midnight without carrying the day, which
+--   The predecessor wrapped at midnight without carrying the day, which
 --   left the world date frozen forever (the flora annual cycle selected
 --   by day-of-year could never move). This is the same minute arithmetic
 --   plus the carry: the number of midnights crossed rolls the date

@@ -27,9 +27,6 @@
 module World.Generate.Timeline.Fast
     ( applyTimelineFast
     , applyTimelineFastFrom
-    , applyPeriodEvents
-    , applyPeriodErosionAt
-    , applyExplodedEvents
     ) where
 
 import UPrelude

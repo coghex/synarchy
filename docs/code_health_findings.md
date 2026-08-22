@@ -978,7 +978,15 @@ save path, the load path, integrity/`KnownEntities`, and the Lua save-module
 bridge).
 
 ### [no-issue] CH-44. Two `Focus` modules, neither of which says which focus it means
-> **Disposition:** No issue — CH-120 states it "supersedes and widens CH-44", and its fix subsumes this one verbatim (the same `Engine/Scripting/Lua/API/ShellFocus.hs` rename, plus `UI/ShellFocus.hs` and a system-naming haddock on all five focus modules); a separate issue would fragment one rename across two PRs over the same files. Re-verified today: `UI/Focus.hs`, `UI/Manager/Focus.hs`, and `API/Focus.hs` still open straight into `module … where`, and `API/UI/Focus.hs`'s header is still the ambiguous "Lua bindings for keyboard/input focus management".
+> **Disposition:** No issue — CH-120 states it "supersedes and widens CH-44", and its fix subsumes this one verbatim (the same `Engine/Scripting/Lua/API/ShellFocus.hs` rename, plus `UI/ShellFocus.hs` and a system-naming haddock on all five focus modules); a separate issue would fragment one rename across two PRs over the same files. Re-verified at the time of this disposition, i.e. PRE-#1155: `UI/Focus.hs`, `UI/Manager/Focus.hs`, and `API/Focus.hs` still opened straight into `module … where`, and `API/UI/Focus.hs`'s header was still the ambiguous "Lua bindings for keyboard/input focus management". **Discharged 2026-08-21 by #1155**, which landed exactly that rename (`UI/Focus.hs` → `UI/ShellFocus.hs`, `API/Focus.hs` → `API/ShellFocus.hs`) plus a system-naming haddock on all five focus modules; none of the four preceding observations describes the tree any more.
+
+*Everything from here to the end of this entry is the finding AS RECORDED,
+describing the tree before #1155. `UI/Focus.hs` is now `UI/ShellFocus.hs`,
+`Engine/Scripting/Lua/API/Focus.hs` is now
+`Engine/Scripting/Lua/API/ShellFocus.hs`, and those two plus the other three
+focus modules now each open with a haddock naming their system. One detail
+below was also wrong when written: `UI.Manager`'s element text-focus field is
+`upmGlobalFocus`, not `upmTextFocus`.*
 
 `Engine.Scripting.Lua.API.Focus` and `Engine.Scripting.Lua.API.UI.Focus` are
 indistinguishable by name and bind **two genuinely different focus systems**:
@@ -3315,6 +3323,9 @@ worldgen (CH-83) and locations (CH-112) — **they hold.**
 ### [#1155] CH-120. Five focus modules, and three have no module haddock at all
 > **Note:** Verified 2026-08-06 — the header table is exactly right (three open straight into `module … (`, `Lua/API/UI/Focus.hs`'s "Lua bindings for keyboard/input focus management" names no system, `UI/FocusNavigation.hs`'s is the model), and the vocabulary collision is real (`UI/Focus.hs:13-15` vs `UI/Manager/Focus.hs:2-13`). Two corrections that change the fix. (1) **There are THREE systems, not two, and two modules span two each**: `UI/Manager/Focus.hs` holds element TEXT focus (`setElementFocus`/`getPageFocus`/`validateFocus`) AND keyboard CONTROL focus (`setControlFocus`… under its own `-- * Control focus (#745)` section), and `Lua/API/UI/Focus.hs` splits the same way — so "one shared sentence per module naming its system" is wrong for those two. (2) **The paragraph named as "the missing header" is incomplete**: `Engine/Input/Thread/Keyboard.hs:99-101` (not `:97`) reads "Two independent focus systems checked here: 1. FocusManager — shell/console text input; 2. UIPageManager — UI widget text input" — correct where it sits, since control focus is not text routing, but copying it into all five would mis-describe `FocusNavigation` and both control-focus halves. Rename scope measured: `UI.Focus` has 18 importers (23 references); `Engine.Scripting.Lua.API.Focus` has 3 sites. NB CH-44 closed `[no-issue]` *because* this finding carries its rename, so #1155 is what discharges it.
 
+*Everything from here to the end of this entry is the finding AS RECORDED,
+describing the tree before #1155 landed its fix on 2026-08-21.*
+
 | Module | Governs | Header? |
 |---|---|---|
 | `UI/Focus.hs` | `FocusManager` — shell/console text focus | **none** |
@@ -3396,7 +3407,7 @@ No action needed. Worth keeping in the document so a future reader knows these
 were checked rather than assumed.
 
 ### [#1156] CH-123. Minor UI defects for one cleanup issue
-> **Note:** Verified 2026-08-06 — and this is the one export bundle in the report whose list measures **exactly** right: an independent scan of `src/UI` across all four roots with line comments stripped reproduces the same 11 names in the same 8 modules, so the batch's tokenizer caveat and re-check did their job. **One correction, to the methodology note itself**: "all 11 are genuine over-exports (used within their own module), none are dead" holds for ten, not eleven. **`submitBuffer` is dead** — checked separately for in-module usage, it has zero references beyond its export line (`:13`), signature (`:64`), and equation (`:65`), and across `src/`, `app/`, `test/`, `test-headless/`, and `scripts/` the only file mentioning it is `src/UI/TextBuffer.hs`. The bullet above the note says as much ("a text-submission entry point … that nothing calls"), so the two contradict each other. Consequence for the fix: `submitBuffer` is `clearBuffer`'s only caller, so deleting it makes `clearBuffer` unreferenced in-module too and the pair must be decided together. The other ten each have a real in-module call site (spot-verified `showTooltip` at `Tooltip/State.hs:116`, `hitsAtPointBy` at `Manager/Query.hs:218`). Bullet 2 confirmed: `UI/Focus.hs:20` imports and `:4`/`:9` re-export `TextBuffer(..)`/`emptyBuffer`, defined at `UI/Types.hs:225,231`. Bullet 3's count has drifted — `UI/Types.hs` is now **496** lines, not 488. NB #1155 renames `UI/Focus.hs`, the same file #1156's re-export requirement edits.
+> **Note:** Verified 2026-08-06 — and this is the one export bundle in the report whose list measures **exactly** right: an independent scan of `src/UI` across all four roots with line comments stripped reproduces the same 11 names in the same 8 modules, so the batch's tokenizer caveat and re-check did their job. **One correction, to the methodology note itself**: "all 11 are genuine over-exports (used within their own module), none are dead" holds for ten, not eleven. **`submitBuffer` is dead** — checked separately for in-module usage, it has zero references beyond its export line (`:13`), signature (`:64`), and equation (`:65`), and across `src/`, `app/`, `test/`, `test-headless/`, and `scripts/` the only file mentioning it is `src/UI/TextBuffer.hs`. The bullet above the note says as much ("a text-submission entry point … that nothing calls"), so the two contradict each other. Consequence for the fix: `submitBuffer` is `clearBuffer`'s only caller, so deleting it makes `clearBuffer` unreferenced in-module too and the pair must be decided together. The other ten each have a real in-module call site (spot-verified `showTooltip` at `Tooltip/State.hs:116`, `hitsAtPointBy` at `Manager/Query.hs:218`). ~~Bullet 2 confirmed: `UI/Focus.hs:20` imports and `:4`/`:9` re-export `TextBuffer(..)`/`emptyBuffer`, defined at `UI/Types.hs:225,231`.~~ **Corrected 2026-08-21 (#1155): that confirmation was wrong.** Those lines are `, FocusTarget(..)` (`:4`), the `-- * focus operation` section comment (`:9`) and the `FocusId` newtype's own body (`:20`); the module imports only `UPrelude` and `Data.Map.Strict`, and its explicit export list carries no `UI.Types` name at all. Bullet 2 is withdrawn below. Bullet 3's count has drifted — `UI/Types.hs` is now **496** lines, not 488. NB #1155 renamed `UI/Focus.hs` to `UI/ShellFocus.hs`; with bullet 2 withdrawn, #1156 has no remaining requirement on that file.
 
 - **11 over-exported internals** (no consumer outside their own module):
   `UI/InputOwnership.hs` (`inputBoundaryPage`, `pagesInScope`),
@@ -3408,10 +3419,17 @@ were checked rather than assumed.
   (`emptyTooltipState`).
   `submitBuffer` is the one worth a look — a text-submission entry point on a
   documented contract (`UI.TextBuffer`) that nothing calls.
-- **`UI.Focus` re-exports `TextBuffer` and `emptyBuffer` from `UI.Types`**, so
-  both are importable from two modules. Given CH-120's confusion about which
-  focus system is which, the re-export adds a third path to a type that has
-  nothing to do with shell focus.
+- ~~**`UI.Focus` re-exports `TextBuffer` and `emptyBuffer` from
+  `UI.Types`**~~ — **withdrawn 2026-08-21 (#1155): this never happened.**
+  The module (now `UI.ShellFocus`) has an explicit export list carrying
+  only `FocusId`/`FocusTarget`/`FocusManager`/`InputMode` and its five
+  focus functions, and it does not import `UI.Types` at all. `UI.Types`
+  is where both names are defined and the only module that exports them
+  in its own right; `UI/TextBuffer.hs:15` imports `TextBuffer(..)` from
+  it without re-exporting it. There IS a second import path, but it is
+  the umbrella aggregate rather than a focus module: `src/UI.hs:11,14`
+  re-exports `module UI.Types` wholesale, exactly as it re-exports every
+  other `UI.*` module it bundles. Nothing to fix here.
 - `UI/Types.hs` (488 lines) is the tree's largest module and holds
   `UIPageManager`, `UIPage`, `UIElement`, `UILayer`, `uiLayerBand`,
   `TextBuffer`, and tooltip state. It is well under budget, but it is the one
