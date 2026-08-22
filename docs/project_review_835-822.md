@@ -9,7 +9,7 @@ PR #832's committed building-footprint expansion, #831's tile-Z UI-wiring regres
 ## Status
 
 - [x] PRR-1. Soil receivers can credit a high neighbour that cannot shed any soil — [#1591]
-- [ ] PRR-2. Slot-aware occupancy still stores only one pending construction job per tile
+- [x] PRR-2. Slot-aware occupancy still stores only one pending construction job per tile — [#1595]
 - [ ] PRR-3. The location-content probe shares four fixed temporary fixture paths and never cleans them
 - [ ] PRR-4. A freshwater tile above four lower neighbours is still forced back to a flat slope
 - [ ] PRR-5. The save barrier can snapshot Lua before processing causal messages produced by acknowledged owners
@@ -44,7 +44,7 @@ PR #832's committed building-footprint expansion, #831's tile-Z UI-wiring regres
 
 ## 2. Pending construction slot identity
 
-### PRR-2. Slot-aware occupancy still stores only one pending construction job per tile
+### [#1595] PRR-2. Slot-aware occupancy still stores only one pending construction job per tile
 
 > **Captured note:** Make the structure slot part of pending construction identity, or reject a second compatible-slot designation explicitly instead of reporting it accepted while overwriting the first job. The placed overlay is slot-keyed, but `ConstructDesignations` remains keyed only by `(x,y)`.
 
