@@ -1231,7 +1231,11 @@ yield exactly one successor, and an expired owner that exits late finds a
 token that is not its own and leaves the successor alone. EXPIRY IS ONE-WAY:
 a holder that stalled past its own lease cannot renew back to life, because
 that would deny a claimant entitled to reclaim the probe and make the lease
-meaningless whenever the holder is merely slow rather than dead. An empty,
+meaningless whenever the holder is merely slow rather than dead. Every
+instant a decision is judged against is read INSIDE the sidecar lock, never
+before it: waiting for that lock can outlast a lease, so a pre-sampled instant
+would stamp a new claim already expired and would judge a denial against one
+that had since lapsed. An empty,
 truncated,
 unparseable or INCOMPLETE claim is treated as OCCUPIED until its own
 filesystem age reaches the lease — which covers a crash between the exclusive

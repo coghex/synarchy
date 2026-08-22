@@ -234,6 +234,21 @@ if hold > 0:
 """
 
 
+LOCK_HOLDER = f"""
+import os, sys, time
+sys.path.insert(0, {TOOLS!r})
+import run_probes
+run_probes.PROBES = [(k, k + '_probe.py', k) for k in ('alpha', 'beta', 'gamma')]
+import probe_claim
+from pathlib import Path
+
+root, probe, held, ready = sys.argv[1], sys.argv[2], float(sys.argv[3]), sys.argv[4]
+with probe_claim._serialized(probe, Path(root)):
+    open(ready, 'w').close()
+    time.sleep(held)
+"""
+
+
 def race(root: Path, probe: str, count: int, *, lease=60.0):
     """`count` separate processes contend for one probe. Returns their rows."""
     root.mkdir(parents=True, exist_ok=True)
@@ -430,6 +445,59 @@ def test_owner_safe_late_release() -> None:
         expect(probe_claim.read_claim("alpha", root=root)["token"]
                == successor.token,
                "the successor's token is still the one on disk")
+
+
+def test_a_contended_acquisition_gets_a_live_lease() -> None:
+    """Waiting for the lock must not eat the lease it was waiting for.
+
+    A review found this: `acquire` sampled the clock and built its
+    payload BEFORE taking the sidecar lock. Waiting for that lock takes
+    as long as the writer ahead of us, which can exceed the lease
+    outright — so the claim written afterwards carried an `expires_at`
+    already in the past, and a claim DENIED against could have expired
+    while we waited. The instant is read inside the hold now.
+
+    Posed with a real second process holding the lock for longer than
+    the whole lease, which is the only arrangement that tells the two
+    orderings apart.
+    """
+    print("\n-- a contended acquisition still gets a live lease --")
+    with registry(), scratch() as base:
+        root = base / "probe-claims"
+        root.mkdir(parents=True)
+        ready = base / "holding"
+        lease, held = 1.0, 3.0
+        holder = subprocess.Popen(
+            [sys.executable, "-c", LOCK_HOLDER, str(root), "alpha",
+             str(held), str(ready)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.time() + 60
+            while time.time() < deadline and not ready.exists():
+                time.sleep(0.01)
+            expect(ready.exists(),
+                   "the other process really is holding the claim lock, so "
+                   "this acquisition genuinely waits for it")
+            started = probe_claim.utc_now()
+            claim = probe_claim.acquire("alpha", root=root,
+                                        lease_seconds=lease)
+        finally:
+            holder.communicate(timeout=60)
+
+        waited = (probe_claim.utc_now() - started).total_seconds()
+        expect(waited > lease,
+               f"the wait ({waited:.1f}s) really did outlast the {lease}s "
+               f"lease, which is what makes this case discriminating")
+        stored = probe_claim.read_claim("alpha", root=root)
+        expires = probe_claim.parse_stamp(stored["expires_at"])
+        acquired = probe_claim.parse_stamp(stored["acquired_at"])
+        expect(probe_claim.utc_now() < expires,
+               "the claim it finally took is LIVE, not born expired")
+        expect(acquired >= started + timedelta(seconds=lease),
+               "its timestamps were read after the wait, not before it")
+        expect(abs((expires - acquired).total_seconds() - lease) < 0.05,
+               "and it got its full lease, not what was left of one")
+        expect(claim.holds(), "so the holder really holds it")
 
 
 def test_expiry_is_one_way() -> None:
@@ -1764,7 +1832,9 @@ def main() -> int:
     for test in (test_namespace, test_exclusive_acquisition,
                  test_independent_process_contention,
                  test_expiry_and_reclaim, test_concurrent_stale_reclaimers,
-                 test_owner_safe_late_release, test_expiry_is_one_way,
+                 test_owner_safe_late_release,
+                 test_a_contended_acquisition_gets_a_live_lease,
+                 test_expiry_is_one_way,
                  test_malformed_claim,
                  test_release_on_every_managed_exit,
                  test_crash_recovery_through_ttl,

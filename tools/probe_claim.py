@@ -81,6 +81,13 @@ late and exits cleanly finds a token that is not its own and leaves the
 successor's claim alone rather than deleting it — the failure mode that
 would hand one probe to two agents at once.
 
+Every instant a decision is judged against is read INSIDE the sidecar
+lock, never before it. Waiting for that lock takes as long as the writer
+ahead of us and can exceed a lease outright, so a pre-sampled instant is
+wrong in both directions at once: a claim written from it is stamped
+already expired, and a claim denied against one may have lapsed during
+the wait.
+
 EXPIRY IS ONE-WAY, and the token alone does not undo it. A process that
 stalled past its own lease — suspended, swapped out, stopped in a
 debugger — has a renewer that wakes up eventually, and renewing there
@@ -993,14 +1000,24 @@ def acquire(probe: str, *, root: Path | None = None,
     base = _ensure_root(Path(root) if root is not None
                         else repository_claim_root(repo_root))
     path = claim_path(key, base)
-    moment = now or utc_now()
     token = uuid.uuid4().hex
-    payload = _payload(key, token, acquired=moment, renewed=moment,
-                       lease_seconds=float(lease_seconds),
-                       owner=_owner_description(),
-                       worktree=str(Path(repo_root or run_probes.REPO_ROOT)))
 
     with _serialized(key, base):
+        # The clock is read INSIDE the hold, and the payload is built
+        # from it here rather than above. Waiting for this lock takes as
+        # long as the writer ahead of us, which can exceed the lease
+        # outright — and an instant sampled before that wait is wrong in
+        # both directions at once: the claim we go on to write would be
+        # stamped with an `expires_at` already in the past, and a claim
+        # we go on to DENY against might have expired while we waited.
+        # `now` stays injectable so the self-test can pose a specific
+        # instant; nothing else may pre-sample one.
+        moment = now if now is not None else utc_now()
+        payload = _payload(key, token, acquired=moment, renewed=moment,
+                           lease_seconds=float(lease_seconds),
+                           owner=_owner_description(),
+                           worktree=str(Path(repo_root
+                                             or run_probes.REPO_ROOT)))
         document, mtime = _read_payload(path, key)
         if document is None and mtime is None:
             if _create_exclusive(path, payload):
