@@ -59,7 +59,7 @@ for _path in (HERE, TOOLS):
 from engine import (CONSOLE_READ_TIMEOUT, EngineCrash,  # noqa: E402
                     SCREENSHOT_TIMEOUT)
 from probelib import GUI_PORT  # noqa: E402
-from run_probes import reap_group  # noqa: E402
+from run_probes import _DeferSigint, reap_group  # noqa: E402
 
 # The pre-ready budget. NOT probelib's 180 s probe READY default (which
 # is exactly what killed the cold-worktree run in #1539) and never
@@ -69,6 +69,11 @@ DEFAULT_SETUP_TIMEOUT = 1800.0
 
 # How often the render phase re-probes for player-readiness.
 READY_POLL_INTERVAL = 0.5
+
+# How often the engine phase re-reads the log for READY. Both intervals
+# are clamped to whatever is left of the setup deadline, so a budget
+# smaller than one interval still ends on time.
+CONSOLE_POLL_INTERVAL = 0.4
 
 # How long a pre-ready teardown waits for the listener socket to free.
 PORT_RELEASE_TIMEOUT = 10.0
@@ -163,17 +168,20 @@ def _run_setup_command(cmd: list[str], repo_root: str, deadline: float, clock,
             "build", "build_timeout",
             f"the setup budget was already spent before `{label}` could run",
             timed_out=True)
+    proc = None
     try:
-        proc = subprocess.Popen(
-            cmd, cwd=repo_root,
-            stdout=subprocess.PIPE if capture else stdout,
-            stderr=subprocess.PIPE if capture else subprocess.STDOUT,
-            text=True if capture else None,
-            start_new_session=True)
-    except OSError as e:
-        raise SetupFailure("build", "build_failed",
-                           f"could not run `{label}`: {e}") from e
-    try:
+        # The spawn window is held against Ctrl-C: the interpreter checks
+        # for signals BETWEEN bytecodes, so an interrupt landing after
+        # `Popen` forks but before `proc` names it would leave a build
+        # tree — in its own session, so it survives our own death — that
+        # nothing here or in `main()` could ever reap.
+        with _DeferSigint():
+            proc = subprocess.Popen(
+                cmd, cwd=repo_root,
+                stdout=subprocess.PIPE if capture else stdout,
+                stderr=subprocess.PIPE if capture else subprocess.STDOUT,
+                text=True if capture else None,
+                start_new_session=True)
         out, err = proc.communicate(timeout=left)
     except subprocess.TimeoutExpired:
         _reap_setup_process(proc)
@@ -181,15 +189,25 @@ def _run_setup_command(cmd: list[str], repo_root: str, deadline: float, clock,
             "build", "build_timeout",
             f"`{label}` did not finish inside the setup budget",
             timed_out=True) from None
+    except OSError as e:
+        _reap_setup_process(proc)
+        raise SetupFailure("build", "build_failed",
+                           f"could not run `{label}`: {e}") from e
     except BaseException:
-        # Ctrl-C, or anything else: the build tree must not outlive us.
+        # A deferred Ctrl-C re-raised on leaving the block above, or
+        # anything else: the build tree must not outlive us.
         _reap_setup_process(proc)
         raise
     return proc.returncode, out or "", err or ""
 
 
-def _reap_setup_process(proc: subprocess.Popen) -> None:
-    """Terminate a setup subprocess's whole group and drain its pipes."""
+def _reap_setup_process(proc: subprocess.Popen | None) -> None:
+    """Terminate a setup subprocess's whole group and drain its pipes.
+
+    Tolerates ``None``: an exec that never produced a process has
+    nothing to reap."""
+    if proc is None:
+        return
     try:
         reap_group(proc.pid)
     except (OSError, ValueError):
@@ -276,12 +294,21 @@ def start_engine(eng, exe: str, deadline: float, *, repo_root: str = REPO_ROOT,
         raise SetupFailure("engine", "engine_exited",
                            f"could not open the engine log: {e}") from e
     try:
-        eng.proc = subprocess.Popen(cmd, cwd=repo_root, stdout=logf,
-                                    stderr=subprocess.STDOUT,
-                                    start_new_session=True)
+        # Same held spawn window as the build: an interrupt between the
+        # fork and `eng.proc` naming it would leave an engine — in its
+        # own session — that neither this function nor `main()`'s
+        # teardown could reach.
+        with _DeferSigint():
+            eng.proc = subprocess.Popen(cmd, cwd=repo_root, stdout=logf,
+                                        stderr=subprocess.STDOUT,
+                                        start_new_session=True)
     except OSError as e:
         raise SetupFailure("engine", "engine_exited",
                            f"could not start {exe}: {e}") from e
+    except BaseException:
+        # A deferred Ctrl-C, re-raised now that eng.proc is recorded.
+        teardown_setup(eng)
+        raise
     finally:
         # The child holds its own dup; the parent's copy would otherwise
         # stay open for the whole session.
@@ -289,23 +316,47 @@ def start_engine(eng, exe: str, deadline: float, *, repo_root: str = REPO_ROOT,
     while True:
         try:
             with open(eng.log_path, errors="replace") as f:
-                if "READY" in f.read():
-                    return
+                ready = "READY" in f.read()
         except OSError:
-            pass
-        code = eng.proc.poll()
-        if code is not None:
-            raise SetupFailure(
-                "engine", "engine_exited",
-                f"the engine exited {code} before the debug console printed "
-                f"READY; see engine.log")
-        if _remaining(deadline, clock) <= 0:
-            raise SetupFailure(
-                "engine", "console_timeout",
-                "the engine is still running but its debug console never "
-                "printed READY inside the setup budget; see engine.log",
-                timed_out=True)
-        sleep(0.4)
+            ready = False
+        left = _remaining(deadline, clock)
+        outcome, failure = console_wait_step(ready, eng.proc.poll(), left <= 0)
+        if outcome == "accept":
+            return
+        if outcome == "fail":
+            kind, detail = failure
+            raise SetupFailure("engine", kind, detail,
+                               timed_out=(kind == "console_timeout"))
+        # Never sleep past the deadline: a --setup-timeout smaller than
+        # one polling interval must still end on time.
+        sleep(max(0.0, min(CONSOLE_POLL_INTERVAL, left)))
+
+
+def console_wait_step(ready: bool, exit_code: int | None, expired: bool):
+    """One iteration of the READY wait, as a pure decision.
+
+    Returns ``("accept", None)``, ``("wait", None)``, or
+    ``("fail", (kind, detail))``. Split out so the ORDERING — in
+    particular that a READY arriving only after the setup budget expired
+    is a timeout rather than an accepted boundary crossing — is covered
+    offline, with no process to spawn and no clock to race.
+    """
+    if ready and not expired:
+        return "accept", None
+    if exit_code is not None:
+        return "fail", ("engine_exited",
+                        f"the engine exited {exit_code} before the debug "
+                        "console printed READY; see engine.log")
+    if ready:
+        return "fail", ("console_timeout",
+                        "the debug console printed READY only after the "
+                        "setup budget had already expired; see engine.log")
+    if expired:
+        return "fail", ("console_timeout",
+                        "the engine is still running but its debug console "
+                        "never printed READY inside the setup budget; see "
+                        "engine.log")
+    return "wait", None
 
 
 # --------------------------------------------------------------------------

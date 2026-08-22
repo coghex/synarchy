@@ -1491,6 +1491,33 @@ def selftest() -> int:
             d = os.path.join(tmp, name)
             return d, SessionTrace(d, dict(meta or {"mode": "selftest-ready"}))
 
+        def _tree_stub(name):
+            """A stand-in setup process that leaves a background child.
+
+            Killing only the immediate process would leave that child
+            behind, which is exactly what the group reap has to prevent.
+            The pid is published by ATOMIC RENAME so a reader never sees
+            the empty file `>` creates before `echo` has written it."""
+            path = os.path.join(tmp, f"{name}.sh")
+            pid_file = os.path.join(tmp, f"{name}.pid")
+            with open(path, "w") as f:
+                f.write("#!/bin/sh\nsleep 120 &\nprintf '%s' \"$!\" > "
+                        f"'{pid_file}.tmp'\nmv '{pid_file}.tmp' "
+                        f"'{pid_file}'\nsleep 120\n")
+            os.chmod(path, 0o755)
+            return path, pid_file
+
+        def _await_pid(pid_file, budget=10.0):
+            end = time.monotonic() + budget
+            while True:
+                try:
+                    with open(pid_file) as f:
+                        return int(f.read().strip())
+                except (OSError, ValueError):
+                    if time.monotonic() >= end:
+                        return None
+                    time.sleep(0.05)
+
         def launch_offline(trace, *, ready, clock, setup_timeout=100000.0,
                            build=None, start=None, eng=None):
             return launch_mod.launch_player_ready(
@@ -1759,12 +1786,7 @@ def selftest() -> int:
         import signal as _signal
         import subprocess
 
-        stub = os.path.join(tmp, "stub_engine.sh")
-        child_pid_file = os.path.join(tmp, "stub_child.pid")
-        with open(stub, "w") as f:
-            f.write("#!/bin/sh\nsleep 120 &\necho $! > "
-                    f"'{child_pid_file}'\nsleep 120\n")
-        os.chmod(stub, 0o755)
+        stub, child_pid_file = _tree_stub("stub_engine")
 
         class StubEngine(FakeEngine):
             def __init__(self, log_path):
@@ -1788,15 +1810,7 @@ def selftest() -> int:
         except launch_mod.SetupFailure as e:
             stub_exc = e
         spawned = stub_eng.proc
-        for _ in range(100):           # the stub writes its child's pid
-            if os.path.isfile(child_pid_file):
-                break
-            time.sleep(0.05)
-        try:
-            with open(child_pid_file) as f:
-                child_pid = int(f.read().strip())
-        except (OSError, ValueError):
-            child_pid = None
+        child_pid = _await_pid(child_pid_file)
         launch_mod.teardown_setup(stub_eng)
 
         def _not_running(pid):
@@ -1877,30 +1891,77 @@ def selftest() -> int:
               and launch_mod.wait_port_released(held_port, timeout=5.0) is True,
               f"held -> {still_held}")
 
+        # 8e-penta. the READY wait's ordering, as a pure decision table
+        # — in particular that a READY arriving only AFTER the setup
+        # budget expired is a timeout, not an accepted boundary
+        # crossing. A --setup-timeout shorter than one polling interval
+        # used to accept exactly that.
+        step = launch_mod.console_wait_step
+        check("a READY inside the budget is accepted",
+              step(True, None, False) == ("accept", None))
+        late_outcome, late_failure = step(True, None, True)
+        check("a READY that only arrives after the budget expired is a "
+              "console timeout, not an accepted boundary",
+              late_outcome == "fail" and late_failure[0] == "console_timeout"
+              and "after" in late_failure[1],
+              str(late_failure))
+        check("an exited engine is reported as the exit, in or out of budget",
+              step(False, 1, False)[1][0] == "engine_exited"
+              and step(True, 1, True)[1][0] == "engine_exited")
+        check("no READY and budget left means keep waiting",
+              step(False, None, False) == ("wait", None))
+        check("no READY and no budget left is a console timeout",
+              step(False, None, True)[1][0] == "console_timeout")
+
+        # ...and the wait never sleeps past its own deadline: a
+        # --setup-timeout smaller than CONSOLE_POLL_INTERVAL must still
+        # end on time rather than overshoot by a whole interval.
+
+        class SleepClock:
+            """A clock that advances by whatever the code sleeps for."""
+
+            def __init__(self):
+                self.now = 0.0
+                self.slept: list = []
+
+            def __call__(self):
+                return self.now
+
+            def sleep(self, seconds):
+                self.slept.append(seconds)
+                self.now += max(seconds, 0.01)
+
+        tight_eng = StubEngine(os.path.join(tmp, "tight_engine.log"))
+        tight_stub, tight_pids = _tree_stub("tight_engine")
+        tight_budget = 0.05          # well under CONSOLE_POLL_INTERVAL
+        tight_clock = SleepClock()
+        tight_exc = None
+        try:
+            launch_mod.start_engine(
+                tight_eng, tight_stub, deadline=tight_clock() + tight_budget,
+                repo_root=tmp, clock=tight_clock, sleep=tight_clock.sleep)
+        except launch_mod.SetupFailure as e:
+            tight_exc = e
+        launch_mod.teardown_setup(tight_eng)
+        check("the READY wait never sleeps past the setup deadline",
+              tight_exc is not None and tight_exc.kind == "console_timeout"
+              and tight_budget < launch_mod.CONSOLE_POLL_INTERVAL
+              and bool(tight_clock.slept)
+              and all(s <= tight_budget for s in tight_clock.slept),
+              f"{tight_clock.slept} -> {tight_exc}")
+        tight_child = _await_pid(tight_pids, budget=2.0)
+        if tight_child is not None and not _not_running(tight_child):
+            try:
+                os.kill(tight_child, _signal.SIGKILL)
+            except OSError:
+                pass
+
         # 8e-quater. the BUILD is a process TREE (cabal spawns ghc,
         # which spawns more), so a pre-ready failure has to reap its
         # whole group too — on the setup timeout AND on a Ctrl-C, which
         # lands inside the build's own wait and never reaches the
         # engine-side teardown. Both paths are driven here with a stub
         # that leaves a background child behind.
-        def _tree_stub(name):
-            path = os.path.join(tmp, f"{name}.sh")
-            pid_file = os.path.join(tmp, f"{name}.pid")
-            with open(path, "w") as f:
-                f.write("#!/bin/sh\nsleep 120 &\necho $! > "
-                        f"'{pid_file}'\nsleep 120\n")
-            os.chmod(path, 0o755)
-            return path, pid_file
-
-        def _await_pid(pid_file):
-            for _ in range(200):
-                try:
-                    with open(pid_file) as f:
-                        return int(f.read().strip())
-                except (OSError, ValueError):
-                    time.sleep(0.05)
-            return None
-
         for case, interrupt in (("build_timeout", False),
                                 ("build_interrupt", True)):
             stub_path, stub_pids = _tree_stub(case)
@@ -1919,7 +1980,7 @@ def selftest() -> int:
                 with open(os.devnull, "w") as sink:
                     launch_mod._run_setup_command(
                         [stub_path], tmp,
-                        deadline=time.monotonic() + (60.0 if interrupt else 0.5),
+                        deadline=time.monotonic() + (60.0 if interrupt else 3.0),
                         clock=time.monotonic, stdout=sink)
             except BaseException as e:
                 raised = e
@@ -1943,6 +2004,74 @@ def selftest() -> int:
                     os.kill(build_child, _signal.SIGKILL)
                 except OSError:
                     pass
+
+        # 8e-sexta. the SPAWN WINDOW: the interpreter checks for signals
+        # between bytecodes, so a Ctrl-C landing after Popen has forked
+        # but before the local names its result would leave a setup
+        # child — in its OWN session, so it outlives us — that nothing
+        # could reap. A real SIGINT is delivered at exactly that moment;
+        # deferring it is what lets the reap still find the group.
+        def _group_idle(pgid):
+            """True once nothing in ``pgid`` is still running (zombies,
+            already exited, do not count)."""
+            done = subprocess.run(["ps", "-eo", "pgid=,state="],
+                                  capture_output=True, text=True)
+            for line in done.stdout.splitlines():
+                parts = line.split()
+                if (len(parts) >= 2 and parts[0].isdigit()
+                        and int(parts[0]) == pgid
+                        and not parts[1].startswith("Z")):
+                    return False
+            return True
+
+        window_stub, window_pids = _tree_stub("spawn_window")
+        real_popen = subprocess.Popen
+        window_group: list = []
+
+        class _PopenThenSigint(subprocess.Popen):
+            """Popen that sends a real SIGINT the instant it returns.
+
+            The signal lands after the fork but BEFORE `__init__`
+            returns, so before the caller's local can name the process —
+            exactly the window under test. It waits for the stub to
+            establish its background child first, so the group really
+            has two members to reap, and it un-patches itself before
+            signalling: the reap it provokes runs `ps` through this same
+            module attribute, and a second SIGINT would interrupt the
+            very teardown being tested."""
+
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                window_group.append(self.pid)   # == pgid (own session)
+                _await_pid(window_pids, budget=10.0)
+                launch_mod.subprocess.Popen = real_popen
+                os.kill(os.getpid(), _signal.SIGINT)
+
+        launch_mod.subprocess.Popen = _PopenThenSigint
+        window_exc = None
+        try:
+            with open(os.devnull, "w") as sink:
+                launch_mod._run_setup_command(
+                    [window_stub], tmp, deadline=time.monotonic() + 60.0,
+                    clock=time.monotonic, stdout=sink)
+        except BaseException as e:
+            window_exc = e
+        finally:
+            launch_mod.subprocess.Popen = real_popen
+        window_child = _await_pid(window_pids, budget=5.0)
+        window_reaped = bool(window_group) and _settles(
+            lambda: _group_idle(window_group[0]))
+        check("a Ctrl-C inside the spawn window still reaps the setup group",
+              isinstance(window_exc, KeyboardInterrupt)
+              and window_child is not None and window_reaped
+              and _not_running(window_child),
+              f"raised {type(window_exc).__name__}, group {window_group}, "
+              f"child {window_child}, reaped={window_reaped}")
+        if window_child is not None and not _not_running(window_child):
+            try:
+                os.kill(window_child, _signal.SIGKILL)
+            except OSError:
+                pass
 
         # 8f. older traces, which carry only started_at/ended_at, must
         # still load and still collate in the usage ledger.
