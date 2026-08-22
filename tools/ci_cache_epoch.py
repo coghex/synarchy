@@ -13,9 +13,10 @@ the pushed SHA.  Consequently PRs restore a cache authored by trusted master
 CI; they do not advance the epoch or publish branch-scoped project caches.
 
 Only inputs that can change compiled project products count.  Documentation,
-Lua, assets and data do not age ``dist-newstyle``.  Missing or rewritten
-history fails closed: the command exits non-zero instead of silently reusing an
-arbitrary epoch.
+Lua, assets and data do not age ``dist-newstyle``.  A missing, pre-anchor or
+rewritten ref falls back visibly to epoch 0.  Cache freshness must never fail an
+otherwise valid older pull request; the image- and toolchain-sensitive restore
+ladder remains the compatibility boundary.
 
 Usage:
   python3 tools/ci_cache_epoch.py --ref <commit>
@@ -74,6 +75,7 @@ class EpochResult:
     epoch: int
     position: int
     next_refresh_in: int
+    fallback_reason: str | None = None
 
 
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -91,46 +93,72 @@ def is_build_relevant(paths: list[str]) -> bool:
                for path in paths for glob in BUILD_INPUT_GLOBS)
 
 
-def first_parent_changes(repo: Path, anchor: str, ref: str) -> list[str]:
-    """Every first-parent commit in ``anchor..ref``, oldest first."""
-    for label, commit in (("anchor", anchor), ("ref", ref)):
-        if _git(repo, "cat-file", "-e", f"{commit}^{{commit}}",
-                check=False).returncode != 0:
-            raise EpochError(f"cache-epoch {label} {commit!r} is not a commit")
-    if _git(repo, "merge-base", "--is-ancestor", anchor, ref,
-            check=False).returncode != 0:
-        raise EpochError(
-            f"cache-epoch anchor {anchor} is not an ancestor of {ref}; "
-            "refusing to guess after rewritten or incomplete history")
-    text = _git(repo, "rev-list", "--first-parent", "--reverse",
-                f"{anchor}..{ref}").stdout
-    return [line.strip() for line in text.splitlines() if line.strip()]
+def first_parent_path_groups(repo: Path, anchor: str, ref: str) -> list[list[str]]:
+    """Changed paths per first-parent commit, using one bounded Git process."""
+    marker = "CI_CACHE_COMMIT "
+    text = _git(
+        repo, "log", "--first-parent", "--diff-merges=first-parent",
+        "--no-renames", "--name-only", "--reverse",
+        f"--format={marker}%H", f"{anchor}..{ref}").stdout
+    groups: list[list[str]] = []
+    current: list[str] | None = None
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line.startswith(marker):
+            if current is not None:
+                groups.append(current)
+            current = []
+        elif line and current is not None:
+            current.append(line)
+    if current is not None:
+        groups.append(current)
+    return groups
 
 
-def changed_paths(repo: Path, commit: str) -> list[str]:
-    """Paths changed by ``commit`` relative to its first parent."""
-    parent = _git(repo, "rev-parse", f"{commit}^1").stdout.strip()
-    text = _git(repo, "diff", "--no-renames", "--name-only",
-                parent, commit).stdout
-    return [line.strip() for line in text.splitlines() if line.strip()]
+def fallback_epoch(anchor: str, ref: str, reason: str) -> EpochResult:
+    """Safe reusable key for history an older PR cannot relate to the anchor."""
+    return EpochResult(
+        anchor=anchor,
+        ref=ref,
+        relevant_count=0,
+        epoch=0,
+        position=0,
+        next_refresh_in=EPOCH_SIZE,
+        fallback_reason=reason,
+    )
 
 
 def derive_epoch(repo: Path, ref: str,
                  anchor: str = EPOCH_ANCHOR) -> EpochResult:
-    commits = first_parent_changes(repo, anchor, ref)
+    resolved: dict[str, str] = {}
+    for label, commit in (("anchor", anchor), ("ref", ref)):
+        proc = _git(repo, "rev-parse", "--verify", f"{commit}^{{commit}}",
+                    check=False)
+        if proc.returncode != 0:
+            return fallback_epoch(
+                resolved.get("anchor", anchor), resolved.get("ref", ref),
+                f"cache-epoch {label} {commit!r} is not a local commit")
+        resolved[label] = proc.stdout.strip()
+    if _git(repo, "merge-base", "--is-ancestor", resolved["anchor"],
+            resolved["ref"], check=False).returncode != 0:
+        return fallback_epoch(
+            resolved["anchor"], resolved["ref"],
+            f"cache-epoch anchor {resolved['anchor']} is not an ancestor of "
+            f"{resolved['ref']}")
+
     relevant = sum(
-        1 for commit in commits if is_build_relevant(changed_paths(repo, commit)))
+        1 for paths in first_parent_path_groups(
+            repo, resolved["anchor"], resolved["ref"])
+        if is_build_relevant(paths))
     # The snapshot at the anchor is the start of epoch 0. Each eighth relevant
     # first-parent change advances the key, so the refresh happens after eight
     # merges rather than on the ninth build that follows them.
     epoch = relevant // EPOCH_SIZE
     position = relevant % EPOCH_SIZE
     next_refresh = EPOCH_SIZE - position
-    resolved_ref = _git(repo, "rev-parse", ref).stdout.strip()
-    resolved_anchor = _git(repo, "rev-parse", anchor).stdout.strip()
     return EpochResult(
-        anchor=resolved_anchor,
-        ref=resolved_ref,
+        anchor=resolved["anchor"],
+        ref=resolved["ref"],
         relevant_count=relevant,
         epoch=epoch,
         position=position,
@@ -139,12 +167,13 @@ def derive_epoch(repo: Path, ref: str,
 
 
 def record(result: EpochResult) -> str:
-    return (
+    base = (
         f"{RECORD_PREFIX} epoch={result.epoch} "
         f"relevant_count={result.relevant_count} "
         f"position={result.position}/{EPOCH_SIZE} "
         f"next_refresh_in={result.next_refresh_in} "
         f"anchor={result.anchor} ref={result.ref}")
+    return base + (" fallback=true" if result.fallback_reason else " fallback=false")
 
 
 def write_github_output(path: Path, result: EpochResult) -> None:
@@ -170,6 +199,10 @@ def write_github_summary(path: Path, result: EpochResult) -> None:
             f"{result.position}/{EPOCH_SIZE} | "
             f"{result.next_refresh_in} change(s) | "
             f"`{result.ref[:12]}` |\n\n")
+        if result.fallback_reason:
+            handle.write(
+                f"> Cache epoch fallback: {result.fallback_reason}. Epoch 0 "
+                "was selected so cache freshness does not block an older PR.\n\n")
 
 
 def _commit(repo: Path, path: str, text: str, message: str) -> str:
@@ -243,13 +276,18 @@ def self_test() -> int:
         _git(other, "config", "user.email", "cache-epoch@example.invalid")
         _git(other, "config", "user.name", "cache epoch self-test")
         unrelated = _commit(other, "src/X.hs", "module X where\n", "other")
-        try:
-            derive_epoch(repo, ninth.ref, unrelated)
-        except EpochError as error:
-            check("not an ancestor" in str(error) or "not a commit" in str(error),
-                  f"unrelated anchor diagnostic must be explicit, got {error}")
-        else:
-            failures.append("an unrelated anchor must fail closed")
+        fallback = derive_epoch(repo, ninth.ref, unrelated)
+        check((fallback.epoch, fallback.relevant_count) == (0, 0),
+              f"an unrelated anchor must fall back to epoch 0, got {fallback}")
+        check(fallback.fallback_reason is not None and
+              ("not an ancestor" in fallback.fallback_reason or
+               "not a local commit" in fallback.fallback_reason),
+              f"unrelated anchor fallback must explain itself, got {fallback}")
+
+        missing = derive_epoch(repo, "missing-ref", anchor)
+        check((missing.epoch, missing.relevant_count) == (0, 0) and
+              missing.fallback_reason is not None,
+              f"an unavailable PR base must fall back to epoch 0, got {missing}")
 
     if failures:
         print("ci_cache_epoch self-test: FAILED")
@@ -284,6 +322,10 @@ def main(argv: list[str] | None = None) -> int:
     except EpochError as error:
         print(f"ci_cache_epoch: {error}", file=sys.stderr)
         return 1
+    if result.fallback_reason:
+        escaped = (result.fallback_reason.replace("%", "%25")
+                   .replace("\r", "%0D").replace("\n", "%0A"))
+        print(f"::warning title=CI cache epoch fallback::{escaped}")
     print(record(result))
     if args.github_output:
         write_github_output(args.github_output, result)

@@ -194,14 +194,25 @@ form is not exempt and runs on both sides.
 The same CI-only exemption applies to `ci_cache_epoch.py --ref ...`: that
 invocation derives the GitHub Actions key and writes runner outputs, while a
 local gate has no GitHub cache to address. Its `--self-test` is not exempt and
-runs on both sides. The epoch is counted from the tool's checked-in anchor over
-first-parent master history, advancing on each eighth build-relevant change. PR workers
-derive it from the PR base SHA and are restore-only; only a successful master
-push saves `dist-v3`. Ordinary docs and runtime-resource changes do not count.
+runs on both sides. The epoch is counted in one `git log` pass from the tool's
+checked-in anchor over first-parent master history, advancing on each eighth
+build-relevant change. PR workers derive it from the PR base SHA and are
+restore-only; only a successful master push saves `dist-v3`. A missing,
+pre-anchor or rewritten base emits a warning and uses epoch 0 rather than
+failing an otherwise valid older PR. Ordinary docs and runtime-resource changes
+do not count.
+
+Every v3 primary key and compatible restore prefix also carries the exact
+immutable image reference selected by `resolve-image`, in addition to the OS,
+GHC, Cabal and plan inputs. Therefore an image-only PR cannot exact-hit or
+prefix-restore project objects created in another image. The pre-v3 bootstrap
+prefix is enabled only when the resolved image equals the one known to have
+created those legacy entries; later image identities get a disabled prefix.
+That historical image constant must never be advanced with the image recipe.
 
 Old project caches are never deleted by CI. The maintainer command
 `python3 tools/ci_cache_cleanup.py` is a dry run unless `--delete` is present,
-uses exact cache IDs, keeps three v3 snapshots per compatible toolchain by default,
+uses exact cache IDs, keeps three v3 snapshots per compatible image/toolchain by default,
 and scopes itself to `refs/heads/master`. `--include-legacy` remains guarded:
 it refuses to select v2 until the same ref contains a successfully seeded v3
 project cache. Dependency caches and PR-ref caches are outside the default

@@ -276,14 +276,17 @@ writer, which makes the new snapshot available in default-branch scope without
 a scheduled warmer or mutable API counter.
 
 On an epoch miss, restore the newest compatible older epoch before compiling,
-then save the refreshed tree only after all blocking work succeeds. Retain the
-legacy per-plan key as the final bootstrap fallback until the first new epoch
-has been seeded. Concurrent first writers remain benign because cache keys are
-immutable.
+then save the refreshed tree only after all blocking work succeeds. Compatibility
+includes the exact immutable image reference, so an image-only change cannot
+reuse old project objects. Retain the legacy per-plan key as the final bootstrap
+fallback only for the image known to have written it. Concurrent first writers
+remain benign because cache keys are immutable. A pre-anchor or unavailable PR
+base warns and selects epoch 0 rather than failing the PR, and the growing
+first-parent range is classified in one Git process rather than one per commit.
 
 Retention is intentionally manual. `tools/ci_cache_cleanup.py` lists exact
 cache IDs and proposed reasons in a dry run by default, keeps the newest three
-snapshots per compatible toolchain, and never selects dependency caches or PR refs
+snapshots per compatible image/toolchain, and never selects dependency caches or PR refs
 under its default master scope. Legacy selection is a separate opt-in and is
 refused until a v3 master cache exists; deletion requires another explicit
 `--delete`. GitHub's normal expiry still handles unused branch-scoped entries.
@@ -400,8 +403,10 @@ runs exclusively until it is replaced by a prebuilt helper.
 
 The project-cache epoch is derived reproducibly from first-parent master
 history, with eight compiled-input changes per epoch. Pull requests use their
-base's epoch and never publish; successful master CI is the only writer. This
-bounds compile drift without a scheduled workflow. Retention is a separate
+base's epoch and never publish; successful master CI is the only writer. A
+pre-anchor or unavailable base degrades visibly to epoch 0. The exact resolved
+image is a separate compatibility component of every v3 key and restore prefix.
+This bounds compile drift without a scheduled workflow. Retention is a separate
 manual, dry-run-first operation, and legacy caches cannot be selected until a
 replacement has been seeded.
 

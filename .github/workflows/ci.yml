@@ -32,8 +32,9 @@
 #   1. the cabal dependency store (at the image-pinned CABAL_DIR), and
 #   2. the project build products (dist-newstyle), so GHC's recompilation
 #      avoidance rebuilds only dirty modules + their reverse-deps.
-# The dist-newstyle key includes the GHC/Cabal versions, dependency plan
-# hash and a deterministic eight-change epoch. `ci_cache_epoch.py`
+# The dist-newstyle key includes the exact immutable CI image reference,
+# GHC/Cabal versions, dependency plan hash and a deterministic eight-change
+# epoch. `ci_cache_epoch.py`
 # counts only first-parent master changes that touch compiled-product
 # inputs after its checked-in anchor; docs, Lua and runtime resources do
 # not age this cache. Pull requests derive the epoch from their BASE SHA
@@ -47,9 +48,12 @@
 # separate and an exact hit never re-saves. Concurrent master writers of
 # a new epoch are benign: one wins the immutable key and the other gets
 # "already exists". v3 restore prefixes first prefer an older epoch of
-# the same plan, then any v3 plan for this toolchain; legacy v2 is last so
-# the first v3 epoch can bootstrap from the cache created before this
-# policy. `tools/ci_cache_cleanup.py` is the explicit, dry-run-first
+# the same plan, then any v3 plan for this exact image/toolchain. Legacy v2
+# is allowed only for the immutable image known to have created it, so the
+# first v3 epoch can bootstrap without letting a later image reuse incompatible
+# products. The `ci-9eaa...` comparison below is therefore HISTORICAL and must
+# not be updated when the image recipe changes. `tools/ci_cache_cleanup.py` is
+# the explicit, dry-run-first
 # retention tool. It keeps the newest three compatible snapshots by default,
 # never selects dependency or PR caches, and refuses to select legacy v2
 # until it can see a successfully seeded v3 replacement on master.
@@ -349,8 +353,10 @@ jobs:
       # Cache project products so GHC recompiles only dirty modules.
       # plan.json keys compatibility; the eight-change epoch bounds how
       # stale an immutable snapshot can become. Same-plan older epochs are
-      # preferred, then any v3 plan for partial reuse, then legacy v2 while
-      # the first v3 master entry is being seeded.
+      # preferred, then any v3 plan for partial reuse. Legacy v2 is a final
+      # bootstrap only while the resolved image is the exact image that wrote
+      # those entries; an image-only change therefore starts from compatible
+      # dependencies but never restores old project objects.
       #
       # Split out of the combined `actions/cache` action (#1358), which
       # is the only way to learn WHICH key a prefix hit restored: the
@@ -367,11 +373,11 @@ jobs:
         id: dist-cache
         with:
           path: dist-newstyle
-          key: dist-v3-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-epoch-${{ steps.cache-epoch.outputs.epoch }}
+          key: dist-v3-${{ runner.os }}-${{ needs.resolve-image.outputs.image }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-epoch-${{ steps.cache-epoch.outputs.epoch }}
           restore-keys: |
-            dist-v3-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-epoch-
-            dist-v3-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-
-            dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-
+            dist-v3-${{ runner.os }}-${{ needs.resolve-image.outputs.image }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-epoch-
+            dist-v3-${{ runner.os }}-${{ needs.resolve-image.outputs.image }}-ghc-9.12.2-cabal-3.16.1.0-
+            ${{ needs.resolve-image.outputs.image == 'ghcr.io/coghex/synarchy-ci:ci-9eaa6afb33b34025' && format('dist-v2-{0}-ghc-9.12.2-cabal-3.16.1.0-', runner.os) || 'dist-v2-disabled-for-incompatible-image-' }}
 
       # Classify what each of the two restores above actually got: exact
       # hit, prefix hit (naming the key it restored), or full miss
@@ -877,13 +883,14 @@ jobs:
       - name: Restore project build cache (dist-newstyle)
         if: steps.probe-selection.outputs.selected == 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: probe-dist-cache
         with:
           path: dist-newstyle
-          key: dist-v3-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-epoch-${{ steps.cache-epoch.outputs.epoch }}
+          key: dist-v3-${{ runner.os }}-${{ needs.resolve-image.outputs.image }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-epoch-${{ steps.cache-epoch.outputs.epoch }}
           restore-keys: |
-            dist-v3-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-epoch-
-            dist-v3-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-
-            dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-
+            dist-v3-${{ runner.os }}-${{ needs.resolve-image.outputs.image }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-epoch-
+            dist-v3-${{ runner.os }}-${{ needs.resolve-image.outputs.image }}-ghc-9.12.2-cabal-3.16.1.0-
+            ${{ needs.resolve-image.outputs.image == 'ghcr.io/coghex/synarchy-ci:ci-9eaa6afb33b34025' && format('dist-v2-{0}-ghc-9.12.2-cabal-3.16.1.0-', runner.os) || 'dist-v2-disabled-for-incompatible-image-' }}
 
       # This runner has its own restored build tree. Besides the executable
       # every probe launches, persistence_contract shells out to
