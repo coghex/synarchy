@@ -1,0 +1,52 @@
+# retained artifacts for role-20260822T033157Z-29944-afdd8992/run-001
+# probe_flake.py deletes a successful run's directory, so this
+# attempt was a FAIL, TIMEOUT or harness error.
+#
+# The protocol event stream and stdout below are VERBATIM -- for a
+# behavioural failure the event stream is the diagnosis, naming the
+# failing check and its detail payload.
+#
+# The engine log has two classes of deterministic boot noise elided,
+# and ONLY those two: `[INFO] [Asset]` / `[INFO] [Lua]` asset- and
+# script-loading chatter, and the `[Init:158]` / `[Init:185]` tectonic
+# and climate banner worldgen prints on every boot. Every other line,
+# of every level and subsystem -- thread starts, READY, arena init,
+# spawn, shutdown, and any WARN or ERROR -- is kept verbatim and in
+# order. The elided counts are stated under each log.
+
+===== events.jsonl (probe-result/v1 protocol stream, verbatim) =====
+{"detail": {"gx": -54, "gy": -54, "species": "white_oak"}, "event": "diagnostic", "level": "INFO", "message": "wood-harvestable flora located"}
+{"detail": {"role": "laborer"}, "event": "check", "id": "derive_initial", "outcome": "PASS"}
+{"detail": {"role": "miner"}, "event": "check", "id": "derive_miner", "outcome": "PASS"}
+{"detail": {"role": "miner"}, "event": "check", "id": "hysteresis_hold", "outcome": "PASS"}
+{"detail": {"role": "woodcutter"}, "event": "check", "id": "hysteresis_flip", "outcome": "PASS"}
+{"detail": {"role": "laborer"}, "event": "check", "id": "demote_laborer", "outcome": "PASS"}
+{"detail": {"role": "none"}, "event": "check", "id": "technomule_no_role", "outcome": "PASS"}
+{"detail": {"action": "chop_designation"}, "event": "check", "id": "steer_woodcutter", "outcome": "PASS"}
+{"detail": {"action": "chop_designation"}, "event": "check", "id": "steer_miner", "outcome": "FAIL"}
+{"detail": {"after": 55.000659942627, "before": 55.0, "felled": true}, "event": "check", "id": "xp_woodcutting", "outcome": "PASS"}
+{"detail": {"after": 60.0002784729, "before": 60.0, "built": true}, "event": "check", "id": "xp_construction", "outcome": "PASS"}
+
+===== stdout.txt (verbatim) =====
+(empty)
+===== engine/role_probe_engine.log (boot noise elided) =====
+2026-08-22 03:31:57 [INFO] [Event] [Θ:7] [YamlNotifications:117] Notification registry loaded: 11 categories
+READY port=8012
+2026-08-22 03:31:57 [INFO] [World] [Θ:7] [Thread:143] Starting world thread...
+2026-08-22 03:31:57 [INFO] [World] [Θ:7] [Thread:150] World thread started
+2026-08-22 03:31:57 [INFO] [Thread] [Θ:7] [Thread:143] Starting unit thread...
+2026-08-22 03:31:57 [INFO] [Thread] [Θ:7] [Thread:150] Unit thread started
+2026-08-22 03:31:57 [INFO] [World] [Θ:7] [Thread:143] Starting simulation thread...
+2026-08-22 03:31:57 [INFO] [World] [Θ:7] [Thread:150] Simulation thread started
+2026-08-22 03:31:57 [INFO] [Thread] [Θ:7] [Thread:143] Starting combat thread...
+2026-08-22 03:31:57 [INFO] [Thread] [Θ:7] [Thread:150] Combat thread started
+2026-08-22 03:31:57 [INFO] [System] [Θ:7] [Headless:57] Starting engine (headless)...
+2026-08-22 03:32:50 [INFO] [World] [Θ:288] [Init:189] Flora catalog snapshot: 14 species, 14 worldgen entries
+2026-08-22 03:32:50 [INFO] [World] [Θ:288] [ColorPalette:93] Building zoom color palette from textures...
+2026-08-22 03:32:50 [INFO] [World] [Θ:288] [ColorPalette:108] Palette built: 73 materials, 77 vegetation
+2026-08-22 03:32:50 [INFO] [World] [Θ:288] [Init:293] Zoom atlas: 1472×1440 (2048 chunks)
+2026-08-22 03:32:50 [INFO] [World] [Θ:288] [Init:371] World initialized: 25 chunks, surface at z=30: probe
+2026-08-22 03:33:14 [INFO] [Thread] [Θ:289] [Spawn:300] UnitSpawn UnitId {unUnitId = 3}: over capacity (12.1 > 11.508368 kg) — leaving pick_steel behind
+2026-08-22 03:33:19 [INFO] [Thread] [Θ:289] [Spawn:300] UnitSpawn UnitId {unUnitId = 4}: over capacity (12.1 > 11.284336 kg) — leaving pick_steel behind
+2026-08-22 03:34:41 [INFO] [System] [Θ:7] [Headless:59] Headless engine shutting down...
+[130 of 149 lines elided: 98 asset/script boot chatter, 32 worldgen plate/climate banner]

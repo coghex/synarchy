@@ -1,0 +1,100 @@
+{
+  "artifact_root": "/Users/vincentcoghlan/probe-flake-1427-artifacts",
+  "check_counts": {
+    "arena_safety": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 2
+    },
+    "bug_fix": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 2
+    },
+    "ice_agreement": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 2
+    },
+    "monotone": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 2
+    },
+    "safety": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 2
+    }
+  },
+  "checks": [
+    {
+      "id": "safety",
+      "label": "getAmbientAt is never warmer than the regional mean"
+    },
+    {
+      "id": "bug_fix",
+      "label": "a temperate region's high ground reads below freezing"
+    },
+    {
+      "id": "monotone",
+      "label": "the coldest-by-altitude tile reads colder than a lowland reference"
+    },
+    {
+      "id": "arena_safety",
+      "label": "getAmbientAt on the flat arena returns the regional mean without crashing"
+    },
+    {
+      "id": "ice_agreement",
+      "label": "worldgen ice tiles read at or below freezing"
+    }
+  ],
+  "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+  "completed_runs": 2,
+  "error": null,
+  "error_run": null,
+  "failure_count": 0,
+  "failure_rate": 0.0,
+  "invocation_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/thermo_altitude-20260822T032241Z-79461-8aad485e",
+  "peak_concurrency": 4,
+  "probe": "thermo_altitude",
+  "requested_runs": 2,
+  "retained_artifacts": [],
+  "rts_capabilities": 4,
+  "runs": [
+    {
+      "artifact_dir": null,
+      "checks": {
+        "arena_safety": "PASS",
+        "bug_fix": "PASS",
+        "ice_agreement": "PASS",
+        "monotone": "PASS",
+        "safety": "PASS"
+      },
+      "elapsed_seconds": 109.06,
+      "index": 1,
+      "outcome": "PASS",
+      "port": 8012
+    },
+    {
+      "artifact_dir": null,
+      "checks": {
+        "arena_safety": "PASS",
+        "bug_fix": "PASS",
+        "ice_agreement": "PASS",
+        "monotone": "PASS",
+        "safety": "PASS"
+      },
+      "elapsed_seconds": 108.279,
+      "index": 2,
+      "outcome": "PASS",
+      "port": 8014
+    }
+  ],
+  "schema": "probe-flake-result/v1",
+  "status": "ok",
+  "timeout_count": 0,
+  "timestamp_utc": "2026-08-22T03:22:41Z",
+  "total_elapsed_seconds": 217.34,
+  "worst_elapsed_seconds": 109.06
+}

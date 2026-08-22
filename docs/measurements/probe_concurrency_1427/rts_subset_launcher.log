@@ -1,0 +1,43 @@
+=== START 04:00:54 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n1-c4-role
+inv1 exit=0
+inv2 exit=0
+inv3 exit=0
+inv4 exit=0
+=== END   04:07:15 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n1-c4-role
+=== START 04:07:15 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n1-c4-thermo_altitude
+inv1 exit=0
+inv2 exit=0
+inv3 exit=0
+inv4 exit=0
+=== END   04:14:43 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n1-c4-thermo_altitude
+=== START 04:14:43 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n1-c4-position_hold
+inv1 exit=0
+inv2 exit=0
+inv3 exit=0
+inv4 exit=0
+=== END   04:19:46 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n1-c4-position_hold
+=== START 04:19:46 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n8-c4-role
+inv1 exit=0
+inv2 exit=0
+inv3 exit=0
+inv4 exit=0
+=== END   04:25:31 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n8-c4-role
+=== START 04:25:31 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n8-c4-thermo_altitude
+inv1 exit=0
+inv2 exit=0
+inv3 exit=0
+inv4 exit=0
+=== END   04:30:20 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n8-c4-thermo_altitude
+=== START 04:30:20 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n8-c4-position_hold
+inv1 exit=0
+inv2 exit=0
+inv3 exit=0
+inv4 exit=0
+=== END   04:35:51 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n8-c4-position_hold
+=== START 04:35:51 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n1-c1-thermo_altitude
+inv1 exit=0
+=== END   05:01:02 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n1-c1-thermo_altitude
+=== START 05:01:02 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n8-c1-thermo_altitude
+inv1 exit=0
+=== END   05:10:50 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n8-c1-thermo_altitude
+RTS SUBSET COMPLETE 2026-08-22T05:10:50Z
