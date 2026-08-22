@@ -30,7 +30,7 @@ import Engine.Input.Types
 import qualified Engine.Core.Queue as Q
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import Test.Headless.Harness (withHeadlessEngine)
-import UI.Focus (createFocusManager)
+import UI.ShellFocus (createFocusManager)
 import UI.InputOwnership (routeScroll, isGameplayBlocked)
 import UI.Manager
 import UI.Types

@@ -1,6 +1,6 @@
 module UI
   ( -- * Focus System
-    module UI.Focus
+    module UI.ShellFocus
     -- * UI element manager
   , module UI.Manager
     -- * rendering
@@ -12,7 +12,7 @@ module UI
   ) where
 
 import UI.Types
-import UI.Focus
+import UI.ShellFocus
 import UI.Manager
 import UI.Render
 import UI.TextBuffer

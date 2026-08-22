@@ -1,4 +1,25 @@
 {-# LANGUAGE Strict #-}
+-- | The TWO game-UI focus systems, both stored on 'UI.Types.UIPageManager'
+--   and kept strictly independent of each other:
+--
+--     * element TEXT focus — 'setElementFocus', 'clearElementFocus',
+--       'getElementFocus' over @upmGlobalFocus@, plus the per-page
+--       remembered focus ('getPageFocus', 'clearPageFocus') and
+--       'validateFocus'. This decides which widget's text buffer
+--       receives typed characters.
+--     * keyboard CONTROL focus (#745) — 'setControlFocus',
+--       'clearControlFocus', 'getControlFocus',
+--       'validateControlFocusIn' over @upmControlFocus@, under this
+--       module's own @* Control focus@ export section. This decides
+--       which non-text control Enter\/Space activates and which
+--       steppable control the arrow keys adjust; traversal between
+--       them lives in "UI.FocusNavigation".
+--
+--   Neither is the THIRD system: shell\/console text focus, which is
+--   "UI.ShellFocus"'s 'UI.ShellFocus.FocusManager' and is spelled
+--   @setFocus@\/@clearFocus@ there. Only the two TEXT systems compete
+--   for a keystroke; "Engine.Input.Thread.Keyboard" checks the shell
+--   one first and this module's element focus second.
 module UI.Manager.Focus
   ( setElementFocus
   , clearElementFocus

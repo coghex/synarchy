@@ -31,7 +31,7 @@ import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Types (LuaMsg(..), LuaBackendState(..))
 import Test.Headless.Harness (withHeadlessEngine)
-import UI.Focus (createFocusManager)
+import UI.ShellFocus (createFocusManager)
 import UI.InputOwnership
 import UI.Manager
 import UI.Types
