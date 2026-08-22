@@ -31,7 +31,6 @@ module World.Fluid.Lake.Graben
     ( grabenCarveIndex
     , grabenRiftThreshold
     , grabenMinArea
-    , grabenWallSlope
     ) where
 
 import UPrelude

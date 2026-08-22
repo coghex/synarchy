@@ -7,8 +7,6 @@ module Combat.Wounds.Healing
     , healClotFloor
     , sleepHealMult
     , scarSeverityThreshold
-    , calorieHealFloorFrac
-    , calorieHealMin
     , calorieHealMultiplier
     ) where
 

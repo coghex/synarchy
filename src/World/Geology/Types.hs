@@ -19,13 +19,10 @@ module World.Geology.Types
     , emptyRegionalData
     , initGeoState
     , lookupRegionTemp
-    , modifyRegionTemp
-    , modifyAllRegionTemp
     , globalToRegion
     -- * Date tracking
     , GeoDate(..)
     , advanceGeoDate
-    , geoDateYears
     ) where
 
 import UPrelude
@@ -103,10 +100,6 @@ data GeoDate = GeoDate
 advanceGeoDate ∷ Float → GeoDate → GeoDate
 advanceGeoDate my (GeoDate current) = GeoDate (current + my)
 
--- | Get total years (for display or frequency calculations).
-geoDateYears ∷ GeoDate → Float
-geoDateYears (GeoDate my) = my
-
 -- | Convert global tile coords to region coords.
 --
 --   PRECONDITION: @gx@/@gy@ must be canonical in-domain coords
@@ -130,14 +123,6 @@ globalToRegion worldSize gx gy =
 
 lookupRegionTemp ∷ RegionCoord → RegionalData → Float
 lookupRegionTemp rc rd = HM.lookupDefault 15.0 rc (rdTemperature rd)
-
-modifyRegionTemp ∷ RegionCoord → (Float → Float) → RegionalData → RegionalData
-modifyRegionTemp rc f rd = rd
-    { rdTemperature = HM.adjust f rc (rdTemperature rd) }
-
-modifyAllRegionTemp ∷ (Float → Float) → RegionalData → RegionalData
-modifyAllRegionTemp f rd = rd
-    { rdTemperature = HM.map f (rdTemperature rd) }
 
 -- * Eruption Profile (per volcano type)
 

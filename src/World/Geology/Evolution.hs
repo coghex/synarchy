@@ -1,10 +1,6 @@
 {-# LANGUAGE Strict #-}
 module World.Geology.Evolution
     ( evolveOneFeature
-    , evolvePointFeature
-    , getFeatureCenter
-    , getFeatureRadius
-    , getFeatureCenterElev
     ) where
 
 import UPrelude

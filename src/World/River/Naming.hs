@@ -43,11 +43,8 @@ module World.River.Naming
     , riverNamesToList
       -- * Naming
     , riverHeadConcepts
-    , riverNameKindTag
     , riverHeadPool
     , riverModifierPool
-    , riverNameExpr
-    , nameRiver
     , buildRiverNames
     ) where
 

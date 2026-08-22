@@ -45,8 +45,6 @@ module Unit.Pathing.Cost
     , stepCostUnder
     , isDamagingDrop
     , lookupTerrainZ
-    , lookupFluidType
-    , lookupSlopeAt
     , lookupSurfaceMaterial
     , materialFactor
     , materialDetour

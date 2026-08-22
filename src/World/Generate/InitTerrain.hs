@@ -23,7 +23,6 @@
 module World.Generate.InitTerrain
     ( computeChunkTimelinePipeline
     , finishBorderedPipeline
-    , computeChunkBorderedPipeline
     , BorderedTerrainCache
     , borderedToInterior
     , PlateBaseCache
@@ -140,8 +139,8 @@ lookupPlateBase (halfW, vec) gx gy =
 --
 --   @mBaseCache@, when supplied, is consulted instead of calling
 --   'elevationAtGlobal' directly — see 'PlateBaseCache'. One-shot
---   callers with no shared cache (e.g. 'computeChunkBorderedPipeline')
---   pass 'Nothing' and get the original per-call behaviour.
+--   callers with no shared cache pass 'Nothing' and get the original
+--   per-call behaviour.
 computeChunkTimelinePipeline
     ∷ Word64
     → [TectonicPlate]
@@ -201,24 +200,6 @@ finishBorderedPipeline coastal coord (timelineElev, timelineMat) =
         (finalElev, _) = removeElevationSpikes 12 4 borderSize
                                                (postCoastElev, finalMat)
     in (finalElev, finalMat)
-
--- | Both stages for a single chunk — for one-shot callers that don't
---   hold a timeline-stage cache. ('World.Generate.Chunk' inlines the
---   same sequence; keep them in sync.)
-computeChunkBorderedPipeline
-    ∷ Word64
-    → [TectonicPlate]
-    → Int                  -- ^ worldSize
-    → MaterialRegistry
-    → CoastalTable
-    → GeoTimeline
-    → ChunkCoord
-    → (VU.Vector Int, VU.Vector MaterialId)
-computeChunkBorderedPipeline seed plates worldSize registry coastal
-                             timeline coord =
-    finishBorderedPipeline coastal coord
-        (computeChunkTimelinePipeline seed plates worldSize registry
-                                      timeline Nothing coord)
 
 -- | Slice a bordered elevation vector down to the @chunkSize^2@
 --   interior used by 'buildWorldTerrain' for the global priority

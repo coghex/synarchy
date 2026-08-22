@@ -2,14 +2,6 @@
 module World.Geology.Volcano
     ( perturbDist
     , applyVolcanicFeature
-    , applyShieldVolcano
-    , applyCinderCone
-    , applyLavaDome
-    , applyCaldera
-    , applyFissure
-    , applyLavaTube
-    , applySuperVolcano
-    , applyHydrothermal
     ) where
 
 import UPrelude

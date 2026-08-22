@@ -2,7 +2,6 @@
 module World.Generate.Arena
     ( generateFlatChunk
     , generateArenaChunks
-    , arenaRadius
     ) where
 
 import UPrelude

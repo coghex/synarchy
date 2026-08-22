@@ -4,6 +4,12 @@ module World.Material
     ( -- * Core types
       MaterialId(..)
       -- * Named constants (compile-time, zero-cost)
+      --
+      -- The WHOLE table stays exported even though most entries have no
+      -- consumer outside this module (#1119 requirement 3): it is the
+      -- canonical id table tools/material_id_audit.py (#1118) checks
+      -- against data/materials/*.yaml, so dropping an entry would
+      -- silently drop a catalogue row from the Haskell side.
     , matAir
     , matGranite, matDiorite, matGabbro
     , matAnorthosite, matPeridotite, matPegmatite

@@ -20,7 +20,7 @@
 --   All four camera facings are covered. These examples assert the
 --   coordinate FRAME, which is #1175's half of the seam story; where the
 --   resolved tile is then drawn is the facing-aware wrap offset #1176
---   owns ('World.Render.ChunkCulling.bestWrapOffset', covered by
+--   owns (@World.Render.ChunkCulling.bestWrapOffset@, covered by
 --   'Test.Headless.World.Render.GroundItemSeam'). The fixture keeps the
 --   resolved chunk inside the view bounds at every facing so the
 --   visibility gate is never the thing under test.

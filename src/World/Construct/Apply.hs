@@ -30,7 +30,6 @@ module World.Construct.Apply
     , applyConstructSlopes
     , applyConstructSlopesTd
     , clearConstructSlope
-    , constructSlopeAt
     ) where
 
 import UPrelude
