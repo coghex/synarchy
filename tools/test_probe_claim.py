@@ -65,6 +65,11 @@ def expect(cond: bool, msg: str) -> None:
     print(f"  {'ok  ' if cond else 'FAIL'} {msg}")
 
 
+def skip(msg: str) -> None:
+    """A case this environment cannot pose. Reported, never counted."""
+    print(f"  skip {msg}")
+
+
 def expect_raises(kind, call, msg: str, *fragments: str) -> None:
     try:
         call()
@@ -1616,17 +1621,29 @@ def test_a_completed_measurement_is_never_lost() -> None:
             a_file.write_text("not a directory", encoding="utf-8")
             a_directory = out / "a-directory"
             a_directory.mkdir()
-            read_only = out / "read-only.json"
-            read_only.write_text("{}", encoding="utf-8")
-            read_only.chmod(0o444)
             dangling = out / "dangling.json"
             dangling.symlink_to(out / "nothing-here")
             cases = [
                 (a_file / "result.json", "a path under a plain file"),
                 (a_directory, "an existing DIRECTORY at the target"),
-                (read_only, "an existing unwritable file"),
                 (dangling, "a dangling symlink"),
             ]
+            # The mode-based case only exists where the mode is obeyed.
+            # CI runs this container as root, and root writes a 0444
+            # file regardless — so `check_result_path` accepting it is
+            # CORRECT there, and asserting a refusal would be asserting
+            # that the tool lies about what it can write. The condition
+            # is the same question the tool itself asks, so the two
+            # cannot disagree about which environment this is.
+            read_only = out / "read-only.json"
+            read_only.write_text("{}", encoding="utf-8")
+            read_only.chmod(0o444)
+            if os.access(read_only, os.W_OK):
+                skip("an existing unwritable file: this process may write a "
+                     "0444 file anyway (running as root), so there is no "
+                     "unwritable destination to refuse")
+            else:
+                cases.append((read_only, "an existing unwritable file"))
             for target, why in cases:
                 ran = []
                 expect_raises(
