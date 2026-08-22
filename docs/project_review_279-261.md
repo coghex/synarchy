@@ -10,7 +10,7 @@ PR #279's original soil-shedding omission was closed by the later erosion-credit
 
 - [x] PRR-1. Popup and event-log coordinates can navigate the wrong world page — [#1588]
 - [x] PRR-2. Dismiss-all cannot clear queued popups before bootstrap — [#1592]
-- [ ] PRR-3. The lake-hole audit ignores higher surrounding lake surfaces
+- [x] PRR-3. The lake-hole audit ignores higher surrounding lake surfaces — [no-issue]
 - [ ] PRR-4. Nested item identity collapses distinct child-instance state
 
 ## 1. Page-scoped popup navigation
@@ -69,7 +69,19 @@ PR #279's original soil-shedding omission was closed by the later erosion-credit
 
 ## 3. Mixed-surface lake-hole audit
 
-### PRR-3. The lake-hole audit ignores higher surrounding lake surfaces
+### [no-issue] PRR-3. The lake-hole audit ignores higher surrounding lake surfaces
+
+> **Disposition:** No issue — the `min()` reference is deliberate and documented
+> (`tools/world_audit.py:358-365` and `:379-384`: terrain reaching any neighbour's
+> waterline is a flush islet/shore/saddle, not a hole), and the premise it would
+> fail on does not occur. A dump scan of all sixteen size-32 baseline seeds found
+> zero lake-to-lake unequal 4-adjacent pairs and zero enclosed dry tiles below any
+> neighbour's surface (twelve such tiles exist, all legitimately at-or-above). The
+> supporting evidence was a misread: seed 12321's 2,767 `WATER_WATER_CLIFF`
+> findings contain no lake-to-lake pair, and its 98 "lake" higher-side cells are
+> lake-river adjacencies labelled by a `details` string that names the loop tile
+> rather than the reported one. Unequal adjacent lake surfaces are already owned by
+> `WATER_WATER_CLIFF`, which flags them by design.
 
 > **Captured note:** Define lake-hole and submerged-bump geometry against all relevant surrounding water surfaces, not only the lowest one. A dry enclosed tile that sits below one or more adjacent lake surfaces should not evade the audit merely because another adjacent lake has a lower surface.
 
