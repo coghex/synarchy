@@ -27,7 +27,7 @@ approval.
 - [x] NCT-5. Graphical device test bypasses the engine's GPU-selection contract — [#1576]
 - [x] NCT-6. Injury-log probe accepts a `unit.injure` event for the wrong unit — [#1579]
 - [x] NCT-7. Injury-log probe never gates a real fall's event emission — [#1583]
-- [ ] NCT-8. Listing movement courses unnecessarily boots the engine
+- [x] NCT-8. Listing movement courses unnecessarily boots the engine — [#1586]
 - [ ] NCT-9. Legacy river diagnostics present anomalies as tests but never fail
 - [ ] NCT-10. Legacy water diagnostics present anomalies as tests but never fail
 - [ ] NCT-11. Baseline capture accepts variation in its strict worldgen invariants
@@ -343,7 +343,7 @@ that the live movement/fall path writes to the shared injury-event stream.
   pathing-dependent; selecting a deterministic trigger/API requires design
   work, but the absent gating coverage is certain.
 
-### NCT-8. Listing movement courses unnecessarily boots the engine
+### [#1586] NCT-8. Listing movement courses unnecessarily boots the engine
 
 `movement_probe.py --list` is documented as a listing operation, but the
 command starts a headless engine and performs the normal probe bootstrap before
