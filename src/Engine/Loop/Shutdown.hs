@@ -42,8 +42,8 @@ data ShutdownTargets = ShutdownTargets
 --   and GLFW, stop the post-render workers, flush the logger.
 --
 --   That split /is/ the phase boundary the boot modes have always had —
---   combat and sim stop ahead of the render teardown, unit, world,
---   input and Lua after it. 'Engine.Core.Workers' owns which worker
+--   the pre-render phase stops ahead of the render teardown, the
+--   post-render phase after it. 'Engine.Core.Workers' owns which worker
 --   belongs to which phase and in what order, so this and the
 --   fatal-error tail cannot drift apart.
 shutdownEngine ∷ ShutdownTargets → EngineM σ ()
@@ -55,10 +55,12 @@ shutdownEngine targets = do
     state ← gets graphicsState
     let device = vulkanDevice state
 
-    -- Vulkan teardown below runs BEFORE the worker threads stop. That
-    -- is safe only while Vulkan objects are touched exclusively by
-    -- this (main) thread — workers hand pixel data over via
-    -- IORefs/queues and must never call into Vulkan.
+    -- The pre-render phase has already stopped above; the Vulkan
+    -- teardown below precedes only the post-render phase. That is safe
+    -- only while Vulkan objects are touched exclusively by this (main)
+    -- thread — workers hand pixel data over via IORefs/queues and must
+    -- never call into Vulkan, which is what lets the post-render phase
+    -- outlive the teardown.
 
     -- Clear batch manager
     logDebugM CatSystem "Clearing batch manager..."
