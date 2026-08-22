@@ -906,7 +906,7 @@ decodeGenerationFile luaKnownNames luaRequiredNames path = do
     -- only come from something outside this transaction. Classified as
     -- 'GenerationCorrupt' (fallback-eligible) rather than a hard
     -- refusal: the file simply isn't present "in the expected form",
-    -- the same bucket 'World.Save.Envelope.isRecoverableEnvelopeError'
+    -- the same bucket @World.Save.Envelope.isRecoverableEnvelopeError@
     -- already puts a missing/truncated/malformed file in — the OTHER
     -- generation still gets its own independent version of this exact
     -- check before it is ever trusted, so a symlink at BOTH paths still

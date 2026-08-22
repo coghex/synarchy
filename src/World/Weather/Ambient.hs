@@ -14,8 +14,7 @@
 -- is just the first term. Those inputs would fold into 'ambientTempAt' without
 -- reworking the callers.
 module World.Weather.Ambient
-    ( lapseRate
-    , altitudeCooling
+    ( altitudeCooling
     , ambientTempAt
     ) where
 

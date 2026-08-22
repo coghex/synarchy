@@ -1,7 +1,7 @@
 {-# LANGUAGE Strict #-}
 -- | Zoom-map location lifecycle-state icon annotations (#781): a
 --   dedicated dynamic overlay, entirely separate from
---   'World.Render.Zoom.Quads.makeMapQuads' so switching 'ZoomMapMode'
+--   @World.Render.Zoom.Quads.makeMapQuads@ so switching 'ZoomMapMode'
 --   never tints, dims, or hides it. One square, screen-upright quad per
 --   placed location whose definition declares a @map_icon@,
 --   texture-selected live from the page's 'WorldGenParams' lifecycle

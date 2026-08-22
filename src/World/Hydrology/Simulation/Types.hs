@@ -1,7 +1,6 @@
 {-# LANGUAGE Strict #-}
 module World.Hydrology.Simulation.Types
     ( baseSampleSpacing
-    , minRiverDrainageCells
     , effRiverThreshold
     , maxGridDim
     , minLakeDepth
