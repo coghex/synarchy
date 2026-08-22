@@ -25,7 +25,7 @@ approval.
 - [x] NCT-3. Vulkan extension tests require optional, platform-specific capabilities — [#1402]
 - [x] NCT-4. Most graphical GLFW tests validate the upstream binding, not game behavior — [#1573]
 - [x] NCT-5. Graphical device test bypasses the engine's GPU-selection contract — [#1576]
-- [ ] NCT-6. Injury-log probe accepts a `unit.injure` event for the wrong unit
+- [x] NCT-6. Injury-log probe accepts a `unit.injure` event for the wrong unit — [#1579]
 - [ ] NCT-7. Injury-log probe never gates a real fall's event emission
 - [ ] NCT-8. Listing movement courses unnecessarily boots the engine
 - [ ] NCT-9. Legacy river diagnostics present anomalies as tests but never fail
@@ -267,7 +267,7 @@ the selection behavior it ostensibly represents.
 
 ## Manual-only targeted probes
 
-### NCT-6. Injury-log probe accepts a `unit.injure` event for the wrong unit
+### [#1579] NCT-6. Injury-log probe accepts a `unit.injure` event for the wrong unit
 
 The injury-log probe's live `unit.injure` phase reads an event's target, kind,
 and wound kind, but tests only that the returned string contains
