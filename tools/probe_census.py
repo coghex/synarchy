@@ -12,9 +12,13 @@ accumulate current samples.
 
 What a census record holds, for each probe:
 
-* `acceptable_failures` — X, the nullable acceptable-failure count for a
-  commit cohort, with an optional justification. This module STORES the
-  supplied policy value; choosing it is #1430's job.
+* `acceptable_failures` — X, the acceptable-failure count, with the
+  justification a nonzero one must carry. #1430 chose the policy #1428
+  staged: X is the number of failures a COMPLETE ten-run measurement may
+  show and still be acceptable, it is an integer from 0 through 9, X=0
+  is the default every probe starts at, and X above 0 is a maintainer's
+  written decision that a CI-eligible probe may not hold at all. See
+  "The acceptable-failure policy" below.
 * `estimated_worst_case_seconds` — supplied metadata, deliberately
   distinct from the OBSERVED `worst_elapsed_seconds` of a sample.
 * `current` — the current commit cohort: the cohort of the most recently
@@ -73,6 +77,19 @@ sides of a mutation exactly as the schema does. They are distinct from
 #1429's SEMANTIC checks, which stay narrow by design: only the commit
 identity, timestamp and counts the cohort arithmetic itself consumes.
 
+THE ACCEPTABLE-FAILURE POLICY IS CODE TOO (#1430), and asymmetric. The
+schema bounds X to 0..9 while still admitting the null a pre-policy
+census holds; `policy_invariants` closes that null, requires a
+non-whitespace justification above 0, and refuses tolerance on a
+CI-eligible probe — on every mutation's CANDIDATE and on `--validate`,
+but never on the stored side, because `--seed` has to be able to READ a
+null X in order to initialize it to 0. That single initialization is
+the only automatic policy repair there is: a malformed stored X stays
+visible rather than being silently corrected. `tolerance_state` applies
+the threshold, and only to ONE complete ten-run measurement, which
+`policy_sample` picks out of a cohort — a cohort's pooled totals are the
+basis for its RATE, never for a fixed-N threshold.
+
 What is deliberately still absent: any requirement that the census agree
 with the live probe registry, which stays `validate_manifest`'s report
 and `--seed`'s repair. This is not an exhaustive corruption detector
@@ -116,10 +133,12 @@ Usage:
       --stale-after-days 7
   python3 tools/probe_census.py --probe KEY --set-acceptable-failures 2 \
       --justification "two known engine-side races"
-  # X only. Omitting --justification NEVER clears the stored text.
+  # X only. Omitting --justification NEVER clears the stored text, and
+  # an X above 0 needs one already stored or supplied here.
   python3 tools/probe_census.py --probe KEY --set-acceptable-failures 7
-  # The only way to clear it; may not be combined with --justification.
-  python3 tools/probe_census.py --probe KEY --set-acceptable-failures 7 \
+  # The only way to clear it: never combined with --justification, and
+  # only while setting X back to 0.
+  python3 tools/probe_census.py --probe KEY --set-acceptable-failures 0 \
       --clear-justification
   python3 tools/probe_census.py --probe KEY --set-estimate 480
 """
@@ -157,6 +176,30 @@ DOCS_BRANCH = "docs-wip"
 CI_ELIGIBLE = "ci-eligible"
 MANUAL_ONLY = "manual-only"
 LEGACY = "legacy"
+
+# --------------------------------------------------------------------------
+# The acceptable-failure policy (#1430)
+# --------------------------------------------------------------------------
+# X is how many failures a COMPLETE N-run measurement may show and still
+# be acceptable. N is fixed at ten, so the admissible values are 0
+# through 9: an X of ten would declare a probe that fails every single
+# run acceptable, which is not a tolerance but a surrender.
+POLICY_RUN_COUNT = 10
+MIN_ACCEPTABLE_FAILURES = 0
+MAX_ACCEPTABLE_FAILURES = POLICY_RUN_COUNT - 1
+# X=0 is the default and the only value that needs no argument: a probe
+# must pass every run until a maintainer states, in writing, why some
+# failures are acceptable.
+DEFAULT_ACCEPTABLE_FAILURES = 0
+
+# Where one complete ten-run measurement sits against a record's own X.
+TOLERANCE_ACCEPTABLE = "acceptable"
+TOLERANCE_OVER = "over-tolerance"
+# Either the record carries no usable X, or the measurement is not the
+# fixed-N basis the policy is stated against. `probe_flake.py` accepts
+# any positive `--runs`, so such a measurement stays valid data that
+# this threshold simply does not classify.
+TOLERANCE_NOT_COMPARABLE = "not-comparable"
 
 RESULT_SCHEMA = probe_flake.RESULT_SCHEMA
 # The admissible result statuses are the schema's `result_status`
@@ -775,9 +818,14 @@ def classification(key: str) -> str:
 
 
 def empty_census() -> dict:
-    """A census record that has never been measured or given a policy."""
+    """A census record that has never been measured.
+
+    Its policy is not empty: X starts at `DEFAULT_ACCEPTABLE_FAILURES`
+    (#1430), because "this probe must pass every run" is the position
+    every probe holds until someone writes down why it should not.
+    """
     return {
-        "acceptable_failures": None,
+        "acceptable_failures": DEFAULT_ACCEPTABLE_FAILURES,
         "acceptable_failures_justification": None,
         "estimated_worst_case_seconds": None,
         "current": None,
@@ -891,6 +939,210 @@ def validate_manifest(manifest) -> list[str]:
 
 
 # ==========================================================================
+# The acceptable-failure policy (#1430)
+# ==========================================================================
+#
+# #1428 stored a nullable X while the policy was still being chosen.
+# This chooses it, and closes the null: every registered probe has an
+# acceptable-failure count, X=0 is the default, and X above 0 is a
+# maintainer's written decision rather than a bug someone gave up on.
+#
+# The three rules are CROSS-FIELD, which is why they are code and not
+# schema (#1493's split): a justification is a different field from the
+# X it explains, and a row's classification is a different field again.
+# The declared schema still owns X's own type and range.
+#
+# They are applied ASYMMETRICALLY, unlike the schema and the cross-field
+# invariants, which bracket every mutation. A census written before this
+# policy existed holds null Xs, and `--seed` has to be able to READ one
+# in order to initialize them — so these run on the CANDIDATE side of
+# every mutation and on `--validate`, never on the stored side. What no
+# operation may do is INSTALL a policy-invalid census.
+#
+# X and its justification stay independent in the #1479 sense: changing
+# X never rewrites the stored text, and X=0 may keep one. The rule added
+# here is one-directional — X above 0 REQUIRES a reason to be there.
+def _is_x(value) -> bool:
+    """A real integer, for policy purposes.
+
+    `bool` is an `int` subclass, so `True` would otherwise pass as an X
+    of one and `False` as the default. Neither is a count.
+    """
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def require_acceptable_failures(value, what: str) -> int:
+    """`value` as a usable X, or the controlled refusal that names it."""
+    if not _is_x(value):
+        raise CensusError(
+            f"{what} must be an integer from {MIN_ACCEPTABLE_FAILURES} "
+            f"through {MAX_ACCEPTABLE_FAILURES}, got {value!r}")
+    if not MIN_ACCEPTABLE_FAILURES <= value <= MAX_ACCEPTABLE_FAILURES:
+        raise CensusError(
+            f"{what} must be an integer from {MIN_ACCEPTABLE_FAILURES} "
+            f"through {MAX_ACCEPTABLE_FAILURES}: X is counted out of "
+            f"{POLICY_RUN_COUNT} runs, so an X of {POLICY_RUN_COUNT} would "
+            f"accept a probe that never passes. Got {value!r}")
+    return value
+
+
+def policy_record_problems(census, live_classification, where,
+                           name) -> list[str]:
+    """Every acceptable-failure violation in ONE census record.
+
+    `live_classification` is the classification this row is judged
+    against; see `policy_invariants` for which one that is.
+    """
+    value = census.get("acceptable_failures")
+    if value is None:
+        return [f"at {where}, {name} has no acceptable-failure policy (X is "
+                f"null); every probe in the census has one, and "
+                f"`python3 tools/probe_census.py --seed` initializes an unset "
+                f"X to {DEFAULT_ACCEPTABLE_FAILURES}"]
+    try:
+        acceptable = require_acceptable_failures(
+            value, f"at {where}, {name}'s `acceptable_failures`")
+    except CensusError as error:
+        # Reported rather than raised: `--validate` names every offending
+        # row in one pass, and a malformed stored X is exactly the state
+        # that must stay VISIBLE instead of being silently repaired.
+        return [str(error)]
+    if acceptable == MIN_ACCEPTABLE_FAILURES:
+        return []
+    problems: list[str] = []
+    justification = census.get("acceptable_failures_justification")
+    if not isinstance(justification, str) or not justification.strip():
+        problems.append(
+            f"at {where}, {name} accepts {acceptable} failure(s) out of "
+            f"{POLICY_RUN_COUNT} with no stated reason "
+            f"({justification!r}); a tolerance without one is "
+            f"indistinguishable from a bug someone gave up on, so supply it "
+            f"with --justification")
+    if live_classification == CI_ELIGIBLE:
+        problems.append(
+            f"at {where}, {name} accepts {acceptable} failure(s) while it is "
+            f"{CI_ELIGIBLE}; CI stops on a single failure, so tolerance is a "
+            f"manual-only concept — set X to {MIN_ACCEPTABLE_FAILURES} "
+            f"before promoting the probe, rather than letting a promotion "
+            f"erase a maintainer's decision")
+    return problems
+
+
+def _registered_keys() -> set:
+    return {key for key, _script, _purpose in run_probes.PROBES}
+
+
+def policy_invariants(document) -> list[str]:
+    """Every acceptable-failure violation in one census.
+
+    A registered probe is judged against its LIVE classification, not
+    the column stored beside it, so a promotion is caught by the same
+    rule whether or not `--seed` has refreshed the row yet. A row whose
+    probe has LEFT the registry is judged by its own stored
+    classification, which is the only one it still has; that the row is
+    extra at all stays `validate_manifest`'s report.
+
+    A `probe-census/v1` seed carries no census records, so nothing here
+    applies to one — its schema drift is `--seed`'s repair.
+    """
+    registered = _registered_keys()
+    problems: list[str] = []
+    for position, entry in enumerate(document.get("probes") or []):
+        if not isinstance(entry, dict):
+            continue
+        census = entry.get("census")
+        if not isinstance(census, dict):
+            continue
+        key = entry.get("key")
+        known = isinstance(key, str) and key in registered
+        live = classification(key) if known else entry.get("classification")
+        problems += policy_record_problems(
+            census, live, f"$.probes[{position}].census",
+            f"probe {key!r}" if key is not None else "this record")
+    return problems
+
+
+def _refuse_policy(problems: list[str], what: str) -> None:
+    """A controlled refusal naming the first policy violation, or nothing."""
+    if not problems:
+        return
+    more = ("" if len(problems) == 1
+            else f" (and {len(problems) - 1} further violation(s))")
+    raise CensusError(
+        f"{what} violates the acceptable-failure policy: {problems[0]}{more}")
+
+
+def tolerance_state(acceptable_failures, requested_runs, completed_runs,
+                    failure_count) -> str:
+    """Where ONE measurement sits against a record's X.
+
+    Acceptable is `failures <= X` and over tolerance is `failures > X`,
+    so an X of one accepts both 10/10 and 9/10 and rejects 8/10.
+
+    The comparison is made ONLY against a single complete
+    `POLICY_RUN_COUNT`-run measurement, because that is the basis X is
+    stated on. `tools/probe_flake.py` deliberately accepts any positive
+    `--runs`, and a measurement with another run count remains valid
+    data that this simply does not classify — the alternative would be
+    rescaling X, which quietly turns "one failure in ten is acceptable"
+    into a rate the maintainer never agreed to.
+
+    The arguments are ONE measurement's own counts, never a cohort's
+    pooled totals: two five-run measurements are not a ten-run one, and
+    two ten-run measurements are not a twenty-run one. `policy_sample`
+    is what picks the measurement this is asked about.
+
+    Nothing here is a judgement about the PROBE: `tools/ci_probes.py`
+    classifies probes as flaky, base-failing or scenario-heavy, and a
+    breach of this threshold is a fact about one ten-run result.
+    """
+    if not _is_x(acceptable_failures):
+        return TOLERANCE_NOT_COMPARABLE
+    if not (MIN_ACCEPTABLE_FAILURES <= acceptable_failures
+            <= MAX_ACCEPTABLE_FAILURES):
+        return TOLERANCE_NOT_COMPARABLE
+    if not _is_x(requested_runs) or requested_runs != POLICY_RUN_COUNT:
+        return TOLERANCE_NOT_COMPARABLE
+    if not _is_x(completed_runs) or completed_runs != requested_runs:
+        return TOLERANCE_NOT_COMPARABLE
+    if not _is_x(failure_count) or failure_count < 0:
+        return TOLERANCE_NOT_COMPARABLE
+    return (TOLERANCE_ACCEPTABLE if failure_count <= acceptable_failures
+            else TOLERANCE_OVER)
+
+
+def policy_sample(cohort):
+    """The one measurement in `cohort` the policy is evaluated against.
+
+    The LAST-APPENDED complete `POLICY_RUN_COUNT`-run sample, or None
+    when the cohort holds no such measurement.
+
+    Append order is what "newest" already means everywhere in the
+    census: commit hashes do not compare, and #1429 picks the
+    authoritative cohort the same way. A same-commit cohort accumulates
+    runs, so it may hold several measurements or none of the policy's
+    size — and pooling them would answer a question nobody asked. Two
+    five-run measurements would become a ten-run verdict, and two
+    genuine ten-run measurements would total twenty and stop being
+    comparable at all, which is exactly backwards.
+    """
+    if not isinstance(cohort, dict):
+        return None
+    samples = cohort.get("samples")
+    if not isinstance(samples, list):
+        return None
+    for sample in reversed(samples):
+        if not isinstance(sample, dict):
+            continue
+        requested = sample.get("requested_runs")
+        completed = sample.get("completed_runs")
+        if (_is_x(requested) and requested == POLICY_RUN_COUNT
+                and _is_x(completed) and completed == requested):
+            return sample
+    return None
+
+
+# ==========================================================================
 # Migration and inventory reconciliation
 # ==========================================================================
 def _rows(document, what: str) -> list:
@@ -987,9 +1239,11 @@ def reconcile_inventory(document: dict) -> dict:
     back from `ci-eligible` to `manual-only` refreshes its
     `classification` and nothing else — no cohort surgery at all.
 
-    It never deletes a row and never rewrites a census record. A probe
-    that left `run_probes.PROBES` keeps its measurements and is reported
-    by `validate_manifest` as an extra entry, which is a decision for a
+    It never deletes a row and never rewrites a census record beyond
+    #1430's single policy initialization: a record whose
+    `acceptable_failures` is still null gets the default. A probe that
+    left `run_probes.PROBES` keeps its measurements and is reported by
+    `validate_manifest` as an extra entry, which is a decision for a
     person.
     """
     result = migrate_document(document)
@@ -998,6 +1252,21 @@ def reconcile_inventory(document: dict) -> dict:
     present = {entry.get("key") for entry in entries}
     for entry in entries:
         key = entry.get("key")
+        census = entry.get("census")
+        if isinstance(census, dict) and census.get(
+                "acceptable_failures") is None:
+            # #1430's one automatic policy repair: an UNSET X becomes
+            # the default. Every non-null X, justification, estimate,
+            # cohort, sample and attempt is left exactly as it is, and
+            # nothing else about a policy field ever moves here — the
+            # preservation gate permits this single transition and
+            # refuses any other. It runs before the registry-membership
+            # test on purpose, so a row whose probe has left the
+            # registry can still be made policy-valid rather than
+            # blocking `--seed` forever.
+            census = _deep_copy(census)
+            census["acceptable_failures"] = DEFAULT_ACCEPTABLE_FAILURES
+            entry["census"] = census
         if key not in live:
             continue
         entry["script"] = live[key]
@@ -1210,8 +1479,12 @@ def set_policy(document: dict, probe: str, *,
     (#1479). Every unrelated policy field and all measurement history
     are left exactly as they were.
 
-    This module stores the policy it is given, within the ranges the
-    declared schema admits; CHOOSING a value is #1430's.
+    This stores the policy it is given. What makes a stored value
+    ADMISSIBLE is #1430's: the declared schema bounds X, and
+    `policy_invariants` refuses a candidate whose X is null, out of
+    range, tolerant without a reason, or tolerant on a CI-eligible
+    probe. The refusal happens in `update`, so a rejected policy leaves
+    the authoritative bytes exactly as they were.
     """
     entries = _rows(document, "census")
     target_row(document, probe, "a policy update")
@@ -1499,6 +1772,14 @@ def summarize_entry(entry, *, now, stale_after_seconds) -> dict:
     (a skewed clock, an injected evaluation time) is the freshest thing
     there is, never negative, and a negative age would sort ahead of
     every real measurement.
+
+    `tolerance` reports the record's own X against ONE measurement
+    (#1430) — the authoritative cohort's last-appended complete
+    `POLICY_RUN_COUNT`-run sample, never its pooled totals, which are
+    the right basis for `failure_rate` and the wrong one for a
+    fixed-N threshold. It is `not-comparable` when the record has no
+    usable X or that cohort holds no such measurement, an unmeasured
+    probe included.
     """
     if not isinstance(entry, dict):
         raise CensusError(
@@ -1508,10 +1789,17 @@ def summarize_entry(entry, *, now, stale_after_seconds) -> dict:
         raise CensusError(
             f"census entry has no string `key` ({entry.get('key')!r})")
     horizon = require_horizon(stale_after_seconds)
+    census = entry.get("census")
+    acceptable = (census.get("acceptable_failures")
+                  if isinstance(census, dict) else None)
     summary = {
         "key": probe,
         "script": entry.get("script"),
         "classification": entry.get("classification"),
+        "acceptable_failures": acceptable,
+        # A record with no measurement is compared against nothing, so
+        # the policy neither passes nor breaches: it does not apply yet.
+        "tolerance": TOLERANCE_NOT_COMPARABLE,
         "measured": False,
         "cohort": None,
         "commit_sha": None,
@@ -1523,7 +1811,7 @@ def summarize_entry(entry, *, now, stale_after_seconds) -> dict:
         "failure_count": None,
         "failure_rate": None,
     }
-    located = authoritative_cohort(entry.get("census"), probe)
+    located = authoritative_cohort(census, probe)
     if located is None:
         return summary
     cohort, source = located
@@ -1535,6 +1823,15 @@ def summarize_entry(entry, *, now, stale_after_seconds) -> dict:
     summary["cohort"] = source
     summary["age_seconds"] = age
     summary["stale"] = age >= horizon
+    # ONE measurement, never the cohort's pooled totals: X is stated
+    # against a complete ten-run run, so `statistic`'s combined counts
+    # are the wrong basis for it even though they are the right one for
+    # the rate beside it.
+    measurement = policy_sample(cohort)
+    if measurement is not None:
+        summary["tolerance"] = tolerance_state(
+            acceptable, measurement["requested_runs"],
+            measurement["completed_runs"], measurement["failure_count"])
     return summary
 
 
@@ -1857,6 +2154,17 @@ MEASUREMENT_FIELDS = ("current", "history", "attempts")
 INVENTORY_FIELDS = ("key", "script", "classification", "protocol")
 
 
+def _is_initialized_x(was, now) -> bool:
+    """`was`/`now` is exactly the unset-X-to-default transition (#1430).
+
+    `_is_x` rather than a bare `now == DEFAULT_ACCEPTABLE_FAILURES`
+    because `False == 0`, and a candidate that turned an unset X into a
+    boolean has not initialized anything.
+    """
+    return (was is None and _is_x(now)
+            and now == DEFAULT_ACCEPTABLE_FAILURES)
+
+
 def _census_of(entry) -> dict:
     census = (entry or {}).get("census")
     return census if isinstance(census, dict) else {}
@@ -1942,10 +2250,19 @@ def _check_preserved(before, after, touched) -> list[str]:
             # never loses a measurement.
             problems += _append_only(key, was, now)
             for field in POLICY_FIELDS:
-                if now.get(field) != was.get(field):
-                    problems.append(
-                        f"probe {key!r}: reconciliation changed policy field "
-                        f"`{field}`")
+                if now.get(field) == was.get(field):
+                    continue
+                if field == "acceptable_failures" and _is_initialized_x(
+                        was.get(field), now.get(field)):
+                    # The ONE policy transition reconciliation may make
+                    # (#1430): an unset X becomes the default. Stated
+                    # here rather than assumed, so a candidate that
+                    # moves any other policy value — or moves X from
+                    # one number to another — is still refused.
+                    continue
+                problems.append(
+                    f"probe {key!r}: reconciliation changed policy field "
+                    f"`{field}`")
             continue
         allowed = set(touched.get(key) or ())
         if not allowed:
@@ -2094,6 +2411,13 @@ def update(path: Path, mutate) -> dict:
         # would reject.
         _refuse_inconsistent(census_invariants(installed),
                              f"the candidate census for {path}")
+        # The acceptable-failure policy (#1430), on the CANDIDATE only.
+        # Deliberately not bracketed like the two checks above: a census
+        # written before this policy existed holds null Xs, and `--seed`
+        # must be able to read one in order to initialize them. What no
+        # operation may do is install a policy-invalid census.
+        _refuse_policy(policy_invariants(installed),
+                       f"the candidate census for {path}")
         _clear_staging(path.parent)
         if path.exists() and path.read_bytes() == payload:
             # A drift-free `--seed` is genuinely a no-op: leave the file,
@@ -2158,16 +2482,30 @@ def seed(repo_root: str | None = None) -> Path:
 # ==========================================================================
 # CLI
 # ==========================================================================
-def _optional_int(text: str, what: str) -> int | None:
-    """`none`, or an integer. Range policy is #1430's, not this tool's."""
+def _acceptable_failures_argument(text: str) -> int:
+    """`--set-acceptable-failures`'s argument, as a stored X.
+
+    There is deliberately no `none` here any more. #1428 staged a
+    nullable X while the policy was still being chosen; #1430 chose it,
+    and every probe in the census now has one — "must pass every run" is
+    spelled `0`, not "unset".
+    """
     if text == "none":
-        return None
+        raise CensusError(
+            f"--set-acceptable-failures takes an integer from "
+            f"{MIN_ACCEPTABLE_FAILURES} through {MAX_ACCEPTABLE_FAILURES}; "
+            f"there is no `none` X, because every probe in the census has a "
+            f"policy — `--set-acceptable-failures "
+            f"{DEFAULT_ACCEPTABLE_FAILURES}` is how \"must pass every run\" "
+            f"is stated")
     try:
-        return int(text)
+        value = int(text)
     except ValueError:
         raise CensusError(
-            f"{what} takes an integer or the literal `none`, got "
-            f"{text!r}") from None
+            f"--set-acceptable-failures takes an integer from "
+            f"{MIN_ACCEPTABLE_FAILURES} through {MAX_ACCEPTABLE_FAILURES}, "
+            f"got {text!r}") from None
+    return require_acceptable_failures(value, "--set-acceptable-failures")
 
 
 def _optional_number(text: str, what: str) -> float | int | None:
@@ -2236,20 +2574,31 @@ def _companion_arguments(args) -> dict | None:
     if not args.probe:
         raise CensusError("--probe KEY is required for a policy update")
     if setting_x:
+        acceptable = _acceptable_failures_argument(
+            args.set_acceptable_failures)
         # The three cases are decided by which FLAG was supplied, never
         # by what its text says: an in-band magic value would make some
         # legitimate justification (`none`, `keep`) unstorable, which is
         # the defect #1479 closes. `--justification` therefore stores
         # its argument verbatim, whatever it spells.
         if args.clear_justification:
+            # An X above the default must say why it is there, so
+            # clearing its reason in the same breath would install a
+            # tolerance nobody can account for. Refused at the argument
+            # layer, where it costs no census read.
+            if acceptable != MIN_ACCEPTABLE_FAILURES:
+                raise CensusError(
+                    f"--clear-justification is valid only while setting X to "
+                    f"{MIN_ACCEPTABLE_FAILURES}: an X of {acceptable} needs a "
+                    f"stated reason, so clearing it would leave a tolerance "
+                    f"with none")
             justification = None
         elif args.justification is None:
             justification = KEEP
         else:
             justification = args.justification
         return {
-            "acceptable_failures": _optional_int(
-                args.set_acceptable_failures, "--set-acceptable-failures"),
+            "acceptable_failures": acceptable,
             "justification": justification,
         }
     return {"estimate": _optional_number(args.set_estimate, "--set-estimate")}
@@ -2297,10 +2646,12 @@ def render_summary(summaries: list[dict]) -> str:
     abbreviation is not that hash.
     """
     header = (f"{'probe':<34}{'measured (UTC)':<22}"
-              f"{'age':>9}{'runs':>7}{'fail':>6}{'rate':>8}"
-              f"  {'state':<18}commit")
+              f"{'age':>9}{'runs':>7}{'fail':>6}{'X':>4}{'rate':>8}"
+              f"  {'tolerance':<16}{'state':<18}commit")
     lines = [header, "-" * len(header)]
     for summary in summaries:
+        policy = summary["acceptable_failures"]
+        acceptable = "-" if policy is None else str(policy)
         if summary["measured"]:
             commit = summary["commit_sha"]
             measured_at = summary["measured_at"]
@@ -2314,8 +2665,9 @@ def render_summary(summaries: list[dict]) -> str:
             commit = measured_at = age = runs = fails = "-"
             state = "unmeasured"
         lines.append(f"{summary['key']:<34}{measured_at:<22}"
-                     f"{age:>9}{runs:>7}{fails:>6}{_rate_text(summary):>8}"
-                     f"  {state:<18}{commit}")
+                     f"{age:>9}{runs:>7}{fails:>6}{acceptable:>4}"
+                     f"{_rate_text(summary):>8}"
+                     f"  {summary['tolerance']:<16}{state:<18}{commit}")
     return "\n".join(lines) + "\n"
 
 
@@ -2339,7 +2691,12 @@ def main(argv: list[str] | None = None) -> int:
                             "commit it was measured on, its age and whether "
                             "it is stale")
     group.add_argument("--set-acceptable-failures", metavar="N",
-                       help="store X for --probe (an integer, or `none`)")
+                       help=f"store X for --probe: the failures a complete "
+                            f"{POLICY_RUN_COUNT}-run measurement may show, "
+                            f"as an integer from {MIN_ACCEPTABLE_FAILURES} "
+                            f"through {MAX_ACCEPTABLE_FAILURES}. Above "
+                            f"{MIN_ACCEPTABLE_FAILURES} it needs a stored or "
+                            f"supplied --justification")
     group.add_argument("--set-estimate", metavar="SECONDS",
                        help="store the estimated worst-case duration for "
                             "--probe (a number of seconds, or `none`)")
@@ -2364,8 +2721,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="the justification stored beside X, verbatim; omit "
                          "to leave the stored one exactly as it was")
     ap.add_argument("--clear-justification", action="store_true",
-                    help="clear the stored justification; the only way to, "
-                         "and never implied by omitting --justification")
+                    help=f"clear the stored justification; the only way to, "
+                         f"never implied by omitting --justification, and "
+                         f"valid only while setting X to "
+                         f"{MIN_ACCEPTABLE_FAILURES}")
     args = ap.parse_args(argv)
 
     # Argument validation runs FIRST, for every operation. `--print`
@@ -2423,7 +2782,11 @@ def main(argv: list[str] | None = None) -> int:
         # at all should say so, rather than being reported as ninety
         # missing probes.
         validate_census(document, f"census {path}")
-        problems = validate_manifest(document)
+        # Inventory drift and the acceptable-failure policy (#1430) are
+        # both reported here, in one pass, rather than raised: a person
+        # fixing a census wants every row that needs attention, not the
+        # first one.
+        problems = validate_manifest(document) + policy_invariants(document)
     except DocsWorktreeMissing as error:
         print(f"probe_census: {error}", file=sys.stderr)
         return 2
