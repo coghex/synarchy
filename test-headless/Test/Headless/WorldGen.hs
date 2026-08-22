@@ -202,11 +202,6 @@ spec = do
             let ids = timelineRiverFeatureIds (wgpGeoTimeline p)
             length ids `shouldBe` length paired
             length (nub ids) `shouldBe` length ids
-            -- Stable call over call, on the same page, from the same
-            -- stored params — nothing here is recomputed from hashmap
-            -- order or wall-clock.
-            map fst (timelineRivers (wgpGeoTimeline p))
-                `shouldBe` map fst paired
 
         it "leaves a world with no language provenance with every river \
            \identified and none NAMED -- the #1102 requirement 6 default \

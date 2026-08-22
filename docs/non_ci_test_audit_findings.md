@@ -23,9 +23,9 @@ approval.
 - [x] NCT-1. Graphical GLFW “set time” test does not test setting time — [#1400]
 - [x] NCT-2. Graphical Vulkan lifecycle tests never destroy their raw instances — [#1401]
 - [x] NCT-3. Vulkan extension tests require optional, platform-specific capabilities — [#1402]
-- [ ] NCT-4. Most graphical GLFW tests validate the upstream binding, not game behavior — [deferred]: awaits #1153's build-only record
-- [ ] NCT-5. Graphical device test bypasses the engine's GPU-selection contract
-- [ ] NCT-6. Injury-log probe accepts a `unit.injure` event for the wrong unit
+- [x] NCT-4. Most graphical GLFW tests validate the upstream binding, not game behavior — [#1573]
+- [x] NCT-5. Graphical device test bypasses the engine's GPU-selection contract — [#1576]
+- [x] NCT-6. Injury-log probe accepts a `unit.injure` event for the wrong unit — [#1579]
 - [ ] NCT-7. Injury-log probe never gates a real fall's event emission
 - [ ] NCT-8. Listing movement courses unnecessarily boots the engine
 - [ ] NCT-9. Legacy river diagnostics present anomalies as tests but never fail
@@ -177,17 +177,7 @@ machine's driver inventory rather than the engine's cross-platform contract.
 - **Remaining uncertainty:** The exact extension inventory varies by Vulkan
   loader/driver, which is precisely why an unconditional test is unsuitable.
 
-### [deferred] NCT-4. Most graphical GLFW tests validate the upstream binding, not game behavior
-
-> **Deferred:** The retained smoke set is a policy question #1153 has not
-> answered — it explicitly puts "running the graphical suite anywhere" out of
-> scope while committing to record `test/` as build-only. Filing now would guess
-> between deleting these examples, relabelling them a manual preflight, and
-> writing project-owned coverage that could only run in a suite nothing
-> executes; the pure part is already covered headless by
-> `Test.Headless.Graphics.WindowMode` (27 examples, incl. `appliedModeAtCreation`).
-> Clears when #1153 lands and `test/`'s build-only status is recorded in
-> `CLAUDE.md` and the cabal stanza.
+### [#1573] NCT-4. Most graphical GLFW tests validate the upstream binding, not game behavior
 
 Most of the graphical GLFW suite unwraps the raw GLFW handle and calls the
 upstream `Graphics.UI.GLFW` API directly.  Beyond the one-time suite setup
@@ -232,7 +222,7 @@ This concern is the usefulness of the surrounding group as regression tests.
   policy decision, but the current tests' lack of project-owned assertions is
   directly observable.
 
-### NCT-5. Graphical device test bypasses the engine's GPU-selection contract
+### [#1576] NCT-5. Graphical device test bypasses the engine's GPU-selection contract
 
 The graphical device smoke test takes the first physical device returned by
 the Vulkan driver and attempts to create a logical device from it.  Production
@@ -277,7 +267,7 @@ the selection behavior it ostensibly represents.
 
 ## Manual-only targeted probes
 
-### NCT-6. Injury-log probe accepts a `unit.injure` event for the wrong unit
+### [#1579] NCT-6. Injury-log probe accepts a `unit.injure` event for the wrong unit
 
 The injury-log probe's live `unit.injure` phase reads an event's target, kind,
 and wound kind, but tests only that the returned string contains
