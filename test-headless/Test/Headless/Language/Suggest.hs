@@ -84,9 +84,24 @@ spec = describe "world-name suggestions" $ do
                 langs = map (langSeedWord ∘ worldLanguageSeed) seeds
             length (nub langs) `shouldBe` length (nub seeds)
 
-        it "is stable for a given world seed" $
-            map (langSeedWord ∘ worldLanguageSeed) sampleSeeds
-                `shouldBe` map (langSeedWord ∘ worldLanguageSeed) sampleSeeds
+        -- Injectivity above and non-identity below both survive ANY
+        -- relabelling of the mapping, so between them they still admit
+        -- a derivation change that silently renames every existing
+        -- world's language. This table is the only thing pinning the
+        -- mapping ITSELF. Its right-hand side was computed
+        -- independently from the construction 'worldLanguageSeed'
+        -- documents — @fmix64 (seed `xor` 0x576C616E67536431)@,
+        -- reimplemented outside Haskell — rather than captured from a
+        -- run of the function under test (#1368).
+        it "maps each world seed to one fixed language seed" $
+            map (langSeedWord ∘ worldLanguageSeed)
+                ([0, 1, 42, 1337, 0xFFFFFFFF] ∷ [Word64])
+                `shouldBe`
+                    [  3786218519592930629
+                    ,  4113614416671679263
+                    , 12594706351022957199
+                    , 13288172387750703019
+                    , 16325447759613160233 ]
 
         -- Equivalent SPELLINGS of a seed are normalized to one number
         -- before reaching here (settingsTab.seedNumber / generation.lua
@@ -97,9 +112,26 @@ spec = describe "world-name suggestions" $ do
                 `shouldBe` []
 
     describe "determinism" $ do
-        it "offers the same sequence for the same seed" $
-            forM_ sampleSeeds $ \s →
-                suggestionsFor prodCat s 12 `shouldBe` suggestionsFor prodCat s 12
+        -- Everything else in this module checks the sequence against
+        -- itself or against a property: the two path-agreement examples
+        -- below, the reroll diversity, the phonology signature, the
+        -- shape coverage, the length bounds and the cross-seed
+        -- distinctness all still hold of a DIFFERENT but equally valid
+        -- sequence. This is the one example that would notice one
+        -- (#1368). Its expected side is literal on purpose — nothing in
+        -- 'pinnedSeed42' is recomputed through 'suggestionsFor',
+        -- 'suggestNameAt', 'worldLanguageSeed' or either renderer,
+        -- because an expectation drawn from the code under test is the
+        -- tautology this replaced.
+        --
+        -- Growing data/language/concepts.yaml moves the draws and so
+        -- moves these four values. Re-capture them deliberately; do not
+        -- soften the assertion to survive catalogue edits, which is the
+        -- coverage it exists to give.
+        it "offers one pinned sequence for a fixed world seed" $
+            [ (nsExpr sug, nsName sug, nsGloss sug, nsSeed sug, nsVersion sug)
+            | sug ← suggestionsFor prodCat 42 4 ]
+                `shouldBe` pinnedSeed42
 
         it "renders both readings from one expression" $
             forM_ sampleSeeds $ \s → do
@@ -382,6 +414,32 @@ evalDebug ls src = unquote ⊚ executeDebugLua (lbsLuaState ls) src
 
 tshow ∷ Int → Text
 tshow = T.pack ∘ show
+
+-- | The first four suggestions world seed 42 offers at generator
+--   version 5, written out as literals.
+--
+--   Each row is one press of the Create World dice: the meaning, the
+--   native name and English gloss the player reads, and the #1092
+--   provenance the accepted name would be recorded with. The language
+--   seed is the same value the table in "language seed derived from the
+--   world seed" pins for seed 42, and the version is spelled out rather
+--   than taken from 'currentGeneratorVersion' — a generator bump
+--   reshapes the whole sequence, so it should land here as a visible
+--   change rather than being absorbed silently.
+pinnedSeed42 ∷ [(NameExpr, Text, Text, LangSeed, GeneratorVersion)]
+pinnedSeed42 =
+    [ ( Modifier (ConceptId "AMBER") (ConceptId "SOUL")
+      , "Janehba-fbahfahiv", "Amber Soul", seed42, gen5 )
+    , ( Bare (ConceptId "OMEN")
+      , "Abwvi", "Omen", seed42, gen5 )
+    , ( Of (ConceptId "DEMON") Singular (ConceptId "CROSSING")
+      , "Wezvij-velihzan", "Demon of Crossing", seed42, gen5 )
+    , ( Bare (ConceptId "MIDNIGHT")
+      , "Ynaij", "Midnight", seed42, gen5 )
+    ]
+  where
+    seed42 = LangSeed 12594706351022957199
+    gen5   = GeneratorVersion 5
 
 -- | Which of the five shapes an expression took, as report text.
 shapeOf ∷ NameExpr → String
