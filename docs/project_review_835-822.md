@@ -11,7 +11,7 @@ PR #832's committed building-footprint expansion, #831's tile-Z UI-wiring regres
 - [x] PRR-1. Soil receivers can credit a high neighbour that cannot shed any soil — [#1591]
 - [x] PRR-2. Slot-aware occupancy still stores only one pending construction job per tile — [#1595]
 - [ ] PRR-3. The location-content probe shares four fixed temporary fixture paths and never cleans them — [deferred]: NCT-22 unprocessed
-- [ ] PRR-4. A freshwater tile above four lower neighbours is still forced back to a flat slope
+- [x] PRR-4. A freshwater tile above four lower neighbours is still forced back to a flat slope — [#1600]
 - [ ] PRR-5. The save barrier can snapshot Lua before processing causal messages produced by acknowledged owners
 - [ ] PRR-6. Negative-infinite pathing cost is clamped to a free step
 - [ ] PRR-7. The repository-wide lenient UTF-8 invariant has no automated static gate
@@ -98,7 +98,7 @@ PR #832's committed building-footprint expansion, #831's tile-Z UI-wiring regres
 
 ## 4. Four-way freshwater drops
 
-### PRR-4. A freshwater tile above four lower neighbours is still forced back to a flat slope
+### [#1600] PRR-4. A freshwater tile above four lower neighbours is still forced back to a flat slope
 
 > **Captured note:** Give the all-four-lower case an explicit representable waterfall treatment instead of converting its computed slope mask to zero. PR #828 broadened every neighbour test to recognize multi-level drops, then deliberately erases all four results when they happen together.
 
