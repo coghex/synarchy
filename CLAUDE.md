@@ -1135,11 +1135,27 @@ classification `engine.listSaves()` exposes. Full contract: **Subsystem probes
 
 **Enum schema policy:** `Direction`, `Pose`, `UnitActivity` (and any
 enum serialized via `Generic Serialize`) are positional by constructor
-tag — **append-only**. Inserting/reordering silently corrupts saves;
-anything beyond appending requires a `currentSaveVersion` bump. A
+tag — **append-only**. Inserting/reordering silently corrupts saves. A
 constructor's own FIELDS are positional too, so reordering them or
 changing one field's serialized type corrupts saves the same way while
 moving no tag (#1270).
+
+Anything beyond appending is a **per-component migration**, never a
+`currentSaveVersion` change — that marker does not gate on-disk
+compatibility (see the architecture note below). Find EVERY component
+storing the enum — `Direction` is stored by both `units`
+(`UnitInstanceDTO.uidFacing`) and `unit-sim`
+(`UnitSimStateDTO.simFacing`), while `Pose` and `UnitActivity` are
+`unit-sim`'s alone — and for each: raise its `csVersion`, freeze the
+outgoing DTO, and register that frozen type in `csOlderVersions` via
+`atVersion` with an explicit migration. `componentCodec` derives
+`ccInputVers` from those declarations, so the reader gains the new
+version while retaining every version it already accepted. The frozen
+DTO must carry a frozen COPY of the old constructor order,
+transitively — the `Pose` nested in `UnitActivity` included — never the
+live enum, which would decode the old tags against the new order and
+reintroduce the very corruption being migrated around. `unitSimCodec`'s
+existing v1/v2 entries are the exemplar.
 
 Enforced since #1145 by `tools/enum_append_only_audit.py` (CI + `make
 ci`, with its own `--self-test`), which is the authority on which types

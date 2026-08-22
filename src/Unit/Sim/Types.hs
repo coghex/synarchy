@@ -156,8 +156,22 @@ data MoveTarget = MoveTarget
 --
 --   APPEND-ONLY. `Generic Serialize` is positional by constructor tag,
 --   so inserting or reordering constructors silently shifts every saved
---   unit's `usPose`. If the pose set legitimately needs to change, bump
---   `currentSaveVersion` in `World.Save.Types`.
+--   unit's `usPose`. The `unit-sim` component stores it
+--   (`UnitSimStateDTO.simPose`/`simPostTransition`, and nested inside
+--   `simState`'s `TransitioningTo`) in `World.Save.Component.Entities`.
+--
+--   If the pose set legitimately needs to change, migrate that
+--   component; `currentSaveVersion` is a bookkeeping marker and does
+--   not gate on-disk compatibility. Raise `unitSimCodec`'s `csVersion`,
+--   freeze the outgoing DTO, and register that frozen type in
+--   `csOlderVersions` via `atVersion` with an explicit migration —
+--   `componentCodec` derives `ccInputVers` from those declarations, so
+--   the reader gains the new version while retaining every version it
+--   already accepted. The frozen DTO must carry a frozen COPY of the
+--   old `Pose` order rather than this live type, transitively — the
+--   copy nested in its frozen `UnitActivity` included — or the old tags
+--   decode against the new order. `unitSimCodec`'s existing v1/v2
+--   entries are the shape to copy.
 data Pose = Standing | Crouching | Crawling | Collapsed | Dead | Climbing | Falling | Sleeping
     deriving (Show, Eq, Generic, Serialize)
 
@@ -188,7 +202,17 @@ poseDepth Sleeping  = 3
 -- | The current activity the unit is doing. Drives anim selection and
 --   movement gating. APPEND-ONLY for the same reason as `Pose` and
 --   `Direction` — `Generic Serialize` is positional. New activities go
---   at the end; replacements bump `currentSaveVersion`.
+--   at the end. The `unit-sim` component stores it
+--   (`UnitSimStateDTO.simState`) in `World.Save.Component.Entities`;
+--   replacing or reordering a constructor — or changing the `Pose`
+--   payload `TransitioningTo` carries — needs that component migrated
+--   exactly as `Pose` above describes: raise `unitSimCodec`'s
+--   `csVersion`, freeze the outgoing DTO into `csOlderVersions` via
+--   `atVersion` with an explicit migration (`componentCodec` then
+--   derives a `ccInputVers` that gains the new version and retains the
+--   old ones), and freeze a COPY of the old constructor order — this
+--   enum's and the nested `Pose`'s — inside it. `currentSaveVersion`
+--   does not gate on-disk compatibility.
 data UnitActivity = Idle | Walking | Drinking | Eating | Picking | TransitioningTo !Pose | Running
     deriving (Show, Eq, Generic, Serialize)
 

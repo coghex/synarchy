@@ -20,8 +20,24 @@ import Data.Serialize (Serialize)
 --   in `dirIndex`/`indexToDir`, and (2) `Generic`-derived `Serialize` is
 --   positional by constructor tag, so reordering or inserting a
 --   constructor silently maps existing saved `usFacing` values to the
---   wrong direction. If the geometry ever needs different cardinality
---   (16-way etc.), bump `currentSaveVersion` in `World.Save.Types`.
+--   wrong direction.
+--
+--   TWO save components store this enum, both in
+--   `World.Save.Component.Entities`: `units`
+--   (`UnitInstanceDTO.uidFacing`) and `unit-sim`
+--   (`UnitSimStateDTO.simFacing`). If the geometry ever needs different
+--   cardinality (16-way etc.), or the order otherwise has to change,
+--   BOTH must be migrated; `currentSaveVersion` is a bookkeeping marker
+--   and does not gate on-disk compatibility. For each component: raise
+--   its `csVersion`, freeze the outgoing DTO, and register that frozen
+--   type in `csOlderVersions` via `atVersion` with an explicit
+--   migration — `componentCodec` derives `ccInputVers` from those
+--   declarations, so the reader gains the new version while retaining
+--   every version it already accepted. The frozen DTO must carry a
+--   frozen COPY of the old constructor order, not this live type;
+--   reusing the live enum decodes the old tags against the new order,
+--   which is the corruption the migration exists to prevent.
+--   `unitSimCodec`'s existing v1/v2 entries are the shape to copy.
 data Direction = DirS | DirSW | DirW | DirNW | DirN | DirNE | DirE | DirSE
     deriving (Show, Eq, Ord, Enum, Bounded, Generic, Serialize)
 
