@@ -108,6 +108,7 @@ loadBuildingYamlFn env backendState = do
                             , bdAnimations      = animMap
                             , bdStateAnims      = stateAnims
                             , bdPowerDrain      = bydPowerDrain def
+                            , bdPowerNode       = bydPowerNode def
                             }
                     atomicModifyIORef' (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
                         (bm { bmDefs = HM.insert name bdef (bmDefs bm) }, ())
