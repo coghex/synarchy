@@ -252,13 +252,17 @@ def test_record_shape() -> None:
     print("\n-- the record, and byte-stable serialization --")
     empty = probe_census.empty_census()
     expect(empty == {
-        "acceptable_failures": None,
+        "acceptable_failures": 0,
         "acceptable_failures_justification": None,
         "estimated_worst_case_seconds": None,
         "current": None,
         "history": [],
         "attempts": [],
     }, "an empty census record is exactly the six specified fields")
+    expect(empty["acceptable_failures"] == 0
+           and empty["acceptable_failures_justification"] is None,
+           "a fresh record starts at X=0 with no justification: it must pass "
+           "every run until someone writes down why not (#1430)")
     expect(probe_census.empty_census() is not empty
            and probe_census.empty_census()["history"] is not empty["history"],
            "each empty record is a fresh object, never a shared default")
@@ -407,6 +411,7 @@ def test_reconciliation() -> None:
                  "classification": "manual-only", "protocol": "legacy",
                  "census": {**probe_census.empty_census(),
                             "acceptable_failures": 1,
+                            "acceptable_failures_justification": "one race",
                             "current": {"commit_sha": COMMIT_A,
                                         "samples": [sample_record("kept")]},
                             "attempts": [attempt_record("retired-attempt")]}},
@@ -426,7 +431,7 @@ def test_reconciliation() -> None:
                 {"key": "beta", "script": "beta_probe.py",
                  "classification": "manual-only", "protocol": "legacy",
                  "census": {**probe_census.empty_census(),
-                            "acceptable_failures": 9,
+                            "acceptable_failures": 0,
                             "current": {"commit_sha": COMMIT_A,
                                         "samples": [sample_record("beta-1")]},
                             "attempts": [attempt_record("beta-attempt")]}},
@@ -465,7 +470,7 @@ def test_reconciliation() -> None:
                                         "samples": [sample_record("beta-1")]}],
                "the promoted cohort is ARCHIVED into history, never dropped")
         expect(promoted["attempts"] == [attempt_record("beta-attempt")]
-               and promoted["acceptable_failures"] == 9,
+               and promoted["acceptable_failures"] == 0,
                "promotion keeps attempts and policy fields")
 
         # The reverse transition refreshes the classification only.
@@ -611,30 +616,36 @@ def test_policy() -> None:
                "omitting --justification LEAVES the existing one unchanged")
 
         probe_census.record_policy(path, "alpha", justification=None,
-                                   acceptable_failures=5)
+                                   acceptable_failures=0)
         expect(census_of()["acceptable_failures_justification"] is None
-               and census_of()["acceptable_failures"] == 5,
+               and census_of()["acceptable_failures"] == 0,
                "an explicit clear removes the justification only")
 
         probe_census.record_policy(path, "alpha", estimate=480)
         record = census_of()
         expect(record["estimated_worst_case_seconds"] == 480
-               and record["acceptable_failures"] == 5,
+               and record["acceptable_failures"] == 0,
                "--set-estimate stores the estimate and keeps X")
 
         probe_census.record_policy(path, "alpha",
                                    justification="restored", acceptable_failures=5)
-        probe_census.record_policy(path, "alpha", acceptable_failures=None)
+        probe_census.record_policy(path, "alpha", acceptable_failures=1)
         record = census_of()
-        expect(record["acceptable_failures"] is None
+        expect(record["acceptable_failures"] == 1
                and record["acceptable_failures_justification"] == "restored",
-               "clearing X leaves its justification alone (#1479)")
+               "lowering X leaves its justification alone (#1479)")
         expect(record["estimated_worst_case_seconds"] == 480,
-               "clearing X leaves the estimate alone")
+               "lowering X leaves the estimate alone")
+        probe_census.record_policy(path, "alpha", acceptable_failures=0)
+        expect(census_of()["acceptable_failures_justification"] == "restored",
+               "and X=0 may keep a justification: only an explicit clear "
+               "removes one")
 
         probe_census.record_policy(path, "alpha", estimate=None)
         expect(census_of()["estimated_worst_case_seconds"] is None,
                "--set-estimate none clears the estimate")
+        expect(census_of()["acceptable_failures"] == 0,
+               "clearing the estimate leaves X alone")
         expect(census_of()["current"] == measured["current"],
                "no policy command ever disturbed the measurements")
         expect(census_of("beta") == probe_census.empty_census(),
@@ -646,6 +657,423 @@ def test_policy() -> None:
             "a --probe naming no census row is refused",
             "nosuch", "no census row")
         unchanged(path, before, "a refused policy update changes no bytes")
+
+        # #1430 closed the nullable X #1428 staged. The library refuses
+        # it through the same `update` funnel the CLI does, so the
+        # authoritative bytes survive either route.
+        expect_refusal(lambda: probe_census.record_policy(
+            path, "alpha", acceptable_failures=None),
+            "storing a null X is refused, naming --seed as the repair",
+            "no acceptable-failure policy", "--seed")
+        unchanged(path, before, "...and that refusal changed no bytes")
+
+
+# ==========================================================================
+def _legacy_policy_census() -> dict:
+    """A `probe-census/v2` census written BEFORE #1430 chose the policy.
+
+    Every row's X is still the null #1428 staged, and two rows carry
+    real accumulated data, so the initialization has something it could
+    plausibly damage.
+    """
+    def row(key, census):
+        return {"key": key, "script": f"{key}_probe.py",
+                "classification": "manual-only", "protocol": "legacy",
+                "census": census}
+
+    return {
+        "schema": "probe-census/v2",
+        "probes": [
+            row("alpha", {"acceptable_failures": None,
+                          "acceptable_failures_justification": "kept text",
+                          "estimated_worst_case_seconds": 480,
+                          "current": {"commit_sha": COMMIT_A,
+                                      "samples": [sample_record("alpha-1")]},
+                          "history": [{"commit_sha": COMMIT_B,
+                                       "samples": [sample_record("old",
+                                                                 COMMIT_B)]}],
+                          "attempts": [attempt_record("a-1", COMMIT_B),
+                                       attempt_record("a-2")]}),
+            row("beta", {**probe_census.empty_census(),
+                         "acceptable_failures": 3,
+                         "acceptable_failures_justification": "three races"}),
+            row("retired", {**probe_census.empty_census(),
+                            "acceptable_failures": None}),
+        ],
+    }
+
+
+def test_acceptable_failure_policy_defaults() -> None:
+    """#1430: every probe has an X, X=0 is the default, and only null moves."""
+    print("\n-- X defaults to 0, and only an UNSET X is initialized --")
+    with registry(), scratch() as root:
+        path = root / "probe_census.json"
+        document = seeded(path)
+        expect(all(row["census"]["acceptable_failures"] == 0
+                   for row in document["probes"]),
+               "a fresh seed gives every registered probe X=0")
+        expect(all(row["census"]["acceptable_failures_justification"] is None
+                   for row in document["probes"]),
+               "and none of them a justification, which only X>0 needs")
+
+        # Coverage is derived from the LIVE registry, never a frozen
+        # count: a probe registered after the census was written is
+        # appended with the same default.
+        legacy = root / "legacy.json"
+        legacy.write_text(json.dumps(v1_document()), encoding="utf-8")
+        migrated = probe_census.ensure_document(legacy)
+        expect([row["key"] for row in migrated["probes"]]
+               == [key for key, _s, _p in SYNTHETIC],
+               "a v1 migration covers exactly the live registry")
+        expect(all(row["census"]["acceptable_failures"] == 0
+                   for row in migrated["probes"]),
+               "every v1-migrated and newly appended row is seeded at X=0")
+
+        extra = list(SYNTHETIC) + [("delta", "delta_probe.py", "a new probe")]
+        with registry(probes=extra):
+            grown = probe_census.ensure_document(path)
+        expect({row["key"] for row in grown["probes"]}
+               == {key for key, _s, _p in extra},
+               "a probe registered later is appended by --seed")
+        expect([row["census"]["acceptable_failures"]
+                for row in grown["probes"]] == [0, 0, 0, 0],
+               "and it arrives at X=0 like every other row")
+
+    # An existing v2 census whose X is still null: ONLY that field moves.
+    with registry(probes=[("alpha", "alpha_probe.py", "one"),
+                          ("beta", "beta_probe.py", "two")]), scratch() as root:
+        path = root / "probe_census.json"
+        stored = _legacy_policy_census()
+        path.write_text(json.dumps(stored), encoding="utf-8")
+        result = probe_census.ensure_document(path)
+        rows = {row["key"]: row["census"] for row in result["probes"]}
+
+        expect(rows["alpha"]["acceptable_failures"] == 0,
+               "--seed initializes an unset X to 0")
+        expect(rows["alpha"]["acceptable_failures_justification"]
+               == "kept text"
+               and rows["alpha"]["estimated_worst_case_seconds"] == 480,
+               "...and touches neither the justification nor the estimate")
+        expect(rows["alpha"]["current"] == stored["probes"][0]["census"]["current"]
+               and rows["alpha"]["history"]
+               == stored["probes"][0]["census"]["history"]
+               and rows["alpha"]["attempts"]
+               == stored["probes"][0]["census"]["attempts"],
+               "...and no cohort, sample or attempt at all")
+        expect(rows["beta"] == stored["probes"][1]["census"],
+               "a row whose X is already set is left exactly as it was")
+        expect(rows["retired"]["acceptable_failures"] == 0,
+               "a row whose probe left the registry is initialized too, so a "
+               "legacy census can always be made policy-valid")
+
+        # Idempotent, and a second seed is a genuine no-op.
+        before = path.read_bytes()
+        probe_census.ensure_document(path)
+        unchanged(path, before, "a second --seed initializes nothing further")
+
+
+def test_acceptable_failure_policy_rules() -> None:
+    """The three rules, each with its own rejecting case."""
+    print("\n-- X is bounded, justified above 0, and manual-only above 0 --")
+    with registry(ci_eligible={"beta"}), scratch() as root:
+        path = root / "probe_census.json"
+        seeded(path)
+
+        probe_census.record_policy(path, "alpha", acceptable_failures=2,
+                                   justification="two engine-side races")
+        stored = json.loads(path.read_text(encoding="utf-8"))
+        rows = {row["key"]: row["census"] for row in stored["probes"]}
+        expect(rows["alpha"]["acceptable_failures"] == 2,
+               "a justified tolerance on a manual-only probe is stored")
+        before = path.read_bytes()
+
+        # (1) the range, at both ends and just past the top.
+        for value in (0, 9):
+            probe_census.record_policy(path, "alpha",
+                                       acceptable_failures=value,
+                                       justification="stated")
+            expect(json.loads(path.read_text(encoding="utf-8"))["probes"][0][
+                       "census"]["acceptable_failures"] == value,
+                   f"X={value} is inside the admissible range")
+        before = path.read_bytes()
+        for value, why, fragment in (
+                (10, "X=10 would accept a probe that never passes", "10"),
+                (-1, "a negative X is not a count", "-1"),
+                (True, "a boolean X (`bool` is an `int` subclass)", "True"),
+                (2.5, "a fractional X", "2.5"),
+                ("3", "a string X", "'3'"),
+                (None, "a null X", "no acceptable-failure policy")):
+            expect_refusal(
+                lambda v=value: probe_census.record_policy(
+                    path, "alpha", acceptable_failures=v),
+                f"storing {value!r} as X is refused ({why})", fragment)
+            unchanged(path, before, f"...and wrote nothing ({value!r})")
+
+        # (2) X>0 needs a reason, and whitespace is not one.
+        probe_census.record_policy(path, "alpha", acceptable_failures=0,
+                                   justification=None)
+        before = path.read_bytes()
+        for text, why in ((None, "a cleared justification"),
+                          ("", "an empty justification"),
+                          ("   \t\n ", "a whitespace-only justification")):
+            expect_refusal(
+                lambda t=text: probe_census.record_policy(
+                    path, "alpha", acceptable_failures=1, justification=t),
+                f"X=1 with {why} is refused",
+                "no stated reason", "--justification")
+            unchanged(path, before, f"...and wrote nothing ({why})")
+        expect(probe_census.record_policy(
+            path, "alpha", acceptable_failures=1,
+            justification="one known race") == "alpha",
+            "the same X with a real reason is accepted")
+
+        # A stored reason satisfies it: a later X change need not resupply.
+        probe_census.record_policy(path, "alpha", acceptable_failures=4)
+        expect(json.loads(path.read_text(encoding="utf-8"))["probes"][0][
+                   "census"]["acceptable_failures_justification"]
+               == "one known race",
+               "an X change reuses the STORED reason rather than demanding "
+               "one again (#1479's independence survives)")
+
+        # (3) tolerance is a manual-only concept.
+        before = path.read_bytes()
+        expect_refusal(
+            lambda: probe_census.record_policy(
+                path, "beta", acceptable_failures=1, justification="a race"),
+            "a tolerance on a CI-eligible probe is refused",
+            "ci-eligible", "manual-only concept")
+        unchanged(path, before, "...and wrote nothing")
+        probe_census.record_policy(path, "beta", acceptable_failures=0)
+        expect(json.loads(path.read_text(encoding="utf-8"))["probes"][1][
+                   "census"]["acceptable_failures"] == 0,
+               "X=0 on a CI-eligible probe is exactly what it must be")
+
+
+def test_acceptable_failure_policy_promotion() -> None:
+    """A promotion may not silently erase a maintainer's tolerance."""
+    print("\n-- promotion requires X to be reset first --")
+    with scratch() as root:
+        path = root / "probe_census.json"
+        with registry():
+            seeded(path)
+            probe_census.record_policy(path, "beta", acceptable_failures=3,
+                                       justification="three races")
+            probe_census.record_result(path, result_document(probe="beta"))
+        before = path.read_bytes()
+
+        with registry(ci_eligible={"beta"}):
+            expect_refusal(
+                lambda: probe_census.ensure_document(path),
+                "--seed refuses to promote a row that still holds a "
+                "tolerance", "beta", "ci-eligible", "manual-only concept")
+            unchanged(path, before,
+                      "...and the maintainer's X survives the refusal")
+            expect(json.loads(path.read_text(encoding="utf-8"))["probes"][1][
+                       "census"]["acceptable_failures"] == 3,
+                   "the stored tolerance really is still 3, not erased")
+
+            # A row that is policy-invalid blocks every mutation, which
+            # is what keeps it VISIBLE instead of quietly repaired.
+            expect_refusal(
+                lambda: probe_census.record_policy(
+                    path, "alpha", acceptable_failures=0),
+                "an unrelated policy update is blocked while it stands",
+                "beta")
+
+            # Resetting X is the one move that unblocks it, and the
+            # promotion then archives the cohort as it always did.
+            probe_census.record_policy(path, "beta", acceptable_failures=0)
+            result = probe_census.ensure_document(path)
+        beta = {row["key"]: row for row in result["probes"]}["beta"]
+        expect(beta["classification"] == "ci-eligible"
+               and beta["census"]["current"] is None
+               and len(beta["census"]["history"]) == 1,
+               "with X reset, promotion archives the cohort as usual")
+        expect(beta["census"]["acceptable_failures_justification"]
+               == "three races",
+               "and the maintainer's written reason is still there to read")
+
+
+def test_acceptable_failure_threshold() -> None:
+    """Failures <= X is acceptable; failures > X is over tolerance."""
+    print("\n-- the threshold, at X and at X+1 --")
+    N = probe_census.POLICY_RUN_COUNT
+    for x in range(probe_census.MIN_ACCEPTABLE_FAILURES,
+                   probe_census.MAX_ACCEPTABLE_FAILURES + 1):
+        expect(probe_census.tolerance_state(x, N, N, x)
+               == probe_census.TOLERANCE_ACCEPTABLE,
+               f"X={x}: exactly {x} failure(s) in {N} runs is acceptable")
+        expect(probe_census.tolerance_state(x, N, N, x + 1)
+               == probe_census.TOLERANCE_OVER,
+               f"X={x}: {x + 1} failure(s) in {N} runs is over tolerance")
+    expect(probe_census.tolerance_state(0, N, N, 0)
+           == probe_census.TOLERANCE_ACCEPTABLE
+           and probe_census.tolerance_state(0, N, N, 1)
+           == probe_census.TOLERANCE_OVER,
+           "X=0 means a clean sweep, and one failure breaches it")
+    expect(probe_census.tolerance_state(1, N, N, 0)
+           == probe_census.TOLERANCE_ACCEPTABLE
+           and probe_census.tolerance_state(1, N, N, 1)
+           == probe_census.TOLERANCE_ACCEPTABLE,
+           "X=1 accepts both 10/10 and 9/10")
+
+    # The basis is a COMPLETE fixed-N measurement, and nothing else.
+    for runs, why in ((N - 1, "a shorter run"), (N + 1, "a longer run"),
+                      (0, "no runs at all")):
+        expect(probe_census.tolerance_state(0, runs, runs, 0)
+               == probe_census.TOLERANCE_NOT_COMPARABLE,
+               f"{why} is not classified against a policy stated out of {N}")
+    expect(probe_census.tolerance_state(0, N, N - 1, 0)
+           == probe_census.TOLERANCE_NOT_COMPARABLE,
+           "and an INCOMPLETE ten-run measurement is not one either")
+    for value, why in ((None, "a null X"), (True, "a boolean X"),
+                       (2.5, "a fractional X"), (10, "an out-of-range X")):
+        expect(probe_census.tolerance_state(value, N, N, 0)
+               == probe_census.TOLERANCE_NOT_COMPARABLE,
+               f"{why} classifies nothing")
+    expect(probe_census.tolerance_state(1, N, N, None)
+           == probe_census.TOLERANCE_NOT_COMPARABLE
+           and probe_census.tolerance_state(1, N, N, -1)
+           == probe_census.TOLERANCE_NOT_COMPARABLE,
+           "an unusable failure count classifies nothing either")
+
+    # The measurement it is asked about is ONE sample, never a cohort's
+    # pooled totals: two five-run measurements are not a ten-run one,
+    # and two ten-run measurements are not a twenty-run one.
+    def sized(runs, failures, mark):
+        return {"requested_runs": runs, "completed_runs": runs,
+                "failure_count": failures, "retained_artifacts": [mark]}
+
+    expect(probe_census.policy_sample({"samples": []}) is None
+           and probe_census.policy_sample({}) is None
+           and probe_census.policy_sample(None) is None,
+           "a cohort with no samples has no policy measurement")
+    expect(probe_census.policy_sample(
+        {"samples": [sized(5, 0, "a"), sized(5, 3, "b")]}) is None,
+        "two five-run samples do NOT add up to a ten-run measurement")
+    picked = probe_census.policy_sample(
+        {"samples": [sized(N, 0, "first"), sized(N, 4, "second")]})
+    expect(picked is not None and picked["retained_artifacts"] == ["second"],
+           "two ten-run samples stay comparable, and the LAST appended one "
+           "is the current measurement")
+    picked = probe_census.policy_sample(
+        {"samples": [sized(N, 0, "ten"), sized(3, 0, "three")]})
+    expect(picked is not None and picked["retained_artifacts"] == ["ten"],
+           "a later odd-sized run does not hide the newest ten-run one")
+    expect(probe_census.policy_sample(
+        {"samples": [{"requested_runs": N, "completed_runs": N - 1,
+                      "failure_count": 0}]}) is None,
+        "an incomplete ten-run sample is not a policy measurement")
+    expect(probe_census.policy_sample({"samples": [7, None]}) is None,
+           "and a malformed sample is skipped rather than raised on")
+
+
+def test_acceptable_failure_policy_cli() -> None:
+    """`--validate` reports policy violations, and `--summary` shows X."""
+    print("\n-- the policy through the CLI --")
+    with registry(ci_eligible={"beta"}), cli_repo() as (_, path):
+        cli("--seed")
+        code, out, err = cli("--validate")
+        expect(code == 0, "a freshly seeded census validates")
+
+        stored = json.loads(path.read_text(encoding="utf-8"))
+        stored["probes"][0]["census"]["acceptable_failures"] = 5
+        stored["probes"][1]["census"]["acceptable_failures"] = 2
+        stored["probes"][1]["census"][
+            "acceptable_failures_justification"] = "a race"
+        path.write_text(json.dumps(stored, indent=2) + "\n", encoding="utf-8")
+        before = path.read_bytes()
+
+        code, _, err = cli("--validate")
+        expect(code == 1 and "alpha" in err and "no stated reason" in err,
+               "--validate reports an unjustified tolerance")
+        expect("beta" in err and "ci-eligible" in err,
+               "--validate reports a tolerance on a CI-eligible probe in the "
+               "SAME pass, rather than stopping at the first")
+        unchanged(path, before, "--validate reads and never repairs")
+
+        # A null X is reported with the repair that fixes it.
+        stored["probes"][0]["census"]["acceptable_failures"] = None
+        stored["probes"][1]["census"]["acceptable_failures"] = 0
+        path.write_text(json.dumps(stored, indent=2) + "\n", encoding="utf-8")
+        code, _, err = cli("--validate")
+        expect(code == 1 and "no acceptable-failure policy" in err
+               and "--seed" in err,
+               "--validate names --seed as the repair for an unset X")
+        code, _, _ = cli("--seed")
+        expect(code == 0, "and --seed performs it")
+        code, _, _ = cli("--validate")
+        expect(code == 0, "after which the census validates")
+
+        # --summary reports X and where the newest cohort sits against it.
+        cli("--probe", "alpha", "--set-acceptable-failures", "1",
+            "--justification", "one known race")
+        code, out, _ = cli("--summary", "--json")
+        rows = {row["key"]: row for row in json.loads(out)}
+        expect(rows["alpha"]["acceptable_failures"] == 1
+               and rows["alpha"]["tolerance"] == "not-comparable",
+               "an unmeasured probe reports its X and no comparison")
+        code, out, _ = cli("--summary")
+        expect(code == 0 and "tolerance" in out and "not-comparable" in out,
+               "the human table carries the policy columns")
+
+    # End to end, through real ingested measurements: the classification
+    # is ONE sample's, never the cohort's pooled totals.
+    N = probe_census.POLICY_RUN_COUNT
+    with registry(), scratch() as root:
+        def tolerance(path):
+            return summary_of(path)["tolerance"]
+
+        # A single complete ten-run measurement, at X and at X+1.
+        for failures, expected in ((1, "acceptable"), (2, "over-tolerance")):
+            path = root / f"one-{failures}.json"
+            seeded(path)
+            probe_census.record_policy(path, "alpha", acceptable_failures=1,
+                                       justification="one known race")
+            probe_census.record_result(
+                path, measurement(runs=N, failures=failures, age_days=1))
+            expect(tolerance(path) == expected,
+                   f"a single {N}-run measurement with {failures} failure(s) "
+                   f"against X=1 is {expected}")
+
+        # Split: two five-run measurements on one commit pool to ten
+        # runs, and must NOT be read as a ten-run result.
+        path = root / "split.json"
+        seeded(path)
+        probe_census.record_policy(path, "alpha", acceptable_failures=1,
+                                   justification="one known race")
+        probe_census.record_result(path, measurement(runs=5, failures=0,
+                                                     age_days=2))
+        probe_census.record_result(path, measurement(runs=5, failures=3,
+                                                     age_days=1))
+        expect(summary_of(path)["requested_runs"] == 2 * 5,
+               "the cohort really does pool to ten runs")
+        expect(tolerance(path) == "not-comparable",
+               "...and two five-run measurements are still not a ten-run "
+               "result, so the policy does not classify them")
+
+        # Repeated: two complete ten-run measurements on one commit pool
+        # to twenty, which must not stop them being comparable.
+        path = root / "repeated.json"
+        seeded(path)
+        probe_census.record_policy(path, "alpha", acceptable_failures=1,
+                                   justification="one known race")
+        probe_census.record_result(path, measurement(runs=N, failures=0,
+                                                     age_days=2))
+        probe_census.record_result(path, measurement(runs=N, failures=5,
+                                                     age_days=1))
+        expect(summary_of(path)["requested_runs"] == 2 * N,
+               "the cohort pools to twenty runs")
+        expect(tolerance(path) == "over-tolerance",
+               "...and the newest ten-run measurement is what classifies, "
+               "rather than the pooled total falling out of the policy")
+
+        # An odd-sized run afterwards does not erase the last real one.
+        probe_census.record_result(path, measurement(runs=3, failures=0,
+                                                     age_days=0))
+        expect(tolerance(path) == "over-tolerance",
+               "a later three-run measurement leaves the newest ten-run "
+               "verdict standing")
 
 
 # ==========================================================================
@@ -737,16 +1165,16 @@ def test_refusals() -> None:
         unchanged(path, before, "not one refusal changed the census bytes")
 
         # CLI value parsing.
-        expect_refusal(lambda: probe_census._optional_int("2.5", "--x"),
-                       "a non-integer X is refused", "integer", "none")
+        expect_refusal(
+            lambda: probe_census._acceptable_failures_argument("2.5"),
+            "a non-integer X is refused", "integer", "2.5")
         expect_refusal(lambda: probe_census._optional_number("soon", "--e"),
                        "a non-numeric estimate is refused", "number", "none")
         expect_refusal(lambda: probe_census._optional_number("nan", "--e"),
                        "a non-finite estimate is refused (JSON has no NaN)",
                        "finite")
-        expect(probe_census._optional_int("none", "--x") is None
-               and probe_census._optional_number("none", "--e") is None,
-               "the literal `none` clears a nullable field")
+        expect(probe_census._optional_number("none", "--e") is None,
+               "the literal `none` clears the nullable estimate")
         expect(probe_census._optional_number("480", "--e") == 480
                and isinstance(probe_census._optional_number("480", "--e"), int),
                "an integral estimate stays an integer")
@@ -1567,6 +1995,15 @@ def test_declared_schema() -> None:
                 "acceptable_failures", -1),
              "$.probes[0].census.acceptable_failures", "a negative X"),
             (lambda d: d["probes"][0]["census"].__setitem__(
+                "acceptable_failures", 10),
+             "$.probes[0].census.acceptable_failures",
+             "an X of 10, which would accept a probe that never passes"),
+            (lambda d: d["probes"][0]["census"].__setitem__(
+                "acceptable_failures", True),
+             "$.probes[0].census.acceptable_failures",
+             "a boolean X (`bool` is an `int` subclass, so this needs its "
+             "own rejection)"),
+            (lambda d: d["probes"][0]["census"].__setitem__(
                 "estimated_worst_case_seconds", -1),
              "$.probes[0].census.estimated_worst_case_seconds",
              "a negative estimate"),
@@ -2151,20 +2588,21 @@ def test_cli_justification() -> None:
                == "two known engine-side races",
                "raising X without --justification KEEPS the stored "
                "justification (#1479 requirement 1)")
-        # Requirement 1 promises the same for the clearing path, which
+        # Requirement 1 promises the same for the lowering path, which
         # is the one that used to clear the text as a side effect.
-        code, _, _ = cli("--probe", "alpha", "--set-acceptable-failures",
-                         "none")
-        expect(code == 0 and stored()["acceptable_failures"] is None
+        # (#1430 replaced its `none` spelling: there is no null X.)
+        code, _, _ = cli("--probe", "alpha", "--set-acceptable-failures", "1")
+        expect(code == 0 and stored()["acceptable_failures"] == 1
                and stored()["acceptable_failures_justification"]
                == "two known engine-side races",
-               "--set-acceptable-failures none without --justification "
-               "keeps it too")
+               "lowering X without --justification keeps it too")
 
-        # (b) the explicit clear, and only the explicit clear, clears.
-        code, _, _ = cli("--probe", "alpha", "--set-acceptable-failures", "3",
+        # (b) the explicit clear, and only the explicit clear, clears —
+        # and since #1430 it is valid only while setting X back to 0,
+        # because an X above 0 must state why it is there.
+        code, _, _ = cli("--probe", "alpha", "--set-acceptable-failures", "0",
                          "--clear-justification")
-        expect(code == 0 and stored()["acceptable_failures"] == 3
+        expect(code == 0 and stored()["acceptable_failures"] == 0
                and stored()["acceptable_failures_justification"] is None,
                "--clear-justification clears the stored justification")
         expect(stored()["acceptable_failures_justification"] is None
@@ -2178,6 +2616,15 @@ def test_cli_justification() -> None:
         expect(code != 0 and "--clear-justification" in err,
                "--justification and --clear-justification together are "
                "refused, never silently resolved")
+        before = path.read_bytes()
+        code, _, err = cli("--probe", "alpha", "--set-acceptable-failures", "3",
+                           "--clear-justification")
+        expect(code != 0 and "--clear-justification" in err
+               and "0" in err,
+               "--clear-justification while raising X is refused: a "
+               "tolerance may not be left with no stated reason")
+        expect(path.read_bytes() == before,
+               "...and that argument refusal never reached the census")
 
         # (c) every literal round-trips: no in-band magic string.
         for text in ("keep", "none", "  padded  ", "KEEP"):
@@ -2189,6 +2636,23 @@ def test_cli_justification() -> None:
         expect(stored()["acceptable_failures"] == 4
                and stored("beta") == probe_census.empty_census(),
                "and no justification command disturbed X or another row")
+
+        # #1430: the staging spelling #1428 accepted is now refused,
+        # naming the value that replaced it.
+        before = path.read_bytes()
+        for value, why, fragment in (
+                ("none", "there is no null X", "none"),
+                ("10", "an X of 10 accepts a probe that never passes", "10"),
+                ("-1", "a negative X", "-1"),
+                ("true", "a boolean X", "true"),
+                ("2.5", "a fractional X", "2.5")):
+            code, _, err = cli("--probe", "alpha",
+                               "--set-acceptable-failures", value)
+            expect(code == 1 and "--set-acceptable-failures" in err
+                   and fragment in err,
+                   f"--set-acceptable-failures {value} is refused ({why})")
+        expect(path.read_bytes() == before,
+               "and not one of those refusals touched the census")
 
 
 def test_cli() -> None:
@@ -3273,7 +3737,12 @@ def test_summary_cli() -> None:
 def main() -> int:
     for test in (test_record_shape, test_migration, test_seed_and_noop,
                  test_reconciliation, test_ingest_accepted,
-                 test_ingest_harness_error, test_policy, test_refusals,
+                 test_ingest_harness_error, test_policy,
+                 test_acceptable_failure_policy_defaults,
+                 test_acceptable_failure_policy_rules,
+                 test_acceptable_failure_policy_promotion,
+                 test_acceptable_failure_threshold,
+                 test_acceptable_failure_policy_cli, test_refusals,
                  test_malformed_rows_refuse_cleanly,
                  test_duplicate_target_rows,
                  test_adversarial_malformed_input,
