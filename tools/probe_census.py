@@ -27,7 +27,10 @@ What a census record holds, for each probe:
   `history` first. No cohort or sample is ever overwritten or discarded.
 * `history` — archived cohorts, append-only, retained forever. A probe
   promoted to CI eligibility keeps its history; it just stops receiving
-  current samples.
+  current samples. #1431 made that last clause a storage invariant
+  rather than a convention: `--record` refuses a live CI-eligible probe
+  outright (`refuse_ci_eligible_measurement`), so a result document
+  produced before the promotion cannot reopen a cohort afterwards.
 * `attempts` — an append-only log of well-formed ingestion attempts. A
   well-formed harness-error result is logged but contributes no sample
   and no aggregate.
@@ -2074,17 +2077,24 @@ def _clear_staging(directory: Path) -> None:
                 pass
 
 
-def _atomic_replace(target: Path, payload: bytes) -> None:
+def _atomic_replace(target: Path, payload: bytes, *, what: str = "census",
+                    prefix: str = STAGING_PREFIX) -> None:
     """Install `payload` as `target` in one step.
 
     The staging file is a SIBLING so the rename never crosses a
     filesystem, the bytes are fsynced before the rename so a crash
     cannot promote a short file, and the directory is fsynced after so
     the rename itself is durable.
+
+    `what` and `prefix` name the artifact for a caller that is not the
+    census itself — `tools/probe_census_page.py` writes the generated
+    page into the same directory, and needs a staging prefix
+    `_clear_staging` does NOT sweep, since that sweep runs under the
+    census lock and would otherwise unlink a live page staging file.
     """
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, staged = tempfile.mkstemp(dir=str(target.parent),
-                                  prefix=STAGING_PREFIX, suffix=STAGING_SUFFIX)
+                                  prefix=prefix, suffix=STAGING_SUFFIX)
     staged_path = Path(staged)
     try:
         # `mkstemp` creates with O_EXCL, so the staging path cannot be a
@@ -2093,7 +2103,7 @@ def _atomic_replace(target: Path, payload: bytes) -> None:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             raise CensusError(
-                f"refusing to use {staged_path}: the census staging file must "
+                f"refusing to use {staged_path}: the {what} staging file must "
                 f"be a regular file with exactly one link")
         with os.fdopen(fd, "wb") as handle:
             handle.write(payload)
@@ -2442,6 +2452,33 @@ def ensure_document(path: Path) -> dict:
     return update(path, mutate)
 
 
+def refuse_ci_eligible_measurement(probe: str) -> None:
+    """A CI-eligible probe takes no census sample (#1431).
+
+    "A promoted probe receives no further census samples" is a STORAGE
+    invariant, not only a reporting one. `probe_flake.resolve_probe`
+    already refuses to RUN a CI-eligible probe, but a result document
+    outlives the run that produced it: one measured before a promotion,
+    or replayed from an artifact tree afterwards, would otherwise be
+    ingested into a row whose classification says it is CI's now.
+    Eligibility is read LIVE from `tools/ci_probes.py`, the same
+    authority `classification` reads, never from the stored row — a
+    census not yet reconciled by `--seed` still holds the old label.
+
+    The refusal covers a harness error too. It is not a judgement about
+    the sample: nothing about a promoted probe belongs in the census's
+    append-only record, and its retained history stays exactly as the
+    promotion left it.
+    """
+    if probe in ci_probes.CI_ELIGIBLE:
+        raise CensusError(
+            f"probe {probe!r} is CI-eligible, so the census accepts no "
+            f"measurement for it: CI runs it on every matching PR, and a "
+            f"promoted probe keeps its manifest row and its retained history "
+            f"while receiving no further samples. tools/ci_probes.py is the "
+            f"authority on that classification.")
+
+
 def record_result(path: Path, result) -> str:
     """Ingest one `probe-flake-result/v1` document. Returns the probe.
 
@@ -2450,8 +2487,13 @@ def record_result(path: Path, result) -> str:
     read. That ordering is what makes `runs[i].checks` safe to reach at
     all: a truthy non-object there used to raise from inside the
     transaction rather than refuse in front of it.
+
+    Live CI eligibility is refused in the same place and for the same
+    reason: in front of the lock, so a promoted probe's census bytes
+    are never even opened for a measurement it may not receive.
     """
     validate_result(result)
+    refuse_ci_eligible_measurement(result["probe"])
     touched: list[str] = []
 
     def mutate(before):
