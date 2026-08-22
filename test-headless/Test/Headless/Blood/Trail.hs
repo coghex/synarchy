@@ -839,9 +839,35 @@ poolPlacementSpec = describe "Blood.Pool.poolLayerOffset — placement" $ do
                   `shouldSatisfy` (≤ ptJitterRadius defaultPoolThresholds + 1e-5))
               [ (s, i) | s ← [0, 1, 7, 4242], i ← [0 .. 40] ]
 
-    it "is deterministic — the same (seed, index) always places the same layer" $
-        poolLayerOffset defaultPoolThresholds 99 4
-            `shouldBe` poolLayerOffset defaultPoolThresholds 99 4
+    -- The expectation below is HAND-DERIVED from the formula documented
+    -- on 'Blood.Pool.poolLayerOffset', not transcribed from a run of the
+    -- implementation, so it is a real oracle rather than a restatement:
+    --
+    --   n    = max 1 (ptMaxLayers pt)                  = 12
+    --   frac = fromIntegral (max 0 (min idx n)) / n    = 4 / 12
+    --   r    = max 0 (ptJitterRadius pt) * sqrt frac
+    --        = 0.35 * sqrt (1/3)                       = 0.20207259
+    --   ang  = idx * 2.399963 + (seed `mod` 360) * (pi / 180)
+    --        = 4 * 2.399963 + 99 * (pi / 180)          = 11.32772796
+    --   x    = r * cos ang                             =  0.06589178
+    --   y    = r * sin ang                             = -0.19102776
+    --
+    -- Components are compared separately against those hard-coded
+    -- numbers; recomputing the formula on the expectation side would
+    -- reproduce whatever the implementation does and prove nothing.
+    -- 1e-5 is the tolerance this file already uses for Float placement
+    -- comparisons, and comfortably covers single-precision rounding
+    -- (the derivation above is exact to ~1e-7 of what Float produces).
+    --
+    -- A failure here means the spiral MOVED — a deliberate decision
+    -- about how a pool spreads (the golden angle, the radius growth, or
+    -- the seed rotation), to be re-derived from the new formula rather
+    -- than copied from the new output.
+    it "places seed 99's layer 4 at the golden-angle spiral point the \
+       \documented formula gives" $ do
+        let (x, y) = poolLayerOffset defaultPoolThresholds 99 4
+        x `shouldSatisfy` (\v → abs (v -   0.06589178) < 1e-5)
+        y `shouldSatisfy` (\v → abs (v - (-0.19102776)) < 1e-5)
 
     it "successive layers never land on top of each other (overlapping, \
        \not stacked)" $ do

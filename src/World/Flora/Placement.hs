@@ -1,7 +1,6 @@
 {-# LANGUAGE Strict #-}
 module World.Flora.Placement
     ( computeChunkFlora
-    , speciesFitness
     , speciesFitnessDetail
     , FitnessFactor(..)
     ) where
@@ -165,7 +164,7 @@ instanceCount cat h
 --   ALL instances get an offset (including trees with count=1). The
 --   offset is clamped by the footprint so the base stays on the tile.
 --   Health is the tile's habitat fitness (#332): the same 0–1
---   'speciesFitness' that gated placement, so a plant in marginal
+--   @speciesFitness@ that gated placement, so a plant in marginal
 --   habitat starts (and stays — climate is static) less healthy, which
 --   slows its derived growth (World.Flora.Growth).
 --
@@ -266,7 +265,7 @@ data FitnessFactor = FitnessFactor
     , ffMax    ∷ !Float
     } deriving (Show, Eq)
 
--- | Same scoring as 'speciesFitness', but also returns the per-factor
+-- | Same scoring as @speciesFitness@, but also returns the per-factor
 --   breakdown (temperature, precipitation, humidity, altitude, slope,
 --   soil) that produced it.
 speciesFitnessDetail ∷ FloraWorldGen → Word8 → Word8

@@ -1,7 +1,6 @@
 {-# LANGUAGE Strict #-}
 module World.Render.ChunkCulling
-    ( bestWrapOffset
-    , isChunkVisibleWrapped
+    ( isChunkVisibleWrapped
     , isChunkRelevantForSlice
     ) where
 

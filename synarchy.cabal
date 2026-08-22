@@ -779,7 +779,6 @@ library
                      World.Hydrology.River.Meander
                      World.Hydrology.River.Tributary
                      World.Hydrology.River.Carving
-                     World.Hydrology.River.Common
                      World.Hydrology.Glacier
                      World.Hydrology.Glacier.Common
                      World.Hydrology.Glacier.Generation
@@ -1223,6 +1222,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Render.WaterSlope
                    Test.Headless.World.Render.ZoomBakeUV
                    Test.Headless.Render.ViewportGuard
+                   Test.Headless.Render.QuadVertices
                    Test.Headless.Core.ConfigState
                    Test.Headless.Core.Queue
                    Test.Headless.Core.DebugListener

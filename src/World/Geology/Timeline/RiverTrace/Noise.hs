@@ -1,7 +1,6 @@
 {-# LANGUAGE Strict #-}
 module World.Geology.Timeline.RiverTrace.Noise
     ( addPathNoise
-    , coherentNoise
     ) where
 import UPrelude
 import World.Geology.Hash

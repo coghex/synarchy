@@ -117,11 +117,11 @@ data LavaShape
 --   on save-load.
 data VolcanoCtx = VolcanoCtx
     { vcSources    ∷ !(V.Vector MagmaSource)
-      -- ^ Vector (not list) so 'sourceContains' indexing is O(1).
+      -- ^ Vector (not list) so @sourceContains@ indexing is O(1).
     , vcIndex      ∷ !(HM.HashMap ChunkCoord [Int])
       -- ^ Per-chunk candidate-source list. Indices into 'vcSources'.
     , vcHotspotIndex ∷ !(HM.HashMap ChunkCoord [Int])
-      -- ^ Wider per-chunk index for 'sumHotspots'. Each source's
+      -- ^ Wider per-chunk index for @sumHotspots@. Each source's
       --   bbox is padded by @3σ@ (where @σ = 2× surface radius@) so
       --   any chunk where a Gaussian contribution would be
       --   non-negligible is in the candidate list.
@@ -130,7 +130,7 @@ data VolcanoCtx = VolcanoCtx
     } deriving (Show, Eq, Generic, NFData)
 
 -- | An empty context, suitable for 'defaultWorldGenParams' and any
---   pre-init code path. 'lavaAt' through this context returns False
+--   pre-init code path. @lavaAt@ through this context returns False
 --   for any z at or above the (noise-only) mantle baseline.
 emptyVolcanoCtx ∷ VolcanoCtx
 emptyVolcanoCtx = VolcanoCtx
