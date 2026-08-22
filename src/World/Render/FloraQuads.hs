@@ -12,15 +12,8 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld
                                            , packWorldUV)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
-                  , worldLayer, applyFacing, GridConfig(..), defaultGridConfig)
+                  , worldLayer, applyFacing, baseTileW, baseTileH)
 import World.Types
-
--- | Tile pixel dimensions — must match GridConfig.
-baseTileW ∷ Float
-baseTileW = fromIntegral (gcTilePixelWidth defaultGridConfig)   -- 96
-
-baseTileH ∷ Float
-baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)  -- 64
 
 floraToQuad
     ∷ (TextureHandle → Int)

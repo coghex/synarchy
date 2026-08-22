@@ -4,6 +4,8 @@ module World.Grid
       GridConfig(..)
     , defaultGridConfig
       -- * Derived constants (from defaultGridConfig)
+    , baseTileW
+    , baseTileH
     , tileWidth
     , tileHeight
     , tileSideHeight
@@ -72,6 +74,16 @@ defaultGridConfig = GridConfig
 
 -- | All derived values computed from defaultGridConfig.
 -- These are top-level CAFs — computed once, shared everywhere.
+
+-- | Sprite width in pixels, as a Float. Paired with 'tileWidth' as a
+--   pixels-to-world-space ratio when scaling a texture onto a quad.
+baseTileW ∷ Float
+baseTileW = fromIntegral (gcTilePixelWidth defaultGridConfig)
+
+-- | Sprite height in pixels, as a Float. The 'tileHeight' counterpart
+--   of 'baseTileW'.
+baseTileH ∷ Float
+baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)
 
 tileWidth ∷ Float
 tileWidth = gcWorldTileWidth defaultGridConfig
