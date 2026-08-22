@@ -12,7 +12,9 @@ import Unit.Injury
 spec ∷ Spec
 spec = do
     describe "tissueInjuryKind (tissue-driven, body-plan agnostic)" $ do
-        it "structural tissue fractures, regardless of mechanism" $ do
+        it "structural tissue fractures regardless of mechanism -- a \
+           \combat-broken bone (slash) and a fall-broken bone (blunt) are \
+           \the SAME kind" $ do
             tissueInjuryKind "bone"      "blunt" `shouldBe` Just "fracture"
             tissueInjuryKind "bone"      "slash" `shouldBe` Just "fracture"
             tissueInjuryKind "cartilage" "blunt" `shouldBe` Just "fracture"
@@ -33,9 +35,6 @@ spec = do
             tissueInjuryKind "steel" "slash" `shouldBe` Nothing
             tissueInjuryKind "wool"  "blunt" `shouldBe` Nothing
             tissueInjuryKind ""      "blunt" `shouldBe` Nothing
-
-        it "a combat-broken bone and a fall-broken bone are the SAME kind" $
-            tissueInjuryKind "bone" "blunt" `shouldBe` tissueInjuryKind "bone" "blunt"
 
     describe "isBodyTissue" $
         it "separates living tissue from armour" $ do
