@@ -11,7 +11,7 @@ PR #279's original soil-shedding omission was closed by the later erosion-credit
 - [x] PRR-1. Popup and event-log coordinates can navigate the wrong world page — [#1588]
 - [x] PRR-2. Dismiss-all cannot clear queued popups before bootstrap — [#1592]
 - [x] PRR-3. The lake-hole audit ignores higher surrounding lake surfaces — [no-issue]
-- [ ] PRR-4. Nested item identity collapses distinct child-instance state
+- [x] PRR-4. Nested item identity collapses distinct child-instance state — [#1597]
 
 ## 1. Page-scoped popup navigation
 
@@ -107,7 +107,7 @@ PR #279's original soil-shedding omission was closed by the later erosion-credit
 
 ## 4. Nested item-instance identity
 
-### PRR-4. Nested item identity collapses distinct child-instance state
+### [#1597] PRR-4. Nested item identity collapses distinct child-instance state
 
 > **Captured note:** Preserve all gameplay-relevant child-instance state when a container contributes to an item row's identity, and do not summarize nested contents solely by definition name. Containers whose children differ in quality, weight, temperature, sharpness, fill, or condition must not be treated as interchangeable or expose one arbitrary representative as the whole group.
 
