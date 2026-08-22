@@ -1114,7 +1114,12 @@ TTL can outlive every supported measurement; a background renewer refreshes
 the lease while the probe runs, and the lease only has to exceed one run's
 worst case. A long, supported measurement therefore never becomes
 reclaimable, while a dead holder's claim lapses one lease after its last
-renewal. Every acquisition mints a unique token, and release, renewal and
+renewal. Two things make that real rather than nominal: the orchestration
+boundary **refuses** a `--lease-seconds` below twice one run's timeout,
+because a lease that can elapse while a single run is still going hands the
+probe to a second agent mid-measurement; and claim timestamps carry
+microseconds, because whole-second stamps round a lease DOWN — a sub-second
+lease would be born already expired. Every acquisition mints a unique token, and release, renewal and
 takeover are all checked against it: concurrent reclaimers of one lapsed claim
 yield exactly one successor, and an expired owner that exits late finds a
 token that is not its own and leaves the successor alone. An empty, truncated
@@ -1128,8 +1133,11 @@ stops having created no artifact directory, no result document and no census
 entry, reporting the current owner and the claim's age; record the acquisition
 in the census BEFORE the probe runs, releasing the claim and refusing outright
 if that write fails or no `docs-wip` census is reachable; measure, renewing
-throughout; ingest the result — success or harness error — while still
-holding the claim; release, token-checked.
+throughout; CHECK against the claim file that the claim is still ours and
+still live, and if it is not, ingest NOTHING — a probe two agents may have
+been measuring at once has no attributable result, so the artifacts are kept
+and the run reports the loss; otherwise ingest the result, success or harness
+error, while still holding the claim; release, token-checked.
 
 `probe_flake.py` is deliberately unchanged by all of this. Its contract is
 that a checkout with no `docs-wip` worktree behaves identically, so the
@@ -1140,7 +1148,8 @@ Exit codes: 0 a measurement that ran and was ingested, whatever rate it
 observed; 2 rejected before anything was claimed; 3 ALREADY CLAIMED; 4 a
 harness error, whose non-accepted attempt is still ingested; 5 a claim audit
 failure, where the acquisition could not be durably recorded so nothing ran;
-6 no leasable port.
+6 no leasable port; 7 the claim was lost while the probe ran, so nothing was
+ingested.
 
 Gate: `python3 tools/test_probe_claim.py` (in CI and `make ci`) — engine-free
 and GPU-free, but genuinely multi-process: its concurrency cases race real

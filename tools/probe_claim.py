@@ -62,6 +62,16 @@ has to exceed one run's worst case, which it does with a wide margin. A
 long-running supported measurement never becomes reclaimable; a dead
 holder's claim lapses one lease after its last renewal.
 
+Two things make that real rather than nominal. The orchestration
+boundary REFUSES a lease shorter than
+`MIN_ORCHESTRATION_LEASE_SECONDS`, twice one run's timeout, because a
+lease that can elapse while a single run is still going is not a short
+lease but a broken one — it hands the probe to a second agent
+mid-measurement. And claim timestamps carry MICROSECONDS, because
+whole-second stamps round a lease down: a sub-second lease would be
+born already expired and any lease could lapse a second early. Neither
+is defence in depth for the other; each closes a different half.
+
 Ownership safety
 ----------------
 Every acquisition mints a unique `token`, and release, renewal and
@@ -91,9 +101,16 @@ The orchestration boundary
    diagnostic — a measurement nobody can attribute is worse than one
    that did not happen;
 4. run the measurement, renewing the lease throughout;
-5. ingest the result — success or harness error — while still holding
+5. CHECK, against the claim file itself, that the claim is still ours
+   and still live. If it is not, a second agent may have been measuring
+   the same probe at the same time, so neither result is the exclusive
+   observation the census records: nothing is ingested, the artifacts
+   are kept, and the run reports the loss. The renewer's own `lost`
+   flag is a hint, not the authority — it sees only what a renewal
+   happened to hit;
+6. ingest the result — success or harness error — while still holding
    the claim;
-6. release, checked against this acquisition's own token.
+7. release, checked against this acquisition's own token.
 
 `tools/probe_flake.py` is deliberately NOT changed by any of this. Its
 own contract is that the harness behaves identically on a checkout with
@@ -111,6 +128,9 @@ Exit codes:
   5  claim audit failure: the acquisition could not be durably recorded,
      so the measurement was refused and the claim released
   6  no clear, leasable port in the whole range
+  7  the claim was lost while the probe ran, so another agent may have
+     been measuring it too. The run's artifacts are kept and NOTHING is
+     ingested — an unattributable measurement is not a measurement
 """
 from __future__ import annotations
 
@@ -150,9 +170,24 @@ STAGING_SUFFIX = ".tmp"
 # runs and on its own clock; the wide margin is what keeps a stalled
 # renewer thread from dropping a live claim.
 LEASE_SECONDS = 4.0 * run_probes.DEFAULT_TIMEOUT
+# The floor `run_claimed_measurement` and the CLI enforce. A lease that
+# can elapse while ONE supported run is still going is not a short
+# lease, it is a broken one: the probe becomes reclaimable mid-
+# measurement and two agents end up measuring it at once. Twice the
+# per-run timeout is the smallest value that cannot do that, and it is
+# refused rather than silently raised, because a caller asking for
+# thirty seconds has misunderstood what this lease is for.
+MIN_ORCHESTRATION_LEASE_SECONDS = 2.0 * run_probes.DEFAULT_TIMEOUT
 # Renew this often. Three refreshes per lease means two consecutive
-# missed renewals still leave the claim held.
+# missed renewals still leave the claim held. The lower clamp is a
+# guard against a zero interval, NOT a floor in seconds: a floor above
+# a short lease would schedule the first renewal after the claim had
+# already lapsed, which is precisely the failure it looks like it
+# prevents. `acquire` still accepts any positive lease, so the
+# self-test can drive expiry deliberately; only the orchestration
+# boundary above enforces a usable one.
 RENEW_DIVISOR = 3
+MIN_RENEW_INTERVAL = 0.05
 
 EXIT_OK = 0
 EXIT_REJECTED = 2
@@ -160,6 +195,7 @@ EXIT_ALREADY_CLAIMED = 3
 EXIT_HARNESS_ERROR = 4
 EXIT_CLAIM_AUDIT = 5
 EXIT_NO_PORT = 6
+EXIT_CLAIM_LOST = 7
 
 CLAIM_FILE_MODE = 0o600
 CLAIM_DIR_MODE = 0o700
@@ -225,6 +261,20 @@ class ClaimLost(Exception):
 
 class ClaimAuditFailed(Exception):
     """The acquisition could not be durably recorded, so nothing ran."""
+
+
+class ClaimLostDuringMeasurement(Exception):
+    """The claim lapsed or was taken over while the probe was running.
+
+    The measurement really happened, but this process stopped being the
+    probe's owner partway through, so a second agent may have been
+    measuring it at the same time. Its result is therefore NOT
+    attributable to one exclusive run and is not ingested.
+    """
+
+    def __init__(self, message: str, measurement=None):
+        super().__init__(message)
+        self.measurement = measurement
 
 
 # --------------------------------------------------------------------------
@@ -315,16 +365,44 @@ def lock_file_path(probe: str, root: Path) -> Path:
 # --------------------------------------------------------------------------
 # Time
 # --------------------------------------------------------------------------
+MICROSECOND_STAMP = "%Y-%m-%dT%H:%M:%S.%fZ"
+SECOND_STAMP = "%Y-%m-%dT%H:%M:%SZ"
+
+
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc).replace(microsecond=0)
+    return datetime.now(timezone.utc)
 
 
 def stamp(moment: datetime) -> str:
-    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    """A claim-file timestamp, to the MICROSECOND.
+
+    The precision is load-bearing rather than cosmetic. Every lease
+    decision is a comparison against a parsed `expires_at`, so rounding
+    the stored value to whole seconds quietly rounds the lease itself:
+    a sub-second lease would be born already expired, and any lease
+    would lapse up to a second early. Nothing may depend on the rounding
+    being generous.
+    """
+    return moment.astimezone(timezone.utc).strftime(MICROSECOND_STAMP)
+
+
+def stamp_second(moment: datetime) -> str:
+    """The same instant to the second, for the census's `timestamp_utc`.
+
+    The census schema declares whole-second timestamps and this is the
+    one place a claim crosses into it. It is a RENDERING of the claim's
+    own full-precision instant, never a second clock reading.
+    """
+    return moment.astimezone(timezone.utc).strftime(SECOND_STAMP)
 
 
 def parse_stamp(value):
     """A stored `...Z` timestamp as an aware datetime, or None.
+
+    Both renderings above are accepted: a claim file is transient
+    untracked scratch state that a previous build may have written to
+    the second, and the two are the same instant to within the
+    precision each carries.
 
     None rather than an exception: an unparseable timestamp makes the
     claim MALFORMED, which has its own defined handling, and must not
@@ -332,11 +410,13 @@ def parse_stamp(value):
     """
     if not isinstance(value, str):
         return None
-    try:
-        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
-            tzinfo=timezone.utc)
-    except ValueError:
-        return None
+    for pattern in (MICROSECOND_STAMP, SECOND_STAMP):
+        try:
+            return datetime.strptime(value, pattern).replace(
+                tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -609,11 +689,29 @@ class Claim:
                     f"({error})") from None
             return True
 
+    def holds(self, now: datetime | None = None) -> bool:
+        """Is this claim still ours, and still live, RIGHT NOW?
+
+        Read from disk rather than from `self.payload`, because the
+        question is exactly whether something else changed it. False
+        means the claim lapsed and somebody took it over, or it was
+        removed — either way this process no longer speaks for the
+        probe, and anything it was about to publish is not attributable.
+        """
+        moment = now or utc_now()
+        with _serialized(self.probe, self.root):
+            document, _mtime = _read_payload(self.path, self.probe)
+        if document is None or document.get("token") != self.token:
+            return False
+        expires = parse_stamp(document.get("expires_at"))
+        return expires is not None and moment < expires
+
     def census_record(self, *, commit_sha: str, requested_runs: int) -> dict:
         """This acquisition, in the census's `claim` shape."""
+        acquired = parse_stamp(self.payload["acquired_at"]) or utc_now()
         return {
             "token": self.token,
-            "timestamp_utc": self.payload["acquired_at"],
+            "timestamp_utc": stamp_second(acquired),
             "commit_sha": commit_sha,
             "owner": self.payload["owner"],
             "host": self.payload["host"],
@@ -723,7 +821,8 @@ class Renewer:
     def __init__(self, claim: Claim, interval: float | None = None):
         self.claim = claim
         self.interval = (interval if interval is not None
-                         else max(1.0, claim.lease_seconds / RENEW_DIVISOR))
+                         else max(MIN_RENEW_INTERVAL,
+                                  claim.lease_seconds / RENEW_DIVISOR))
         self.lost: str | None = None
         self.renewals = 0
         self._stop = threading.Event()
@@ -814,7 +913,16 @@ def run_claimed_measurement(probe: str, runs: int, *,
     * a denied claimant creates no artifacts, writes no result document
       and records nothing;
     * an acquisition that cannot be durably recorded releases the claim
-      and refuses to run the probe at all.
+      and refuses to run the probe at all;
+    * a measurement that finishes without the claim still being ours
+      ingests NOTHING, because a probe two agents may have been running
+      at once has no attributable result.
+
+    `lease_seconds` is floored at `MIN_ORCHESTRATION_LEASE_SECONDS`
+    here — twice one run's timeout — and refused below it. That is what
+    stops the lease elapsing mid-measurement in the first place; the
+    ownership check before ingestion is the backstop for everything a
+    floor cannot foresee, such as a machine suspended for an hour.
     """
     key = require_probe_key(probe)
     # Before claiming: a probe this harness cannot measure at all is not
@@ -822,6 +930,16 @@ def run_claimed_measurement(probe: str, runs: int, *,
     probe_flake.resolve_probe(key)
     if runs < 1:
         raise ClaimError(f"--runs must be a positive count, got {runs}")
+    if (not isinstance(lease_seconds, (int, float))
+            or lease_seconds < MIN_ORCHESTRATION_LEASE_SECONDS):
+        raise ClaimError(
+            f"a claim lease of {lease_seconds!r} cannot survive one run of "
+            f"{probe!r}: a single run may take the full "
+            f"{run_probes.DEFAULT_TIMEOUT:.0f}s timeout, so a lease under "
+            f"{MIN_ORCHESTRATION_LEASE_SECONDS:.0f}s would let another agent "
+            f"reclaim this probe while it is still being measured. Raise "
+            f"--lease-seconds to at least "
+            f"{MIN_ORCHESTRATION_LEASE_SECONDS:.0f}.")
 
     run_measure = measure if measure is not None else probe_flake.measure
     try:
@@ -854,6 +972,24 @@ def run_claimed_measurement(probe: str, runs: int, *,
             measurement = run_measure(
                 key, runs, artifact_root=artifact_root, rts_caps=rts_caps,
                 announce=announce)
+        # Ownership is CHECKED, not assumed, at the one moment it
+        # becomes load-bearing. `renewer.lost` is a hint — it only sees
+        # what a renewal happened to hit — so the authority is a fresh
+        # token-and-lease read of the claim file itself. If the probe
+        # was taken over while this measurement ran, another agent may
+        # have been measuring it at the same time, and neither result is
+        # the exclusive observation the census is a record of. Refuse to
+        # ingest rather than record an unattributable one; the run's
+        # artifacts stay on disk for whoever investigates.
+        if not claim.holds():
+            raise ClaimLostDuringMeasurement(
+                f"probe {key!r}: the claim was lost while the probe was "
+                f"running"
+                + (f" ({renewer.lost})" if renewer.lost else "")
+                + f", so another agent may have been measuring it at the same "
+                  f"time; nothing was recorded in {target} and the run's "
+                  f"artifacts under {measurement.invocation_dir} were kept",
+                measurement=measurement)
         # Still holding the claim: the result — accepted sample or
         # harness-error attempt — is ingested before anyone else may
         # take this probe.
@@ -922,7 +1058,9 @@ def main(argv: list[str] | None = None) -> int:
                          f"(default {probe_flake.DEFAULT_RTS_CAPS})")
     ap.add_argument("--lease-seconds", type=float, default=LEASE_SECONDS,
                     help=f"claim lease before renewal (default "
-                         f"{LEASE_SECONDS:.0f}); the renewer refreshes it")
+                         f"{LEASE_SECONDS:.0f}, minimum "
+                         f"{MIN_ORCHESTRATION_LEASE_SECONDS:.0f}); the "
+                         f"renewer refreshes it while the probe runs")
     ap.add_argument("--json", action="store_true",
                     help="machine-readable outcome on stdout")
     args = ap.parse_args(argv)
@@ -960,6 +1098,9 @@ def main(argv: list[str] | None = None) -> int:
     except ClaimAuditFailed as error:
         print(f"probe_claim: {error}", file=sys.stderr)
         return EXIT_CLAIM_AUDIT
+    except ClaimLostDuringMeasurement as error:
+        print(f"probe_claim: {error}", file=sys.stderr)
+        return EXIT_CLAIM_LOST
     except probe_flake.PortExhausted as error:
         print(f"probe_claim: {error}", file=sys.stderr)
         return EXIT_NO_PORT

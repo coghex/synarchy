@@ -871,6 +871,175 @@ def test_orchestration_harness_error_is_still_ingested() -> None:
                "and the acquisition it belongs to is recorded exactly once")
 
 
+def test_orchestration_refuses_a_lease_that_cannot_survive_a_run() -> None:
+    """A lease shorter than one run is refused, not quietly accepted.
+
+    This is the exact reachability a review found: `--lease-seconds 0.1`
+    is a perfectly valid float, and with it the claim lapses before the
+    first renewal, so a second agent can take the probe while the first
+    is still measuring it. The floor is what stops that happening at
+    all; `test_orchestration_aborts_when_the_claim_is_lost` covers the
+    backstop for whatever a floor cannot foresee.
+    """
+    print("\n-- a lease that cannot survive one run is refused --")
+    with registry(), scratch_repo() as (main_wt, _other, census):
+        seeded_census(census)
+        with claim_root() as root:
+            ran = []
+            for lease in (0.1, 1.0, 30.0,
+                          probe_claim.MIN_ORCHESTRATION_LEASE_SECONDS - 1):
+                expect_raises(
+                    probe_claim.ClaimError,
+                    lambda s=lease: probe_claim.run_claimed_measurement(
+                        "alpha", 2, root=root, census_path=census,
+                        lease_seconds=s,
+                        measure=lambda *a, **k: ran.append(1) or fake_measurement(),
+                        repo_root=str(main_wt)),
+                    f"a {lease}s lease is refused with the floor named",
+                    str(int(probe_claim.MIN_ORCHESTRATION_LEASE_SECONDS)))
+                expect(probe_claim.read_claim("alpha", root=root) is None,
+                       f"...and a {lease}s lease claimed nothing")
+            expect(not ran, "no refused lease ever executed the probe")
+            expect(probe_claim.MIN_ORCHESTRATION_LEASE_SECONDS
+                   >= 2 * run_probes.DEFAULT_TIMEOUT
+                   and probe_claim.LEASE_SECONDS
+                   >= probe_claim.MIN_ORCHESTRATION_LEASE_SECONDS,
+                   "the floor covers a full-timeout run and the default "
+                   "clears the floor")
+
+        # The CLI is the surface the review reached this through.
+        import io
+        from contextlib import redirect_stdout, redirect_stderr
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with redirect_stdout(out), redirect_stderr(err):
+                code = probe_claim.main(["--probe", "alpha", "--runs", "2",
+                                         "--lease-seconds", "0.1"])
+        except SystemExit as exit_code:
+            code = exit_code.code if isinstance(exit_code.code, int) else 1
+        expect(code == probe_claim.EXIT_REJECTED
+               and "--lease-seconds" in err.getvalue(),
+               "`--lease-seconds 0.1` is rejected by the CLI too")
+
+
+def test_a_short_lease_means_what_it_says() -> None:
+    """Sub-second leases are not rounded away by the stored timestamps.
+
+    Whole-second timestamps used to round a lease DOWN, so a 0.1s lease
+    was born already expired and a 60s one could lapse a second early.
+    Nothing may depend on the rounding being generous, so the claim file
+    keeps microseconds — while still reading a second-precision file a
+    previous build wrote.
+    """
+    print("\n-- a short lease is not rounded away --")
+    with registry(), claim_root() as root:
+        claim = probe_claim.acquire("alpha", root=root, lease_seconds=0.5)
+        stored = probe_claim.read_claim("alpha", root=root)
+        expect("." in stored["expires_at"],
+               "the stored expiry carries sub-second precision")
+        acquired = probe_claim.parse_stamp(stored["acquired_at"])
+        expires = probe_claim.parse_stamp(stored["expires_at"])
+        expect(abs((expires - acquired).total_seconds() - 0.5) < 0.001,
+               "the stored lease is exactly the one that was asked for")
+        expect(probe_claim.utc_now() < expires,
+               "and a fresh sub-second claim is not already expired")
+        expect_raises(probe_claim.ClaimDenied,
+                      lambda: probe_claim.acquire("alpha", root=root,
+                                                  lease_seconds=0.5),
+                      "so a competitor is still denied immediately after it")
+        time.sleep(0.6)
+        taken = probe_claim.acquire("alpha", root=root, lease_seconds=0.5)
+        expect(taken.token != claim.token,
+               "and it really does lapse once that half-second is gone")
+
+        # A second-precision claim from an older build still reads.
+        legacy = dict(stored)
+        legacy["expires_at"] = probe_claim.stamp_second(
+            probe_claim.utc_now() + timedelta(seconds=600))
+        legacy["token"] = "legacy-token"
+        probe_claim.claim_path("beta", root).write_text(
+            json.dumps({**legacy, "probe": "beta"}), encoding="utf-8")
+        expect_raises(probe_claim.ClaimDenied,
+                      lambda: probe_claim.acquire("beta", root=root,
+                                                  lease_seconds=600),
+                      "a second-precision claim file is still honoured")
+
+        # The renewer's own cadence must sit INSIDE the lease it renews.
+        for lease in (0.3, 2.0, 600.0, probe_claim.LEASE_SECONDS):
+            probe = probe_claim.Claim("alpha", "t", root / "x", root, {}, lease)
+            interval = probe_claim.Renewer(probe).interval
+            expect(interval < lease,
+                   f"a {lease}s lease renews every {interval}s, inside it")
+
+
+def test_orchestration_aborts_when_the_claim_is_lost() -> None:
+    """A measurement whose claim was taken over ingests NOTHING.
+
+    The claim is what makes a measurement an EXCLUSIVE observation. If
+    it was lost while the probe ran, a second agent may have been
+    measuring the same probe at the same time, and neither result is the
+    thing the census is a record of — so the result is refused rather
+    than recorded, and the artifacts are kept for whoever investigates.
+    """
+    print("\n-- a lost claim refuses to ingest its own result --")
+    with registry(), scratch_repo() as (main_wt, _other, census):
+        seeded_census(census)
+        with claim_root() as root:
+            thief = {}
+
+            def measure(probe, runs, **kwargs):
+                # Exactly what a stalled agent meets: its lease elapsed
+                # and somebody legitimately reclaimed the probe.
+                thief["claim"] = probe_claim.acquire(
+                    probe, root=root,
+                    lease_seconds=probe_claim.LEASE_SECONDS,
+                    now=probe_claim.utc_now()
+                    + timedelta(seconds=2 * probe_claim.LEASE_SECONDS))
+                return fake_measurement(probe, runs)
+
+            before = census.read_bytes()
+            expect_raises(
+                probe_claim.ClaimLostDuringMeasurement,
+                lambda: probe_claim.run_claimed_measurement(
+                    "alpha", 2, root=root, census_path=census, measure=measure,
+                    repo_root=str(main_wt), renew_interval=3600),
+                "a measurement that lost its claim refuses to ingest",
+                "lost while the probe was running", "nothing was recorded")
+
+            document = json.loads(census.read_text(encoding="utf-8"))
+            row = probe_census.find_entry(document, "alpha")["census"]
+            expect(row["attempts"] == [] and row["current"] is None,
+                   "no sample and no attempt reached the census")
+            expect(len(row["claims"]) == 1,
+                   "only the acquisition itself was ever recorded")
+            expect(census.read_bytes() != before,
+                   "...which is the one write this run made")
+            survivor = probe_claim.read_claim("alpha", root=root)
+            expect(survivor is not None
+                   and survivor["token"] == thief["claim"].token,
+                   "and the successor's claim survived the loser's unwind")
+
+            # The same through the CLI, for its distinct exit code.
+            thief["claim"].release()
+            import io
+            from contextlib import redirect_stdout, redirect_stderr
+            out, err = io.StringIO(), io.StringIO()
+            saved = probe_claim.probe_flake.measure
+            probe_claim.probe_flake.measure = measure
+            saved_root = probe_claim.repository_claim_root
+            probe_claim.repository_claim_root = lambda *a, **k: root
+            try:
+                with redirect_stdout(out), redirect_stderr(err):
+                    code = probe_claim.main(["--probe", "alpha", "--runs", "2"])
+            finally:
+                probe_claim.probe_flake.measure = saved
+                probe_claim.repository_claim_root = saved_root
+            expect(code == probe_claim.EXIT_CLAIM_LOST,
+                   "the CLI reports its own exit code for a lost claim")
+            expect("lost while the probe was running" in err.getvalue(),
+                   "...and says so")
+
+
 def test_orchestration_rejects_before_claiming() -> None:
     """An unmeasurable probe never takes a claim off anyone's list."""
     print("\n-- an unmeasurable probe is rejected before claiming --")
@@ -990,6 +1159,9 @@ def main() -> int:
                  test_orchestration_claim_audit_failure,
                  test_orchestration_harness_error_is_still_ingested,
                  test_orchestration_rejects_before_claiming,
+                 test_orchestration_refuses_a_lease_that_cannot_survive_a_run,
+                 test_a_short_lease_means_what_it_says,
+                 test_orchestration_aborts_when_the_claim_is_lost,
                  test_probe_flake_needs_no_docs_worktree, test_cli):
         test()
     print()
