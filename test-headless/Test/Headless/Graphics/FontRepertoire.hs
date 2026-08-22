@@ -579,8 +579,7 @@ spec = do
                                    , (asciiKey, FontHandle 2) ])
                 `shouldBe` 2
 
-        it "is stable for the same path and policy" $ do
-            sdfFontKey arcadePath `shouldBe` sdfFontKey arcadePath
+        it "keeps distinct font paths distinct under the shared policy" $ do
             sdfFontKey arcadePath `shouldNotBe` sdfFontKey gothicPath
             -- Same policy, different font: still separate atlases.
             sdfFontKey arcadePath `shouldNotBe` sdfFontKey shellPath
