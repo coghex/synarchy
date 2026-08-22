@@ -456,14 +456,15 @@ SKIP_GLOBS = [
 # never the reverse — so no edit under `test/` or `test-headless/` can
 # change what a probe observes.
 #
-# One real coupling survives and is safe only because of CI's ORDERING:
-# the CI-eligible `persistence_contract` probe calls
+# One real coupling survives. The CI-eligible `persistence_contract` probe calls
 # `persistence_snapshot.compare_session_files`, which launches
-# `cabal repl test:synarchy-test-headless`, so it does need
-# `test-headless/` to COMPILE. But `.github/workflows/ci.yml` builds and
-# runs `synarchy-test-headless` unconditionally, both steps before the
-# behavior-probe step, so a compilation break there reddens the run before
-# any probe starts. `test/` has no such coupling: it belongs to
+# `cabal repl test:synarchy-test-headless`, so it does need `test-headless/`
+# to COMPILE. The separate `behavior-probes` job therefore builds both
+# `exe:synarchy` and `synarchy-test-headless` before launching any selected
+# probe. A test-only change still selects no probes and is compiled + tested by
+# `test-and-audits`; a mixed core/test change selects probes and the
+# prerequisite build fails cleanly before their timeout begins. `test/` has no such
+# coupling: it belongs to
 # `synarchy-test-graphical`, which this selector never builds and which is
 # compiled only when `tools/ci_expensive_gates.py` selects the graphical
 # build through its own independent `GRAPHICAL_GLOBS` entry `test/*` —

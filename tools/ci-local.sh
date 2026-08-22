@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Local mirror of the CI gate (#527). `make ci` runs this; it executes the
-# same checks .github/workflows/ci.yml's build-test job runs, in the same
+# same checks .github/workflows/ci.yml's test-and-audits worker runs, in the same
 # order, so a green run here predicts a green run in CI ("green locally =>
 # green in CI").
 #
@@ -230,7 +230,7 @@ echo "==> [19/20] CI cache report self-test"
 python3 tools/ci_cache_report.py --self-test
 
 # The gate that keeps this file honest (#1355): fails if a
-# `python3 tools/*.py` check runs in ci.yml's build-test job and not
+# `python3 tools/*.py` check runs in ci.yml's test-and-audits worker and not
 # here, or here and not there, outside the audit's hard-coded exemption
 # list. Without it the two drift silently, and they already had --- the
 # original five of the probe-runner self-tests above ran only in CI.

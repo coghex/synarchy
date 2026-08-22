@@ -80,7 +80,7 @@ exactly why the detail could move out of the always-loaded file.
 ## The `make ci` gate set
 
 CLAUDE.md states the rule: `make ci` runs the same gate SET as `ci.yml`'s
-`build-test` job, `tools/ci_parity_audit.py` keeps the two from drifting,
+`test-and-audits` worker, `tools/ci_parity_audit.py` keeps the two from drifting,
 and the gate is never an iteration loop. This is the enumeration and the
 exemptions.
 
@@ -166,11 +166,17 @@ oversight: #1490's cause was a docs-only push breaking
 `test_findings_report_audit.py`, so a fast path that skipped the audits
 would hide the very failure it was built for. `make ci` has no push
 range and so has no fast path; it always runs everything.
-Two families are CI-only, by name: CI's path SELECTORS
-(`ci_expensive_gates.py --stdin --gate worldgen|graphical|unit-assets`,
-`ci_probes.py --stdin`, `ci_docs_fast_path.py --stdin --explain`), which
-have nothing to select for locally, and `run_probes.py`, the
-engine-booting probe sweep CLAUDE.md keeps opt-in. One invocation is
+The CI-only members of `test-and-audits` are its path SELECTORS
+(`ci_expensive_gates.py --stdin --gate worldgen|graphical|unit-assets`
+and `ci_docs_fast_path.py --stdin --explain`), which have nothing to select
+for locally. The separate `behavior-probes` job owns
+`ci_probes.py --stdin` and the engine-booting `run_probes.py` sweep; neither
+is part of the `test-and-audits` / `make ci` parity contract because
+CLAUDE.md keeps behavior probes opt-in locally. The stable `build-test`
+context depends on both parallel workers and is the single CI verdict the
+admin-bypass PR drainer consumes, so moving the sweep out of the heavy worker
+does not weaken its blocking PR verdict. The parity audit pins that aggregate
+wiring and the probe worker's selector and runner commands. One invocation is
 LOCAL-only for the mirror-image reason:
 `ci_expensive_gates.py --local-changed-paths`, because CI is handed a
 pull-request base sha and `make ci` has to resolve its own. The

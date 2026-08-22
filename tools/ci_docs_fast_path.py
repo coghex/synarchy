@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Decide whether a master push may take CI's docs-only fast path (#1490).
 
-CI's `build-test` job spends ~22 minutes on a cabal build plus the
+CI's `test-and-audits` worker spends ~22 minutes on a cabal build plus the
 headless hspec suite. Neither can be affected by a change that touches
 only documentation: no Haskell target compiles a doc, and exactly ONE
 reads one at runtime (see MANIFEST below). A push that changes nothing
