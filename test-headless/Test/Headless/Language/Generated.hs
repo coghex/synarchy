@@ -451,8 +451,17 @@ spec = describe "Generated language names" $ do
             [ p | p ← v2Profiles, profileYRole p ≡ Just r ]
 
     describe "profile generation (requirements 1, 2, 12)" $ do
-        it "is deterministic for the same version and seed" $
-            buildProfileV1 (LangSeed 7) `shouldBe` buildProfileV1 (LangSeed 7)
+        it "builds a PINNED version-1 profile for seed 7" $ do
+            -- Determinism is only observable against a value fixed at
+            -- authoring time. Calling the builder twice and comparing
+            -- the results cannot fail in a pure language: a generator
+            -- that consistently drew a different inventory would pass
+            -- it unchanged, and fails these lines instead.
+            let p = buildProfileV1 (LangSeed 7)
+            (profVowels p, profConsonants p) `shouldBe` ("aeo", "thknbz")
+            (profMinSyllables p, profMaxSyllables p) `shouldBe` (2, 3)
+            profCompoundOrder p `shouldBe` HeadFirst
+            profileSignature p `shouldBe` "4378792190029212613"
 
         it "accepts version 1" $
             case generateProfile (GeneratorVersion 1) (LangSeed 7) of
@@ -555,14 +564,34 @@ spec = describe "Generated language names" $ do
             sort (map generatorVersionInt supportedGeneratorVersions)
                 `shouldBe` [1, 2, 3, 4, 5]
 
-        it "repeated construction of the same (version, seed) is \
-           \byte-identical, for every supported version" $
-            forM_ supportedGeneratorVersions $ \ver → do
-                generateProfile ver (LangSeed 4242)
-                    `shouldBe` generateProfile ver (LangSeed 4242)
+        it "pins what one seed builds and renders, for every supported \
+           \version" $ do
+            -- The version-general half of "byte-identical across
+            -- constructions", stated so it can fail: one seed through
+            -- the dispatcher, per version, against values fixed at
+            -- authoring time. Signature and first canonical name are
+            -- deliberately both — versions 3 and 4 hash to the same
+            -- style signature (bound morphemes live in the root
+            -- assignment, not in the style fields), and it is the
+            -- rendered name that separates them.
+            let expected =
+                    [ (GeneratorVersion 1, ("9306776994284989454", "Tazo"))
+                    , (GeneratorVersion 2, ("6603857679469430450", "Mudu"))
+                    , (GeneratorVersion 3, ("2340532553696747361", "Ygte"))
+                    , (GeneratorVersion 4, ("2340532553696747361", "Ygme"))
+                    , (GeneratorVersion 5, ("17173116883382338059", "Pead")) ]
+            -- Version-GENERAL by construction: a sixth supported
+            -- version with no pinned row fails here rather than
+            -- quietly going uncovered.
+            sort (map (generatorVersionInt ∘ fst) expected)
+                `shouldBe` sort (map generatorVersionInt supportedGeneratorVersions)
+            forM_ expected $ \(ver, (sig, firstName)) →
                 case generateProfile ver (LangSeed 4242) of
                     Left e  → expectationFailure (T.unpack (generatorErrorText e))
-                    Right p → renderingsFor p `shouldBe` renderingsFor p
+                    Right p → do
+                        (ver, profileSignature p) `shouldBe` (ver, sig)
+                        (ver, take 1 (renderingsFor p))
+                            `shouldBe` (ver, [Right firstName])
 
         it "the supported-version list matches what the dispatcher \
            \actually builds, in both directions" $ do
@@ -650,15 +679,26 @@ spec = describe "Generated language names" $ do
             filter (not ∘ contractOk) texts `shouldBe` []
 
     describe "determinism (requirement 13)" $ do
-        it "rendering the same profile and expression twice is byte-identical" $ do
+        it "renders a PINNED string for one fixed profile and expression" $ do
             let prof  = buildProfileV1 (LangSeed 321)
                 roots = rootsFor prof
                 expr  = Modifier (cid "ASH") (cid "LAND")
-            renderNative prof roots expr `shouldBe` renderNative prof roots expr
+            -- What requirement 13 promises is that THIS profile and
+            -- THIS expression keep producing this text across builds,
+            -- which only a fixed expected side can hold the generator
+            -- to.
+            renderNative prof roots expr `shouldBe` Right "Mpuimbzoppa"
 
-        it "profile signatures are stable for the same profile" $
+        it "pins one profile's signature, and a neighbouring seed's \
+           \differs from it" $ do
             profileSignature (buildProfileV1 (LangSeed 321))
-                `shouldBe` profileSignature (buildProfileV1 (LangSeed 321))
+                `shouldBe` "10826199575149732283"
+            -- The other half of "stable": a signature that ignored the
+            -- profile entirely would be perfectly stable too.
+            profileSignature (buildProfileV1 (LangSeed 322))
+                `shouldBe` "9332460123107599855"
+            profileSignature (buildProfileV1 (LangSeed 321))
+                `shouldNotBe` profileSignature (buildProfileV1 (LangSeed 322))
 
     -- #1094: version 2's admissible two-consonant onset relation.
     describe "admissible onsets (#1094 requirements 3, 4, 5, 7)" $ do
@@ -1163,22 +1203,70 @@ spec = describe "Generated language names" $ do
             offenders `shouldBe` []
 
     describe "boundary phonology is deterministic (#1095 requirement 7)" $ do
-        it "the same seed and version render byte-identically" $ do
-            forM_ [0, 1, 42, 12345 ∷ Word64] $ \s → do
-                buildProfileV3 (LangSeed s) `shouldBe` buildProfileV3 (LangSeed s)
-                nativeRenderingsV3 s `shouldBe` nativeRenderingsV3 s
+        it "draws a PINNED policy for each of four fixed seeds" $ do
+            -- The draw itself, against values fixed at authoring time:
+            -- a generator that consistently picked a different rule or
+            -- different segments satisfies any same-input comparison
+            -- and fails these. The NAMES these four languages render
+            -- are pinned separately, in the version-3 golden block
+            -- below.
+            let policyOf s = profBoundary (buildProfileV3 (LangSeed s))
+            policyOf 0 `shouldBe` BoundaryMediated BoundaryRepair
+                { brRule = BoundaryEpenthetic, brEpenthetic = 'o'
+                , brLinker = 'b', brLinkerAlt = 'c' }
+            policyOf 1 `shouldBe` BoundaryMediated BoundaryRepair
+                { brRule = BoundaryHarmonic, brEpenthetic = 'a'
+                , brLinker = 'k', brLinkerAlt = 'g' }
+            policyOf 42 `shouldBe` BoundaryMediated BoundaryRepair
+                { brRule = BoundaryHarmonic, brEpenthetic = 'i'
+                , brLinker = 'y', brLinkerAlt = 't' }
+            policyOf (12345 ∷ Word64) `shouldBe` BoundaryMediated BoundaryRepair
+                { brRule = BoundaryHarmonic, brEpenthetic = 'i'
+                , brLinker = 'r', brLinkerAlt = 'y' }
 
-        it "a repair is a pure function of (profile, the two pieces)" $ do
-            let prof = buildProfileV3 (LangSeed 9)
-            joinMorphemes prof "hoh" "h" `shouldBe` joinMorphemes prof "hoh" "h"
-            joinSyllables prof "abb" "ba" `shouldBe` joinSyllables prof "abb" "ba"
+        it "repairs a boundary as a pure function of (profile, the two \
+           \pieces), pinned across all three rules" $ do
+            -- The SAME two pieces through three languages that drew
+            -- three different rules. The repair follows the profile, so
+            -- the three results differ from one another, and each is a
+            -- fixed value rather than a second call to itself.
+            let epenthetic  = buildProfileV3 (LangSeed 0)
+                harmonic    = buildProfileV3 (LangSeed 9)
+                simplifying = buildProfileV3 (LangSeed 3)
+                profiles    = [epenthetic, harmonic, simplifying]
+            map (boundaryRuleText ∘ profBoundary) profiles
+                `shouldBe` ["epenthetic", "harmonic", "simplifying"]
+            map (\p → (joinMorphemes p "hoh" "h", joinSyllables p "abb" "ba"))
+                profiles
+                `shouldBe` [ ("hohoh", "abboba")
+                           , ("hohzh", "abbzba")
+                           , ("hohgh", "abbgba") ]
 
     -- #1096: version 4's bound morphemes.
     describe "bound-form selection (#1096 requirements 2, 3, 5)" $ do
-        it "is deterministic for the same version, seed, and catalogue" $
-            forM_ [0, 1, 42, 12345 ∷ Word64] $ \s → do
-                let p = buildProfileV4 (LangSeed s)
-                lrBound (rootsFor p) `shouldBe` lrBound (rootsFor p)
+        it "selects PINNED bound forms for fixed seeds" $ do
+            -- What "deterministic for the same version, seed, and
+            -- catalogue" actually claims: THESE concepts, with THESE
+            -- forms, for this seed over the production catalogue. Seed
+            -- 0's own map is the golden further below, so these are the
+            -- three other languages of the same fixed set.
+            let boundFor s =
+                    M.toList (lrBound (rootsFor (buildProfileV4 (LangSeed s))))
+            boundFor 1 `shouldBe`
+                [ (cid "BLESSING", "hy"), (cid "HAWK", "sy")
+                , (cid "HEARTH", "ysy"), (cid "HOUND", "su")
+                , (cid "MOON", "uzy"), (cid "SAND", "ypy")
+                , (cid "SHAME", "uhu"), (cid "SMOKE", "uf") ]
+            boundFor 42 `shouldBe`
+                [ (cid "ANGEL", "voko"), (cid "COAL", "vik")
+                , (cid "FAMINE", "gokt"), (cid "FATE", "bkeb")
+                , (cid "FROST", "ki"), (cid "GATE", "ter")
+                , (cid "RAVEN", "bit"), (cid "WINTER", "kta") ]
+            boundFor (12345 ∷ Word64) `shouldBe`
+                [ (cid "BRIDGE", "piy"), (cid "CROWN", "gaph")
+                , (cid "HARBOR", "hayhuha"), (cid "HOLLOW", "ruyk")
+                , (cid "HORIZON", "hak"), (cid "SHADOW", "huk")
+                , (cid "THUNDER", "yuh"), (cid "TITAN", "hu") ]
 
         it "does not depend on the order the catalogue is enumerated in" $ do
             -- Requirement 2's "must not depend on catalogue traversal
@@ -1674,9 +1762,45 @@ spec = describe "Generated language names" $ do
     -- gates, so a property that holds here holds for the population the
     -- report measures.
     describe "extended letters are inventory, not decoration (#1100 requirement 1)" $ do
-        it "is deterministic in the seed" $
-            forM_ [0 .. 63 ∷ Word64] $ \s →
-                buildProfileV5 (LangSeed s) `shouldBe` buildProfileV5 (LangSeed s)
+        it "extends the same seed's version-4 inventory rather than \
+           \replacing it" $ do
+            -- Requirement 1's "inventory, not decoration", stated as a
+            -- relation to the UNMARKED language of the same seed rather
+            -- than as a comparison of one construction to another:
+            -- version 5 keeps version 4's letters in order, and
+            -- everything it adds is exactly what
+            -- 'profileExtendedChars' reports. A decorating
+            -- implementation would substitute rather than extend, and
+            -- shows up here as a broken prefix.
+            let offenders =
+                    [ (s, profVowels four, profVowels five
+                      , profConsonants four, profConsonants five
+                      , profileExtendedChars five)
+                    | s ← [0 .. 63 ∷ Word64]
+                    , let four = buildProfileV4 (LangSeed s)
+                          five = buildProfileV5 (LangSeed s)
+                          keptV = take (length (profVowels four))
+                                       (profVowels five)
+                          keptC = take (length (profConsonants four))
+                                       (profConsonants five)
+                          added = drop (length (profVowels four))
+                                       (profVowels five)
+                                ⧺ drop (length (profConsonants four))
+                                       (profConsonants five)
+                    , keptV ≢ profVowels four
+                      ∨ keptC ≢ profConsonants four
+                      ∨ sort (profileExtendedChars five) ≢ sort added ]
+            offenders `shouldBe` []
+            -- Two fixed languages of that sample, pinned: seed 7 drew
+            -- three marked consonants, seed 63 a single marked vowel.
+            -- (Seeds 0, 1 and 42 are the golden at the end of this
+            -- module.)
+            (profileExtendedChars (buildProfileV5 (LangSeed 7))
+             , profileDiacritic (buildProfileV5 (LangSeed 7)))
+                `shouldBe` ("\x011D\x0125\x0135", Just DiaCircumflex)
+            (profileExtendedChars (buildProfileV5 (LangSeed 63))
+             , profileDiacritic (buildProfileV5 (LangSeed 63)))
+                `shouldBe` ("\x016F", Just DiaRing)
 
         it "only marks a base sound the language already has" $ do
             -- The rule that ties an accent to the language rather than
