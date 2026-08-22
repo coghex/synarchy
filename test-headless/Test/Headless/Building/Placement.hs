@@ -7,6 +7,35 @@
 --   WorldTileData pattern — plus the ghost-tint validity contract
 --   (Building.Render.ghostTint).
 --
+--   These specs exercise canPlaceAt DIRECTLY, and deliberately assert
+--   nothing about the two Lua entry points agreeing with each other
+--   (#1381). Engine.Scripting.Lua.API.Buildings.Spawn's buildingSpawnFn
+--   (building.spawn) and buildingCanPlaceAtFn (building.canPlaceAt, the
+--   ghost preview's check) share this validation only in the following
+--   restricted sense: on the branches that reach final placement
+--   validation, both delegate to canPlaceAt and construct corresponding
+--   page-scoped occupancy, location, world-size, definition, and
+--   canonical-coordinate arguments — which does NOT guarantee identical
+--   argument values or identical results. The two differ in ways the
+--   shared call cannot reconcile:
+--
+--     * building.spawn takes an optional pageId and validates against
+--       THAT page, even a hidden one (#90's location content-spawning
+--       passes it deliberately); building.canPlaceAt has no page
+--       parameter and only ever answers for the active page.
+--     * spawn reads tile data as `readIORef (wsTilesRef ws)` on its
+--       resolved page, while the preview goes through
+--       snapshotVisibleWorldTiles, which reads the FIRST VISIBLE page
+--       and returns Nothing — "no world loaded", with canPlaceAt never
+--       called — when wmVisible is empty. Active-world resolution has
+--       its own fallback to the first registered world, so the two can
+--       land on different pages.
+--
+--   That divergence is by design; this module records it rather than
+--   asserting it away. A test that fed the same arguments to canPlaceAt
+--   twice would only restate the function's purity, so none is kept
+--   here.
+--
 --   Every fixture chunk below carries NO structure data
 --   (lcStructures = emptyChunkStructures, same as Pathing.Cost's
 --   fixtures) and the location's own hosting chunk is never separately
@@ -266,21 +295,6 @@ spec = describe "Portal location exclusion (#778)" $ do
                         (`elem` [ "chunk not loaded", "ground is uneven"
                                 , "tile already occupied" ])
                 Placeable → expectationFailure "expected NotPlaceable"
-
-    describe "direct spawn and preview validation agree" $
-        -- Engine.Scripting.Lua.API.Buildings.Spawn's buildingSpawnFn
-        -- (building.spawn) and buildingCanPlaceAtFn (building.canPlaceAt,
-        -- the ghost preview's check) both call this exact function with
-        -- the same page-scoped inputs — so agreement is structural, not
-        -- something either Lua entry point can special-case around.
-        it "the same inputs always produce the same result" $
-            canPlaceAt noBuildings
-                       (worldWithChunks [flatChunkAt (ChunkCoord 0 0) 5])
-                       instances1 0 portalDef 8 8
-                `shouldBe`
-                canPlaceAt noBuildings
-                           (worldWithChunks [flatChunkAt (ChunkCoord 0 0) 5])
-                           instances1 0 portalDef 8 8
 
     describe "cylindrical U-seam overlap (mirrors #777's Location.Bounds contract)" $ do
         -- worldSize 2 chunks -> worldWidthTiles 32, halfW 16. loc1 is
