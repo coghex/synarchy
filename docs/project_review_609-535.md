@@ -9,7 +9,7 @@ The current furnace/machine-shop content, recipe-dependent power accounting, inf
 ## Status
 
 - [x] PRR-1. Parallel probe assignments can overlap a neighboring probe's secondary port — [#1571]
-- [ ] PRR-2. A direct CI rewrite removed accepted feature-gate coverage without per-probe evidence
+- [x] PRR-2. A direct CI rewrite removed accepted feature-gate coverage without per-probe evidence — [#1577]
 - [ ] PRR-3. The probe-runner README still carries the drifting count #594 meant to remove
 
 ## 1. Parallel probe port allocation
@@ -39,7 +39,7 @@ The current furnace/machine-shop content, recipe-dependent power accounting, inf
 
 ## 2. Behavior-probe gate coverage
 
-### PRR-2. A direct CI rewrite removed accepted feature-gate coverage without per-probe evidence
+### [#1577] PRR-2. A direct CI rewrite removed accepted feature-gate coverage without per-probe evidence
 
 > **Captured note:** Re-evidence the behavior probes demoted by direct commit `b09c1518` against the repository's current promotion criteria, and make the resulting coverage decisions explicit. In particular, a power-only change should not be routed to a green behavior-probe gate that executes zero power behavior unless maintainers have deliberately accepted and recorded that gap; previously reviewed cooking and infection coverage should not remain removed solely because the rewrite labeled it narrow or scenario-heavy without supporting measurements.
 
