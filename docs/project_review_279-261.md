@@ -9,7 +9,7 @@ PR #279's original soil-shedding omission was closed by the later erosion-credit
 ## Status
 
 - [x] PRR-1. Popup and event-log coordinates can navigate the wrong world page — [#1588]
-- [ ] PRR-2. Dismiss-all cannot clear queued popups before bootstrap
+- [x] PRR-2. Dismiss-all cannot clear queued popups before bootstrap — [#1592]
 - [ ] PRR-3. The lake-hole audit ignores higher surrounding lake surfaces
 - [ ] PRR-4. Nested item identity collapses distinct child-instance state
 
@@ -43,7 +43,7 @@ PR #279's original soil-shedding omission was closed by the later erosion-credit
 
 ## 2. Pre-bootstrap popup queue teardown
 
-### PRR-2. Dismiss-all cannot clear queued popups before bootstrap
+### [#1592] PRR-2. Dismiss-all cannot clear queued popups before bootstrap
 
 > **Captured note:** Make popup teardown clear pending notifications even when no card is active and the popup UI has not bootstrapped. Queue lifetime must follow the same view/session boundary as active cards rather than leaking an old menu or world event into the next gameplay bootstrap.
 
