@@ -9,7 +9,7 @@ PR #167's shell `quit`/`exit` commands still call the real lifecycle transition,
 ## Status
 
 - [x] PRR-1. Per-world units still move, re-ground, and infect against another page's environment — [#1593]
-- [ ] PRR-2. A queued fluid writeback can overtake a live edit's sim re-seed
+- [x] PRR-2. A queued fluid writeback can overtake a live edit's sim re-seed — [#1596]
 - [ ] PRR-3. Notification pauses discard the player's non-default world speed on resume
 - [ ] PRR-4. Build placement does not bind pick, validation, and commit to one world page
 - [ ] PRR-5. Settings Defaults preserves the live tooltip timing values instead of defaulting them
@@ -42,7 +42,7 @@ PR #167's shell `quit`/`exit` commands still call the real lifecycle transition,
 
 ## 2. Edit/writeback ordering
 
-### PRR-2. A queued fluid writeback can overtake a live edit's sim re-seed
+### [#1596] PRR-2. A queued fluid writeback can overtake a live edit's sim re-seed
 
 > **Captured note:** PR #112 made live terrain/fluid edits re-seed the sim, but the authoritative edit and the re-seed travel in opposite queues. A sim batch computed from the old chunk can already be waiting behind the edit on the world queue, apply afterward, and overwrite the fresh terrain/fluid before the sim thread consumes `SimChunkEdited`.
 
