@@ -26,7 +26,7 @@ approval.
 - [x] NCT-4. Most graphical GLFW tests validate the upstream binding, not game behavior — [#1573]
 - [x] NCT-5. Graphical device test bypasses the engine's GPU-selection contract — [#1576]
 - [x] NCT-6. Injury-log probe accepts a `unit.injure` event for the wrong unit — [#1579]
-- [ ] NCT-7. Injury-log probe never gates a real fall's event emission
+- [x] NCT-7. Injury-log probe never gates a real fall's event emission — [#1583]
 - [ ] NCT-8. Listing movement courses unnecessarily boots the engine
 - [ ] NCT-9. Legacy river diagnostics present anomalies as tests but never fail
 - [ ] NCT-10. Legacy water diagnostics present anomalies as tests but never fail
@@ -304,7 +304,7 @@ be attached to an otherwise correctly shaped event and the probe stays green.
   within a serialization tolerance depends on the event payload contract;
   target attribution itself is unambiguous.
 
-### NCT-7. Injury-log probe never gates a real fall's event emission
+### [#1583] NCT-7. Injury-log probe never gates a real fall's event emission
 
 The injury-log probe describes its fourth phase as proving that a real fall
 emits a `fall` injury event, but deliberately reports a missing event only as
