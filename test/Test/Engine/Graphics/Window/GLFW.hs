@@ -4,6 +4,7 @@
 module Test.Engine.Graphics.Window.GLFW (spec) where
 
 import UPrelude
+import Control.Exception (finally)
 import Test.Hspec
 import Engine.Graphics.Window.Types (Window(..))
 import qualified Graphics.UI.GLFW as GLFW
@@ -56,12 +57,28 @@ spec _env state =
                         Just t -> t `shouldSatisfy` (>= 0)
                         Nothing -> expectationFailure "Could not get GLFW time"
 
+                -- Assert against the value the setter was GIVEN (#1400): a
+                -- fresh process clock already reads near 0, so the old
+                -- `setTime 0` + `>= 0` pair passed just as happily when the
+                -- setter did nothing. The clock counts up from the value it
+                -- was set to, so a distinctive target far above any plausible
+                -- suite runtime, bounded on both sides, distinguishes a real
+                -- set from a no-op and from a wrong-but-larger one.
+                -- The clock is process-global and this example moves it, so
+                -- the reset to a neutral origin runs on EVERY exit -- a failed
+                -- read or assertion must not leave the later examples (and any
+                -- other reader in this process) on a shifted clock.
                 it "can set time" $ do
-                    GLFW.setTime 0
-                    time <- GLFW.getTime
-                    case time of
-                        Just t -> t `shouldSatisfy` (>= 0)
-                        Nothing -> expectationFailure "Could not get GLFW time after set"
+                    let target    = 12345 ∷ Double
+                        tolerance = 1     ∷ Double
+                    (do GLFW.setTime target
+                        time <- GLFW.getTime
+                        case time of
+                            Just t -> do
+                                t `shouldSatisfy` (>= target)
+                                t `shouldSatisfy` (<= target + tolerance)
+                            Nothing -> expectationFailure "Could not get GLFW time after set")
+                        `finally` GLFW.setTime 0
 
         Nothing → describe "GLFW Window" $ 
             it "exists" $ expectationFailure "Window not found in state"
