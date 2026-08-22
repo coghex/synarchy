@@ -511,7 +511,8 @@ def audit_gate_sets(
 #: The gate whose decision both files must consult.
 SAVE_COMPAT_GATE = "save-compat"
 
-#: The command that must run unconditionally on both sides ...
+#: The main audit command. Local `make ci` always runs it; CI skips it only
+#: for a docs-only range that the same selector proves cannot affect it.
 SAVE_COMPAT_WITHOUT_COMMAND = (
     "python3 tools/test_save_compat_audit.py --without-reproducibility")
 #: ... the one that must run only when the gate selects ...
@@ -541,14 +542,14 @@ SAVE_COMPAT_LOCAL_SCRATCH_WRITE = "printf 'package synarchy"
 #: resolution back after the scratch write).
 SAVE_COMPAT_PATHS_VAR = "SAVE_COMPAT_PATHS"
 
-#: The exact guard CI's reproducibility step carries. Pinned rather than
-#: parsed: `if:` is a GitHub expression, and a half-understood evaluator
-#: would be a worse check than an exact match. The
-#: `github.event_name != 'pull_request'` half is requirement 5 -- a push
-#: to master runs the coverage whatever the paths were -- so removing it
-#: fails here.
-SAVE_COMPAT_CI_IF = (
-    "github.event_name != 'pull_request' "
+#: The exact guards CI's two Cabal-backed save-compat steps carry. Pinned
+#: rather than parsed: `if:` is a GitHub expression, and a half-understood
+#: evaluator would be a worse check than an exact match. Non-docs-only
+#: master pushes feed every tracked file to the selector, preserving the
+#: post-merge backstop; docs-only pushes and PRs use their real range.
+SAVE_COMPAT_CI_IF = "steps.expensive-gates.outputs.save-compat == 'true'"
+SAVE_COMPAT_AUDIT_CI_IF = (
+    "steps.docs-fast-path.outputs.docs_only != 'true' "
     "|| steps.expensive-gates.outputs.save-compat == 'true'")
 
 #: The markers delimiting the executable selection block in ci-local.sh.
@@ -807,6 +808,22 @@ def audit_save_compat_reproducibility_wiring(
                 "when that coverage runs is a deliberate act: update "
                 "SAVE_COMPAT_CI_IF in this audit in the same change.")
 
+    main_audit = [s for s in steps
+                  if SAVE_COMPAT_WITHOUT_COMMAND in str(s.get("run") or "")]
+    if len(main_audit) != 1:
+        problems.append(
+            f"{WORKFLOW_LABEL}: expected exactly one step running "
+            f"`{SAVE_COMPAT_WITHOUT_COMMAND}`, found {len(main_audit)}.")
+    else:
+        condition = _normalise_expression(str(main_audit[0].get("if") or ""))
+        if condition != _normalise_expression(SAVE_COMPAT_AUDIT_CI_IF):
+            problems.append(
+                f"{WORKFLOW_LABEL}: the step running "
+                f"`{SAVE_COMPAT_WITHOUT_COMMAND}` is guarded by "
+                f"{condition!r}, not by the pinned "
+                f"{_normalise_expression(SAVE_COMPAT_AUDIT_CI_IF)!r}. The "
+                "main audit may skip only an unrelated docs-only range.")
+
     selector_steps = [
         s for s in steps
         if SAVE_COMPAT_SELECTOR_COMMAND in str(s.get("run") or "")]
@@ -842,8 +859,7 @@ def audit_save_compat_reproducibility_wiring(
         if SAVE_COMPAT_WITHOUT_COMMAND not in commands:
             problems.append(
                 f"{label}: does not run `{SAVE_COMPAT_WITHOUT_COMMAND}`, "
-                "so the members that must stay blocking on every pull "
-                "request are not running.")
+                "so the main save-compat members are not reachable.")
         if SAVE_COMPAT_ONLY_COMMAND not in commands:
             problems.append(
                 f"{label}: does not run `{SAVE_COMPAT_ONLY_COMMAND}`, so "
@@ -1303,13 +1319,14 @@ jobs:
           printf '%s\\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat | \\
             sed 's/^/save-compat=/' >> "$GITHUB_OUTPUT"
       - name: Save compatibility audit
+        if: >-
+          steps.docs-fast-path.outputs.docs_only != 'true'
+          || steps.expensive-gates.outputs.save-compat == 'true'
         run: |
           python3 tools/test_save_compat_audit.py --without-reproducibility
           python3 tools/save_compat_audit.py
       - name: Save compatibility fixture reproducibility
-        if: >-
-          github.event_name != 'pull_request'
-          || steps.expensive-gates.outputs.save-compat == 'true'
+        if: steps.expensive-gates.outputs.save-compat == 'true'
         run: python3 tools/test_save_compat_audit.py --only-reproducibility
 """
 
@@ -1379,16 +1396,25 @@ def _save_compat_wiring_self_test() -> list[str]:
             any("markers" in p for p in problems(local=unmarked)),
             f"a block with no markers should fail, got {problems(local=unmarked)}")
 
-    # (g) Losing the post-merge backstop from CI's guard (requirement 5)
-    #     fails, and so does swapping the guard for another gate's output.
-    no_backstop = _WIRING_CI_GOOD.replace(
-        "          github.event_name != 'pull_request'\n"
-        "          || steps.expensive-gates.outputs.save-compat == 'true'\n",
-        "          steps.expensive-gates.outputs.save-compat == 'true'\n")
+    # (g) Making the reproducibility member unconditional fails, and so
+    #     does swapping either guard for another gate's output.
+    no_selection = _WIRING_CI_GOOD.replace(
+        "        if: steps.expensive-gates.outputs.save-compat == 'true'\n",
+        "        if: always()\n")
     _expect(failures,
-            any("guarded by" in p for p in problems(ci=no_backstop)),
-            f"losing the master-push backstop should fail, "
-            f"got {problems(ci=no_backstop)}")
+            any("guarded by" in p for p in problems(ci=no_selection)),
+            f"making the reproducibility member unconditional should fail, "
+            f"got {problems(ci=no_selection)}")
+    unguarded_main = _WIRING_CI_GOOD.replace(
+        "        if: >-\n"
+        "          steps.docs-fast-path.outputs.docs_only != 'true'\n"
+        "          || steps.expensive-gates.outputs.save-compat == 'true'\n",
+        "")
+    _expect(failures,
+            any("main audit may skip" in p
+                for p in problems(ci=unguarded_main)),
+            f"making the main audit unconditional should fail, "
+            f"got {problems(ci=unguarded_main)}")
     wrong_output = _WIRING_CI_GOOD.replace(
         "steps.expensive-gates.outputs.save-compat == 'true'",
         "steps.expensive-gates.outputs.worldgen == 'true'")
@@ -1436,9 +1462,7 @@ def _save_compat_wiring_self_test() -> list[str]:
     # (i) A CI reproducibility step with no `if:` at all -- the exact
     #     "runs on every PR again" regression, from the other side.
     unguarded_ci = _WIRING_CI_GOOD.replace(
-        "        if: >-\n"
-        "          github.event_name != 'pull_request'\n"
-        "          || steps.expensive-gates.outputs.save-compat == 'true'\n",
+        "        if: steps.expensive-gates.outputs.save-compat == 'true'\n",
         "")
     _expect(failures,
             any("guarded by" in p for p in problems(ci=unguarded_ci)),
