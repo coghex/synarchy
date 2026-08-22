@@ -123,12 +123,16 @@ echo "==> [10/20] EngineEnv capability inventory audit"
 python3 tools/test_engine_env_capability_audit.py
 python3 tools/engine_env_capability_audit.py
 
-# Both of these stay unconditional, exactly as in CI:
+# Local `make ci` keeps both commands unconditional. CI runs them for
+# every non-docs-only change and every save-compat input change, but skips
+# this Cabal-backed step after its docs-only selector proves the range is
+# unrelated documentation.
 # --without-reproducibility (#1360) drops exactly ONE member of the
 # self-test module -- the one that spawns its own `cabal repl` to build
 # two timestamp variants -- and the block below runs that member when
 # this working tree's own changes touch a path that can move its result.
-# Every other member, and the whole real audit, still run every time.
+# Every other member and the whole real audit still run on every local
+# invocation.
 echo "==> [11/20] save compatibility audit"
 python3 tools/test_save_compat_audit.py --without-reproducibility
 python3 tools/save_compat_audit.py

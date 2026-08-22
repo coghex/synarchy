@@ -42,17 +42,10 @@ import World.Generate (viewDepth)
 import World.Generate.Coordinates (canonicalTileFrame)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
-                  , worldLayer, applyFacing, GridConfig(..)
-                  , defaultGridConfig)
+                  , worldLayer, applyFacing, baseTileW, baseTileH)
 import World.Render.ChunkCulling (isChunkVisibleWrapped)
 import World.Render.ViewBounds (computeViewBounds)
 import World.Types
-
-baseTileW ∷ Float
-baseTileW = fromIntegral (gcTilePixelWidth defaultGridConfig)
-
-baseTileH ∷ Float
-baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)
 
 -- | Ground-render scale for item sprites. Item textures are 32×32
 --   inventory icons drawn edge-to-edge; at raw pixel ratio they'd

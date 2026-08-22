@@ -225,45 +225,52 @@ jobs:
           echo "/usr/local/.ghcup/bin" >> "$GITHUB_PATH"
           echo "CABAL_DIR=/usr/local/cabal" >> "$GITHUB_ENV"
 
-      # Docs-only fast path (#1490). A push that changes ONLY
+      # Docs-only fast path (#1490). A PR or push that changes ONLY
       # documentation cannot affect the Haskell half of this job -- no
-      # target compiles a doc, and the single doc any target reads at
-      # runtime (docs/save_compat/manifest.json) is excluded by the
-      # selector. Such a push therefore skips the cabal build, the test
+      # target compiles a doc, and docs/save_compat/* is excluded because
+      # its machine-readable contracts require the real-codec audit below.
+      # Such a change therefore skips the cabal build, the test
       # suites, the headless hspec suite and world_check, and still runs
-      # EVERY Python audit below.
+      # every engine-free Python audit below.
       #
-      # Skipping the audits too would have been the natural reading of
+      # Skipping every audit too would have been the natural reading of
       # "docs-only", and it would have been wrong: #1490's whole cause was
       # a docs-only push breaking test_findings_report_audit.py, whose
       # self-test reads docs/code_health_findings.md. Filtering docs out
-      # of CI would have hidden that outright. Skip the BUILD, never the
-      # AUDITS.
+      # of CI would have hidden that outright. Engine-free audits remain;
+      # only the Cabal-backed save audit is skipped when its complete,
+      # conservative input family is absent.
       #
-      # The range is the COMPLETE pushed span (before..after), so a batch
-      # push of several commits is judged as one. --no-renames turns a
-      # rename into the delete+add pair the selector rejects. The selector
-      # fails closed: a missing, zero, or unresolvable `before` (a first
-      # push or a force push) runs the full job.
+      # PRs use base..HEAD; pushes use the COMPLETE pushed span
+      # (before..after), so a batch push of several commits is judged as
+      # one. --no-renames turns a rename into the delete+add pair the
+      # selector rejects. The selector fails closed: a missing, zero, or
+      # unresolvable base (a first push or a force push) runs the full job.
       - name: Select docs-only fast path
         id: docs-fast-path
         run: |
           DOCS_ONLY=false
-          BEFORE='${{ github.event.before }}'
+          BASE=''
+          AFTER='${{ github.sha }}'
           ZERO=0000000000000000000000000000000000000000
           ELIGIBLE=no
-          if [ "${{ github.event_name }}" = push ]; then
-            if [ -n "$BEFORE" ] && [ "$BEFORE" != "$ZERO" ]; then
-              if git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-                ELIGIBLE=yes
-              fi
+          : > /tmp/ci-changed-paths.txt
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            BASE='${{ github.event.pull_request.base.sha }}'
+          elif [ "${{ github.event_name }}" = push ]; then
+            BASE='${{ github.event.before }}'
+          fi
+          if [ -n "$BASE" ] && [ "$BASE" != "$ZERO" ]; then
+            if git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+              ELIGIBLE=yes
             fi
           fi
           if [ "$ELIGIBLE" = yes ]; then
-            git diff --no-renames --name-status "$BEFORE" '${{ github.sha }}' > /tmp/pushed-range.txt
-            DOCS_ONLY="$(python3 tools/ci_docs_fast_path.py --stdin --explain < /tmp/pushed-range.txt)"
+            git diff --no-renames --name-status "$BASE" "$AFTER" > /tmp/ci-change-range.txt
+            git diff --name-only "$BASE" "$AFTER" > /tmp/ci-changed-paths.txt
+            DOCS_ONLY="$(python3 tools/ci_docs_fast_path.py --stdin --explain < /tmp/ci-change-range.txt)"
           else
-            echo "ci_docs_fast_path: no resolvable push range; running the full job"
+            echo "ci_docs_fast_path: no resolvable change range; running the full job"
           fi
           echo "docs_only=$DOCS_ONLY" >> "$GITHUB_OUTPUT"
           echo "docs-only fast path: $DOCS_ONLY"
@@ -294,9 +301,12 @@ jobs:
           # dist-newstyle/cache/plan.json, which the cache keys below hash.
           cabal build all --dry-run
 
-      # Hspec is deliberately full and blocking on every PR. These two
+      # Hspec is deliberately full and blocking on every non-docs-only PR. These
       # independent gates are path-selective on PRs, but always run after a
-      # merge so master retains the complete regression backstop.
+      # non-docs-only merge so master retains the complete regression
+      # backstop. A docs-only push reuses the exact range already resolved
+      # above, allowing Cabal-backed gates to stay off without classifying
+      # every tracked source file as changed.
       - name: Select expensive path-relevant gates
         id: expensive-gates
         run: |
@@ -304,6 +314,8 @@ jobs:
             BASE='${{ github.event.pull_request.base.sha }}'
             git fetch --no-tags origin "$BASE"
             CHANGED="$(git diff --name-only "$BASE" HEAD)"
+          elif [ "${{ steps.docs-fast-path.outputs.docs_only }}" = true ]; then
+            CHANGED="$(cat /tmp/ci-changed-paths.txt)"
           else
             CHANGED="$(git ls-files)"
           fi
@@ -538,8 +550,9 @@ jobs:
       # See tools/save_compat_audit.py's module docstring for exactly
       # what this does and does not guarantee.
       #
-      # Both commands here stay unconditional and blocking on every pull
-      # request. --without-reproducibility (#1360) removes exactly ONE
+      # Both commands here stay blocking on every non-docs-only change,
+      # and on every save-compat input change. --without-reproducibility
+      # (#1360) removes exactly ONE
       # member of the self-test module -- the one that spawns its own
       # `cabal repl` to build two timestamp variants -- which the next
       # step runs path-selectively instead. Every other member still
@@ -552,6 +565,9 @@ jobs:
       # and test_real_manifest_passes_the_audit runs that same audit. The
       # saving here is one ADDITIONAL repl, not all of them.
       - name: Save compatibility audit
+        if: >-
+          steps.docs-fast-path.outputs.docs_only != 'true'
+          || steps.expensive-gates.outputs.save-compat == 'true'
         run: |
           python3 tools/test_save_compat_audit.py --without-reproducibility
           python3 tools/save_compat_audit.py
@@ -565,16 +581,14 @@ jobs:
       # save-tooling or Cabal change can move -- so an unrelated pull
       # request no longer pays its ~26 s.
       #
-      # Path-selective on PRs; unconditional after a merge to master, so
-      # a path tools/ci_expensive_gates.py's save-compat table does not
-      # list can never leave this coverage unrun on master. The gate's
-      # own --self-test pins both directions, and
+      # Path-selective on PRs and docs-only master pushes. Every other
+      # master push feeds the selector all tracked files, retaining the
+      # post-merge backstop. The gate's own --self-test pins both
+      # directions, and
       # tools/ci_parity_audit.py pins that `make ci` selects it from the
       # same decision.
       - name: Save compatibility fixture reproducibility
-        if: >-
-          github.event_name != 'pull_request'
-          || steps.expensive-gates.outputs.save-compat == 'true'
+        if: steps.expensive-gates.outputs.save-compat == 'true'
         run: python3 tools/test_save_compat_audit.py --only-reproducibility
 
       # Cheap, no-engine guard (issue #1145): fails if a

@@ -25,15 +25,9 @@ import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Graphics.Viewport (windowDegenerate)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
-                  , applyFacingF, GridConfig(..), defaultGridConfig)
+                  , applyFacingF, baseTileW, baseTileH)
 import World.Generate (viewDepth)
 import Building.Types
-
-baseTileW ∷ Float
-baseTileW = fromIntegral (gcTilePixelWidth defaultGridConfig)
-
-baseTileH ∷ Float
-baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)
 
 -- | Hit test at framebuffer-pixel coordinates. Returns the topmost
 --   (highest-Z) building whose sprite quad contains the click.

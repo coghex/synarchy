@@ -42,8 +42,11 @@ spec = do
             rollOne 1.0 1.0 42 `shouldSatisfy` (\v → v ≥ 0.5 ∧ v ≤ 1.5)
         it "single roll lands in [0.5, 1.5] (seed 999)" $
             rollOne 1.0 1.0 999 `shouldSatisfy` (\v → v ≥ 0.5 ∧ v ≤ 1.5)
-        it "is deterministic for a given seed" $
-            rollOne 1.0 1.0 42 `shouldBe` rollOne 1.0 1.0 42
+        it "GOLDEN: seed 42 draws a pinned value -- this pins the roll \
+           \FORMULA (a Box-Muller draw scaled by range/4), not a balance \
+           \policy, so a deliberate change to how a stat is drawn must \
+           \update this number" $
+            rollOne 1.0 1.0 42 `shouldSatisfy` nearValue 1.38305
 
     describe "rollStat with base=50, range=5" $ do
         it "single roll lands in [47.5, 52.5]" $
@@ -228,5 +231,12 @@ spec = do
             pickOne givenOnly 5 `shouldBe` "Pip"
         it "yields \"\" for an empty pool" $
             pickOne emptyPool 5 `shouldBe` ""
-        it "is deterministic for a given seed" $
-            pickOne givenFamily 42 `shouldBe` pickOne givenFamily 42
+        it "GOLDEN: seed 42 draws a pinned given+family pair from the \
+           \real two-by-two pool -- pins the index mapping, so a changed \
+           \draw fails here rather than passing on membership alone" $
+            pickOne givenFamily 42 `shouldBe` "Mira Thorne"
+
+-- | Float goldens are compared with a tolerance rather than naked
+--   equality on a computed value.
+nearValue ∷ Float → Float → Bool
+nearValue expected actual = abs (actual - expected) < 1e-4

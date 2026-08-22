@@ -139,9 +139,32 @@ spec = do
             impactSeverityBucket 0.60 `shouldBe` SeveritySevere
             impactSeverityBucket 0.90 `shouldBe` SeverityCatastrophic
 
-    describe "impactFallbackAngle" $
-        it "is deterministic for the same seed" $
-            impactFallbackAngle 12345 `shouldBe` impactFallbackAngle 12345
+    describe "impactFallbackAngle" $ do
+        it "slices the circle into 3600 steps -- seed 900 is exactly a \
+           \quarter turn, seed 1800 exactly a half turn" $ do
+            impactFallbackAngle 900  `shouldSatisfy` nearAngle (pi / 2)
+            impactFallbackAngle 1800 `shouldSatisfy` nearAngle pi
+
+        it "always lands in [0, 2*pi) -- including at the last step \
+           \before the wrap" $ do
+            let seeds   = [0, 1, 899, 900, 1800, 2700, 3599, 3600, 12345]
+                angles  = map impactFallbackAngle seeds
+            angles `shouldSatisfy` all (\a → a ≥ 0 ∧ a < 2 * pi)
+
+        it "wraps modulo 3600 -- seed 3600 is the zero angle again and \
+           \seed 4500 is the same quarter turn as seed 900" $ do
+            impactFallbackAngle 3600 `shouldSatisfy` nearAngle 0
+            impactFallbackAngle 4500 `shouldSatisfy` nearAngle (pi / 2)
+
+        it "takes the seed's absolute value, so a negative seed reads the \
+           \same direction as its positive twin" $ do
+            impactFallbackAngle (-900) `shouldSatisfy` nearAngle (pi / 2)
+            impactFallbackAngle (-1234)
+                `shouldSatisfy` nearAngle (impactFallbackAngle 1234)
   where
     isJust' (Just _) = True
     isJust' Nothing  = False
+    -- Angles are Float radians computed by division; compare with a
+    -- tolerance rather than naked equality.
+    nearAngle ∷ Float → Float → Bool
+    nearAngle expected actual = abs (actual - expected) < 1e-5
