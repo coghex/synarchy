@@ -9,7 +9,7 @@ The glacier-pair cleanup, thought and unified state-of-mind systems, data-driven
 ## Status
 
 - [x] PRR-1. Parallel probes race while mutating the shared Cabal build directory — [#1570]
-- [ ] PRR-2. `make ci` no longer runs every locally reproducible CI gate it claims to mirror
+- [x] PRR-2. `make ci` no longer runs every locally reproducible CI gate it claims to mirror — [no-issue]
 - [ ] PRR-3. Coffee's consumable effects have no production gameplay caller
 - [ ] PRR-4. Auto-harvest ignores the farming skill it claims to scale by
 
@@ -41,7 +41,9 @@ The glacier-pair cleanup, thought and unified state-of-mind systems, data-driven
 
 ## 2. Local CI gate drift
 
-### PRR-2. `make ci` no longer runs every locally reproducible CI gate it claims to mirror
+### [no-issue] PRR-2. `make ci` no longer runs every locally reproducible CI gate it claims to mirror
+
+> **Disposition:** No issue — fixed by #1355 (closed 2026-08-20). `tools/ci-local.sh:220-221` now runs both `ci_probes.py --self-test` and `ci_expensive_gates.py --self-test`; `tools/ci_parity_audit.py` compares the two files' `python3 tools/*.py` invocations in both directions on both sides (42 identical, 7 reason-carrying exemptions on a current run) so the set cannot silently drift again; and the claim is narrowed to `ci.yml`'s `test-and-audits` worker in both the script and `CLAUDE.md`. Behavior probes now have the explicit answer the finding asked for: a separate PR-only `behavior-probes` job that `make ci` deliberately excludes, with that three-job wiring and its two required commands structurally pinned by the same audit.
 
 > **Captured note:** Reconcile `make ci` with the current CI workflow, or narrow the promise made by the script and repository instructions. At minimum, the cheap probe-policy and expensive-gate self-tests that CI runs unconditionally should not be absent from a command documented as the exact same gate set; the intended local contract for CI's path-selected behavior probes also needs an explicit answer.
 
