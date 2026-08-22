@@ -14,7 +14,6 @@ module Combat.Resolution.Events
 import UPrelude
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
-import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Sequence as Seq
 import Data.IORef (atomicModifyIORef')
@@ -50,10 +49,10 @@ hitEvent gt atk tgt part kind sev rawDmg effDmg mode limb weapon detail isLunge 
         , ("limb",     limb)         -- macro-part display name ("left arm")
         , ("kind",     kind)         -- mechanism (slash/stab/blunt)
         , ("weapon",   weapon)       -- weapon display name / natural facet
-        , ("severity", T.pack (show sev))
+        , ("severity", tshow sev)
         , ("detail",   detail)       -- per-layer "subpart:layer:material:sevPct|…"
-        , ("raw",      T.pack (show rawDmg))
-        , ("eff",      T.pack (show effDmg))
+        , ("raw",      tshow rawDmg)
+        , ("eff",      tshow effDmg)
         , ("mode",     attackModeText mode)
         ]
         <> [ ("lunge", "1") | isLunge ]  -- the combat log opens with a lunge line

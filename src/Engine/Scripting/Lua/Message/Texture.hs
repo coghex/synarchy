@@ -392,7 +392,7 @@ handleLoadTextureBatchWith samplerPolicy requests = do
                         Nothing →
                             logWarnM CatTexture $
                                 "Missing canonical texture for deduped alias: "
-                                    <> T.pack (show handle)
+                                    <> tshow handle
                 invalidateRenderCaches
 
             _ → logWarnM CatTexture "Cannot batch-load textures: Vulkan not ready"
@@ -400,7 +400,7 @@ handleLoadTextureBatchWith samplerPolicy requests = do
 handleLoadTexture ∷ TextureHandle → FilePath → EngineM σ ()
 handleLoadTexture handle path = do
     logDebugM CatLua $ "Loading texture from Lua: " <> T.pack path
-                    <> " (handle: " <> T.pack (show handle) <> ")"
+                    <> " (handle: " <> tshow handle <> ")"
     handleLoadTextureBatch [(handle, path)]
     logDebugM CatLua $ "Texture loaded successfully: " <> T.pack path
 

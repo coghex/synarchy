@@ -5,7 +5,6 @@ module World.Thread.Command.Time
     ) where
 
 import UPrelude
-import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
@@ -16,7 +15,7 @@ handleWorldSetTimeCommand ∷ WorldSimCapability → LoggerState → WorldPageId
 handleWorldSetTimeCommand wsc logger pageId hour minute = do
     logDebug logger CatWorld $
         "Setting time for world: " <> unWorldPageId pageId
-        <> " to " <> T.pack (show hour) <> ":" <> T.pack (show minute)
+        <> " to " <> tshow hour <> ":" <> tshow minute
     mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Just worldState → do
@@ -34,8 +33,8 @@ handleWorldSetDateCommand ∷ WorldSimCapability → LoggerState → WorldPageId
 handleWorldSetDateCommand wsc logger pageId year month day = do
     logDebug logger CatWorld $
         "Setting date for world: " <> unWorldPageId pageId
-        <> " to " <> T.pack (show year) <> "-"
-        <> T.pack (show month) <> "-" <> T.pack (show day)
+        <> " to " <> tshow year <> "-"
+        <> tshow month <> "-" <> tshow day
     mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Just worldState → do
@@ -56,7 +55,7 @@ handleWorldSetTimeScaleCommand ∷ WorldSimCapability → LoggerState → WorldP
 handleWorldSetTimeScaleCommand wsc logger pageId scale = do
     logDebug logger CatWorld $
         "Setting time scale for world: " <> unWorldPageId pageId
-        <> " to " <> T.pack (show scale) <> " game-min/real-sec"
+        <> " to " <> tshow scale <> " game-min/real-sec"
     mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Just worldState → do

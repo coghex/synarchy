@@ -91,7 +91,6 @@ import Data.List (sortOn)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
-import qualified Data.Text as T
 import Location.Bounds (AbsBounds, translateBounds)
 import Language.Etymology.Source (EtymologySource)
 import Location.Naming (LocationNamer, nameLocationInstance)
@@ -470,4 +469,3 @@ locationInstanceAllocatorErrors lis =
     | (iid, inst) ← HM.toList (lisById lis)
     , liId inst ≢ iid
     ]
-  where tshow = T.pack . show

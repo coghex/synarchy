@@ -96,10 +96,10 @@ loadMaterialDirectory logger dir = do
     let yamlFiles = filter isYaml entries
     logInfo logger CatAsset $ "Loading materials from "
         <> T.pack dir <> " ("
-        <> T.pack (show (length yamlFiles)) <> " files)"
+        <> tshow (length yamlFiles) <> " files)"
     mats ← concat ⊚ mapM (\f → loadMaterialYaml logger (dir </> f)) yamlFiles
     logInfo logger CatAsset $ "Total materials loaded: "
-        <> T.pack (show (length mats))
+        <> tshow (length mats)
     return mats
   where
     isYaml f = takeExtension f ∈ [".yaml", ".yml"]

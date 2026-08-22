@@ -4,7 +4,6 @@ module Sim.Thread
     ) where
 
 import UPrelude
-import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Vector as V
@@ -72,7 +71,7 @@ startSimThread env = startWorkerThread WorkerSpec
         logDebug logger CatWorld "Sim thread stopping..."
     , wsOnCrash     = \_ e → do
         logger ← readIORef (ccLoggerRef (toCoreCapability env))
-        logError logger CatWorld $ "Sim thread crashed: " <> T.pack (show e)
+        logError logger CatWorld $ "Sim thread crashed: " <> tshow e
         writeIORef (ccLifecycleRef (toCoreCapability env)) CleaningUp
     }
 
@@ -289,9 +288,6 @@ handleSimCommand env logger simStateRef cmd = do
                 takeMVar ack
             putMVar done ()
             logDebug logger CatWorld "Sim: fast-settled and paused"
-
-tshow ∷ Show a ⇒ a → T.Text
-tshow = T.pack ∘ show
 
 -- | Run all sim ticks synchronously without sleeping for one world. Stops
 --   when no chunk has settle ticks remaining and no chunk is active, or

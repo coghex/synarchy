@@ -6,7 +6,6 @@ module Engine.Scene.Batch.Sprite
 import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Map.Strict as Map
-import qualified Data.Text as T
 import Data.Maybe (mapMaybe)
 import Engine.Scene.Base (NodeType(..), Transform2D(..))
 import Engine.Scene.Types.Node (SceneNode(..))
@@ -28,8 +27,8 @@ collectVisibleObjects graph camera viewWidth viewHeight = do
         drawableObjs = mapMaybe nodeToDrawable visibleNodes
 
     logDebugSM CatScene "Visible object culling"
-        [("totalObjects", T.pack $ show $ length spriteNodes)
-        ,("visibleObjects", T.pack $ show $ length visibleNodes)]
+        [("totalObjects", tshow $ length spriteNodes)
+        ,("visibleObjects", tshow $ length visibleNodes)]
 
     pure $ V.fromList drawableObjs
 

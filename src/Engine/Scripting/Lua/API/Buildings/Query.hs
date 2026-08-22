@@ -186,11 +186,11 @@ buildingListFn env = do
         then return "No buildings placed"
         else return $ T.unpack $ T.intercalate "\n" $
             map (\(bid, inst) →
-                "id=" <> T.pack (show (unBuildingId bid))
+                "id=" <> tshow (unBuildingId bid)
                 <> " " <> biDefName inst
-                <> " (" <> T.pack (show (biAnchorX inst))
-                <> ", " <> T.pack (show (biAnchorY inst))
-                <> ", " <> T.pack (show (biGridZ inst)) <> ")"
+                <> " (" <> tshow (biAnchorX inst)
+                <> ", " <> tshow (biAnchorY inst)
+                <> ", " <> tshow (biGridZ inst) <> ")"
             ) entries
     Lua.pushstring (TE.encodeUtf8 (T.pack result))
     return 1

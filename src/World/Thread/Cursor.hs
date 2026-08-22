@@ -172,8 +172,8 @@ sendChunkInfo env worldState mParams baseGX baseGY = do
         renderOreLines counts = T.intercalate "\n"
             [ prettyMatName (mpName (getMaterialProps materials
                                         (MaterialId oid)))
-                <> ": " <> T.pack (show nTiles) <> " tiles ("
-                <> T.pack (show nCells) <> " blocks)"
+                <> ": " <> tshow nTiles <> " tiles ("
+                <> tshow nCells <> " blocks)"
             | (oid, nTiles, nCells) ← counts ]
         chunkEdits = HM.lookupDefault [] coord edits
     resourceText ← case lookupChunk coord tileData of
@@ -202,28 +202,28 @@ sendChunkInfo env worldState mParams baseGX baseGY = do
     sendHudResourcesInfo env resourceText
 
     let basicLines = T.unlines $ filter (not . T.null)
-            [ "Chunk (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
+            [ "Chunk (" <> tshow cx <> ", " <> tshow cy <> ")"
             , case mEntry of
                 Just entry →
                     let props = getMaterialProps materials (MaterialId (zceTexIndex entry))
                     in "Material: " <> mpName props
-                     <> "\nElevation: " <> T.pack (show (zceElev entry))
+                     <> "\nElevation: " <> tshow (zceElev entry)
                      <> (if zceIsOcean entry then "\nOcean" else "")
                      <> (if zceHasLava entry then "\nLava" else "")
                 Nothing → ""
             ]
 
     let advLines = T.unlines $ filter (not . T.null)
-            [ "Grid origin: (" <> T.pack (show baseGX)
-              <> ", " <> T.pack (show baseGY) <> ")"
+            [ "Grid origin: (" <> tshow baseGX
+              <> ", " <> tshow baseGY <> ")"
             , case mEntry of
                 Just entry →
-                    "MatID: " <> T.pack (show (zceTexIndex entry))
+                    "MatID: " <> tshow (zceTexIndex entry)
                 Nothing → ""
             , case mParams of
                 Just params →
                     let ocean = isOceanChunk (wgpOceanMap params) coord
-                    in "Ocean map: " <> T.pack (show ocean)
+                    in "Ocean map: " <> tshow ocean
                 Nothing → ""
             ]
         weatherInfo = case mParams of
@@ -261,7 +261,7 @@ chunkWeatherInfo params cx cy =
             let showF1 f =
                     let whole = floor f ∷ Int
                         frac  = abs (round ((f - fromIntegral whole) * 10.0) ∷ Int)
-                    in T.pack (show whole) <> "." <> T.pack (show frac)
+                    in tshow whole <> "." <> tshow frac
                 showSeas (SeasonalClimate s w) =
                     showF1 s <> " / " <> showF1 w
 
@@ -275,7 +275,7 @@ chunkWeatherInfo params cx cy =
                         <> "\nUpwelling: " <> showF1 (ocUpwelling oc)
 
             in T.unlines $ filter (not . T.null)
-                [ "Region (" <> T.pack (show ru) <> ", " <> T.pack (show rv) <> ")"
+                [ "Region (" <> tshow ru <> ", " <> tshow rv <> ")"
                 , "Air temp (S/W): " <> showSeas (rcAirTemp rc) <> " C"
                 , "Humidity: " <> showF1 (rcHumidity rc)
                 , "Precip (S/W): " <> showSeas (rcPrecipitation rc)
@@ -285,7 +285,7 @@ chunkWeatherInfo params cx cy =
                   <> " @ " <> showF1 (rcWindDir rc) <> " rad"
                 , "Continentality: " <> showF1 (rcContinentality rc)
                 , "Albedo: " <> showF1 (rcAlbedo rc)
-                , "Elev avg: " <> T.pack (show (rcElevAvg rc))
+                , "Elev avg: " <> tshow (rcElevAvg rc)
                 , oceanLine
                 ]
 
@@ -320,29 +320,29 @@ sendTileInfo env worldState _mParams gx gy z = do
                     mFluid = (lcFluidMap lc) V.! colIdx
                     fluidStr = case mFluid of
                         Nothing → ""
-                        Just fc → "Fluid: " <> T.pack (show (fcType fc))
-                                <> " (surface z=" <> T.pack (show (fcSurface fc)) <> ")"
+                        Just fc → "Fluid: " <> tshow (fcType fc)
+                                <> " (surface z=" <> tshow (fcSurface fc) <> ")"
                 in ( mpName props
-                   , T.pack (show surfZ)
+                   , tshow surfZ
                    , fluidStr
                    )
 
     let basicLines = T.unlines $ filter (not . T.null)
-            [ "Tile (" <> T.pack (show gx) <> ", " <> T.pack (show gy) <> ")"
+            [ "Tile (" <> tshow gx <> ", " <> tshow gy <> ")"
             , "Material: " <> matText
             , "Surface: " <> surfText
-            , "Z: " <> T.pack (show z)
+            , "Z: " <> tshow z
             , fluidText
             ]
 
     let ChunkCoord ccx ccy = coord
         advLines = T.unlines $ filter (not . T.null)
-            [ "Chunk: (" <> T.pack (show ccx) <> ", " <> T.pack (show ccy) <> ")"
-            , "Local: (" <> T.pack (show lx) <> ", " <> T.pack (show ly) <> ")"
+            [ "Chunk: (" <> tshow ccx <> ", " <> tshow ccy <> ")"
+            , "Local: (" <> tshow lx <> ", " <> tshow ly <> ")"
             , "Column start Z: " <> case mChunk of
                   Nothing → "?"
                   Just lc → let col = (lcTiles lc) V.! colIdx
-                             in T.pack (show (ctStartZ col))
+                             in tshow (ctStartZ col)
             ]
 
     sendHudInfo env basicLines advLines

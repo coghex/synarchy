@@ -16,7 +16,6 @@ import UPrelude
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Map.Strict as Map
-import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
 import Data.IORef (readIORef)
 import Engine.Core.Log (logDebug, LogCategory(..))
@@ -51,7 +50,7 @@ import UI.InputOwnership (routeScroll, isGameplayBlocked)
 dispatchScrollEvent ∷ EngineEnv → InputState → Double → Double → IO InputState
 dispatchScrollEvent env inpSt x y = do
     logger ← readIORef (ccLoggerRef (toCoreCapability env))
-    logDebug logger CatInput $ "Scroll event: dx=" <> T.pack (show x) <> ", dy=" <> T.pack (show y)
+    logDebug logger CatInput $ "Scroll event: dx=" <> tshow x <> ", dy=" <> tshow y
 
     (winW, winH) ← readIORef (rvWindowSizeRef (toRenderViewCapability env))
     (fbW, fbH) ← readIORef (rvFramebufferSizeRef (toRenderViewCapability env))
@@ -115,7 +114,7 @@ dispatchScrollEvent env inpSt x y = do
       -- still tell modified from unmodified UI scroll input.
       else case routeScroll (mouseX, mouseY) uiMgr of
         Just elemHandle@(ElementHandle eh) → do
-            logDebug logger CatInput $ "Scroll on UI element: " <> T.pack (show elemHandle)
+            logDebug logger CatInput $ "Scroll on UI element: " <> tshow elemHandle
             Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaUIScrollEvent elemHandle x y shiftHeld)
             recordScrollOutcome "accepted" "ui_scroll" (Just eh)
         -- No capturing surface under the cursor. #744: a visible

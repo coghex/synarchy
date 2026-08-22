@@ -61,7 +61,7 @@ createVulkanInstance config surfaceUse = do
                                  availableExts availableLayers of
     Left (MissingRequiredExtensions missingExts) →
       logAndThrowM CatInit (ExInit ExtensionNotSupported) $
-        "Required extensions not available: " <> T.pack (show missingExts)
+        "Required extensions not available: " <> tshow missingExts
     Right plan → pure plan
 
   let debugEnabled     = ipDebugMessenger plan
@@ -77,11 +77,11 @@ createVulkanInstance config surfaceUse = do
       "Debug mode: VK_EXT_debug_utils not available, debug messenger disabled"
 
   logDebugSM CatVulkan "Instance configuration"
-    [("glfw_extensions", T.pack $ show $ map BSU.toString glfwExts)
-    ,("debug_mode", T.pack $ show $ gcDebugMode config)
-    ,("validation", T.pack $ show $ ipValidationLayer plan)
-    ,("portability", T.pack $ show hasPortability)
-    ,("layer_settings", T.pack $ show hasLayerSettings)]
+    [("glfw_extensions", tshow $ map BSU.toString glfwExts)
+    ,("debug_mode", tshow $ gcDebugMode config)
+    ,("validation", tshow $ ipValidationLayer plan)
+    ,("portability", tshow hasPortability)
+    ,("layer_settings", tshow hasLayerSettings)]
 
   inst ← liftIO $ with (1 ∷ Word32) $ \valuePtr → do
     let moltenVkSetting = LayerSettingEXT
@@ -125,7 +125,7 @@ createVulkanInstance config surfaceUse = do
       logDebugM CatVulkan "Creating debug messenger"
       messenger ← createDebugUtilsMessengerEXT inst debugUtilsMessengerCreateInfo Nothing
         `catchError` \err → logAndThrowM CatInit (ExInit VulkanInitFailed) $
-          "Failed to create debug messenger: " <> T.pack (show err)
+          "Failed to create debug messenger: " <> tshow err
       logDebugM CatVulkan "Debug messenger created successfully"
       return $ Just messenger
     else return Nothing

@@ -17,7 +17,6 @@ module Engine.Scripting.Lua.Message.Scene
 
 import UPrelude
 import qualified Data.Map.Strict as Map
-import qualified Data.Text as T
 import Data.IORef (atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle, FontHandle)
 import Engine.Core.Log (LogCategory(..))
@@ -53,7 +52,7 @@ handleSpawnText oid x y fontHandle text color layer size = do
             env ← ask
             liftIO $ atomicModifyIORef' (uicTextBuffersRef (toUiCapability env)) $ \m →
               (Map.insert oid text m, ())
-          Nothing → logDebugM CatLua $ "Failed to add text object " <> T.pack (show oid)
+          Nothing → logDebugM CatLua $ "Failed to add text object " <> tshow oid
       Nothing → logDebugM CatLua "Cannot spawn text: no active scene"
 
 handleSetText ∷ ObjectId → Text → EngineM σ ()
@@ -83,7 +82,7 @@ handleSpawnSprite objId x y width height texHandle layer = do
         case addObjectToScene sceneId node sceneMgr of
           Just (_addedObjId, newSceneMgr) → do
             modify $ \s → s { sceneManager = newSceneMgr }
-          Nothing → logDebugM CatLua $ "Failed to add sprite " <> T.pack (show objId)
+          Nothing → logDebugM CatLua $ "Failed to add sprite " <> tshow objId
       Nothing → logDebugM CatLua "Cannot spawn sprite: no active scene"
 
 handleSetPos ∷ ObjectId → Float → Float → EngineM σ ()

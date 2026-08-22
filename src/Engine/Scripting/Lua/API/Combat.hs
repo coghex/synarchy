@@ -35,7 +35,6 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Sequence as Seq
-import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.IORef (IORef, atomicModifyIORef', readIORef)
 import qualified HsLua as Lua
@@ -187,7 +186,7 @@ injuryEmitFn env = do
                     , opt "part"      partArg
                     , opt "woundKind" wkArg
                     , maybe [] (\(Lua.Number n) →
-                        [("severity", T.pack (show (realToFrac n ∷ Double)))])
+                        [("severity", tshow (realToFrac n ∷ Double))])
                         sevArg
                     ]
                 ev = CombatEvent

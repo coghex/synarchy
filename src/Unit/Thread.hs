@@ -10,7 +10,6 @@ import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
-import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, writeIORef, newIORef, atomicModifyIORef'
                   , modifyIORef')
@@ -55,7 +54,7 @@ startUnitThread env = startWorkerThread WorkerSpec
         logDebug logger CatThread "Unit thread stopping..."
     , wsOnCrash     = \_ e → do
         logger ← readIORef (loggerRef env)
-        logError logger CatThread $ "Unit thread crashed: " <> T.pack (show e)
+        logError logger CatThread $ "Unit thread crashed: " <> tshow e
         writeIORef (lifecycleRef env) CleaningUp
     }
 

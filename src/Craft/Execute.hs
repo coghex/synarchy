@@ -12,7 +12,6 @@ module Craft.Execute
     ) where
 
 import UPrelude
-import qualified Data.Text as T
 import Control.Monad (foldM)
 import Craft.Types (RecipeDef(..), RecipeIngredient(..), recipeDemands)
 import Item.Types (ItemInstance(..))
@@ -66,6 +65,6 @@ consumeIngredients ∷ RecipeDef → [ItemInstance] → Either Text [ItemInstanc
 consumeIngredients recipe inv0 = foldM step inv0 (recipeDemands recipe)
   where
     step inv ing = case takeItemsByName (riItem ing) (riCount ing) inv of
-        Nothing   → Left $ "missing " <> T.pack (show (riCount ing))
+        Nothing   → Left $ "missing " <> tshow (riCount ing)
                          <> "x " <> riItem ing
         Just inv' → Right inv'

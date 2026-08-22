@@ -226,9 +226,6 @@ backend env = do
 q ∷ Text → Text
 q t = "\"" <> t <> "\""
 
-tshow ∷ Int → Text
-tshow = T.pack ∘ show
-
 -- | @{ source = …, destination = …, items = { … } }@.
 req ∷ Text → Int → Text → Int → Text → Text
 req srcKind srcId dstKind dstId items = T.concat

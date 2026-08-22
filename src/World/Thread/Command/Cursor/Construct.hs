@@ -17,7 +17,6 @@ module World.Thread.Command.Cursor.Construct
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle)
 import Engine.Core.Capability.WorldSim
@@ -153,7 +152,7 @@ handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt = do
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                 (cs { constructAnchor = Nothing }, ())
             logDebug logger CatWorld $
-                "Construct designation: +" <> T.pack (show (length entries))
+                "Construct designation: +" <> tshow (length entries)
                 <> " tiles (" <> constructTargetCategory tgt <> ")"
             recordDesignationOutcome env "construction.designate"
                 "anchor tile ineligible, unloaded, or requested slot already occupied"

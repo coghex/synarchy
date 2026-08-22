@@ -769,7 +769,7 @@ data MissingDefRef = MissingDefRef
 
 renderMissingDefRef ∷ MissingDefRef → Text
 renderMissingDefRef r =
-    mdrKind r <> " #" <> T.pack (show (mdrEntity r)) <> " on page '"
+    mdrKind r <> " #" <> tshow (mdrEntity r) <> " on page '"
         <> unWorldPageId (mdrPage r) <> "' references unknown definition '"
         <> mdrDefName r <> "'"
 
@@ -910,7 +910,7 @@ data MissingItemDefRef = MissingItemDefRef
 
 renderMissingItemDefRef ∷ MissingItemDefRef → Text
 renderMissingItemDefRef r =
-    midrSource r <> " item #" <> T.pack (show (midrItemId r)) <> " on page '"
+    midrSource r <> " item #" <> tshow (midrItemId r) <> " on page '"
         <> unWorldPageId (midrPage r) <> "' references unknown item \
            \definition '" <> midrDefName r <> "'"
 
@@ -957,7 +957,7 @@ data MissingRecipeRef = MissingRecipeRef
 
 renderMissingRecipeRef ∷ MissingRecipeRef → Text
 renderMissingRecipeRef r =
-    "craft bill #" <> T.pack (show (mrrBillId r)) <> " on page '"
+    "craft bill #" <> tshow (mrrBillId r) <> " on page '"
         <> unWorldPageId (mrrPage r) <> "' references unknown recipe '"
         <> mrrRecipe r <> "'"
 
@@ -989,7 +989,7 @@ data MissingBillOutputItemRef = MissingBillOutputItemRef
 
 renderMissingBillOutputItemRef ∷ MissingBillOutputItemRef → Text
 renderMissingBillOutputItemRef r =
-    "craft bill #" <> T.pack (show (mbirBillId r)) <> " on page '"
+    "craft bill #" <> tshow (mbirBillId r) <> " on page '"
         <> unWorldPageId (mbirPage r) <> "' references unknown output item \
            \definition '" <> mbirDefName r <> "'"
 
@@ -1022,7 +1022,7 @@ data MissingConstructDefRef = MissingConstructDefRef
 
 renderMissingConstructDefRef ∷ MissingConstructDefRef → Text
 renderMissingConstructDefRef r =
-    "construct designation at " <> T.pack (show (mcdTile r)) <> " on page '"
+    "construct designation at " <> tshow (mcdTile r) <> " on page '"
         <> unWorldPageId (mcdPage r) <> "' references unknown building \
            \definition '" <> mcdDefName r <> "'"
 
@@ -1063,9 +1063,9 @@ data MissingMaterialRef = MissingMaterialRef
 
 renderMissingMaterialRef ∷ MissingMaterialRef → Text
 renderMissingMaterialRef r =
-    mmrSource r <> " at " <> T.pack (show (mmrCoord r)) <> " on page '"
+    mmrSource r <> " at " <> tshow (mmrCoord r) <> " on page '"
         <> unWorldPageId (mmrPage r) <> "' references unknown material id "
-        <> T.pack (show (mmrMatId r))
+        <> tshow (mmrMatId r)
 
 -- | Every saved material reference, across all pages, that does not
 --   resolve against the currently-registered material set. Covers the
@@ -1121,9 +1121,9 @@ data MissingFloraRef = MissingFloraRef
 
 renderMissingFloraRef ∷ MissingFloraRef → Text
 renderMissingFloraRef r =
-    mfrSource r <> " at " <> T.pack (show (mfrCoord r)) <> " on page '"
+    mfrSource r <> " at " <> tshow (mfrCoord r) <> " on page '"
         <> unWorldPageId (mfrPage r) <> "' references unknown flora id "
-        <> T.pack (show (mfrFloraId r))
+        <> tshow (mfrFloraId r)
 
 -- | Every saved flora-species reference, across all pages, that does
 --   not resolve against the currently-registered flora catalog. Covers
@@ -1173,7 +1173,7 @@ data MissingLocationRef = MissingLocationRef
 
 renderMissingLocationRef ∷ MissingLocationRef → Text
 renderMissingLocationRef r =
-    "location overlay chunk " <> T.pack (show (mlrCoord r)) <> " on page '"
+    "location overlay chunk " <> tshow (mlrCoord r) <> " on page '"
         <> unWorldPageId (mlrPage r) <> "' references unknown location id '"
         <> mlrLocId r <> "'"
 
@@ -1256,7 +1256,7 @@ data MissingInfectionRef = MissingInfectionRef
 
 renderMissingInfectionRef ∷ MissingInfectionRef → Text
 renderMissingInfectionRef r =
-    "unit #" <> T.pack (show (mirUnitId r)) <> " wound (" <> mirWoundPart r
+    "unit #" <> tshow (mirUnitId r) <> " wound (" <> mirWoundPart r
         <> ") on page '" <> unWorldPageId (mirPage r)
         <> "' references unknown infection id '" <> mirInfType r <> "'"
 

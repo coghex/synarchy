@@ -86,7 +86,7 @@ handleWorldLoadTransactionCommand env logger requestId saveData matReg = do
     outcome ← try (stageSession env logger saveData matReg)
     case outcome of
         Left (ex ∷ SomeException) → do
-            let msg = "internal error during staging: " <> T.pack (show ex)
+            let msg = "internal error during staging: " <> tshow ex
             logWarn logger CatWorld $
                 "Load transaction #" <> tShow requestId <> " staging crashed: " <> msg
             failLoad (loadStatusRef env) requestId msg

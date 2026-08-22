@@ -153,7 +153,7 @@ readLuaArrayAt readElem = do
             Lua.pop 1
             case mv of
                 Nothing → return (Left ("malformed array element at index "
-                    <> T.pack (show i)))
+                    <> tshow i))
                 Just v  → go (i + 1) n (v : acc)
 
 -- | Read {id=string, version=number, required=boolean} from the table

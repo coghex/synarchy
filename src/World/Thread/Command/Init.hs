@@ -76,19 +76,19 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
             normalizeWorldGenInputs rawWorldSize rawPlaceCount
     when (worldSize ≢ rawWorldSize ∨ placeCount ≢ rawPlaceCount) $ do
         let msg = "Normalized worldgen inputs: worldSize "
-                <> T.pack (show rawWorldSize) <> " → "
-                <> T.pack (show worldSize) <> ", plateCount "
-                <> T.pack (show rawPlaceCount) <> " → "
-                <> T.pack (show placeCount)
+                <> tshow rawWorldSize <> " → "
+                <> tshow worldSize <> ", plateCount "
+                <> tshow rawPlaceCount <> " → "
+                <> tshow placeCount
                 <> " (worldSize minimum/multiple "
-                <> T.pack (show minimumWorldSize)
+                <> tshow minimumWorldSize
                 <> ", plateCount min 1)."
         logWarn logger CatWorld msg
         sendGenLog env msg
     logDebug logger CatWorld $ "Initializing world: " <> unWorldPageId pageId
-        <> " (seed=" <> T.pack (show seed)
-        <> ", size=" <> T.pack (show worldSize)
-        <> ", places=" <> T.pack (show placeCount) <> ")"
+        <> " (seed=" <> tshow seed
+        <> ", size=" <> tshow worldSize
+        <> ", places=" <> tshow placeCount <> ")"
     
     sendGenLog env "Initializing world state..."
     
@@ -165,7 +165,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     let plates = generatePlates seed worldSize placeCount
     _ ← evaluate (force plates)
     sendGenLog env $ "Ocean flood fill: "
-        <> T.pack (show (HS.size oceanMap)) <> " ocean chunks"
+        <> tshow (HS.size oceanMap) <> " ocean chunks"
 
     -- Step 3: Climate — refine the timeline's co-evolved climate
     --   with the precise chunk-resolution ocean map. The timeline's own
@@ -187,8 +187,8 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
 
     floraCat ← readIORef (wsFloraCatalogRef worldSim)
     logInfo logger CatWorld $ "Flora catalog snapshot: "
-        <> T.pack (show (HM.size (fcSpecies floraCat))) <> " species, "
-        <> T.pack (show (HM.size (fcWorldGen floraCat))) <> " worldgen entries"
+        <> tshow (HM.size (fcSpecies floraCat)) <> " species, "
+        <> tshow (HM.size (fcWorldGen floraCat)) <> " worldgen entries"
 
     -- Use world gen config (already read for erosion intensity).
     -- 'withVolcanoCtx' populates the Magma context now that
@@ -291,9 +291,9 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     writeIORef (wsZoomAtlasRef worldState) Nothing  -- will be filled after GPU upload
     -- Store chunksPerRow for later use
     logInfo logger CatWorld $ "Zoom atlas: "
-        <> T.pack (show (zadWidth atlas)) <> "×"
-        <> T.pack (show (zadHeight atlas)) <> " ("
-        <> T.pack (show (V.length zoomCache)) <> " chunks)"
+        <> tshow (zadWidth atlas) <> "×"
+        <> tshow (zadHeight atlas) <> " ("
+        <> tshow (V.length zoomCache) <> " chunks)"
     
     -- Step 5: Preview
     writeIORef phaseRef (LoadPhase1 5 totalSteps)
@@ -313,7 +313,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     let radius = chunkLoadRadius
         totalInitialChunks = (2 * radius + 1) * (2 * radius + 1)
     sendGenLog env $ "Generating initial chunks ("
-        <> T.pack (show totalInitialChunks) <> ")..."
+        <> tshow totalInitialChunks <> ")..."
     
     catalog ← readIORef (wsFloraCatalogRef worldSim)
     let centerCoord = ChunkCoord 0 0
@@ -366,11 +366,11 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
         (cam { camZSlice = startZSlice, camZTracking = True }, ())
     
     sendGenLog env $ "World initialized: "
-        <> T.pack (show totalInitialChunks) <> " chunks queued"
+        <> tshow totalInitialChunks <> " chunks queued"
     
     logInfo logger CatWorld $ "World initialized: "
-        <> T.pack (show totalInitialChunks) <> " chunks, "
-        <> "surface at z=" <> T.pack (show surfaceElev)
+        <> tshow totalInitialChunks <> " chunks, "
+        <> "surface at z=" <> tshow surfaceElev
         <> ": " <> unWorldPageId pageId
 
 -- | The namer this page's generated names are rendered through — its
@@ -463,8 +463,8 @@ handleWorldInitArenaCommand env logger pageId = do
 
     let totalChunks = length allChunks
     logInfo logger CatWorld $ "Test arena initialized: "
-        <> T.pack (show totalChunks)
-        <> " flat loam chunks at z=" <> T.pack (show arenaZ)
+        <> tshow totalChunks
+        <> " flat loam chunks at z=" <> tshow arenaZ
 
 handleWorldInitArenaDoneCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
 handleWorldInitArenaDoneCommand env logger pageId = do

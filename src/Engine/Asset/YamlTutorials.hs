@@ -141,7 +141,6 @@ describeTutorialLoadError err = case err of
     <> " parents: " <> commas parents
   where
     commas = T.intercalate ", " ∘ map (\t → "'" <> t <> "'")
-    tshow  = T.pack ∘ show
 
 -- | Validate a parsed tutorial file into the one tree it declares.
 --
@@ -392,7 +391,7 @@ loadTutorialDir logger dir = do
               trees  → do
                 logError logger CatAsset $ "Expected exactly one tutorial"
                   <> " tree in " <> T.pack dir <> ", found "
-                  <> T.pack (show (length trees)) <> " ("
+                  <> tshow (length trees) <> " ("
                   <> T.intercalate ", " (map T.pack files)
                   <> "); this slice supports one active tree, so remove"
                   <> " all but one"
@@ -418,7 +417,7 @@ loadTutorialYaml logger path = do
   case result of
     Left err → do
       logError logger CatAsset $ "Failed to parse tutorial YAML "
-        <> T.pack path <> ": " <> T.pack (show (err ∷ Yaml.ParseException))
+        <> T.pack path <> ": " <> tshow (err ∷ Yaml.ParseException)
       return Nothing
     Right doc → case validateTutorialDoc doc of
       Left e → do

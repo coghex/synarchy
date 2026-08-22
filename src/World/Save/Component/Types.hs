@@ -137,8 +137,8 @@ data ComponentError = ComponentError
 
 renderComponentError ∷ ComponentError → Text
 renderComponentError e =
-    "[" <> cidText (ceComponent e) <> " v" <> T.pack (show (ceVersion e))
-        <> " " <> T.pack (show (cePhase e)) <> "] " <> ceMessage e
+    "[" <> cidText (ceComponent e) <> " v" <> tshow (ceVersion e)
+        <> " " <> tshow (cePhase e) <> "] " <> ceMessage e
   where cidText (ComponentId t) = t
 
 -- | Everything one component needs (requirement 3): a stable id, a
@@ -375,8 +375,8 @@ olderVersionTableError (ComponentId cid) current = go HS.empty
         | otherwise        = go (HS.insert v seen) vs
     violation v what =
         "save component \"" <> cid <> "\": csOlderVersions entry v"
-          <> T.pack (show v) <> " " <> what
-          <> " (csVersion is v" <> T.pack (show current)
+          <> tshow v <> " " <> what
+          <> " (csVersion is v" <> tshow current
           <> "). Every entry must be strictly older than csVersion and "
           <> "appear at most once, or the sorted dispatch table silently "
           <> "shadows a decoder (issue #1275)."
@@ -429,7 +429,7 @@ componentCodec spec =
                       : csOlderVersions spec)
     dispatch = [ (cvVersion cv, cvDecode cv) | cv ← accepted ]
     renderedVersions =
-        [ "v" <> T.pack (show (cvVersion cv)) | cv ← accepted ]
+        [ "v" <> tshow (cvVersion cv) | cv ← accepted ]
 
 -- | Pull one component's typed, self-validated value out of an
 --   already-structurally-valid 'DecodedEnvelope' (assembly path). The
@@ -497,7 +497,7 @@ applyPageSlices cid ver pageIdOf writeSlice slices base =
                               base slices)
   where
     mkErr = ComponentError cid ver AssemblePhase
-    showPid p = T.pack (show p)
+    showPid p = tshow p
 
 -- Stable component identifiers -------------------------------------
 

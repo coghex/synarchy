@@ -35,11 +35,11 @@ loadYamlList logger parseNoun successPhrase toList path = do
     case result of
         Left err → do
             logWarn logger CatAsset $ "Failed to parse " <> parseNoun
-                <> " YAML " <> T.pack path <> ": " <> T.pack (show err)
+                <> " YAML " <> T.pack path <> ": " <> tshow err
             return []
         Right f → do
             let xs = toList f
             logDebug logger CatAsset $ "Loaded "
-                <> T.pack (show (length xs))
+                <> tshow (length xs)
                 <> " " <> successPhrase <> " from " <> T.pack path
             return xs

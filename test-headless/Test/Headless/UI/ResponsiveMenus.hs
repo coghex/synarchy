@@ -2035,9 +2035,6 @@ classifyExpr w h s =
 setScaleCall ∷ Double → Text
 setScaleCall s = "engine.setUIScale(" <> tshow s <> ")"
 
-tshow ∷ Show a ⇒ a → Text
-tshow = T.pack ∘ show
-
 -- * JSON decode targets
 
 data ResSupport = ResSupport { rsW ∷ Int, rsH ∷ Int, rsSupported ∷ Bool } deriving Show

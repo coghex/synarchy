@@ -11,7 +11,6 @@ module World.Thread.Command.Edit.Terrain
     ) where
 
 import UPrelude
-import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
@@ -50,7 +49,7 @@ handleWorldDeleteTileCommand env logger pageId gx gy = do
                 Nothing →
                     logWarn logger CatWorld $
                         "Chunk not loaded for delete tile at "
-                          <> T.pack (show gx) <> "," <> T.pack (show gy)
+                          <> tshow gx <> "," <> tshow gy
                 Just lc → do
                     -- Pre-check the column bounds so we can warn on
                     -- invalid edits before appending. applyEdit is
@@ -63,10 +62,10 @@ handleWorldDeleteTileCommand env logger pageId gx gy = do
                     if i < 0 ∨ i ≥ colLen
                       then logWarn logger CatWorld $
                              "Delete tile out of column range at "
-                               <> T.pack (show gx) <> "," <> T.pack (show gy)
-                               <> " topZ=" <> T.pack (show oldTopZ)
-                               <> " startZ=" <> T.pack (show (ctStartZ col))
-                               <> " len=" <> T.pack (show colLen)
+                               <> tshow gx <> "," <> tshow gy
+                               <> " topZ=" <> tshow oldTopZ
+                               <> " startZ=" <> tshow (ctStartZ col)
+                               <> " len=" <> tshow colLen
                       else do
                         let lc' = applyEdit edit lc
                         atomicModifyIORef' (wsTilesRef ws) $ \w →
@@ -86,8 +85,8 @@ handleWorldDeleteTileCommand env logger pageId gx gy = do
                         -- re-ground on their own).
                         Q.writeQueue (unitQueue env) (UnitReGround gx gy)
                         logDebug logger CatWorld $
-                            "Deleted tile at " <> T.pack (show gx) <> ","
-                              <> T.pack (show gy) <> " z=" <> T.pack (show oldTopZ)
+                            "Deleted tile at " <> tshow gx <> ","
+                              <> tshow gy <> " z=" <> tshow oldTopZ
 
 -- | Raise the column at (gx, gy) one z of the given material.
 --   Records the edit in the log (same WeAddTile path spoil promotion
@@ -111,7 +110,7 @@ handleWorldAddTileCommand env logger pageId gx gy mat = do
                 Nothing →
                     logWarn logger CatWorld $
                         "Chunk not loaded for add tile at "
-                          <> T.pack (show gx) <> "," <> T.pack (show gy)
+                          <> tshow gx <> "," <> tshow gy
                 Just lc → do
                     -- Loud bounds pre-check, mirroring delete: replay
                     -- is silent on out-of-range, live edits warn.
@@ -125,8 +124,8 @@ handleWorldAddTileCommand env logger pageId gx gy mat = do
                     if i < 0 ∨ i > colLen
                       then logWarn logger CatWorld $
                              "Add tile out of column range at "
-                               <> T.pack (show gx) <> "," <> T.pack (show gy)
-                               <> " topZ=" <> T.pack (show oldTopZ)
+                               <> tshow gx <> "," <> tshow gy
+                               <> " topZ=" <> tshow oldTopZ
                       else do
                         let lc' = applyEdit edit lc
                         atomicModifyIORef' (wsTilesRef ws) $ \w →
@@ -140,9 +139,9 @@ handleWorldAddTileCommand env logger pageId gx gy mat = do
                         -- Units standing on the tile ride up.
                         Q.writeQueue (unitQueue env) (UnitReGround gx gy)
                         logDebug logger CatWorld $
-                            "Added tile at " <> T.pack (show gx) <> ","
-                              <> T.pack (show gy)
-                              <> " mat=" <> T.pack (show mat)
+                            "Added tile at " <> tshow gx <> ","
+                              <> tshow gy
+                              <> " mat=" <> tshow mat
 
 -- | Set the walkable-ramp slope bitmask of an existing tile at (gx,gy,z).
 --   Routes through the edit log (WeSetSlope) like every other edit, so a
@@ -166,15 +165,15 @@ handleWorldSetSlopeCommand env logger pageId gx gy z bits = do
                 Nothing →
                     logWarn logger CatWorld $
                         "Chunk not loaded for set slope at "
-                          <> T.pack (show gx) <> "," <> T.pack (show gy)
+                          <> tshow gx <> "," <> tshow gy
                 Just lc → do
                     let col = lcTiles lc V.! idx
                         i   = z - ctStartZ col
                     if i < 0 ∨ i ≥ VU.length (ctSlopes col)
                       then logWarn logger CatWorld $
                              "Set slope z out of column range at "
-                               <> T.pack (show gx) <> "," <> T.pack (show gy)
-                               <> " z=" <> T.pack (show z)
+                               <> tshow gx <> "," <> tshow gy
+                               <> " z=" <> tshow z
                       else do
                         let lc' = applyEdit edit lc
                         atomicModifyIORef' (wsTilesRef ws) $ \w →
@@ -190,9 +189,9 @@ handleWorldSetSlopeCommand env logger pageId gx gy z bits = do
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
                         logDebug logger CatWorld $
-                            "Set slope at " <> T.pack (show gx) <> ","
-                              <> T.pack (show gy) <> " z=" <> T.pack (show z)
-                              <> " bits=" <> T.pack (show bits)
+                            "Set slope at " <> tshow gx <> ","
+                              <> tshow gy <> " z=" <> tshow z
+                              <> " bits=" <> tshow bits
 
 -- | Set a single 3D cell at (gx, gy, z) to a material (id 0 = air) via
 --   the WeSetCell edit path — the locations primitive for carving
@@ -218,16 +217,16 @@ handleWorldSetCellCommand env logger pageId gx gy z mat = do
                 Nothing →
                     logWarn logger CatWorld $
                         "Chunk not loaded for set cell at "
-                          <> T.pack (show gx) <> "," <> T.pack (show gy)
+                          <> tshow gx <> "," <> tshow gy
                 Just lc → do
                     let col = lcTiles lc V.! idx
                         i   = z - ctStartZ col
                     if i < 0
                       then logWarn logger CatWorld $
                              "Set cell z below column floor at "
-                               <> T.pack (show gx) <> "," <> T.pack (show gy)
-                               <> " z=" <> T.pack (show z)
-                               <> " startZ=" <> T.pack (show (ctStartZ col))
+                               <> tshow gx <> "," <> tshow gy
+                               <> " z=" <> tshow z
+                               <> " startZ=" <> tshow (ctStartZ col)
                       else do
                         let lc' = applyEdit edit lc
                         atomicModifyIORef' (wsTilesRef ws) $ \w →
@@ -242,6 +241,6 @@ handleWorldSetCellCommand env logger pageId gx gy z mat = do
                         -- mouth) leaves units floating; re-ground them.
                         Q.writeQueue (unitQueue env) (UnitReGround gx gy)
                         logDebug logger CatWorld $
-                            "Set cell at " <> T.pack (show gx) <> ","
-                              <> T.pack (show gy) <> " z=" <> T.pack (show z)
-                              <> " mat=" <> T.pack (show mat)
+                            "Set cell at " <> tshow gx <> ","
+                              <> tshow gy <> " z=" <> tshow z
+                              <> " mat=" <> tshow mat

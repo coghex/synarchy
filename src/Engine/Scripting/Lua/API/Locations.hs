@@ -124,7 +124,7 @@ loadLocationYamlFn core regs env backendState = do
                         return (acc + 1)
                         ) (0 ∷ Int) defs
                     logInfo logger CatAsset $
-                        "loadLocationYaml: loaded " <> T.pack (show total)
+                        "loadLocationYaml: loaded " <> tshow total
                         <> " locations from " <> T.pack filePath
                     return total
             Lua.pushnumber (Lua.Number (fromIntegral count))

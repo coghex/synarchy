@@ -441,9 +441,9 @@ itemContentsSig inst
     | otherwise = T.intercalate ";" $ sort
         [ T.intercalate ":"
             [ iiDefName c
-            , T.pack (show (iiCurrentFill c))
-            , T.pack (show (iiCondition c))
-            , T.pack (show (iiSharpness c))
+            , tshow (iiCurrentFill c)
+            , tshow (iiCondition c)
+            , tshow (iiSharpness c)
             , itemContentsSig c ]
         | c ← iiContents inst ]
 

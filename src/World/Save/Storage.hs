@@ -327,7 +327,7 @@ data PublishFailure = PublishFailure
 renderPublishFailure ∷ PublishFailure → Text
 renderPublishFailure f =
     "save storage failed for slot '" <> pfSlot f <> "' during "
-        <> T.pack (show (pfPhase f)) <> pathSuffix <> ": " <> pfReason f
+        <> tshow (pfPhase f) <> pathSuffix <> ": " <> pfReason f
   where
     pathSuffix = maybe "" (\p → " (" <> T.pack p <> ")") (pfPath f)
 

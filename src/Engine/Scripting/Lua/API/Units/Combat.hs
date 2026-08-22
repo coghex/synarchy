@@ -20,7 +20,6 @@ import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
-import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
@@ -470,7 +469,7 @@ unitInjureFn env = do
                     "injure"
                     [ ("part",      TE.decodeUtf8Lenient partBS)
                     , ("woundKind", TE.decodeUtf8Lenient kindBS)
-                    , ("severity",  T.pack (show (woundSeverity w))) ]
+                    , ("severity",  tshow (woundSeverity w)) ]
             -- Impact blood (#607): unit.injure has no attacker, so
             -- direction always falls back to a deterministic seeded
             -- angle (requirement 7) — this debug path exists precisely

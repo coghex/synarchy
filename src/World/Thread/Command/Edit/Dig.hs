@@ -11,7 +11,6 @@ import UPrelude
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef')
@@ -132,7 +131,7 @@ handleWorldDigTileCommand env rngRef unitQ logger pageId rawGX rawGY rawUX rawUY
                     if blocked
                       then logDebug logger CatWorld $
                              "Dig blocked (no spoil room) at "
-                               <> T.pack (show gx) <> "," <> T.pack (show gy)
+                               <> tshow gx <> "," <> tshow gy
                       else do
                         let corners' = drainCorners (ux, uy) (gx, gy)
                                                     amount oldCorners
@@ -150,10 +149,10 @@ handleWorldDigTileCommand env rngRef unitQ logger pageId rawGX rawGY rawUX rawUY
                                 when (leftover > 0.001) $
                                     logWarn logger CatWorld $
                                         "Spoil leftover "
-                                          <> T.pack (show leftover)
+                                          <> tshow leftover
                                           <> " despite capacity check at "
-                                          <> T.pack (show gx) <> ","
-                                          <> T.pack (show gy)
+                                          <> tshow gx <> ","
+                                          <> tshow gy
                                 writeIORef (wsSpoilRef ws) piles'
                                 -- Promote any tile whose corners
                                 -- completed a full level.
@@ -244,7 +243,7 @@ spawnYieldItems env rngRef logger ws defName (gx, gy) n = do
         Nothing →
             logWarn logger CatWorld $
                 "Dig yield: unknown item def '" <> defName
-                  <> "' — dropping " <> T.pack (show n)
+                  <> "' — dropping " <> tshow n
         Just _ → forM_ [1 .. n] $ \_ → do
             mInst ← materializeItem itemMgr logger rngRef
                         (freshItemInstanceId env) pristineItem defName
@@ -322,4 +321,4 @@ promoteFullSpoilTiles env unitQ logger _pageId ws startV = do
                         Q.writeQueue unitQ (UnitReGround tx ty)
                         logDebug logger CatWorld $
                             "Spoil promoted to terrain at "
-                              <> T.pack (show tx) <> "," <> T.pack (show ty)
+                              <> tshow tx <> "," <> tshow ty

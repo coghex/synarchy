@@ -28,7 +28,6 @@ import Control.Exception (displayException)
 import Data.IORef (readIORef)
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
-import qualified Data.Text as T
 import Engine.Core.Error.Exception (EngineException)
 import Engine.Core.Log (shutdownLogger)
 import Engine.Core.State (EngineEnv, engineConfig, loggerRef)
@@ -145,7 +144,7 @@ luaThreadOrAbort env started (Left _) = do
     stopWorkers (\name → reportBootCleanup ("stopped the " <> name <> " worker"))
                 live
     reportBootCleanup $
-        T.pack (show (length live)) <> " worker thread(s) stopped"
+        tshow (length live) <> " worker thread(s) stopped"
     -- Same tail as 'handleBootResult': flush buffered log lines before
     -- exiting, so the boot's own context isn't lost with the process.
     logger ← readIORef (loggerRef env)

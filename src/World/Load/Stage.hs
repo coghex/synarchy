@@ -141,9 +141,9 @@ stageSession env logger saveData registry = case sdWorlds saveData of
         if not (null buildingOrphans) ∨ not (null unitOrphans)
           then pure $ Left $ StageError $
                  "internal error: staging produced "
-                 <> T.pack (show (length buildingOrphans))
+                 <> tshow (length buildingOrphans)
                  <> " orphaned building(s) / "
-                 <> T.pack (show (length unitOrphans))
+                 <> tshow (length unitOrphans)
                  <> " orphaned unit(s) after content validation already "
                  <> "passed — aborting rather than silently dropping them"
           else do
@@ -291,11 +291,11 @@ stagePage logger registry palette catalog buildingDefs unitDefs
                              (wpsContainerKnowledge wps)
     unless (null staleKnowledge) $
         logInfo logger CatWorld $
-            "Save load: dropping " <> T.pack (show (length staleKnowledge))
+            "Save load: dropping " <> tshow (length staleKnowledge)
             <> " container-knowledge record(s) on page "
             <> unWorldPageId pid <> " whose building no longer exists ("
             <> T.intercalate ", "
-                   [ T.pack (show (unBuildingId b)) | b ← staleKnowledge ]
+                   [ tshow (unBuildingId b) | b ← staleKnowledge ]
             <> ")"
     writeIORef (wsContainerKnowledgeRef worldState)
         (retainContainers liveBuildings (wpsContainerKnowledge wps))
@@ -412,8 +412,8 @@ stagePage logger registry palette catalog buildingDefs unitDefs
                       elevationAtGlobal seed (wgpPlates params) worldSize camGX camGY
                   startZSlice = surfaceElev + surfaceHeadroom
               logInfo logger CatWorld $ "Save loaded: "
-                  <> T.pack (show totalInitialChunks) <> " chunks, "
-                  <> "surface at z=" <> T.pack (show surfaceElev)
+                  <> tshow totalInitialChunks <> " chunks, "
+                  <> "surface at z=" <> tshow surfaceElev
                   <> ": " <> unWorldPageId pid
               pure $ Just Camera2D
                   { camPosition     = (wpsCameraX wps, wpsCameraY wps)

@@ -10,7 +10,6 @@ module World.Thread.Command.Edit.Vegetation
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
@@ -53,15 +52,15 @@ handleWorldSetVegCommand wsc logger pageId rawGX rawGY z vegId = do
                 Nothing →
                     logWarn logger CatWorld $
                         "Chunk not loaded for set veg at "
-                          <> T.pack (show gx) <> "," <> T.pack (show gy)
+                          <> tshow gx <> "," <> tshow gy
                 Just lc → do
                     let col = lcTiles lc V.! idx
                         i   = z - ctStartZ col
                     if i < 0 ∨ i ≥ VU.length (ctVeg col)
                       then logWarn logger CatWorld $
                              "Set veg z out of column range at "
-                               <> T.pack (show gx) <> "," <> T.pack (show gy)
-                               <> " z=" <> T.pack (show z)
+                               <> tshow gx <> "," <> tshow gy
+                               <> " z=" <> tshow z
                       else do
                         let lc' = applyEdit edit lc
                         atomicModifyIORef' (wsTilesRef ws) $ \w →
@@ -72,9 +71,9 @@ handleWorldSetVegCommand wsc logger pageId rawGX rawGY z vegId = do
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
                         logDebug logger CatWorld $
-                            "Set veg at " <> T.pack (show gx) <> ","
-                              <> T.pack (show gy) <> " z=" <> T.pack (show z)
-                              <> " vegId=" <> T.pack (show vegId)
+                            "Set veg at " <> tshow gx <> ","
+                              <> tshow gy <> " z=" <> tshow z
+                              <> " vegId=" <> tshow vegId
 
 -- | Plant a single row-crop FloraInstance at (gx, gy) via the
 --   WePlaceFlora edit path — the farm AI's (#336) row-crop planting
@@ -111,7 +110,7 @@ handleWorldPlantRowCropAtCommand wsc logger pageId rawGX rawGY cropName = do
                 Nothing →
                     logWarn logger CatWorld $
                         "Chunk not loaded for plant row crop at "
-                          <> T.pack (show gx) <> "," <> T.pack (show gy)
+                          <> tshow gx <> "," <> tshow gy
                 Just lc → do
                     let col = lcTiles lc V.! idx
                         z   = lcSurfaceMap lc VU.! idx
@@ -135,17 +134,17 @@ handleWorldPlantRowCropAtCommand wsc logger pageId rawGX rawGY cropName = do
                         Nothing →
                             logWarn logger CatWorld $
                                 "Plant row crop refused (unknown/non-row-crop"
-                                  <> " species) at " <> T.pack (show gx) <> ","
-                                  <> T.pack (show gy) <> " crop=" <> cropName
+                                  <> " species) at " <> tshow gx <> ","
+                                  <> tshow gy <> " crop=" <> cropName
                         Just _ | not (isTilledSoil vg) →
                             logWarn logger CatWorld $
                                 "Plant row crop refused (not tilled soil) at "
-                                  <> T.pack (show gx) <> "," <> T.pack (show gy)
+                                  <> tshow gx <> "," <> tshow gy
                         Just _ | hasExistingFlora ∨ hasExistingPlot →
                             logWarn logger CatWorld $
                                 "Plant row crop refused (tile already "
-                                  <> "planted) at " <> T.pack (show gx) <> ","
-                                  <> T.pack (show gy)
+                                  <> "planted) at " <> tshow gx <> ","
+                                  <> tshow gy
                         Just (fid, baseWidth) → do
                             paramsM ← readIORef (wsGenParamsRef ws)
                             date ← readIORef (wsDateRef ws)
@@ -163,5 +162,5 @@ handleWorldPlantRowCropAtCommand wsc logger pageId rawGX rawGY cropName = do
                             writeIORef (wsBgQuadCacheRef ws)   Nothing
                             logDebug logger CatWorld $
                                 "Planted row crop " <> cropName <> " at "
-                                  <> T.pack (show gx) <> ","
-                                  <> T.pack (show gy)
+                                  <> tshow gx <> ","
+                                  <> tshow gy

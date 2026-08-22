@@ -235,7 +235,7 @@ loadVideoConfig logger path = do
     case result of
         Left err → do
             logWarn logger CatInit $ "Error loading video config: "
-                                   <> T.pack (show err)
+                                   <> tshow err
             return defaultVideoConfig
         Right vf → return $ VideoConfig
             { vcWidth      = resWidth (vfResolution vf)

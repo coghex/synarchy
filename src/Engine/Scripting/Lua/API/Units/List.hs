@@ -82,11 +82,11 @@ unitListFn env = do
         then return "No units spawned"
         else return $ T.unpack $ T.intercalate "\n" $
             map (\(uid, inst) →
-                "id=" <> T.pack (show (unUnitId uid))
+                "id=" <> tshow (unUnitId uid)
                 <> " " <> uiDefName inst
-                <> " (" <> T.pack (show (uiGridX inst))
-                <> ", " <> T.pack (show (uiGridY inst))
-                <> ", " <> T.pack (show (uiGridZ inst)) <> ")"
+                <> " (" <> tshow (uiGridX inst)
+                <> ", " <> tshow (uiGridY inst)
+                <> ", " <> tshow (uiGridZ inst) <> ")"
             ) entries
     Lua.pushstring (TE.encodeUtf8 (T.pack result))
     return 1

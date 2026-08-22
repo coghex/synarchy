@@ -5,7 +5,6 @@ module World.Thread
     ) where
 
 import UPrelude
-import qualified Data.Text as T
 import Data.IORef (IORef, readIORef, writeIORef, newIORef)
 import Control.Concurrent (threadDelay)
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -51,7 +50,7 @@ startWorldThread env = startWorkerThread WorkerSpec
         logDebug logger CatWorld "World thread stopping..."
     , wsOnCrash     = \_ e → do
         logger ← readIORef (ccLoggerRef (toCoreCapability env))
-        logError logger CatWorld $ "World thread crashed: " <> T.pack (show e)
+        logError logger CatWorld $ "World thread crashed: " <> tshow e
         writeIORef (ccLifecycleRef (toCoreCapability env)) CleaningUp
     }
 
@@ -145,7 +144,7 @@ processAuthorizedSave env logger = do
         discarded = length commands - length authorized - length deferred
     when (discarded > 0) $
         logWarn logger CatWorld $
-            "Load publish discarded " <> T.pack (show discarded)
+            "Load publish discarded " <> tshow discarded
             <> " stale WorldCommand(s) queued before the whole-session replacement"
     forM_ authorized $ handleWorldCommand env logger
     forM_ deferred $ Q.writeQueue (wsWorldQueue (toWorldSimCapability env))

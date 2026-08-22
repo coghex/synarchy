@@ -45,7 +45,7 @@ loadLootTableYaml logger path = do
     case result of
         Left err → do
             logWarn logger CatAsset $ "Failed to parse loot table YAML "
-                <> T.pack path <> ": " <> T.pack (show err)
+                <> T.pack path <> ": " <> tshow err
             return Nothing
         Right def → do
             logDebug logger CatAsset $ "Loaded loot table '"

@@ -184,7 +184,6 @@ module World.Save.Component.Page
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.List as L
-import qualified Data.Text as T
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import Craft.Bills (emptyCraftBills)
@@ -238,9 +237,6 @@ import World.Save.Component.Types
 -- Canonical (page-id ascending) ordered list of a snapshot's pages.
 orderedPages ∷ SessionSnapshot → [PageSnapshot]
 orderedPages = L.sortOn pgsPageId . HM.elems . snapPages
-
-tshow ∷ Show a ⇒ a → Text
-tshow = T.pack . show
 
 -- Frozen leaf DTOs (requirement 4) -----------------------------------
 

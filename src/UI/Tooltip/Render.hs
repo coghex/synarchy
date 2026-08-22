@@ -120,7 +120,7 @@ rebuildVisuals pageH content fontCache mgr0 =
                 let lns = hintLines content
                     step (acc, m) (i, lineTxt) =
                         let (h, m1) = createText
-                                ("__tooltip_hint_" <> T.pack (show i))
+                                ("__tooltip_hint_" <> tshow i)
                                 lineTxt
                                 (tsFont style)
                                 (tsHintFontSize style)

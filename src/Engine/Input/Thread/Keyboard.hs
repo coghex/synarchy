@@ -14,7 +14,6 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
-import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
 import Data.IORef (readIORef, writeIORef, newIORef, atomicModifyIORef')
 import Engine.Core.Log (logDebug, LogCategory(..))
@@ -136,7 +135,7 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
     case (shellMode, uiFocus) of
       (TextInputMode (FocusId fid),_) → do
         logger ← readIORef (ccLoggerRef (toCoreCapability env))
-        logDebug logger CatInput $ "Input mode: ShellTextInput, focusId=" <> T.pack (show fid)
+        logDebug logger CatInput $ "Input mode: ShellTextInput, focusId=" <> tshow fid
         when (key ≡ KeyGrave ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
             Q.writeQueue (ivLuaQueue (toInputViewCapability env)) LuaShellToggle
             markMatched "shellToggle"
@@ -191,7 +190,7 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
 
       (GameInputMode, Just (ElementHandle elemId)) → do
         logger ← readIORef (ccLoggerRef (toCoreCapability env))
-        logDebug logger CatInput $ "Input mode: UITextInput, elementId=" <> T.pack (show elemId)
+        logDebug logger CatInput $ "Input mode: UITextInput, elementId=" <> tshow elemId
         when (key ≡ KeyGrave ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
             Q.writeQueue (ivLuaQueue (toInputViewCapability env)) LuaShellToggle
             markMatched "shellToggle"
@@ -229,7 +228,7 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
 
       (GameInputMode, Nothing) → do
         logger ← readIORef (ccLoggerRef (toCoreCapability env))
-        logDebug logger CatInput $ "Input mode: GameInputMode, key=" <> T.pack (show key)
+        logDebug logger CatInput $ "Input mode: GameInputMode, key=" <> tshow key
 
         -- #745: keyboard CONTROL focus — Tab/Shift+Tab traversal,
         -- Enter/Space activation, Escape clears, and arrow-key
