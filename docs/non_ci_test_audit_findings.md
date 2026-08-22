@@ -29,7 +29,7 @@ approval.
 - [x] NCT-7. Injury-log probe never gates a real fall's event emission — [#1583]
 - [x] NCT-8. Listing movement courses unnecessarily boots the engine — [#1586]
 - [x] NCT-9. Legacy river diagnostics present anomalies as tests but never fail — [#1590]
-- [ ] NCT-10. Legacy water diagnostics present anomalies as tests but never fail
+- [x] NCT-10. Legacy water diagnostics present anomalies as tests but never fail — [#1594]
 - [ ] NCT-11. Baseline capture accepts variation in its strict worldgen invariants
 - [ ] NCT-12. Thermo probe treats a failed ice dump as absent evidence
 - [ ] NCT-13. Etymology UI probe skips required location and river entry points
@@ -425,7 +425,7 @@ a regression.
 - **Remaining uncertainty:** The acceptable count for each anomaly is a domain
   decision; the current lack of any test verdict is unambiguous.
 
-### NCT-10. Legacy water diagnostics present anomalies as tests but never fail
+### [#1594] NCT-10. Legacy water diagnostics present anomalies as tests but never fail
 
 The standalone water diagnostics repeat the river tools' misleading test
 shape in a separate subsystem: both identify conditions their descriptions
