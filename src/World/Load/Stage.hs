@@ -242,25 +242,15 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     writeIORef (wsTillDesignationsRef worldState) (wpsTillDesignations wps)
     writeIORef (wsCropPlotsRef worldState) (wpsCropPlots wps)
     writeIORef (wsPlantDesignationsRef worldState) (wpsPlantDesignations wps)
-    -- Issue #763: craft bills / power nodes are
-    -- restored VERBATIM, never pruned against the save's own building
-    -- snapshot. A bill/node whose station/building instance is absent
-    -- (demolished before the save was ever taken) is EXPLICITLY
-    -- documented, tolerated gameplay state per the #758-era contract —
-    -- "a demolished station's bills lingering, visible + cancellable"
+    -- Issue #763: craft bills / power nodes are restored VERBATIM,
+    -- never filtered against the save's own building snapshot. A
+    -- bill/node whose station/building instance is absent (demolished
+    -- before the save was ever taken) is EXPLICITLY documented,
+    -- tolerated gameplay state per the #758 contract — "a demolished
+    -- station's bills lingering, visible + cancellable"
     -- (docs/persistence_state_inventory.md) — not corruption to clean
-    -- up. 'Craft.Bills.pruneToStations'/'Power.Types.pruneToBuildings'
-    -- exist for a DIFFERENT scenario their own doc comments name (a
-    -- station's building DEFINITION deregistered between sessions,
-    -- orphaning every instance of that type) — but that scenario is
-    -- already unreachable by the time staging runs at all: this
-    -- module's caller (Engine.Scripting.Lua.API.Save.continueLoad)
-    -- rejects the WHOLE load outright via missingDefReferences before
-    -- staging ever starts if any building instance references an
-    -- unregistered definition, so every wpsBuildings instance here is
-    -- already guaranteed to resolve. Applying the prune here only ever
-    -- catches the FIRST (tolerated) case, silently discarding bills/
-    -- nodes #763 requires to be restored.
+    -- up. Pinned by "dangling craft bills / power nodes survive
+    -- staging" in Test.Headless.World.Identity.
     writeIORef (wsCraftBillsRef worldState) (wpsCraftBills wps)
     writeIORef (wsPowerNodesRef worldState) (wpsPowerNodes wps)
 

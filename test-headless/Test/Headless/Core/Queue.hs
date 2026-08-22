@@ -1,6 +1,6 @@
 {-# LANGUAGE ExplicitForAll #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module Test.Engine.Core.Queue (spec) where
+module Test.Headless.Core.Queue (spec) where
 
 import UPrelude
 import Test.Hspec

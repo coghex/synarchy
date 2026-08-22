@@ -38,7 +38,6 @@ module Craft.Bills
     , setBillPaused
     , setBillWorking
     , reorderBill
-    , pruneToStations
     ) where
 
 import UPrelude
@@ -47,7 +46,6 @@ import Data.Hashable (Hashable)
 import Data.List (sortOn, findIndex)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
-import qualified Data.HashSet as HS
 import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..))
 
@@ -389,11 +387,3 @@ reorderBill dir bid bills = case lookupBill bid bills of
                                      $ HM.insert (cbId neighbor) neighbor'
                                      $ cbsBills bills
                        in (bills { cbsBills = inserted }, True)
-
--- | Drop bills whose station isn't in the given id set — the save-load
---   defense (a bill whose station's def was deregistered between
---   sessions would otherwise point at nothing forever).
-pruneToStations ∷ HS.HashSet BuildingId → CraftBills → CraftBills
-pruneToStations stations bills = bills
-    { cbsBills = HM.filter ((`HS.member` stations) . cbStation)
-                           (cbsBills bills) }

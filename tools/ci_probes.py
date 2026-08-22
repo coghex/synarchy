@@ -899,7 +899,7 @@ def _self_test() -> int:
          "test-headless source -> no probes"),
         (["test-headless/Spec.hs"], [], "test-headless entry point -> no probes"),
         (["test/Spec.hs"], [], "graphical test entry point -> no probes"),
-        (["test/Test/Engine/Core/Queue.hs"], [],
+        (["test/Test/Engine/Graphics/Vulkan/Device.hs"], [],
          "nested graphical test source -> no probes"),
         # #1359 requirement 2: a test path neither adds nor removes probes
         # from what the production path alone selects.
