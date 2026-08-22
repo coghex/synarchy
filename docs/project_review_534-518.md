@@ -11,7 +11,7 @@ The glacier-pair cleanup, thought and unified state-of-mind systems, data-driven
 - [x] PRR-1. Parallel probes race while mutating the shared Cabal build directory — [#1570]
 - [x] PRR-2. `make ci` no longer runs every locally reproducible CI gate it claims to mirror — [no-issue]
 - [x] PRR-3. Coffee's consumable effects have no production gameplay caller — [#1580]
-- [ ] PRR-4. Auto-harvest ignores the farming skill it claims to scale by
+- [x] PRR-4. Auto-harvest ignores the farming skill it claims to scale by — [#1582]
 
 ## 1. Parallel probe build isolation
 
@@ -94,7 +94,7 @@ The glacier-pair cleanup, thought and unified state-of-mind systems, data-driven
 
 ## 4. Farming-skill effect on harvest
 
-### PRR-4. Auto-harvest ignores the farming skill it claims to scale by
+### [#1582] PRR-4. Auto-harvest ignores the farming skill it claims to scale by
 
 > **Captured note:** Make farming skill observably gate or scale automatic harvesting, and add a comparative regression that distinguishes low- and high-skill workers. The current action is instant for every eligible unit; farming affects later role derivation and gains XP after success, but it does not change harvest eligibility, duration, or yield.
 
