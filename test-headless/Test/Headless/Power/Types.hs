@@ -1,4 +1,4 @@
--- | Power-node registry tests (#358): the pure add/remove/lookup/prune
+-- | Power-node registry tests (#358): the pure add/remove/lookup
 --   transitions in Power.Types that the power.* verbs wrap, plus the
 --   save-format roundtrip (nodes persist in WorldPageSave, v73).
 --
@@ -15,7 +15,6 @@ module Test.Headless.Power.Types (spec) where
 import UPrelude
 import Test.Hspec
 import qualified Data.ByteString.Char8 as BS
-import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import qualified Data.Serialize as S
 import qualified Data.Yaml as Yaml
@@ -150,13 +149,6 @@ spec = do
             let (n1, _) = addPowerNode panel1 PowerSource 400 emptyPowerNodes
                 (n2, _) = addPowerNode battery1 PowerStorage 5000 n1
             S.decode (S.encode n2) `shouldBe` Right n2
-
-        it "pruneToBuildings drops nodes whose building is gone" $ do
-            let (n1, i1) = addPowerNode panel1 PowerSource 400 emptyPowerNodes
-                (n2, i2) = addPowerNode battery1 PowerStorage 5000 n1
-                pruned = pruneToBuildings (HS.singleton battery1) n2
-            lookupPowerNode i1 pruned `shouldBe` Nothing
-            pnBuilding ⊚ lookupPowerNode i2 pruned `shouldBe` Just battery1
 
 -- | A rejection whose message names @needle@ — asserted on the reason,
 --   not just on Left, so a rule can't pass by failing for the wrong

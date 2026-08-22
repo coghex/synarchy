@@ -414,10 +414,13 @@ replayWireEdits = foldl' step HS.empty
     step acc _                  = acc
 
 -- | Every node's tile, resolved via the building it rides on and
---   restricted to one page. A node whose building isn't on this page is
---   dropped (shouldn't happen — a node only exists riding an
---   already-placed building on its own page — but cheap to filter
---   defensively rather than assume).
+--   restricted to one page. A node whose building doesn't resolve at
+--   all is simply skipped: an absent host is documented, tolerated
+--   state (#758), since a save carrying a node whose building was
+--   demolished before the save was taken restores that node verbatim
+--   (see 'Power.Types' and docs/persistence_state_inventory.md). A
+--   node resolving to a building on a DIFFERENT page is filtered for
+--   the same cost, keeping this one page's answer self-contained.
 positionsOf ∷ WorldPageId → BuildingManager → PowerNodes
            → HM.HashMap PowerNodeId (Int, Int)
 positionsOf pageId bm nodes = HM.fromList

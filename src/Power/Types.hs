@@ -42,7 +42,6 @@ module Power.Types
     , lookupPowerNode
     , nodeForBuilding
     , allNodes
-    , pruneToBuildings
     ) where
 
 import UPrelude
@@ -51,7 +50,6 @@ import Data.Hashable (Hashable)
 import Data.List (find, sortOn)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
-import qualified Data.HashSet as HS
 import Building.Types (BuildingId(..))
 import Power.Base (PowerNodeSpec(..))
 
@@ -149,12 +147,3 @@ nodeForBuilding bid = find ((≡ bid) . pnBuilding) . HM.elems . pnsNodes
 --   and a future network-scan's enumeration point.
 allNodes ∷ PowerNodes → [PowerNode]
 allNodes = sortOn pnId . HM.elems . pnsNodes
-
--- | Drop nodes whose building isn't in the given id set — the same
---   save-load defense as 'Craft.Bills.pruneToStations' (a node whose
---   building's def was deregistered between sessions would otherwise
---   point at nothing forever).
-pruneToBuildings ∷ HS.HashSet BuildingId → PowerNodes → PowerNodes
-pruneToBuildings buildings nodes = nodes
-    { pnsNodes = HM.filter ((`HS.member` buildings) . pnBuilding)
-                           (pnsNodes nodes) }
