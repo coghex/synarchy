@@ -213,6 +213,14 @@ MIN_ORCHESTRATION_LEASE_SECONDS = 2.0 * run_probes.DEFAULT_TIMEOUT
 # boundary above enforces a usable one.
 RENEW_DIVISOR = 3
 MIN_RENEW_INTERVAL = 0.05
+# The upper bound, and it is not arbitrary. `timedelta` overflows well
+# below the float range — `timedelta(seconds=1e100)` raises — and the
+# census `claim` definition caps `lease_seconds` at 1e9, so a lease
+# above that would be refused when the acquisition was RECORDED, after
+# the probe had already been claimed. One billion seconds is thirty-one
+# years, which is not a short leash; anything past it is a typo or a
+# unit mistake, and both are better refused before anything is claimed.
+MAX_LEASE_SECONDS = 1_000_000_000.0
 
 EXIT_OK = 0
 EXIT_REJECTED = 2
@@ -404,6 +412,13 @@ def require_lease(value, what: str = "a claim lease") -> float:
     `OverflowError` respectively: a traceback out of an acquisition,
     where this module promises a controlled refusal.
 
+    The upper bound is the same kind of trap one step along: a lease is
+    finite and positive and still unusable if it is large enough that
+    `timedelta` cannot represent it, which raises `OverflowError` from
+    inside `_payload` — again a traceback where a refusal was promised.
+    `MAX_LEASE_SECONDS` is where the census's own cap sits, so a lease
+    this accepts is one the acquisition record can also hold.
+
     `True` is excluded explicitly, because `isinstance(True, int)`.
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -415,6 +430,10 @@ def require_lease(value, what: str = "a claim lease") -> float:
     if value <= 0:
         raise ClaimError(
             f"{what} must be a positive number of seconds, got {value!r}")
+    if value > MAX_LEASE_SECONDS:
+        raise ClaimError(
+            f"{what} must be at most {MAX_LEASE_SECONDS:.0f} seconds "
+            f"(about thirty-one years), got {value!r}")
     return float(value)
 
 
@@ -587,7 +606,7 @@ def _read_payload(path: Path, expected: str | None = None):
         return None, mtime
     lease = document.get("lease_seconds")
     if (isinstance(lease, bool) or not isinstance(lease, (int, float))
-            or not lease > 0):
+            or not math.isfinite(lease) or not 0 < lease <= MAX_LEASE_SECONDS):
         return None, mtime
     for field in ("acquired_at", "renewed_at", "expires_at"):
         if parse_stamp(document.get(field)) is None:

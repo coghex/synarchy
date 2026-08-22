@@ -969,7 +969,13 @@ def test_orchestration_refuses_a_lease_that_cannot_survive_a_run() -> None:
         code, err = cli_lease("0.1")
         expect(code == probe_claim.EXIT_REJECTED and "--lease-seconds" in err,
                "`--lease-seconds 0.1` is rejected by the CLI too")
-        for text in ("nan", "inf", "-inf", "infinity", "-1"):
+        # A lease can also be finite, positive and still unusable: big
+        # enough and `timedelta` overflows, which is the same traceback
+        # in a different disguise. The bound is where the census's own
+        # cap sits, so a lease that is accepted is one the acquisition
+        # record can hold too.
+        for text in ("nan", "inf", "-inf", "infinity", "-1", "1e100",
+                     "1e300", str(probe_claim.MAX_LEASE_SECONDS + 1)):
             code, err = cli_lease(text)
             expect(code == probe_claim.EXIT_REJECTED,
                    f"`--lease-seconds {text}` is a controlled refusal, not a "
@@ -978,12 +984,17 @@ def test_orchestration_refuses_a_lease_that_cannot_survive_a_run() -> None:
             _code, err = cli_lease(text)
             expect("finite" in err,
                    f"...and `--lease-seconds {text}` says it must be finite")
+        for text in ("1e100", "1e300"):
+            _code, err = cli_lease(text)
+            expect(str(int(probe_claim.MAX_LEASE_SECONDS)) in err,
+                   f"...and `--lease-seconds {text}` names the maximum")
 
         # The same values through the low-level API, which #1436 and any
         # other caller reach directly.
         with claim_root() as root:
             for value in (float("nan"), float("inf"), float("-inf"), 0, -1,
-                          True, None, "600"):
+                          True, None, "600", 1e100, 1e300,
+                          probe_claim.MAX_LEASE_SECONDS + 1):
                 expect_raises(
                     probe_claim.ClaimError,
                     lambda v=value: probe_claim.acquire("alpha", root=root,
@@ -992,6 +1003,25 @@ def test_orchestration_refuses_a_lease_that_cannot_survive_a_run() -> None:
                     "lease")
                 expect(probe_claim.read_claim("alpha", root=root) is None,
                        f"...and a {value!r} lease claimed nothing")
+            # The bound is inclusive, and a lease at it really works —
+            # a refusal that also rejected every usable value would be
+            # a different bug wearing this one's clothes.
+            edge = probe_claim.acquire(
+                "gamma", root=root,
+                lease_seconds=probe_claim.MAX_LEASE_SECONDS)
+            expect(probe_claim.read_claim("gamma", root=root)["token"]
+                   == edge.token,
+                   f"a lease of exactly {probe_claim.MAX_LEASE_SECONDS:.0f} "
+                   f"is accepted and really claims the probe")
+            # The bound and the census's own cap must not drift: a lease
+            # this accepts has to be one the acquisition RECORD can hold,
+            # or the refusal simply moves to after the probe is claimed.
+            declared = probe_census.load_schema()["$defs"]["claim"][
+                "properties"]["lease_seconds"]["maximum"]
+            expect(declared == probe_claim.MAX_LEASE_SECONDS,
+                   f"the lease bound is exactly the census `claim` schema's "
+                   f"own cap (tool {probe_claim.MAX_LEASE_SECONDS!r}, schema "
+                   f"{declared!r})")
             expect_raises(
                 probe_claim.ClaimError,
                 lambda: probe_claim.Renewer(

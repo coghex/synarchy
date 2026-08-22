@@ -1123,7 +1123,10 @@ lease would be born already expired. A lease is required to be finite as well
 as positive, at the boundary and in `acquire` alike: `float` parses `nan`,
 `inf` and `-inf`, NaN fails every ordering comparison and infinity passes
 every lower bound, so both slip past a bare `<` and reach `timedelta`, which
-raises where this module promises a controlled refusal. Every acquisition mints a unique token, and release, renewal and
+raises where this module promises a controlled refusal. It is bounded ABOVE
+too, at the census `claim` schema's own 1e9 cap: a lease can be finite and
+positive and still overflow `timedelta`, and one the acquisition record could
+not hold would only move the refusal to after the probe was claimed. Every acquisition mints a unique token, and release, renewal and
 takeover are all checked against it: concurrent reclaimers of one lapsed claim
 yield exactly one successor, and an expired owner that exits late finds a
 token that is not its own and leaves the successor alone. An empty, truncated,
