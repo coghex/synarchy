@@ -32,6 +32,7 @@ import qualified Data.HashSet as HS
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
+import World.Generate.Coordinates (globalToChunk)
 import World.Constants (seaLevel)
 import World.Fluid.Lake.Types
     ( Lake(..), WorldLakes(..), LakeChunkEntry(..), emptyWorldLakes
@@ -146,14 +147,8 @@ identifyLavaPools worldSize poolDepth poolRadius ctx lakes rivers terrain
     -- pool entries under keys the reader never asks for.
     chunkOf ∷ Int → Int → (ChunkCoord, Int)
     chunkOf gx gy =
-        let fd a = let (q, r) = a `divMod` chunkSize
-                   in if r < 0 then q - 1 else q
-            cx = fd gx
-            cy = fd gy
-            lx = gx - cx * chunkSize
-            ly = gy - cy * chunkSize
-        in ( ChunkCoord cx cy
-           , ly * chunkSize + lx )
+        let (cc, (lx, ly)) = globalToChunk gx gy
+        in (cc, ly * chunkSize + lx)
 
     lakeAt gx gy tz =
         let (cc, i) = chunkOf gx gy

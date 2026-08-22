@@ -13,7 +13,14 @@ module World.Generate.Coordinates
     ) where
 
 import UPrelude
-import World.Types
+-- Imports here are deliberately NARROW (#1113): the "World.Types"
+-- umbrella re-exports "World.Generate.Types", which reaches
+-- "World.Magma.Init" and through it Field/Lookup, so importing it
+-- would make this module unreachable from the very consumers
+-- 'globalToChunk' exists to serve. Keep this at "World.Chunk.Types",
+-- which owns 'chunkSize' and the seam wrap, and keep "World.Grid"
+-- narrow for the same reason.
+import World.Chunk.Types (ChunkCoord(..), chunkSize, wrapChunkCoordU)
 import World.Grid (worldToGrid)
 import Engine.Graphics.Camera (CameraFacing(..))
 
