@@ -3413,8 +3413,12 @@ were checked rather than assumed.
   The module (now `UI.ShellFocus`) has an explicit export list carrying
   only `FocusId`/`FocusTarget`/`FocusManager`/`InputMode` and its five
   focus functions, and it does not import `UI.Types` at all. `UI.Types`
-  is the sole definer and exporter of both names; `UI.TextBuffer` imports
-  `TextBuffer(..)` from it without re-exporting it. Nothing to fix here.
+  is where both names are defined and the only module that exports them
+  in its own right; `UI/TextBuffer.hs:15` imports `TextBuffer(..)` from
+  it without re-exporting it. There IS a second import path, but it is
+  the umbrella aggregate rather than a focus module: `src/UI.hs:11,14`
+  re-exports `module UI.Types` wholesale, exactly as it re-exports every
+  other `UI.*` module it bundles. Nothing to fix here.
 - `UI/Types.hs` (488 lines) is the tree's largest module and holds
   `UIPageManager`, `UIPage`, `UIElement`, `UILayer`, `uiLayerBand`,
   `TextBuffer`, and tooltip state. It is well under budget, but it is the one
