@@ -139,6 +139,31 @@ def v1_document() -> dict:
     }
 
 
+def stored_v2_document() -> dict:
+    """A `probe-census/v2` census exactly as #1428 wrote one.
+
+    Six-field records, no `claims`. This is what `--seed` migrates FROM,
+    so it is spelled out here rather than derived from the current
+    `empty_census()`: deriving it would silently start testing the
+    current shape the moment the record grows another field.
+    """
+    return {
+        "schema": "probe-census/v2",
+        "probes": [{
+            "key": "alpha", "script": "alpha_probe.py",
+            "classification": "manual-only", "protocol": "legacy",
+            "census": {
+                "acceptable_failures": 2,
+                "acceptable_failures_justification": "two known races",
+                "estimated_worst_case_seconds": 480,
+                "current": None,
+                "history": [],
+                "attempts": [],
+            },
+        }],
+    }
+
+
 def result_document(probe="alpha", status="ok", commit=COMMIT_A, **overrides):
     """A realistic `probe-flake-result/v1` document.
 
@@ -258,7 +283,8 @@ def test_record_shape() -> None:
         "current": None,
         "history": [],
         "attempts": [],
-    }, "an empty census record is exactly the six specified fields")
+        "claims": [],
+    }, "an empty census record is exactly the seven specified fields")
     expect(empty["acceptable_failures"] == 0
            and empty["acceptable_failures_justification"] is None,
            "a fresh record starts at X=0 with no justification: it must pass "
@@ -269,8 +295,8 @@ def test_record_shape() -> None:
 
     with registry(ci_eligible={"beta"}, protocol={"beta": "probe-result/v1"}):
         document = probe_census.build_manifest()
-        expect(document["schema"] == "probe-census/v2",
-               "a freshly built census is probe-census/v2")
+        expect(document["schema"] == "probe-census/v3",
+               "a freshly built census is probe-census/v3")
         expect([row["key"] for row in document["probes"]]
                == ["alpha", "beta", "gamma"],
                "rows are built in live registry order")
@@ -313,8 +339,8 @@ def test_migration() -> None:
 
         expect(source == original,
                "migration does not mutate the document it was given")
-        expect(migrated["schema"] == "probe-census/v2",
-               "the migrated document is probe-census/v2")
+        expect(migrated["schema"] == "probe-census/v3",
+               "the migrated document is probe-census/v3")
         expect([row["key"] for row in migrated["probes"]] == ["alpha", "beta"],
                "row order is preserved exactly")
         expect(len(migrated["probes"]) == 2,
@@ -370,8 +396,8 @@ def test_seed_and_noop() -> None:
         path = root / "docs" / "probe_census.json"
         document = seeded(path)
         expect(path.exists(), "an absent census is created")
-        expect(document["schema"] == "probe-census/v2",
-               "the fresh census is probe-census/v2")
+        expect(document["schema"] == "probe-census/v3",
+               "the fresh census is probe-census/v3")
         expect([row["key"] for row in document["probes"]]
                == ["alpha", "beta", "gamma"],
                "the fresh census lists the live registry in order")
@@ -390,7 +416,7 @@ def test_seed_and_noop() -> None:
         legacy = root / "legacy.json"
         legacy.write_text(json.dumps(v1_document()), encoding="utf-8")
         migrated = probe_census.ensure_document(legacy)
-        expect(migrated["schema"] == "probe-census/v2",
+        expect(migrated["schema"] == "probe-census/v3",
                "seeding a v1 census migrates it")
         expect([row["key"] for row in migrated["probes"]]
                == ["alpha", "beta", "gamma"],
@@ -405,7 +431,7 @@ def test_reconciliation() -> None:
         # A census written when `retired` was registered and `gamma` was
         # not, with real accumulated data on two rows.
         document = {
-            "schema": "probe-census/v2",
+            "schema": probe_census.CENSUS_SCHEMA,
             "probes": [
                 {"key": "retired", "script": "retired_probe.py",
                  "classification": "manual-only", "protocol": "legacy",
@@ -719,15 +745,19 @@ def _legacy_policy_census() -> dict:
 
     Every row's X is still the null #1428 staged, and two rows carry
     real accumulated data, so the initialization has something it could
-    plausibly damage.
+    plausibly damage. It is a genuine v2 document — six-field records,
+    no `claims` — so `--seed` here performs the real migration as well
+    as the policy initialization, which is exactly the pairing an
+    operator with an old census meets.
     """
     def row(key, census):
         return {"key": key, "script": f"{key}_probe.py",
                 "classification": "manual-only", "protocol": "legacy",
-                "census": census}
+                "census": {field: value for field, value in census.items()
+                           if field != "claims"}}
 
     return {
-        "schema": "probe-census/v2",
+        "schema": probe_census.RECORD_SCHEMA,
         "probes": [
             row("alpha", {"acceptable_failures": None,
                           "acceptable_failures_justification": "kept text",
@@ -805,8 +835,10 @@ def test_acceptable_failure_policy_defaults() -> None:
                and rows["alpha"]["attempts"]
                == stored["probes"][0]["census"]["attempts"],
                "...and no cohort, sample or attempt at all")
-        expect(rows["beta"] == stored["probes"][1]["census"],
-               "a row whose X is already set is left exactly as it was")
+        expect(rows["beta"] == {**stored["probes"][1]["census"],
+                                "claims": []},
+               "a row whose X is already set is left exactly as it was, "
+               "apart from the empty claim log its migration adds")
         expect(rows["retired"]["acceptable_failures"] == 0,
                "a row whose probe left the registry is initialized too, so a "
                "legacy census can always be made policy-valid")
@@ -1239,7 +1271,7 @@ def test_malformed_rows_refuse_cleanly() -> None:
     print("\n-- structurally malformed census state --")
 
     def census_with(rows):
-        return {"schema": "probe-census/v2", "probes": rows}
+        return {"schema": probe_census.CENSUS_SCHEMA, "probes": rows}
 
     def row(key="alpha", census=None):
         return {"key": key, "script": "alpha_probe.py",
@@ -1257,7 +1289,8 @@ def test_malformed_rows_refuse_cleanly() -> None:
              "a row whose key is a number"),
             (census_with([{"script": "x.py"}]), "'key' is a required property",
              "a row with no key at all"),
-            ({"schema": "probe-census/v2", "probes": {"alpha": {}}},
+            ({"schema": probe_census.CENSUS_SCHEMA,
+              "probes": {"alpha": {}}},
              "$.probes", "a `probes` mapping instead of a list"),
             (census_with(["alpha"]), "$.probes[0]",
              "a row that is a bare string"),
@@ -1379,7 +1412,7 @@ def test_duplicate_target_rows() -> None:
     with registry(), scratch() as root:
         duped = root / "duplicate-target.json"
         duped.write_text(json.dumps({
-            "schema": "probe-census/v2",
+            "schema": probe_census.CENSUS_SCHEMA,
             "probes": [row("alpha"), row("beta"), row("alpha")]}),
             encoding="utf-8")
         before = duped.read_bytes()
@@ -1404,7 +1437,7 @@ def test_duplicate_target_rows() -> None:
         # discard a finished measurement.
         elsewhere = root / "unrelated-duplicate.json"
         elsewhere.write_text(json.dumps({
-            "schema": "probe-census/v2",
+            "schema": probe_census.CENSUS_SCHEMA,
             "probes": [row("alpha"), row("beta"), row("beta")]}),
             encoding="utf-8")
         probe_census.record_result(elsewhere, result_document())
@@ -1534,14 +1567,14 @@ def test_atomicity() -> None:
                 raised = error
             expect(raised is not None and "injected" in str(raised),
                    "the injected failure propagates rather than being swallowed")
-            expect(len(calls) == 1 and b"probe-census/v2" in calls[0],
+            expect(len(calls) == 1 and b"probe-census/v3" in calls[0],
                    "the candidate had been fully serialized before the failure")
         finally:
             probe_census._atomic_replace = original
         unchanged(path, before,
                   "a failure before replacement leaves the OLD census intact")
         expect(json.loads(path.read_text(encoding="utf-8"))["schema"]
-               == "probe-census/v2",
+               == "probe-census/v3",
                "and the old census is still a complete, readable document")
 
         # Stale staging residue from a killed writer is never
@@ -1677,7 +1710,7 @@ def _replace(document, path, value):
 
 
 def rich_census() -> dict:
-    """A v2 census with real accumulated data on its first row.
+    """A current-schema census with real accumulated data on its first row.
 
     Consistent under #1493's cross-field invariants, which is what keeps
     every case built on it honest: a base document that were already
@@ -1699,7 +1732,7 @@ def rich_census() -> dict:
                 "census": census}
 
     return {
-        "schema": "probe-census/v2",
+        "schema": probe_census.CENSUS_SCHEMA,
         "probes": [
             row("alpha", {"acceptable_failures": 2,
                           "acceptable_failures_justification": "two races",
@@ -1709,7 +1742,8 @@ def rich_census() -> dict:
                           "history": [{"commit_sha": COMMIT_B,
                                        "samples": [copy.deepcopy(archived)]}],
                           "attempts": [copy.deepcopy(archived_attempt),
-                                       copy.deepcopy(attempt)]}),
+                                       copy.deepcopy(attempt)],
+                          "claims": []}),
             row("beta", probe_census.empty_census()),
             row("gamma", probe_census.empty_census()),
         ],
@@ -1901,8 +1935,8 @@ def test_declared_schema() -> None:
     # `load_schema` runs that draft's own meta-schema check, so reaching
     # here at all is the self-check passing.
     expect(set(probe_census.SCHEMA_DEFINITIONS)
-           == {probe_census.SEED_SCHEMA, probe_census.CENSUS_SCHEMA,
-               probe_census.RESULT_SCHEMA},
+           == {probe_census.SEED_SCHEMA, probe_census.RECORD_SCHEMA,
+               probe_census.CENSUS_SCHEMA, probe_census.RESULT_SCHEMA},
            "every document kind the tool reads has a declared schema")
     expect(all(name in (schema.get("$defs") or {})
                for name in probe_census.SCHEMA_DEFINITIONS.values()),
@@ -1923,8 +1957,12 @@ def test_declared_schema() -> None:
             v1_document(), probe_census.SEED_SCHEMA, "a v1 seed"),
             "the v1 seed schema accepts a real v1 seed")
         expect_valid(lambda: probe_census.validate_document(
-            rich_census(), probe_census.CENSUS_SCHEMA, "a v2 census"),
-            "the v2 census schema accepts a real measured census")
+            rich_census(), probe_census.CENSUS_SCHEMA, "a v3 census"),
+            "the v3 census schema accepts a real measured census")
+        expect_valid(lambda: probe_census.validate_document(
+            stored_v2_document(), probe_census.RECORD_SCHEMA, "a v2 census"),
+            "the FROZEN v2 schema still accepts a real stored v2 census, "
+            "which is what --seed migrates from")
         expect_valid(lambda: probe_census.validate_document(
             probe_census.build_manifest(), probe_census.CENSUS_SCHEMA,
             "a fresh manifest"),
@@ -2270,8 +2308,8 @@ def test_malformed_schema_file() -> None:
         # whichever document an operation validates first.
         dangling = {"$schema": DRAFT,
                     "$defs": {name: {"$ref": "#/$defs/gone"}
-                              for name in ("census_v1", "census_v2",
-                                           "flake_result_v1")}}
+                              for name in probe_census.SCHEMA_DEFINITIONS
+                              .values()}}
         unusable = [
             (json.dumps({"$schema": DRAFT, "$defs": {"nothing": True}}),
              "declares no", "no definition for the documents it validates"),
@@ -2407,7 +2445,7 @@ def test_missing_dependency() -> None:
                 # a skipped check, and keeping it dependency-free is
                 # what lets a fresh checkout run it.
                 code, out, _ = cli("--print")
-                expect(code == 0 and '"probe-census/v2"' in out,
+                expect(code == 0 and '"probe-census/v3"' in out,
                        "--print still works: it validates nothing to skip")
             code, _, _ = cli("--record", str(result_file))
             expect(code == 0,
@@ -2710,7 +2748,7 @@ def test_cli() -> None:
         try:
             code, out, _ = cli("--print")
             document = json.loads(out)
-            expect(code == 0 and document["schema"] == "probe-census/v2",
+            expect(code == 0 and document["schema"] == "probe-census/v3",
                    "--print emits the v2 census the live registry implies")
             expect(all(row["census"] == probe_census.empty_census()
                        for row in document["probes"]),
@@ -2753,7 +2791,7 @@ def test_cli() -> None:
 
     with registry(ci_eligible={"beta"}), cli_repo() as (_root, path):
         code, out, _ = cli("--seed")
-        expect(code == 0 and path.exists() and "probe-census/v2" in out,
+        expect(code == 0 and path.exists() and "probe-census/v3" in out,
                "--seed creates the census in the docs worktree")
         code, _, _ = cli("--validate")
         expect(code == 0, "--validate accepts the freshly seeded v2 census")
