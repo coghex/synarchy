@@ -978,7 +978,15 @@ save path, the load path, integrity/`KnownEntities`, and the Lua save-module
 bridge).
 
 ### [no-issue] CH-44. Two `Focus` modules, neither of which says which focus it means
-> **Disposition:** No issue — CH-120 states it "supersedes and widens CH-44", and its fix subsumes this one verbatim (the same `Engine/Scripting/Lua/API/ShellFocus.hs` rename, plus `UI/ShellFocus.hs` and a system-naming haddock on all five focus modules); a separate issue would fragment one rename across two PRs over the same files. Re-verified today: `UI/Focus.hs`, `UI/Manager/Focus.hs`, and `API/Focus.hs` still open straight into `module … where`, and `API/UI/Focus.hs`'s header is still the ambiguous "Lua bindings for keyboard/input focus management".
+> **Disposition:** No issue — CH-120 states it "supersedes and widens CH-44", and its fix subsumes this one verbatim (the same `Engine/Scripting/Lua/API/ShellFocus.hs` rename, plus `UI/ShellFocus.hs` and a system-naming haddock on all five focus modules); a separate issue would fragment one rename across two PRs over the same files. Re-verified at the time of this disposition, i.e. PRE-#1155: `UI/Focus.hs`, `UI/Manager/Focus.hs`, and `API/Focus.hs` still opened straight into `module … where`, and `API/UI/Focus.hs`'s header was still the ambiguous "Lua bindings for keyboard/input focus management". **Discharged 2026-08-21 by #1155**, which landed exactly that rename (`UI/Focus.hs` → `UI/ShellFocus.hs`, `API/Focus.hs` → `API/ShellFocus.hs`) plus a system-naming haddock on all five focus modules; none of the four preceding observations describes the tree any more.
+
+*Everything from here to the end of this entry is the finding AS RECORDED,
+describing the tree before #1155. `UI/Focus.hs` is now `UI/ShellFocus.hs`,
+`Engine/Scripting/Lua/API/Focus.hs` is now
+`Engine/Scripting/Lua/API/ShellFocus.hs`, and those two plus the other three
+focus modules now each open with a haddock naming their system. One detail
+below was also wrong when written: `UI.Manager`'s element text-focus field is
+`upmGlobalFocus`, not `upmTextFocus`.*
 
 `Engine.Scripting.Lua.API.Focus` and `Engine.Scripting.Lua.API.UI.Focus` are
 indistinguishable by name and bind **two genuinely different focus systems**:
@@ -3314,6 +3322,9 @@ worldgen (CH-83) and locations (CH-112) — **they hold.**
 
 ### [#1155] CH-120. Five focus modules, and three have no module haddock at all
 > **Note:** Verified 2026-08-06 — the header table is exactly right (three open straight into `module … (`, `Lua/API/UI/Focus.hs`'s "Lua bindings for keyboard/input focus management" names no system, `UI/FocusNavigation.hs`'s is the model), and the vocabulary collision is real (`UI/Focus.hs:13-15` vs `UI/Manager/Focus.hs:2-13`). Two corrections that change the fix. (1) **There are THREE systems, not two, and two modules span two each**: `UI/Manager/Focus.hs` holds element TEXT focus (`setElementFocus`/`getPageFocus`/`validateFocus`) AND keyboard CONTROL focus (`setControlFocus`… under its own `-- * Control focus (#745)` section), and `Lua/API/UI/Focus.hs` splits the same way — so "one shared sentence per module naming its system" is wrong for those two. (2) **The paragraph named as "the missing header" is incomplete**: `Engine/Input/Thread/Keyboard.hs:99-101` (not `:97`) reads "Two independent focus systems checked here: 1. FocusManager — shell/console text input; 2. UIPageManager — UI widget text input" — correct where it sits, since control focus is not text routing, but copying it into all five would mis-describe `FocusNavigation` and both control-focus halves. Rename scope measured: `UI.Focus` has 18 importers (23 references); `Engine.Scripting.Lua.API.Focus` has 3 sites. NB CH-44 closed `[no-issue]` *because* this finding carries its rename, so #1155 is what discharges it.
+
+*Everything from here to the end of this entry is the finding AS RECORDED,
+describing the tree before #1155 landed its fix on 2026-08-21.*
 
 | Module | Governs | Header? |
 |---|---|---|
