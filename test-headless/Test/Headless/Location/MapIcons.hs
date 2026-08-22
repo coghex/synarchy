@@ -555,6 +555,13 @@ spec = describe "Location map icons" $ do
             V.map sqTexture (run ())
                 `shouldBe` V.fromList
                     [TextureHandle 12, TextureHandle 13, TextureHandle 11]
-        it "repeated calls with unchanged inputs never reorder or flicker" $ do
-            let quadKey q = (sqSortKey q, sqTexture q, x (pos (sqV0 q)), y (pos (sqV0 q)))
-            V.map quadKey (run ()) `shouldBe` V.map quadKey (run ())
+        it "assigns consecutive paint-order sort keys from \
+           \iconSortKeyBase, in that same instance-id order" $
+            -- Painter's order within 'zoomMapLayer' is decided by
+            -- 'sqSortKey' alone, so pinning the exact keys is what
+            -- "never reorder or flicker" actually rests on:
+            -- 'makeLocationIconQuads' zips 'instancesToList' against
+            -- @[iconSortKeyBase ..]@, giving 1000, 1001, 1002 to
+            -- loc2, loc3, loc1 respectively.
+            V.map sqSortKey (run ())
+                `shouldBe` V.fromList [1000.0, 1001.0, 1002.0]
