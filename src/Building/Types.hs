@@ -32,6 +32,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Unit.Direction (Direction(..))
 import World.Page.Types (WorldPageId(..))
 import Item.Types (ItemInstance)
+import Power.Base (PowerNodeSpec)
 
 -- | One building animation: a flat per-frame sequence of whole-image
 --   textures.
@@ -145,6 +146,27 @@ data BuildingDef = BuildingDef
       --   flat per-building wattage. This field remains for a
       --   hypothetical future ALWAYS-ON non-crafting device (lights,
       --   etc.); no shipped or crafting building should set it.
+    , bdPowerNode     ∷ !(Maybe PowerNodeSpec)
+      -- ^ The power-registry NODE this def mints when placed (#1148) —
+      --   'Power.Base.PowerNodeSource' with its peak watts, or
+      --   'Power.Base.PowerNodeStorage' with its capacity Wh. Nothing
+      --   (default) = an ordinary building, not placeable through
+      --   @power.placeNode@ at all.
+      --
+      --   This is the node half of what 'bdPowerDrain' is for
+      --   consumers: both now come off the def's own YAML, so a third
+      --   power device is a content file rather than a source edit
+      --   (it replaced a hardcoded two-name catalogue in
+      --   'Power.Types'). It is also the whole placeability registry —
+      --   @power.isPlaceable@ answers from exactly this field, which is
+      --   what keeps the build tool's item-consuming route and the free
+      --   @building.spawn@ route agreeing without a second list in Lua.
+      --
+      --   Read at PLACEMENT time and snapshotted into the
+      --   'Power.Types.PowerNode' the placement mints, so editing a
+      --   rating here changes what LATER placements get; nodes already
+      --   placed (or loaded from a save) keep the values they were
+      --   built with.
     } deriving (Show, Eq)
 
 -- | A placed building. anchor = bottom-left corner of the footprint.
