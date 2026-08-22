@@ -165,6 +165,17 @@ EXEMPT_COMMANDS: tuple[tuple[str, str], ...] = (
         "locally, which is what keeps the classification and its ci.yml "
         "wiring honest from `make ci`.",
     ),
+    (
+        ("python3 tools/ci_cache_epoch.py --ref $CACHE_REF "
+         "--github-output $GITHUB_OUTPUT "
+         "--github-summary $GITHUB_STEP_SUMMARY"),
+        "CI cache-key orchestration: derives a pull request's immutable "
+        "project-cache epoch from its base SHA and a master push's epoch "
+        "from its pushed SHA, then publishes runner outputs. `make ci` "
+        "does not restore or save GitHub Actions caches, so it has no key "
+        "to select. The tool's --self-test form is NOT exempt and runs on "
+        "both sides.",
+    ),
 )
 
 _INTERPRETER_RE = re.compile(r"python[0-9]*(?:\.[0-9]+)*")

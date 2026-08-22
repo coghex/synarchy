@@ -194,7 +194,7 @@ echo "==> [17/20] world_check --quick"
 python3 tools/world_check.py --quick
 
 # Validate the probe-runner harness itself (cheap, no engine, no GPU) --
-# the same eight checks, in the same order, as ci.yml's "probe runner
+# the same nine checks, in the same order, as ci.yml's "probe runner
 # self-tests" step. ci_probes/ci_expensive_gates cover the path->probe
 # and path->gate mappings, which would otherwise only surface after a
 # push as a PR mis-selecting its own gates; test_run_probes covers
@@ -210,7 +210,12 @@ python3 tools/world_check.py --quick
 # migration extends it (#1475); test_probe_census is the census's own
 # self-test -- the record, its atomic writer, the declared schema, and
 # #1429's cohort, freshness and staleness semantics -- against synthetic
-# documents in throwaway temporary trees, touching no docs worktree.
+# documents in throwaway temporary trees, touching no docs worktree;
+# test_probe_claim is #1434's -- the atomic per-probe claim, its lease,
+# ownership-safe takeover and release, and the claim-aware orchestration
+# boundary -- racing real interpreters against a shared barrier file and
+# SIGKILLing one of them, because a claim that must hold between OS
+# processes cannot be proved by threads. No probe is ever executed.
 echo "==> [18/20] probe runner self-tests"
 python3 tools/ci_probes.py --self-test
 python3 tools/ci_expensive_gates.py --self-test
@@ -221,6 +226,7 @@ python3 tools/test_action_outcome_probe.py
 python3 tools/test_probelib.py
 python3 tools/test_probe_flake.py
 python3 tools/test_probe_census.py
+python3 tools/test_probe_claim.py
 
 # Cheap, no-engine self-test of CI's cache-outcome report (#1358). The
 # report itself runs only in CI -- `make ci` restores no GitHub Actions
@@ -230,7 +236,9 @@ python3 tools/test_probe_census.py
 # either cache step to the combined `actions/cache` action would empty
 # `cache-matched-key` and turn every prefix hit into a reported cold
 # cache, with nothing failing.
-echo "==> [19/20] CI cache report self-test"
+echo "==> [19/20] CI cache policy and report self-tests"
+python3 tools/ci_cache_epoch.py --self-test
+python3 tools/ci_cache_cleanup.py --self-test
 python3 tools/ci_cache_report.py --self-test
 
 # The gate that keeps this file honest (#1355): fails if a

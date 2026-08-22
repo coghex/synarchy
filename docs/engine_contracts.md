@@ -98,7 +98,9 @@ eight probe-runner self-tests (`ci_probes.py --self-test`,
 `test_action_outcome_probe.py`, `test_probelib.py`,
 `test_probe_flake.py`), `ci_cache_report.py --self-test` (#1358 — the
 cache-outcome report's own classification, plus the `ci.yml` wiring it
-reads), and the parity audit itself.
+reads), the project-cache epoch and cleanup policy self-tests
+(`ci_cache_epoch.py --self-test`, `ci_cache_cleanup.py --self-test`), and the
+parity audit itself.
 
 **One member of the save-compat self-test is path-selective on BOTH
 sides (#1360).** `tools/test_save_compat_audit.py` gained two flags that
@@ -188,6 +190,33 @@ locally. Its bare `ci_cache_report.py` (#1358) classifies what the two
 `make ci` restores no GitHub Actions cache, so it has no outcome to
 classify, and the command reports rather than gates. Its `--self-test`
 form is not exempt and runs on both sides.
+
+The same CI-only exemption applies to `ci_cache_epoch.py --ref ...`: that
+invocation derives the GitHub Actions key and writes runner outputs, while a
+local gate has no GitHub cache to address. Its `--self-test` is not exempt and
+runs on both sides. The epoch is counted in one `git log` pass from the tool's
+checked-in anchor over first-parent master history, advancing on each eighth
+build-relevant change. PR workers derive it from the PR base SHA and are
+restore-only; only a successful master push saves `dist-v3`. A missing,
+pre-anchor or rewritten base emits a warning and uses epoch 0 rather than
+failing an otherwise valid older PR. Ordinary docs and runtime-resource changes
+do not count.
+
+Every v3 primary key and compatible restore prefix also carries the exact
+immutable image reference selected by `resolve-image`, in addition to the OS,
+GHC, Cabal and plan inputs. Therefore an image-only PR cannot exact-hit or
+prefix-restore project objects created in another image. The pre-v3 bootstrap
+prefix is enabled only when the resolved image equals the one known to have
+created those legacy entries; later image identities get a disabled prefix.
+That historical image constant must never be advanced with the image recipe.
+
+Old project caches are never deleted by CI. The maintainer command
+`python3 tools/ci_cache_cleanup.py` is a dry run unless `--delete` is present,
+uses exact cache IDs, keeps three v3 snapshots per compatible image/toolchain by default,
+and scopes itself to `refs/heads/master`. `--include-legacy` remains guarded:
+it refuses to select v2 until the same ref contains a successfully seeded v3
+project cache. Dependency caches and PR-ref caches are outside the default
+selection.
 
 The separate `behavior-probes` job owns `ci_probes.py --stdin` and the
 engine-booting `run_probes.py` sweep; neither is part of the

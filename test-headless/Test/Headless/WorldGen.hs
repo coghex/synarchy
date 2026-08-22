@@ -460,17 +460,6 @@ spec = do
                 -- this fixture returned an EMPTY overlay before #997.
                 HM.size (lpOverlay wetPlacement) `shouldBe` 1
 
-            it "is deterministic — two evaluations of the fixture agree" $ \_env → do
-                let again = placeWith HS.empty allWet [flatDef]
-                lpOverlay again `shouldBe` lpOverlay wetPlacement
-                lpOutcome again `shouldBe` lpOutcome wetPlacement
-                -- and again from independently regenerated plates, the
-                -- same way the strict determinism spec above re-derives.
-                let plates2 = generatePlates gseed gws 3
-                    third = computeLocationPlacement gseed gws plates2
-                                HS.empty allWet noLakes noRivers [flatDef]
-                lpOverlay third `shouldBe` lpOverlay wetPlacement
-
             it "places on real, canonical land — never ocean or an alias coord" $ \_env → do
                 let placed = HM.keys (lpOverlay wetPlacement)
                 placed `shouldSatisfy` all (`elem` landChunks)

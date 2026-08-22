@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/coghex/synarchy/blob/master/tools/probe_census_schema.json",
   "title": "The probe census and the flake-harness result it ingests",
-  "$comment": "The three ROOT definitions are `census_v1`, `census_v2` and `flake_result_v1`; tools/probe_census.py maps each declared schema string to one of them. They are deliberately not named after the schema strings themselves, because a JSON Pointer treats `/` as a separator and `#/$defs/probe-census/v2` would name nothing.",
+  "$comment": "The four ROOT definitions are `census_v1`, `census_v2`, `census_v3` and `flake_result_v1`; tools/probe_census.py maps each declared schema string to one of them. They are deliberately not named after the schema strings themselves, because a JSON Pointer treats `/` as a separator and `#/$defs/probe-census/v2` would name nothing.",
   "description": "The declared shape of every document tools/probe_census.py reads or writes (#1492). It replaces hand-rolled type, presence, closed-object, enum, length and range checking; it deliberately declares NO cross-field invariant -- those span fields, so no keyword expresses them and they live in tools/probe_census.py's census_invariants()/result_invariants() (#1493) -- and no parity with the live probe registry, which stays validate_manifest's report and --seed's repair. Every object here is closed: explicit `required` plus `additionalProperties: false`, with a nullable field REQUIRED and null-inclusive rather than optional, so deleting one is a violation rather than an absence. Enums are spelled as one-element `enum` rather than `const` on purpose: the library's const message names only the value it EXPECTED, while enum names the offending one.",
 
   "$defs": {
@@ -31,13 +31,38 @@
     },
 
     "census_v2": {
-      "$comment": "#1428's record: the same inventory, each row carrying its census.",
+      "$comment": "#1428's record: the same inventory, each row carrying its census. FROZEN at the six-field record, because this is now a migration INPUT: it must keep describing what a stored v2 census actually looks like, so `--seed` can validate the document it migrates from. Pointing it at the current `inventory_row` would make every real v2 census invalid for carrying no `claims`, which is the one thing migration exists to add.",
       "type": "object",
       "required": ["schema", "probes"],
       "additionalProperties": false,
       "properties": {
         "schema": {"enum": ["probe-census/v2"]},
+        "probes": {"type": "array", "items": {"$ref": "#/$defs/inventory_row_v2"}}
+      }
+    },
+
+    "census_v3": {
+      "$comment": "#1434's record: the v2 document with each row's census also carrying its append-only `claims` log. Claim acquisitions are a DEDICATED collection rather than more `attempts`, which tools/probe_census.py defines as result-ingestion attempts and deliberately makes non-idempotent.",
+      "type": "object",
+      "required": ["schema", "probes"],
+      "additionalProperties": false,
+      "properties": {
+        "schema": {"enum": ["probe-census/v3"]},
         "probes": {"type": "array", "items": {"$ref": "#/$defs/inventory_row"}}
+      }
+    },
+
+    "inventory_row_v2": {
+      "$comment": "A stored v2 row. Frozen alongside census_v2 and never widened.",
+      "type": "object",
+      "required": ["key", "script", "classification", "protocol", "census"],
+      "additionalProperties": false,
+      "properties": {
+        "key": {"$ref": "#/$defs/probe_key"},
+        "script": {"$ref": "#/$defs/script_name"},
+        "classification": {"$ref": "#/$defs/classification"},
+        "protocol": {"$ref": "#/$defs/protocol_status"},
+        "census": {"$ref": "#/$defs/census_record_v2"}
       }
     },
 
@@ -54,8 +79,8 @@
       }
     },
 
-    "census_record": {
-      "$comment": "Exactly the six fields probe_census.empty_census() writes.",
+    "census_record_v2": {
+      "$comment": "A stored v2 record: the six fields #1428 wrote, with no `claims`. Frozen -- it describes migration INPUT, so widening it would make every real v2 census invalid.",
       "type": "object",
       "required": ["acceptable_failures", "acceptable_failures_justification",
                    "estimated_worst_case_seconds", "current", "history",
@@ -81,6 +106,61 @@
         },
         "history": {"type": "array", "items": {"$ref": "#/$defs/cohort"}},
         "attempts": {"type": "array", "items": {"$ref": "#/$defs/attempt"}}
+      }
+    },
+
+    "census_record": {
+      "$comment": "Exactly the seven fields probe_census.empty_census() writes.",
+      "type": "object",
+      "required": ["acceptable_failures", "acceptable_failures_justification",
+                   "estimated_worst_case_seconds", "current", "history",
+                   "attempts", "claims"],
+      "additionalProperties": false,
+      "properties": {
+        "acceptable_failures": {
+          "$comment": "X (#1430): the failures a complete 10-run measurement may show and still be acceptable, so 0 through 9 -- an X of 10 would declare a probe that never passes acceptable. Still null-INCLUSIVE here, and only here: a census written before the policy existed holds nulls, and tools/probe_census.py's --seed has to be able to read one in order to initialize it to 0. policy_invariants() is what refuses a null on every candidate and on --validate.",
+          "type": ["integer", "null"], "minimum": 0, "maximum": 9
+        },
+        "acceptable_failures_justification": {
+          "type": ["string", "null"], "maxLength": 4000
+        },
+        "estimated_worst_case_seconds": {
+          "$comment": "Supplied metadata, distinct from a sample's OBSERVED worst_elapsed_seconds.",
+          "type": ["number", "null"], "minimum": 0, "maximum": 1000000000
+        },
+        "current": {
+          "$comment": "The current commit cohort, or null when nothing has been measured. Spelled as if/else rather than oneOf so a malformed cohort reports the field that is actually wrong instead of `is not valid under any of the given schemas`.",
+          "if": {"type": "null"},
+          "then": true,
+          "else": {"$ref": "#/$defs/cohort"}
+        },
+        "history": {"type": "array", "items": {"$ref": "#/$defs/cohort"}},
+        "attempts": {"type": "array", "items": {"$ref": "#/$defs/attempt"}},
+        "claims": {
+          "$comment": "#1434's append-only log of successful claim ACQUISITIONS, keyed for idempotency by `token`. Deliberately not `attempts`, which are result-ingestion attempts and are non-idempotent by design.",
+          "type": "array", "items": {"$ref": "#/$defs/claim"}
+        }
+      }
+    },
+
+    "claim": {
+      "$comment": "Exactly what probe_claim.Claim.census_record() writes: one successful acquisition of the per-probe lock, recorded BEFORE the measurement it authorizes runs. `token` is the acquisition token and the idempotency key -- replaying the same acquisition must remain one record, and the same token carrying different metadata is refused rather than appended.",
+      "type": "object",
+      "required": ["token", "timestamp_utc", "commit_sha", "owner", "host",
+                   "pid", "lease_seconds", "requested_runs"],
+      "additionalProperties": false,
+      "properties": {
+        "token": {"type": "string", "minLength": 1, "maxLength": 128},
+        "timestamp_utc": {"$ref": "#/$defs/timestamp_utc"},
+        "commit_sha": {"$ref": "#/$defs/commit_sha"},
+        "owner": {"type": "string", "minLength": 1, "maxLength": 512},
+        "host": {"type": "string", "minLength": 1, "maxLength": 256},
+        "pid": {
+          "$comment": "NOT `count`: a pid is not a tally and legitimately exceeds that definition's million -- Linux allows a pid_max up to 2^22.",
+          "type": "integer", "minimum": 0, "maximum": 4294967295
+        },
+        "lease_seconds": {"type": "number", "minimum": 0, "maximum": 1000000000},
+        "requested_runs": {"$ref": "#/$defs/count"}
       }
     },
 
