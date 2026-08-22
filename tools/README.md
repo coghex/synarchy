@@ -992,7 +992,9 @@ its whole archived history, and receiving no further samples (see the
 duplicate, extra, stale-classification or stale-protocol manifest row would
 otherwise yield a subset page that is perfectly consistent with itself and
 quietly wrong about which probes exist, so `--generate` and `--audit` both run
-`probe_census`'s shape check and inventory comparison first and stop there.
+`probe_census`'s shape check and inventory comparison first and stop there —
+`--audit` before it so much as READS the page, since a stale manifest beside a
+missing page must name the manifest rather than the missing page.
 #1430's acceptable-failure policy is deliberately NOT applied: a null X is
 state the page must be able to DISPLAY (`unset`), and a policy problem is
 `probe_census --validate`'s report either way.
@@ -1022,7 +1024,10 @@ WHY it does not belong (CI-eligible, or not registered at all). Every surviving
 row is then compared cell by cell against the row the same generator would
 render, so a hand-edited protocol, reason set, state, rate, X, duration, commit
 or age is a finding naming that column. A page whose table is not the generated
-one is one structural finding rather than ninety derived ones.
+one is one structural finding rather than ninety derived ones, and a header
+field declared TWICE is refused rather than read first-wins: a second,
+contradicting `as-of` under ages computed from the first would otherwise audit
+clean.
 
 `python3 tools/test_probe_census_page.py` is the deterministic, engine-free,
 offline self-test: synthetic censuses and a synthetic probe registry in a

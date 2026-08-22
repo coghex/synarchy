@@ -177,8 +177,14 @@ def source_problems(document) -> list[str]:
     try:
         probe_census.validate_census(document, "the source census")
     except probe_census.CensusError as error:
-        return [str(error)]
-    return probe_census.validate_manifest(document)
+        problems = [str(error)]
+    else:
+        problems = probe_census.validate_manifest(document)
+    # Tagged here rather than at each call site, so `--generate`,
+    # `--audit` and a direct `audit_page` caller all say the same thing
+    # about the same problem: this is the manifest, not the page.
+    return [f"the source census {probe_census.MANIFEST_RELPATH} is not "
+            f"usable: {problem}" for problem in problems]
 
 
 # ==========================================================================
@@ -402,7 +408,18 @@ def parse_page(text) -> tuple[dict, list[dict]]:
         stripped = line.rstrip()
         match = FIELD_RE.match(stripped)
         if match:
-            fields.setdefault(match.group(1), match.group(2).strip())
+            name = match.group(1)
+            if name in fields:
+                # First-wins would let a second, CONTRADICTING `as-of`
+                # line sit under a page whose ages were computed from
+                # the first one, and audit clean. The generator emits
+                # each field exactly once, so a repeat is never a page
+                # this tool wrote.
+                raise PageError(
+                    f"the page declares `{name}` more than once "
+                    f"({fields[name]!r}, then {match.group(2).strip()!r}); "
+                    f"a generated page declares each header field once")
+            fields[name] = match.group(2).strip()
             continue
         if stripped.startswith("|"):
             table.append(stripped)
@@ -455,8 +472,7 @@ def audit_page(text, document, *, reasons=None) -> list[str]:
     """
     problems = source_problems(document)
     if problems:
-        return [f"the source census is not a usable manifest: {problem}"
-                for problem in problems]
+        return problems
     try:
         fields, rows = parse_page(text)
     except probe_census.CensusError as error:
@@ -582,13 +598,19 @@ def main(argv: list[str] | None = None) -> int:
                  else probe_census.parse_timestamp(args.as_of, "--as-of"))
         document = probe_census.load(probe_census.manifest_path())
         path = page_path()
-        if args.generate:
-            problems = source_problems(document)
-            if not problems:
-                text = render_page(document, as_of=as_of)
-                write_page(path, text)
-        else:
-            problems = audit_page(read_page(path), document)
+        # The source manifest is validated FIRST, for both operations and
+        # before the page is even read. `--audit` used to read the page
+        # first, so a stale manifest beside a missing page reported the
+        # missing page — the one diagnosis that does not name the thing
+        # actually wrong. `audit_page` repeats the check for a caller
+        # that reaches it directly; running it twice costs nothing and
+        # keeps neither side dependent on the other's ordering.
+        problems = source_problems(document)
+        if not problems:
+            if args.generate:
+                write_page(path, render_page(document, as_of=as_of))
+            else:
+                problems = audit_page(read_page(path), document)
     except probe_census.DocsWorktreeMissing as error:
         print(f"probe_census_page: {error}", file=sys.stderr)
         return 2

@@ -34,7 +34,9 @@ Exit codes: 0 = all tests passed, 1 = one or more failed.
 """
 from __future__ import annotations
 
+import contextlib
 import datetime
+import io
 import json
 import shutil
 import subprocess
@@ -601,6 +603,18 @@ def test_parse_refusals() -> None:
             found = audit(broken)
             expect(len(found) == 1 and fragment in found[0],
                    f"{name} is one structural finding ({fragment})")
+        for field in (page.FIELD_AS_OF, page.FIELD_MANUAL_ONLY):
+            # First-wins would accept a page whose ages were computed
+            # from one as-of while a second, contradicting one sits
+            # right below it.
+            repeated = text.replace(
+                "\n| probe",
+                f"\n- **{field}:** 1999-01-01T00:00:00Z\n\n| probe", 1)
+            found = audit(repeated)
+            expect(len(found) == 1 and f"`{field}` more than once" in found[0],
+                   f"a page declaring `{field}` twice is refused, not "
+                   f"silently read first-wins")
+
         headerless = "\n".join(line for line in text.splitlines()
                                if not line.startswith(f"- **{page.FIELD_AS_OF}"))
         found = audit(headerless + "\n")
@@ -639,30 +653,59 @@ def cli_repo():
             run_probes.REPO_ROOT = saved
 
 
+def run(*argv) -> tuple[int, str]:
+    """`page.main(argv)`, with its diagnostics captured."""
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        code = page.main(list(argv))
+    return code, stderr.getvalue()
+
+
 def test_cli() -> None:
     print("\n-- the CLI, against a real two-worktree scratch repository --")
     with registry(), cli_repo() as docs:
         target = docs / page.PAGE_RELPATH
         manifest = docs / probe_census.MANIFEST_RELPATH
 
-        expect(page.main(["--audit"]) == 2,
+        expect(run("--audit")[0] == 2,
                "auditing before the census exists is the same actionable "
                "exit 2 probe_census gives for an unreadable manifest")
         probe_census.ensure_document(manifest)
-        expect(page.main(["--audit"]) == 1,
+
+        # The source manifest is validated before the page is even read,
+        # for BOTH operations: a stale manifest beside a missing page
+        # must name the manifest, which is the thing actually wrong.
+        good = manifest.read_bytes()
+        drifted = json.loads(good.decode("utf-8"))
+        for row in drifted["probes"]:
+            if row["key"] == "beta":
+                row["classification"] = "manual-only"
+        manifest.write_text(json.dumps(drifted, indent=2, sort_keys=True),
+                            encoding="utf-8")
+        code, err = run("--audit")
+        expect(code == 1 and "source census" in err and "beta" in err,
+               "a stale manifest beside a MISSING page reports the manifest")
+        expect("unreadable" not in err,
+               "and not the missing page, which is the one diagnosis that "
+               "names nothing wrong")
+        code, err = run("--generate")
+        expect(code == 1 and "source census" in err and not target.exists(),
+               "--generate refuses on the same stale manifest, writing no "
+               "page at all")
+        manifest.write_bytes(good)
+
+        expect(run("--audit")[0] == 1,
                "auditing before the page exists exits 1")
         expect(not target.exists(),
                "and creates nothing while refusing")
 
-        expect(page.main(["--generate", "--as-of",
-                          "2026-08-21T12:00:00Z"]) == 0,
+        expect(run("--generate", "--as-of", "2026-08-21T12:00:00Z")[0] == 0,
                "--generate writes the page and exits 0")
         expect(target.is_file(), f"the page lands at {page.PAGE_RELPATH}")
         first = target.read_bytes()
-        expect(page.main(["--audit"]) == 0,
+        expect(run("--audit")[0] == 0,
                "and the page it wrote audits clean")
-        expect(page.main(["--generate", "--as-of",
-                          "2026-08-21T12:00:00Z"]) == 0
+        expect(run("--generate", "--as-of", "2026-08-21T12:00:00Z")[0] == 0
                and target.read_bytes() == first,
                "regenerating at the same as-of reproduces the same bytes")
         expect(not [p for p in (docs / "docs").iterdir()
@@ -671,16 +714,14 @@ def test_cli() -> None:
 
         target.write_text(target.read_text(encoding="utf-8").replace(
             "needs-gpu", "flaky"), encoding="utf-8")
-        expect(page.main(["--audit"]) == 1,
-               "a hand-edited page exits 1")
-        expect(page.main(["--generate", "--as-of",
-                          "2026-08-21T12:00:00Z"]) == 0
+        expect(run("--audit")[0] == 1, "a hand-edited page exits 1")
+        expect(run("--generate", "--as-of", "2026-08-21T12:00:00Z")[0] == 0
                and target.read_bytes() == first,
                "and --generate restores it")
 
-        expect(page.main(["--audit", "--as-of", "2026-08-21T12:00:00Z"]) == 1,
+        expect(run("--audit", "--as-of", "2026-08-21T12:00:00Z")[0] == 1,
                "--as-of outside --generate is reported, not ignored")
-        expect(page.main(["--generate", "--as-of", "yesterday"]) == 1,
+        expect(run("--generate", "--as-of", "yesterday")[0] == 1,
                "an unreadable --as-of refuses instead of falling back to now")
 
         # No docs worktree at all is the actionable exit 2, not a silent
@@ -688,7 +729,7 @@ def test_cli() -> None:
         subprocess.run(["git", "worktree", "remove", "--force", str(docs)],
                        cwd=run_probes.REPO_ROOT, check=True,
                        capture_output=True, text=True)
-        expect(page.main(["--generate"]) == 2,
+        expect(run("--generate")[0] == 2,
                "a missing docs worktree exits 2")
 
 
