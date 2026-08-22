@@ -123,8 +123,10 @@ riverSurfaceMap table coord = VU.create $ do
 -- tile-resolution priority flood (see "World.Fluid.Lake.Identify");
 -- here each tile is classified as:
 --
---   * Ocean  — terrain ≤ seaLevel in an ocean-BFS-reachable chunk;
---              surface = seaLevel.
+--   * Ocean  — terrain ≤ seaLevel where the coarse plate-seeded chunk
+--              flood calls this chunk (or a 4-cardinal neighbour)
+--              oceanic, OR the tile-resolution 'gtWorldOcean' mask
+--              flags the tile; surface = seaLevel.
 --   * River  — tile flagged by a 'RiverChunkEntry' bitmask in the
 --              global 'WorldRivers' table; surface = the entry's
 --              per-tile quantised surface z.
@@ -139,13 +141,18 @@ composeFluidMap params coord terrainMap =
         worldLakes  = gtWorldLakes timeline
         worldRivers = gtWorldRivers timeline
 
-        -- Chunk-level ocean BFS: is this chunk reachable from a
-        -- world-edge ocean chunk via chunk-resolution flood?
+        -- Chunk-level ocean BFS: is this chunk (or a 4-cardinal
+        -- neighbour) oceanic per the coarse chunk-resolution flood?
+        -- That flood is seeded from TECTONIC PLATES, not the world
+        -- edge ('World.Fluid.Ocean.computeOceanMap'), and is read here
+        -- through 'wgpOceanDist'.
         --
         -- The coarse chunk-flood. ORed below with the tile-resolution
-        -- 'gtWorldOcean' mask (the fix for whole chunks rendering dry
-        -- inside an edge-connected sea, where this chunk-flood couldn't
-        -- propagate through a chunk-scale sill).
+        -- 'gtWorldOcean' mask, which floods from world-edge sub-sea
+        -- tiles AND from sub-sea tiles in oceanic chunks — the fix for
+        -- whole chunks rendering dry inside a sea, open or enclosed,
+        -- where this chunk-flood couldn't propagate through a
+        -- chunk-scale sill.
         chunkIsOceanic = chunkOrNeighborOceanic params coord
         worldOceanBit  = oceanBitInChunk (gtWorldOcean timeline) coord
 
@@ -176,10 +183,12 @@ composeFluidMap params coord terrainMap =
         waterFluid = V.generate chunkArea $ \idx →
             let terrZ   = terrainMap VU.! idx
                 -- Ocean = the coarse chunk-flood OR the tile-resolution
-                -- edge-connected ocean ('gtWorldOcean'). The OR is the
-                -- fix for whole chunks rendering dry inside a sea: the
-                -- chunk-flood ('chunkIsOceanic') can't propagate through
-                -- a chunk-scale sill, so sub-sea tiles it missed used to
+                -- rendered-ocean mask ('gtWorldOcean'), which covers
+                -- enclosed inland seas as well as the edge-connected
+                -- open ocean. The OR is the fix for whole chunks
+                -- rendering dry inside a sea: the chunk-flood
+                -- ('chunkIsOceanic') can't propagate through a
+                -- chunk-scale sill, so sub-sea tiles it missed used to
                 -- render dry at a chunk boundary; the tile mask catches
                 -- them. Only ADDS ocean tiles (union) — no regression.
                 isOcean = terrZ ≤ seaLevel
