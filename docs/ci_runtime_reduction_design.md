@@ -7,7 +7,7 @@ successful runs normally completed the same step in about four minutes. A hang
 is something to restart, reproduce, and measure—not justification for adding a
 timer to the test suite.
 
-Design state: `exploring`
+Design state: `ready for issue processing`
 
 Status legend: `[ ]` unprocessed · `[#N]` linked to issue N · `[no-issue]`
 reviewed and deliberately not tracked separately · `[deferred]` blocked on a
@@ -19,7 +19,9 @@ concrete precondition
 - [ ] CIR-1. Publish durable CI timing and selection diagnostics
 - [ ] CIR-2. Decode save-compat fixture descriptors once per self-test run
 - [ ] CIR-3. Reproduce and localize headless-suite hangs without timers
-- [ ] CIR-4. Refresh the frozen build-product cache on a bounded cadence
+- [ ] CIR-7. Isolate parallel probes behind one prebuilt executable
+- [ ] CIR-4. Automate immutable weekly CI image and cache refreshes
+- [ ] CIR-8. Prove and adopt only safe Hspec parallel regions
 - [ ] CIR-5. Run post-build gate families on independent critical paths
 - [ ] CIR-6. Reassess full-suite and behavior-probe selection from measured coverage
 
@@ -30,10 +32,13 @@ concrete precondition
 - **Done when:** CI publishes enough timing and selection data to explain its
   critical path; repeated work identified in the save-compat audit is removed;
   a rerun of a hung headless suite provides enough evidence to compare and
-  localize the behavior; build-cache age is bounded without unbounded churn; and
-  independent gate families no longer serialize behind one another after the
-  build unnecessarily. Any reduction in which tests run on a PR is backed by an
-  explicit path-to-coverage contract and retains a full post-merge backstop.
+  localize the behavior; build-cache age is bounded without unbounded churn;
+  parallel probes never mutate one shared Cabal build tree; independent gate
+  families no longer serialize behind one another unnecessarily after the
+  build; and safe Hspec regions use available concurrency without corrupting
+  shared fixtures. Any reduction in which tests run on a PR is
+  backed by an explicit path-to-coverage contract and retains a full post-merge
+  backstop.
 - **Users and operators:** Contributors waiting for PR checks, reviewers deciding
   whether a result is trustworthy, and maintainers diagnosing flakes and hangs.
 - **Arc label:** `tooling` proposed
@@ -84,10 +89,57 @@ concrete precondition
   termination in `tools/run_probes.py`. The aggregate runs up to two probes in
   parallel and retries a failure once in isolation. There are currently eleven
   CI-eligible probes; core or unclassified changes select all eleven.
-- Tracker searches for `CI runtime`, `CI pipeline`, `CI slow`, and `headless
-  hang` found no existing CI-runtime epic. Issue #1262 concerns closing the unit
-  atlas pipeline, and issue #1323 concerns descendant cleanup after ordinary
-  behavior-probe failure; both are adjacent but not duplicates of this arc.
+- Every ordinary probe boot still reaches `tools.probelib.boot`, which launches
+  `cabal run -v0 exe:synarchy` against the checkout's one `dist-newstyle`.
+  Parallel Python processes and distinct debug ports do not isolate Cabal's
+  inplace package database. `persistence_contract` additionally launches
+  `cabal repl test:synarchy-test-headless` through
+  `tools/persistence_snapshot.py`.
+- This is a measured failure, not only a source-level risk. In
+  [PR run 32491150012](https://github.com/coghex/synarchy/actions/runs/32491150012),
+  `cargo_capacity` and `persistence_contract` failed in the parallel batch and
+  then passed alone. Their solo retries consumed 92.2 s and 188.2 s: 280.4 s
+  (4m40s) added to a probe step whose wall time reached 10m32s. The verified
+  shared-build-directory race is also recorded as unprocessed PRR-1 in
+  `docs/project_review_534-518.md`.
+- A cloned `dist-newstyle` is not a sound isolation primitive. The current
+  Cabal plan records absolute `bin-file` paths under the originating checkout,
+  and the inplace package database is the exact mutable surface racing today.
+  A local warmed build tree is about 1.3 GB, while a source/resource worktree is
+  much smaller. Copying that build tree per probe would therefore be both
+  path-sensitive and needlessly expensive.
+- The current master-scoped project cache was created at
+  2026-08-19T23:18:26Z. By the 2026-08-21 measurement, master had advanced 81
+  first-parent commits and 106 Haskell paths differed from the snapshot. On
+  [fresh-cache master run 32312982306](https://github.com/coghex/synarchy/actions/runs/32312982306),
+  the library/executable and test-suite builds took 11 s + 75 s = 1m26s. On
+  [master run 32491022029](https://github.com/coghex/synarchy/actions/runs/32491022029),
+  the same two stages took 176 s + 280 s = 7m36s. Hspec itself took 232 s in
+  both runs, making the roughly six-minute build increase good evidence of
+  cache-age drift rather than a generally slower runner.
+- The CI image has no scheduled refresh. Its immutable tag is the content hash
+  of `.github/ci/Dockerfile` plus `.github/workflows/ci-image.yml`; a tag is
+  published only once. The Dockerfile nevertheless resolves moving external
+  inputs (`ubuntu:22.04`, `apt-get`, and the ghcup download), and the image
+  workflow explicitly notes that identical instructions are not guaranteed to
+  rebuild to identical bytes. A recurring refresh must therefore mint a new
+  immutable identity, never overwrite the current content tag.
+- The checked-in Hspec version is 2.11.17. Its runner supports `--jobs=N`, but
+  Hspec only schedules specs explicitly marked with its `parallel` combinator;
+  `test-headless/Spec.hs` marks none today. The large shared-world
+  `aroundAll withHeadlessEngine` block deliberately relies on sequential
+  execution and memoizes generated worlds. Many other groups also own mutable
+  engine state, fixed temporary paths, process-wide configuration, or
+  repo-relative resources, so adding `parallel` at the root would be unsafe.
+- The readiness tracker scan found no existing CI-runtime epic. Open issue
+  #1358 directly overlaps CIR-1's cache-outcome reporting and should be reused
+  or deduplicated when that slice is processed rather than silently drafting a
+  second issue. Open issue #1427 measures concurrency and RTS effects for the
+  separate non-CI probe de-flake lab; its evidence can inform CIR-7's worker cap,
+  but it does not isolate CI probes from shared Cabal mutation. Issues #1364 and
+  #1475 add CI coverage rather than reduce its runtime. No open tracker umbrella
+  duplicates this design's combined cache, build-handoff, Hspec, audit, and
+  probe-isolation arc.
 
 ## Desired experience
 
@@ -104,12 +156,22 @@ concrete precondition
    has not changed for weeks.
 5. Master retains a complete regression backstop. Any PR-only selection rule
    must fail closed when a path is unclassified and must have a self-test.
+6. Parallel work should start from one verified build. Each worker gets an
+   isolated execution/resource tree and immutable binaries rather than a copy
+   of mutable Cabal state.
+7. Cache and image freshness should be automatic and observable. A maintainer
+   may dispatch the maintenance workflow manually, but ordinary freshness must
+   not depend on remembering a personal weekly checklist.
 
 ## Scope
 
 ### In scope
 
 - GitHub Actions workflow structure, summaries, and artifact handoff.
+- Ephemeral worktree/resource-root isolation for concurrent consumers of one
+  build.
+- Scheduled and manually dispatched CI maintenance for immutable image/cache
+  rotation.
 - Cabal build-product cache freshness and bounded retention strategy.
 - Headless Hspec diagnostics, grouping, reruns, and local reproduction.
 - Static-audit startup cost, beginning with save compatibility.
@@ -125,6 +187,8 @@ concrete precondition
 - Changing game behavior, worldgen output, save formats, or persisted data.
 - Duplicating shared world generation across shards without measurements showing
   a net critical-path win.
+- Copying or hard-linking a mutable `dist-newstyle` into probe worktrees as a
+  substitute for an explicit executable handoff.
 - Treating `make ci` as an exact wall-clock mirror of a parallel cloud workflow;
   it remains the local coverage mirror and may execute the same gates serially.
 
@@ -169,14 +233,101 @@ for each shared `(seed, size, plateCount)` world and prove that concurrent test
 processes do not contend for ports, config state, or repo-relative runtime
 files.
 
+### Isolate parallel probes after one build
+
+Build the production executable once, resolve its exact path, and make that
+immutable binary the input to every parallel probe. `probelib.boot` needs an
+explicit runner-supplied executable override; ordinary one-probe developer use
+may retain `cabal run`, but aggregate/CI mode must never start another Cabal
+build or registration process merely to boot an engine that was already built.
+
+Each concurrently active probe gets an ephemeral source/resource worktree at
+the tested commit, its own debug port, logs, save/config output, and temporary
+artifact directory. The built executable remains outside those trees and is
+invoked with `--resource-root <worker-tree>`. Prepare all Git worktrees before
+fan-out so Git metadata operations themselves do not race. Dispose of a worker
+tree after its probe, or prove it clean before reuse; do not let one probe's
+runtime writes become another probe's fixture.
+
+This intentionally does **not** clone `dist-newstyle`. Cabal build products are
+path-sensitive and mutable, and a warmed local tree is roughly 1.3 GB. Copying
+it per probe would preserve the wrong abstraction at much higher I/O cost. The
+handoff unit is a tested executable (and, where needed, a dedicated helper
+executable), not Cabal's internal build database.
+
+`persistence_contract` is the current exception because its structural save
+comparison launches GHCi. Initially it must run without any concurrent Cabal
+consumer. The stronger follow-up is a small prebuilt codec-helper executable
+or equivalent binary interface so this probe also becomes a pure artifact
+consumer. Retrying a Cabal race alone is not accepted isolation: an
+infrastructure failure must not be converted into five minutes of hidden
+latency and a green result.
+
 ### Keep build caches fresh without recreating cache explosion
 
 Replace the indefinitely frozen per-plan project snapshot with a bounded epoch,
-such as plan plus calendar week, while retaining a restore prefix that can reuse
-the newest older compatible snapshot on an epoch miss. The exact epoch is a
-proposal pending measurement. The key must remain compiler-, Cabal-, OS-, and
-plan-sensitive, and concurrent first writers must remain benign. Cache age and
-whether the restore was exact or fallback must appear in the run summary.
+initially plan plus calendar week, while retaining a restore prefix that can
+reuse the newest older compatible snapshot on an epoch miss. A scheduled
+default-branch maintenance workflow runs once per week at a non-peak cron
+minute and exposes `workflow_dispatch` for a manual repair run. It restores the
+newest compatible prior snapshot, performs the warning-clean application and
+test-suite builds, and saves the new epoch in master scope so pull requests can
+restore it. Normal pull-request workflows remain restore-only consumers of the
+master cache.
+
+Weekly is the first operating cadence, not a promise that seven days of drift
+will always meet the latency target. The observed six-minute increase after 81
+first-parent commits in less than two days means CIR-1 must report snapshot age
+and changed-commit count. If the build budget is exceeded before the weekly
+run, shortening the automatic cadence to daily or adding a bounded
+commit-count trigger is an operational adjustment, not a redesign.
+
+The same maintenance workflow may refresh the CI image, but only by minting a
+new immutable epoch identity, for example
+`ci-<recipe-content-hash>-<YYYY-Www>`, validating it, publishing it once, and
+recording its digest. It must never overwrite an existing content tag. Retain
+the prior image long enough for rollback and make cache keys include the
+selected image identity (or the complete ABI/toolchain inputs it represents),
+so a refreshed operating-system image cannot restore incompatible project
+objects. This deliberately accepts a weekly environment-freshness boundary;
+the run summary must make that boundary visible when comparing historical
+runs.
+
+The maintenance workflow is repository automation, not another manual chore
+beside janitor or documentation publication. A maintainer uses the dispatch
+button only when the scheduled run was missed or a refresh needs to be forced.
+The key must remain compiler-, Cabal-, OS-, plan-, image-, and epoch-sensitive,
+and concurrent first writers must remain benign. Cache age, image age/digest,
+and whether the restore was exact or fallback must appear in the run summary.
+
+### Prove safe Hspec parallel regions
+
+Hspec can do this directly: version 2.11.17 provides the `parallel` spec
+modifier and the test binary already exposes `--jobs=N`; the suite is linked
+with `-threaded` and has an RTS `-N` default. `--jobs` alone changes nothing,
+however, because the current test tree marks no spec parallelizable.
+
+Parallelism must be opt-in at audited group boundaries. The canonical
+shared-world `aroundAll withHeadlessEngine` group remains sequential: its
+examples share one `EngineEnv`, deliberately reuse memoized generated worlds,
+and include readers plus mutation-sensitive fixtures whose ordering is part of
+the current performance/correctness contract. Many other groups also own
+mutable engine state, fixed temporary paths, process-wide configuration, or
+repo-relative resources, so adding `parallel` at the root would be unsafe.
+
+The first candidates are pure, CPU-bound specs with no engine,
+process-global environment, fixed temporary path, current-directory mutation,
+or repo-relative output. Independently owned engine groups are candidates only
+after their ports, resource roots, temporary paths, and RTS capability budgets
+are isolated. Measure `--jobs=1`, `2`, and a cap no higher than the runner's
+useful CPU capacity. A global `parallel` wrapper is out of scope.
+
+If audited in-process parallelism gives little benefit because world generation
+still dominates, retain it only where measured and prefer process/job-level
+fan-out: one serial shared-world Hspec lane plus separate isolated lanes for
+genuinely independent groups. Process sharding must run the already-built test
+executable from separate worktrees and must not regenerate the same shared
+worlds in multiple lanes.
 
 ### Shorten the critical path after one build
 
@@ -189,17 +340,27 @@ consumers for:
 - worldgen/unit-asset/graphical gates when selected.
 
 The producer should upload only the runnable binaries and minimal metadata each
-consumer needs, not the whole `dist-newstyle` tree. Before adopting this shape,
-a spike must verify that the Haskell executables run in an identical immutable
-CI container after artifact download, and that `world_check.py` and probe
-launching can accept an explicit binary path instead of requiring `cabal run`.
-If binary handoff costs or dynamic-library coupling erase the latency win, keep
-one job and parallelize only proven non-contending static work.
+consumer needs, not the whole `dist-newstyle` tree. GitHub Actions artifacts,
+not caches, are the handoff mechanism for outputs produced by one job and
+consumed by other jobs in the same workflow. Each consumer gets GitHub's clean
+checkout in the same immutable CI image, downloads the artifact, and uses that
+checkout as its resource tree. The final stable `build-test` check depends on
+all consumer jobs and consolidates their verdicts so branch protection does
+not mistake a partial fan-out for success.
 
-Separate jobs increase total runner minutes and make the required-check surface
-more complex even while reducing wall time. The workflow should therefore split
-only gate families with a demonstrated critical-path benefit and retain clear,
-stable check names for branch protection.
+Before adopting this shape, a spike must verify that both Haskell executables
+run in the identical immutable CI container after artifact download, that the
+test executable accepts Hspec options directly, and that `world_check.py` and
+probe launching accept an explicit binary path instead of requiring
+`cabal run`. CIR-7 supplies the probe half of this interface. If binary handoff
+costs or dynamic-library coupling erase the latency win, keep one job and
+parallelize only proven non-contending work in isolated worker trees.
+
+Separate jobs increase total runner minutes even while reducing wall time. That
+trade is accepted for independent, measured gate families, with explicit
+concurrency caps and timing/cost reporting. The required-check surface remains
+one stable aggregate rather than exposing every internal lane as a permanent
+branch-protection contract.
 
 ### Revisit PR selection only with coverage evidence
 
@@ -237,6 +398,38 @@ Restart the same commit first, then use comparative run evidence and narrower
 local reproduction to decide whether the fault is a test, engine lifecycle, or
 runner-specific problem.
 
+### D-5. Build once, then isolate execution trees rather than Cabal trees
+
+Parallel probes and post-build consumers receive immutable executables from one
+verified build. Each concurrently active consumer runs in its own checkout or
+ephemeral Git worktree/resource root. No consumer receives a cloned,
+hard-linked, or concurrently mutable `dist-newstyle`; any remaining GHCi user
+runs exclusively until it is replaced by a prebuilt helper.
+
+### D-6. Make CI freshness a scheduled weekly program with a manual fallback
+
+The repository owns a weekly scheduled maintenance workflow that runs from
+master, refreshes a new immutable image/cache epoch, validates it, and reports
+what changed. It also supports `workflow_dispatch` for repair or an intentional
+early refresh. This is automation, not a maintainer checklist. Weekly is the
+starting cadence; measured age/build drift may shorten it without reopening the
+architecture.
+
+### D-7. Prefer bounded parallel critical paths over minimum runner minutes
+
+After one build, independent Hspec, audit, probe, and selected expensive-gate
+families should run concurrently. Additional GitHub-hosted runner minutes are
+an accepted trade for shorter feedback, provided concurrency is capped,
+coverage is unchanged, and the workflow reports both latency and total runner
+cost.
+
+### D-8. Hspec parallelism is explicit and fixture-aware
+
+Use Hspec's `parallel`/`--jobs` only on audited groups. The shared-world block
+and any group with unisolated mutable engine, filesystem, environment, or
+process state remain sequential. `parallel` is never applied to the whole
+suite merely because the framework supports it.
+
 ## Open questions
 
 ### Q-1. What latency and runner-minute budgets define success?
@@ -245,7 +438,9 @@ Proposed starting service levels are PR median at or below 10 minutes, PR 95th
 percentile at or below 15 minutes when no selected scenario inherently exceeds
 that budget, and master at or below 15 minutes. These are optimization targets,
 not test timers. The user may prefer a different balance between wall-clock
-latency and parallel-runner consumption.
+latency and parallel-runner consumption. CIR-1 may publish these as provisional
+measurement bands, but it must not turn them into failure gates without a later
+maintainer decision.
 
 ### Q-2. May the full Hspec suite become path-selective on pull requests?
 
@@ -253,27 +448,48 @@ Keeping it unconditional is the conservative coverage choice and still permits
 meaningful wins from CIR-2 through CIR-5. Making integration groups selective
 could reduce ordinary PR latency further, but requires durable ownership
 mapping and accepts that an omitted cross-area regression may be found only by
-the master backstop. This question affects CIR-6 only.
+the master backstop. This question affects CIR-6 only. CIR-6 must stop for an
+explicit maintainer decision before changing PR selection; retaining the
+unconditional suite is the safe default.
 
 ### Q-3. Is increased GitHub-hosted runner usage acceptable to reduce wall time?
 
-Running Hspec, probes, and audits on separate runners after one build can turn
-their sum into their maximum, but consumes more runner minutes and requires
-artifact handoff. This question determines whether CIR-5 targets separate jobs
-or conservative within-job concurrency.
+Resolved by D-7. The user prefers parallel execution wherever independence can
+be proved; bounded extra runner usage is acceptable in exchange for shorter
+feedback.
 
 ### Q-4. What is the right cache refresh epoch?
 
-A weekly epoch is a concrete proposal, not yet a decision. Timing data should
-compare compile drift, cache size, restore time, and the number of simultaneous
-dependency plans before choosing weekly, daily, or an explicit rolling policy.
+Resolved by D-6 for the first deployment: use a weekly epoch and an automated
+master-scoped warmer. CIR-1 must measure whether the build-time budget is
+exceeded before the week ends; if so, shorten the cadence to daily or a bounded
+commit-count policy without changing the immutable-epoch design.
 
 ### Q-5. How should the headless suite expose its last active example?
 
 Candidates are a small custom formatter/runner hook that flushes example starts,
 a wrapper that preserves line-buffered progress, or partition-level markers.
 The choice must help compare a manually restarted run and must not serialize
-tests that are intentionally parallelizable later.
+tests that are intentionally parallelizable later. CIR-3 may choose the
+smallest reliable diagnostic that preserves the existing output and scheduling
+contracts; it must stop for a maintainer decision if useful diagnostics require
+changing either contract.
+
+### Q-6. Which Hspec groups are both safe and worth parallelizing?
+
+The framework capability is verified, but the repository boundary is not. CIR-8
+must inventory fixture and process ownership, measure candidate groups at
+`--jobs=1/2/...`, and leave any uncertain group sequential. If no safe group
+materially shortens the critical path without duplicating shared worldgen,
+CIR-8 records that result rather than forcing a parallel implementation.
+
+### Q-7. Are the built executables self-contained enough for artifact handoff?
+
+The producer and consumers use the same immutable container image, which makes
+handoff plausible, but the Linux binary's dynamic-library requirements and the
+direct Hspec runner's runtime environment have not yet been exercised as a
+downloaded artifact. CIR-5 stops after the spike and reports the blocker if the
+minimal binary bundle cannot run without copying Cabal's build database.
 
 ## Verification strategy
 
@@ -285,11 +501,23 @@ tests that are intentionally parallelizable later.
 - Compare the restarted PR #1328 run with its cancelled predecessor. If it
   hangs again, reproduce with successively narrower Hspec matches before
   changing CI.
+- Run the full CI-eligible probe selection with at least two workers from one
+  prebuilt executable, proving no worker invokes `cabal run`, no
+  `package.conf.inplace`/shared-build mutation occurs, isolated resource trees
+  remain independent, and the prior solo-retry tax disappears.
 - Validate cache keys and fallback ordering with a pure self-test or dry-run
   script, then inspect exact-hit/fallback evidence on successive workflow runs.
+  Exercise both the weekly `schedule` path and `workflow_dispatch`, verify the
+  cache is written in master scope, and prove an image refresh creates a new
+  immutable tag/digest rather than overwriting one.
 - For artifact handoff, execute downloaded binaries in the same container and
   prove Hspec, one representative behavior probe, and world check can locate
   all repo-relative resources.
+- For Hspec, establish a `--jobs=1` baseline, mark only audited candidate
+  groups, then compare `--jobs=2` and the runner-appropriate cap across repeated
+  runs. Example counts and coverage stay identical; the shared-world generation
+  count must not increase, and fixture/state failures or output races reject
+  the candidate boundary.
 - Compare wall-clock critical path and total runner minutes before and after
   each slice. A wall-time improvement that causes unbounded cost or materially
   higher flake/retry rates does not pass.
@@ -346,40 +574,87 @@ tests that are intentionally parallelizable later.
   specific hung PR run.
 - **Open questions:** Q-5
 
-### CIR-4. Refresh the frozen build-product cache on a bounded cadence
+### CIR-7. Isolate parallel probes behind one prebuilt executable
 
-- **Outcome:** Compatible project artifacts receive a fresh bounded snapshot
-  periodically, limiting cumulative recompilation without per-commit cache
-  explosion.
-- **Scope:** Cache-key epoch, restore order, cache diagnostics, comments/docs,
-  and concurrency-safe self-tests where practical.
+- **Outcome:** The full CI-eligible probe selection can use multiple workers
+  without any worker mutating a shared Cabal build tree or paying retry tax for
+  an infrastructure race.
+- **Scope:** An explicit executable override for probe boot, ephemeral worker
+  worktree/resource-root lifecycle, unique per-worker ports and outputs, and an
+  exclusive boundary for the remaining persistence-contract GHCi consumer.
+- **Phase:** 1 — remove infrastructure contention
+- **Depends on:** `none`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-1, D-5
+- **Acceptance signals:** A two-worker full selection boots one prebuilt
+  executable without invoking `cabal run`, produces no shared
+  `package.conf.inplace` errors, and needs no race-induced solo retries;
+  single-probe invocation still works; worker trees are disposed cleanly.
+- **Out of scope:** Copying or hard-linking `dist-newstyle`, increasing the
+  worker cap above two before measuring resource contention, restructuring the
+  overall workflow job graph, or changing probe assertions.
+- **Open questions:** `None`
+
+### CIR-4. Automate immutable weekly CI image and cache refreshes
+
+- **Outcome:** Master automatically produces a fresh, validated, immutable CI
+  image/cache epoch each week, with a manual repair button and compatible
+  fallback to the previous epoch.
+- **Scope:** A default-branch `schedule` plus `workflow_dispatch`, immutable
+  image tag/digest publication, image-aware cache keys, restore order, build
+  warming, run-summary diagnostics, retention/rollback policy, and focused
+  self-tests where practical.
 - **Phase:** 2 — shorten compilation
 - **Depends on:** `CIR-1`
 - **Ordering:** `not on the critical path`
-- **Relevant decisions:** D-1
-- **Acceptance signals:** Same-epoch exact hits, new-epoch compatible fallback,
-  one bounded snapshot per plan/epoch, and lower compile drift over the chosen
-  window.
-- **Out of scope:** Self-hosted persistent build directories.
-- **Open questions:** Q-4
+- **Relevant decisions:** D-1, D-6
+- **Acceptance signals:** Scheduled and manually dispatched runs both work from
+  master scope; image refreshes mint rather than overwrite tags and record the
+  digest; same-epoch exact hits and compatible prior-epoch fallback are
+  observable; compile drift is measured and stays within the chosen budget or
+  triggers a documented cadence adjustment.
+- **Out of scope:** Adding refresh steps to the maintainer's janitor/docs
+  routine, mutable image tags, and self-hosted persistent build directories.
+- **Open questions:** `None`
+
+### CIR-8. Prove and adopt only safe Hspec parallel regions
+
+- **Outcome:** Audited independent Hspec groups run concurrently when that
+  materially reduces the critical path, or the repository records a measured
+  no-win result instead of forcing unsafe parallelism.
+- **Scope:** Fixture/process ownership inventory, candidate `parallel`
+  annotations, repeated `--jobs=1`, `2`, and runner-cap measurements, and a
+  bounded spike of isolated process lanes if in-process concurrency cannot
+  reach the worldgen-dominated path.
+- **Phase:** 2 — shorten test execution
+- **Depends on:** `CIR-1`, `CIR-3`
+- **Ordering:** `can proceed independently of cache work`
+- **Relevant decisions:** D-1, D-3, D-8
+- **Acceptance signals:** Example counts and verdicts remain identical across
+  repeated runs; shared-world generation count does not increase; no mutable
+  fixture/state races appear; retained parallel boundaries show a material
+  wall-time improvement.
+- **Out of scope:** A root-level `parallel`, duplicating canonical world
+  generation across shards, or making Hspec path-selective.
+- **Open questions:** Q-6
 
 ### CIR-5. Run post-build gate families on independent critical paths
 
 - **Outcome:** Hspec, static audits, behavior probes, and selected expensive
   gates do not add their full serial durations after compilation.
-- **Scope:** Binary artifact spike, explicit binary-path support where needed,
-  workflow job graph, stable required-check names, and measured runner-minute
-  tradeoff.
+- **Scope:** A compilation-producer artifact, clean-checkout consumer jobs,
+  explicit binary-path support where needed, workflow job graph, one stable
+  aggregate required check, and measured runner-minute tradeoff.
 - **Phase:** 3 — structural parallelism
-- **Depends on:** `CIR-1`, `CIR-2`, `CIR-3`
+- **Depends on:** `CIR-1`, `CIR-2`, `CIR-3`, `CIR-7`
 - **Ordering:** `critical path`
-- **Relevant decisions:** D-1, D-2, D-3, D-4
+- **Relevant decisions:** D-1, D-2, D-3, D-4, D-5, D-7
 - **Acceptance signals:** Identical gate coverage and verdicts, no duplicate
   shared world generation, lower PR critical path, bounded artifact overhead,
-  and no material retry/flakiness regression.
+  bounded runner-minute growth, and no material retry/flakiness regression.
 - **Out of scope:** Parallel execution of tests that share mutable engine state
-  without isolation.
-- **Open questions:** Q-3
+  without isolation, or uploading the complete `dist-newstyle` tree.
+- **Open questions:** Q-7
 
 ### CIR-6. Reassess full-suite and behavior-probe selection from measured coverage
 
@@ -389,9 +664,9 @@ tests that are intentionally parallelizable later.
 - **Scope:** Coverage/ownership map, test grouping, selector self-tests, and
   documented stop/ask behavior for unclassified paths.
 - **Phase:** 4 — policy optimization
-- **Depends on:** `CIR-1`, `CIR-5`
+- **Depends on:** `CIR-1`, `CIR-5`, `CIR-8`
 - **Ordering:** `not on the critical path`
-- **Relevant decisions:** D-1, D-2, D-3
+- **Relevant decisions:** D-1, D-2, D-3, D-8
 - **Acceptance signals:** A measured decision; if selection changes, every path
   has an explicit result, unclassified paths fail closed, and master continues
   to run the complete suite.

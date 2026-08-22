@@ -1,6 +1,6 @@
 # Coordinated test findings — AI, persistence, and onboarding
 
-This report records seven current concerns from approved coordinated-test
+This report records eight current concerns from approved coordinated-test
 assessments that had not yet entered a durable findings workflow. They cover
 runtime AI state, save/load probe validity, and first-use UI feedback.
 
@@ -10,15 +10,16 @@ concrete precondition
 
 ## Methodology
 
-Six completed local `assess-tests` assessments were inventoried, covering
-seventeen observations:
+Seven completed local `assess-tests` assessments were inventoried, covering
+nineteen observations:
 
 - `20260813T011157Z-ui-transfer-combat-blood-gameplay-expedi-5fa13c`;
 - `20260813T020840Z-combat-animation-bddd95`;
 - `20260813T021424Z-ux-action-feedback-52da40`;
 - `20260818T160612Z-onboarding-discoverability-persistence-l-794241`;
 - `20260819T145517Z-ui-gameplay-unified-transfer-persistence-8213cd`; and
-- `20260819T152510Z-gameplay-first-aid-survival-cd8036`.
+- `20260819T152510Z-gameplay-first-aid-survival-cd8036`; and
+- `20260821T135443Z-combat-retaliation-tick-continuity-gamep-3d7769`.
 
 The first three assessments were already incorporated into
 `docs/coordinated_playtest_findings.md`. That report retained seven confirmed
@@ -45,25 +46,34 @@ already requires the scenario to discover and report the actual claimant. It is
 recorded here for completeness but does not add an eighth concern to the status
 queue.
 
+The seventh assessment covered two independent manual-probe harness defects at
+`4fb9eb8d30920718da558502fd542e61f01391ae`. This report records the
+retaliation-swap fixture failure that suppresses its stale-window oracle. The
+assessment's separate position-hold inventory mismatch belongs to the
+documentation/code-health reporting lane and is not duplicated here. The
+retaliation premise was rechecked at
+`4eb63002b427118e569f3391f5c751b0504cdb1a`; the relevant source is unchanged.
+
 No scenario was rerun while drafting. The report relies on the approved
 assessments’ preserved execution evidence and a fresh current-code check. No
 implementation, test, tracker item, or remote state was changed.
 
 ## Status
 
-- [ ] TEST-1. Combat retaliation reads a constant outside its Lua module boundary
-- [ ] TEST-2. Destroyed construction targets remain in persisted unit-AI state
-- [ ] TEST-3. The save-migration probe omits required location registries
-- [ ] TEST-4. The save-migration probe continues after a prerequisite load failure
-- [ ] TEST-5. The unified-transfer probe ignores persistence integrity diagnostics
-- [ ] TEST-6. Fresh-world entry hides the portal-placement toolbar
+- [x] TEST-1. Combat retaliation reads a constant outside its Lua module boundary — [#1483]
+- [x] TEST-2. Destroyed construction targets remain in persisted unit-AI state — [#1484]
+- [x] TEST-3. The save-migration probe omits required location registries — [#1485]
+- [x] TEST-4. The save-migration probe continues after a prerequisite load failure — [#1486]
+- [x] TEST-5. The unified-transfer probe ignores persistence integrity diagnostics — [#1487]
+- [x] TEST-6. Fresh-world entry hides the portal-placement toolbar — [#1488]
 - [ ] TEST-7. Randbox focus styling falsely signals replacement selection
+- [ ] TEST-8. Retaliation-swap fixture carries injury state into its stale-window case
 
 ---
 
 ## Runtime AI state
 
-### TEST-1. Combat retaliation reads a constant outside its Lua module boundary
+### [#1483] TEST-1. Combat retaliation reads a constant outside its Lua module boundary
 
 The mid-fight retaliation path compares an attacker timestamp against
 `RETALIATE_WINDOW_SEC`, but that constant is local to a different Lua module.
@@ -98,7 +108,7 @@ preserved three real-engine update errors from this path.
 - **Remaining uncertainty:** The captured probe establishes the executable
   failure but not its frequency during ordinary gameplay.
 
-### TEST-2. Destroyed construction targets remain in persisted unit-AI state
+### [#1484] TEST-2. Destroyed construction targets remain in persisted unit-AI state
 
 When no unbuilt construction target resolves, both the utility and execution
 paths return without clearing the previously cached `buildTarget`. A destroyed
@@ -144,7 +154,7 @@ integrity boundaries rather than save corruption.
 
 ## Persistence probe validity
 
-### TEST-3. The save-migration probe omits required location registries
+### [#1485] TEST-3. The save-migration probe omits required location registries
 
 The headless save-compatibility migration probe loads several content registries
 but omits loot tables and location definitions. Seven tracked complete-session
@@ -182,7 +192,7 @@ regression.
   production registry set or derive a minimal set from fixture metadata remains
   a repair-time decision.
 
-### TEST-4. The save-migration probe continues after a prerequisite load failure
+### [#1486] TEST-4. The save-migration probe continues after a prerequisite load failure
 
 A fixture’s acceptance and publication checks do not guard the remainder of its
 scenario. After either prerequisite fails, the probe still queries an absent
@@ -224,7 +234,7 @@ produce the same noise.
   “skipped due to prerequisite” vocabulary; the repair must decide whether to
   report dependent checks as skipped or simply omit them.
 
-### TEST-5. The unified-transfer probe ignores persistence integrity diagnostics
+### [#1487] TEST-5. The unified-transfer probe ignores persistence integrity diagnostics
 
 The unified-transfer probe boots its save and load processes with dedicated log
 files but never reads those files. Its approved run exited successfully with
@@ -267,7 +277,7 @@ diagnostics produced by the scenario cannot affect its mechanical verdict.
 
 ## First-use UI feedback
 
-### TEST-6. Fresh-world entry hides the portal-placement toolbar
+### [#1488] TEST-6. Fresh-world entry hides the portal-placement toolbar
 
 A new world enters gameplay at zoom `64.0`, which selects the zoom-map HUD page
 and hides the world toolbar. The player manual instead says the player arrives
@@ -344,3 +354,53 @@ replacement produced a composite generated-plus-typed name.
 - **Remaining uncertainty:** The preferred choice between select-on-first-focus
   and focus-only restyling is a UX decision; the assessment did not test other
   randbox consumers or keyboard Select All behavior.
+
+---
+
+## Behavior probe validity
+
+### TEST-8. Retaliation-swap fixture carries injury state into its stale-window case
+
+> **Captured note:** Shared combat fixture collapses before the stale-window oracle
+
+**Verification:** Verified — the probe reuses one genuinely injured subject for
+its fresh and stale cases, but its claimed restore step does not clear wounds or
+restore blood volume. The approved run completed every fresh-window check, then
+stopped before any stale-window assertion because the subject was collapsed.
+
+**Evidence:**
+
+- `tools/retaliation_swap_probe.py:219-256` — `stanch` only dresses bleeding
+  wounds, while `restore` queues `unit.revive`, dresses wounds, and tops up
+  survival resources; it does not establish a clean injury or blood state.
+- `tools/retaliation_swap_probe.py:464-500` — each case relies on that restore,
+  lets natural ticks run, and checks the subject pose only after the window.
+- `tools/retaliation_swap_probe.py:657-687` — the fresh and stale windows receive
+  the same subject, and the stale no-swap and tick-completion checks occur only
+  after `run_case` returns successfully.
+- `src/Engine/Scripting/Lua/API/Units/Spawn.hs:376-390` — `unit.revive` is an
+  asynchronous queued transition and is a no-op unless the unit is collapsed.
+- `scripts/unit_resource_injury.lua:95-149` and
+  `scripts/unit_resource_tick.lua:240-272` — residual injury, consciousness,
+  locomotion, and blood state can keep or return a unit to collapse after a
+  revive request.
+- `tools/README.md:460` — the documented probe contract requires a stale hit to
+  trigger no swap while still completing the subject's tick.
+
+**Handoff context:**
+
+- **Current behavior:** A real staging hit leaves persistent physiology on the
+  shared subject. In the assessed run, the fresh case passed, but the subject
+  was collapsed when the stale case reached its captured preconditions, so the
+  probe emitted neither stale behavioral result.
+- **Expected behavior:** Both retaliation windows should begin from an
+  independently established live, non-collapsed fixture and always emit their
+  declared behavioral checks.
+- **Scope and constraints:** Preserve the genuine-hit setup, fresh-window target
+  swap, same-invocation sentinel, log-error oracle, stale no-swap assertion, and
+  the product's real injury rules. A harness repair must not weaken or skip the
+  stale assertions.
+- **Remaining uncertainty:** The failed run did not record wound details, blood
+  fraction, or the pose-transition timeline, so the relative contributions of
+  residual wounds, low blood, and revive synchronization were not isolated. The
+  scenario was not rerun during assessment or capture.
