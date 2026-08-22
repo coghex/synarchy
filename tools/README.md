@@ -1139,8 +1139,13 @@ one stray write would wedge the probe.
 unmeasurable probe before claiming anything; acquire, where a DENIED claimant
 stops having created no artifact directory, no result document and no census
 entry, reporting the current owner and the claim's age; record the acquisition
-in the census BEFORE the probe runs, releasing the claim and refusing outright
-if that write fails or no `docs-wip` census is reachable; measure, renewing
+in the census BEFORE the probe runs — inside one hold of the sidecar lock that
+renews the lease first, because that write is a census mutation and can block
+on another writer for as long as that writer takes — releasing the claim and
+refusing outright if that write fails or no `docs-wip` census is reachable;
+REASSERT ownership immediately before the probe starts and refuse to start it
+if that is gone, since beginning a measurement this run no longer owns is the
+duplicated work the claim exists to prevent; measure, renewing
 throughout; ingest the result inside ONE hold of the sidecar lock that first
 re-reads the claim file, confirms the claim is still ours and still live, and
 renews the lease so it cannot elapse mid-commit — checking and then writing
@@ -1160,8 +1165,8 @@ Exit codes: 0 a measurement that ran and was ingested, whatever rate it
 observed; 2 rejected before anything was claimed; 3 ALREADY CLAIMED; 4 a
 harness error, whose non-accepted attempt is still ingested; 5 a claim audit
 failure, where the acquisition could not be durably recorded so nothing ran;
-6 no leasable port; 7 the claim was lost while the probe ran, so nothing was
-ingested.
+6 no leasable port; 7 the claim was lost — before the probe started, so it was
+never run, or while it ran, so nothing was ingested.
 
 Gate: `python3 tools/test_probe_claim.py` (in CI and `make ci`) — engine-free
 and GPU-free, but genuinely multi-process: its concurrency cases race real

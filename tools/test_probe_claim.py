@@ -1078,7 +1078,7 @@ def test_orchestration_aborts_when_the_claim_is_lost() -> None:
 
             before = census.read_bytes()
             expect_raises(
-                probe_claim.ClaimLostDuringMeasurement,
+                probe_claim.ClaimLostDuringRun,
                 lambda: probe_claim.run_claimed_measurement(
                     "alpha", 2, root=root, census_path=census, measure=measure,
                     repo_root=str(main_wt), renew_interval=3600),
@@ -1250,6 +1250,115 @@ def test_commit_while_held_renews_and_refuses() -> None:
         expect(not ran, "...and the commit never ran")
 
 
+def test_a_delayed_audit_cannot_be_overtaken() -> None:
+    """The acquisition audit is a census write, and it is held too.
+
+    A review found this: recording the acquisition happens BEFORE the
+    renewer starts, and it is a census mutation, so it can block on
+    another writer's lock for as long as that writer takes. A lease that
+    elapsed meanwhile would let a second agent take the probe — and this
+    process would still go on to run it, which is exactly the duplicate
+    measurement the claim exists to prevent.
+
+    Two halves, both proved here: no acquisition can interleave with the
+    audit, and if ownership is gone by the time the probe would start,
+    the probe does not start.
+    """
+    print("\n-- a delayed acquisition audit cannot be overtaken --")
+    with registry(), scratch_repo() as (main_wt, _other, census):
+        seeded_census(census)
+
+        # Half one: a real contender, released onto the lock at the
+        # instant the audit begins, must still be waiting when it ends.
+        with scratch() as base:
+            root = base / "probe-claims"
+            root.mkdir(parents=True)
+            barrier = base / "go"
+            observed = {}
+
+            def audit_slowly(target, probe, record):
+                # This contender reads the REAL clock, so what it finds
+                # once it finally gets the lock is the claim as it truly
+                # stands: freshly renewed inside the hold, and therefore
+                # live. It must be denied, not merely delayed.
+                contender = subprocess.Popen(
+                    [sys.executable, "-c", CONTENDER, str(root), "alpha",
+                     str(barrier), "600", "0", "0"],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                observed["contender"] = contender
+                barrier.write_text("go", encoding="utf-8")
+                ready = Path(str(barrier) + ".ready")
+                deadline = time.time() + 60
+                while time.time() < deadline and not ready.exists():
+                    time.sleep(0.01)
+                observed["reached_the_lock"] = ready.exists()
+                time.sleep(0.5)
+                observed["still_waiting"] = contender.poll() is None
+                return probe_census.record_claim(target, probe, record)
+
+            ran = []
+            outcome = probe_claim.run_claimed_measurement(
+                "alpha", 2, root=root, census_path=census,
+                measure=lambda p, r, **k: ran.append(1) or fake_measurement(p, r),
+                record_claim=audit_slowly, repo_root=str(main_wt),
+                renew_interval=3600)
+            out, _err = observed["contender"].communicate(timeout=120)
+            observed["contender_outcome"] = out.strip().splitlines()[-1]
+
+        expect(observed.get("reached_the_lock") is True,
+               "the contender really did reach the claim lock during the "
+               "audit, so the assertion below is not vacuous")
+        expect(observed.get("still_waiting") is True,
+               "a competing acquisition CANNOT proceed while the acquisition "
+               "is being recorded")
+        expect(ran == [1] and outcome.exit_code == probe_claim.EXIT_OK,
+               "and the probe this run still owned did run")
+        expect(json.loads(observed["contender_outcome"])["outcome"] == "denied",
+               "the contender was DENIED once it got the lock, because the "
+               "lease was renewed inside the hold rather than left to elapse "
+               "for however long the audit took")
+
+        # Half two: ownership genuinely gone by the time the probe would
+        # start. The steal writes the claim file directly, because a
+        # legitimate acquisition cannot get in at all any more — which is
+        # the point of half one, and would make this half untestable
+        # through `acquire`.
+        with claim_root() as root:
+            before = census.read_bytes()
+            ran = []
+
+            def audit_then_lose(target, probe, record):
+                result = probe_census.record_claim(target, probe, record)
+                stolen = dict(probe_claim.read_claim(probe, root=root))
+                stolen["token"] = "somebody-else"
+                probe_claim.claim_path(probe, root).write_text(
+                    json.dumps(stolen), encoding="utf-8")
+                return result
+
+            expect_raises(
+                probe_claim.ClaimLostDuringRun,
+                lambda: probe_claim.run_claimed_measurement(
+                    "beta", 2, root=root, census_path=census,
+                    measure=lambda *a, **k: ran.append(1) or fake_measurement("beta"),
+                    record_claim=audit_then_lose, repo_root=str(main_wt),
+                    renew_interval=3600),
+                "a claim lost before the measurement refuses to start it",
+                "before the measurement started", "was not run")
+            expect(not ran,
+                   "the probe was NEVER run — which is the duplicate "
+                   "measurement this whole feature exists to prevent")
+            row = probe_census.find_entry(
+                json.loads(census.read_text(encoding="utf-8")),
+                "beta")["census"]
+            expect(row["attempts"] == [] and row["current"] is None,
+                   "and no result reached the census")
+            expect(census.read_bytes() != before and len(row["claims"]) == 1,
+                   "only the acquisition the audit itself wrote is recorded")
+            expect(probe_claim.read_claim("beta", root=root)["token"]
+                   == "somebody-else",
+                   "and the new owner's claim was left alone on the way out")
+
+
 def test_probe_flake_needs_no_docs_worktree() -> None:
     """The low-level measurement API stays usable without a census.
 
@@ -1346,6 +1455,7 @@ def main() -> int:
                  test_a_short_lease_means_what_it_says,
                  test_orchestration_aborts_when_the_claim_is_lost,
                  test_ingestion_cannot_be_overtaken,
+                 test_a_delayed_audit_cannot_be_overtaken,
                  test_commit_while_held_renews_and_refuses,
                  test_probe_flake_needs_no_docs_worktree, test_cli):
         test()

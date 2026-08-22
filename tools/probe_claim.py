@@ -100,13 +100,21 @@ The orchestration boundary
 2. acquire the claim — a DENIED claimant stops here, having created no
    artifact directory, no result document and no census entry, and
    reports the current owner and the claim's age;
-3. record the acquisition in the census, BEFORE the probe runs. If that
-   write fails, or no `docs-wip` census is reachable, the claim is
-   released and the measurement is refused with a controlled
-   diagnostic — a measurement nobody can attribute is worse than one
-   that did not happen;
-4. run the measurement, renewing the lease throughout;
-5. ingest the result — success or harness error — inside ONE hold of
+3. record the acquisition in the census, BEFORE the probe runs, inside
+   one hold of the sidecar lock that renews the lease first — that
+   write is a census mutation and can block on another writer for as
+   long as that writer takes, so it gets the same protection the
+   ingestion does. If it fails, or no `docs-wip` census is reachable,
+   the claim is released and the measurement is refused with a
+   controlled diagnostic — a measurement nobody can attribute is worse
+   than one that did not happen;
+4. reassert ownership immediately before the probe starts, and REFUSE
+   TO START if it is gone. Anything may have happened since the audit —
+   a suspended machine, a census write that blocked for an hour — and
+   beginning a measurement this run no longer owns is exactly the
+   duplicated work the claim exists to prevent;
+5. run the measurement, renewing the lease throughout;
+6. ingest the result — success or harness error — inside ONE hold of
    the sidecar lock that first re-reads the claim file and confirms the
    claim is still ours and still live, and renews the lease so it
    cannot elapse mid-commit. Checking and then writing would be two
@@ -120,7 +128,7 @@ The orchestration boundary
    census records: nothing is ingested, the artifacts are kept, and the
    run reports the loss. The renewer's `lost` flag is a hint, not the
    authority — it sees only what a renewal happened to hit;
-6. release, checked against this acquisition's own token.
+7. release, checked against this acquisition's own token.
 
 The lock ORDER is claim-then-census everywhere, so the two never wait
 on each other.
@@ -141,9 +149,12 @@ Exit codes:
   5  claim audit failure: the acquisition could not be durably recorded,
      so the measurement was refused and the claim released
   6  no clear, leasable port in the whole range
-  7  the claim was lost while the probe ran, so another agent may have
-     been measuring it too. The run's artifacts are kept and NOTHING is
-     ingested — an unattributable measurement is not a measurement
+  7  the claim was lost. Before the probe started, the probe was NOT
+     run, because starting a measurement this run no longer owns is the
+     duplicated work the claim exists to prevent. After it ran, another
+     agent may have been measuring the probe too, so the artifacts are
+     kept and NOTHING is ingested — an unattributable measurement is
+     not a measurement
 """
 from __future__ import annotations
 
@@ -277,17 +288,30 @@ class ClaimAuditFailed(Exception):
     """The acquisition could not be durably recorded, so nothing ran."""
 
 
-class ClaimLostDuringMeasurement(Exception):
-    """The claim lapsed or was taken over while the probe was running.
+# The two phases at which a run can discover it no longer owns its probe.
+PHASE_BEFORE_MEASUREMENT = "before the measurement started"
+PHASE_AFTER_MEASUREMENT = "while the probe was running"
 
-    The measurement really happened, but this process stopped being the
-    probe's owner partway through, so a second agent may have been
-    measuring it at the same time. Its result is therefore NOT
-    attributable to one exclusive run and is not ingested.
+
+class ClaimLostDuringRun(Exception):
+    """This run stopped being the probe's owner partway through.
+
+    Two phases reach it, and the difference is what has already
+    happened, not what the run does about it:
+
+    * BEFORE the measurement — the acquisition audit outlived the lease
+      and somebody took the probe. Nothing runs, because starting now
+      would be the duplicate measurement this whole feature exists to
+      prevent.
+    * AFTER it — the measurement really happened, but a second agent
+      may have been measuring the same probe at the same time, so the
+      result is not attributable to one exclusive run and is not
+      ingested.
     """
 
-    def __init__(self, message: str, measurement=None):
+    def __init__(self, message: str, *, phase: str, measurement=None):
         super().__init__(message)
+        self.phase = phase
         self.measurement = measurement
 
 
@@ -807,6 +831,15 @@ class Claim:
             self._renew_locked(moment)
             return commit()
 
+    def reassert(self, now: datetime | None = None) -> None:
+        """Confirm the claim is still ours and live, and refresh its lease.
+
+        `commit_while_held` with nothing to commit: the check and the
+        renewal are the point. Used at a boundary where the next step
+        must not begin unless this run still owns the probe.
+        """
+        self.commit_while_held(lambda: None, now=now)
+
     def census_record(self, *, commit_sha: str, requested_runs: int) -> dict:
         """This acquisition, in the census's `claim` shape."""
         acquired = parse_stamp(self.payload["acquired_at"]) or utc_now()
@@ -1065,8 +1098,14 @@ def run_claimed_measurement(probe: str, runs: int, *,
                   else probe_census.manifest_path(repo_root))
         record = claim.census_record(commit_sha=commit_sha(repo_root),
                                      requested_runs=runs)
+        # The acquisition audit runs under the SAME hold the ingestion
+        # does, for the same reason: it is a census mutation, it can
+        # block on another writer's lock for as long as that writer
+        # takes, and a lease that elapses meanwhile would let a second
+        # agent take the probe. Under the hold no acquisition can
+        # interleave, and the lease is renewed before the write begins.
         try:
-            log_claim(target, key, record)
+            claim.commit_while_held(lambda: log_claim(target, key, record))
         except (probe_census.CensusError,
                 probe_census.DocsWorktreeMissing) as error:
             # The claim is released by the context manager on the way
@@ -1077,8 +1116,31 @@ def run_claimed_measurement(probe: str, runs: int, *,
                 f"probe {key!r}: the claim was acquired but could not be "
                 f"recorded in the census at {target} ({error}); the claim "
                 f"has been released and the probe was not run") from None
+        except ClaimLost as error:
+            raise ClaimLostDuringRun(
+                f"probe {key!r}: the claim was lost while its acquisition "
+                f"was being recorded ({error}), so another agent now owns "
+                f"this probe; it was not run and nothing was recorded in "
+                f"{target}",
+                phase=PHASE_BEFORE_MEASUREMENT) from None
 
         with Renewer(claim, renew_interval) as renewer:
+            # The last thing before the probe starts: still ours, still
+            # live, lease refreshed. Anything at all may have happened
+            # between the audit and here — a suspended machine, a
+            # census write that blocked for an hour — and starting a
+            # measurement this run no longer owns is precisely the
+            # duplicated work the claim exists to prevent. A stale
+            # answer is worth nothing, so this is a fresh read.
+            try:
+                claim.reassert()
+            except ClaimLost as error:
+                raise ClaimLostDuringRun(
+                    f"probe {key!r}: the claim was lost before the "
+                    f"measurement started ({error}), so another agent now "
+                    f"owns this probe; it was not run and nothing was "
+                    f"recorded in {target}",
+                    phase=PHASE_BEFORE_MEASUREMENT) from None
             measurement = run_measure(
                 key, runs, artifact_root=artifact_root, rts_caps=rts_caps,
                 announce=announce)
@@ -1101,12 +1163,13 @@ def run_claimed_measurement(probe: str, runs: int, *,
             claim.commit_while_held(
                 lambda: log_result(target, measurement.to_document()))
         except ClaimLost as error:
-            raise ClaimLostDuringMeasurement(
+            raise ClaimLostDuringRun(
                 f"probe {key!r}: the claim was lost while the probe was "
                 f"running ({renewer.lost or error}), so another agent may "
                 f"have been measuring it at the same time; nothing was "
                 f"recorded in {target} and the run's artifacts under "
                 f"{measurement.invocation_dir} were kept",
+                phase=PHASE_AFTER_MEASUREMENT,
                 measurement=measurement) from None
 
     return Outcome(
@@ -1212,7 +1275,7 @@ def main(argv: list[str] | None = None) -> int:
     except ClaimAuditFailed as error:
         print(f"probe_claim: {error}", file=sys.stderr)
         return EXIT_CLAIM_AUDIT
-    except ClaimLostDuringMeasurement as error:
+    except ClaimLostDuringRun as error:
         print(f"probe_claim: {error}", file=sys.stderr)
         return EXIT_CLAIM_LOST
     except probe_flake.PortExhausted as error:
