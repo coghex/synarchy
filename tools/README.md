@@ -1122,10 +1122,14 @@ microseconds, because whole-second stamps round a lease DOWN — a sub-second
 lease would be born already expired. Every acquisition mints a unique token, and release, renewal and
 takeover are all checked against it: concurrent reclaimers of one lapsed claim
 yield exactly one successor, and an expired owner that exits late finds a
-token that is not its own and leaves the successor alone. An empty, truncated
-or unparseable claim is treated as OCCUPIED until its own filesystem age
-reaches the lease — which covers a crash between the exclusive create and the
-payload write without letting a competitor straight in.
+token that is not its own and leaves the successor alone. An empty, truncated,
+unparseable or INCOMPLETE claim is treated as OCCUPIED until its own
+filesystem age reaches the lease — which covers a crash between the exclusive
+create and the payload write without letting a competitor straight in.
+Completeness is checked against every field a claim carries, not merely the
+ones an ownership decision reads: a partial file holding a probe, a token and
+a far-future expiry would otherwise read as live forever, never aged out, and
+one stray write would wedge the probe.
 
 `run_claimed_measurement` is the orchestration boundary, in order: reject an
 unmeasurable probe before claiming anything; acquire, where a DENIED claimant
@@ -1133,11 +1137,15 @@ stops having created no artifact directory, no result document and no census
 entry, reporting the current owner and the claim's age; record the acquisition
 in the census BEFORE the probe runs, releasing the claim and refusing outright
 if that write fails or no `docs-wip` census is reachable; measure, renewing
-throughout; CHECK against the claim file that the claim is still ours and
-still live, and if it is not, ingest NOTHING — a probe two agents may have
-been measuring at once has no attributable result, so the artifacts are kept
-and the run reports the loss; otherwise ingest the result, success or harness
-error, while still holding the claim; release, token-checked.
+throughout; ingest the result inside ONE hold of the sidecar lock that first
+re-reads the claim file, confirms the claim is still ours and still live, and
+renews the lease so it cannot elapse mid-commit — checking and then writing
+would leave a gap in which a slow commit outlives the lease and another agent
+starts measuring, and under the hold no acquisition can interleave. If the
+claim was already lost, ingest NOTHING: a probe two agents may have been
+measuring at once has no attributable result, so the artifacts are kept and
+the run reports the loss. Then release, token-checked. The lock order is
+claim-then-census everywhere, so the two never wait on each other.
 
 `probe_flake.py` is deliberately unchanged by all of this. Its contract is
 that a checkout with no `docs-wip` worktree behaves identically, so the

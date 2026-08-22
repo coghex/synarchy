@@ -81,11 +81,16 @@ late and exits cleanly finds a token that is not its own and leaves the
 successor's claim alone rather than deleting it — the failure mode that
 would hand one probe to two agents at once.
 
-A claim file that is empty, truncated or unparseable is treated as
-OCCUPIED until its own filesystem age reaches the lease, then becomes
-reclaimable. That covers a crash between the exclusive create and the
-payload write without opening a window in which a competing acquisition
-succeeds immediately.
+A claim file that is empty, truncated, unparseable or INCOMPLETE is
+treated as OCCUPIED until its own filesystem age reaches the lease, then
+becomes reclaimable. That covers a crash between the exclusive create
+and the payload write without opening a window in which a competing
+acquisition succeeds immediately. Completeness is checked against every
+field a claim carries, not merely the ones an ownership decision reads:
+a partial file holding nothing but a probe, a token and a far-future
+expiry would otherwise read as a live claim forever — never aged out,
+because ageing out is what happens to malformed claims — and one stray
+write would wedge the probe permanently.
 
 The orchestration boundary
 --------------------------
@@ -101,16 +106,24 @@ The orchestration boundary
    diagnostic — a measurement nobody can attribute is worse than one
    that did not happen;
 4. run the measurement, renewing the lease throughout;
-5. CHECK, against the claim file itself, that the claim is still ours
-   and still live. If it is not, a second agent may have been measuring
-   the same probe at the same time, so neither result is the exclusive
-   observation the census records: nothing is ingested, the artifacts
-   are kept, and the run reports the loss. The renewer's own `lost`
-   flag is a hint, not the authority — it sees only what a renewal
-   happened to hit;
-6. ingest the result — success or harness error — while still holding
-   the claim;
-7. release, checked against this acquisition's own token.
+5. ingest the result — success or harness error — inside ONE hold of
+   the sidecar lock that first re-reads the claim file and confirms the
+   claim is still ours and still live, and renews the lease so it
+   cannot elapse mid-commit. Checking and then writing would be two
+   steps with a gap between them: the renewer has stopped by then, so a
+   slow census commit could outlive the lease, another agent could
+   acquire the probe and start measuring, and this process would
+   publish anyway on a stale answer. Under the hold no acquisition can
+   interleave, because every acquisition takes that same lock. If the
+   claim was ALREADY lost, a second agent may have been measuring the
+   same probe, so neither result is the exclusive observation the
+   census records: nothing is ingested, the artifacts are kept, and the
+   run reports the loss. The renewer's `lost` flag is a hint, not the
+   authority — it sees only what a renewal happened to hit;
+6. release, checked against this acquisition's own token.
+
+The lock ORDER is claim-then-census everywhere, so the two never wait
+on each other.
 
 `tools/probe_flake.py` is deliberately NOT changed by any of this. Its
 own contract is that the harness behaves identically on a checkout with
@@ -467,13 +480,24 @@ def _encode(payload: dict) -> bytes:
 def _read_payload(path: Path, expected: str | None = None):
     """`(payload_or_None, mtime_or_None)` for the claim at `path`.
 
-    A payload is returned only when it parses AND carries the four
-    fields every ownership decision reads, naming the probe the caller
-    asked about. Anything else — absent, empty, truncated, not an
-    object, missing a field, carrying an unparseable expiry, or naming a
-    DIFFERENT probe — comes back as `None`, which is the MALFORMED case
-    the caller ages out against the filesystem rather than trusting. A
-    file that disagrees about its own identity is a copied or
+    A payload is returned only when it parses AND carries a COMPLETE,
+    well-typed claim naming the probe the caller asked about. Anything
+    else — absent, empty, truncated, not an object, missing or
+    ill-typed in any required field, carrying an unparseable timestamp,
+    or naming a DIFFERENT probe — comes back as `None`, which is the
+    MALFORMED case the caller ages out against the filesystem rather
+    than trusting.
+
+    Completeness is the load-bearing word, and checking only the fields
+    an ownership decision happens to READ is the trap. A partial file
+    carrying nothing but `probe`, `token` and a far-future `expires_at`
+    would then read as a perfectly live claim forever: it is never aged
+    out, because ageing out is what happens to MALFORMED claims, and a
+    stray or truncated write would wedge the probe permanently. Every
+    field `_payload` writes is therefore required here, so a partial
+    write is recognized as partial whatever it happens to contain.
+
+    A file that disagrees about its own identity is a copied or
     hand-edited claim, and honouring it would key the lock on the
     filename while reporting somebody else's owner.
     """
@@ -497,14 +521,26 @@ def _read_payload(path: Path, expected: str | None = None):
         return None, mtime
     if not isinstance(document, dict):
         return None, mtime
-    if not isinstance(document.get("token"), str) or not document["token"]:
+    if document.get("schema") != CLAIM_SCHEMA:
         return None, mtime
-    if not isinstance(document.get("probe"), str):
-        return None, mtime
+    for field in ("probe", "token", "owner", "host", "worktree"):
+        value = document.get(field)
+        if not isinstance(value, str) or not value:
+            return None, mtime
     if expected is not None and document["probe"] != expected:
         return None, mtime
-    if parse_stamp(document.get("expires_at")) is None:
+    # `isinstance(True, int)` is True, so a boolean pid has to be ruled
+    # out explicitly rather than by type alone.
+    pid = document.get("pid")
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid < 0:
         return None, mtime
+    lease = document.get("lease_seconds")
+    if (isinstance(lease, bool) or not isinstance(lease, (int, float))
+            or not lease > 0):
+        return None, mtime
+    for field in ("acquired_at", "renewed_at", "expires_at"):
+        if parse_stamp(document.get(field)) is None:
+            return None, mtime
     return document, mtime
 
 
@@ -642,27 +678,38 @@ class Claim:
         return False
 
     # -- operations ---------------------------------------------------------
+    def _renew_locked(self, moment: datetime) -> dict:
+        """`renew`'s body. The sidecar lock must already be held."""
+        document, _mtime = _read_payload(self.path, self.probe)
+        if document is None or document.get("token") != self.token:
+            raise ClaimLost(
+                f"the claim on {self.probe!r} is no longer ours "
+                f"(token {self.token!r} is not the one on disk)")
+        payload = dict(document)
+        payload["renewed_at"] = stamp(moment)
+        payload["expires_at"] = stamp(
+            moment + timedelta(seconds=self.lease_seconds))
+        payload["lease_seconds"] = self.lease_seconds
+        _install(self.path, payload)
+        self.payload = payload
+        return payload
+
+    def _holds_locked(self, moment: datetime) -> bool:
+        """`holds`'s body. The sidecar lock must already be held."""
+        document, _mtime = _read_payload(self.path, self.probe)
+        if document is None or document.get("token") != self.token:
+            return False
+        expires = parse_stamp(document.get("expires_at"))
+        return expires is not None and moment < expires
+
     def renew(self, now: datetime | None = None) -> dict:
         """Extend this claim's lease. Token-checked.
 
         Raises `ClaimLost` when the claim is gone or now carries another
         token: an expired owner must never write over its successor.
         """
-        moment = now or utc_now()
         with _serialized(self.probe, self.root):
-            document, _mtime = _read_payload(self.path, self.probe)
-            if document is None or document.get("token") != self.token:
-                raise ClaimLost(
-                    f"the claim on {self.probe!r} is no longer ours "
-                    f"(token {self.token!r} is not the one on disk)")
-            payload = dict(document)
-            payload["renewed_at"] = stamp(moment)
-            payload["expires_at"] = stamp(
-                moment + timedelta(seconds=self.lease_seconds))
-            payload["lease_seconds"] = self.lease_seconds
-            _install(self.path, payload)
-            self.payload = payload
-            return payload
+            return self._renew_locked(now or utc_now())
 
     def release(self) -> bool:
         """Give the claim back. Token-checked; True when we removed it.
@@ -697,14 +744,41 @@ class Claim:
         means the claim lapsed and somebody took it over, or it was
         removed — either way this process no longer speaks for the
         probe, and anything it was about to publish is not attributable.
+
+        A bare `holds()` is a SNAPSHOT and answers only about the
+        instant it read. Anything whose correctness depends on the
+        answer still being true while it runs must use
+        `commit_while_held` instead.
+        """
+        with _serialized(self.probe, self.root):
+            return self._holds_locked(now or utc_now())
+
+    def commit_while_held(self, commit, now: datetime | None = None):
+        """Run `commit()` while this claim is provably, exclusively ours.
+
+        Checking ownership and then acting on the answer are two steps,
+        and between them the lease can lapse and another agent can take
+        the probe — so the check alone is not enough for anything that
+        PUBLISHES. This closes the gap by doing both inside ONE hold of
+        the sidecar lock: no acquisition can interleave, because every
+        acquisition path takes that same lock.
+
+        The lease is renewed inside the hold as well, so it cannot
+        elapse while `commit` runs, however long the commit takes.
+
+        `commit` must not touch this claim itself — it would deadlock on
+        the lock this already holds. The census is the intended callee,
+        and the lock ORDER is claim-then-census everywhere, so the two
+        never wait on each other.
         """
         moment = now or utc_now()
         with _serialized(self.probe, self.root):
-            document, _mtime = _read_payload(self.path, self.probe)
-        if document is None or document.get("token") != self.token:
-            return False
-        expires = parse_stamp(document.get("expires_at"))
-        return expires is not None and moment < expires
+            if not self._holds_locked(moment):
+                raise ClaimLost(
+                    f"the claim on {self.probe!r} is no longer ours "
+                    f"(token {self.token!r} is not the live one on disk)")
+            self._renew_locked(moment)
+            return commit()
 
     def census_record(self, *, commit_sha: str, requested_runs: int) -> dict:
         """This acquisition, in the census's `claim` shape."""
@@ -900,7 +974,7 @@ def run_claimed_measurement(probe: str, runs: int, *,
                             root: Path | None = None,
                             repo_root: str | None = None,
                             census_path: Path | None = None,
-                            measure=None,
+                            measure=None, record_claim=None, record_result=None,
                             renew_interval: float | None = None) -> Outcome:
     """Claim `probe`, measure it, ingest the result, release. In that order.
 
@@ -941,7 +1015,12 @@ def run_claimed_measurement(probe: str, runs: int, *,
             f"--lease-seconds to at least "
             f"{MIN_ORCHESTRATION_LEASE_SECONDS:.0f}.")
 
+    # The three seams #1436 and the gate drive this through. Each
+    # defaults to the real thing, so the shipped path is the one that
+    # runs unless a caller deliberately substitutes.
     run_measure = measure if measure is not None else probe_flake.measure
+    log_claim = record_claim or probe_census.record_claim
+    log_result = record_result or probe_census.record_result
     try:
         claim = acquire(key, root=root, lease_seconds=lease_seconds,
                         repo_root=repo_root)
@@ -956,7 +1035,7 @@ def run_claimed_measurement(probe: str, runs: int, *,
         record = claim.census_record(commit_sha=commit_sha(repo_root),
                                      requested_runs=runs)
         try:
-            probe_census.record_claim(target, key, record)
+            log_claim(target, key, record)
         except (probe_census.CensusError,
                 probe_census.DocsWorktreeMissing) as error:
             # The claim is released by the context manager on the way
@@ -972,28 +1051,32 @@ def run_claimed_measurement(probe: str, runs: int, *,
             measurement = run_measure(
                 key, runs, artifact_root=artifact_root, rts_caps=rts_caps,
                 announce=announce)
-        # Ownership is CHECKED, not assumed, at the one moment it
-        # becomes load-bearing. `renewer.lost` is a hint — it only sees
+        # Ownership is CHECKED, not assumed, and the check and the write
+        # are ONE operation. `renewer.lost` is a hint — it only sees
         # what a renewal happened to hit — so the authority is a fresh
-        # token-and-lease read of the claim file itself. If the probe
-        # was taken over while this measurement ran, another agent may
-        # have been measuring it at the same time, and neither result is
+        # token-and-lease read of the claim file, taken under the
+        # sidecar lock and HELD across the ingestion. Checking first and
+        # writing afterwards would leave exactly the gap this exists to
+        # close: a slow census commit outliving the lease, another agent
+        # acquiring the probe and starting to measure it, and this
+        # process publishing anyway on the strength of a stale answer.
+        #
+        # If the claim was already lost, another agent may have been
+        # measuring the probe at the same time, and neither result is
         # the exclusive observation the census is a record of. Refuse to
         # ingest rather than record an unattributable one; the run's
         # artifacts stay on disk for whoever investigates.
-        if not claim.holds():
+        try:
+            claim.commit_while_held(
+                lambda: log_result(target, measurement.to_document()))
+        except ClaimLost as error:
             raise ClaimLostDuringMeasurement(
                 f"probe {key!r}: the claim was lost while the probe was "
-                f"running"
-                + (f" ({renewer.lost})" if renewer.lost else "")
-                + f", so another agent may have been measuring it at the same "
-                  f"time; nothing was recorded in {target} and the run's "
-                  f"artifacts under {measurement.invocation_dir} were kept",
-                measurement=measurement)
-        # Still holding the claim: the result — accepted sample or
-        # harness-error attempt — is ingested before anyone else may
-        # take this probe.
-        probe_census.record_result(target, measurement.to_document())
+                f"running ({renewer.lost or error}), so another agent may "
+                f"have been measuring it at the same time; nothing was "
+                f"recorded in {target} and the run's artifacts under "
+                f"{measurement.invocation_dir} were kept",
+                measurement=measurement) from None
 
     return Outcome(
         outcome="measured" if measurement.valid else "harness-error",

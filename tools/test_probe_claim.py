@@ -191,12 +191,19 @@ import probe_claim
 
 root, probe, barrier, lease = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4])
 hold = float(sys.argv[5]) if len(sys.argv) > 5 else 0.0
+# An optional future offset, so a contender can look at a claim the way
+# its own clock would once the lease had elapsed.
+skew = float(sys.argv[6]) if len(sys.argv) > 6 else 0.0
 # Every contender waits for the same starting gun, so the race is real.
 while not os.path.exists(barrier):
     time.sleep(0.01)
+# "I am about to block on the claim lock": a waiter that has not reached
+# the lock yet would make a still-running assertion vacuous.
+open(barrier + '.ready', 'w').close()
 try:
+    when = probe_claim.utc_now() + __import__('datetime').timedelta(seconds=skew)
     claim = probe_claim.acquire(probe, root=__import__('pathlib').Path(root),
-                                lease_seconds=lease)
+                                lease_seconds=lease, now=when)
 except probe_claim.ClaimDenied as denied:
     print(json.dumps({{"outcome": "denied", "detail": denied.describe()}}))
     sys.exit(0)
@@ -425,6 +432,28 @@ def test_malformed_claim() -> None:
         "wrong probe": '{"schema": "probe-claim/v1", "probe": "beta", '
                        '"token": "t", "expires_at": "2099-01-01T00:00:00Z"}',
     }
+    # PARTIAL claims: valid JSON, a live-looking far-future expiry, and
+    # one required field missing each. Checking only the fields an
+    # ownership decision happens to READ would accept every one of these
+    # as a live claim FOREVER — never aged out, because ageing out is
+    # what happens to malformed claims — so a stray or truncated write
+    # would wedge the probe permanently. Each is built from a complete
+    # payload so exactly one thing is wrong with it.
+    complete = {"schema": "probe-claim/v1", "probe": "alpha", "token": "t",
+                "owner": "dev@host:1", "host": "host", "pid": 1,
+                "worktree": "/repo",
+                "acquired_at": "2099-01-01T00:00:00.000000Z",
+                "renewed_at": "2099-01-01T00:00:00.000000Z",
+                "expires_at": "2099-01-01T00:00:00.000000Z",
+                "lease_seconds": 3600.0}
+    for missing in ("schema", "owner", "host", "pid", "worktree",
+                    "acquired_at", "renewed_at", "lease_seconds"):
+        payloads[f"partial: no {missing}"] = json.dumps(
+            {f: v for f, v in complete.items() if f != missing})
+    payloads["wrong schema"] = json.dumps({**complete,
+                                           "schema": "probe-claim/v99"})
+    payloads["boolean pid"] = json.dumps({**complete, "pid": True})
+    payloads["zero lease"] = json.dumps({**complete, "lease_seconds": 0})
     for name, text in payloads.items():
         with registry(), claim_root() as root:
             root.mkdir(parents=True, exist_ok=True)
@@ -437,10 +466,20 @@ def test_malformed_claim() -> None:
                                             lease_seconds=600),
                 f"a {name!r} claim 100s old is treated as HELD",
                 "unreadable")
-            taken = probe_claim.acquire("alpha", root=root, lease_seconds=60)
-            expect(taken.token and probe_claim.read_claim(
-                "alpha", root=root)["token"] == taken.token,
-                f"a {name!r} claim older than the lease is reclaimable")
+            # Reported rather than raised: a regression here means the
+            # probe is WEDGED, which every later case needs to be able
+            # to say too instead of dying on the first one.
+            try:
+                taken = probe_claim.acquire("alpha", root=root,
+                                            lease_seconds=60)
+                reclaimed = bool(taken.token) and probe_claim.read_claim(
+                    "alpha", root=root)["token"] == taken.token
+                detail = ""
+            except probe_claim.ClaimDenied as denied:
+                reclaimed, detail = False, f" (still denied: {denied})"
+            expect(reclaimed,
+                   f"a {name!r} claim older than the lease is "
+                   f"reclaimable{detail}")
 
 
 def test_release_on_every_managed_exit() -> None:
@@ -1067,6 +1106,110 @@ def test_orchestration_rejects_before_claiming() -> None:
                 "a non-positive run count is refused", "positive")
 
 
+def test_ingestion_cannot_be_overtaken() -> None:
+    """No acquisition can interleave with the result being ingested.
+
+    Checking ownership and then writing are two steps, and a review
+    found the gap between them: the renewer has stopped by then, so a
+    slow census commit can outlive the lease, another agent can acquire
+    the probe and start measuring it, and this process publishes anyway
+    on the strength of an answer that is no longer true.
+
+    `commit_while_held` closes it by doing both inside ONE hold of the
+    sidecar lock. This case proves that with a real second process: a
+    contender whose own clock is far enough ahead that the claim looks
+    lapsed to it, released onto the lock at the exact moment ingestion
+    begins. It must still be waiting when the commit finishes.
+    """
+    print("\n-- ingestion cannot be overtaken mid-write --")
+    with registry(), scratch_repo() as (main_wt, _other, census):
+        seeded_census(census)
+        with scratch() as base:
+            root = base / "probe-claims"
+            root.mkdir(parents=True)
+            barrier = base / "go"
+            observed = {}
+
+            def ingest_slowly(target, document):
+                # The contender is started HERE, inside the commit, so
+                # its whole life overlaps the window under test.
+                contender = subprocess.Popen(
+                    [sys.executable, "-c", CONTENDER, str(root), "alpha",
+                     str(barrier), "600",
+                     "0", str(4 * probe_claim.LEASE_SECONDS)],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                observed["contender"] = contender
+                barrier.write_text("go", encoding="utf-8")
+                ready = Path(str(barrier) + ".ready")
+                deadline = time.time() + 60
+                while time.time() < deadline and not ready.exists():
+                    time.sleep(0.01)
+                observed["reached_the_lock"] = ready.exists()
+                # It has reached the lock; give it every chance to win.
+                time.sleep(0.5)
+                observed["still_waiting"] = contender.poll() is None
+                observed["owner_at_commit"] = probe_claim.read_claim(
+                    "alpha", root=root)
+                return probe_census.record_result(target, document)
+
+            outcome = probe_claim.run_claimed_measurement(
+                "alpha", 2, root=root, census_path=census,
+                measure=lambda p, r, **k: fake_measurement(p, r),
+                repo_root=str(main_wt), renew_interval=3600,
+                record_result=ingest_slowly)
+
+            contender = observed["contender"]
+            out, _err = contender.communicate(timeout=120)
+
+        expect(observed.get("reached_the_lock") is True,
+               "the contender really did reach the claim lock, so the "
+               "assertion below is not vacuous")
+        expect(observed.get("still_waiting") is True,
+               "a competing acquisition CANNOT proceed while the result is "
+               "being ingested — it blocks on the same lock")
+        expect(observed["owner_at_commit"] is not None
+               and observed["owner_at_commit"]["token"] == outcome.claim.token,
+               "so the claim is still ours at the instant of the commit")
+        expect(outcome.exit_code == probe_claim.EXIT_OK,
+               "and the measurement it protected was ingested")
+        row = probe_census.find_entry(
+            json.loads(census.read_text(encoding="utf-8")), "alpha")["census"]
+        expect(len(row["attempts"]) == 1 and row["current"] is not None,
+               "...exactly once")
+        expect(json.loads(out.strip().splitlines()[-1])["outcome"] == "won",
+               "the contender took the probe only afterwards, once the "
+               "claim was released")
+
+
+def test_commit_while_held_renews_and_refuses() -> None:
+    """The commit hold renews the lease, and a lost claim never commits."""
+    print("\n-- commit_while_held: renew, then commit, or refuse --")
+    with registry(), claim_root() as root:
+        claim = probe_claim.acquire("alpha", root=root, lease_seconds=600)
+        before = probe_claim.read_claim("alpha", root=root)["expires_at"]
+        committed = []
+        expect(claim.commit_while_held(
+            lambda: committed.append("done") or "value",
+            now=probe_claim.utc_now() + timedelta(seconds=300)) == "value",
+            "a held claim runs the commit and returns its value")
+        after = probe_claim.read_claim("alpha", root=root)["expires_at"]
+        expect(committed == ["done"], "the commit ran exactly once")
+        expect(after > before,
+               "and the lease was renewed inside the hold, so it cannot "
+               "elapse however long the commit takes")
+
+        lapsed = probe_claim.acquire("beta", root=root, lease_seconds=1)
+        probe_claim.acquire("beta", root=root, lease_seconds=600,
+                            now=probe_claim.utc_now() + timedelta(seconds=60))
+        ran = []
+        expect_raises(probe_claim.ClaimLost,
+                      lambda: lapsed.commit_while_held(
+                          lambda: ran.append(1)),
+                      "a claim taken over refuses to commit at all",
+                      "no longer ours")
+        expect(not ran, "...and the commit never ran")
+
+
 def test_probe_flake_needs_no_docs_worktree() -> None:
     """The low-level measurement API stays usable without a census.
 
@@ -1162,6 +1305,8 @@ def main() -> int:
                  test_orchestration_refuses_a_lease_that_cannot_survive_a_run,
                  test_a_short_lease_means_what_it_says,
                  test_orchestration_aborts_when_the_claim_is_lost,
+                 test_ingestion_cannot_be_overtaken,
+                 test_commit_while_held_renews_and_refuses,
                  test_probe_flake_needs_no_docs_worktree, test_cli):
         test()
     print()
