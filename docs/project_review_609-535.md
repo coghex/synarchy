@@ -8,13 +8,13 @@ The current furnace/machine-shop content, recipe-dependent power accounting, inf
 
 ## Status
 
-- [ ] PRR-1. Parallel probe assignments can overlap a neighboring probe's secondary port
+- [x] PRR-1. Parallel probe assignments can overlap a neighboring probe's secondary port — [#1571]
 - [ ] PRR-2. A direct CI rewrite removed accepted feature-gate coverage without per-probe evidence
 - [ ] PRR-3. The probe-runner README still carries the drifting count #594 meant to remove
 
 ## 1. Parallel probe port allocation
 
-### PRR-1. Parallel probe assignments can overlap a neighboring probe's secondary port
+### [#1571] PRR-1. Parallel probe assignments can overlap a neighboring probe's secondary port
 
 > **Captured note:** Make `run_probes.py --jobs` allocate non-overlapping port reservations, not merely distinct base integers. A registered probe that legitimately binds `--port + 1` must not collide with the next probe's assigned base, and an explicit aggregate `--port` must either participate in the parallel allocation or be rejected instead of being silently ignored.
 
