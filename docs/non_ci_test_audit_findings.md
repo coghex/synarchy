@@ -30,7 +30,7 @@ approval.
 - [x] NCT-8. Listing movement courses unnecessarily boots the engine — [#1586]
 - [x] NCT-9. Legacy river diagnostics present anomalies as tests but never fail — [#1590]
 - [x] NCT-10. Legacy water diagnostics present anomalies as tests but never fail — [#1594]
-- [ ] NCT-11. Baseline capture accepts variation in its strict worldgen invariants
+- [x] NCT-11. Baseline capture accepts variation in its strict worldgen invariants — [#1598]
 - [ ] NCT-12. Thermo probe treats a failed ice dump as absent evidence
 - [ ] NCT-13. Etymology UI probe skips required location and river entry points
 - [ ] NCT-14. Etymology UI probe skips its real scrolling interaction phase
@@ -465,7 +465,7 @@ floating water, water cliffs, or dry banks below a water surface.
 
 ## Opt-in worldgen baseline capture
 
-### NCT-11. Baseline capture accepts variation in its strict worldgen invariants
+### [#1598] NCT-11. Baseline capture accepts variation in its strict worldgen invariants
 
 The baseline-capture tool says tile count and elevation statistics should be
 deterministic, but on variation across its capture runs it only writes a
