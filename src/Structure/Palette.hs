@@ -17,7 +17,6 @@ module Structure.Palette
     , emptyTexPalette
     , internPath
     , lookupPath
-    , lookupId
     ) where
 
 import UPrelude
@@ -63,7 +62,3 @@ internPath path tp = case HM.lookup path (tpPathToId tp) of
 -- | id → path (for resolving to a runtime handle at render/load).
 lookupPath ∷ Int → TexPalette → Maybe Text
 lookupPath i tp = HM.lookup i (tpIdToPath tp)
-
--- | path → id (read-only; does not assign).
-lookupId ∷ Text → TexPalette → Maybe Int
-lookupId path tp = HM.lookup path (tpPathToId tp)

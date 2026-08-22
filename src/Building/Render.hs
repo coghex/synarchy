@@ -26,16 +26,10 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..)
                                           , renderFlagSelected, packWorldUV)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
-                  , worldLayer, applyFacingF, GridConfig(..), defaultGridConfig)
+                  , worldLayer, applyFacingF, baseTileW, baseTileH)
 import Unit.Direction (Direction(..))
 import World.State.Types (wmVisible)
 import Building.Types
-
-baseTileW ∷ Float
-baseTileW = fromIntegral (gcTilePixelWidth defaultGridConfig)
-
-baseTileH ∷ Float
-baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)
 
 -- | Pick a frame for a building at the given POSIX time. Mirrors
 --   Unit.Render.pickFrame but simpler — only one direction key

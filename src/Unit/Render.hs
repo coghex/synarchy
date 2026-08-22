@@ -28,17 +28,11 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, applyFacing, applyFacingF
-                  , GridConfig(..), defaultGridConfig)
+                  , baseTileW, baseTileH)
 import World.State.Types (wmVisible)
 import Unit.Types
 import Unit.Direction (mirrorDir)
 import Unit.Sprite (screenDirOf, resolveTexture)
-
-baseTileW ∷ Float
-baseTileW = fromIntegral (gcTilePixelWidth defaultGridConfig)
-
-baseTileH ∷ Float
-baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)
 
 unitSortNudge ∷ Float
 unitSortNudge = 0.0003
