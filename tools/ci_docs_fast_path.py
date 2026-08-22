@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Decide whether a master push may take CI's docs-only fast path (#1490).
+"""Decide whether a PR or master push may take CI's docs-only fast path (#1490).
 
 CI's `test-and-audits` worker spends ~22 minutes on a cabal build plus the
-headless hspec suite. Neither can be affected by a change that touches
-only documentation: no Haskell target compiles a doc, and exactly ONE
-reads one at runtime (see MANIFEST below). A push that changes nothing
-else may therefore skip the Haskell half and still run every Python
+headless hspec suite. Neither can be affected by a plain documentation
+change: no Haskell target compiles those docs, and documentation-shaped
+save-compatibility inputs are excluded below. A qualifying change may
+therefore skip the Haskell half while retaining every engine-free Python
 audit -- which is the half a documentation change CAN break.
 
 That distinction is the whole point, and it is not cosmetic. Issue #1490
@@ -14,8 +14,8 @@ exists because master `559e946f` changed only
 `tools/test_findings_report_audit.py`, whose self-test reads that report.
 A fast path that skipped the audits would have hidden that failure
 outright rather than merely delaying it, which is strictly worse than the
-cancellation bug it was meant to fix. So: skip the BUILD, never the
-AUDITS.
+cancellation bug it was meant to fix. So: skip the BUILD, retain the
+engine-free audits, and exclude docs whose own audit needs Cabal.
 
 Eligibility is deliberately conservative -- it fails CLOSED, because the
 cost of a wrong "eligible" is an unverified master commit while the cost
@@ -25,18 +25,20 @@ of a wrong "not eligible" is one slow-but-correct run:
   * The change status of every path must be ADD or MODIFY. A delete, a
     rename, a copy or a type change reverts to the full job even when
     both endpoints are documentation.
-  * `docs/save_compat/manifest.json` is EXCLUDED however it is touched:
-    `test-headless/Test/Headless/World/Save/Compat.hs` reads that exact
-    file at runtime, so it is the one doc a Haskell target consumes.
-    (The fixture blobs it names live under `test-headless/data/`, which
-    is outside `docs/` and so already forces the full job.)
+  * `docs/save_compat/*` is EXCLUDED however it is touched. The manifest
+    is read by the Haskell save-compat suite, and the directory's other
+    machine-readable contracts select a Python audit that decodes real
+    fixtures through `cabal repl`. Calling these files documentation does
+    not make them Cabal-free. (The fixture blobs live under
+    `test-headless/data/`, which is outside `docs/` and already forces the
+    full job.)
   * An empty or unreadable range is NOT eligible.
 
-The caller supplies `git diff --no-renames --name-status BEFORE AFTER`
-over the COMPLETE pushed range, so one push carrying several commits is
-judged as a whole. `--no-renames` is what turns a rename into the
-delete+add pair the status rule above rejects; without it a doc renamed
-onto a source path would read as a single eligible entry.
+The caller supplies `git diff --no-renames --name-status BASE AFTER`
+over a PR's complete base range or a push's complete pushed range, so the
+whole change is judged as one. `--no-renames` is what turns a rename into
+the delete+add pair the status rule above rejects; without it a doc
+renamed onto a source path would read as a single eligible entry.
 """
 
 from __future__ import annotations
@@ -44,9 +46,8 @@ from __future__ import annotations
 import argparse
 import sys
 
-# The one documentation path a Haskell target reads at runtime, so the
-# one that must never take a Haskell-skipping path.
-MANIFEST = "docs/save_compat/manifest.json"
+# Documentation-shaped compatibility inputs whose checks invoke Cabal.
+SAVE_COMPAT_PREFIX = "docs/save_compat/"
 
 DOCS_PREFIX = "docs/"
 
@@ -97,7 +98,7 @@ def is_docs_only(records: list[tuple[str, str]]) -> bool:
     for status, path in records:
         if status not in ELIGIBLE_STATUSES:
             return False
-        if path == MANIFEST:
+        if path.startswith(SAVE_COMPAT_PREFIX):
             return False
         if not path.startswith(DOCS_PREFIX):
             return False
@@ -112,13 +113,13 @@ def explain(records: list[tuple[str, str]]) -> str:
         if status not in ELIGIBLE_STATUSES:
             return (f"{path} has status {status} (not a plain add/modify); "
                     "running the full job")
-        if path == MANIFEST:
-            return (f"{path} is read by the headless save-compat suite; "
+        if path.startswith(SAVE_COMPAT_PREFIX):
+            return (f"{path} requires the Cabal-backed save-compat gate; "
                     "running the full job")
         if not path.startswith(DOCS_PREFIX):
             return f"{path} is outside docs/; running the full job"
     return (f"all {len(records)} changed path(s) are documentation; "
-            "skipping the Haskell build and running every Python audit")
+            "skipping Cabal and running every engine-free Python audit")
 
 
 def _self_test() -> int:
@@ -139,16 +140,15 @@ def _self_test() -> int:
     check("an added doc", verdict("A\tdocs/new_report.md"), True)
     check("a doc in a nested directory",
           verdict("M\tdocs/history/claude_md_2026-08-20_pretrim.md"), True)
-    check("the enum baseline is an ordinary doc (Python reads it, "
-          "Haskell does not)",
-          verdict("M\tdocs/save_compat/enum_baseline.json"), True)
-
-    # -- the manifest is the one doc a Haskell target reads --
+    # -- save-compat docs are executable compatibility inputs --
+    manifest = f"{SAVE_COMPAT_PREFIX}manifest.json"
+    enum_baseline = f"{SAVE_COMPAT_PREFIX}enum_baseline.json"
     check("the save-compat manifest alone",
-          verdict(f"M\t{MANIFEST}"), False)
+          verdict(f"M\t{manifest}"), False)
     check("the manifest beside an ordinary doc",
-          verdict(f"M\tdocs/a.md\nM\t{MANIFEST}"), False)
-    check("an added manifest", verdict(f"A\t{MANIFEST}"), False)
+          verdict(f"M\tdocs/a.md\nM\t{manifest}"), False)
+    check("an added manifest", verdict(f"A\t{manifest}"), False)
+    check("the enum baseline", verdict(f"M\t{enum_baseline}"), False)
 
     # -- anything outside docs/ reverts to the full job --
     check("a source file", verdict("M\tsrc/World/Types.hs"), False)
@@ -196,8 +196,8 @@ def _self_test() -> int:
 
     # -- explain() names the offender, so a full run says why --
     reason = explain(parse_name_status(
-        f"M\tdocs/a.md\nM\t{MANIFEST}"))
-    if MANIFEST not in reason:
+        f"M\tdocs/a.md\nM\t{manifest}"))
+    if manifest not in reason:
         failures.append(f"explain() should name the manifest, got {reason!r}")
     reason = explain(parse_name_status("M\tdocs/a.md\nM\tsrc/World/Types.hs"))
     if "src/World/Types.hs" not in reason:
@@ -214,9 +214,9 @@ def _self_test() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Decide whether a master push may skip CI's Haskell "
+        description="Decide whether a PR or master push may skip CI's Haskell "
                     "build (#1490). Reads `git diff --no-renames "
-                    "--name-status BEFORE AFTER` over the complete pushed "
+                    "--name-status BASE AFTER` over the complete change "
                     "range and prints true/false.")
     parser.add_argument(
         "--stdin", action="store_true",
