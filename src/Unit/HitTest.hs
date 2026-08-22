@@ -35,17 +35,11 @@ import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import Engine.Graphics.Viewport (windowDegenerate)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
-                  , applyFacingF, GridConfig(..), defaultGridConfig)
+                  , applyFacingF, baseTileW, baseTileH)
 import World.Generate (viewDepth)
 import Unit.Types
 import Unit.Render (pickFrame)
 import Unit.Sprite (resolveTexture)
-
-baseTileW ∷ Float
-baseTileW = fromIntegral (gcTilePixelWidth defaultGridConfig)
-
-baseTileH ∷ Float
-baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)
 
 -- | Hit test at framebuffer-pixel coordinates. Returns the topmost
 --   (highest-Z) unit whose sprite quad contains the click, or Nothing.
