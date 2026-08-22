@@ -299,12 +299,13 @@ bloodGpuStatsFn env = do
 --   (issue #606: the resolved per-decal data a world-space quad needs —
 --   see 'Blood.Render.bloodRenderRecords'), on the given page or the
 --   active world if omitted. A decal whose texture reference has been
---   evicted never appears here (it's already gone from the decal list —
---   'removeDecalsForTexture' — and 'bloodRenderRecord' re-checks the
---   pool defensively on top of that). Each record's tint/alpha reflect
---   the decal's CURRENT age at call time (Blood.Render.decalTint), so a
---   decal spawned with a low @wetness@ reports a darker, fainter tint
---   than one spawned fresh — headless-observable aging, without a GPU.
+--   evicted never appears here (it's already gone from the decal list,
+--   dropped by "Blood.Types"'s texture-eviction cascade, and
+--   'Blood.Render.bloodRenderRecords' re-checks the pool defensively on
+--   top of that). Each record's tint/alpha reflect the decal's CURRENT
+--   age at call time, aged inside "Blood.Render", so a decal spawned
+--   with a low @wetness@ reports a darker, fainter tint than one
+--   spawned fresh — headless-observable aging, without a GPU.
 bloodGetRenderQuadsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 bloodGetRenderQuadsFn env = do
     mPageArg ← Lua.tostring 1
@@ -451,8 +452,8 @@ pushDecal now d = do
 -- | Push one render record: { decal, texture, page, x, y, surfaceZ,
 --   offsetX, offsetY, rotation, scale, tintR, tintG, tintB, alpha } —
 --   the resolved data 'World.Render.BloodQuads' turns into a world-space
---   quad (Blood.Render.BloodRenderRecord). @tintR/G/B@ and @alpha@
---   already fold in aging (Blood.Render.decalTint): a fresher decal
+--   quad ('Blood.Render.BloodRenderRecord'). @tintR/G/B@ and @alpha@
+--   already fold in aging inside "Blood.Render": a fresher decal
 --   reports a brighter tint and higher alpha than an older one.
 pushRenderRecord ∷ BloodRenderRecord → Lua.LuaE Lua.Exception ()
 pushRenderRecord r = do

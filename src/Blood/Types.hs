@@ -33,7 +33,6 @@ module Blood.Types
     , BloodTexturePool(..)
     , emptyBloodTexturePool
     , requestDistance
-    , matchThreshold
     , findMatch
     , requestTexture
     , lookupTexture
@@ -48,7 +47,6 @@ module Blood.Types
     , allDecals
     , bloodDryDuration
     , wetnessAt
-    , removeDecalsForTexture
     , BloodStore(..)
     , emptyBloodStore
     , defaultBloodTextureCap
@@ -299,10 +297,10 @@ data BloodDecal = BloodDecal
     , bdeCreatedAt  ∷ !Double
       -- ^ Game time at placement. "Current age" (design doc) is
       --   derived at read time (now - bdeCreatedAt), not stored —
-      --   'Blood.Render.decalTint' (#606) is the aging render this
-      --   value drives; rain/fluid interaction remains deliberately
-      --   deferred (see docs/blood_decals.md's "Deferred: rain and
-      --   fluid integration").
+      --   "Blood.Render"'s module-internal aging tint (#606) is the
+      --   render this value drives; rain/fluid interaction remains
+      --   deliberately deferred (see docs/blood_decals.md's
+      --   "Deferred: rain and fluid integration").
     , bdeInitialWetness ∷ !Float
       -- ^ Wetness at creation, 0..1 (design doc's "current age/
       --   wetness/dryness" — the stored half; a caller can spawn an
@@ -417,9 +415,9 @@ allDecals = sortOn bdeId . HM.elems . bdlDecals
 -- | Seconds of unpaused engine time for a decal to linearly dry from its
 --   initial wetness to fully dry (design doc's "Aging": wet → drying →
 --   old/faded). The settled compiled production default (see
---   docs/blood_decals.md's "Runtime tuning" table); 'Blood.Render.decalTint'
---   (#606) is the real aging render this value drives — never a texture
---   rewrite, just a derived tint/alpha read.
+--   docs/blood_decals.md's "Runtime tuning" table); "Blood.Render"'s
+--   module-internal aging tint (#606) is the real render this value
+--   drives — never a texture rewrite, just a derived tint/alpha read.
 bloodDryDuration ∷ Double
 bloodDryDuration = 600
 

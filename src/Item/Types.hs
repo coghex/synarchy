@@ -16,7 +16,6 @@ module Item.Types
     , emptyItemManager
     , lookupItemDef
     , QualityTier(..)
-    , defaultQualityTiers
     , qualityTierLabel
     ) where
 
