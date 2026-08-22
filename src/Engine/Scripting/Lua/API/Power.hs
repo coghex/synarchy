@@ -1,10 +1,12 @@
 {-# LANGUAGE Strict #-}
 -- | Lua surface for the power-node registry (#358) and its connectivity
---   + energy balance (#360). power.placeNode pops a solar_panel/
---   high_voltage_battery item out of a unit's inventory and turns it
---   into a placed, persistent power node — mirroring the portal's
---   instant-build path (building.spawn with bdBuildWork = 0) but sourced
---   from an item instead of being free. getNode / getNodeForBuilding /
+--   + energy balance (#360). power.placeNode pops an item whose
+--   building def declares a power node (#1148 — `power_role` plus its
+--   rating, in data/buildings/*.yaml) out of a unit's inventory and
+--   turns it into a placed, persistent power node — mirroring the
+--   portal's instant-build path (building.spawn with bdBuildWork = 0)
+--   but sourced from an item instead of being free.
+--   getNode / getNodeForBuilding /
 --   listNodes report each node's own role + parameters (+ current charge
 --   for storage nodes); listNetworks / getNetworkForNode report the live
 --   connected-component view — which nodes share a wired network and
@@ -57,6 +59,7 @@ import Unit.Pathing.Cost (lookupTerrainZ)
 import World.Generate.Coordinates (canonicalTile)
 import Item.Types (ItemInstance(..))
 import Power.Types
+import Power.Base (PowerNodeSpec, powerNodeSpecRating)
 import Power.Network (pageWireTiles, positionsOf, computeSnapshots, consumersOn,
                       activeCraftConsumersOn, combineConsumers)
 import qualified Power.Network as PN
@@ -65,23 +68,39 @@ import qualified Power.Network as PN
 --   tool's placement click) decide whether a def routes through
 --   power.placeNode (item-consuming) or the free building.spawn path,
 --   without hardcoding the placeable-item name list a second time in
---   Lua — the single source of truth stays 'powerNodeSpecFor'.
+--   Lua — the single source of truth is the building def's own
+--   'bdPowerNode' (#1148), which is exactly what 'powerPlaceNodeFn'
+--   below consults, so the two can't disagree.
+--
+--   A name with no building def at all (@wiring@ is the shipped case:
+--   an item, never a building) is simply not placeable — same answer
+--   the hardcoded catalogue gave.
 powerIsPlaceableFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-powerIsPlaceableFn _env = do
+powerIsPlaceableFn env = do
     nameArg ← Lua.tostring 1
-    let placeable = case nameArg of
-            Nothing → False
-            Just bs → case powerNodeSpecFor (TE.decodeUtf8Lenient bs) of
-                Just _  → True
-                Nothing → False
+    placeable ← case nameArg of
+        Nothing → return False
+        Just bs → Lua.liftIO $ do
+            bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
+            return (isJust (buildingPowerSpec bm (TE.decodeUtf8Lenient bs)))
     Lua.pushboolean placeable
     return 1
 
+-- | The declared node spec behind a placeable name, or Nothing when the
+--   name names no building def or a def that declares no power node.
+--   The ONE lookup 'powerIsPlaceableFn' and 'powerPlaceNodeFn' share.
+buildingPowerSpec ∷ BuildingManager → Text → Maybe PowerNodeSpec
+buildingPowerSpec bm defName = bdPowerNode =≪ HM.lookup defName (bmDefs bm)
+
 -- | power.placeNode(uid, itemDefName, gx, gy [, pageId]) → nodeId,
---   buildingId on success, or nil, reason on failure. Pops one
---   matching item instance out of the unit's inventory FIRST, then
---   validates placement — a rejected placement splices the item back
---   at its original index (mirrors unit.transferItemToBuilding's
+--   buildingId on success, or nil, reason on failure.
+--
+--   Placeability is settled FIRST, off the building def, before the
+--   inventory is touched at all (#1148): a non-power item gets its
+--   \"not a placeable power item\" reason without ever being popped.
+--   Everything after that point does pop the matching item instance
+--   before validating placement, and a rejected placement splices it
+--   back at its original index (mirrors unit.transferItemToBuilding's
 --   rollback). An explicit pageId behaves like building.spawn's (pins
 --   the target page instead of the active world, #76), and the
 --   supplying unit must live on whichever page that resolves to
@@ -99,9 +118,13 @@ powerPlaceNodeFn env = do
                 defName = TE.decodeUtf8Lenient nameBS
                 gx      = fromIntegral x
                 gy      = fromIntegral y
-            result ← Lua.liftIO $ case powerNodeSpecFor defName of
+            bm0 ← Lua.liftIO $
+                readIORef (bcBuildingManagerRef (toBuildingCapability env))
+            result ← case buildingPowerSpec bm0 defName of
                 Nothing → pure (Left "not a placeable power item")
-                Just (role, param) → do
+                Just spec → Lua.liftIO $ do
+                    let role  = powerNodeRole spec
+                        param = powerNodeSpecRating spec
                     mTarget ← case pageArg of
                         Just pidBS → do
                             let pid = WorldPageId (TE.decodeUtf8Lenient pidBS)

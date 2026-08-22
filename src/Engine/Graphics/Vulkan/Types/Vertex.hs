@@ -73,10 +73,106 @@ mkVertex p t c a f = Vertex p t c a f 0 0
 
 -- | Like 'mkVertex', but stamps the tile's packed world coordinates
 -- (pass the result of 'packWorldUV') instead of defaulting worldUV to
--- 0. renderFlags still defaults to 0 — combine with a direct 'Vertex'
--- construction if a caller ever needs both a non-zero worldUV AND flags.
+-- 0. renderFlags still defaults to 0 — for a whole sprite quad that
+-- needs both a non-zero worldUV AND flags, build its four corners with
+-- 'quadVertices' rather than restating the 'Vertex' constructor.
 mkVertexWorld ∷ Word32 → Vec2 → Vec2 → Vec4 → Float → Float → Vertex
 mkVertexWorld wuv p t c a f = Vertex p t c a f 0 wuv
+
+-- | The four corner POSITIONS of a sprite quad, in the order
+-- 'Engine.Scene.Types.Batch.SortableQuad' documents for
+-- @sqV0@..@sqV3@: top-left, top-right, bottom-right, bottom-left.
+--
+-- Positions are given per corner rather than as an origin plus a size
+-- because three of the quad producers cannot express themselves that
+-- way: the blood decals rotate each corner about the quad centre
+-- independently, and the sliced front wall moves its left and right
+-- edges together with its U range. 'rectCorners' is the convenience
+-- for the axis-aligned majority.
+data QuadCorners = QuadCorners
+    { qcTopLeft     ∷ !Vec2
+    , qcTopRight    ∷ !Vec2
+    , qcBottomRight ∷ !Vec2
+    , qcBottomLeft  ∷ !Vec2
+    } deriving (Show, Eq)
+
+-- | An axis-aligned quad: its top-left corner and its size. Expands to
+-- the same @(x,y)@, @(x+w,y)@, @(x+w,y+h)@, @(x,y+h)@ winding every
+-- upright sprite has always emitted.
+rectCorners ∷ Vec2   -- ^ top-left corner
+            → Vec2   -- ^ (width, height)
+            → QuadCorners
+rectCorners (Vec2 x0 y0) (Vec2 w h) = QuadCorners
+    { qcTopLeft     = Vec2 x0 y0
+    , qcTopRight    = Vec2 (x0 + w) y0
+    , qcBottomRight = Vec2 (x0 + w) (y0 + h)
+    , qcBottomLeft  = Vec2 x0 (y0 + h)
+    }
+
+-- | The texture sub-rect a quad samples, named by which corners each
+-- value reaches rather than by min\/max: 'quLeftU' is the U of the two
+-- LEFT-hand corners (v0, v3) and 'quRightU' the U of the two RIGHT-hand
+-- ones (v1, v2). Passing them the other way round is exactly a
+-- horizontal mirror, which is how 'Unit.Render' draws SW\/W\/NW from the
+-- SE\/E\/NE sprites, and a narrowed U range is how a front wall's
+-- vertical strip samples its own slice.
+data QuadUV = QuadUV
+    { quLeftU   ∷ !Float
+    , quTopV    ∷ !Float
+    , quRightU  ∷ !Float
+    , quBottomV ∷ !Float
+    } deriving (Show, Eq)
+
+-- | The whole texture, corner to corner: the UV rect of every quad that
+-- draws a sprite unflipped and unsliced.
+fullQuadUV ∷ QuadUV
+fullQuadUV = QuadUV 0 0 1 1
+
+-- | The five per-vertex values a quad repeats identically across all
+-- four of its corners — everything a 'Vertex' carries except its
+-- position and its texture coordinate.
+data QuadPayload = QuadPayload
+    { qpTint      ∷ !Vec4   -- ^ 'color'
+    , qpAtlasSlot ∷ !Float  -- ^ 'atlasId'
+    , qpFaceMap   ∷ !Float  -- ^ 'faceMapId'
+    , qpFlags     ∷ !Word32 -- ^ 'renderFlags'
+    , qpWorldUV   ∷ !Word32 -- ^ 'worldUV', from 'packWorldUV'
+    } deriving (Show, Eq)
+
+-- | Build a textured quad's four vertices (#1152).
+--
+-- THIS IS THE ONE PLACE the world-sprite quads state their winding and
+-- their UV-to-corner pairing. The corners come out in the
+-- @sqV0@..@sqV3@ order 'Engine.Scene.Types.Batch.SortableQuad'
+-- documents, each taking its texture coordinate from the matching
+-- edges of the UV rect:
+--
+-- * v0 = top-left     samples (leftU,  topV)
+-- * v1 = top-right    samples (rightU, topV)
+-- * v2 = bottom-right samples (rightU, bottomV)
+-- * v3 = bottom-left  samples (leftU,  bottomV)
+--
+-- Swapping a pair produces a mirrored or sheared sprite rather than a
+-- type error, which is why the eight quad producers (buildings and
+-- their ghosts, structure pieces\/walls\/posts, units, ground items and
+-- blood decals) share this definition instead of restating it.
+--
+-- Not to be confused with
+-- 'Engine.Scene.Batch.Vertex.generateQuadVertices' (scene nodes, no
+-- flags\/world UV) or 'UI.Render.makeQuadVertices' (the UI pipeline's
+-- six-vertex triangle list).
+quadVertices ∷ QuadCorners → QuadUV → QuadPayload
+             → (Vertex, Vertex, Vertex, Vertex)
+quadVertices corners uv payload =
+    ( corner (qcTopLeft     corners) (quLeftU  uv) (quTopV    uv)
+    , corner (qcTopRight    corners) (quRightU uv) (quTopV    uv)
+    , corner (qcBottomRight corners) (quRightU uv) (quBottomV uv)
+    , corner (qcBottomLeft  corners) (quLeftU  uv) (quBottomV uv)
+    )
+  where
+    corner p u v = Vertex p (Vec2 u v) (qpTint payload)
+                          (qpAtlasSlot payload) (qpFaceMap payload)
+                          (qpFlags payload) (qpWorldUV payload)
 
 -- | 2D vector for positions and texture coordinates
 data Vec2 = Vec2

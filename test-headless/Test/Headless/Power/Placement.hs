@@ -42,6 +42,7 @@ import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Item.Types (ItemInstance(..))
 import Power.Types (PowerNodes(..), PowerNode(..), PowerNodeId(..), emptyPowerNodes)
+import Power.Base (PowerNodeSpec(..))
 import Structure.Types (emptyChunkStructures)
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
@@ -148,7 +149,9 @@ mkUnit page inv = UnitInstance
     }
 
 -- | The building side of a placed solar panel. @bdBuildWork = 0@ is
---   the instant-build path power nodes ride on.
+--   the instant-build path power nodes ride on, and @bdPowerNode@ is
+--   what makes it placeable at all since #1148 — the def carries the
+--   role + rating its shipped YAML declares.
 panelBuildingDef ∷ BuildingDef
 panelBuildingDef = BuildingDef
     { bdName = "solar_panel", bdDisplayName = "Solar Panel"
@@ -160,7 +163,16 @@ panelBuildingDef = BuildingDef
     , bdMaterials = HM.empty, bdStorageCapacity = 0
     , bdOperations = [], bdAnimations = HM.empty
     , bdStateAnims = HM.empty, bdPowerDrain = 0
+    , bdPowerNode = Just (PowerNodeSource 400)
     }
+
+-- | An ordinary building that declares no power node — the #1148
+--   control. It is a real, spawnable def, so a "false" from
+--   power.isPlaceable can only come from the missing declaration.
+ordinaryBuildingDef ∷ BuildingDef
+ordinaryBuildingDef = panelBuildingDef
+    { bdName = "shed", bdDisplayName = "Shed", bdCategory = "Storage"
+    , bdPowerNode = Nothing }
 
 -- | A flat, fluid-free chunk at (0,0) — the loaded terrain
 --   'Building.Placement.canPlaceAt' needs.
@@ -228,7 +240,8 @@ resetScene env = do
                               , mkItem "wiring" spareIid ]
         }
     writeIORef (buildingManagerRef env) emptyBuildingManager
-        { bmDefs = HM.singleton "solar_panel" panelBuildingDef }
+        { bmDefs = HM.fromList [ ("solar_panel", panelBuildingDef)
+                               , ("shed", ordinaryBuildingDef) ] }
     _ ← drainBuildingQueue env
     pure (wsActive, wsHidden)
 
@@ -354,7 +367,12 @@ expectNothingHappened env wsActive wsHidden = do
     expectNoBuildingQueued env
 
 spec ∷ SpecWith EngineEnv
-spec = describe "power placement page ownership (#1205)" $ do
+spec = do
+    ownershipSpec
+    placeabilitySpec
+
+ownershipSpec ∷ SpecWith EngineEnv
+ownershipSpec = describe "power placement page ownership (#1205)" $ do
 
     it "refuses an EXPLICIT-page placement whose supplier is elsewhere" $ \env → do
         (wsActive, wsHidden) ← resetScene env
@@ -423,3 +441,72 @@ spec = describe "power placement page ownership (#1205)" $ do
         hiddenNodes ← nodesOn wsHidden
         hiddenNodes `shouldBe` ([], 1)
         expectNoBuildingQueued env
+
+-- | The other half of the same registry: since #1148 both
+--   @power.isPlaceable@ and @power.placeNode@ answer from the building
+--   def's own 'bdPowerNode', so this group pins all three answers the
+--   deleted hardcoded catalogue used to give — and the refusal path
+--   that must NOT touch the supplier's inventory.
+--
+--   Run just this gate: @cabal test synarchy-test-headless
+--   --test-options='--match "power placeability"'@.
+placeabilitySpec ∷ SpecWith EngineEnv
+placeabilitySpec =
+  describe "power placeability comes off the building def (#1148)" $ do
+
+    it "says yes for a def that declares a node" $ \env → do
+        _ ← resetScene env
+        ls ← newBareLuaBackend env
+        isPlaceable ls "solar_panel" `shouldReturn` q "true"
+
+    it "says no for a def that declares none" $ \env → do
+        _ ← resetScene env
+        ls ← newBareLuaBackend env
+        isPlaceable ls "shed" `shouldReturn` q "false"
+
+    it "says no for a name with no building def at all" $ \env → do
+        _ ← resetScene env
+        ls ← newBareLuaBackend env
+        -- `wiring` is the shipped case: a real item the supplier is
+        -- carrying, but never a building.
+        isPlaceable ls "wiring" `shouldReturn` q "false"
+
+    it "refuses a non-power item WITHOUT touching the inventory" $ \env → do
+        (_, wsHidden) ← resetScene env
+        ls ← newBareLuaBackend env
+        -- The supplier's own page and a placeable tile, so the only
+        -- thing wrong is the item. The catalogue check has to happen
+        -- BEFORE the pop: a pop-then-rollback would pass an
+        -- order-blind assertion but reorder a duplicate.
+        r ← placeNamed ls "wiring" hiddenPage
+        r `shouldBe` q "nil|not a placeable power item"
+        inv ← inventoryOf env
+        inv `shouldBe` startingInventory
+        nodesOn wsHidden `shouldReturn` ([], 1)
+        (bids, nextBid) ← buildingsIn env
+        bids `shouldBe` []
+        nextBid `shouldBe` 1
+        expectNoBuildingQueued env
+
+    it "refuses an ordinary building def the same way" $ \env → do
+        (_, wsHidden) ← resetScene env
+        ls ← newBareLuaBackend env
+        r ← placeNamed ls "shed" hiddenPage
+        r `shouldBe` q "nil|not a placeable power item"
+        inv ← inventoryOf env
+        inv `shouldBe` startingInventory
+        nodesOn wsHidden `shouldReturn` ([], 1)
+        expectNoBuildingQueued env
+
+-- | @power.isPlaceable(name)@ through the registered production API.
+isPlaceable ∷ LuaBackendState → Text → IO Text
+isPlaceable ls name = executeDebugLua (lbsLuaState ls) $ T.concat
+    [ "return tostring(power.isPlaceable('", name, "'))" ]
+
+-- | 'placeNode' with the item name spelled out, for the refusal cases.
+placeNamed ∷ LuaBackendState → Text → WorldPageId → IO Text
+placeNamed ls name (WorldPageId pg) =
+    executeDebugLua (lbsLuaState ls) $ T.concat
+        [ "return _G.__pn(power.placeNode(1, '", name, "', "
+        , T.pack (show placeX), ", ", T.pack (show placeY)
+        , ", '", pg, "'))" ]

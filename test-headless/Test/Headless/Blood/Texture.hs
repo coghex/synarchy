@@ -23,7 +23,8 @@ baseDescriptor = BloodTextureDescriptor
     , btdSeed       = 7
     }
 
--- | Every RGBA pixel as a (r,g,b,a) tuple, for corner/shape checks.
+-- | Every RGBA pixel as a (r,g,b,a) tuple, for the pinned sample
+--   coordinates and the corner/shape checks.
 pixels ∷ BloodTextureImage → [(Word8, Word8, Word8, Word8)]
 pixels img = go (BS.unpack (btiPixels img))
   where
@@ -32,14 +33,50 @@ pixels img = go (BS.unpack (btiPixels img))
 
 spec ∷ Spec
 spec = do
-    describe "generateBloodTexture / determinism" $ do
-        it "the same descriptor produces byte-identical pixel data" $
-            btiPixels (generateBloodTexture baseDescriptor)
-                `shouldBe` btiPixels (generateBloodTexture baseDescriptor)
-
-        it "the same descriptor produces the same hash" $
-            bloodTextureHash (generateBloodTexture baseDescriptor)
-                `shouldBe` bloodTextureHash (generateBloodTexture baseDescriptor)
+    describe "generateBloodTexture / pinned output" $
+        -- The golden below is the only absolute statement in this module
+        -- about WHAT 'baseDescriptor' draws; everything else here is
+        -- relative (distinctness) or structural (dimensions, bounds).
+        -- Deliberately NOT pinned via 'bloodTextureHash': that is
+        -- 'Data.Hashable.hash', and 'hashable' carries no version bound,
+        -- so an absolute hash would move on a dependency bump with no
+        -- texture change. These are the repository's own numbers.
+        --
+        -- Six samples across the 24x24 medium canvas, chosen so the set
+        -- spans the splat rather than repeating the corners already
+        -- pinned below: the fully-opaque centre, two interior body
+        -- pixels either side of it, the left and top soft edges (where
+        -- 'splatAlpha' is between 0 and 255, so an edge-roughness or
+        -- softness change lands here first), and one fully transparent
+        -- pixel OUTSIDE the splat but away from any corner, which pins
+        -- the shape's extent.
+        --
+        -- If this fails, the generator's output changed. That is a
+        -- deliberate VISUAL decision about how blood looks — look at the
+        -- new texture and decide it is what you want, then update these
+        -- numbers. It is not a value to regenerate until the suite goes
+        -- green.
+        it "draws the pinned RGBA values at named sample coordinates" $ do
+            let img = generateBloodTexture baseDescriptor
+                w   = btiWidth img
+                ps  = pixels img
+                at (x, y) = ps !! (y * w + x)
+                samples =
+                    [ (12, 12)  -- centre of the pool: fully opaque
+                    , ( 8,  8)  -- interior body, upper-left of centre
+                    , (16, 16)  -- interior body, lower-right of centre
+                    , ( 6, 12)  -- left soft edge
+                    , (12,  6)  -- top soft edge
+                    , ( 2, 12)  -- outside the splat (not a corner)
+                    ]
+            map at samples `shouldBe`
+                [ (150, 9, 8, 255)
+                , (150, 9, 8, 196)
+                , (150, 9, 8, 171)
+                , (150, 9, 8,  51)
+                , (150, 9, 8,  19)
+                , (  0, 0, 0,   0)
+                ]
 
     describe "generateBloodTexture / distinctness" $ do
         it "a different style produces a different hash" $
