@@ -1665,6 +1665,69 @@ def selftest() -> int:
               and spent_eng.lua_timeouts == []
               and spent_eng.shot_paths == [])
 
+        # ...and the budget check and the timeout it produces come from
+        # ONE clock read. A clock that expires BETWEEN two reads used to
+        # hand `socket.create_connection` a non-positive timeout, which
+        # raises ValueError — unclassified, so it escaped setup as a
+        # generic error and skipped the pre-ready teardown entirely.
+        class TickClock:
+            """A clock that advances on every READ, not on sleeps."""
+
+            def __init__(self, step):
+                self.now = 0.0
+                self.step = step
+
+            def __call__(self):
+                value = self.now
+                self.now += self.step
+                return value
+
+            def sleep(self, _seconds):
+                pass
+
+        race_eng = ReadyEngine()
+        race_clock = TickClock(step=1.5)     # one tick outlives the budget
+        race_ready = launch_mod.probe_player_ready(
+            race_eng, probe_trace.setup_frame_path(),
+            deadline=race_clock.now + 1.0, clock=race_clock)
+        race_timeouts = race_eng.lua_timeouts + race_eng.shot_timeouts
+        check("an expiry between the budget check and the timeout it "
+              "produces can never yield a non-positive timeout",
+              race_ready is False and bool(race_timeouts)
+              and all(t > 0 for t in race_timeouts),
+              str(race_timeouts))
+
+        # ...and if anything unclassified DID escape setup, the instance
+        # is still torn down rather than left holding its port.
+        escaped = []
+
+        class TeardownWitness(FakeEngine):
+            def __init__(self):
+                super().__init__()
+                self.torn_down = False
+
+        witness_eng = TeardownWitness()
+        witness_eng.proc = "sentinel"        # teardown clears this
+        real_teardown = launch_mod.teardown_setup
+        launch_mod.teardown_setup = lambda eng, **kw: (
+            escaped.append(eng), True)[1]
+        _, escape_trace = fresh("setup_escape")
+        try:
+            launch_offline(escape_trace,
+                           ready=lambda: (_ for _ in ()).throw(
+                               ValueError("unclassified setup failure")),
+                           clock=FakeClock(), eng=witness_eng)
+            escape_exc = None
+        except BaseException as e:
+            escape_exc = e
+        finally:
+            launch_mod.teardown_setup = real_teardown
+        check("an unclassified setup failure still tears the instance down",
+              isinstance(escape_exc, ValueError)
+              and escaped == [witness_eng]
+              and escape_trace.meta.get("loaded_at") is None,
+              f"{type(escape_exc).__name__}, torn down {len(escaped)}")
+
         # ...and readiness that only arrives AFTER the watchdog expired
         # is rejected rather than allowed to cross the boundary.
         late_dir, late_trace = fresh("ready_late")

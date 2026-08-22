@@ -403,35 +403,44 @@ def probe_player_ready(eng, screenshot_path: str, deadline: float | None = None,
     until its own budget decides; only the caller's liveness check ends
     the wait early.
     """
-    def left() -> float | None:
-        return None if deadline is None else deadline - clock()
+    def io_timeout(default: float) -> float | None:
+        """The next read's timeout, or None when the budget is spent.
+
+        ONE clock read decides both, deliberately: checking "is there
+        budget left?" and then computing the timeout from a SECOND read
+        leaves a window where the deadline expires between them and a
+        non-positive timeout reaches `socket.create_connection`, which
+        raises ValueError — an exception `launch_player_ready` does not
+        classify, so it would escape as a generic error and skip the
+        pre-ready teardown entirely.
+        """
+        if deadline is None:
+            return default
+        remaining = deadline - clock()
+        return min(default, remaining) if remaining > 0 else None
 
     def spent() -> bool:
-        remaining = left()
-        return remaining is not None and remaining <= 0
-
-    def budgeted(default: float) -> float:
-        remaining = left()
-        return default if remaining is None else min(default, remaining)
+        return deadline is not None and deadline - clock() <= 0
 
     try:
-        if spent():
+        budget = io_timeout(CONSOLE_READ_TIMEOUT)
+        if budget is None:
             return False
         menu = eng.lua('local m = package.loaded["scripts.ui_manager"]; '
-                       'return m and m.currentMenu or nil',
-                       timeout=budgeted(CONSOLE_READ_TIMEOUT))
+                       'return m and m.currentMenu or nil', timeout=budget)
         if not isinstance(menu, str) or not menu.strip():
             return False
-        if spent():
+        budget = io_timeout(CONSOLE_READ_TIMEOUT)
+        if budget is None:
             return False
         widgets = eng.lua('return require("scripts.ui.registry").dumpWidgets()',
-                          timeout=budgeted(CONSOLE_READ_TIMEOUT))
+                          timeout=budget)
         if not isinstance(widgets, list) or not widgets:
             return False
-        if spent():
+        budget = io_timeout(SCREENSHOT_TIMEOUT)
+        if budget is None:
             return False
-        size = eng.screenshot(screenshot_path,
-                              timeout=budgeted(SCREENSHOT_TIMEOUT))
+        size = eng.screenshot(screenshot_path, timeout=budget)
     except EngineCrash:
         return False
     if spent():
@@ -462,6 +471,28 @@ def launch_player_ready(eng, trace, *,
         raise ValueError("setup_timeout must be positive")
     started = clock()
     deadline = started + setup_timeout
+    try:
+        return _launch_player_ready(
+            eng, trace, started=started, deadline=deadline,
+            setup_timeout=setup_timeout,
+            repo_root=repo_root, build=build, start=start, ready=ready,
+            clock=clock, sleep=sleep, poll_interval=poll_interval, log=log)
+    except SetupFailure:
+        # Classified: the caller's own handler records it and tears down.
+        raise
+    except BaseException:
+        # Nothing else should escape setup, but the launcher owns the
+        # instance until the boundary, so anything that does must not
+        # leave an engine holding the port behind it.
+        teardown_setup(eng)
+        raise
+
+
+def _launch_player_ready(eng, trace, *, started: float, deadline: float,
+                         setup_timeout: float,
+                         repo_root: str, build, start, ready,
+                         clock, sleep, poll_interval: float, log) -> float:
+    """The three phases themselves — see `launch_player_ready`."""
 
     log(f"playtest: setup 1/3 — building (setup budget {setup_timeout:.0f}s, "
         "separate from the player-session budget)")
