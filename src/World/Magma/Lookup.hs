@@ -1,10 +1,15 @@
 {-# LANGUAGE Strict #-}
 module World.Magma.Lookup
     ( lookupNearSources
-    , lavaAt
+      -- Kept exported with no consumer yet (#1119): its own Haddock
+      -- below names it the engine's lava-query entry point and states
+      -- that the overlay parameter exists so a future precedence layer
+      -- is inserted here rather than at every call site. Un-exporting
+      -- it would cascade under -Werror into deleting lavaAt,
+      -- sourceContains and, through them, World.Magma.Field's mantleZ
+      -- and sumHotspots hotspot-uplift model — far past narrowing an
+      -- export list.
     , effectiveLavaAt
-    , sourceContains
-    , toChunkCoord
     ) where
 
 import UPrelude
@@ -48,8 +53,7 @@ lavaAt ctx gx gy z =
     ∨ any (sourceContains ctx gx gy z) (lookupNearSources ctx gx gy)
 
 -- | True iff source at index @i@ contains @(gx, gy, z)@ in any of
---   its shapes. Used by 'lavaAt' and re-exported for
---   'World.Magma.Init.discoverChunkLava'.
+--   its shapes. Used by @lavaAt@.
 sourceContains ∷ VolcanoCtx → Int → Int → Int → Int → Bool
 sourceContains ctx gx gy z i =
     let s = vcSources ctx V.! i
@@ -58,7 +62,7 @@ sourceContains ctx gx gy z i =
 
 -- | The only function the rest of the engine should call. The overlay
 --   currently contributes no precedence of its own, so this is exactly
---   'lavaAt'; it keeps the overlay parameter so future precedence
+--   @lavaAt@; it keeps the overlay parameter so future precedence
 --   layers (cooled basalt, sim writes, dig reveal) are inserted here
 --   without touching call sites.
 effectiveLavaAt ∷ MagmaOverlay → VolcanoCtx → Int → Int → Int → Bool

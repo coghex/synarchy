@@ -3,10 +3,8 @@
 --   for per-chunk zoom map texture generation.
 module World.ZoomMap.ColorPalette
     ( ZoomColorPalette(..)
-    , emptyColorPalette
     , buildColorPalette
     , lookupMatColor
-    , lookupVegColor
     , lookupVegColorById
     , defaultOceanColor
     , defaultLavaColor
@@ -36,9 +34,6 @@ data ZoomColorPalette = ZoomColorPalette
 
 instance NFData ZoomColorPalette where
     rnf (ZoomColorPalette m v) = rnf m `seq` rnf v
-
-emptyColorPalette ∷ ZoomColorPalette
-emptyColorPalette = ZoomColorPalette Map.empty Map.empty
 
 defaultOceanColor ∷ RGBA
 defaultOceanColor = (30, 60, 120, 255)
@@ -151,22 +146,6 @@ lookupMatColor palette matId =
     case Map.lookup matId (zcpMaterials palette) of
         Just c  → c
         Nothing → (128, 128, 128, 255)
-
--- | Look up vegetation color for a veg category (1-4).
---   Uses a representative vegetation ID per category by
---   finding the closest match in the loaded palette.
---   Returns Nothing for category 0 or if no veg textures loaded.
-lookupVegColor ∷ ZoomColorPalette → Word8 → Int → Int → Maybe RGBA
-lookupVegColor _palette 0 _ _ = Nothing
-lookupVegColor palette _vegCat gx gy
-    | Map.null (zcpVegetation palette) = Nothing
-    | otherwise =
-        let vegMap = zcpVegetation palette
-            keys   = Map.keys vegMap
-            -- Deterministic selection based on position hash
-            hash   = abs (gx * 7919 + gy * 6271) `mod` length keys
-            vegId  = keys !! hash
-        in Map.lookup vegId vegMap
 
 -- | Look up vegetation color by exact veg ID.
 --   Returns Nothing for vegNone (0) or if the ID isn't in the palette.

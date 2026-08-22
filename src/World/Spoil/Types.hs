@@ -8,7 +8,7 @@
 --   piles at different vertices can never fight over a corner. The
 --   pile raises those four corners one at a time ("expand before
 --   stack": all deposit routing fills level 1 across nearby vertices
---   before anything stacks to level 2; hard cap 'spoilMaxLevels').
+--   before anything stacks to level 2; hard cap @spoilMaxLevels@).
 --
 --   Fills are stored RELATIVE to each touching tile's current terrain
 --   surface. When a tile ends up with all four of its corners filled
@@ -25,9 +25,6 @@ module World.Spoil.Types
     , emptySpoilPiles
     , spoilSlotTiles
     , tileCornerVertices
-    , spoilRaiseThreshold
-    , spoilMaxLevels
-    , spoilSearchRadius
     , spoilCapacity
     , depositSpoil
     , candidateVertices
@@ -63,7 +60,7 @@ emptySpoilPiles ∷ SpoilPiles
 emptySpoilPiles = HM.empty
 
 -- | A slot's corner renders raised once its fill (within the level)
---   crosses this — mirrors the dig system's 'digThreshold'.
+--   crosses this — mirrors the dig system's @digThreshold@.
 spoilRaiseThreshold ∷ Float
 spoilRaiseThreshold = 0.5
 
@@ -166,7 +163,7 @@ spoilCapacity tileOk mat start piles =
 -- | Route @amount@ corner-units of spoil into the piles around
 --   @start@. Expand-before-stack: pass 1 fills every reachable slot
 --   to one level; pass 2 (only if material remains) stacks toward
---   'spoilMaxLevels'. Returns the new piles and any unplaced
+--   @spoilMaxLevels@. Returns the new piles and any unplaced
 --   leftover (0 when the caller pre-checked 'spoilCapacity').
 depositSpoil ∷ ((Int, Int) → Bool) → MaterialId → (Int, Int) → Float
              → SpoilPiles → (SpoilPiles, Float)

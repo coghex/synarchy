@@ -69,11 +69,6 @@ module World.Save.Component.Transfer
     , TransferStateDTO(..)
     , TransferFailureDTO(..)
     , TransferReasonDTO(..)
-      -- * Conversions
-    , toTransferOrdersQueueDTO
-    , fromTransferOrdersQueueDTO
-    , toTransferOrderDTO
-    , fromTransferOrderDTO
     ) where
 
 import UPrelude

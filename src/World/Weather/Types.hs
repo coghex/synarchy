@@ -3,7 +3,6 @@ module World.Weather.Types
     ( -- * Climate Region Grid
       ClimateCoord(..)
     , ClimateGrid(..)
-    , emptyClimateGrid
     , climateRegionSize
     , climateRegionCount
       -- * Regional Climate (equilibrium state)

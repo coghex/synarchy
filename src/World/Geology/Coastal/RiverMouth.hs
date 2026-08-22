@@ -4,8 +4,7 @@
 --   the world's river mouths down to the handful near a given chunk,
 --   then a cheap per-tile radius check against that shortlist.
 module World.Geology.Coastal.RiverMouth
-    ( riverMouthRadius
-    , filterNearbyMouths
+    ( filterNearbyMouths
     , isNearRiverMouth
     ) where
 
