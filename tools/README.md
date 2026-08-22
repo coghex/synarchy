@@ -17,7 +17,8 @@ and the unit-asset gate, while pushes to master run all three; a green
 
 That "same gate set" claim is now enforced rather than maintained by hand:
 `ci_parity_audit.py` (#1355) compares this file's `python3 tools/*.py`
-invocations against those of `.github/workflows/ci.yml`'s `build-test` job,
+invocations against those of `.github/workflows/ci.yml`'s
+`test-and-audits` worker,
 at command-and-arguments granularity and in both directions, and fails on
 any difference outside a hard-coded exemption list carrying a reason per
 entry (CI's path selectors, which `make ci` has nothing to select for). It
@@ -26,8 +27,11 @@ runs last in both files and has its own `--self-test`.
 The PR-only `behavior-probes` job is deliberately outside that parity
 contract: it owns `ci_probes.py --stdin` and `run_probes.py`, restores the
 same build caches on an independent runner, and runs in parallel with
-`build-test`. Behavior probes remain opt-in locally, while branch protection
-requires both CI jobs on pull requests.
+`test-and-audits`. The stable `build-test` context aggregates both workers;
+that is the single CI verdict consumed by the admin-bypass PR drainer, while
+branch protection also requires the probe context directly. The parity
+audit structurally pins the aggregate dependencies and both probe commands.
+Behavior probes remain opt-in locally.
 
 `-Werror` itself lives in `synarchy.cabal`'s checked-in warning policy, so
 every build already carries it; `ci-local.sh` only scopes a temporary

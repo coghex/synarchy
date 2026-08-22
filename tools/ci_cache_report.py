@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Report which restore outcome each of CI's two caches got (#1358).
 
-`.github/workflows/ci.yml`'s `build-test` job restores two caches -- the
+`.github/workflows/ci.yml`'s `test-and-audits` worker restores two caches -- the
 cabal dependency store and the `dist-newstyle` project build products --
 each keyed on the dependency plan hash with a broad `restore-keys`
 prefix fallback (#790). That gives three possible outcomes per cache:
@@ -109,8 +109,8 @@ except ImportError:  # pragma: no cover - exercised only on a bare toolchain
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
-#: The one workflow job whose caches this reports on.
-AUDITED_JOB = "build-test"
+#: The workflow worker whose caches this reports on.
+AUDITED_JOB = "test-and-audits"
 WORKFLOW_LABEL = ".github/workflows/ci.yml (job: %s)" % AUDITED_JOB
 
 #: This script's path as it appears in the workflow's `run:` block, used
@@ -545,9 +545,9 @@ def _self_test() -> int:
            f"`{DOCS_ONLY_ENV}` is bound to")
 
     check(check_wiring({"jobs": {}}) != [],
-          "a workflow with no build-test job must be reported")
+          f"a workflow with no {AUDITED_JOB} job must be reported")
     check(check_wiring({"jobs": {AUDITED_JOB: {"steps": []}}}) != [],
-          "a build-test job with no steps must be reported")
+          f"a {AUDITED_JOB} job with no steps must be reported")
 
     # 10. Inner spacing in a workflow expression is not drift.
     spaced = _valid_wiring_document()

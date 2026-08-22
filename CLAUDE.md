@@ -26,7 +26,7 @@ full story behind a contract stated tersely here.
 - **Run:** `cabal run synarchy`
 - **Run tests:** see **Testing Tiers** below — pick the cheapest tier that covers the change; don't run the gates as an iteration loop
 - **Pre-push gate:** `make ci` runs the same **gate set** as `ci.yml`'s
-  `build-test` job — the warning-clean (`-Werror`) builds, the headless
+  `test-and-audits` worker — the warning-clean (`-Werror`) builds, the headless
   hspec suite (full tier: it sets `SYNARCHY_FULL_TESTS=1`, which CI sets
   only on worldgen-selected runs — #1364), and every `python3 tools/*.py`
   audit and self-test.

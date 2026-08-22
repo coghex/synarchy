@@ -67,7 +67,7 @@
 # CI-image publication ordering (#784): this file and ci-image.yml used
 # to race as two fully independent workflows — both fired on the same
 # push, with no ordering between "publish a new image" and "consume the
-# fixed tag", so a Dockerfile-changing push could start build-test
+# fixed tag", so a Dockerfile-changing push could start the test workers
 # against the STALE previous image while the new one was still being
 # built, and a Dockerfile-changing PR never built or validated its
 # candidate at all (ci-image.yml had no pull_request trigger). The fix:
@@ -173,7 +173,11 @@ jobs:
       contents: read
       packages: write
 
-  build-test:
+  # Heavy build, hspec and engine-free audit worker. The stable `build-test`
+  # context is the aggregate job below; keeping the worker separate lets it
+  # overlap the real-engine behavior probes without weakening the drainer's
+  # single-check merge gate.
+  test-and-audits:
     needs: resolve-image
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -189,8 +193,8 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      # fetch-depth: 0 so the path-selective probe step (#530) can diff a
-      # PR against its base to see which files changed.
+      # fetch-depth: 0 so the path-selective expensive-gate selectors can
+      # diff a PR against its base to see which files changed.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -763,9 +767,10 @@ jobs:
           key: ${{ steps.dist-cache.outputs.cache-primary-key }}
 
   # Path-selective, BLOCKING behavior-probe gate (#530), split from
-  # build-test so real-engine probes run in parallel with hspec and the
+  # test-and-audits so real-engine probes run in parallel with hspec and the
   # engine-free audits. It is PR-only, preserving the existing policy;
-  # master pushes keep build-test as their complete post-merge backstop.
+  # master pushes keep test-and-audits as their complete post-merge backstop,
+  # with the stable build-test aggregate reporting its verdict.
   behavior-probes:
     if: github.event_name == 'pull_request'
     needs: resolve-image
@@ -818,7 +823,7 @@ jobs:
           echo "/usr/local/.ghcup/bin" >> "$GITHUB_PATH"
           echo "CABAL_DIR=/usr/local/cabal" >> "$GITHUB_ENV"
 
-      # Match build-test's plan resolution so both jobs address the same
+      # Match test-and-audits' plan resolution so both jobs address the same
       # dependency and dist-newstyle cache entries.
       - name: Resolve dependency plan
         if: steps.probe-selection.outputs.selected == 'true'
@@ -848,8 +853,8 @@ jobs:
       # every probe launches, persistence_contract shells out to
       # `cabal repl test:synarchy-test-headless`; compile that target here so
       # it cannot consume the probe's timeout rebuilding a stale cached suite.
-      # This job never saves either cache; build-test remains the sole cache
-      # writer for the workflow.
+      # This job never saves either cache; test-and-audits remains the sole
+      # cache writer for the workflow.
       - name: Build behavior probe prerequisites
         if: steps.probe-selection.outputs.selected == 'true'
         run: cabal build exe:synarchy synarchy-test-headless
@@ -865,3 +870,29 @@ jobs:
           python3 tools/run_probes.py
           --only "${{ steps.probe-selection.outputs.only }}"
           --exact --retries 1 --jobs 2
+
+  # Stable aggregate context consumed by branch protection and the PR
+  # drainer. The drainer gates its --admin merge on exactly `build-test`, so
+  # this job must fail when either parallel PR worker fails. On master pushes
+  # behavior-probes is intentionally skipped and test-and-audits remains the
+  # complete post-merge backstop.
+  build-test:
+    if: always()
+    needs:
+      - test-and-audits
+      - behavior-probes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require parallel CI workers
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TESTS_RESULT: ${{ needs.test-and-audits.result }}
+          PROBES_RESULT: ${{ needs.behavior-probes.result }}
+        run: |
+          test "$TESTS_RESULT" = success
+          if [ "$EVENT_NAME" = pull_request ]; then
+            test "$PROBES_RESULT" = success
+          else
+            test "$PROBES_RESULT" = skipped
+          fi

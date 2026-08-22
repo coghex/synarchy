@@ -15,7 +15,7 @@ whether a change is safe to push — was not.
 What this compares
 ------------------
 The set of `python3 tools/*.py` invocations run by the workflow's
-`build-test` job against the set run by `tools/ci-local.sh`, in both
+`test-and-audits` worker against the set run by `tools/ci-local.sh`, in both
 directions, minus a hard-coded exemption list. An invocation is compared
 at COMMAND granularity INCLUDING ARGUMENTS, so
 `ci_expensive_gates.py --self-test` and
@@ -37,10 +37,12 @@ What this deliberately does NOT compare
 * **Comments.** Only executable content counts: YAML comments are dropped
   by the YAML parser, shell comments by this module's own lexer. A
   commented-out check does not run, so it must not count as running.
-* **Other jobs.** Only `build-test` is inspected. `resolve-image` builds
-  the CI image and has no local counterpart by construction;
-  `behavior-probes` runs the opt-in, real-engine tier that `make ci`
-  deliberately excludes.
+* **Other jobs.** Gate-set parity inspects only `test-and-audits`.
+  `resolve-image` builds the CI image and has no local counterpart by
+  construction; `behavior-probes` runs the opt-in, real-engine tier that
+  `make ci` deliberately excludes; `build-test` is the stable aggregate
+  context consumed by branch protection and the PR drainer. This audit
+  separately pins that three-job wiring and the two probe-runner commands.
 
 Failing loudly rather than silently
 -----------------------------------
@@ -49,7 +51,7 @@ recognise: a missed invocation reads as parity that is not there. So the
 extractor refuses rather than shrugs. A `python` interpreter appearing
 anywhere other than as the head of a command (`xargs python3 ...`), a
 `tools/*.py` script executed directly instead of through an interpreter,
-an unterminated quote or `$(`/`${`, a missing `build-test` job, and an
+an unterminated quote or `$(`/`${`, a missing audited worker, and an
 empty invocation set on either side are each an error naming the offending
 text — never a quietly smaller comparison.
 
@@ -83,8 +85,23 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 LOCAL_GATE_PATH = REPO_ROOT / "tools" / "ci-local.sh"
 
-#: The one workflow job whose gate set `make ci` mirrors.
-AUDITED_JOB = "build-test"
+#: The workflow worker whose gate set `make ci` mirrors.
+AUDITED_JOB = "test-and-audits"
+
+#: The stable status context the drainer and branch protection consume.
+AGGREGATE_JOB = "build-test"
+
+#: The separate real-engine worker that runs alongside AUDITED_JOB on PRs.
+PROBE_JOB = "behavior-probes"
+
+AGGREGATE_NEEDS = frozenset({AUDITED_JOB, PROBE_JOB})
+PROBE_JOB_IF = "github.event_name == 'pull_request'"
+PROBE_REQUIRED_COMMANDS = frozenset({
+    "python3 tools/ci_probes.py --stdin",
+    ("python3 tools/run_probes.py --only "
+     "${{ steps.probe-selection.outputs.only }} "
+     "--exact --retries 1 --jobs 2"),
+})
 
 WORKFLOW_LABEL = ".github/workflows/ci.yml (job: %s)" % AUDITED_JOB
 LOCAL_GATE_LABEL = "tools/ci-local.sh"
@@ -554,7 +571,7 @@ def _normalise_expression(text: str) -> str:
 
 def workflow_steps(yaml_text: str, job: str = AUDITED_JOB,
                    where: str = WORKFLOW_LABEL) -> list[dict]:
-    """The `build-test` job's steps as mappings, `if:` included.
+    """The audited worker's steps as mappings, `if:` included.
 
     workflow_run_blocks above deliberately returns only `run:` text,
     because the gate-set comparison is about commands. This wiring check
@@ -580,6 +597,90 @@ def workflow_steps(yaml_text: str, job: str = AUDITED_JOB,
         if not isinstance(step, dict):
             raise AuditError(f"{where}: step {index} is not a mapping.")
     return steps
+
+
+def audit_parallel_gate_wiring(yaml_text: str) -> list[str]:
+    """Pin the stable aggregate and both parallel workers.
+
+    The PR drainer merges with ``--admin`` and deliberately watches one exact
+    CI context, ``build-test``. Branch protection alone therefore cannot make
+    a newly split worker blocking: the stable context itself must depend on
+    both workers and fail when either PR result is not successful.
+    """
+    try:
+        document = yaml.safe_load(yaml_text)
+    except yaml.YAMLError as error:
+        raise AuditError(
+            f"{WORKFLOW_PATH}: could not parse as YAML ({error}).") from error
+    jobs = document.get("jobs") if isinstance(document, dict) else None
+    if not isinstance(jobs, dict):
+        return [f"{WORKFLOW_PATH}: no `jobs:` mapping."]
+
+    problems: list[str] = []
+    for job in (AUDITED_JOB, PROBE_JOB, AGGREGATE_JOB):
+        if not isinstance(jobs.get(job), dict):
+            problems.append(f"{WORKFLOW_PATH}: no `{job}` job.")
+    if problems:
+        return problems
+
+    aggregate = jobs[AGGREGATE_JOB]
+    raw_needs = aggregate.get("needs")
+    needs = ({raw_needs} if isinstance(raw_needs, str)
+             else set(raw_needs) if isinstance(raw_needs, list)
+             else set())
+    if needs != AGGREGATE_NEEDS:
+        problems.append(
+            f"{WORKFLOW_PATH}: `{AGGREGATE_JOB}` must need exactly "
+            f"{sorted(AGGREGATE_NEEDS)}, got {sorted(needs)}.")
+    if _normalise_expression(str(aggregate.get("if") or "")) != "always()":
+        problems.append(
+            f"{WORKFLOW_PATH}: `{AGGREGATE_JOB}` must use `if: always()` so "
+            "a failed or skipped dependency cannot skip the stable verdict.")
+
+    aggregate_steps = aggregate.get("steps")
+    steps = ([step for step in aggregate_steps if isinstance(step, dict)]
+             if isinstance(aggregate_steps, list) else [])
+    verdict_steps = [step for step in steps
+                     if "TESTS_RESULT" in str(step.get("run") or "")]
+    if len(verdict_steps) != 1:
+        problems.append(
+            f"{WORKFLOW_PATH}: `{AGGREGATE_JOB}` must have exactly one "
+            "worker-result verdict step.")
+    else:
+        env = verdict_steps[0].get("env")
+        expected_env = {
+            "EVENT_NAME": "${{ github.event_name }}",
+            "TESTS_RESULT": "${{ needs.test-and-audits.result }}",
+            "PROBES_RESULT": "${{ needs.behavior-probes.result }}",
+        }
+        if env != expected_env:
+            problems.append(
+                f"{WORKFLOW_PATH}: `{AGGREGATE_JOB}` worker-result env must "
+                f"be exactly {expected_env}, got {env}.")
+    aggregate_text = "\n".join(
+        str(step.get("run") or "") for step in steps)
+    for token in ("pull_request",
+                  'test "$TESTS_RESULT" = success',
+                  'test "$PROBES_RESULT" = success',
+                  'test "$PROBES_RESULT" = skipped'):
+        if token not in aggregate_text and token not in str(aggregate_steps):
+            problems.append(
+                f"{WORKFLOW_PATH}: `{AGGREGATE_JOB}` does not enforce "
+                f"{token!r} in its worker-result verdict.")
+
+    probe = jobs[PROBE_JOB]
+    if _normalise_expression(str(probe.get("if") or "")) != PROBE_JOB_IF:
+        problems.append(
+            f"{WORKFLOW_PATH}: `{PROBE_JOB}` must remain PR-only with "
+            f"`if: {PROBE_JOB_IF}`.")
+    commands = workflow_invocations(yaml_text, PROBE_JOB,
+                                    f"{WORKFLOW_PATH} (job: {PROBE_JOB})")
+    missing = PROBE_REQUIRED_COMMANDS - commands
+    for command in sorted(missing):
+        problems.append(
+            f"{WORKFLOW_PATH}: `{PROBE_JOB}` no longer runs required "
+            f"command `{command}`.")
+    return problems
 
 
 def extract_local_block(shell_text: str,
@@ -824,6 +925,7 @@ def run_repository_audit() -> int:
         # conditionally (#1360): they must also agree on the condition.
         problems.extend(
             audit_save_compat_reproducibility_wiring(yaml_text, shell_text))
+        problems.extend(audit_parallel_gate_wiring(yaml_text))
     except OSError as error:
         print(f"ci_parity_audit.py: {error}")
         return 1
@@ -1094,6 +1196,81 @@ def _self_test() -> list[str]:
     #     is observed rather than asserted about its text.
     failures.extend(_save_compat_wiring_self_test())
 
+    # 14. The stable build-test context must aggregate both parallel workers.
+    failures.extend(_parallel_gate_wiring_self_test())
+
+    return failures
+
+
+_PARALLEL_GATE_WORKFLOW_GOOD = """\
+name: fixture
+on: [push, pull_request]
+jobs:
+  test-and-audits:
+    runs-on: ubuntu-latest
+    steps:
+      - run: python3 tools/audit.py
+  behavior-probes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - run: python3 tools/ci_probes.py --stdin
+      - run: >-
+          python3 tools/run_probes.py
+          --only "${{ steps.probe-selection.outputs.only }}"
+          --exact --retries 1 --jobs 2
+  build-test:
+    if: always()
+    needs: [test-and-audits, behavior-probes]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          EVENT_NAME: ${{ github.event_name }}
+          TESTS_RESULT: ${{ needs.test-and-audits.result }}
+          PROBES_RESULT: ${{ needs.behavior-probes.result }}
+        run: |
+          test "$TESTS_RESULT" = success
+          if [ "$EVENT_NAME" = pull_request ]; then
+            test "$PROBES_RESULT" = success
+          else
+            test "$PROBES_RESULT" = skipped
+          fi
+"""
+
+
+def _parallel_gate_wiring_self_test() -> list[str]:
+    failures: list[str] = []
+
+    def problems(text: str) -> list[str]:
+        return audit_parallel_gate_wiring(text)
+
+    _expect(failures, problems(_PARALLEL_GATE_WORKFLOW_GOOD) == [],
+            "the known-good parallel gate fixture should pass, got "
+            f"{problems(_PARALLEL_GATE_WORKFLOW_GOOD)}")
+    mutations = (
+        ("drop aggregate probe dependency",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "needs: [test-and-audits, behavior-probes]",
+             "needs: [test-and-audits]"), "must need exactly"),
+        ("drop always",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace("    if: always()\n", ""),
+         "must use `if: always()`"),
+        ("drop probe runner",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "      - run: >-\n          python3 tools/run_probes.py\n"
+             "          --only \"${{ steps.probe-selection.outputs.only }}\"\n"
+             "          --exact --retries 1 --jobs 2\n", ""),
+         "no longer runs required command"),
+        ("accept failed probes",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             'test "$PROBES_RESULT" = success',
+             'test "$PROBES_RESULT" = failure'),
+         'test "$PROBES_RESULT" = success'),
+    )
+    for label, mutated, needle in mutations:
+        got = problems(mutated)
+        _expect(failures, any(needle in problem for problem in got),
+                f"{label} should fail with {needle!r}, got {got}")
     return failures
 
 
@@ -1117,7 +1294,7 @@ _WIRING_CI_GOOD = """
 name: fixture
 on: push
 jobs:
-  build-test:
+  test-and-audits:
     runs-on: ubuntu-latest
     steps:
       - name: Select expensive path-relevant gates
