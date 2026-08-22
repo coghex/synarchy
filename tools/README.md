@@ -1119,7 +1119,11 @@ boundary **refuses** a `--lease-seconds` below twice one run's timeout,
 because a lease that can elapse while a single run is still going hands the
 probe to a second agent mid-measurement; and claim timestamps carry
 microseconds, because whole-second stamps round a lease DOWN — a sub-second
-lease would be born already expired. Every acquisition mints a unique token, and release, renewal and
+lease would be born already expired. A lease is required to be finite as well
+as positive, at the boundary and in `acquire` alike: `float` parses `nan`,
+`inf` and `-inf`, NaN fails every ordering comparison and infinity passes
+every lower bound, so both slip past a bare `<` and reach `timedelta`, which
+raises where this module promises a controlled refusal. Every acquisition mints a unique token, and release, renewal and
 takeover are all checked against it: concurrent reclaimers of one lapsed claim
 yield exactly one successor, and an expired owner that exits late finds a
 token that is not its own and leaves the successor alone. An empty, truncated,

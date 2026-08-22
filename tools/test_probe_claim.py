@@ -946,19 +946,59 @@ def test_orchestration_refuses_a_lease_that_cannot_survive_a_run() -> None:
                    "the floor covers a full-timeout run and the default "
                    "clears the floor")
 
-        # The CLI is the surface the review reached this through.
+        # The CLI is the surface the review reached this through, and
+        # `float` parses more than numbers: `nan` fails every ordering
+        # comparison and `inf` passes every lower bound, so both slip
+        # past a bare `<` and reach `timedelta`, which raises. Each must
+        # meet a controlled refusal, never a traceback.
         import io
         from contextlib import redirect_stdout, redirect_stderr
-        out, err = io.StringIO(), io.StringIO()
-        try:
-            with redirect_stdout(out), redirect_stderr(err):
-                code = probe_claim.main(["--probe", "alpha", "--runs", "2",
-                                         "--lease-seconds", "0.1"])
-        except SystemExit as exit_code:
-            code = exit_code.code if isinstance(exit_code.code, int) else 1
-        expect(code == probe_claim.EXIT_REJECTED
-               and "--lease-seconds" in err.getvalue(),
+
+        def cli_lease(text):
+            out, err = io.StringIO(), io.StringIO()
+            try:
+                with redirect_stdout(out), redirect_stderr(err):
+                    code = probe_claim.main(["--probe", "alpha", "--runs", "2",
+                                             "--lease-seconds", text])
+            except SystemExit as exit_code:
+                code = exit_code.code if isinstance(exit_code.code, int) else 1
+            except BaseException as error:  # noqa: BLE001
+                return None, f"{type(error).__name__}: {error}"
+            return code, err.getvalue()
+
+        code, err = cli_lease("0.1")
+        expect(code == probe_claim.EXIT_REJECTED and "--lease-seconds" in err,
                "`--lease-seconds 0.1` is rejected by the CLI too")
+        for text in ("nan", "inf", "-inf", "infinity", "-1"):
+            code, err = cli_lease(text)
+            expect(code == probe_claim.EXIT_REJECTED,
+                   f"`--lease-seconds {text}` is a controlled refusal, not a "
+                   f"traceback (got {code!r}: {err.strip()[:120]})")
+        for text in ("nan", "inf", "infinity"):
+            _code, err = cli_lease(text)
+            expect("finite" in err,
+                   f"...and `--lease-seconds {text}` says it must be finite")
+
+        # The same values through the low-level API, which #1436 and any
+        # other caller reach directly.
+        with claim_root() as root:
+            for value in (float("nan"), float("inf"), float("-inf"), 0, -1,
+                          True, None, "600"):
+                expect_raises(
+                    probe_claim.ClaimError,
+                    lambda v=value: probe_claim.acquire("alpha", root=root,
+                                                        lease_seconds=v),
+                    f"acquire refuses a {value!r} lease",
+                    "lease")
+                expect(probe_claim.read_claim("alpha", root=root) is None,
+                       f"...and a {value!r} lease claimed nothing")
+            expect_raises(
+                probe_claim.ClaimError,
+                lambda: probe_claim.Renewer(
+                    probe_claim.Claim("alpha", "t", root / "x", root, {}, 600),
+                    interval=float("nan")),
+                "and a non-finite renewal interval is refused rather than "
+                "spun on", "finite")
 
 
 def test_a_short_lease_means_what_it_says() -> None:

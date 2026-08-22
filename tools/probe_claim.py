@@ -152,6 +152,7 @@ import contextlib
 import errno
 import fcntl
 import json
+import math
 import os
 import socket
 import stat
@@ -365,6 +366,32 @@ def require_probe_key(probe) -> str:
             f"unknown probe {probe!r}: not registered in run_probes.PROBES. "
             f"`python3 tools/run_probes.py --list` names every probe.")
     return probe
+
+
+def require_lease(value, what: str = "a claim lease") -> float:
+    """A finite, positive number of seconds, or a controlled refusal.
+
+    FINITENESS is the part that is easy to leave out and impossible to
+    recover from. `float` parses `nan`, `inf` and `-inf` — so
+    `--lease-seconds nan` is a perfectly valid argument — and NaN fails
+    every ordering comparison, so a bare `value <= 0` or
+    `value < FLOOR` waves both NaN and positive infinity straight
+    through. They then reach `timedelta`, which raises `ValueError` and
+    `OverflowError` respectively: a traceback out of an acquisition,
+    where this module promises a controlled refusal.
+
+    `True` is excluded explicitly, because `isinstance(True, int)`.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ClaimError(
+            f"{what} must be a number of seconds, got {value!r}")
+    if not math.isfinite(value):
+        raise ClaimError(
+            f"{what} must be a finite number of seconds, got {value!r}")
+    if value <= 0:
+        raise ClaimError(
+            f"{what} must be a positive number of seconds, got {value!r}")
+    return float(value)
 
 
 def claim_path(probe: str, root: Path) -> Path:
@@ -816,10 +843,7 @@ def acquire(probe: str, *, root: Path | None = None,
     which an unparseable claim stops being treated as occupied.
     """
     key = require_probe_key(probe)
-    if not isinstance(lease_seconds, (int, float)) or lease_seconds <= 0:
-        raise ClaimError(
-            f"a claim lease must be a positive number of seconds, got "
-            f"{lease_seconds!r}")
+    lease_seconds = require_lease(lease_seconds)
     base = _ensure_root(Path(root) if root is not None
                         else repository_claim_root(repo_root))
     path = claim_path(key, base)
@@ -894,7 +918,10 @@ class Renewer:
 
     def __init__(self, claim: Claim, interval: float | None = None):
         self.claim = claim
-        self.interval = (interval if interval is not None
+        # A non-finite interval would make `Event.wait` return at once
+        # and spin, so it is refused here rather than tolerated.
+        self.interval = (require_lease(interval, "a renewal interval")
+                         if interval is not None
                          else max(MIN_RENEW_INTERVAL,
                                   claim.lease_seconds / RENEW_DIVISOR))
         self.lost: str | None = None
@@ -1004,8 +1031,12 @@ def run_claimed_measurement(probe: str, runs: int, *,
     probe_flake.resolve_probe(key)
     if runs < 1:
         raise ClaimError(f"--runs must be a positive count, got {runs}")
-    if (not isinstance(lease_seconds, (int, float))
-            or lease_seconds < MIN_ORCHESTRATION_LEASE_SECONDS):
+    # Type, finiteness and positivity first, so a `nan` or an `inf`
+    # meets the refusal that names what is wrong with it rather than the
+    # floor message — and, more to the point, so neither reaches an
+    # ordering comparison that would wave it through.
+    lease_seconds = require_lease(lease_seconds, "a claim lease")
+    if lease_seconds < MIN_ORCHESTRATION_LEASE_SECONDS:
         raise ClaimError(
             f"a claim lease of {lease_seconds!r} cannot survive one run of "
             f"{probe!r}: a single run may take the full "
