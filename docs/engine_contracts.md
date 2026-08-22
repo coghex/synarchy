@@ -92,10 +92,13 @@ Unicode-operator audit, the persistence-inventory / EngineEnv-capability
 material-id / findings-report-status audits (each with its own
 self-test), the unit-asset inventory gate (`test_pack_atlas.py` +
 `pack_atlas.py --validate-only --strict`), `world_check.py --quick`, the
-six probe-runner self-tests (`ci_probes.py --self-test`,
+eight probe-runner self-tests (`ci_probes.py --self-test`,
 `ci_expensive_gates.py --self-test`, `ci_docs_fast_path.py --self-test`,
 `test_run_probes.py`, `test_persistence_contract_sweep.py`,
-`test_action_outcome_probe.py`), and the parity audit itself.
+`test_action_outcome_probe.py`, `test_probelib.py`,
+`test_probe_flake.py`), `ci_cache_report.py --self-test` (#1358 — the
+cache-outcome report's own classification, plus the `ci.yml` wiring it
+reads), and the parity audit itself.
 
 **One member of the save-compat self-test is path-selective on BOTH
 sides (#1360).** `tools/test_save_compat_audit.py` gained two flags that
@@ -176,18 +179,26 @@ would hide the very failure it was built for. The separate PR-only
 behavior-probe job also selects no probes for documentation. `make ci`
 has no event change range and so has no fast path; it always runs
 everything.
-The CI-only members of `test-and-audits` are its path SELECTORS
+The CI-only invocations split across the two worker jobs. In
+`test-and-audits`, the path SELECTORS
 (`ci_expensive_gates.py --stdin --gate worldgen|graphical|unit-assets`
-and `ci_docs_fast_path.py --stdin --explain`), which have nothing to select
-for locally. The separate `behavior-probes` job owns
-`ci_probes.py --stdin` and the engine-booting `run_probes.py` sweep; neither
-is part of the `test-and-audits` / `make ci` parity contract because
-CLAUDE.md keeps behavior probes opt-in locally. The stable `build-test`
-context depends on both parallel workers and is the single CI verdict the
-admin-bypass PR drainer consumes, so moving the sweep out of the heavy worker
-does not weaken its blocking PR verdict. The parity audit pins that aggregate
-wiring and the probe worker's selector and runner commands. One invocation is
-LOCAL-only for the mirror-image reason:
+and `ci_docs_fast_path.py --stdin --explain`) have nothing to select
+locally. Its bare `ci_cache_report.py` (#1358) classifies what the two
+`actions/cache` restore steps got from outputs only a runner publishes;
+`make ci` restores no GitHub Actions cache, so it has no outcome to
+classify, and the command reports rather than gates. Its `--self-test`
+form is not exempt and runs on both sides.
+
+The separate `behavior-probes` job owns `ci_probes.py --stdin` and the
+engine-booting `run_probes.py` sweep; neither is part of the
+`test-and-audits` / `make ci` parity contract because CLAUDE.md keeps
+behavior probes opt-in locally. The stable `build-test` context depends
+on both parallel workers and is the single CI verdict the admin-bypass
+PR drainer consumes, so moving the sweep out of the heavy worker does
+not weaken its blocking PR verdict. The parity audit pins that aggregate
+wiring and the probe worker's selector and runner commands.
+
+One invocation is LOCAL-only for the mirror-image reason:
 `ci_expensive_gates.py --local-changed-paths`, because CI is handed a
 pull-request base sha and `make ci` has to resolve its own. The
 `--stdin --gate save-compat` decision both of them feed is NOT exempt —

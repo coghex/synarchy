@@ -68,7 +68,7 @@ cited lines.
 - [ ] EXPL-18. `Building.Render`'s sort comment says units add a `spriteRowSpan` term "as units do"; they no longer do
 - [ ] EXPL-19. `Unit.HitTest` claims to mirror a tile hit-test that no longer holds the math, and to use the "same math" the engine documents as different
 - [ ] EXPL-20. `resolveTexture`'s haddock credits itself with animation mirroring; animations never reach it and it cannot honour `flip: false`
-- [ ] EXPL-21. 98 production call sites spell inequality `≠` instead of `≢`; neither the operator audit nor CLAUDE.md's table can see it
+- [x] EXPL-21. 98 production call sites spell inequality `≠` instead of `≢`; neither the operator audit nor CLAUDE.md's table can see it — [#1494]
 - [ ] EXPL-22. The capability inventory says four of the five capability splits are §3.1 thread-privacy splits; two are, and the doc contradicts itself
 - [ ] EXPL-23. `inputBoundaryPage` explains the modal-boundary tie-break by `PageHandle` and show-recency; the sort key is `(upLayer, upZIndex)`
 - [ ] EXPL-24. `hitsAtPointBy`'s haddock cites `UI.InputOwnership.pagesInScope`, which is not exported
@@ -90,6 +90,7 @@ cited lines.
 - [ ] EXPL-40. `World.Save.Component.Types` says concrete components live in three modules; five define them, and the two omitted are the optional pair
 - [ ] EXPL-41. `World.Save.Component.Entities`' header omits the `core-session` dependency from two of its five components
 - [ ] EXPL-42. A haddock names `Building.Knowledge.SeedAtSpawn`; the constructor is `SeedWhenBuilt`, and "at spawn" is what the design rejects
+- [ ] EXPL-43. `circadian.lua` documents its function as `unit.getCircadianUrge`; no such engine verb is registered
 
 ---
 
@@ -1301,7 +1302,7 @@ matches the code exactly, `flipX` included.
 
 ## Unicode operator convention
 
-### EXPL-21. 98 production call sites spell inequality `≠` instead of `≢`; neither the operator audit nor CLAUDE.md's table can see it
+### [#1494] EXPL-21. 98 production call sites spell inequality `≠` instead of `≢`; neither the operator audit nor CLAUDE.md's table can see it
 
 **The rule, from the project owner (2026-08-20):** in actual Haskell code
 inequality is always `≢`. `≠` is acceptable only in PROSE — a comment writing
@@ -3296,3 +3297,86 @@ Also verified exact in this pass, and recorded so they are not re-checked:
 - `World.Fluid.Lake.Types.packBitmask`'s documented layout — "bit @i@ (LSB = 0)
   of byte @b@ encodes tile @b * 8 + i@", 32 `Word8`s for 256 elements, unused
   trailing bits zero — is exactly what its `foldr` produces.
+
+---
+
+## Lua scripts
+
+### EXPL-43. `circadian.lua` documents its function as `unit.getCircadianUrge`; no such engine verb is registered
+
+`scripts/circadian.lua:63-66`:
+
+```lua
+-- unit.getCircadianUrge(uid) — 0..1, or nil if the unit doesn't exist or
+-- has no resolvable position (issue #611 requirement: skip gracefully,
+-- never error). Named to match the issue's own example call shape.
+function M.getCircadianUrge(uid)
+```
+
+**`unit.getCircadianUrge` does not exist.** `unit` is the ENGINE's Lua table,
+populated by `registerLuaFunction` calls in
+`src/Engine/Scripting/Lua/API/Register/Unit.hs`, and no verb of that name is
+registered there or anywhere else. A repo-wide search finds the identifier in
+exactly two places: this definition, and its single real caller —
+`scripts/unit_ai_sleep.lua:138`:
+
+```lua
+    local urge = circadian.getCircadianUrge(uid) or 0
+```
+
+which reaches it as `circadian.getCircadianUrge`, through the module table, as a
+Lua-side helper.
+
+**The comment records how the wrong prefix got there**: "Named to match the
+issue's own example call shape." Issue #611's text used a `unit.`-prefixed
+example, and the doc line copied that shape rather than the shape the function
+actually has. The `unit.` prefix is not a harmless stylistic difference — it
+names a DIFFERENT namespace, the one the debug console exposes, so the obvious
+thing to do with a doc line in this form (paste `unit.getCircadianUrge(uid)`
+into the console) fails with a nil-index error rather than returning the
+documented 0..1.
+
+Everything else on the line is accurate: the function does return 0..1 or `nil`,
+and it does skip gracefully rather than erroring when the unit is missing or has
+no resolvable position (`unit.getInfo` nil-guard, then `world.getSunAngleAt`
+nil-guard).
+
+**Severity: low.** No behaviour is involved and the one real caller uses the
+correct name. Recorded because it is the doc line directly above the definition,
+it states a call shape that cannot work, and the wrong namespace is the one a
+reader is most likely to try by hand.
+
+#### Method note: what the `scripts/` sweep found, and did not
+
+The Lua tree was swept with the same techniques used on the Haskell side.
+Recorded so the negative results are on file:
+
+- **References to a `scripts/*.lua` file that does not exist** — 2 hits, both
+  CORRECT as written, describing history in the past tense:
+  `scripts/build_tool.lua:4` ("#403 — absorbs the former
+  scripts/construct_tool.lua") and `scripts/lib/data_codec.lua:2` ("Replaces
+  scripts/lib/serialize.lua's load()-based Lua-expression codec").
+- **References to a `scripts.*` module path that does not resolve** — ZERO.
+- **Comment references to an engine verb that is not registered** — 2 hits. One
+  is the finding above. The other, `debug.hide()` at
+  `scripts/ui/view_teardown.lua:236`, is not a defect: it is shorthand for
+  `require("scripts.debug").hide()`, which the same file spells out in full at
+  `:245`, `:248` and `:249`.
+- **Numeric-word claims** — every one checked was exact:
+  `scripts/lib/data_codec.lua:241`'s "the four limits above" is exactly four
+  (`MAX_DEPTH`, `MAX_TABLE_ENTRIES`, `MAX_STRING_BYTES`, `MAX_TOTAL_BYTES` at
+  `:63-66`, with the per-call override resolving exactly those four at
+  `:257-260`); `scripts/ui/randbox.lua:610`'s "the three handlers that change
+  text in response to a keystroke" is exactly three `notifyUserEdit` call sites
+  (`:644`, `:656`, `:668`); and `scripts/unit_ai_deliver.lua:28`'s "Bound like
+  the three above" matches the three `fetch.*` bindings immediately above it,
+  with its claim that `unit_ai_construct.lua` and `unit_ai_repair.lua` "do the
+  same" holding at `unit_ai_construct.lua:36-37` and `unit_ai_repair.lua:31`.
+- **Exhaustiveness claims** — `scripts/tutorial_progress.lua:525`'s "v1 is the
+  only schema" matches its single `version = 1` literal at `:498`; and
+  `scripts/starvation.lua:11`'s "This is the one place the two fraction
+  thresholds + both multipliers live" holds, including its cross-language
+  claim — `tools/physiology_probe.py` really does read through the module
+  (`require('scripts.starvation').speedMultiplier`) rather than hardcoding the
+  values, and its own test points sit inside the bands rather than restating
+  their boundaries.

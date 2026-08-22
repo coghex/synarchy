@@ -42,6 +42,7 @@ approval.
 - [ ] NCT-20. Item-identity persistence phase can load a stale save
 - [ ] NCT-21. Foraging persistence phase can load a stale save
 - [ ] NCT-22. Location persistence probes can load stale fixtures
+- [ ] NCT-23. Position-hold inventory overstates the executable fixture by one acolyte
 
 ---
 
@@ -1023,3 +1024,48 @@ already captured separately in `docs/project_review_859-848.md`.
   feature assertions into one generic smoke test.
 - **Remaining uncertainty:** None material about the shared asynchronous
   boundary; the exact common helper and artifact ownership design is open.
+
+---
+
+## Manual-only probe inventory
+
+### NCT-23. Position-hold inventory overstates the executable fixture by one acolyte
+
+> **Captured note:** Position-hold apparatus overstates its unit count
+
+**Verification:** Verified — the probe docstring, manual inventory, and CI
+classifier all say four acolytes share the arena, but the executable fixture
+spawns exactly three and its declared checks use only those three roles.
+
+**Evidence:**
+
+- `tools/position_hold_probe.py:17-27` — the module description claims four
+  units while naming only `held`, `control`, and `internal`.
+- `tools/position_hold_probe.py:113-140` — all 12 declared checks concern the
+  held unit, the never-commanded control, or the internal-move unit; no fourth
+  role appears in the probe contract.
+- `tools/position_hold_probe.py:203-218,370-378` — `_run` spawns `held` and
+  `control` initially and `internal` later, with no other `spawn_acolyte` call.
+- `tools/README.md:450` — the manual inventory repeats that four acolytes share
+  the arena.
+- `tools/ci_probes.py:187-191` — the manual-only classifier rationale likewise
+  attributes the scenario's cost to four acolytes.
+- `git blame` attributes the three descriptions and all three spawn sites to
+  the same introducing commit, `87dafde2f`, so no later fixture reduction
+  explains the disagreement.
+
+**Handoff context:**
+
+- **Current behavior:** Three maintained descriptions overstate the live
+  fixture's cardinality and describe a nonexistent fourth role, while the
+  executable probe and its checks consistently operate on three acolytes.
+- **Expected behavior:** The probe docstring, manual inventory, classifier
+  rationale, and executable fixture should agree on the number and purpose of
+  participating units.
+- **Scope and constraints:** Preserve the three existing oracle roles, all 12
+  behavior checks, and the justified `scenario-heavy` manual-only
+  classification. Do not add an otherwise unused fourth unit merely to make
+  stale prose true.
+- **Remaining uncertainty:** No fourth oracle role is present or documented.
+  If one is intended, its independent behavioral purpose would need to be
+  established rather than inferred from the current count claim.
