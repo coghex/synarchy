@@ -16,6 +16,14 @@
 --     3. The harvest window: a species with a @fruiting@ annual stage
 --        yields only in season; one without stays open year-round;
 --        dead plants and juveniles never yield.
+--     4. 'instanceLifespan': the exact Annual/Biennial constants, and
+--        — for perennials, whose lifetime is rolled from a hash of the
+--        placement fields — the two properties the source actually
+--        commits to. The mixer is documented as cosmetic
+--        ('World.Flora.Growth'), so no exact perennial lifespan is
+--        pinned here: what is contractual is that equal placement
+--        gives an equal lifespan, and that varying any single mixed
+--        field moves it.
 module Test.Headless.World.FloraGrowth (spec) where
 
 import UPrelude
@@ -75,6 +83,30 @@ evergreen = (newFloraSpecies "test_pine" (TextureHandle 1))
         ]
     }
 
+-- An annual-shaped species. 'instanceLifespan' answers Annual with the
+-- exact 360-day constant, so this fixture's lifecycle boundaries are
+-- independent of the placement mixer — unlike the perennial ones,
+-- which derive their boundaries from the very value under test.
+annualHerb ∷ FloraSpecies
+annualHerb = (newFloraSpecies "test_annual" (TextureHandle 1))
+    { fsLifecycle = Annual
+    , fsPhases = HM.fromList
+        [ (PhaseSprout,  LifePhase PhaseSprout  0   (TextureHandle 2))
+        , (PhaseMatured, LifePhase PhaseMatured 120 (TextureHandle 3))
+        , (PhaseDead,    LifePhase PhaseDead    360 (TextureHandle 4))
+        ]
+    }
+
+-- A biennial-shaped species: the other exact constant, 720 days.
+biennialRoot ∷ FloraSpecies
+biennialRoot = (newFloraSpecies "test_biennial" (TextureHandle 1))
+    { fsLifecycle = Biennial
+    , fsPhases = HM.fromList
+        [ (PhaseSprout,  LifePhase PhaseSprout  0   (TextureHandle 2))
+        , (PhaseMatured, LifePhase PhaseMatured 240 (TextureHandle 3))
+        ]
+    }
+
 -- A fresh instance: age 0 at the world epoch, full health.
 seedling ∷ FloraInstance
 seedling = FloraInstance
@@ -82,6 +114,50 @@ seedling = FloraInstance
     , fiOffU = 0.1, fiOffV = -0.2, fiZ = 5
     , fiAge = 0.0, fiHealth = 1.0, fiVariant = 2, fiBaseWidth = 10.0
     }
+
+-- The same placement as 'seedling', written out independently rather
+-- than derived from it: chunk regeneration rebuilds an instance from
+-- scratch, and the mixer's stability claim is about the FIELDS
+-- agreeing, not about one value being reused.
+regenerated ∷ FloraInstance
+regenerated = FloraInstance
+    { fiSpecies = FloraId 1, fiTileX = 3, fiTileY = 7
+    , fiOffU = 0.1, fiOffV = -0.2, fiZ = 5
+    , fiAge = 0.0, fiHealth = 1.0, fiVariant = 2, fiBaseWidth = 10.0
+    }
+
+-- The five placement fields 'instanceHashFrac' mixes, each varied ONE
+-- at a time off 'seedling' with the species and the other four held
+-- fixed — so a mixer that dropped any single field is caught by that
+-- field's own case, with no reliance on the five results being
+-- pairwise distinct.
+--
+-- The offsets are quantized into 1/1023 buckets before mixing, so both
+-- moves cross a bucket boundary (fiOffU 0.1→0.3 is bucket 614→818,
+-- fiOffV -0.2→0.25 is 307→767); an equal lifespan therefore cannot be
+-- explained by an unchanged quantized input. The values were also
+-- chosen so that no case collides in the mixer's 16-bit output; a
+-- surprising failure here therefore means either the field stopped
+-- being mixed or new mixing constants happen to collide on this
+-- placement — check the mixer before adjusting the fixture.
+mixedFieldVariants ∷ [(String, FloraInstance)]
+mixedFieldVariants =
+    [ ("fiOffU",    seedling { fiOffU    = 0.3 })
+    , ("fiOffV",    seedling { fiOffV    = 0.25 })
+    , ("fiTileX",   seedling { fiTileX   = 4 })
+    , ("fiTileY",   seedling { fiTileY   = 9 })
+    , ("fiVariant", seedling { fiVariant = 5 })
+    ]
+
+-- Force the Maybe before comparing. Comparing 'Maybe' values directly
+-- would let a variant that returned Nothing read as "different", which
+-- is not the sensitivity being asserted.
+requireLifespan ∷ String → FloraSpecies → FloraInstance → IO Float
+requireLifespan what sp fi = case instanceLifespan sp fi of
+    Just l  → pure l
+    Nothing → do
+        expectationFailure (what <> ": expected a lifespan, got Nothing")
+        pure 0.0
 
 fruitingDay, dormantDay ∷ Int
 fruitingDay = 200   -- inside berry's fruiting window (180–269)
@@ -182,15 +258,45 @@ spec = do
             fgDead gReborn `shouldBe` False
             fgGeneration gReborn `shouldBe` 1
             growthPhaseTag berry gReborn `shouldBe` Just PhaseSprout
-        it "lifespans are deterministic and within the species range" $ do
-            let l1 = instanceLifespan berry seedling
-                l2 = instanceLifespan berry seedling
-            l1 `shouldBe` l2
-            case l1 of
-                Just l → do
-                    l `shouldSatisfy` (≥ 1080)
-                    l `shouldSatisfy` (≤ 3600)
-                Nothing → expectationFailure "expected a lifespan"
+        it "an annual dies on its exact 360-day boundary, then reseeds" $ do
+            -- Anchored on a lifespan the suite pins exactly (360), so
+            -- unlike the perennial case above these boundaries are not
+            -- computed from the value under test. Both examples stand:
+            -- this one cannot be satisfied by a constant mixer, that
+            -- one still covers the hashed-lifetime path.
+            let gAlive  = floraGrowth annualHerb 359 seedling
+                gDead   = floraGrowth annualHerb 360 seedling
+                gReborn = floraGrowth annualHerb 421 seedling
+            fgDead gAlive `shouldBe` False
+            fgDead gDead `shouldBe` True
+            growthPhaseTag annualHerb gDead `shouldBe` Just PhaseDead
+            fgDead gReborn `shouldBe` False
+            fgGeneration gReborn `shouldBe` 1
+            growthPhaseTag annualHerb gReborn `shouldBe` Just PhaseSprout
+
+    describe "instanceLifespan" $ do
+        it "an annual lives exactly 360 game-days" $
+            instanceLifespan annualHerb seedling `shouldBe` Just 360.0
+        it "a biennial lives exactly 720 game-days" $
+            instanceLifespan biennialRoot seedling `shouldBe` Just 720.0
+        it "an evergreen has no lifespan at all" $
+            instanceLifespan evergreen seedling `shouldBe` Nothing
+        it "a perennial's rolled lifespan is within the species range" $ do
+            l ← requireLifespan "berry/seedling" berry seedling
+            l `shouldSatisfy` (≥ 1080)
+            l `shouldSatisfy` (≤ 3600)
+        it "equal placement fields give an equal lifespan" $ do
+            l  ← requireLifespan "berry/seedling" berry seedling
+            l' ← requireLifespan "berry/regenerated" berry regenerated
+            l' `shouldBe` l
+        it "varying any one mixed placement field moves the lifespan" $ do
+            baseline ← requireLifespan "berry/seedling" berry seedling
+            rolled ← forM mixedFieldVariants $ \(field, fi) → do
+                l ← requireLifespan ("berry/" <> field) berry fi
+                pure (field, l)
+            -- Collected rather than asserted field by field so a mixer
+            -- that dropped several fields names all of them at once.
+            map fst (filter ((≡ baseline) . snd) rolled) `shouldBe` []
 
     describe "harvestOpen (fruiting window)" $ do
         let mature = seedling { fiAge = 400.0 }

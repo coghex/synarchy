@@ -1,0 +1,1271 @@
+{
+  "cells": [
+    {
+      "achieved_peak_concurrency_all": [
+        1
+      ],
+      "achieved_peak_concurrency_max": 1,
+      "achieved_peak_concurrency_min": 1,
+      "attempts": [
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 214.663, "index": 1, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 204.886, "index": 2, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 177.048, "index": 3, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 190.07, "index": 4, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 180.414, "index": 5, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 178.427, "index": 6, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 182.484, "index": 7, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 181.868, "index": 8, "invocation": "inv1.json", "outcome": "PASS"}
+      ],
+      "behavioral_failure_rate": 0.0,
+      "cell": "n1-c1-thermo_altitude",
+      "cohort_wall_seconds": 1511,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 0,
+        "harness_error": 0,
+        "pass": 8,
+        "setup_failure": 0,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 214.7,
+        "mean": 188.7,
+        "median": 182.2,
+        "min": 177.0,
+        "n": 8,
+        "p90": 207.8
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {},
+      "failure_rate_incl_timeouts": 0.0,
+      "finished_utc": "2026-08-22T05:01:02Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0
+      },
+      "invocations": 1,
+      "mean_achieved_parallelism": 1.0,
+      "probe": "thermo_altitude",
+      "requested_attempts": 8,
+      "requested_concurrency": 1,
+      "rts_capabilities": 1,
+      "runs_per_invocation": 8,
+      "started_utc": "2026-08-22T04:35:51Z",
+      "tree_clean": "yes"
+    },
+    {
+      "achieved_peak_concurrency_all": [
+        4,
+        4,
+        4,
+        4
+      ],
+      "achieved_peak_concurrency_max": 4,
+      "achieved_peak_concurrency_min": 4,
+      "attempts": [
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 151.355, "index": 1, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 138.095, "index": 2, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 151.406, "index": 1, "invocation": "inv2.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 151.166, "index": 2, "invocation": "inv2.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 154.635, "index": 1, "invocation": "inv3.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 140.963, "index": 2, "invocation": "inv3.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 147.721, "index": 1, "invocation": "inv4.json", "outcome": "PASS"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/position_hold-20260822T041444Z-46835-18b3565d/run-002", "class": "setup_failure", "elapsed_seconds": 86.0, "index": 2, "invocation": "inv4.json", "outcome": "FAIL"}
+      ],
+      "behavioral_failure_rate": 0.0,
+      "cell": "n1-c4-position_hold",
+      "cohort_wall_seconds": 302,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 0,
+        "harness_error": 0,
+        "pass": 7,
+        "setup_failure": 1,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 154.6,
+        "mean": 140.2,
+        "median": 149.4,
+        "min": 86.0,
+        "n": 8,
+        "p90": 152.4
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {},
+      "failure_rate_incl_timeouts": 0.125,
+      "finished_utc": "2026-08-22T04:19:46Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 0
+      },
+      "invocations": 4,
+      "mean_achieved_parallelism": 3.71,
+      "probe": "position_hold",
+      "requested_attempts": 8,
+      "requested_concurrency": 4,
+      "rts_capabilities": 1,
+      "runs_per_invocation": 2,
+      "started_utc": "2026-08-22T04:14:44Z",
+      "tree_clean": "yes"
+    },
+    {
+      "achieved_peak_concurrency_all": [
+        4,
+        4,
+        4,
+        4
+      ],
+      "achieved_peak_concurrency_max": 4,
+      "achieved_peak_concurrency_min": 4,
+      "attempts": [
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T040055Z-14850-165c4c1c/run-001", "class": "behavioral_failure", "elapsed_seconds": 178.66, "index": 1, "invocation": "inv1.json", "outcome": "FAIL"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T040055Z-14850-165c4c1c/run-002", "class": "behavioral_failure", "elapsed_seconds": 201.961, "index": 2, "invocation": "inv1.json", "outcome": "FAIL"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T040055Z-14851-637e64e9/run-001", "class": "behavioral_failure", "elapsed_seconds": 190.544, "index": 1, "invocation": "inv2.json", "outcome": "FAIL"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T040055Z-14851-637e64e9/run-002", "class": "behavioral_failure", "elapsed_seconds": 184.362, "index": 2, "invocation": "inv2.json", "outcome": "FAIL"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 168.317, "index": 1, "invocation": "inv3.json", "outcome": "PASS"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T040055Z-14852-f7961d6b/run-002", "class": "behavioral_failure", "elapsed_seconds": 183.622, "index": 2, "invocation": "inv3.json", "outcome": "FAIL"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T040055Z-14853-d86fb6a4/run-001", "class": "behavioral_failure", "elapsed_seconds": 157.706, "index": 1, "invocation": "inv4.json", "outcome": "FAIL"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T040055Z-14853-d86fb6a4/run-002", "class": "behavioral_failure", "elapsed_seconds": 185.28, "index": 2, "invocation": "inv4.json", "outcome": "FAIL"}
+      ],
+      "behavioral_failure_rate": 0.875,
+      "cell": "n1-c4-role",
+      "cohort_wall_seconds": 381,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 7,
+        "harness_error": 0,
+        "pass": 1,
+        "setup_failure": 0,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 202.0,
+        "mean": 181.3,
+        "median": 184.0,
+        "min": 157.7,
+        "n": 8,
+        "p90": 194.0
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {
+        "demote_laborer": 2,
+        "steer_miner": 5,
+        "steer_woodcutter": 3
+      },
+      "failure_rate_incl_timeouts": 0.875,
+      "finished_utc": "2026-08-22T04:07:15Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 0
+      },
+      "invocations": 4,
+      "mean_achieved_parallelism": 3.81,
+      "probe": "role",
+      "requested_attempts": 8,
+      "requested_concurrency": 4,
+      "rts_capabilities": 1,
+      "runs_per_invocation": 2,
+      "started_utc": "2026-08-22T04:00:54Z",
+      "tree_clean": "yes"
+    },
+    {
+      "achieved_peak_concurrency_all": [
+        4,
+        4,
+        4,
+        4
+      ],
+      "achieved_peak_concurrency_max": 4,
+      "achieved_peak_concurrency_min": 4,
+      "attempts": [
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 213.807, "index": 1, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 232.281, "index": 2, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 214.67, "index": 1, "invocation": "inv2.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 233.141, "index": 2, "invocation": "inv2.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 214.981, "index": 1, "invocation": "inv3.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 231.371, "index": 2, "invocation": "inv3.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 215.005, "index": 1, "invocation": "inv4.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 231.438, "index": 2, "invocation": "inv4.json", "outcome": "PASS"}
+      ],
+      "behavioral_failure_rate": 0.0,
+      "cell": "n1-c4-thermo_altitude",
+      "cohort_wall_seconds": 448,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 0,
+        "harness_error": 0,
+        "pass": 8,
+        "setup_failure": 0,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 233.1,
+        "mean": 223.3,
+        "median": 223.2,
+        "min": 213.8,
+        "n": 8,
+        "p90": 232.5
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {},
+      "failure_rate_incl_timeouts": 0.0,
+      "finished_utc": "2026-08-22T04:14:43Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 0
+      },
+      "invocations": 4,
+      "mean_achieved_parallelism": 3.99,
+      "probe": "thermo_altitude",
+      "requested_attempts": 8,
+      "requested_concurrency": 4,
+      "rts_capabilities": 1,
+      "runs_per_invocation": 2,
+      "started_utc": "2026-08-22T04:07:15Z",
+      "tree_clean": "yes"
+    },
+    {
+      "achieved_peak_concurrency_all": [
+        1
+      ],
+      "achieved_peak_concurrency_max": 1,
+      "achieved_peak_concurrency_min": 1,
+      "attempts": [
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 141.772, "index": 1, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 171.206, "index": 2, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 148.76, "index": 3, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/position_hold-20260822T023018Z-87890-1cae40ae/run-004", "class": "behavioral_failure", "elapsed_seconds": 182.768, "index": 4, "invocation": "inv1.json", "outcome": "FAIL"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 157.486, "index": 5, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 137.51, "index": 6, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 147.072, "index": 7, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 140.582, "index": 8, "invocation": "inv1.json", "outcome": "PASS"}
+      ],
+      "behavioral_failure_rate": 0.125,
+      "cell": "n4-c1-position_hold",
+      "cohort_wall_seconds": 1227,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 1,
+        "harness_error": 0,
+        "pass": 7,
+        "setup_failure": 0,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 182.8,
+        "mean": 153.4,
+        "median": 147.9,
+        "min": 137.5,
+        "n": 8,
+        "p90": 174.7
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {
+        "work_resumes": 1
+      },
+      "failure_rate_incl_timeouts": 0.125,
+      "finished_utc": "2026-08-22T02:50:45Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0
+      },
+      "invocations": 1,
+      "mean_achieved_parallelism": 1.0,
+      "probe": "position_hold",
+      "requested_attempts": 8,
+      "requested_concurrency": 1,
+      "rts_capabilities": 4,
+      "runs_per_invocation": 8,
+      "started_utc": "2026-08-22T02:30:18Z",
+      "tree_clean": "yes"
+    },
+    {
+      "achieved_peak_concurrency_all": [
+        1
+      ],
+      "achieved_peak_concurrency_max": 1,
+      "achieved_peak_concurrency_min": 1,
+      "attempts": [
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T015944Z-76527-26cda599/run-001", "class": "behavioral_failure", "elapsed_seconds": 128.62, "index": 1, "invocation": "inv1.json", "outcome": "FAIL"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 127.113, "index": 2, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T015944Z-76527-26cda599/run-003", "class": "behavioral_failure", "elapsed_seconds": 141.045, "index": 3, "invocation": "inv1.json", "outcome": "FAIL"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 174.651, "index": 4, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T015944Z-76527-26cda599/run-005", "class": "behavioral_failure", "elapsed_seconds": 151.723, "index": 5, "invocation": "inv1.json", "outcome": "FAIL"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T015944Z-76527-26cda599/run-006", "class": "behavioral_failure", "elapsed_seconds": 138.883, "index": 6, "invocation": "inv1.json", "outcome": "FAIL"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T015944Z-76527-26cda599/run-007", "class": "behavioral_failure", "elapsed_seconds": 163.062, "index": 7, "invocation": "inv1.json", "outcome": "FAIL"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T015944Z-76527-26cda599/run-008", "class": "behavioral_failure", "elapsed_seconds": 162.268, "index": 8, "invocation": "inv1.json", "outcome": "FAIL"}
+      ],
+      "behavioral_failure_rate": 0.75,
+      "cell": "n4-c1-role",
+      "cohort_wall_seconds": 1188,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 6,
+        "harness_error": 0,
+        "pass": 2,
+        "setup_failure": 0,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 174.7,
+        "mean": 148.4,
+        "median": 146.4,
+        "min": 127.1,
+        "n": 8,
+        "p90": 166.5
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {
+        "steer_miner": 4,
+        "steer_woodcutter": 2
+      },
+      "failure_rate_incl_timeouts": 0.75,
+      "finished_utc": "2026-08-22T02:19:32Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0
+      },
+      "invocations": 1,
+      "mean_achieved_parallelism": 1.0,
+      "probe": "role",
+      "requested_attempts": 8,
+      "requested_concurrency": 1,
+      "rts_capabilities": 4,
+      "runs_per_invocation": 8,
+      "started_utc": "2026-08-22T01:59:44Z",
+      "tree_clean": "yes"
+    },
+    {
+      "achieved_peak_concurrency_all": [
+        1
+      ],
+      "achieved_peak_concurrency_max": 1,
+      "achieved_peak_concurrency_min": 1,
+      "attempts": [
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 137.808, "index": 1, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T034133Z-36507-38c2c49f/run-002", "class": "behavioral_failure", "elapsed_seconds": 127.056, "index": 2, "invocation": "inv1.json", "outcome": "FAIL"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T034133Z-36507-38c2c49f/run-003", "class": "behavioral_failure", "elapsed_seconds": 175.535, "index": 3, "invocation": "inv1.json", "outcome": "FAIL"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 138.607, "index": 4, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T034133Z-36507-38c2c49f/run-005", "class": "behavioral_failure", "elapsed_seconds": 152.463, "index": 5, "invocation": "inv1.json", "outcome": "FAIL"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T034133Z-36507-38c2c49f/run-006", "class": "behavioral_failure", "elapsed_seconds": 146.441, "index": 6, "invocation": "inv1.json", "outcome": "FAIL"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 131.654, "index": 7, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T034133Z-36507-38c2c49f/run-008", "class": "behavioral_failure", "elapsed_seconds": 145.066, "index": 8, "invocation": "inv1.json", "outcome": "FAIL"}
+      ],
+      "behavioral_failure_rate": 0.625,
+      "cell": "n4-c1-role-retest",
+      "cohort_wall_seconds": 1155,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 5,
+        "harness_error": 0,
+        "pass": 3,
+        "setup_failure": 0,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 175.5,
+        "mean": 144.3,
+        "median": 141.8,
+        "min": 127.1,
+        "n": 8,
+        "p90": 159.4
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {
+        "demote_laborer": 2,
+        "steer_miner": 3,
+        "steer_woodcutter": 1
+      },
+      "failure_rate_incl_timeouts": 0.625,
+      "finished_utc": "2026-08-22T04:00:47Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0
+      },
+      "invocations": 1,
+      "mean_achieved_parallelism": 1.0,
+      "probe": "role",
+      "requested_attempts": 8,
+      "requested_concurrency": 1,
+      "rts_capabilities": 4,
+      "runs_per_invocation": 8,
+      "started_utc": "2026-08-22T03:41:32Z",
+      "tree_clean": "yes"
+    },
+    {
+      "achieved_peak_concurrency_all": [
+        1
+      ],
+      "achieved_peak_concurrency_max": 1,
+      "achieved_peak_concurrency_min": 1,
+      "attempts": [
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 79.978, "index": 1, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 82.187, "index": 2, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 80.797, "index": 3, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 80.404, "index": 4, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 80.686, "index": 5, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 80.346, "index": 6, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 80.521, "index": 7, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 80.491, "index": 8, "invocation": "inv1.json", "outcome": "PASS"}
+      ],
+      "behavioral_failure_rate": 0.0,
+      "cell": "n4-c1-thermo_altitude",
+      "cohort_wall_seconds": 645,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 0,
+        "harness_error": 0,
+        "pass": 8,
+        "setup_failure": 0,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 82.2,
+        "mean": 80.7,
+        "median": 80.5,
+        "min": 80.0,
+        "n": 8,
+        "p90": 81.2
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {},
+      "failure_rate_incl_timeouts": 0.0,
+      "finished_utc": "2026-08-22T02:30:17Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0
+      },
+      "invocations": 1,
+      "mean_achieved_parallelism": 1.0,
+      "probe": "thermo_altitude",
+      "requested_attempts": 8,
+      "requested_concurrency": 1,
+      "rts_capabilities": 4,
+      "runs_per_invocation": 8,
+      "started_utc": "2026-08-22T02:19:32Z",
+      "tree_clean": "yes"
+    },
+    {
+      "achieved_peak_concurrency_all": [
+        2,
+        2
+      ],
+      "achieved_peak_concurrency_max": 2,
+      "achieved_peak_concurrency_min": 2,
+      "attempts": [
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 170.984, "index": 1, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 146.966, "index": 2, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/position_hold-20260822T030649Z-96343-ef507954/run-003", "class": "behavioral_failure", "elapsed_seconds": 183.206, "index": 3, "invocation": "inv1.json", "outcome": "FAIL"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 145.546, "index": 4, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 163.376, "index": 1, "invocation": "inv2.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 140.908, "index": 2, "invocation": "inv2.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 147.751, "index": 3, "invocation": "inv2.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 145.908, "index": 4, "invocation": "inv2.json", "outcome": "PASS"}
+      ],
+      "behavioral_failure_rate": 0.125,
+      "cell": "n4-c2-position_hold",
+      "cohort_wall_seconds": 647,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 1,
+        "harness_error": 0,
+        "pass": 7,
+        "setup_failure": 0,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 183.2,
+        "mean": 155.6,
+        "median": 147.4,
+        "min": 140.9,
+        "n": 8,
+        "p90": 174.7
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {
+        "work_resumes": 1
+      },
+      "failure_rate_incl_timeouts": 0.125,
+      "finished_utc": "2026-08-22T03:17:36Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0,
+        "2": 0
+      },
+      "invocations": 2,
+      "mean_achieved_parallelism": 1.92,
+      "probe": "position_hold",
+      "requested_attempts": 8,
+      "requested_concurrency": 2,
+      "rts_capabilities": 4,
+      "runs_per_invocation": 4,
+      "started_utc": "2026-08-22T03:06:49Z",
+      "tree_clean": "yes"
+    },
+    {
+      "achieved_peak_concurrency_all": [
+        2,
+        2
+      ],
+      "achieved_peak_concurrency_max": 2,
+      "achieved_peak_concurrency_min": 2,
+      "attempts": [
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T025045Z-45765-1e75e5f4/run-001", "class": "behavioral_failure", "elapsed_seconds": 135.463, "index": 1, "invocation": "inv1.json", "outcome": "FAIL"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 128.581, "index": 2, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T025045Z-45765-1e75e5f4/run-003", "class": "behavioral_failure", "elapsed_seconds": 143.182, "index": 3, "invocation": "inv1.json", "outcome": "FAIL"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T025045Z-45765-1e75e5f4/run-004", "class": "behavioral_failure", "elapsed_seconds": 170.846, "index": 4, "invocation": "inv1.json", "outcome": "FAIL"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T025045Z-45766-86cfdc9a/run-001", "class": "behavioral_failure", "elapsed_seconds": 164.551, "index": 1, "invocation": "inv2.json", "outcome": "FAIL"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T025045Z-45766-86cfdc9a/run-002", "class": "behavioral_failure", "elapsed_seconds": 143.497, "index": 2, "invocation": "inv2.json", "outcome": "FAIL"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T025045Z-45766-86cfdc9a/run-003", "class": "behavioral_failure", "elapsed_seconds": 155.726, "index": 3, "invocation": "inv2.json", "outcome": "FAIL"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T025045Z-45766-86cfdc9a/run-004", "class": "behavioral_failure", "elapsed_seconds": 142.141, "index": 4, "invocation": "inv2.json", "outcome": "FAIL"}
+      ],
+      "behavioral_failure_rate": 0.875,
+      "cell": "n4-c2-role",
+      "cohort_wall_seconds": 606,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 7,
+        "harness_error": 0,
+        "pass": 1,
+        "setup_failure": 0,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 170.8,
+        "mean": 148.0,
+        "median": 143.3,
+        "min": 128.6,
+        "n": 8,
+        "p90": 166.4
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {
+        "demote_laborer": 5,
+        "steer_miner": 4
+      },
+      "failure_rate_incl_timeouts": 0.875,
+      "finished_utc": "2026-08-22T03:00:51Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0,
+        "2": 0
+      },
+      "invocations": 2,
+      "mean_achieved_parallelism": 1.95,
+      "probe": "role",
+      "requested_attempts": 8,
+      "requested_concurrency": 2,
+      "rts_capabilities": 4,
+      "runs_per_invocation": 4,
+      "started_utc": "2026-08-22T02:50:45Z",
+      "tree_clean": "yes"
+    },
+    {
+      "achieved_peak_concurrency_all": [
+        2,
+        2
+      ],
+      "achieved_peak_concurrency_max": 2,
+      "achieved_peak_concurrency_min": 2,
+      "attempts": [
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 88.358, "index": 1, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 88.04, "index": 2, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 87.745, "index": 3, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 93.136, "index": 4, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 88.578, "index": 1, "invocation": "inv2.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 88.094, "index": 2, "invocation": "inv2.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 87.254, "index": 3, "invocation": "inv2.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 91.09, "index": 4, "invocation": "inv2.json", "outcome": "PASS"}
+      ],
+      "behavioral_failure_rate": 0.0,
+      "cell": "n4-c2-thermo_altitude",
+      "cohort_wall_seconds": 358,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 0,
+        "harness_error": 0,
+        "pass": 8,
+        "setup_failure": 0,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 93.1,
+        "mean": 89.0,
+        "median": 88.2,
+        "min": 87.3,
+        "n": 8,
+        "p90": 91.7
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {},
+      "failure_rate_incl_timeouts": 0.0,
+      "finished_utc": "2026-08-22T03:06:49Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0,
+        "2": 0
+      },
+      "invocations": 2,
+      "mean_achieved_parallelism": 1.99,
+      "probe": "thermo_altitude",
+      "requested_attempts": 8,
+      "requested_concurrency": 2,
+      "rts_capabilities": 4,
+      "runs_per_invocation": 4,
+      "started_utc": "2026-08-22T03:00:51Z",
+      "tree_clean": "yes"
+    },
+    {
+      "achieved_peak_concurrency_all": [
+        4,
+        4,
+        4,
+        4
+      ],
+      "achieved_peak_concurrency_max": 4,
+      "achieved_peak_concurrency_min": 4,
+      "attempts": [
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 163.794, "index": 1, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 173.936, "index": 2, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 155.441, "index": 1, "invocation": "inv2.json", "outcome": "PASS"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/position_hold-20260822T032618Z-91397-0eb862fa/run-002", "class": "behavioral_failure", "elapsed_seconds": 154.859, "index": 2, "invocation": "inv2.json", "outcome": "FAIL"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 157.729, "index": 1, "invocation": "inv3.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 144.773, "index": 2, "invocation": "inv3.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 163.686, "index": 1, "invocation": "inv4.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 133.873, "index": 2, "invocation": "inv4.json", "outcome": "PASS"}
+      ],
+      "behavioral_failure_rate": 0.125,
+      "cell": "n4-c4-position_hold",
+      "cohort_wall_seconds": 338,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 1,
+        "harness_error": 0,
+        "pass": 7,
+        "setup_failure": 0,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 173.9,
+        "mean": 156.0,
+        "median": 156.6,
+        "min": 133.9,
+        "n": 8,
+        "p90": 166.8
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {
+        "control_works": 1
+      },
+      "failure_rate_incl_timeouts": 0.125,
+      "finished_utc": "2026-08-22T03:31:56Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 0
+      },
+      "invocations": 4,
+      "mean_achieved_parallelism": 3.69,
+      "probe": "position_hold",
+      "requested_attempts": 8,
+      "requested_concurrency": 4,
+      "rts_capabilities": 4,
+      "runs_per_invocation": 2,
+      "started_utc": "2026-08-22T03:26:18Z",
+      "tree_clean": "yes"
+    },
+    {
+      "achieved_peak_concurrency_all": [
+        4,
+        4,
+        4,
+        4
+      ],
+      "achieved_peak_concurrency_max": 4,
+      "achieved_peak_concurrency_min": 4,
+      "attempts": [
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T031736Z-44115-b5802337/run-001", "class": "behavioral_failure", "elapsed_seconds": 167.151, "index": 1, "invocation": "inv1.json", "outcome": "FAIL"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 133.184, "index": 2, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T031736Z-44116-7b2c40a5/run-001", "class": "behavioral_failure", "elapsed_seconds": 153.611, "index": 1, "invocation": "inv2.json", "outcome": "FAIL"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T031736Z-44116-7b2c40a5/run-002", "class": "behavioral_failure", "elapsed_seconds": 150.964, "index": 2, "invocation": "inv2.json", "outcome": "FAIL"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T031736Z-44117-6b45bc25/run-001", "class": "behavioral_failure", "elapsed_seconds": 146.351, "index": 1, "invocation": "inv3.json", "outcome": "FAIL"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 148.223, "index": 2, "invocation": "inv3.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 140.768, "index": 1, "invocation": "inv4.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 126.027, "index": 2, "invocation": "inv4.json", "outcome": "PASS"}
+      ],
+      "behavioral_failure_rate": 0.5,
+      "cell": "n4-c4-role",
+      "cohort_wall_seconds": 305,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 4,
+        "harness_error": 0,
+        "pass": 4,
+        "setup_failure": 0,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 167.2,
+        "mean": 145.8,
+        "median": 147.3,
+        "min": 126.0,
+        "n": 8,
+        "p90": 157.7
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {
+        "demote_laborer": 1,
+        "steer_miner": 4,
+        "steer_woodcutter": 1
+      },
+      "failure_rate_incl_timeouts": 0.5,
+      "finished_utc": "2026-08-22T03:22:41Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 0
+      },
+      "invocations": 4,
+      "mean_achieved_parallelism": 3.82,
+      "probe": "role",
+      "requested_attempts": 8,
+      "requested_concurrency": 4,
+      "rts_capabilities": 4,
+      "runs_per_invocation": 2,
+      "started_utc": "2026-08-22T03:17:36Z",
+      "tree_clean": "yes"
+    },
+    {
+      "achieved_peak_concurrency_all": [
+        4,
+        4,
+        4,
+        4
+      ],
+      "achieved_peak_concurrency_max": 4,
+      "achieved_peak_concurrency_min": 4,
+      "attempts": [
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 109.12, "index": 1, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 106.253, "index": 2, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 110.435, "index": 1, "invocation": "inv2.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 105.0, "index": 2, "invocation": "inv2.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 109.06, "index": 1, "invocation": "inv3.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 108.279, "index": 2, "invocation": "inv3.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 107.347, "index": 1, "invocation": "inv4.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 103.256, "index": 2, "invocation": "inv4.json", "outcome": "PASS"}
+      ],
+      "behavioral_failure_rate": 0.0,
+      "cell": "n4-c4-thermo_altitude",
+      "cohort_wall_seconds": 217,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 0,
+        "harness_error": 0,
+        "pass": 8,
+        "setup_failure": 0,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 110.4,
+        "mean": 107.3,
+        "median": 107.8,
+        "min": 103.3,
+        "n": 8,
+        "p90": 109.5
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {},
+      "failure_rate_incl_timeouts": 0.0,
+      "finished_utc": "2026-08-22T03:26:18Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 0
+      },
+      "invocations": 4,
+      "mean_achieved_parallelism": 3.96,
+      "probe": "thermo_altitude",
+      "requested_attempts": 8,
+      "requested_concurrency": 4,
+      "rts_capabilities": 4,
+      "runs_per_invocation": 2,
+      "started_utc": "2026-08-22T03:22:41Z",
+      "tree_clean": "yes"
+    },
+    {
+      "achieved_peak_concurrency_all": [
+        8,
+        8,
+        7,
+        8,
+        8,
+        3,
+        8,
+        8
+      ],
+      "achieved_peak_concurrency_max": 8,
+      "achieved_peak_concurrency_min": 3,
+      "attempts": [
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 157.963, "index": 1, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 156.553, "index": 1, "invocation": "inv2.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 148.913, "index": 1, "invocation": "inv3.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 136.835, "index": 1, "invocation": "inv4.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 170.637, "index": 1, "invocation": "inv5.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 174.011, "index": 1, "invocation": "inv6.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 160.558, "index": 1, "invocation": "inv7.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 149.954, "index": 1, "invocation": "inv8.json", "outcome": "PASS"}
+      ],
+      "behavioral_failure_rate": 0.0,
+      "cell": "n4-c8-position_hold",
+      "cohort_wall_seconds": 174,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 0,
+        "harness_error": 0,
+        "pass": 8,
+        "setup_failure": 0,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 174.0,
+        "mean": 156.9,
+        "median": 157.3,
+        "min": 136.8,
+        "n": 8,
+        "p90": 171.6
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {},
+      "failure_rate_incl_timeouts": 0.0,
+      "finished_utc": "2026-08-22T03:41:32Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 0,
+        "5": 0,
+        "6": 0,
+        "7": 0,
+        "8": 0
+      },
+      "invocations": 8,
+      "mean_achieved_parallelism": 7.22,
+      "probe": "position_hold",
+      "requested_attempts": 8,
+      "requested_concurrency": 8,
+      "rts_capabilities": 4,
+      "runs_per_invocation": 1,
+      "started_utc": "2026-08-22T03:38:38Z",
+      "tree_clean": "yes"
+    },
+    {
+      "achieved_peak_concurrency_all": [
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8
+      ],
+      "achieved_peak_concurrency_max": 8,
+      "achieved_peak_concurrency_min": 8,
+      "attempts": [
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 181.84, "index": 1, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T033157Z-29938-50540ddc/run-001", "class": "behavioral_failure", "elapsed_seconds": 150.538, "index": 1, "invocation": "inv2.json", "outcome": "FAIL"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 169.818, "index": 1, "invocation": "inv3.json", "outcome": "PASS"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T033157Z-29940-ad81facd/run-001", "class": "behavioral_failure", "elapsed_seconds": 161.46, "index": 1, "invocation": "inv4.json", "outcome": "FAIL"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 194.531, "index": 1, "invocation": "inv5.json", "outcome": "PASS"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T033157Z-29942-f934be4d/run-001", "class": "behavioral_failure", "elapsed_seconds": 180.983, "index": 1, "invocation": "inv6.json", "outcome": "FAIL"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 154.758, "index": 1, "invocation": "inv7.json", "outcome": "PASS"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T033157Z-29944-afdd8992/run-001", "class": "behavioral_failure", "elapsed_seconds": 164.349, "index": 1, "invocation": "inv8.json", "outcome": "FAIL"}
+      ],
+      "behavioral_failure_rate": 0.5,
+      "cell": "n4-c8-role",
+      "cohort_wall_seconds": 195,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 4,
+        "harness_error": 0,
+        "pass": 4,
+        "setup_failure": 0,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 194.5,
+        "mean": 169.8,
+        "median": 167.1,
+        "min": 150.5,
+        "n": 8,
+        "p90": 185.6
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {
+        "demote_laborer": 1,
+        "steer_miner": 3
+      },
+      "failure_rate_incl_timeouts": 0.5,
+      "finished_utc": "2026-08-22T03:35:11Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 0,
+        "5": 0,
+        "6": 0,
+        "7": 0,
+        "8": 0
+      },
+      "invocations": 8,
+      "mean_achieved_parallelism": 6.97,
+      "probe": "role",
+      "requested_attempts": 8,
+      "requested_concurrency": 8,
+      "rts_capabilities": 4,
+      "runs_per_invocation": 1,
+      "started_utc": "2026-08-22T03:31:56Z",
+      "tree_clean": "yes"
+    },
+    {
+      "achieved_peak_concurrency_all": [
+        7,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8
+      ],
+      "achieved_peak_concurrency_max": 8,
+      "achieved_peak_concurrency_min": 7,
+      "attempts": [
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 203.618, "index": 1, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 204.534, "index": 1, "invocation": "inv2.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 193.059, "index": 1, "invocation": "inv3.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 206.413, "index": 1, "invocation": "inv4.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 193.49, "index": 1, "invocation": "inv5.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 194.819, "index": 1, "invocation": "inv6.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 203.65, "index": 1, "invocation": "inv7.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 206.032, "index": 1, "invocation": "inv8.json", "outcome": "PASS"}
+      ],
+      "behavioral_failure_rate": 0.0,
+      "cell": "n4-c8-thermo_altitude",
+      "cohort_wall_seconds": 207,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 0,
+        "harness_error": 0,
+        "pass": 8,
+        "setup_failure": 0,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 206.4,
+        "mean": 200.7,
+        "median": 203.6,
+        "min": 193.1,
+        "n": 8,
+        "p90": 206.1
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {},
+      "failure_rate_incl_timeouts": 0.0,
+      "finished_utc": "2026-08-22T03:38:38Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 0,
+        "5": 0,
+        "6": 0,
+        "7": 0,
+        "8": 0
+      },
+      "invocations": 8,
+      "mean_achieved_parallelism": 7.76,
+      "probe": "thermo_altitude",
+      "requested_attempts": 8,
+      "requested_concurrency": 8,
+      "rts_capabilities": 4,
+      "runs_per_invocation": 1,
+      "started_utc": "2026-08-22T03:35:11Z",
+      "tree_clean": "yes"
+    },
+    {
+      "achieved_peak_concurrency_all": [
+        1
+      ],
+      "achieved_peak_concurrency_max": 1,
+      "achieved_peak_concurrency_min": 1,
+      "attempts": [
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 65.786, "index": 1, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 69.702, "index": 2, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 79.184, "index": 3, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 93.727, "index": 4, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 79.32, "index": 5, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 67.99, "index": 6, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 67.358, "index": 7, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 65.444, "index": 8, "invocation": "inv1.json", "outcome": "PASS"}
+      ],
+      "behavioral_failure_rate": 0.0,
+      "cell": "n8-c1-thermo_altitude",
+      "cohort_wall_seconds": 588,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 0,
+        "harness_error": 0,
+        "pass": 8,
+        "setup_failure": 0,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 93.7,
+        "mean": 73.6,
+        "median": 68.8,
+        "min": 65.4,
+        "n": 8,
+        "p90": 83.6
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {},
+      "failure_rate_incl_timeouts": 0.0,
+      "finished_utc": "2026-08-22T05:10:50Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0
+      },
+      "invocations": 1,
+      "mean_achieved_parallelism": 1.0,
+      "probe": "thermo_altitude",
+      "requested_attempts": 8,
+      "requested_concurrency": 1,
+      "rts_capabilities": 8,
+      "runs_per_invocation": 8,
+      "started_utc": "2026-08-22T05:01:02Z",
+      "tree_clean": "yes"
+    },
+    {
+      "achieved_peak_concurrency_all": [
+        4,
+        4,
+        4,
+        4
+      ],
+      "achieved_peak_concurrency_max": 4,
+      "achieved_peak_concurrency_min": 4,
+      "attempts": [
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 166.916, "index": 1, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 148.834, "index": 2, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 143.235, "index": 1, "invocation": "inv2.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 157.258, "index": 2, "invocation": "inv2.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 189.954, "index": 1, "invocation": "inv3.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 140.733, "index": 2, "invocation": "inv3.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 136.838, "index": 1, "invocation": "inv4.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 159.23, "index": 2, "invocation": "inv4.json", "outcome": "PASS"}
+      ],
+      "behavioral_failure_rate": 0.0,
+      "cell": "n8-c4-position_hold",
+      "cohort_wall_seconds": 331,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 0,
+        "harness_error": 0,
+        "pass": 8,
+        "setup_failure": 0,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 190.0,
+        "mean": 155.4,
+        "median": 153.0,
+        "min": 136.8,
+        "n": 8,
+        "p90": 173.8
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {},
+      "failure_rate_incl_timeouts": 0.0,
+      "finished_utc": "2026-08-22T04:35:51Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 0
+      },
+      "invocations": 4,
+      "mean_achieved_parallelism": 3.76,
+      "probe": "position_hold",
+      "requested_attempts": 8,
+      "requested_concurrency": 4,
+      "rts_capabilities": 8,
+      "runs_per_invocation": 2,
+      "started_utc": "2026-08-22T04:30:20Z",
+      "tree_clean": "yes"
+    },
+    {
+      "achieved_peak_concurrency_all": [
+        4,
+        4,
+        4,
+        4
+      ],
+      "achieved_peak_concurrency_max": 4,
+      "achieved_peak_concurrency_min": 4,
+      "attempts": [
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 157.508, "index": 1, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 149.416, "index": 2, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T041947Z-8707-1ed41ba9/run-001", "class": "behavioral_failure", "elapsed_seconds": 166.14, "index": 1, "invocation": "inv2.json", "outcome": "FAIL"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T041947Z-8707-1ed41ba9/run-002", "class": "behavioral_failure", "elapsed_seconds": 159.624, "index": 2, "invocation": "inv2.json", "outcome": "FAIL"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T041947Z-8708-a9bd1213/run-001", "class": "behavioral_failure", "elapsed_seconds": 146.349, "index": 1, "invocation": "inv3.json", "outcome": "FAIL"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 152.928, "index": 2, "invocation": "inv3.json", "outcome": "PASS"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T041947Z-8709-3ac91753/run-001", "class": "behavioral_failure", "elapsed_seconds": 158.823, "index": 1, "invocation": "inv4.json", "outcome": "FAIL"},
+        {"artifact_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/role-20260822T041947Z-8709-3ac91753/run-002", "class": "behavioral_failure", "elapsed_seconds": 185.806, "index": 2, "invocation": "inv4.json", "outcome": "FAIL"}
+      ],
+      "behavioral_failure_rate": 0.625,
+      "cell": "n8-c4-role",
+      "cohort_wall_seconds": 344,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 5,
+        "harness_error": 0,
+        "pass": 3,
+        "setup_failure": 0,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 185.8,
+        "mean": 159.6,
+        "median": 158.2,
+        "min": 146.3,
+        "n": 8,
+        "p90": 172.0
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {
+        "demote_laborer": 2,
+        "steer_miner": 4,
+        "steer_woodcutter": 1
+      },
+      "failure_rate_incl_timeouts": 0.625,
+      "finished_utc": "2026-08-22T04:25:31Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 0
+      },
+      "invocations": 4,
+      "mean_achieved_parallelism": 3.71,
+      "probe": "role",
+      "requested_attempts": 8,
+      "requested_concurrency": 4,
+      "rts_capabilities": 8,
+      "runs_per_invocation": 2,
+      "started_utc": "2026-08-22T04:19:47Z",
+      "tree_clean": "yes"
+    },
+    {
+      "achieved_peak_concurrency_all": [
+        4,
+        4,
+        4,
+        4
+      ],
+      "achieved_peak_concurrency_max": 4,
+      "achieved_peak_concurrency_min": 4,
+      "attempts": [
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 154.457, "index": 1, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 126.363, "index": 2, "invocation": "inv1.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 160.241, "index": 1, "invocation": "inv2.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 126.791, "index": 2, "invocation": "inv2.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 158.666, "index": 1, "invocation": "inv3.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 129.12, "index": 2, "invocation": "inv3.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 160.214, "index": 1, "invocation": "inv4.json", "outcome": "PASS"},
+        {"artifact_dir": null, "class": "pass", "elapsed_seconds": 128.267, "index": 2, "invocation": "inv4.json", "outcome": "PASS"}
+      ],
+      "behavioral_failure_rate": 0.0,
+      "cell": "n8-c4-thermo_altitude",
+      "cohort_wall_seconds": 288,
+      "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+      "completed_attempts": 8,
+      "counts": {
+        "behavioral_failure": 0,
+        "harness_error": 0,
+        "pass": 8,
+        "setup_failure": 0,
+        "timeout": 0
+      },
+      "elapsed_noncensored": {
+        "max": 160.2,
+        "mean": 143.0,
+        "median": 141.8,
+        "min": 126.4,
+        "n": 8,
+        "p90": 160.2
+      },
+      "elapsed_timeouts_censored": [],
+      "failed_checks": {},
+      "failure_rate_incl_timeouts": 0.0,
+      "finished_utc": "2026-08-22T04:30:20Z",
+      "infrastructure_signatures": {},
+      "invocation_exit_codes": {
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 0
+      },
+      "invocations": 4,
+      "mean_achieved_parallelism": 3.97,
+      "probe": "thermo_altitude",
+      "requested_attempts": 8,
+      "requested_concurrency": 4,
+      "rts_capabilities": 8,
+      "runs_per_invocation": 2,
+      "started_utc": "2026-08-22T04:25:32Z",
+      "tree_clean": "yes"
+    }
+  ]
+}

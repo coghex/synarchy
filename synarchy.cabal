@@ -303,7 +303,7 @@ library
                      Engine.Scripting.Lua.API.Input
                      Engine.Scripting.Lua.API.Keybinds
                      Engine.Scripting.Lua.API.Text
-                     Engine.Scripting.Lua.API.Focus
+                     Engine.Scripting.Lua.API.ShellFocus
                      Engine.Scripting.Lua.API.Shell
                      Engine.Scripting.Lua.API.UI
                      Engine.Scripting.Lua.API.UI.Page
@@ -416,7 +416,7 @@ library
                      Engine.Loop.Shutdown
                      UI
                      UI.Types
-                     UI.Focus
+                     UI.ShellFocus
                      UI.InputOwnership
                      UI.ControlActivation
                      UI.FocusNavigation
@@ -466,6 +466,7 @@ library
                      Unit.Pathing.Hazard
                      Unit.Pathing.Cost
                      Unit.Pathing.AStar
+                     Unit.Physics
                      Unit.Fall
                      Unit.Injury
                      Unit.Command.Types
@@ -544,6 +545,7 @@ library
                      Engine.Scripting.Lua.API.Craft.Recipe
                      Engine.Scripting.Lua.API.Craft.Execute
                      Engine.Scripting.Lua.API.Craft.Bill
+                     Power.Base
                      Power.Types
                      Power.Live
                      Power.Network
@@ -777,7 +779,6 @@ library
                      World.Hydrology.River.Meander
                      World.Hydrology.River.Tributary
                      World.Hydrology.River.Carving
-                     World.Hydrology.River.Common
                      World.Hydrology.Glacier
                      World.Hydrology.Glacier.Common
                      World.Hydrology.Glacier.Generation
@@ -1221,6 +1222,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Render.WaterSlope
                    Test.Headless.World.Render.ZoomBakeUV
                    Test.Headless.Render.ViewportGuard
+                   Test.Headless.Render.QuadVertices
                    Test.Headless.Core.ConfigState
                    Test.Headless.Core.Queue
                    Test.Headless.Core.DebugListener

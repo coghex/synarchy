@@ -96,9 +96,16 @@ import Unit.Faction (factionFromTag, factionTag, parseFaction)
 import Unit.Sim.Types (UnitSimState(..))
 import Item.Types (ItemInstance(..))
 
--- | 4-byte magic prefix on every save file. Spells "SYRA"
---   (Synarchy) in little-endian. Detects "this isn't a save file"
---   before we even try to decode the version field.
+-- | 4-byte magic prefix of the pre-#759 flat save file. Spells
+--   "SYRA" (Synarchy) in little-endian. Detects "this isn't a save
+--   file" before we even try to decode the version field.
+--
+--   Kept exported with no code consumer (#1119): it is the referent
+--   "World.Save.Envelope.Types" cites to explain why
+--   'World.Save.Envelope.Types.envelopeMagic' repeats the same value
+--   rather than importing it, and it documents the header triple
+--   alongside 'SaveHeader' — itself retained for
+--   @tools\/persistence_inventory_audit.py@'s root-owner record.
 saveMagic ∷ Word32
 saveMagic = 0x53595241
 
@@ -109,6 +116,10 @@ saveMagic = 0x53595241
 --   carries its own version and migrations for that
 --   ("World.Save.Envelope", "docs/persistence_contract.md"). Per-bump
 --   history up to v91: "docs/history/savedata_version_changelog.md".
+--
+--   Kept exported with no code consumer (#1119): @CLAUDE.md@ and
+--   @docs\/persistence_contract.md@ both instruct maintainers to bump
+--   it, so it is a documented maintainer-facing marker, not dead code.
 currentSaveVersion ∷ Int
 currentSaveVersion = 93
 

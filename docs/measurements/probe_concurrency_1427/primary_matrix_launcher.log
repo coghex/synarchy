@@ -1,0 +1,73 @@
+=== START 01:59:44 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c1-role
+inv1 exit=0
+=== END   02:19:32 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c1-role
+=== START 02:19:32 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c1-thermo_altitude
+inv1 exit=0
+=== END   02:30:17 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c1-thermo_altitude
+=== START 02:30:17 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c1-position_hold
+inv1 exit=0
+=== END   02:50:45 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c1-position_hold
+=== START 02:50:45 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c2-role
+inv1 exit=0
+inv2 exit=0
+=== END   03:00:51 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c2-role
+=== START 03:00:51 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c2-thermo_altitude
+inv1 exit=0
+inv2 exit=0
+=== END   03:06:49 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c2-thermo_altitude
+=== START 03:06:49 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c2-position_hold
+inv1 exit=0
+inv2 exit=0
+=== END   03:17:36 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c2-position_hold
+=== START 03:17:36 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c4-role
+inv1 exit=0
+inv2 exit=0
+inv3 exit=0
+inv4 exit=0
+=== END   03:22:41 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c4-role
+=== START 03:22:41 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c4-thermo_altitude
+inv1 exit=0
+inv2 exit=0
+inv3 exit=0
+inv4 exit=0
+=== END   03:26:18 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c4-thermo_altitude
+=== START 03:26:18 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c4-position_hold
+inv1 exit=0
+inv2 exit=0
+inv3 exit=0
+inv4 exit=0
+=== END   03:31:56 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c4-position_hold
+=== START 03:31:56 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c8-role
+inv1 exit=0
+inv2 exit=0
+inv3 exit=0
+inv4 exit=0
+inv5 exit=0
+inv6 exit=0
+inv7 exit=0
+inv8 exit=0
+=== END   03:35:11 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c8-role
+=== START 03:35:11 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c8-thermo_altitude
+inv1 exit=0
+inv2 exit=0
+inv3 exit=0
+inv4 exit=0
+inv5 exit=0
+inv6 exit=0
+inv7 exit=0
+inv8 exit=0
+=== END   03:38:38 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c8-thermo_altitude
+=== START 03:38:38 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c8-position_hold
+inv1 exit=0
+inv2 exit=0
+inv3 exit=0
+inv4 exit=0
+inv5 exit=0
+inv6 exit=0
+inv7 exit=0
+inv8 exit=0
+=== END   03:41:32 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c8-position_hold
+=== START 03:41:32 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c1-role-retest
+inv1 exit=0
+=== END   04:00:47 /private/tmp/claude-501/-Users-vincentcoghlan-work-synarchy/7e4e0aba-34bc-4ba4-b68b-11d128d00797/scratchpad/cohorts/n4-c1-role-retest
+PRIMARY MATRIX COMPLETE 2026-08-22T04:00:47Z

@@ -1,4 +1,14 @@
-module Engine.Scripting.Lua.API.Focus
+-- | Lua bindings for SHELL\/CONSOLE text-input focus — the
+--   @engine.registerFocusable@, @engine.requestFocus@,
+--   @engine.releaseFocus@, @engine.getFocusId@ family, which drives
+--   "UI.ShellFocus"'s 'UI.ShellFocus.FocusManager' through
+--   @uicFocusManagerRef@. Its only consumer is @scripts\/shell.lua@'s
+--   debug-console input line.
+--
+--   This is NOT the game-UI focus binding: element TEXT focus and
+--   keyboard CONTROL focus are exposed as the @UI.*@ family in
+--   "Engine.Scripting.Lua.API.UI.Focus" over 'UI.Types.UIPageManager'.
+module Engine.Scripting.Lua.API.ShellFocus
   ( registerFocusableFn
   , requestFocusFn
   , releaseFocusFn
@@ -8,7 +18,7 @@ module Engine.Scripting.Lua.API.Focus
 import UPrelude
 import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
-import UI.Focus (FocusId(..), registerFocusTarget, setFocus, clearFocus, fmCurrentFocus)
+import UI.ShellFocus (FocusId(..), registerFocusTarget, setFocus, clearFocus, fmCurrentFocus)
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
 

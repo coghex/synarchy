@@ -1,0 +1,31 @@
+# Per-invocation launch progress captured from each `probe_flake.py`
+# invocation's stderr: one line per attempt, naming the invocation,
+# the run index within it, and the port it leased. This is the part of
+# the launcher capture that is NOT already in the result documents.
+# The rendered result tables the same invocations printed on stdout are
+# omitted here because every value in them is in `inv<i>.json` beside
+# this file; see the README.
+
+===== inv1 =====
+[1/1] thermo_altitude on port 8009 ...
+
+===== inv2 =====
+[1/1] thermo_altitude on port 8016 ...
+
+===== inv3 =====
+[1/1] thermo_altitude on port 8014 ...
+
+===== inv4 =====
+[1/1] thermo_altitude on port 8010 ...
+
+===== inv5 =====
+[1/1] thermo_altitude on port 8012 ...
+
+===== inv6 =====
+[1/1] thermo_altitude on port 8011 ...
+
+===== inv7 =====
+[1/1] thermo_altitude on port 8013 ...
+
+===== inv8 =====
+[1/1] thermo_altitude on port 8015 ...

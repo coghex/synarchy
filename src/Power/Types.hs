@@ -7,6 +7,12 @@
 --   capacity Wh). Mirrors 'Craft.Bills': a per-world, id-keyed registry
 --   persisted as its own 'WorldPageSave' field.
 --
+--   WHICH buildings mint a node is no longer decided here: since #1148
+--   a def declares its own 'Building.Types.bdPowerNode' in
+--   @data/buildings/*.yaml@, and 'powerNodeRole' is all that remains of
+--   the old hardcoded name catalogue. Adding a power device is content
+--   work; only a genuinely new ROLE would touch this module.
+--
 --   That authority is honoured at BOTH ends of a node's life: placement
 --   spawns the building and registers the node together
 --   (@power.placeNode@), and demolition retires the node inside the same
@@ -30,7 +36,7 @@ module Power.Types
     , PowerNode(..)
     , PowerNodes(..)
     , emptyPowerNodes
-    , powerNodeSpecFor
+    , powerNodeRole
     , addPowerNode
     , removePowerNode
     , lookupPowerNode
@@ -45,6 +51,7 @@ import Data.List (find, sortOn)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import Building.Types (BuildingId(..))
+import Power.Base (PowerNodeSpec(..))
 
 -- | What a placed power node does on its future network. Sources
 --   generate (scaled by time-of-day, #360); storage banks charge and
@@ -88,14 +95,15 @@ data PowerNodes = PowerNodes
 emptyPowerNodes ∷ PowerNodes
 emptyPowerNodes = PowerNodes HM.empty 1
 
--- | The fixed catalogue of placeable power items: item def name → the
---   node role + its one meaningful parameter (peak watts for a source,
---   capacity Wh for storage). #358's whole placeable set; a future
---   power item just adds a case here, no other wiring changes.
-powerNodeSpecFor ∷ Text → Maybe (PowerRole, Float)
-powerNodeSpecFor "solar_panel"          = Just (PowerSource,  400)
-powerNodeSpecFor "high_voltage_battery" = Just (PowerStorage, 5000)
-powerNodeSpecFor _                      = Nothing
+-- | The runtime role a declared 'PowerNodeSpec' mints. The one
+--   mapping between the editable content vocabulary
+--   ('Power.Base.PowerNodeSpec', off the building def's YAML) and this
+--   module's frozen, positionally-serialized 'PowerRole' (#1148) —
+--   which is why the two are separate types: growing the YAML
+--   vocabulary must not touch a save-wire enum.
+powerNodeRole ∷ PowerNodeSpec → PowerRole
+powerNodeRole (PowerNodeSource  _) = PowerSource
+powerNodeRole (PowerNodeStorage _) = PowerStorage
 
 -- | Register a new node riding an already-placed building. A freshly
 --   placed battery starts empty (pnStoredWh = 0) — it charges up from

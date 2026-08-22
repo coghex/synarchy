@@ -84,7 +84,6 @@ module World.Save.Component.Types
     , atVersion
     , olderVersionTableError
     , componentCodec
-    , decodeComponentValue
     , findDescriptor
     , applyPageSlices
       -- * Stable component identifiers

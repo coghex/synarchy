@@ -13,7 +13,6 @@
 -- snappy when commands arrive.
 module Combat.Thread
     ( startCombatThread
-    , combatTickRate
     ) where
 
 import UPrelude

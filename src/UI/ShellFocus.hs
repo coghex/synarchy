@@ -1,4 +1,25 @@
-module UI.Focus
+-- | Shell\/console TEXT-input focus — the 'FocusManager' system, which
+--   decides whether typed keys reach the debug console's input line
+--   ('scripts\/shell.lua', the sole consumer of the
+--   @engine.registerFocusable@\/@engine.requestFocus@\/@engine.releaseFocus@
+--   bindings in "Engine.Scripting.Lua.API.ShellFocus") or fall through
+--   to the game. It is one of THREE focus systems and touches neither
+--   of the other two:
+--
+--     * game-UI element TEXT focus — 'UI.Manager.Focus.setElementFocus'
+--       over @upmGlobalFocus@;
+--     * keyboard CONTROL focus — 'UI.Manager.Focus.setControlFocus' over
+--       @upmControlFocus@, plus "UI.FocusNavigation"'s Tab traversal
+--       (#745).
+--
+--   Watch the vocabulary: this module's
+--   'setFocus'\/'clearFocus'\/'registerFocusTarget' are the SHELL verbs,
+--   while the game-UI ones are spelled
+--   @setElementFocus@\/@clearElementFocus@\/@setControlFocus@. Only the
+--   two TEXT systems compete for a keystroke, and
+--   "Engine.Input.Thread.Keyboard" resolves them in a fixed order:
+--   'FocusManager' first, the UI page manager second.
+module UI.ShellFocus
   ( -- * Core Types
     FocusId(..)
   , FocusTarget(..)

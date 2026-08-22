@@ -123,7 +123,7 @@ mkDef starting w h = BuildingDef
     , bdOperations      = []
     , bdAnimations      = HM.empty
     , bdStateAnims      = HM.empty
-    , bdPowerDrain      = 0
+    , bdPowerDrain      = 0, bdPowerNode      = Nothing
     }
 
 -- | The starting portal under test: a 1x1 footprint, is_starting=True.

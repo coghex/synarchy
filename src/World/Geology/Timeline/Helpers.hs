@@ -4,8 +4,6 @@ module World.Geology.Timeline.Helpers
       mkGeoPeriod
       -- * Feature helpers
     , featureCenter
-    , isHydroFeature
-    , isRiverFeature
     , isGlacierFeature
     , isActiveRiver
     , isLakeFeature
@@ -17,9 +15,6 @@ module World.Geology.Timeline.Helpers
     , regionalErosionMap
       -- * Glacier evolution wrapper
     , evolveGlacierCapped
-      -- * Elev grid lookup
-    , elevFromGrid
-    , filledElevFromGrid
       -- * Lake reconciliation
     , reconcileLakes
       -- * Lake spillway post-carve adjustment
@@ -58,34 +53,7 @@ elevFromGrid grid _worldSize gx gy =
        then egElev grid VU.! idx
        else seaLevel
 
--- | Look up filled (depression-free) elevation from a separate
---   filled vector using the same grid indexing as elevFromGrid.
-{-# INLINE filledElevFromGrid #-}
-filledElevFromGrid ∷ VU.Vector Int → ElevGrid → Int → Int → Int → Int
-filledElevFromGrid filled grid _worldSize gx gy =
-    let spacing = egSpacing grid
-        gridW = egGridW grid
-        halfGrid = gridW `div` 2
-        u = gx - gy
-        v = gx + gy
-        iu = ((u + spacing `div` 2) `div` spacing) + halfGrid
-        iv = ((v + spacing `div` 2) `div` spacing) + halfGrid
-        iu' = ((iu `mod` gridW) + gridW) `mod` gridW
-        iv' = max 0 (min (gridW - 1) iv)
-        idx = iv' * gridW + iu'
-    in if idx ≥ 0 ∧ idx < VU.length filled
-       then filled VU.! idx
-       else seaLevel
-
 -- * Feature classification helpers
-
-isHydroFeature ∷ FeatureShape → Bool
-isHydroFeature (HydroShape _) = True
-isHydroFeature _              = False
-
-isRiverFeature ∷ FeatureShape → Bool
-isRiverFeature (HydroShape (RiverFeature _)) = True
-isRiverFeature _                             = False
 
 isGlacierFeature ∷ FeatureShape → Bool
 isGlacierFeature (HydroShape (GlacierFeature _)) = True

@@ -46,7 +46,7 @@ import Engine.Graphics.Config (loadVideoConfig, VideoConfig(..), VideoConfigFile
 import Engine.Graphics.Font.Data (defaultFontCache)
 import Engine.Input.Bindings (loadKeyBindings, KeyBindingConfig)
 import Engine.Input.Types (defaultInputState)
-import UI.Focus (createFocusManager)
+import UI.ShellFocus (createFocusManager)
 import UI.Types (emptyUIPageManager)
 import Unit.Types (emptyUnitManager)
 import Unit.Sim.Types (emptyUnitThreadState)

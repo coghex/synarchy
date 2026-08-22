@@ -5,7 +5,8 @@ consumes. H1 records; it never analyzes.
 
     <trace_dir>/
     ├── meta.json        session metadata (persona, model, dt, versions,
-    │                    timestamps, stop_reason, fb size, world_seed, ...)
+    │                    lifecycle timestamps, stop_reason, fb size,
+    │                    world_seed, ...)
     ├── turns.jsonl      one JSON object per turn (schema below)
     ├── replay.jsonl     one line PER TURN (no-input turns included, so
     │                    replay pacing is faithful):
@@ -39,7 +40,46 @@ consumes. H1 records; it never analyzes.
     │                    own retained visible-result evidence — never
     │                    borrowed from a following turn that might not
     │                    exist)
+    ├── setup.log        build/preparation output, written live during
+    │                    the pre-ready `build` phase (#1539). Unlike the
+    │                    engine log this survives a failure BEFORE the
+    │                    executable ever starts, which used to leave the
+    │                    trace with nothing but an unexplained zero-byte
+    │                    engine.log
+    ├── setup_ready.png  the player-ready probe's screenshot (#1539) —
+    │                    a SETUP artifact, deliberately not under
+    │                    frames/ and never numbered as a turn: it is
+    │                    never a turn observation, never shown to the
+    │                    player, and produces no turns.jsonl or
+    │                    replay.jsonl record
     └── engine.log       engine stdout/stderr copied at session end
+
+Session lifecycle timestamps in meta.json (#1539) — all unix epoch
+floats from `time.time()`, so they are directly comparable with each
+other and with a budget expressed in seconds. Budget ENFORCEMENT is a
+separate concern and stays on a monotonic clock:
+
+    setup_started_at    the trace was created and setup began: build,
+                        engine launch, UI loading. Always present.
+    loaded_at           the PLAYER-READY boundary — the engine and its
+                        debug console are reachable, the menu surface is
+                        initialized, and a screenshot that could really
+                        be handed to a player has succeeded. Null until
+                        crossed, so it stays null on a setup failure.
+    session_started_at  the player-session loop began. Never before
+                        loaded_at; null if no session ever ran.
+    ended_at            the session finished (`finish`).
+    started_at          RETAINED, with its original meaning unchanged:
+                        the moment the trace directory was created,
+                        which is the start of SETUP. `setup_started_at`
+                        is its explicit new name; both are written so
+                        that readers of older traces (usage.py's ledger
+                        timestamp among them) keep working untouched.
+
+Setup duration is `loaded_at - setup_started_at` and the actual player
+session is `ended_at - session_started_at`, each derivable without the
+other. A trace written before #1539 carries only `started_at`/`ended_at`;
+every reader here treats the new fields as optional.
 
 Per-turn record (turns.jsonl):
     turn            int
@@ -99,7 +139,16 @@ class SessionTrace:
         self.dir = trace_dir
         os.makedirs(os.path.join(trace_dir, "frames"), exist_ok=True)
         self.meta = dict(meta)
+        # `started_at` keeps its original meaning — trace creation, which
+        # is where SETUP begins — and `setup_started_at` is that same
+        # instant under its explicit new name (#1539). The two
+        # boundary stamps below are present-but-null until they are
+        # actually crossed, so a setup failure leaves them null rather
+        # than implying a session that never ran.
         self.meta.setdefault("started_at", time.time())
+        self.meta.setdefault("setup_started_at", self.meta["started_at"])
+        self.meta.setdefault("loaded_at", None)
+        self.meta.setdefault("session_started_at", None)
         self.turns = 0
         self._write_meta()
 
@@ -107,6 +156,41 @@ class SessionTrace:
         with open(os.path.join(self.dir, "meta.json"), "w") as f:
             json.dump(self.meta, f, indent=2, sort_keys=True)
             f.write("\n")
+
+    def setup_log_path(self) -> str:
+        """Where the pre-ready `build` phase writes its output (#1539).
+
+        Inside the trace from the start, so a build failure — which
+        happens before the executable exists and therefore before any
+        engine log has a single byte in it — still leaves its real
+        cause behind."""
+        return os.path.join(self.dir, "setup.log")
+
+    def setup_frame_path(self) -> str:
+        """The player-ready probe's screenshot (#1539).
+
+        A SETUP artifact: NOT `frames/turn_0001.png`, so it cannot
+        disturb turn numbering or replay pacing, and it is never
+        recorded as a turn or shown to the player."""
+        return os.path.join(self.dir, "setup_ready.png")
+
+    def mark_loaded(self, when: float | None = None) -> None:
+        """Stamp the PLAYER-READY boundary (#1539).
+
+        Called once, by the launcher, the moment the game can actually
+        hand a player its first frame. Everything before it is setup;
+        every player-session budget starts after it."""
+        self.meta["loaded_at"] = time.time() if when is None else when
+        self._write_meta()
+
+    def mark_session_started(self, when: float | None = None) -> None:
+        """Stamp the start of the player-session loop (#1539).
+
+        Written by the session/replay loops themselves, so no player
+        call can precede it. In a complete run it is at or after
+        `loaded_at`."""
+        self.meta["session_started_at"] = time.time() if when is None else when
+        self._write_meta()
 
     def frame_path(self, turn: int) -> str:
         return os.path.join(self.dir, "frames", f"turn_{turn:04d}.png")

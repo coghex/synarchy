@@ -20,7 +20,9 @@ import Engine.Core.Capability.RenderView
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
+import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..)
+                                          , QuadPayload(..), quadVertices
+                                          , rectCorners, fullQuadUV
                                           , renderFlagSelected, packWorldUV)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
@@ -221,14 +223,16 @@ buildingToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst 
             flags = if isSel then renderFlagSelected else 0
             wuv = packWorldUV (biAnchorX inst) (biAnchorY inst)
 
-            v0 = Vertex (Vec2 drawX drawY)
-                         (Vec2 0 0) tint (fromIntegral actualSlot) defFmSlot flags wuv
-            v1 = Vertex (Vec2 (drawX + quadW) drawY)
-                         (Vec2 1 0) tint (fromIntegral actualSlot) defFmSlot flags wuv
-            v2 = Vertex (Vec2 (drawX + quadW) (drawY + quadH))
-                         (Vec2 1 1) tint (fromIntegral actualSlot) defFmSlot flags wuv
-            v3 = Vertex (Vec2 drawX (drawY + quadH))
-                         (Vec2 0 1) tint (fromIntegral actualSlot) defFmSlot flags wuv
+            (v0, v1, v2, v3) =
+                quadVertices (rectCorners (Vec2 drawX drawY) (Vec2 quadW quadH))
+                             fullQuadUV
+                             QuadPayload
+                                 { qpTint      = tint
+                                 , qpAtlasSlot = fromIntegral actualSlot
+                                 , qpFaceMap   = defFmSlot
+                                 , qpFlags     = flags
+                                 , qpWorldUV   = wuv
+                                 }
 
         in Just SortableQuad
             { sqSortKey = sortKey
@@ -311,14 +315,18 @@ renderGhostQuad env facing zSlice = do
                                 actualSlot = lookupSlot texHandle
                                 sortKey = (faF + fbF) + quadH / tileHalfDiamondHeight * 0.5 + 0.01
                                 wuv = packWorldUV (bgGridX ghost) (bgGridY ghost)
-                                v0 = Vertex (Vec2 drawX drawY)
-                                             (Vec2 0 0) tint (fromIntegral actualSlot) defFmSlot 0 wuv
-                                v1 = Vertex (Vec2 (drawX + quadW) drawY)
-                                             (Vec2 1 0) tint (fromIntegral actualSlot) defFmSlot 0 wuv
-                                v2 = Vertex (Vec2 (drawX + quadW) (drawY + quadH))
-                                             (Vec2 1 1) tint (fromIntegral actualSlot) defFmSlot 0 wuv
-                                v3 = Vertex (Vec2 drawX (drawY + quadH))
-                                             (Vec2 0 1) tint (fromIntegral actualSlot) defFmSlot 0 wuv
+                                (v0, v1, v2, v3) =
+                                    quadVertices
+                                        (rectCorners (Vec2 drawX drawY)
+                                                     (Vec2 quadW quadH))
+                                        fullQuadUV
+                                        QuadPayload
+                                            { qpTint      = tint
+                                            , qpAtlasSlot = fromIntegral actualSlot
+                                            , qpFaceMap   = defFmSlot
+                                            , qpFlags     = 0
+                                            , qpWorldUV   = wuv
+                                            }
                             in return $ V.singleton SortableQuad
                                 { sqSortKey = sortKey
                                 , sqV0      = v0

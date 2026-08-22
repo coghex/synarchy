@@ -1,10 +1,7 @@
 {-# LANGUAGE Strict #-}
 -- | Bake ZoomChunkEntry vectors into render-ready BakedZoomEntry vectors.
 module World.Render.Zoom.Bake
-    ( bakeEntries
-    , bakeEntriesAtlas
-    , ensureBaked
-    , ensureBakedAtlas
+    ( ensureBakedAtlas
     , zoomQuadWorldUVs
     ) where
 
@@ -151,31 +148,9 @@ bakeEntriesAtlas facing cache atlasInfo lookupSlot defFmSlot =
             , bzeElev    = zceElev entry
             }
 
-ensureBaked ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)
-              → V.Vector ZoomChunkEntry → WorldTextures
-              → CameraFacing
-              → (WorldTextures → Word8 → Int → TextureHandle)
-              → (TextureHandle → Int) → Float
-              → IO (V.Vector BakedZoomEntry)
--- Only called from the world thread (via updateWorldTiles), so
--- the read-check-write on bakedRef is single-threaded — no race.
-ensureBaked bakedRef rawCache textures facing texPicker lookupSlot defFmSlot = do
-    (existing, bakedWith, bakedFacing) ← readIORef bakedRef
-    let texturesChanged = bakedWith ≢ textures
-        facingChanged   = bakedFacing ≢ facing
-        needsBake = not (V.null rawCache)
-                  ∧ (V.null existing ∨ texturesChanged ∨ facingChanged)
-    if needsBake
-        then do
-            let baked = bakeEntries facing rawCache
-                            (\mat elev → texPicker textures mat elev)
-                            lookupSlot defFmSlot
-            writeIORef bakedRef (baked, textures, facing)
-            return baked
-        else return existing
-
--- | Like ensureBaked, but uses the atlas texture when available.
---   Falls back to the per-material texture picker when no atlas.
+-- | Bake the zoom entries when they are stale, using the atlas texture
+--   when available. Falls back to the per-material texture picker when
+--   no atlas.
 --   Rebakes when: cache empty, textures changed, facing changed,
 --   or atlas just became available (atlas handle in baked entries
 --   doesn't match current atlas).

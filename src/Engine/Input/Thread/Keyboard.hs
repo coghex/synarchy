@@ -42,7 +42,7 @@ import qualified Engine.Core.Queue as Q
 import UI.Manager (validateFocus, validateControlFocusIn, setControlFocus
                   , clearControlFocus, getElement, getControlFocus)
 import UI.Types (ElementHandle(..), UIElement(..))
-import UI.Focus (getInputMode, InputMode(..), FocusId(..))
+import UI.ShellFocus (getInputMode, InputMode(..), FocusId(..))
 import UI.FocusNavigation (nextFocus, prevFocus)
 
 -- | F4 (#730) Layer A: one primary keyboard record per real key press

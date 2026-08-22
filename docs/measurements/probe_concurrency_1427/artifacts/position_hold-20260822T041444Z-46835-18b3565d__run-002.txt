@@ -1,0 +1,40 @@
+# retained artifacts for position_hold-20260822T041444Z-46835-18b3565d/run-002
+# probe_flake.py deletes a successful run's directory, so this
+# attempt was a FAIL, TIMEOUT or harness error.
+#
+# The protocol event stream and stdout below are VERBATIM -- for a
+# behavioural failure the event stream is the diagnosis, naming the
+# failing check and its detail payload.
+#
+# The engine log has two classes of deterministic boot noise elided,
+# and ONLY those two: `[INFO] [Asset]` / `[INFO] [Lua]` asset- and
+# script-loading chatter, and the `[Init:158]` / `[Init:185]` tectonic
+# and climate banner worldgen prints on every boot. Every other line,
+# of every level and subsystem -- thread starts, READY, arena init,
+# spawn, shutdown, and any WARN or ERROR -- is kept verbatim and in
+# order. The elided counts are stated under each log.
+
+===== events.jsonl (probe-result/v1 protocol stream, verbatim) =====
+{"detail": {"control": 2, "held": 1}, "event": "diagnostic", "level": "INFO", "message": "units spawned"}
+{"detail": {"tiles": 0.6, "timeout_sec": 60.0}, "event": "diagnostic", "level": "INFO", "message": "arrival radius and stall budget read from the shipped constants"}
+{"event": "diagnostic", "level": "WARN", "message": "the commanded acolyte never arrived and never held"}
+
+===== stdout.txt (verbatim) =====
+(empty)
+===== engine/position_hold_engine.log (boot noise elided) =====
+2026-08-22 04:17:12 [INFO] [Event] [Θ:4] [YamlNotifications:117] Notification registry loaded: 11 categories
+READY port=8013
+2026-08-22 04:17:12 [INFO] [World] [Θ:4] [Thread:143] Starting world thread...
+2026-08-22 04:17:12 [INFO] [World] [Θ:4] [Thread:150] World thread started
+2026-08-22 04:17:12 [INFO] [Thread] [Θ:4] [Thread:143] Starting unit thread...
+2026-08-22 04:17:12 [INFO] [Thread] [Θ:4] [Thread:150] Unit thread started
+2026-08-22 04:17:12 [INFO] [World] [Θ:4] [Thread:143] Starting simulation thread...
+2026-08-22 04:17:12 [INFO] [World] [Θ:4] [Thread:150] Simulation thread started
+2026-08-22 04:17:12 [INFO] [Thread] [Θ:4] [Thread:143] Starting combat thread...
+2026-08-22 04:17:12 [INFO] [Thread] [Θ:4] [Thread:150] Combat thread started
+2026-08-22 04:17:12 [INFO] [System] [Θ:4] [Headless:57] Starting engine (headless)...
+2026-08-22 04:17:32 [INFO] [World] [Θ:285] [Init:414] Initializing test arena: arena
+2026-08-22 04:17:32 [INFO] [World] [Θ:285] [Init:465] Test arena initialized: 25 flat loam chunks at z=0
+2026-08-22 04:17:35 [INFO] [Thread] [Θ:286] [Spawn:300] UnitSpawn UnitId {unUnitId = 2}: over capacity (12.1 > 10.14128 kg) — leaving pick_steel behind
+2026-08-22 04:18:37 [INFO] [System] [Θ:4] [Headless:59] Headless engine shutting down...
+[87 of 102 lines elided: 87 asset/script boot chatter, 0 worldgen plate/climate banner]

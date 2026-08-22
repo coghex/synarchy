@@ -1,0 +1,55 @@
+# retained artifacts for position_hold-20260822T032618Z-91397-0eb862fa/run-002
+# probe_flake.py deletes a successful run's directory, so this
+# attempt was a FAIL, TIMEOUT or harness error.
+#
+# The protocol event stream and stdout below are VERBATIM -- for a
+# behavioural failure the event stream is the diagnosis, naming the
+# failing check and its detail payload.
+#
+# The engine log has two classes of deterministic boot noise elided,
+# and ONLY those two: `[INFO] [Asset]` / `[INFO] [Lua]` asset- and
+# script-loading chatter, and the `[Init:158]` / `[Init:185]` tectonic
+# and climate banner worldgen prints on every boot. Every other line,
+# of every level and subsystem -- thread starts, READY, arena init,
+# spawn, shutdown, and any WARN or ERROR -- is kept verbatim and in
+# order. The elided counts are stated under each log.
+
+===== events.jsonl (probe-result/v1 protocol stream, verbatim) =====
+{"detail": {"control": 2, "held": 1}, "event": "diagnostic", "level": "INFO", "message": "units spawned"}
+{"detail": {"tiles": 0.6, "timeout_sec": 60.0}, "event": "diagnostic", "level": "INFO", "message": "arrival radius and stall budget read from the shipped constants"}
+{"detail": {"anchor": [12.5, 0.5], "expected": [12.5, 0.5]}, "event": "check", "id": "hold_created", "outcome": "PASS"}
+{"detail": {"drift": 0.0, "hold_kept": true, "max_distance": 0.11620366931709793, "radius": 0.6, "samples": 20}, "event": "check", "id": "hold_sustained", "outcome": "PASS"}
+{"detail": {"spread": 5.517102689524122}, "event": "check", "id": "control_autonomous", "outcome": "PASS"}
+{"detail": {"actions": ["hold_position"]}, "event": "check", "id": "work_suppressed", "outcome": "PASS"}
+{"detail": {"actions": ["idle", "wander"]}, "event": "check", "id": "control_works", "outcome": "FAIL"}
+{"detail": {"canteens": "1", "lake": [18, 0]}, "event": "diagnostic", "level": "INFO", "message": "canteens drained and the lake written into water memory"}
+{"detail": {"excursion": 5.450000762938998, "radius": 0.6, "refilled": true}, "event": "check", "id": "interrupt_displaces", "outcome": "PASS"}
+{"detail": {"returned": true}, "event": "check", "id": "return_to_anchor", "outcome": "PASS"}
+{"detail": {"cleared_immediately": true, "reanchored": true}, "event": "check", "id": "command_supersedes", "outcome": "PASS"}
+{"detail": {"moved": 0.0, "returned": "true"}, "event": "check", "id": "release_verb", "outcome": "PASS"}
+{"detail": {"action": "dig_designation"}, "event": "check", "id": "work_resumes", "outcome": "PASS"}
+{"detail": {"internal": 3}, "event": "diagnostic", "level": "INFO", "message": "walk-out unit spawned"}
+{"detail": {"closest": 0.4048449255817278, "elapsed": 12.30255913734436}, "event": "diagnostic", "level": "INFO", "message": "the walk-out arrived"}
+{"detail": {"actions": ["dig_designation", "wander"], "hold_free": true, "samples": 12}, "event": "check", "id": "internal_move_no_hold", "outcome": "PASS"}
+{"detail": {"hold": null}, "event": "check", "id": "control_never_holds", "outcome": "PASS"}
+
+===== stdout.txt (verbatim) =====
+(empty)
+===== engine/position_hold_engine.log (boot noise elided) =====
+2026-08-22 03:28:54 [INFO] [Event] [Θ:7] [YamlNotifications:117] Notification registry loaded: 11 categories
+READY port=8013
+2026-08-22 03:28:54 [INFO] [World] [Θ:7] [Thread:143] Starting world thread...
+2026-08-22 03:28:54 [INFO] [World] [Θ:7] [Thread:150] World thread started
+2026-08-22 03:28:54 [INFO] [Thread] [Θ:7] [Thread:143] Starting unit thread...
+2026-08-22 03:28:54 [INFO] [Thread] [Θ:7] [Thread:150] Unit thread started
+2026-08-22 03:28:54 [INFO] [World] [Θ:7] [Thread:143] Starting simulation thread...
+2026-08-22 03:28:54 [INFO] [World] [Θ:7] [Thread:150] Simulation thread started
+2026-08-22 03:28:54 [INFO] [Thread] [Θ:7] [Thread:143] Starting combat thread...
+2026-08-22 03:28:54 [INFO] [Thread] [Θ:7] [Thread:150] Combat thread started
+2026-08-22 03:28:54 [INFO] [System] [Θ:7] [Headless:57] Starting engine (headless)...
+2026-08-22 03:29:15 [INFO] [World] [Θ:288] [Init:414] Initializing test arena: arena
+2026-08-22 03:29:15 [INFO] [World] [Θ:288] [Init:465] Test arena initialized: 25 flat loam chunks at z=0
+2026-08-22 03:29:18 [INFO] [Thread] [Θ:289] [Spawn:300] UnitSpawn UnitId {unUnitId = 2}: over capacity (12.1 > 9.778467 kg) — leaving pick_steel behind
+2026-08-22 03:29:18 [INFO] [Thread] [Θ:289] [Spawn:300] UnitSpawn UnitId {unUnitId = 2}: over capacity (10.1 > 9.778467 kg) — leaving shovel_steel behind
+2026-08-22 03:31:28 [INFO] [System] [Θ:7] [Headless:59] Headless engine shutting down...
+[87 of 103 lines elided: 87 asset/script boot chatter, 0 worldgen plate/climate banner]

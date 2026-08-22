@@ -36,7 +36,7 @@
 --      for arena / non-wrapping worlds.
 --
 -- Seam VISIBILITY is the separate axis #1176 owns: the wrap offset
--- 'World.Render.ChunkCulling.bestWrapOffset' returns is a facing-aware
+-- @World.Render.ChunkCulling.bestWrapOffset@ returns is a facing-aware
 -- @(x, y)@ pair, because a u-wrap displaces screen Y rather than screen
 -- X at east/west. The two halves compose — this function resolves WHICH
 -- tile a pixel names, that one decides where the tile is drawn — and

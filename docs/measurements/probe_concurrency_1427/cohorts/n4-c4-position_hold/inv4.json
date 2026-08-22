@@ -1,0 +1,177 @@
+{
+  "artifact_root": "/Users/vincentcoghlan/probe-flake-1427-artifacts",
+  "check_counts": {
+    "command_supersedes": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 2
+    },
+    "control_autonomous": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 2
+    },
+    "control_never_holds": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 2
+    },
+    "control_works": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 2
+    },
+    "hold_created": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 2
+    },
+    "hold_sustained": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 2
+    },
+    "internal_move_no_hold": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 2
+    },
+    "interrupt_displaces": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 2
+    },
+    "release_verb": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 2
+    },
+    "return_to_anchor": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 2
+    },
+    "work_resumes": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 2
+    },
+    "work_suppressed": {
+      "FAIL": 0,
+      "MISSING": 0,
+      "PASS": 2
+    }
+  },
+  "checks": [
+    {
+      "id": "hold_created",
+      "label": "a completed player move order anchors the unit at the commanded tile"
+    },
+    {
+      "id": "hold_sustained",
+      "label": "the unit stays inside the arrival radius for a sustained unpaused window"
+    },
+    {
+      "id": "control_autonomous",
+      "label": "a never-commanded acolyte moves freely in the same world"
+    },
+    {
+      "id": "work_suppressed",
+      "label": "the held unit never enters a work action with a designation in reach"
+    },
+    {
+      "id": "control_works",
+      "label": "the never-commanded acolyte does take its own designation"
+    },
+    {
+      "id": "interrupt_displaces",
+      "label": "a dry canteen outranks the hold: the unit leaves the anchor and refills"
+    },
+    {
+      "id": "return_to_anchor",
+      "label": "and then walks back inside the arrival radius and holds again"
+    },
+    {
+      "id": "command_supersedes",
+      "label": "a new player move order clears the hold and re-anchors on arrival"
+    },
+    {
+      "id": "release_verb",
+      "label": "releaseHold clears the hold without issuing any movement"
+    },
+    {
+      "id": "work_resumes",
+      "label": "the released unit takes the designation it ignored while holding"
+    },
+    {
+      "id": "internal_move_no_hold",
+      "label": "a completed internal move (the portal walk-out) creates no hold"
+    },
+    {
+      "id": "control_never_holds",
+      "label": "a never-commanded acolyte never acquires a hold"
+    }
+  ],
+  "commit_sha": "caaed17e40c3f2e274b34f68bb863a63a95ab51d",
+  "completed_runs": 2,
+  "error": null,
+  "error_run": null,
+  "failure_count": 0,
+  "failure_rate": 0.0,
+  "invocation_dir": "/Users/vincentcoghlan/probe-flake-1427-artifacts/position_hold-20260822T032618Z-91399-500ed470",
+  "peak_concurrency": 4,
+  "probe": "position_hold",
+  "requested_runs": 2,
+  "retained_artifacts": [],
+  "rts_capabilities": 4,
+  "runs": [
+    {
+      "artifact_dir": null,
+      "checks": {
+        "command_supersedes": "PASS",
+        "control_autonomous": "PASS",
+        "control_never_holds": "PASS",
+        "control_works": "PASS",
+        "hold_created": "PASS",
+        "hold_sustained": "PASS",
+        "internal_move_no_hold": "PASS",
+        "interrupt_displaces": "PASS",
+        "release_verb": "PASS",
+        "return_to_anchor": "PASS",
+        "work_resumes": "PASS",
+        "work_suppressed": "PASS"
+      },
+      "elapsed_seconds": 163.686,
+      "index": 1,
+      "outcome": "PASS",
+      "port": 8009
+    },
+    {
+      "artifact_dir": null,
+      "checks": {
+        "command_supersedes": "PASS",
+        "control_autonomous": "PASS",
+        "control_never_holds": "PASS",
+        "control_works": "PASS",
+        "hold_created": "PASS",
+        "hold_sustained": "PASS",
+        "internal_move_no_hold": "PASS",
+        "interrupt_displaces": "PASS",
+        "release_verb": "PASS",
+        "return_to_anchor": "PASS",
+        "work_resumes": "PASS",
+        "work_suppressed": "PASS"
+      },
+      "elapsed_seconds": 133.873,
+      "index": 2,
+      "outcome": "PASS",
+      "port": 8010
+    }
+  ],
+  "schema": "probe-flake-result/v1",
+  "status": "ok",
+  "timeout_count": 0,
+  "timestamp_utc": "2026-08-22T03:26:18Z",
+  "total_elapsed_seconds": 297.559,
+  "worst_elapsed_seconds": 163.686
+}

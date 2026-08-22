@@ -5,7 +5,6 @@ module World.Region.Types
     , RegionalData(..)
     , emptyRegionalData
     , Region(..)
-    , chunkToRegion
     ) where
 
 import UPrelude
@@ -14,7 +13,6 @@ import Control.DeepSeq (NFData)
 import Data.Serialize (Serialize)
 import Data.Hashable (Hashable(..))
 import qualified Data.HashMap.Strict as HM
-import World.Chunk.Types (ChunkCoord(..))
 
 -- | Coarse spatial grid coordinate.
 --   Each region covers regionSize x regionSize chunks.
@@ -44,9 +42,3 @@ data Region = Region
     , regSeaLevel ∷ !Int          -- ^ Base sea level (for future tidal variation)
     , regAvgElev  ∷ !Int          -- ^ Average elevation across region
     } deriving (Show, Eq)
-
-chunkToRegion ∷ ChunkCoord → RegionCoord
-chunkToRegion (ChunkCoord cx cy) =
-    RegionCoord (floorDiv' cx regionSize) (floorDiv' cy regionSize)
-  where
-    floorDiv' a b = floor (fromIntegral a / fromIntegral b ∷ Double)

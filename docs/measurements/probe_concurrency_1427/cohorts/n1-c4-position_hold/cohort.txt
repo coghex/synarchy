@@ -1,0 +1,8 @@
+cohort probe=position_hold rts_caps=1 concurrency=4 total_attempts=8 runs_per_invocation=2
+repo=/Users/vincentcoghlan/worktrees/coghex/synarchy/issue-1427-probe-concurrency-characterization
+commit=caaed17e40c3f2e274b34f68bb863a63a95ab51d
+tree_clean=yes
+started_utc=2026-08-22T04:14:44Z
+epoch_start=1787372084
+finished_utc=2026-08-22T04:19:46Z
+epoch_end=1787372386

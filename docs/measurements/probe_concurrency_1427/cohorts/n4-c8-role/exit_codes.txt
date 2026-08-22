@@ -1,0 +1,8 @@
+inv1 exit=0
+inv2 exit=0
+inv3 exit=0
+inv4 exit=0
+inv5 exit=0
+inv6 exit=0
+inv7 exit=0
+inv8 exit=0

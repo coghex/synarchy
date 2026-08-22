@@ -81,13 +81,11 @@ module World.Save.Component.Entities
     , PageBuildingsDTO(..)
     , BuildingsDTO(..)
     , BuildingInstanceDTO(..)
-    , toBuildingInstanceDTO
     , fromBuildingInstanceDTO
     , BuildingInstanceDTOv1(..)
     , PageBuildingsDTOv1(..)
     , BuildingsDTOv1(..)
     , toBuildingInstanceDTOv1
-    , migrateBuildingInstanceDTOv1
     , migrateBuildingsDTOv1
     , PageUnitsDTO(..)
     , UnitsDTO(..)
@@ -101,7 +99,6 @@ module World.Save.Component.Entities
     , PageUnitsDTOv1(..)
     , UnitsDTOv1(..)
     , toUnitInstanceDTOv1
-    , migrateUnitInstanceDTOv1
     , migrateUnitsDTOv1
     , PageSimDTO(..)
     , UnitSimDTO(..)
@@ -142,11 +139,8 @@ module World.Save.Component.Entities
     , toUnitSimStateDTO
     , fromUnitSimStateDTO
     , toCraftBillDTO
-    , fromCraftBillDTO
     , toBillQueueDTO
     , fromBillQueueDTO
-    , toPowerNodeDTO
-    , fromPowerNodeDTO
     , toNodeRegistryDTO
     , fromNodeRegistryDTO
     , applyBuildings
