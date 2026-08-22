@@ -50,8 +50,9 @@ registerCraftAPI env = do
   Lua.setglobal (Lua.Name "craft")
 
   -- Power global (#358) — the placeable power-node registry. placeNode
-  -- pops a solar_panel/high_voltage_battery item out of a unit's
-  -- inventory and turns it into a persistent power node; getNode /
+  -- pops an item whose building def declares a power node (#1148) out
+  -- of a unit's inventory and turns it into a persistent power node;
+  -- getNode /
   -- getNodeForBuilding / listNodes are read-only queries reporting each
   -- node's role + parameters. listNetworks / getNetworkForNode (#360)
   -- report the live wire-connectivity view: which nodes share a network

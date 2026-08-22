@@ -131,7 +131,7 @@ cargoDef = BuildingDef
     , bdSpriteAnchor = "diamond_bottom", bdBuildWork = 0
     , bdMaterials = HM.empty, bdStorageCapacity = 100
     , bdOperations = [], bdAnimations = HM.empty
-    , bdStateAnims = HM.empty, bdPowerDrain = 0
+    , bdStateAnims = HM.empty, bdPowerDrain = 0, bdPowerNode = Nothing
     }
 
 mkBuilding ∷ [ItemInstance] → BuildingInstance
