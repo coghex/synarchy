@@ -3,8 +3,7 @@
 --   The renderer's `pickFrame` does the actual texture lookup; this
 --   module only decides which animation key the renderer should ask for.
 module Unit.Anim
-    ( poseStateKey
-    , stateKey
+    ( stateKey
     , poseTag
     , resolveStateAnim
     , chooseAnim
@@ -37,11 +36,6 @@ stateKey p Drinking           = poseTag p <> "-drink"
 stateKey p Eating             = poseTag p <> "-eat"
 stateKey p Picking            = poseTag p <> "-pickup"
 stateKey p (TransitioningTo q) = poseTag p <> "-to-" <> poseTag q
-
--- | Convenience: equivalent to `stateKey p Idle`. The idle pose key is
---   used as the default state for a freshly-loaded unit.
-poseStateKey ∷ Pose → Text
-poseStateKey p = stateKey p Idle
 
 -- | Resolve a state key (e.g. "standing-idle") to an animation name
 --   (e.g. "idle-standing") using the unit's `udStateAnims` map. If no
