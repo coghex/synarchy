@@ -1370,6 +1370,165 @@ pair installed by swapping the `datetime` module inside `probe_select` and
 `isinstance`. Like #1431's, #1432's and #1433's self-tests, it is not wired
 into `make ci` or GitHub CI.
 
+### `probe_resource_lock.py` — cross-process shared/exclusive resources (#1436)
+
+`run_probes.ResourceLedger` is a reader/writer lock over the probes inside ONE
+runner process — its own docstring says so, and the scheduler owns it from a
+single thread. So it coordinates nobody else: a `/deflake` measurement and a
+`tools/run_probes.py` sweep are independent processes, both driving the same
+checkout, and `config_state_probe.py` taking `repo-config` exclusively could
+not stop a foreign engine booting into the tracked `config/` tree it asserts
+against. This is the same model between processes.
+
+```bash
+python3 tools/test_probe_resource_lock.py   # the deterministic self-test
+```
+
+There is no CLI. `run_probes` and `tools/deflake.py` both import it, and both
+read the interests from `run_probes.shared_resources` /
+`exclusive_resources`, so there is one conflict model rather than two.
+
+The lock IS an `flock` on one file per (namespace, resource): `LOCK_SH` for a
+shared interest, `LOCK_EX` for an exclusive one. Nothing counts holders or
+decides staleness — the two things a hand-rolled protocol gets wrong — and a
+holder that is SIGKILLed releases everything the moment it dies, which is what
+makes waiting for a resource safe rather than a wedge. Lock files are never
+unlinked, for the reason `probe_flake.PortLease` records at length.
+
+The files are FLAT entries in `/tmp`, the arrangement
+`probe_flake._machine_wide_scratch` establishes and for the same reason: a
+dedicated subdirectory is owned by whichever account created it, and a
+directory's owner may unlink entries in it however the sticky bit is set, so
+that account could replace a held lock's pathname and hand one exclusive
+resource to two processes. `_check_shared_dir` verifies sticky, root-or-us
+ownership and writability rather than assuming them, and repairs nothing.
+
+The namespace is the repository's COMMON git directory, hashed:
+`run_probes.REPO_ROOT` is derived from the tools file's own location, so every
+linked worktree resolves a different value and two worktrees of one repository
+would namespace separately while driving the same tracked tree. A checkout git
+cannot answer for is a controlled refusal, never a path-derived guess.
+
+`acquire` takes the whole interest set or none of it, in sorted name order and
+always non-blocking, so nobody ever waits while holding and a deadlock cycle
+cannot form; a conflict rolls back everything already taken and raises
+`ResourceBusy` naming the resource, the interest and whatever live holders
+could be identified. `wait_acquire` is the polling wrapper the sequential probe
+runner uses. Release drops OUR file descriptors and nothing else, so a late
+cleanup cannot take a successor's resource away — by construction, not by a
+token check.
+
+Holder notes are DIAGNOSTICS ONLY: mutual exclusion is the flock, and a
+refused acquirer reads the notes so it can say who is in the way. A note is
+live while its own flock is held, never by the pid it records.
+
+### `deflake.py` — one bounded census measurement, end to end (#1436)
+
+The orchestration that puts the five components in order: `probe_select`
+(#1435) picks a probe, `probe_claim` (#1434) makes it this agent's,
+`probe_resource_lock` keeps a foreign engine out of the tracked files it
+touches, `probe_flake` (#1425) measures it, and `probe_census` (#1428/#1429)
+records the result.
+
+```bash
+python3 tools/deflake.py            # one probe, one measurement
+python3 tools/deflake.py --json     # the machine-readable outcome document
+python3 tools/test_deflake.py       # the deterministic self-test
+```
+
+No arguments select a probe, and there is deliberately no run-count or RTS
+override: one invocation is one bounded measurement of whichever probe the
+ladder chose, which keeps ownership, artifacts and census updates bounded and
+makes every failure attributable to a single measurement. Repetition across
+probes belongs to a surrounding workflow.
+
+**The fixed measurement contract** is ten sequential runs at four RTS
+capabilities. The two are INDEPENDENT dimensions and `-N4` is the second, not
+the first: the engine's baked-in default is `-N -A128M`, so an unpinned run
+takes every core and measures a different condition on every machine. Both
+values are supplied to `probe_flake.measure` explicitly rather than left to
+its defaults, because "the orchestrator declined to override a default" is not
+a property a test can assert. The run count is
+`probe_census.POLICY_RUN_COUNT`, the same N the ladder compares a cohort
+against, so a private copy cannot drift into producing permanently incomplete
+cohorts.
+
+**Ownership, in order.** Select — a malformed census, or a `docs-wip` worktree
+that cannot be resolved, fails before anything is claimed. Claim — losing the
+selection-to-claim race is an ordinary no-work success that measures nothing,
+writes nothing, releases nothing of the winner's and selects no second probe.
+Audit — the acquisition is recorded before the probe runs, and a failure there
+releases the claim and refuses to run. Resources — non-blocking, so a conflict
+is `resource-busy` and the claim is given back rather than held hostage for
+however long a foreign sweep takes. A **success-shaped outcome owns nothing**:
+`resource-busy` and `claim-busy` are exit 0, which a surrounding workflow reads
+as "nothing happened, move on", so if giving the claim back fails the retained
+ownership becomes the result — the nonzero `managed-error` — rather than a
+footnote on a status nobody investigates. Measure — resources held and the lease
+renewed throughout. Record — the measurement is retained on disk first, then
+ingested under one hold of the claim's sidecar lock. Release — only what this
+invocation acquired.
+
+**The commit cohort.** `probe_census.ingest_result` keys a cohort on the result
+document's own `commit_sha`, and that stays the value ingested. `/deflake`
+adds a REFERENCE: the commit is captured once, immediately after the claim,
+and before recording all three of that reference, the document's own value and
+a fresh `HEAD` read must agree. Ten engine-booting runs occupy many minutes to
+over an hour and the PR drainer fast-forwards the primary checkout after every
+merge, so a measurement really can straddle a HEAD change. A disagreement, or
+a value that does not name a commit at all, is the nonzero `commit-changed`
+outcome.
+
+**Recorder outcomes are decided by a signal, never a message.**
+`probe_census.update` guarantees unchanged bytes only for a failure BEFORE its
+`os.replace`; the directory fsync after it used to reach a caller as an
+indistinguishable bare `OSError`. #1436 added
+`probe_census.CensusDurabilityUnconfirmed` for exactly this decision, so
+`record-failed` (before) and `record-indeterminate` (after) are told apart
+deterministically. The indeterminate case retries nothing, appends no
+compensating record, and deliberately LEAVES the claim for token-aware
+diagnostics and TTL recovery — census ingestion is append-only and
+deliberately non-idempotent, so an automatic retry would duplicate the sample.
+A census update that commits but whose claim release then fails is
+`recorded-release-failed`: both facts reported, nothing rolled back or
+repeated.
+
+**Outcomes.** Successful, exit 0: `recorded`, `no-qualifying-probe`,
+`claim-busy`, `resource-busy`. Nonzero: `selector-error`,
+`claim-audit-failed`, `commit-changed`, `harness-error`, `record-failed`,
+`record-indeterminate`, `recorded-release-failed`, `managed-error`,
+`interrupted`. Every no-work result says why no measurement began; every
+nonzero one states which ownership, if any, remains.
+
+#### Real runs are evidence, never a merge gate
+
+A completed real ten-run `/deflake` invocation is useful manual pull-request
+evidence, and it is best-effort:
+
+- **real ten-run `/deflake` execution is manual, environment-sensitive
+  evidence.** It boots roughly ten engines in sequence and can legitimately
+  run for an hour;
+- **it is NOT required by CI, branch protection, or merge.** The real command
+  and any engine-booting ten-run measurement are deliberately absent from
+  `make ci` and from GitHub CI;
+- **no PASS/FAIL/TIMEOUT rate this lab measures is itself a merge verdict.**
+  A rate is an observation about a probe, not a judgement about a change;
+- **the repository's narrow automated CI and normal agent review remain the
+  merge gates**; and
+- **a maintainer may attach a completed real measurement to a pull request as
+  supplemental evidence.**
+
+Only a real `recorded` outcome proves the live end-to-end path. The other
+legitimate outcomes — `no-qualifying-probe`, `claim-busy`, `resource-busy`, or
+an environment error — remain valid smoke evidence but must not be described
+as proving measurement, ingestion, artifact handling or release. There is
+deliberately no forced-probe override to manufacture a completion with.
+
+The gate is `tools/test_deflake.py`, which boots no engine: every collaborator
+is an injected adapter, while `probe_census` and `probe_flake.Measurement`
+themselves are driven for real against throwaway censuses, because the census
+claims it checks are properties of the shipped recorder.
+
 ### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets/save-compat selection
 
 Selects the four expensive gates that are conditional on pull requests:
