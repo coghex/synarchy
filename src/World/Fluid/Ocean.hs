@@ -38,8 +38,11 @@ computeOceanMap seed worldSize _plateCount plates applyTL =
         -- This requires a majority (3+) of the chunk to be at/below sea
         -- level for the BFS to propagate, preventing ocean from bleeding
         -- inland through single low-lying corners on flat continents.
-        -- Coastal-fluid placement happens in `composeFluidMap` (water-
-        -- table-driven), which reads `oceanDist` for its classification.
+        -- Coastal-fluid placement happens in `composeFluidMap`, which
+        -- composes from the GLOBAL SURFACE-FLUID tables (`gtWorldOcean`,
+        -- `gtWorldLakes`, `gtWorldRivers`, `gtWorldLavaPools`) — not
+        -- from the subsurface water table — and reads `oceanDist`
+        -- through `chunkOrNeighborOceanic` for its coarse ocean test.
         chunkElev ∷ ChunkCoord → Int
         chunkElev (ChunkCoord cx cy) =
             let baseGX = cx * chunkSize
@@ -111,7 +114,12 @@ computeOceanMap seed worldSize _plateCount plates applyTL =
 
         -- BFS with distance tracking. Two phases:
         -- Phase 1: standard ocean BFS (only ocean chunks, seaLevel check)
-        -- Phase 2: extend into land chunks for water table gradient
+        -- Phase 2: extend into land chunks, recording distance from the
+        -- ocean boundary. That distance is a chunk metric for location
+        -- placement ('Location.Overlay'), NOT a water-table input — the
+        -- subsurface water table is climate-only
+        -- ('World.Hydrology.WaterTable'). Every ocean CLASSIFIER
+        -- downstream tests @dist ≡ 0@, so it sees phase 1 only.
         maxLandDist = 30 ∷ Int
 
         -- Phase 1: ocean BFS (same as before)
