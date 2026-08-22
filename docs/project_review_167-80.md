@@ -10,7 +10,7 @@ PR #167's shell `quit`/`exit` commands still call the real lifecycle transition,
 
 - [x] PRR-1. Per-world units still move, re-ground, and infect against another page's environment — [#1593]
 - [x] PRR-2. A queued fluid writeback can overtake a live edit's sim re-seed — [#1596]
-- [ ] PRR-3. Notification pauses discard the player's non-default world speed on resume
+- [x] PRR-3. Notification pauses discard the player's non-default world speed on resume — [#1599]
 - [ ] PRR-4. Build placement does not bind pick, validation, and commit to one world page
 - [ ] PRR-5. Settings Defaults preserves the live tooltip timing values instead of defaulting them
 - [ ] PRR-6. The settings Revert regression harness no longer reaches its assertions
@@ -66,7 +66,7 @@ PR #167's shell `quit`/`exit` commands still call the real lifecycle transition,
 
 ## 3. Notification pause speed
 
-### PRR-3. Notification pauses discard the player's non-default world speed on resume
+### [#1599] PRR-3. Notification pauses discard the player's non-default world speed on resume
 
 > **Captured note:** PR #83 preserved the selected time scale across a normal pause cycle, but notification categories bypass `pause.set(true)` and write the engine flag directly. Resuming through Space therefore restores `pause.prevTimeScale`—normally 1.0—rather than the live speed that was active when the notification paused the game.
 
