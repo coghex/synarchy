@@ -2,7 +2,6 @@
 module World.Geology.Log
     ( logTimeline
     , logTimelineSummary
-    , formatTimeline
     , formatPlatesSummary
     ) where
 

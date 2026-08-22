@@ -8,9 +8,6 @@ module World.Scale
     , scaleElev
     , scaleDist
     , scaleElevI
-    , scaleDistI
-      -- * Constants
-    , referenceWorldSize
     ) where
 
 import UPrelude
@@ -50,7 +47,3 @@ scaleDist ws v = v * wsScale ws
 -- | Scale and round to Int.
 scaleElevI ∷ WorldScale → Int → Int
 scaleElevI ws v = round (fromIntegral v * wsScale ws ∷ Float)
-
--- | Scale a horizontal Int distance.
-scaleDistI ∷ WorldScale → Int → Int
-scaleDistI ws v = round (fromIntegral v * wsScale ws ∷ Float)

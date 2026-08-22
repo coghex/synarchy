@@ -120,18 +120,7 @@ module World.Save.Component.WorldGen
     , toEtymologySourceDTO
     , fromEtymologySourceDTO
     , toRiverNamesDTO
-    , fromRiverNamesDTO
-    , toRiverNamesDTOv1
-    , fromRiverNamesDTOv1
-    , toLocationInstancesDTO
-    , fromLocationInstancesDTO
-    , toLocationInstancesDTOv1
-    , fromLocationInstancesDTOv1
-    , toLocationInstancesDTOv2
     , toLocationInstancesDTOv3
-    , fromLocationInstancesDTOv2
-    , toClimateStateDTO
-    , fromClimateStateDTO
     ) where
 
 import UPrelude
@@ -722,7 +711,7 @@ fromLocationInstanceDTO d = LocationInstance
 -- | Frozen mirror of the per-page instance table: its allocator plus
 --   its instances. 'Location.Instance.lisPendingLegacy' has no field
 --   here on purpose — it is a transient v1-migration carry that can
---   never be true of anything on disk, so 'fromLocationInstancesDTO'
+--   never be true of anything on disk, so @fromLocationInstancesDTO@
 --   always rebuilds it as 'Nothing'.
 data LocationInstancesDTO = LocationInstancesDTO
     { lisdNextId ∷ !Int

@@ -10,7 +10,6 @@ module Combat.Resolution.Damage
     , resolveStrike
     , weaponPenetration
     , resolvePartLayersNamed
-    , resolvePartLayers
     , defenderArmor
     , swingKinematics
     , computeSeverity

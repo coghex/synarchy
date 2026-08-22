@@ -50,7 +50,7 @@ traceRiverFromSource seed worldSize elevGrid _filledElev flowDir
         totalSamples = gridW * gridW
 
         -- Convert tile coordinates (gx, gy) to grid index.
-        -- Same math as elevFromGrid/filledElevFromGrid.
+        -- Same math as elevFromGrid.
         tileToGridIdx x y =
             let u = x - y
                 v = x + y

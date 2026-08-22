@@ -45,8 +45,10 @@ python3 tools/playtest/run.py --selftest
 
 Defaults: port **9308** (never the GUI's 8008), **12 turns**, 600 seconds
 wall-clock, `dt` 2.0 s, a 90-second decision timeout, a **200K**
-input-plus-output player-token ceiling, and stuck detection after 3 identical
-no-change turns. `--player` selects one complete audited medium-effort profile:
+input-plus-output player-token ceiling, stuck detection after 3 identical
+no-change turns, and a 1800-second `--setup-timeout` watchdog for
+everything *before* the session starts (see
+[Budgets and the player-ready boundary](#budgets-and-the-player-ready-boundary)). `--player` selects one complete audited medium-effort profile:
 `codex-luna` (the default, `gpt-5.6-luna`) or `claude-sonnet`
 (`claude-sonnet-5`). Arbitrary provider/model/effort strings are not accepted.
 
@@ -58,6 +60,102 @@ can still cross the remaining ceiling because the CLIs report usage only after
 it completes. Neither noninteractive CLI exposes a trustworthy whole-plan
 remaining-token count, so account remaining is shown as unavailable, not
 guessed.
+
+## Budgets and the player-ready boundary
+
+A cold-boot playtest spends real time on things that are not play: on a
+fresh worktree `cabal` compiles the whole game, the process then has to
+start, and the loading screen has to assemble a main menu. **None of it
+is charged to the player.** A run is two halves separated by one
+observable boundary (#1539).
+
+**Player-ready** — the boundary — is reached only when all of these hold
+at once:
+
+1. the engine process is running and its debug console is reachable
+   (it printed `READY`);
+2. startup boot has **finished** and the main-menu surface itself is
+   initialized (`ui_manager.startupBootDone` and
+   `moduleReady.mainMenu`, both set by `finishStartupBoot`), with
+   `currentMenu` naming a menu and `ui.registry.dumpWidgets()`
+   non-empty; and
+3. a screenshot that could really be handed to the player succeeds and
+   reports a positive framebuffer size.
+
+Condition 2 is what keeps the **loading screen** out: `currentMenu` is
+initialized to `"main"` at module load, long before any UI exists, and
+the startup loading screen is shown without changing it — and it carries
+visible labels, so `dumpWidgets()` is non-empty there too. A menu name
+plus arbitrary visible widgets would hand the player a progress bar as
+its first frame.
+
+Elapsed time and fixed sleeps never satisfy it — the old
+`time.sleep(3.0)` after boot is gone. Both console reads are ordinary
+harness-side **oracle** reads: they are recorded for the critic and
+never surfaced to the player, so the oracle-blind contract is unchanged
+(it forbids *showing* the player oracle data, not reading it). The
+probe's screenshot is written to `setup_ready.png` — a **setup
+artifact**, deliberately not `frames/turn_0001.png`: it is never a turn
+observation, never shown to the player, and produces no `turns.jsonl`
+or `replay.jsonl` record.
+
+**When each budget begins:**
+
+| Budget | Begins |
+|---|---|
+| `--max-seconds` wall clock | at the player-ready boundary |
+| `--turns`, stuck detection (`--stuck-k`) | at the boundary |
+| `--decision-timeout`, `--max-player-tokens` + its projected reserve | at the boundary — no player-provider call happens before it |
+| lockstep `--dt` advancement | at the boundary |
+| `--setup-timeout` | at process start; it **ends** at the boundary |
+
+A setup longer than `--max-seconds` therefore leaves the complete
+configured session budget available; the two never overlap.
+
+**Setup watchdogs are not session budgets.** `--setup-timeout` (default
+**1800 s**, generous enough for a full cold-worktree build) exists only
+so a wedged compiler or engine cannot hang forever. It is independent of
+`--max-seconds` and is **not** `probelib`'s 180-second probe `READY`
+default — that default, which counted compilation against itself, is what
+killed the run this section exists because of, and it remains unchanged
+for the ~85 behavior probes that call `probelib.boot` directly. Tripping
+the setup watchdog is a setup failure, never `time_budget_exhausted`.
+
+**How setup failures appear.** The pre-ready sequence runs in three named
+phases, and a failure names the one it happened in:
+
+| Phase | `stop_reason` | `setup_failure.kind` |
+|---|---|---|
+| build / preparation | `setup_build_failed` | `build_failed`, `build_timeout` |
+| engine process + debug console | `setup_engine_failed` | `engine_exited`, `console_timeout`, `refused_port` |
+| rendered-UI readiness | `setup_render_failed` | `render_engine_exited`, `render_timeout` |
+
+Such a run records **zero turns**, writes no `replay.jsonl`, makes no
+player-provider call and consumes no player tokens, leaves `loaded_at`
+and `session_started_at` null, and exits non-zero. `meta.setup_failure`
+carries `{phase, kind, detail, timed_out, stop_reason}`, and
+`meta.setup_log_tail` / `meta.engine_log_tail` carry the retained output.
+The pre-ready teardown reaps the **whole spawned process group** (the
+engine is spawned into its own session) and waits for the listener port
+to actually release, so a failed attempt cannot leave an orphan holding
+the port and make the next one fail as an unrelated "exited before READY"
+(#1190/#1323).
+
+**Which timestamps measure setup versus play** — all four are unix epoch
+floats (`time.time()`); budget *enforcement* stays on a monotonic clock:
+
+| Field | Meaning |
+|---|---|
+| `setup_started_at` | setup began (trace creation) |
+| `loaded_at` | the player-ready boundary; **null** if never reached |
+| `session_started_at` | the session loop began; **null** if no session ran |
+| `ended_at` | the session finished |
+| `started_at` | retained, unchanged: the same instant as `setup_started_at` |
+
+Setup duration is `loaded_at - setup_started_at`; the actual player
+session is `ended_at - session_started_at`. Traces written before #1539
+carry only `started_at`/`ended_at`, and every reader (the usage ledger,
+the critic, pre-analysis, `--replay`) still accepts them.
 
 ## The lockstep loop
 
@@ -181,13 +279,18 @@ One directory per session (default `tools/playtest/sessions/<ts>_<persona>/`,
 gitignored):
 
 - `meta.json` — persona, goal, player model + settings, `dt`, budgets,
-  harness version, timestamps, `stop_reason`
+  harness version, the four lifecycle timestamps
+  (`setup_started_at` / `loaded_at` / `session_started_at` / `ended_at`,
+  plus the retained `started_at`), `stop_reason`
   (`goal_reached_claimed` / `turn_budget_exhausted` /
   `time_budget_exhausted` / `decision_timeout` /
   `token_budget_reserved` / `token_budget_exhausted` /
-  `usage_unavailable` / `stuck_loop` / `engine_crash` / `interrupted`),
+  `usage_unavailable` / `stuck_loop` / `engine_crash` / `interrupted`,
+  or one of the three pre-ready SETUP outcomes `setup_build_failed` /
+  `setup_engine_failed` / `setup_render_failed`, #1539),
   cumulative `usage_totals` (input + output), crash detail + engine log tail
-  when applicable.
+  when applicable, and `setup_failure` + `setup_log_tail` on a pre-ready
+  failure.
 - `turns.jsonl` — per turn: screenshot path, the player's structured
   output (observation/action/expectation/note + raw + token usage),
   the exact injected `input.*` calls and their acks (**executed calls
@@ -232,6 +335,13 @@ gitignored):
 - `engine.log` — engine output, copied at session end (an engine crash
   mid-session is a **finding**: the partial trace + logs are retained
   and `stop_reason` is `engine_crash`).
+- `setup.log` — build/preparation output (#1539), written live during the
+  pre-ready `build` phase at cabal's normal verbosity. Unlike the engine
+  log it survives a failure that happens *before the executable ever
+  starts*, which used to leave the trace with nothing but an unexplained
+  zero-byte `engine.log`.
+- `setup_ready.png` — the player-ready probe's screenshot (#1539). A setup
+  artifact, not under `frames/` and never numbered as a turn.
 - `inspection-plan.json` — deterministic, LLM-free selection of bookends and
   turns implicated by notes, bad outcomes, stuck detection, or a crash. It is
   an inspection queue, not a verdict; listed images still need direct review.
@@ -261,6 +371,12 @@ Notes on trace contents:
   `meta.scenario` field).
 
 ## Stop conditions
+
+Every reason below is a **player-session** outcome and can only be reached
+after the [player-ready boundary](#budgets-and-the-player-ready-boundary).
+A failure before it stops the run with one of the three SETUP reasons
+instead (`setup_build_failed` / `setup_engine_failed` /
+`setup_render_failed`) and zero turns.
 
 Turn budget (`--turns`), wall-clock budget (`--max-seconds`), decision timeout,
 player-token budget (`--max-player-tokens`), missing provider usage, the player
@@ -337,7 +453,14 @@ clean and additive.
 - `python3 tools/playtest/run.py --selftest` — offline, CI-safe check
   of the loop, trace write, replay, stuck detection, trace phase
   fidelity (#698: terminal/stuck/interrupted turns record and replay
-  without an invented step or post call), and the oracle-blind prompt
+  without an invented step or post call), the setup/session split
+  (#1539: a setup longer than `--max-seconds` still hands the session
+  its whole budget, no player call precedes the boundary, readiness
+  needs positive rendered/UI evidence rather than elapsed time, each
+  pre-ready phase's failure records zero turns and phase-specific
+  diagnostics with null boundary stamps, lifecycle metadata is
+  chronological, the group reap and port wait really happen, and
+  pre-#1539 traces still load), and the oracle-blind prompt
   shape plus both pinned medium-effort provider invocations, normalized usage,
   and projected token reserve (FakeEngine + scripted agent; no window, no
   build, no model call).

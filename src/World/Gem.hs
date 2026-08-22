@@ -1,7 +1,7 @@
 {-# LANGUAGE Strict #-}
 -- | Seeded gem region field (dig yields, G3).
 --
---   The world is divided into 'gemRegionSize'-square tile regions.
+--   The world is divided into @gemRegionSize@-square tile regions.
 --   Each region deterministically answers (from a hash of the world
 --   seed + region coords — nothing is stored or saved):
 --
@@ -14,14 +14,11 @@
 --                 that yields several finds in a row
 --
 --   Per completed dig tile the handler rolls ONCE:
---   @tierBase × richness × perception@, capped at 'gemChanceCap'.
+--   @tierBase × richness × perception@, capped at @gemChanceCap@.
 --   Perception (the finishing digger's stat, ~0.8–1.2) is the
 --   noticing-the-glint factor — deliberately NOT mining skill.
 module World.Gem
-    ( gemRegionSize
-    , gemChanceCap
-    , gemAtRegion
-    , gemChanceAt
+    ( gemChanceAt
     ) where
 
 import UPrelude

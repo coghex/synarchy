@@ -7,7 +7,6 @@
 module World.Spoil.Logic
     ( spoilTileOk
     , spoilStartVertex
-    , spoilCapacityAt
     , spoilBlockedAt
     ) where
 

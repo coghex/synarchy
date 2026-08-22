@@ -9,7 +9,6 @@
 --   `Unit.Thread.Command::handleUnitCommand` on `UnitDestroy`.
 module Unit.Selection
     ( selectUnit
-    , deselectUnit
     , clearSelection
     , setSelection
     , isSelected
@@ -46,12 +45,6 @@ selectUnit env uid = do
         if onActivePage mPage um uid
         then (um { umSelected = HS.singleton uid }, True)
         else (um, False)
-
--- | Remove a single unit from the selection.
-deselectUnit ∷ EngineEnv → UnitId → IO ()
-deselectUnit env uid =
-    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
-        (um { umSelected = HS.delete uid (umSelected um) }, ())
 
 -- | Empty the selection.
 clearSelection ∷ EngineEnv → IO ()

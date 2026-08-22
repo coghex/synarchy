@@ -2,7 +2,6 @@
 module World.Magma.Field
     ( mantleZ
     , mantleNoise
-    , sumHotspots
     , mantleBaseDepth
     ) where
 

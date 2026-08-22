@@ -8,27 +8,17 @@
 --   for the placement pipeline. Old per-feature pool / fissure
 --   stampers were removed in the lava-v1 phase-3 cleanup.
 module World.Fluid.Lava
-    ( hasAnyLavaQuick
-    , chunkHasLavaQuick
+    ( chunkHasLavaQuick
     ) where
 
 import UPrelude
 import qualified Data.Vector.Unboxed as VU
-import World.Chunk.Types (LoadedChunk(..), ChunkCoord, chunkSize)
+import World.Chunk.Types (ChunkCoord, chunkSize)
 import World.Magma.Types (VolcanoCtx)
 import World.Magma.Init (discoverChunkLava)
 
--- | Cheap predicate: does this chunk carry a magma overlay? Equal to
---   @isJust . lcMagma@ — relies on chunk-gen having populated the
---   overlay via 'discoverChunkLava'. Since the pool rework that means
---   BASALT CAPS (sub-water breaches), not visible surface lava, which
---   lives in the global 'gtWorldLavaPools' table; callers wanting
---   "any lava here?" must OR that table in separately.
-hasAnyLavaQuick ∷ LoadedChunk → Bool
-hasAnyLavaQuick = isJust . lcMagma
-
--- | Zoom-cache predicate: same question as 'hasAnyLavaQuick' but
---   without a 'LoadedChunk'. Computes the overlay using a synthetic
+-- | Zoom-cache predicate: does this chunk carry any lava, asked
+--   without a loaded chunk in hand. Computes the overlay using a synthetic
 --   flat surface at @avgElev@ — same machinery the real chunk-gen
 --   runs, just approximated to one elevation per chunk. Over-flags
 --   slightly when the chunk's real surface is higher than a chute's

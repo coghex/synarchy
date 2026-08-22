@@ -46,9 +46,9 @@ calderaHazardsFor features =
             in Just (cx, cy, caOuterRadius p)
         VolcanicShape (SuperVolcano p) →
             let GeoCoord cx cy = svCenter p
-                -- Matches the rim's true outer edge (World.Geology.
-                -- Volcano's applySuperVolcano: rimOuterR = calderaR +
-                -- calderaR * 0.15).
+                -- Matches the rim's true outer edge, as stamped by
+                -- 'World.Geology.Volcano.applyVolcanicFeature' for a
+                -- super-volcano: rimOuterR = calderaR + calderaR * 0.15.
                 hazardR = round (fromIntegral (svCalderaRadius p)
                                   * (1.15 ∷ Float))
             in Just (cx, cy, hazardR)

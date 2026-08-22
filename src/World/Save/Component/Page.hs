@@ -118,7 +118,6 @@ module World.Save.Component.Page
     , WorldActivityDTO(..)
     , PageActivityDTOv2(..)
     , WorldActivityDTOv2(..)
-    , migratePageActivityV2
     , migrateWorldActivityV2
       -- * Frozen leaf DTOs (requirement 4)
     , WorldGenParamsDTO(..)
@@ -133,9 +132,7 @@ module World.Save.Component.Page
     , WorldIdentityDTOv1(..)
     , WorldIdentityDTOv2(..)
     , LanguageProvenanceDTO(..)
-    , fromWorldIdentityDTOv1
     , toWorldIdentityDTOv2
-    , fromWorldIdentityDTOv2
     , WorldEditDTO(..)
     , MineDesignationDTO(..)
     , StructurePieceDTO(..)
@@ -168,20 +165,14 @@ module World.Save.Component.Page
     , toWorldGenParamsDTOv5
     , toEtymologySourceDTO
     , fromEtymologySourceDTO
-    , toItemStorageDTO
-    , fromItemStorageDTO
     , toItemInstanceDTO
     , fromItemInstanceDTO
     , toItemInstanceDTOv1
     , migrateItemInstanceDTOv1
     , toGroundItemDTO
     , fromGroundItemDTO
-    , toGroundItemDTOv1
-    , migrateGroundItemDTOv1
     , toGroundItemsDTO
-    , fromGroundItemsDTO
     , toGroundItemsDTOv1
-    , migrateGroundItemsDTOv1
     , basePageSnapshots
     , blankPageSnapshot
     , applyWorldEdits
@@ -319,14 +310,16 @@ data WorldIdentityDTOv2 = WorldIdentityDTOv2
 
 -- | Encoder for the frozen shape — the round-trip partner a frozen-DTO
 --   fixture is built with (the same reason 'toWorldGenParamsDTOv3'
---   exists).
+--   exists). Kept exported with no consumer yet (#1119) because that
+--   fixture seam is the whole point of a frozen shape's encoder, and
+--   'toItemInstanceDTOv1' cites it as the precedent for its own.
 toWorldIdentityDTOv2 ∷ WorldIdentity → WorldIdentityDTOv2
 toWorldIdentityDTOv2 i = WorldIdentityDTOv2 (wiName i) (wiGloss i)
     (toLanguageProvenanceDTO <$> wiLanguage i)
 
 -- | A pre-#1104 identity keeps its name, gloss, and language EXACTLY
 --   and decodes with NO etymology source — the same honest absence
---   'fromWorldIdentityDTOv1' produces for provenance. A world named
+--   @fromWorldIdentityDTOv1@ produces for provenance. A world named
 --   before the expression was recorded genuinely has none to recover,
 --   and deriving one from the name would fabricate a meaning.
 fromWorldIdentityDTOv2 ∷ WorldIdentityDTOv2 → WorldIdentity
@@ -1198,7 +1191,7 @@ migrateWorldPagesV3 (WorldPagesDTOv3 ps) = WorldPages
 --   the same base 'PageSnapshot' map. The identity difference is the
 --   headline — every v2 page's name and gloss carry across byte-exact
 --   while its language provenance decodes ABSENT
---   ('fromWorldIdentityDTOv1'), never inferred from the world seed or
+--   (@fromWorldIdentityDTOv1@), never inferred from the world seed or
 --   the name text. Its gen params are the frozen pre-#1101 shape, so
 --   its location instances likewise keep their stored names and gain
 --   no gloss. Clocks, camera, and map mode ride across untouched.

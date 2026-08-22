@@ -1,7 +1,6 @@
 {-# LANGUAGE Strict #-}
 module World.Geology.Event
     ( applyGeoEvent
-    , applyEvolution
     ) where
 
 import UPrelude

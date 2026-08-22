@@ -1,7 +1,6 @@
 {-# LANGUAGE Strict #-}
 module World.Render.Camera
     ( camEpsilon
-    , quadCacheMarginFrac
     , quadCacheMargins
     , cameraChanged
     ) where

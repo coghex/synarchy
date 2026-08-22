@@ -12,7 +12,7 @@
 --   epoch; the date is already persisted, so growth survives chunk
 --   eviction AND save/load for free), @fiAge@ is the deterministic
 --   placement age ("age at day 0"), and @fiHealth@ is the placement-time
---   habitat fitness ('speciesFitness' — soil + climate suitability).
+--   habitat fitness (@speciesFitness@ — soil + climate suitability).
 --   Unhealthy plants grow slower; nothing here ever writes state.
 --
 --   Mortal lifecycles (perennial/annual/biennial) wrap generationally:
@@ -33,7 +33,6 @@ module World.Flora.Growth
     ( -- * Derived growth state
       FloraGrowth(..)
     , floraGrowth
-    , growthRate
     , instanceLifespan
     , deadWindowDays
       -- * Phase / stage selection

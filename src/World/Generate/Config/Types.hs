@@ -8,11 +8,6 @@ module World.Generate.Config.Types
     , ResourcesYaml(..)
     , TimelineYaml(..)
     , defaultWorldGenConfig
-    , defaultResourcesYaml
-    , defaultCalendarYaml
-    , defaultSunYaml
-    , defaultMoonYaml
-    , defaultClimateYaml
     , defaultTimelineYaml
     ) where
 

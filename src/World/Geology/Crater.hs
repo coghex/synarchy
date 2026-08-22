@@ -1,8 +1,6 @@
 {-# LANGUAGE Strict #-}
 module World.Geology.Crater
     ( generateCraters
-    , generateCraterAttempt
-    , determineMeteoriteType
     , applyCrater
     ) where
 

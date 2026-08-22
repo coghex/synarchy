@@ -24,8 +24,6 @@
 --   'discoverChunkLava'.
 module World.Magma.Pool
     ( identifyLavaPools
-    , defaultLavaPoolDepth
-    , defaultLavaPoolRadius
     ) where
 
 import UPrelude
@@ -43,25 +41,6 @@ import World.Fluid.River.Types (WorldRivers, riversInChunk
 import World.Geology.Timeline.Types (EventBBox(..))
 import World.Magma.Types (VolcanoCtx(..), MagmaSource(..))
 import World.Magma.Shape (pointInShape)
-
--- | Default pool depth and radius — the config-exposed levers
---   ('wgcLavaPoolDepth' / 'wgcLavaPoolRadius' in
---   "World.Generate.Config"). 'identifyLavaPools' takes explicit
---   values; these defaults exist for callers without a config.
---
---   Depth: how deep a pool may stand above the basin floor it
---   drains to — bounds the fill so a flank breach doesn't fill an
---   entire valley to its rim (lava cools; a fixed head above the
---   landing floor is the v1 stand-in for a volume model).
-defaultLavaPoolDepth ∷ Int
-defaultLavaPoolDepth = 4
-
--- | Default outer rim radius (tiles, Euclidean from the landing
---   point). On dead-flat ground the basin grow has no saddle to
---   stop at, so the radius is the effective bound there. The area
---   cap derives as ⌈π·r²⌉.
-defaultLavaPoolRadius ∷ Int
-defaultLavaPoolRadius = 18
 
 -- | Max steepest-descent steps from a breach to its landing point.
 --   Lava that would run further than this just pools where the walk
