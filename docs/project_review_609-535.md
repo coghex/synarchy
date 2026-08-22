@@ -10,7 +10,7 @@ The current furnace/machine-shop content, recipe-dependent power accounting, inf
 
 - [x] PRR-1. Parallel probe assignments can overlap a neighboring probe's secondary port — [#1571]
 - [x] PRR-2. A direct CI rewrite removed accepted feature-gate coverage without per-probe evidence — [#1577]
-- [ ] PRR-3. The probe-runner README still carries the drifting count #594 meant to remove
+- [x] PRR-3. The probe-runner README still carries the drifting count #594 meant to remove — [#1584]
 
 ## 1. Parallel probe port allocation
 
@@ -66,7 +66,7 @@ The current furnace/machine-shop content, recipe-dependent power accounting, inf
 
 ## 3. Probe-runner inventory documentation
 
-### PRR-3. The probe-runner README still carries the drifting count #594 meant to remove
+### [#1584] PRR-3. The probe-runner README still carries the drifting count #594 meant to remove
 
 > **Captured note:** Remove the remaining prose assertion about the current number of registered probes, or derive it from the registry. The README already names `run_probes.py --list` as authoritative; it should not immediately undercut that source of truth with another hand-maintained estimate that has fallen almost thirty probes behind.
 
