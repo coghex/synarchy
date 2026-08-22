@@ -5,7 +5,6 @@
 module World.ZoomMap.ChunkTexture
     ( ZoomAtlasData(..)
     , buildZoomAtlas
-    , chunkAtlasUVs
     ) where
 
 import UPrelude
@@ -76,21 +75,6 @@ assembleAtlas atlasW _atlasH chunksPerRow chunkPixels totalSize =
                               tileStride
 
 -- * UV Computation
-
--- | Compute UV coordinates for a chunk at the given index
---   within the atlas.  Returns (u0, v0, u1, v1).
-chunkAtlasUVs ∷ ZoomAtlasData → Int → (Float, Float, Float, Float)
-chunkAtlasUVs atlas idx =
-    let cpr = zadChunksPerRow atlas
-        col = idx `mod` cpr
-        row = idx `div` cpr
-        aw  = fromIntegral (zadWidth atlas)
-        ah  = fromIntegral (zadHeight atlas)
-        u0  = fromIntegral (col * zoomTileSize) / aw
-        v0  = fromIntegral (row * zoomTileSize) / ah
-        u1  = fromIntegral ((col + 1) * zoomTileSize) / aw
-        v1  = fromIntegral ((row + 1) * zoomTileSize) / ah
-    in (u0, v0, u1, v1)
 
 -- * Helpers
 

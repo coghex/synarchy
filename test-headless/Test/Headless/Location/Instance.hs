@@ -131,10 +131,19 @@ spec = describe "Location instance identity" $ do
             map liChunk (instancesToList instances3)
                 `shouldBe` [ChunkCoord (-3) 4, ChunkCoord 0 0, ChunkCoord 2 (-1)]
 
-        it "reproduces the same id → (definition, anchor) mapping when the \
-           \same placement is recomputed" $
-            identityOf (buildLocationInstances Nothing registry overlay3)
-                `shouldBe` identityOf instances3
+        it "pins each allocated id to its definition and canonical chunk" $
+            -- Hand-stated, never re-derived from a second construction:
+            -- 'overlay3' maps (2,-1)→"ruin", (-3,4)→"camp", (0,0)→"ruin",
+            -- and ids follow canonical (cx, cy) order — so a build that
+            -- leaked hashmap order, or paired a correctly ordered chunk
+            -- with the wrong definition, cannot reproduce this list. It
+            -- is also the baseline the two cross-path comparisons below
+            -- (the pre-#911 migration, the serialization round trip) rest
+            -- on.
+            identityOf instances3 `shouldBe`
+                [ (LocationInstanceId 1, "camp", ChunkCoord (-3) 4)
+                , (LocationInstanceId 2, "ruin", ChunkCoord 0    0)
+                , (LocationInstanceId 3, "ruin", ChunkCoord 2  (-1)) ]
 
         it "leaves the allocator strictly above every live id" $ do
             lisNextId instances3 `shouldBe` 4

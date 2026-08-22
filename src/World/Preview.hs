@@ -1,7 +1,6 @@
 {-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 module World.Preview
-    ( buildPreviewImage
-    , buildPreviewFromPixels
+    ( buildPreviewFromPixels
     , PreviewImage(..)
     ) where
 
@@ -97,63 +96,3 @@ buildPreviewFromPixels params cache pixels =
                         writePixel (px + 3) (py + 1) rr rg rb ra
 
     in PreviewImage imgW imgH pixelData
-
--- * Fallback: Build Preview from ZoomChunkEntry summary (used when per-chunk pixel data is not available)
-
-buildPreviewImage ∷ WorldGenParams → V.Vector ZoomChunkEntry → PreviewImage
-buildPreviewImage params cache =
-    let worldSize = wgpWorldSize params
-        halfSize  = worldSize `div` 2
-        imgW      = worldSize
-        imgH      = worldSize
-        totalBytes = imgW * imgH * 4
-
-        pixelData = BSI.unsafeCreate totalBytes $ \ptr → do
-                forM_ [0 .. imgW * imgH - 1] $ \i → do
-                    pokeByteOff ptr (i * 4 + 0) (0 ∷ Word8)
-                    pokeByteOff ptr (i * 4 + 1) (0 ∷ Word8)
-                    pokeByteOff ptr (i * 4 + 2) (0 ∷ Word8)
-                    pokeByteOff ptr (i * 4 + 3) (255 ∷ Word8)
-
-                V.forM_ cache $ \entry → do
-                    let cx = zceChunkX entry
-                        cy = zceChunkY entry
-                        u = cx - cy
-                        v = cx + cy
-                        px = (((u + halfSize) `mod` imgW) + imgW) `mod` imgW
-                        py = v + halfSize
-
-                    when (py >= 0 ∧ py < imgH) $ do
-                        let matId   = zceTexIndex entry
-                            elev    = zceElev entry
-                            hasIce  = zceHasIce entry
-                            (r, g, b, a) = fallbackColor matId elev hasIce
-                            writePixel x = when (x >= 0 ∧ x < imgW) $ do
-                                let idx = (py * imgW + x) * 4
-                                pokeByteOff ptr (idx + 0) r
-                                pokeByteOff ptr (idx + 1) g
-                                pokeByteOff ptr (idx + 2) b
-                                pokeByteOff ptr (idx + 3) a
-                        writePixel px
-                        writePixel ((px + 1) `mod` imgW)
-
-    in PreviewImage imgW imgH pixelData
-
--- | Simple color for fallback preview (no per-chunk pixels available)
-fallbackColor ∷ Word8 → Int → Bool → (Word8, Word8, Word8, Word8)
-fallbackColor matId elev hasIce
-    | matId ≡ 250 = (220, 225, 245, 255)   -- glacier
-    | hasIce      = (200, 215, 235, 255)   -- ice
-    | matId ≡ 0   = (30, 60, 120, 255)     -- ocean
-    | otherwise   =                         -- land
-        let shift = clamp (-30) 60 (elev `div` 20)
-            r = clampByte (140 + shift)
-            g = clampByte (130 + shift)
-            b = clampByte (100 + shift)
-        in (r, g, b, 255)
-
-clampByte ∷ Int → Word8
-clampByte x
-    | x < 0     = 0
-    | x > 255   = 255
-    | otherwise  = fromIntegral x

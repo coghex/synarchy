@@ -15,7 +15,7 @@ module Unit.Thread.Movement.Types
 
 import UPrelude
 import Unit.Direction (Direction(..))
-import Unit.Fall (gravity, metresPerZ)
+import Unit.Physics (gravity, metresPerZ)
 
 -- | Per-unit movement stats relevant to climb/fall mechanics.
 --   Snapshotted once per tick at the top of tickAllMovement so the
@@ -51,11 +51,11 @@ defaultMoveStats = UnitMoveStats
     , umsHeight    = baselineUnitHeight
     }
 
--- | Free-fall gravity in z-levels/s². Derived from the injury model's
---   constants (Unit.Fall.gravity m/s² ÷ metresPerZ) so the motion that
---   brings a unit down stays consistent with the impact energy the fall
---   injuries assume — one source of truth for "how hard gravity pulls."
---   Shared by Fall (descent) and Leap (arc flight time).
+-- | Free-fall gravity in z-levels/s². Derived from the shared physics
+--   constants ("Unit.Physics": gravity m/s² ÷ metresPerZ) so the motion
+--   that brings a unit down stays consistent with the impact energy the
+--   fall injuries assume — one source of truth for "how hard gravity
+--   pulls." Shared by Fall (descent) and Leap (arc flight time).
 fallGravityZ ∷ Float
 fallGravityZ = gravity / metresPerZ
 

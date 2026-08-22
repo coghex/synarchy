@@ -4,7 +4,6 @@ module World.Thread.ChunkLoading
     , drainInitQueues
     , dispatchLocationStamps
     , locationStampsFor
-    , maxChunksPerTick
     ) where
 
 import UPrelude

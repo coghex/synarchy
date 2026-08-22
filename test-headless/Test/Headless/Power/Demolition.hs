@@ -52,6 +52,7 @@ import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Item.Types (ItemInstance(..))
+import Power.Base (PowerNodeSpec(..))
 import Power.Types
     (PowerNode(..), PowerNodeId(..), PowerNodes(..), PowerRole(..)
     , addPowerNode, emptyPowerNodes)
@@ -169,15 +170,23 @@ bareDef name = BuildingDef
     , bdSpriteAnchor = "diamond_bottom", bdBuildWork = 0
     , bdMaterials = HM.empty, bdStorageCapacity = 0
     , bdOperations = [], bdAnimations = HM.empty
-    , bdStateAnims = HM.empty, bdPowerDrain = 0
+    , bdStateAnims = HM.empty, bdPowerDrain = 0, bdPowerNode = Nothing
     }
 
 -- | The two power hosts plus one ORDINARY building — the control that
 --   proves a non-power demolition leaves every registry alone.
+--
+--   The node role/rating rides the def itself since #1148, so the two
+--   hosts declare theirs here exactly as their shipped YAML does; the
+--   shed declares none, which is what makes it non-placeable.
 buildingDefs ∷ HM.HashMap Text BuildingDef
 buildingDefs = HM.fromList
-    [ ("solar_panel", bareDef "solar_panel")
-    , ("high_voltage_battery", bareDef "high_voltage_battery")
+    [ ("solar_panel"
+      , (bareDef "solar_panel")
+            { bdPowerNode = Just (PowerNodeSource 400) })
+    , ("high_voltage_battery"
+      , (bareDef "high_voltage_battery")
+            { bdPowerNode = Just (PowerNodeStorage 5000) })
     , ("shed", (bareDef "shed") { bdCategory = "Storage" })
     ]
 

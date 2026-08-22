@@ -270,7 +270,7 @@ spec = do
 --   its WRAPPED image across the U seam has to be clickable where it is
 --   DRAWN. The render pass paints at @drawX0 + xOff@, so a hit test that
 --   compared clicks against the unwrapped geometry alone was a whole
---   'worldScreenWidth' away from every such click — visible, unhittable.
+--   world screen period away from every such click — visible, unhittable.
 --
 --   This drives the real 'hitTestGroundItemAt' (engine-backed: it reads
 --   camera / viewport / item-manager state off EngineEnv) with the

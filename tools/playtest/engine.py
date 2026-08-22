@@ -1,6 +1,6 @@
 """Engine connection for the playtest harness (#647).
 
-Owns the game-instance lifecycle — windowed (the original substrate,
+Owns the launched game instance — windowed (the original substrate,
 steals focus) or offscreen (#650: GPU on, window off, unattended /
 parallel-safe) — and every debug-console interaction the lockstep
 loop needs: pause control, F1 screenshots, F2 input injection, and the
@@ -15,6 +15,12 @@ what the step itself produced, #775). Both render modes serve the
 identical render + input pipeline, so everything below the launch
 flags is mode-blind.
 
+Getting an instance TO that point is `launch.py`'s job (#1539): the
+build, the process/console startup and the wait for a first
+player-ready frame are three separately-budgeted setup phases, and the
+boundary between them and play is what every player-session budget
+starts from.
+
 Also owns the action->input.* translation: the player acts in
 screenshot pixel space (F1's framebuffer pixels), which is exactly the
 space the input.* verbs accept, so no coordinate conversion happens
@@ -26,7 +32,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from probelib import boot, quit_engine, send, send_json  # noqa: E402
+from probelib import quit_engine, send, send_json  # noqa: E402
 
 
 class EngineCrash(Exception):
@@ -40,6 +46,12 @@ class ActionError(ValueError):
 # The action vocabulary the harness accepts from agents. Mirrors F2's
 # verbs; documented for the player in the agent prompt and in README.md.
 ACTION_KINDS = ("click", "drag", "scroll", "key", "hold", "type", "wait", "done")
+
+# Default per-call console budgets. Named so the setup launcher can
+# shrink them to whatever is left of its own deadline (#1539) instead of
+# letting one stalled read run 15-20 s past a smaller --setup-timeout.
+CONSOLE_READ_TIMEOUT = 15.0
+SCREENSHOT_TIMEOUT = 20.0
 
 # How the instance renders: "windowed" opens (and focuses) a real game
 # window; "offscreen" (#650) runs the same full render pipeline into
@@ -181,18 +193,18 @@ class PlaytestEngine:
     # -- lifecycle ---------------------------------------------------
 
     def boot_mode(self) -> tuple[str, ...]:
-        """The probelib.boot mode flags this render mode maps to."""
+        """The boot-profile flag(s) this render mode launches with —
+        `launch.start_engine` passes them straight to the executable."""
         return () if self.render_mode == "windowed" else ("--offscreen",)
 
-    def launch(self, ready_timeout: float = 180.0) -> None:
-        """Boot the instance — F1/F2 need a real render + input
-        pipeline, which both modes provide: windowed (mode=())
-        deliberately opens and focuses a game window; offscreen
-        (--offscreen, #650) renders windowless so sessions can run
-        unattended and in parallel. probelib.boot blocks until READY."""
-        self.proc = boot(self.port, log=self.log_path, mode=self.boot_mode(),
-                         ready_timeout=ready_timeout,
-                         label=f"playtest engine ({self.render_mode})")
+    # Launching is NOT here: `launch.py` owns the cold-boot sequence and
+    # the player-ready boundary (#1539). It builds, spawns and waits in
+    # three separately-classified phases under their own budget, and
+    # records the process on `self.proc` exactly as this used to — so
+    # `quit`/`alive`/`log_tail` below are unchanged. probelib.boot's
+    # single 180 s READY deadline (which counted compilation against
+    # itself) is deliberately no longer on the playtest path, while its
+    # contract for the ~85 behavior probes that DO call it is untouched.
 
     def quit(self) -> None:
         if self.proc is not None and self.proc.poll() is None:
@@ -215,7 +227,7 @@ class PlaytestEngine:
 
     # -- console I/O with crash detection -----------------------------
 
-    def lua(self, code: str, timeout: float = 15.0):
+    def lua(self, code: str, timeout: float = CONSOLE_READ_TIMEOUT):
         """Run one console line, JSON-decoding the reply. Raises
         EngineCrash when the process is gone / unreachable — a crash
         mid-session is a finding, and the caller ends gracefully."""
@@ -239,9 +251,10 @@ class PlaytestEngine:
         flag = "true" if paused else "false"
         self.lua_fire(f'require("scripts.pause").set({flag})')
 
-    def screenshot(self, path: str) -> tuple[int, int]:
+    def screenshot(self, path: str,
+                   timeout: float = SCREENSHOT_TIMEOUT) -> tuple[int, int]:
         reply = self.lua(f"return debug.captureScreenshot({_lua_str(path)})",
-                         timeout=20.0)
+                         timeout=timeout)
         if not isinstance(reply, dict) or "width" not in reply:
             err = reply.get("error") if isinstance(reply, dict) else repr(reply)
             raise EngineCrash(f"screenshot failed: {err}")
@@ -324,9 +337,6 @@ class FakeEngine(PlaytestEngine):
         self.paused = True
         self.unpauses = 0  # sim steps taken — selftest counts them (#698)
 
-    def launch(self, ready_timeout: float = 0) -> None:
-        self.proc = None
-
     def alive(self) -> bool:
         return True
 
@@ -338,7 +348,8 @@ class FakeEngine(PlaytestEngine):
             self.unpauses += 1
         self.paused = paused
 
-    def screenshot(self, path: str) -> tuple[int, int]:
+    def screenshot(self, path: str,
+                   timeout: float = SCREENSHOT_TIMEOUT) -> tuple[int, int]:
         with open(path, "wb") as f:
             f.write(self._PNG)
         self.fb_size = (1280, 720)

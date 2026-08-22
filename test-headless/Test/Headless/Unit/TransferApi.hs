@@ -162,7 +162,7 @@ storageDef name display (w, h) work cap = BuildingDef
     , bdSpriteAnchor = "diamond_bottom", bdBuildWork = work
     , bdMaterials = HM.empty, bdStorageCapacity = cap
     , bdOperations = [], bdAnimations = HM.empty
-    , bdStateAnims = HM.empty, bdPowerDrain = 0
+    , bdStateAnims = HM.empty, bdPowerDrain = 0, bdPowerNode = Nothing
     }
 
 mkBuilding ∷ Text → (Int, Int) → (Int, Int) → [ItemInstance] → BuildingInstance

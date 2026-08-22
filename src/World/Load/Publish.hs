@@ -33,7 +33,7 @@ import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import Engine.Input.Types (defaultInputState)
-import UI.Focus (FocusManager(..))
+import UI.ShellFocus (FocusManager(..))
 import UI.Manager (clearElementFocus, clearControlFocus)
 import UI.Types (UIPageManager(upmHovered))
 import World.Types

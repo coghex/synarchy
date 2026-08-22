@@ -69,7 +69,7 @@ import UPrelude
 import qualified Data.Map.Strict as Map
 import Data.IORef (IORef)
 import Engine.Scene.Base (ObjectId)
-import UI.Focus (FocusManager)
+import UI.ShellFocus (FocusManager)
 import UI.Types (UIPageManager)
 import World.Types (WorldPageId)
 import Engine.Core.State
@@ -90,10 +90,14 @@ data UiCapability = UiCapability
     --   @session-replaced@ (a load publish clears text and control
     --   focus, and Lua rebuilds the tree).
     uicUiManagerRef      ∷ IORef UIPageManager
-    -- | @InputThread@\/@LuaThread@ read and write it (#745 Tab\/
-    --   Shift+Tab navigation, @API.Focus@); @session-replaced@ — a
-    --   load publish clears the CURRENT focus only, keeping
-    --   registered targets.
+    -- | Shell\/console TEXT focus ("UI.ShellFocus"), not either
+    --   game-UI focus system. @InputThread@ only READS it
+    --   (@Thread.Keyboard@\/@Thread.Char@, to decide whether a
+    --   keystroke belongs to the debug console); @LuaThread@ reads and
+    --   writes it (@API.ShellFocus@). #745's Tab\/Shift+Tab
+    --   control-focus traversal never touches this ref — it transitions
+    --   'uicUiManagerRef'. @session-replaced@ — a load publish clears
+    --   the CURRENT focus only, keeping registered targets.
   , uicFocusManagerRef   ∷ IORef FocusManager
     -- | @WorldThread@ only (@World.Thread.Cursor@'s HUD
     --   refresh-on-active-world-change, #129); @session-replaced@.

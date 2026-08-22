@@ -52,9 +52,6 @@ module Unit.Injury
     , maxInjurySeverity
       -- * Tunables
     , injuryFloor
-    , layerRefThickness
-    , cutAbsorbScale
-    , bluntAbsorbScale
     ) where
 
 import UPrelude

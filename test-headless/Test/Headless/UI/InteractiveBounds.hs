@@ -41,7 +41,7 @@ import Engine.Scripting.Lua.Types (LuaMsg(..), LuaBackendState(..))
 import Test.Headless.Harness (withHeadlessEngine)
 import UI.Clipping (boxTileRects)
 import UI.ControlActivation
-import UI.Focus (createFocusManager)
+import UI.ShellFocus (createFocusManager)
 import UI.InputOwnership
 import UI.InteractiveBounds
 import UI.Manager

@@ -32,6 +32,8 @@ import Unit.Faction (Faction(..))
 import World.Page.Types (WorldPageId(..))
 import Unit.Injury (bruiseCap)
 import Combat.Wounds.Bleed (bleedRateFor)
+import Unit.Physics (gravity, metresPerZ)
+import Unit.Thread.Movement.Types (fallGravityZ)
 import Unit.Fall
 
 -- | Load the shipped acolyte's body-part list through the SAME
@@ -170,6 +172,19 @@ spec = do
         frailMass    = bodyMass frailH frailB
         averageMass  = bodyMass averageH averageB
         extremeMass  = bodyMass extremeH extremeB
+
+    describe "shared physics constants (#1146)" $ do
+        it "keeps the relocated values the calibration below was tuned on" $ do
+            metresPerZ `shouldBe` 1.5
+            gravity    `shouldBe` 9.81
+
+        it "gives motion and injury ONE source of truth for gravity" $
+            -- 'Unit.Thread.Movement.Types.fallGravityZ' is the descent
+            -- the engine integrates; 'gravity'/'metresPerZ' are what
+            -- 'fallInjuries' turns the landing into. Both now read
+            -- "Unit.Physics", so this equality cannot drift into two
+            -- separately-tuned constants.
+            fallGravityZ `shouldBe` gravity / metresPerZ
 
     describe "profile derivations (#998)" $
         it "derives body mass as 22*height^2*bulk for all three profiles" $ do

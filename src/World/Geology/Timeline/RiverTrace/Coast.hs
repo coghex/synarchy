@@ -1,7 +1,6 @@
 {-# LANGUAGE Strict #-}
 module World.Geology.Timeline.RiverTrace.Coast
     ( extendToCoast
-    , nearestOceanDir
     ) where
 import UPrelude
 import qualified Data.Vector.Unboxed as VU
