@@ -8,14 +8,14 @@ PR #279's original soil-shedding omission was closed by the later erosion-credit
 
 ## Status
 
-- [ ] PRR-1. Popup and event-log coordinates can navigate the wrong world page
+- [x] PRR-1. Popup and event-log coordinates can navigate the wrong world page — [#1588]
 - [ ] PRR-2. Dismiss-all cannot clear queued popups before bootstrap
 - [ ] PRR-3. The lake-hole audit ignores higher surrounding lake surfaces
 - [ ] PRR-4. Nested item identity collapses distinct child-instance state
 
 ## 1. Page-scoped popup navigation
 
-### PRR-1. Popup and event-log coordinates can navigate the wrong world page
+### [#1588] PRR-1. Popup and event-log coordinates can navigate the wrong world page
 
 > **Captured note:** Carry the originating world-page identity with every popup coordinate and enforce it when a card or event-log row is activated. A historical coordinate must not be interpreted in whichever page happens to be active later.
 
