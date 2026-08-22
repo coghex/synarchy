@@ -55,6 +55,13 @@ Ownership, in order, and what each step may not do
    conflict is reported as `resource-busy` and the claim is given back,
    because an agent that waited would hold a probe hostage for however
    long a foreign sweep takes.
+
+   A SUCCESS-SHAPED OUTCOME OWNS NOTHING. `resource-busy` and
+   `claim-busy` are exit 0, which a surrounding workflow reads as
+   "nothing happened, move on" — so if giving the claim back fails, the
+   retained ownership becomes the result rather than a footnote on it,
+   and the outcome is the nonzero `managed-error`. `_no_work` is the one
+   funnel every such exit goes through, so that holds by construction.
 5. MEASURE. Held resources and a renewed claim throughout, released only
    once the harness has stopped and reaped its process groups.
 6. RECORD. The measurement is retained on disk FIRST — it is the
@@ -470,6 +477,32 @@ def _release(claim) -> str | None:
         return str(error)
 
 
+def _no_work(outcome: str, claim, *, detail: str, **fields) -> Result:
+    """A successful no-work outcome — unless the claim would not let go.
+
+    A success-shaped outcome means "nothing happened here, move on", and
+    a surrounding workflow reads exit 0 exactly that way. A claim this
+    process is still holding is NOT nothing: the probe stays out of every
+    other agent's reach until the lease expires, and reporting that as an
+    ordinary no-op hides it behind the one status nobody investigates. So
+    a release that fails stops being a footnote on the no-work result and
+    becomes the result — a nonzero `managed-error` naming the retained
+    ownership and the token that recovers it.
+
+    Every exit-0 outcome that has ever owned a claim goes through here,
+    so the invariant "a success-shaped outcome owns nothing" holds by
+    construction rather than at each site.
+    """
+    problem = _release(claim)
+    if problem is None:
+        return Result(outcome, detail=f"{detail}; no ownership remains",
+                      ownership=OWNERSHIP_NONE, **fields)
+    return Result(OUTCOME_MANAGED_ERROR, detail=(
+        f"{detail}, but the owned claim (token {claim.token}) could not be "
+        f"released ({problem}) and is left for TTL recovery"),
+        ownership=OWNERSHIP_CLAIM_HELD, **fields)
+
+
 def _acquire_probe_resources(probe: str, *, namespace, repo_root=None):
     """The probe's declared interests, taken across processes.
 
@@ -529,8 +562,7 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
         # and nothing was written, which is the same shape as losing the
         # race in the first place. `release` is token-checked, so the
         # successor's claim is not touched.
-        _release(claim)
-        return Result(OUTCOME_CLAIM_BUSY, detail=(
+        return _no_work(OUTCOME_CLAIM_BUSY, claim, detail=(
             f"the claim was lost while its acquisition was being recorded "
             f"({error}); the probe was not run"), **common)
     except (probe_census.CensusError, probe_census.DocsWorktreeMissing,
@@ -552,13 +584,9 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
         # repository state. The claim is given back, nothing is created,
         # no other owner's interest is touched, and no second probe is
         # selected.
-        problem = _release(claim)
-        return Result(OUTCOME_RESOURCE_BUSY, detail=(
-            busy.describe()
-            + (f"; the claim could not be released: {problem}" if problem
-               else "; the claim was released")),
-            ownership=OWNERSHIP_CLAIM_HELD if problem else OWNERSHIP_NONE,
-            conflict=busy.to_document(), commit=captured, **common)
+        return _no_work(OUTCOME_RESOURCE_BUSY, claim,
+                        detail=f"{busy.describe()}; the probe was not run",
+                        conflict=busy.to_document(), commit=captured, **common)
     except probe_resource_lock.ResourceLockError as error:
         problem = _release(claim)
         return Result(OUTCOME_MANAGED_ERROR, detail=(
@@ -578,8 +606,7 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
             try:
                 claim.reassert()
             except probe_claim.ClaimLost as error:
-                _release(claim)
-                return Result(OUTCOME_CLAIM_BUSY, detail=(
+                return _no_work(OUTCOME_CLAIM_BUSY, claim, detail=(
                     f"the claim was lost before the measurement started "
                     f"({error}); the probe was not run"),
                     commit=captured, **common)

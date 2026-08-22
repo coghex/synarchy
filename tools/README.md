@@ -1460,7 +1460,11 @@ writes nothing, releases nothing of the winner's and selects no second probe.
 Audit — the acquisition is recorded before the probe runs, and a failure there
 releases the claim and refuses to run. Resources — non-blocking, so a conflict
 is `resource-busy` and the claim is given back rather than held hostage for
-however long a foreign sweep takes. Measure — resources held and the lease
+however long a foreign sweep takes. A **success-shaped outcome owns nothing**:
+`resource-busy` and `claim-busy` are exit 0, which a surrounding workflow reads
+as "nothing happened, move on", so if giving the claim back fails the retained
+ownership becomes the result — the nonzero `managed-error` — rather than a
+footnote on a status nobody investigates. Measure — resources held and the lease
 renewed throughout. Record — the measurement is retained on disk first, then
 ingested under one hold of the claim's sidecar lock. Release — only what this
 invocation acquired.

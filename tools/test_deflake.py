@@ -617,6 +617,75 @@ def test_resource_busy_releases_only_the_owned_claim() -> None:
         scratch.cleanup()
 
 
+def test_a_no_work_outcome_never_reports_retained_ownership() -> None:
+    print("\n-- a success-shaped outcome that could not give the claim back "
+          "stops being a success")
+    scratch = Scratch()
+    try:
+        def busy(probe, **kw):
+            raise probe_resource_lock.ResourceBusy(
+                "repo-config", probe_resource_lock.SHARED,
+                namespace="selftest",
+                holders=[{"owner": "another sweep",
+                          "interest": probe_resource_lock.EXCLUSIVE}])
+
+        # exit 0 is read by a surrounding workflow as "nothing happened,
+        # move on". A claim this process is still holding is not nothing:
+        # the probe stays out of every other agent's reach until the lease
+        # expires, and reporting that under the one status nobody
+        # investigates would hide it.
+        stuck = FakeClaim(release_error="the claim file is unwritable")
+        result = run(scratch, acquire_claim=lambda probe, **kw: stuck,
+                     acquire_resources=busy,
+                     measure=Recorder(measurement(scratch)))
+        expect(result.outcome == deflake.OUTCOME_MANAGED_ERROR,
+               f"a resource conflict whose claim release FAILS is a managed "
+               f"error, not resource-busy ({result.outcome}: {result.detail})")
+        expect(result.exit_code != 0,
+               f"and it is nonzero ({result.exit_code})")
+        expect(result.ownership == deflake.OWNERSHIP_CLAIM_HELD,
+               f"naming the ownership that remains ({result.ownership})")
+        expect(stuck.token in result.detail
+               and "the claim file is unwritable" in result.detail,
+               f"with the token and the release diagnostic ({result.detail})")
+        expect((result.conflict or {}).get("resource") == "repo-config",
+               f"and the conflict is still reported ({result.conflict})")
+
+        # The same rule on the other exit-0 path that has ever owned a
+        # claim: a claim lost before the measurement started.
+        stuck = FakeClaim(lose_on="reassert",
+                          release_error="the claim file is unwritable")
+        result = run(scratch, acquire_claim=lambda probe, **kw: stuck,
+                     measure=Recorder(measurement(scratch)))
+        expect(result.outcome == deflake.OUTCOME_MANAGED_ERROR,
+               f"a lost claim whose release also fails is a managed error "
+               f"({result.outcome})")
+        expect(result.ownership == deflake.OWNERSHIP_CLAIM_HELD,
+               f"reporting the retained ownership ({result.ownership})")
+
+        # And the invariant itself: every documented exit-0 outcome the
+        # orchestrator can reach owns nothing.
+        for outcome, releasing in (
+                (deflake.OUTCOME_RESOURCE_BUSY,
+                 dict(acquire_resources=busy)),
+                (deflake.OUTCOME_CLAIM_BUSY,
+                 dict(acquire_claim=lambda probe, **kw:
+                      FakeClaim(lose_on="reassert"))),
+                (deflake.OUTCOME_NO_QUALIFYING_PROBE,
+                 dict(claimed={PROBE, OTHER})),
+                (deflake.OUTCOME_RECORDED,
+                 dict(record_result=probe_census.record_result))):
+            got = run(scratch, measure=Recorder(measurement(scratch)),
+                      **releasing)
+            expect(got.outcome == outcome
+                   and got.exit_code == 0
+                   and got.ownership == deflake.OWNERSHIP_NONE,
+                   f"{outcome} exits 0 and owns nothing "
+                   f"(got {got.outcome}/{got.exit_code}/{got.ownership})")
+    finally:
+        scratch.cleanup()
+
+
 FOREIGN_HOLDER_SRC = textwrap.dedent("""\
     import sys, time
     from pathlib import Path
@@ -1163,6 +1232,7 @@ def main() -> int:
     test_a_claim_lost_before_the_measurement_runs_nothing()
     test_the_claimed_set_keeps_a_held_probe_out_of_selection()
     test_resource_busy_releases_only_the_owned_claim()
+    test_a_no_work_outcome_never_reports_retained_ownership()
     test_a_real_foreign_holder_makes_deflake_report_resource_busy()
     test_a_checkout_that_moved_refuses_to_record()
     test_a_result_document_naming_another_commit_refuses_the_cohort()
