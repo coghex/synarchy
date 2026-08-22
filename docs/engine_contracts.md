@@ -166,12 +166,14 @@ oversight: #1490's cause was a docs-only push breaking
 `test_findings_report_audit.py`, so a fast path that skipped the audits
 would hide the very failure it was built for. `make ci` has no push
 range and so has no fast path; it always runs everything.
-Two families are CI-only, by name: CI's path SELECTORS
-(`ci_expensive_gates.py --stdin --gate worldgen|graphical|unit-assets`,
-`ci_probes.py --stdin`, `ci_docs_fast_path.py --stdin --explain`), which
-have nothing to select for locally, and `run_probes.py`, the
-engine-booting probe sweep CLAUDE.md keeps opt-in. One invocation is
-LOCAL-only for the mirror-image reason:
+The CI-only members of `build-test` are its path SELECTORS
+(`ci_expensive_gates.py --stdin --gate worldgen|graphical|unit-assets`
+and `ci_docs_fast_path.py --stdin --explain`), which have nothing to select
+for locally. The separate `behavior-probes` job owns
+`ci_probes.py --stdin` and the engine-booting `run_probes.py` sweep; neither
+is part of the `build-test` / `make ci` parity contract because CLAUDE.md
+keeps behavior probes opt-in locally. One invocation is LOCAL-only for the
+mirror-image reason:
 `ci_expensive_gates.py --local-changed-paths`, because CI is handed a
 pull-request base sha and `make ci` has to resolve its own. The
 `--stdin --gate save-compat` decision both of them feed is NOT exempt —

@@ -74,16 +74,15 @@
 # resolve-image below calls ci-image.yml as a REUSABLE workflow
 # (`uses: ./.github/workflows/ci-image.yml`) — its jobs join THIS run's
 # dependency graph rather than running as a separate, unordered trigger
-# — and build-test `needs: resolve-image`, so GitHub structurally cannot
-# start build-test's container before resolve-image (and therefore
-# ci-image.yml's own jobs) finish. That's also why container.image below
-# is an expression referencing needs.resolve-image.outputs.image rather
-# than a literal tag: GitHub resolves jobs.<job>.container.image using
-# the `needs` context once every needed job has completed, so a
-# job-level container CAN depend on a job earlier in the same run — the
-# old belief that it couldn't (see #671's original literal-tag choice)
-# is what let publication and consumption go unordered in the first
-# place.
+# — and both test jobs declare `needs: resolve-image`, so GitHub cannot
+# start either container before resolve-image (and therefore ci-image.yml's
+# own jobs) finishes. That's also why each container.image below is an
+# expression referencing needs.resolve-image.outputs.image rather than a
+# literal tag: GitHub resolves jobs.<job>.container.image using the `needs`
+# context once every needed job has completed, so a job-level container CAN
+# depend on a job earlier in the same run — the old belief that it couldn't
+# (see #671's original literal-tag choice) is what let publication and
+# consumption go unordered in the first place.
 #
 # ci-image.yml tags each build content-addressably: `ci-<sha256 of
 # .github/ci/Dockerfile ++ .github/workflows/ci-image.yml itself, first
@@ -163,7 +162,7 @@ concurrency:
 
 jobs:
   # Resolves (building + validating + first-publishing when needed) the
-  # immutable, content-addressed CI image tag build-test consumes. Lives
+  # immutable, content-addressed CI image tag both test jobs consume. Lives
   # in the separate reusable workflow .github/workflows/ci-image.yml
   # (not inlined here) so that file's own content participates in the
   # candidate's identity hash — see that file's header and the header
@@ -304,14 +303,16 @@ jobs:
           else
             CHANGED="$(git ls-files)"
           fi
-          printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate worldgen | \
-            sed 's/^/worldgen=/' >> "$GITHUB_OUTPUT"
-          printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate graphical | \
-            sed 's/^/graphical=/' >> "$GITHUB_OUTPUT"
-          printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate unit-assets | \
-            sed 's/^/unit-assets=/' >> "$GITHUB_OUTPUT"
-          printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat | \
-            sed 's/^/save-compat=/' >> "$GITHUB_OUTPUT"
+          {
+            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate worldgen | \
+              sed 's/^/worldgen=/'
+            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate graphical | \
+              sed 's/^/graphical=/'
+            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate unit-assets | \
+              sed 's/^/unit-assets=/'
+            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat | \
+              sed 's/^/save-compat=/'
+          } >> "$GITHUB_OUTPUT"
 
       # plan.json exists after --dry-run; its hash keys the store cache.
       # The store path is static because the image pins CABAL_DIR (#671).
@@ -713,8 +714,8 @@ jobs:
       # Cheap, no-engine guard (#1355): fails if a `python3 tools/*.py`
       # check runs in this job and not in tools/ci-local.sh, or the other
       # way round, outside the audit's hard-coded exemption list (CI's
-      # path selectors, which `make ci` has nothing to select for, and the
-      # engine-booting probe sweep). CLAUDE.md promises `make ci` predicts
+      # path selectors, which `make ci` has nothing to select for).
+      # CLAUDE.md promises `make ci` predicts
       # this job's result; nothing enforced that and it had already
       # drifted -- the original five of the probe-runner self-tests above
       # ran only here.
@@ -722,36 +723,6 @@ jobs:
         run: |
           python3 tools/ci_parity_audit.py --self-test
           python3 tools/ci_parity_audit.py
-
-      # Path-selective, BLOCKING behavior-probe gate (#530). Only on PRs:
-      # diff against the base, pick the CI-eligible probes relevant to the
-      # changed files (full curated smoke set for core/unclassified changes,
-      # none for docs/assets or manual-only probe areas), and run them
-      # against the exe already built above.
-      # --jobs 2 (#671) pairs probes on the 4-vCPU runner — the eligible
-      # set ran strictly sequentially before (~4 min for the full set of
-      # 4; #722 grew the set to 7, ~6 min sequential / ~3-4 min under
-      # --jobs 2 on a warm dev machine). --retries 1 re-runs a failed
-      # probe SOLO before failing; that solo re-run is the designed
-      # absorber for exactly the parallel-engine contention flakes
-      # --jobs can introduce, so if flaky retries start showing up
-      # regularly here, drop back to --jobs 1 rather than growing the
-      # retry count.
-      - name: Behavior probes (path-selective)
-        if: github.event_name == 'pull_request'
-        run: |
-          BASE='${{ github.event.pull_request.base.sha }}'
-          echo "Diffing against base $BASE"
-          git fetch --no-tags origin "$BASE"
-          CHANGED="$(git diff --name-only "$BASE" HEAD)"
-          echo "Changed files:"; echo "$CHANGED" | sed 's/^/  /'
-          ONLY="$(printf '%s\n' "$CHANGED" | python3 tools/ci_probes.py --stdin)"
-          if [ -z "$ONLY" ]; then
-            echo "No behavior probes selected for this change — skipping."
-            exit 0
-          fi
-          echo "Selected probes: $ONLY"
-          python3 tools/run_probes.py --only "$ONLY" --exact --retries 1 --jobs 2
 
       # The other half of the #1358 restore/save split above. It has to
       # reproduce the combined `actions/cache` action's post step, and it
@@ -790,3 +761,102 @@ jobs:
         with:
           path: dist-newstyle
           key: ${{ steps.dist-cache.outputs.cache-primary-key }}
+
+  # Path-selective, BLOCKING behavior-probe gate (#530), split from
+  # build-test so real-engine probes run in parallel with hspec and the
+  # engine-free audits. It is PR-only, preserving the existing policy;
+  # master pushes keep build-test as their complete post-merge backstop.
+  behavior-probes:
+    if: github.event_name == 'pull_request'
+    needs: resolve-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ needs.resolve-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Trust checked-out workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # Select before any Cabal or cache work so a change with no eligible
+      # probes gets a fast, explicit green check. The output is already a
+      # comma-separated, single-line --only value, so it is safe to carry
+      # through a normal GitHub Actions output.
+      - name: Select behavior probes
+        id: probe-selection
+        run: |
+          BASE='${{ github.event.pull_request.base.sha }}'
+          echo "Diffing against base $BASE"
+          git fetch --no-tags origin "$BASE"
+          CHANGED="$(git diff --name-only "$BASE" HEAD)"
+          echo "Changed files:"
+          printf '%s\n' "$CHANGED" | awk '{print "  " $0}'
+          ONLY="$(printf '%s\n' "$CHANGED" | python3 tools/ci_probes.py --stdin)"
+          if [ -z "$ONLY" ]; then
+            echo "No behavior probes selected for this change — skipping."
+            echo "selected=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Selected probes: $ONLY"
+            echo "selected=true" >> "$GITHUB_OUTPUT"
+            echo "only=$ONLY" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Toolchain (baked into the CI image)
+        if: steps.probe-selection.outputs.selected == 'true'
+        run: |
+          /usr/local/.ghcup/bin/ghc --version
+          /usr/local/.ghcup/bin/cabal --version
+          echo "/usr/local/.ghcup/bin" >> "$GITHUB_PATH"
+          echo "CABAL_DIR=/usr/local/cabal" >> "$GITHUB_ENV"
+
+      # Match build-test's plan resolution so both jobs address the same
+      # dependency and dist-newstyle cache entries.
+      - name: Resolve dependency plan
+        if: steps.probe-selection.outputs.selected == 'true'
+        run: |
+          cabal build all --dry-run
+          cabal update
+          cabal build all --dry-run
+
+      - name: Restore dependency cache
+        if: steps.probe-selection.outputs.selected == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /usr/local/cabal/store
+          key: deps-v2-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
+          restore-keys: deps-v2-${{ runner.os }}-ghc9.12.2-
+
+      - name: Restore project build cache (dist-newstyle)
+        if: steps.probe-selection.outputs.selected == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: dist-newstyle
+          key: dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}
+          restore-keys: |
+            dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-
+
+      # This runner has its own restored build tree. It builds only the
+      # executable the probes launch and never saves either cache; build-test
+      # remains the sole cache writer for the workflow.
+      - name: Build executable for behavior probes
+        if: steps.probe-selection.outputs.selected == 'true'
+        run: cabal build exe:synarchy
+
+      # --jobs 2 pairs probes on the 4-vCPU runner. --retries 1 reruns a
+      # failed probe solo, absorbing the contention flakes this concurrency
+      # can introduce without weakening the final blocking verdict.
+      - name: Behavior probes (path-selective)
+        if: steps.probe-selection.outputs.selected == 'true'
+        run: >-
+          python3 tools/run_probes.py
+          --only "${{ steps.probe-selection.outputs.only }}"
+          --exact --retries 1 --jobs 2

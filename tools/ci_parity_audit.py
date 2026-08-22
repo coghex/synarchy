@@ -17,9 +17,10 @@ What this compares
 The set of `python3 tools/*.py` invocations run by the workflow's
 `build-test` job against the set run by `tools/ci-local.sh`, in both
 directions, minus a hard-coded exemption list. An invocation is compared
-at COMMAND granularity INCLUDING ARGUMENTS, so `ci_probes.py --self-test`
-and `ci_probes.py --stdin` are two different checks, and retuning an
-existing check's flags on one side alone is drift.
+at COMMAND granularity INCLUDING ARGUMENTS, so
+`ci_expensive_gates.py --self-test` and
+`ci_expensive_gates.py --stdin --gate worldgen` are two different checks,
+and retuning an existing check's flags on one side alone is drift.
 
 What this deliberately does NOT compare
 ---------------------------------------
@@ -37,7 +38,9 @@ What this deliberately does NOT compare
   by the YAML parser, shell comments by this module's own lexer. A
   commented-out check does not run, so it must not count as running.
 * **Other jobs.** Only `build-test` is inspected. `resolve-image` builds
-  the CI image and has no local counterpart by construction.
+  the CI image and has no local counterpart by construction;
+  `behavior-probes` runs the opt-in, real-engine tier that `make ci`
+  deliberately excludes.
 
 Failing loudly rather than silently
 -----------------------------------
@@ -122,14 +125,6 @@ EXEMPT_COMMANDS: tuple[tuple[str, str], ...] = (
         "--self-test form is NOT exempt and does run locally.",
     ),
     (
-        "python3 tools/ci_probes.py --stdin",
-        "CI path-selection orchestration for the behaviour-probe gate: "
-        "picks which CI-eligible probes a change needs. `make ci` runs no "
-        "behaviour probes at all (they are an opt-in tier, see CLAUDE.md), "
-        "so it has nothing to select. Its --self-test form is NOT exempt "
-        "and does run locally.",
-    ),
-    (
         "python3 tools/ci_expensive_gates.py --local-changed-paths",
         "LOCAL-only, and the one entry that runs here rather than in CI "
         "(#1360). It resolves the changed-path list `make ci` judges "
@@ -152,20 +147,6 @@ EXEMPT_COMMANDS: tuple[tuple[str, str], ...] = (
         "either way. Its --self-test form is NOT exempt and does run "
         "locally, which is what keeps the classification and its ci.yml "
         "wiring honest from `make ci`.",
-    ),
-)
-
-# Scripts exempt however they are invoked, because the exemption is a
-# property of the script rather than of one argument list.
-EXEMPT_SCRIPTS: tuple[tuple[str, str], ...] = (
-    (
-        "tools/run_probes.py",
-        "Boots real engines. The probe sweep costs minutes to tens of "
-        "minutes, and CLAUDE.md's testing tiers keep it opt-in rather than "
-        "part of any default gate. It runs locally perfectly well — it is "
-        "excluded for that cost and that tier contract, not because it "
-        "cannot. Exempt by script rather than by exact command so retuning "
-        "CI's --jobs/--retries does not fail this audit.",
     ),
 )
 
@@ -442,15 +423,10 @@ def local_gate_invocations(shell_text: str,
     return set(extract_invocations(shell_text, where))
 
 
-def _script_of(command: str) -> str | None:
-    return _tools_script(command.split())
-
-
 def audit_gate_sets(
     ci_commands: set[str],
     local_commands: set[str],
     exempt_commands: tuple[tuple[str, str], ...] = EXEMPT_COMMANDS,
-    exempt_scripts: tuple[tuple[str, str], ...] = EXEMPT_SCRIPTS,
 ) -> list[str]:
     """Compare two gate sets. Returns a list of human-readable problems."""
     problems: list[str] = []
@@ -459,11 +435,6 @@ def audit_gate_sets(
         if not reason.strip():
             problems.append(
                 f"exemption {command!r} carries no stated reason.")
-    for script, reason in exempt_scripts:
-        if not reason.strip():
-            problems.append(
-                f"exemption for script {script!r} carries no stated reason.")
-
     if not ci_commands:
         problems.append(
             f"{WORKFLOW_LABEL} yielded no `python3 tools/*.py` invocations; "
@@ -474,11 +445,8 @@ def audit_gate_sets(
             "an empty gate set cannot certify parity.")
 
     exempt_command_set = {command for command, _ in exempt_commands}
-    exempt_script_set = {script for script, _ in exempt_scripts}
-
     def exempt(command: str) -> bool:
-        return (command in exempt_command_set
-                or _script_of(command) in exempt_script_set)
+        return command in exempt_command_set
 
     ci_only = sorted(c for c in ci_commands - local_commands if not exempt(c))
     local_only = sorted(c for c in local_commands - ci_commands if not exempt(c))
@@ -498,12 +466,6 @@ def audit_gate_sets(
             problems.append(
                 f"stale exemption: no side runs `{command}`. Remove the entry "
                 "rather than leaving policy that guards nothing.")
-    for script, _reason in exempt_scripts:
-        if not any(_script_of(command) == script for command in everything):
-            problems.append(
-                f"stale exemption: no side runs `{script}`. Remove the entry "
-                "rather than leaving policy that guards nothing.")
-
     return problems
 
 
@@ -878,8 +840,8 @@ def run_repository_audit() -> int:
         print("Every `python3 tools/*.py` check the workflow's "
               f"`{AUDITED_JOB}` job runs must also run in "
               f"{LOCAL_GATE_LABEL}, and vice versa, unless it is on this "
-              "audit's hard-coded exemption list (see EXEMPT_COMMANDS / "
-              "EXEMPT_SCRIPTS, each entry with its reason).")
+              "audit's hard-coded EXEMPT_COMMANDS list, where every entry "
+              "carries its reason.")
         return 1
 
     shared = len(ci_commands & local_commands)
@@ -981,13 +943,13 @@ def _self_test() -> list[str]:
             f"got {sorted(local)}")
 
     # 2. Parity passes with nothing exempted.
-    _expect(failures, audit_gate_sets(ci, local, (), ()) == [],
+    _expect(failures, audit_gate_sets(ci, local, ()) == [],
             "matched gate sets should report no problems, got "
-            f"{audit_gate_sets(ci, local, (), ())}")
+            f"{audit_gate_sets(ci, local, ())}")
 
     # 3. A non-exempt CI-only invocation fails and names the command.
     dropped = local - {"python3 tools/block_two.py --flag value"}
-    problems = audit_gate_sets(ci, dropped, (), ())
+    problems = audit_gate_sets(ci, dropped, ())
     _expect(failures,
             any("python3 tools/block_two.py --flag value" in p
                 and "not by" in p and LOCAL_GATE_LABEL in p for p in problems),
@@ -996,7 +958,7 @@ def _self_test() -> list[str]:
 
     # 4. A non-exempt local-only invocation fails and names the command.
     added = local | {"python3 tools/local_extra.py"}
-    problems = audit_gate_sets(ci, added, (), ())
+    problems = audit_gate_sets(ci, added, ())
     _expect(failures,
             any("python3 tools/local_extra.py" in p and WORKFLOW_LABEL in p
                 for p in problems),
@@ -1006,7 +968,7 @@ def _self_test() -> list[str]:
     # 5. Changing an invocation's ARGUMENTS is drift in both directions.
     retuned = (local - {"python3 tools/block_two.py --flag value"}) | {
         "python3 tools/block_two.py --flag other"}
-    problems = audit_gate_sets(ci, retuned, (), ())
+    problems = audit_gate_sets(ci, retuned, ())
     _expect(failures,
             any("--flag value" in p for p in problems)
             and any("--flag other" in p for p in problems),
@@ -1018,23 +980,16 @@ def _self_test() -> list[str]:
     exempt_side = set(shared)
     for command, _reason in EXEMPT_COMMANDS:
         exempt_side.add(command)
-    for script, _reason in EXEMPT_SCRIPTS:
-        exempt_side.add(f"python3 {script} --only foo --exact --jobs 2")
     problems = audit_gate_sets(exempt_side, shared)
     _expect(failures, problems == [],
             f"the real exemptions should be accepted, got {problems}")
 
     # 6b. …and each is load-bearing: without the list, each one is drift.
-    problems = audit_gate_sets(exempt_side, shared, (), ())
+    problems = audit_gate_sets(exempt_side, shared, ())
     for command, _reason in EXEMPT_COMMANDS:
         _expect(failures, any(command in p for p in problems),
                 f"exemption {command!r} is not load-bearing: it was not "
                 "reported as drift with the list emptied")
-    for script, _reason in EXEMPT_SCRIPTS:
-        _expect(failures, any(script in p for p in problems),
-                f"exemption for {script!r} is not load-bearing: it was not "
-                "reported as drift with the list emptied")
-
     # 7. A stale exemption fails, naming what nothing runs.
     problems = audit_gate_sets(shared, shared)
     for command, _reason in EXEMPT_COMMANDS:
@@ -1042,28 +997,19 @@ def _self_test() -> list[str]:
                 any("stale exemption" in p and command in p for p in problems),
                 f"a stale exemption for {command!r} should be reported, got "
                 f"{problems}")
-    for script, _reason in EXEMPT_SCRIPTS:
-        _expect(failures,
-                any("stale exemption" in p and script in p for p in problems),
-                f"a stale exemption for {script!r} should be reported, got "
-                f"{problems}")
-
     # 8. Every exemption states a reason.
     for command, reason in EXEMPT_COMMANDS:
         _expect(failures, bool(reason.strip()),
                 f"exemption {command!r} has no reason")
-    for script, reason in EXEMPT_SCRIPTS:
-        _expect(failures, bool(reason.strip()),
-                f"exemption for {script!r} has no reason")
     _expect(failures,
             audit_gate_sets(shared | {"python3 tools/x.py"}, shared,
-                            (("python3 tools/x.py", "   "),), ()) != [],
+                            (("python3 tools/x.py", "   "),)) != [],
             "a blank exemption reason should be reported")
 
     # 9. Vacuity on either side is a failure, not a pass. Checked with BOTH
     #    sides empty, so drift cannot report the failure on vacuity's
     #    behalf and hide the fact that nothing checks for it.
-    problems = audit_gate_sets(set(), set(), (), ())
+    problems = audit_gate_sets(set(), set(), ())
     _expect(failures,
             any("empty gate set" in p and WORKFLOW_LABEL in p
                 for p in problems),
