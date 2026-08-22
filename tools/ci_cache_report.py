@@ -120,6 +120,9 @@ SCRIPT_NAME = "tools/ci_cache_report.py"
 #: Only `actions/cache/restore` publishes cache-primary-key and
 #: cache-matched-key as step outputs; the combined action does not.
 RESTORE_ACTION_PREFIX = "actions/cache/restore@"
+SAVE_ACTION_PREFIX = "actions/cache/save@"
+CACHE_EPOCH_STEP_ID = "cache-epoch"
+CACHE_EPOCH_OUTPUT = "${{ steps.cache-epoch.outputs.epoch }}"
 
 #: Fixed prefix every machine-readable line carries, so a log search for
 #: one string finds every cache's outcome.
@@ -325,6 +328,54 @@ def check_wiring(document: object) -> list[str]:
                 f"{WORKFLOW_LABEL}: step `{spec.step_id}` caches `{path}`, but "
                 f"this report describes it as `{spec.path}`.")
 
+    epoch_steps = by_id.get(CACHE_EPOCH_STEP_ID, [])
+    if len(epoch_steps) != 1:
+        problems.append(
+            f"{WORKFLOW_LABEL}: expected exactly one step with `id: "
+            f"{CACHE_EPOCH_STEP_ID}`, found {len(epoch_steps)}.")
+
+    dist_steps = by_id.get("dist-cache", [])
+    if len(dist_steps) == 1:
+        with_block = dist_steps[0].get("with")
+        with_block = with_block if isinstance(with_block, dict) else {}
+        key = str(with_block.get("key", ""))
+        restore_keys = str(with_block.get("restore-keys", ""))
+        if "dist-v3-" not in key or CACHE_EPOCH_OUTPUT not in key:
+            problems.append(
+                f"{WORKFLOW_LABEL}: project-cache primary key must be v3 and "
+                f"contain `{CACHE_EPOCH_OUTPUT}`, got `{key}`.")
+        if "dist-v3-" not in restore_keys or "dist-v2-" not in restore_keys:
+            problems.append(
+                f"{WORKFLOW_LABEL}: project-cache restore keys must include "
+                "both compatible v3 fallback and legacy v2 bootstrap.")
+
+    save_steps = []
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        with_block = step.get("with")
+        path = str((with_block or {}).get("path", "")).strip() \
+            if isinstance(with_block, dict) else ""
+        if path == "dist-newstyle" and str(step.get("uses", "")).startswith(
+                SAVE_ACTION_PREFIX):
+            save_steps.append(step)
+    if len(save_steps) != 1:
+        problems.append(
+            f"{WORKFLOW_LABEL}: expected exactly one `{SAVE_ACTION_PREFIX}...` "
+            f"step for dist-newstyle, found {len(save_steps)}.")
+    else:
+        condition = _normalize_expression(save_steps[0].get("if", ""))
+        for required in (
+                "github.event_name=='push'",
+                "github.ref=='refs/heads/master'",
+                "steps.dist-cache.outputs.cache-hit!='true'",
+                "steps.dist-cache.outputs.cache-primary-key!=''",
+                "steps.docs-fast-path.outputs.docs_only!='true'"):
+            if required not in condition:
+                problems.append(
+                    f"{WORKFLOW_LABEL}: project-cache save condition is "
+                    f"missing `{required}`; PRs must remain restore-only.")
+
     report_steps = [
         step for step in steps
         if isinstance(step, dict) and isinstance(step.get("run"), str)
@@ -364,14 +415,35 @@ def _valid_wiring_document() -> dict:
         {"name": "Select docs-only fast path",
          "id": DOCS_FAST_PATH_STEP_ID,
          "run": "echo docs_only=false >> \"$GITHUB_OUTPUT\""},
+        {"name": "Select project build cache epoch",
+         "id": CACHE_EPOCH_STEP_ID,
+         "run": "python3 tools/ci_cache_epoch.py --ref HEAD"},
     ]
     for spec in CACHES:
         steps.append({
             "name": f"Restore {spec.label}",
             "id": spec.step_id,
             "uses": f"{RESTORE_ACTION_PREFIX}deadbeef",
-            "with": {"path": spec.path, "key": "some-key"},
+            "with": {
+                "path": spec.path,
+                "key": ("dist-v3-Linux-plan-epoch-" + CACHE_EPOCH_OUTPUT
+                        if spec.step_id == "dist-cache" else "some-key"),
+                "restore-keys": ("dist-v3-Linux-plan-epoch-\n"
+                                 "dist-v2-Linux-\n"
+                                 if spec.step_id == "dist-cache" else "deps-"),
+            },
         })
+    steps.append({
+        "name": "Save project build cache (dist-newstyle)",
+        "uses": f"{SAVE_ACTION_PREFIX}deadbeef",
+        "if": ("github.event_name == 'push' && "
+               "github.ref == 'refs/heads/master' && "
+               "steps.dist-cache.outputs.cache-hit != 'true' && "
+               "steps.dist-cache.outputs.cache-primary-key != '' && "
+               "steps.docs-fast-path.outputs.docs_only != 'true'"),
+        "with": {"path": "dist-newstyle",
+                 "key": "${{ steps.dist-cache.outputs.cache-primary-key }}"},
+    })
     steps.append({
         "name": "Report cache restore outcomes",
         "env": dict(expected_env_bindings()),
@@ -419,8 +491,8 @@ def _self_test() -> int:
         f"{deps.env_prefix}_PRIMARY_KEY": "deps-v2-Linux-ghc9.12.2-new",
         f"{deps.env_prefix}_MATCHED_KEY": "deps-v2-Linux-ghc9.12.2-old",
         f"{dist.env_prefix}_HIT": "true",
-        f"{dist.env_prefix}_PRIMARY_KEY": "dist-v2-Linux-x",
-        f"{dist.env_prefix}_MATCHED_KEY": "dist-v2-Linux-x",
+        f"{dist.env_prefix}_PRIMARY_KEY": "dist-v3-Linux-x-epoch-2",
+        f"{dist.env_prefix}_MATCHED_KEY": "dist-v3-Linux-x-epoch-2",
     }
     lines = build_report(env)
     check(any(line == f"{RECORD_PREFIX} cache={deps.key} outcome={PREFIX_HIT} "
@@ -429,7 +501,8 @@ def _self_test() -> int:
               for line in lines),
           f"a prefix hit must emit a record naming both keys, got {lines!r}")
     check(any(line == f"{RECORD_PREFIX} cache={dist.key} outcome={EXACT_HIT} "
-                      "primary_key=dist-v2-Linux-x matched_key=dist-v2-Linux-x"
+                      "primary_key=dist-v3-Linux-x-epoch-2 "
+                      "matched_key=dist-v3-Linux-x-epoch-2"
               for line in lines),
           f"an exact hit must emit its own record, got {lines!r}")
     check(not any(line.startswith("::") for line in lines),
@@ -442,7 +515,7 @@ def _self_test() -> int:
         f"{deps.env_prefix}_PRIMARY_KEY": "deps-v2-Linux-ghc9.12.2-abc",
         f"{deps.env_prefix}_MATCHED_KEY": "",
         f"{dist.env_prefix}_HIT": "",
-        f"{dist.env_prefix}_PRIMARY_KEY": "dist-v2-Linux-abc",
+        f"{dist.env_prefix}_PRIMARY_KEY": "dist-v3-Linux-abc-epoch-2",
         f"{dist.env_prefix}_MATCHED_KEY": "",
     }
     pushed = build_report({**miss, EVENT_ENV: "push"})
@@ -514,6 +587,10 @@ def _self_test() -> int:
         return next(step for step in steps
                     if SCRIPT_NAME in str(step.get("run", "")))
 
+    def dist_save_step(steps: list[dict]) -> dict:
+        return next(step for step in steps
+                    if str(step.get("uses", "")).startswith(SAVE_ACTION_PREFIX))
+
     mutate(lambda steps: find(steps, dist.step_id).__setitem__(
                "uses", "actions/cache@deadbeef"),
            "combined `actions/cache` action")
@@ -522,6 +599,18 @@ def _self_test() -> int:
     mutate(lambda steps: find(steps, dist.step_id)["with"].__setitem__(
                "path", "somewhere-else"),
            "this report describes it as")
+    mutate(lambda steps: find(steps, CACHE_EPOCH_STEP_ID).__setitem__(
+               "id", "renamed-epoch"),
+           f"`id: {CACHE_EPOCH_STEP_ID}`")
+    mutate(lambda steps: find(steps, dist.step_id)["with"].__setitem__(
+               "key", "dist-v3-Linux-plan"),
+           "must be v3 and contain")
+    mutate(lambda steps: find(steps, dist.step_id)["with"].__setitem__(
+               "restore-keys", "dist-v3-Linux-"),
+           "legacy v2 bootstrap")
+    mutate(lambda steps: dist_save_step(steps).__setitem__(
+               "if", "steps.dist-cache.outputs.cache-hit != 'true'"),
+           "PRs must remain restore-only")
     mutate(lambda steps: steps.append(dict(find(steps, deps.step_id))),
            f"`id: {deps.step_id}`")
     mutate(lambda steps: steps.remove(report_step(steps)),
