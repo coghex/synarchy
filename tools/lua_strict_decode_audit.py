@@ -21,81 +21,58 @@ total:
   decodeUtf8With    -> caller-supplied `OnDecodeError` handler
   decodeUtf8Lenient -> substitutes U+FFFD
 
-WHAT IS DETECTED, exactly: a USE of the function
-`Data.Text.Encoding.decodeUtf8` -- that ONE module's export -- in code
-under the scoped tree, however it is spelled. Nothing else. An import
-is not a use, and a same-named function from anywhere else is a
-different function: `Data.Text.Lazy.Encoding.decodeUtf8`, an unrelated
-`Other.decodeUtf8`, or a local binding of that name are all clean, and
-the fixtures below pin each of them so.
+WHAT IS DETECTED: a QUALIFIED reference to that one module's export, in
+code under the scoped tree. A reference is qualified when it is written
+`<qualifier>.decodeUtf8` and the qualifier resolves, through the file's
+OWN import declarations, to exactly `Data.Text.Encoding`. Every alias
+is covered because the alias comes from the file itself --
+`TE.decodeUtf8` under the repository's standard one, `Enc.decodeUtf8`
+under any other, the unaliased `Data.Text.Encoding.decodeUtf8` -- with
+`qualified` written before the module name or after it (GHC2024 enables
+`ImportQualifiedPost`). Renaming the alias cannot walk past this.
 
-Reaching that precision takes three parts.
+A same-named function from ANYWHERE ELSE is never caught, because it is
+not the banned one: `Data.Text.Lazy.Encoding.decodeUtf8`, an unrelated
+`Other.decodeUtf8`, or a local binding of that name.
 
-1. IMPORTS ARE RESOLVED PER FILE, BY TOKEN. Each file's own import
-   declarations are parsed for exactly `Data.Text.Encoding`, and what
-   they establish drives the scan. A declaration begins at an `import`
-   TOKEN that opens one -- at the start of a line at any indent, or
-   after `{` or `;` -- so neither an indented top-level layout
-   (`module M where` with the body at column 1) nor an explicit-brace
-   layout (`module M where { import ...; f = ... }`) hides one. It ends
-   at the `;`/`}` that closes it, or by layout at the first line indented
-   no further than its own opening column, whichever comes first.
+QUALIFIED REFERENCES ARE THE WHOLE DECIDABLE DOMAIN, AND THAT IS
+DELIBERATE (#1605 requirement 3). A module qualifier can never be
+captured by a term binder, so a qualified hit is unambiguous by
+construction. A BARE `decodeUtf8` is not analysed at all: deciding
+whether one is an unqualified import's export or a nested binder that
+legally shadows it -- a parameter, a `let`/`where` binding, a lambda or
+case pattern -- needs real Haskell scope analysis (layout in three
+flavours, binding groups, guards, view patterns, record syntax), and a
+partial attempt is worse than none because it SILENCES real uses. PR
+#1623 spent ten review rounds proving that one construct at a time.
 
-   Both `qualified` spellings are understood -- the prepositive one and
-   GHC2024's postpositive `import Data.Text.Encoding qualified as TE`
-   (`ImportQualifiedPost`, on by default in this language edition).
+So instead of guessing, this guard REFUSES what it cannot decide
+(requirement 4). Three causes, each exiting non-zero with the file, the
+cause and the remedy:
 
-   The parser is FAIL-LOUD: a declaration naming `Data.Text.Encoding` in
-   a shape it does not model raises rather than being scanned as though
-   the module were absent. A silent "no import, so nothing to flag" is
-   exactly how an import-resolving guard gets walked past. A file
-   carrying an identifier-rewriting CPP directive (`#define`, `#undef`,
-   `#include`) raises for the same reason: this scan reads
-   UNPREPROCESSED source, so a macro could rename the very alias it
-   resolves by. Conditional directives only SELECT text and are fine.
+  * an import naming `Data.Text.Encoding` in a shape it does not model;
 
-2. A QUALIFIED USE IS RESOLVED EXACTLY. `TE.decodeUtf8` under the
-   repository's standard alias, `Enc.decodeUtf8` under any other, and
-   the unaliased `Data.Text.Encoding.decodeUtf8` all resolve through the
-   file's own import, so renaming the alias cannot walk past this. A
-   module qualifier can never be captured by a local term binder, so a
-   qualified hit is unambiguous -- there is no shadowing question to ask.
+  * an UNQUALIFIED import of that module -- with or without an alias, an
+    explicit list, or a `hiding` clause -- since that is exactly the
+    case whose call sites cannot be resolved;
 
-3. AN UNRESOLVED BARE USE IS REPORTED, NOT GUESSED AT.
-   `import Data.Text.Encoding` puts `decodeUtf8` in unqualified scope,
-   and a nested binder -- a `let`/`where` binding, a lambda or case
-   pattern -- may legally shadow it there. (A TOP-LEVEL binding cannot:
-   clashing with an unqualified import of the same name is an
-   ambiguous-occurrence error, so such a file does not compile.) Placing
-   those binders' scopes needs real parsing, and a guard must not guess:
-   guessing "shadowed" hides a strict decode, which is the failure this
-   audit exists to prevent.
+  * an identifier-rewriting CPP directive (`#define`, `#undef`,
+    `#include`), since this reads UNPREPROCESSED source and a macro can
+    rename the very alias it resolves by. Conditional directives
+    (`#if`, `#ifdef`) only SELECT text, so a scan that reads every
+    branch over-reports at worst and they are not a cause.
 
-   So exactly one shadowing case is resolved, the one that needs no
-   scope analysis at all -- a name bound in a declaration's own HEAD,
-   where every position is a binding position by construction and what
-   it binds covers the whole declaration (`_binds_in_head`). The head
-   ends at the declaration's `=` OR at the `|` opening its guards,
-   whichever comes first, because a guard is an ordinary expression
-   sitting before that `=` and a name in one is a use. A view pattern
-   (`ViewPatterns` is on tree-wide) puts an expression INSIDE the head
-   itself, so its `(e -> pat)` expression half is excluded from the
-   binding region too. Scoping is per top-level declaration, since a
-   binder in one cannot reach into another.
+A refusal is not a claim that the file decodes strictly; it says the
+file cannot be certified as written. The remedy is a qualified import --
+which every one of the 90 `Data.Text.Encoding` imports in `src/` and
+`app/` already is, 88 of them under the scoped tree and the other two in
+`src/UPrelude.hs` and `src/Unit/Atlas/Digest.hs` -- or an `EXEMPTIONS`
+entry carrying its reason.
 
-   Every OTHER bare occurrence under such an import is reported. A file
-   that genuinely shadows the name in a `let`, a lambda or a `where` is
-   therefore reported too, deliberately: the remedy is to import the
-   module qualified -- as all 89 `Data.Text.Encoding` imports in `src/`
-   and `app/` already are, which is why this reports nothing today -- or
-   to record the file in `EXEMPTIONS` with its reason. That is the
-   conservative direction, and it is the only one under which the guard
-   cannot be walked past.
-
-Two more properties hold throughout: candidates are maximal identifier
+Two properties hold throughout. Candidates are maximal identifier
 LEXEMES, so the total siblings are safe by construction
 (`decodeUtf8Lenient` is a DIFFERENT identifier, never a `decodeUtf8`
-followed by something, and `myDecodeUtf8` is different again); and
+followed by something, and `myDecodeUtf8` is different again). And
 comment and string-literal awareness comes from
 `tools/unicode_operator_audit.py`'s lexer via its public
 `haskell_code_spans` / `haskell_code_only`, rather than a second copy
@@ -104,8 +81,8 @@ free to drift from it.
 Usage:
   python3 tools/lua_strict_decode_audit.py              # audit the tree
   python3 tools/lua_strict_decode_audit.py --self-test  # fixtures only
-Exit codes: 0 = clean, 1 = a strict decode appeared under the scoped
-tree (or, under --self-test, a fixture behaved wrongly).
+Exit codes: 0 = clean, 1 = a strict use was found or a file could not be
+certified (or, under --self-test, a fixture behaved wrongly).
 """
 from __future__ import annotations
 
@@ -133,10 +110,12 @@ STRICT_MODULE = "Data.Text.Encoding"
 BANNED_IDENTIFIER = "decodeUtf8"
 TOTAL_SIBLINGS = ("decodeUtf8'", "decodeUtf8With", "decodeUtf8Lenient")
 
-# Exemptions, if one is ever needed: repo-relative path -> the reason it
-# is exempt, stated inline the way tools/unicode_operator_audit.py
-# states its own. Whole-file, because there is no construct-scoped case
-# to carve out here. A clean tree needs none.
+# Exemptions: repo-relative path -> the reason it is exempt, stated
+# inline the way tools/unicode_operator_audit.py states its own
+# (requirement 7). Whole-file, because there is no construct-scoped case
+# to carve out here. This is also the recorded escape for a file the
+# guard refuses. A clean tree needs none, and the checked-in table is
+# empty.
 EXEMPTIONS: dict[str, str] = {}
 
 # Haskell 2010 report SS2.4: the characters a variable or constructor
@@ -149,94 +128,54 @@ _MENTIONS_STRICT_MODULE = re.compile(
     r"(?<![\w'.])" + re.escape(STRICT_MODULE) + r"(?![\w'.])")
 
 # The import shapes this module understands, per the Haskell 2010 report
-# SS5.3: `import [qualified] Data.Text.Encoding [as Alias]
-# [hiding] [( ... )]`. Anything else that names the module is a parse
-# failure, not a pass (see `_ImportParseError`).
+# SS5.3 plus GHC2024's ImportQualifiedPost: `import [qualified]
+# Data.Text.Encoding [qualified] [as Alias] [hiding] [( ... )]`.
+# Anything else that names the module is a parse failure, not a pass.
 _STRICT_IMPORT = re.compile(
     r"\Aimport\s+(?P<prequalified>qualified\s+)?"
     + re.escape(STRICT_MODULE) + r"(?![\w'.])"
-    # GHC2024 enables ImportQualifiedPost, so `qualified` may follow the
-    # module name instead of preceding it. Both spellings mean the same
-    # import; rejecting the postpositive one would raise on a perfectly
-    # compliant file.
     r"(?P<postqualified>\s+qualified(?![\w']))?"
     r"(?:\s+as\s+(?P<alias>[A-Z][\w']*(?:\.[A-Z][\w']*)*))?"
     r"(?P<rest>[\s\S]*)\Z")
 
-# CPP directives that can rewrite identifiers before GHC ever sees
-# them, or hide text from this scan. Matched on the RAW file text, not
-# the comment-masked copy: CPP runs before Haskell is parsed, so a
-# `#define` inside what looks like a Haskell comment is still a real
-# directive.
+# `import` as a whole token, wherever it sits.
+_IMPORT_TOKEN = re.compile(r"(?<![\w'])import(?![\w'])")
+
+# CPP directives that can rewrite identifiers before GHC ever sees them,
+# or hide text from this scan. Matched on the RAW file text, not the
+# comment-masked copy: CPP runs before Haskell is parsed, so a `#define`
+# inside what looks like a Haskell comment is still a real directive.
 _REWRITING_CPP_DIRECTIVE = re.compile(
     r"^[ \t]*#[ \t]*(define|undef|include)\b", re.MULTILINE)
-
-# Reserved words read as whole tokens, wherever they sit.
-_IMPORT_TOKEN = re.compile(r"(?<![\w'])import(?![\w'])")
-_MODULE_TOKEN = re.compile(r"(?<![\w'])module(?![\w'])")
-_WHERE_TOKEN = re.compile(r"(?<![\w'])where(?![\w'])")
-
-# `{` is overloaded in Haskell: it opens an EXPLICIT LAYOUT BLOCK after
-# one of these reserved words, and RECORD SYNTAX (a construction, an
-# update or a record pattern) anywhere else. The two must not be
-# confused -- a layout brace introduces declarations, a record brace
-# introduces field bindings inside one expression.
-_LAYOUT_BRACE_KEYWORDS = frozenset({"where", "let", "do", "of"})
-
-# A declaration with no `=` is a BODY-LESS one -- a type signature, a
-# type-level declaration, a fixity or a `deriving` clause -- in which a
-# bare name is a declaration, not a use. Recognised by its leading
-# keyword or by a `::`/`∷`, so that "no `=`" alone can never make an
-# arbitrary fragment read as all-head and silence the uses inside it.
-_BODYLESS_KEYWORDS = frozenset({
-    "data", "newtype", "type", "class", "instance", "foreign",
-    "deriving", "pattern", "infix", "infixl", "infixr"})
-_SIGNATURE_TOKEN = re.compile(r"(?<![!#$%&*+./<=>?@\\^|~:-])(?:::|∷)"
-                              r"(?![!#$%&*+./<=>?@\\^|~:-])")
-
-# Haskell 2010 report SS2.4's symbolic-operator characters. A maximal run
-# of these is one operator lexeme, which is how `=` is told from `==`,
-# `=>` or `>=`.
-_SYMBOL_RUN = re.compile(r"[!#$%&*+./<=>?@\\^|~:-]+")
-
-# Operator lexemes that separate a binding's LEFT-HAND side from its
-# right: `=` for a definition, `->` for a lambda or case alternative,
-# `::` for the signature that declares one. The project's Unicode
-# spellings count too.
-# The operator lexemes that end a declaration's binding left-hand side:
-# its own `=`, or the `|` opening its guards, whichever comes first.
-_HEAD_TERMINATORS = frozenset({"=", "|"})
 
 
 class _UnscannableSource(Exception):
     """Source this guard cannot certify, for any reason.
 
     Raised rather than swallowed, always. Every alternative -- scanning
-    a file whose imports were not understood, or one whose text the
-    compiler will rewrite before it sees it -- makes the uses in that
-    file invisible, which is the one failure mode a guard must not
-    have."""
+    a file whose imports were not understood, one whose bare names it
+    cannot resolve, or one whose text the compiler will rewrite before
+    it sees it -- makes the uses in that file invisible, which is the
+    one failure mode a guard must not have."""
 
 
 class _ImportParseError(_UnscannableSource):
     """A `Data.Text.Encoding` import this module cannot classify."""
 
 
+class _UnqualifiedImportError(_UnscannableSource):
+    """An UNQUALIFIED import of `Data.Text.Encoding`.
+
+    Its call sites are bare names, which cannot be told from a local
+    binding that legally shadows them without full scope analysis -- see
+    the module docstring. Refused as a whole rather than guessed at, and
+    refused whatever else the declaration carries: an alias, an explicit
+    import list, or a `hiding` clause all still put the module's names
+    in unqualified scope."""
+
+
 class _PreprocessorError(_UnscannableSource):
-    """A file whose text CPP will rewrite before GHC parses it.
-
-    This audit reads UNPREPROCESSED source, so an object-like or
-    function-like `#define` can rename anything it resolves by -- a
-    module qualifier most of all. `#define TextEnc TE` next to
-    `import qualified Data.Text.Encoding as TextEnc` makes the compiler
-    see the alias `TE` while this scan records `TextEnc`, and a
-    `TE.decodeUtf8` call would then resolve against an alias the scan
-    never learned. `#include` is the same hazard at one remove, since
-    the included text is invisible here.
-
-    CONDITIONAL directives are deliberately NOT an error: `#if`/`#ifdef`
-    only SELECT text, and a scan that reads every branch over-reports at
-    worst, which is the safe direction."""
+    """A file whose text CPP will rewrite before GHC parses it."""
 
 
 @dataclass(frozen=True)
@@ -252,15 +191,6 @@ class Violation:
                 f"decodeUtf8Lenient (or another total sibling)")
 
 
-@dataclass(frozen=True)
-class StrictImports:
-    """How `STRICT_MODULE`'s `decodeUtf8` can be named in one file:
-    the module qualifiers a call site may write it behind, and whether
-    any import also puts it in unqualified scope."""
-    qualifiers: frozenset[str]
-    unqualified: bool
-
-
 # ---------------------------------------------------------------------
 # Import resolution
 # ---------------------------------------------------------------------
@@ -272,7 +202,9 @@ def _opens_declaration(code_text: str, start: int) -> bool:
     It does when only spaces separate it from the start of its line, or
     from an explicit-layout `{` or `;`. Those are the only positions the
     Haskell grammar allows a declaration to begin at, in either layout
-    style."""
+    style -- which is why declarations are found by TOKEN here and never
+    by column: GHC accepts a top-level layout indented to any column,
+    and an explicit-brace module body puts imports inline."""
     i = start - 1
     while i >= 0 and code_text[i] in " \t":
         i -= 1
@@ -285,8 +217,10 @@ def _declaration_end(code_text: str, pos: int, column: int) -> int:
     or at the first line indented no further than `column` in an
     implicit one -- whichever comes first.
 
-    Bracket depth is tracked so a `;` inside an import list (or any
-    parenthesised group) cannot end the declaration early."""
+    Bracket depth is tracked so a `;` inside an import list cannot end
+    the declaration early. A continuation line can never itself be the
+    reserved word `import`, so one that is starts a fresh declaration
+    however deeply it is indented."""
     depth = 0
     i = pos
     n = len(code_text)
@@ -304,12 +238,6 @@ def _declaration_end(code_text: str, pos: int, column: int) -> int:
             while j < n and code_text[j] in " \t":
                 j += 1
             if j < n and code_text[j] != "\n":
-                # A continuation line can never itself be the reserved
-                # word `import`, so one that is starts a fresh
-                # declaration however deeply it is indented. Without
-                # this a malformed file folds two imports into one and
-                # the guard reports the wrong shape instead of the
-                # import it can read.
                 if (j - line_start) <= column or _IMPORT_TOKEN.match(code_text, j):
                     return i
         i += 1
@@ -319,10 +247,8 @@ def _declaration_end(code_text: str, pos: int, column: int) -> int:
 def _import_declarations(code_text: str) -> list[tuple[int, int, str]]:
     """Every import declaration in `code_text` as `(start, end, text)`.
 
-    Found by TOKEN position, never by column: see `_opens_declaration`
-    and `_declaration_end`. `code_text` must already be comment- and
-    string-masked, so a comment quoting an import is never mistaken for
-    one."""
+    `code_text` must already be comment- and string-masked, so a comment
+    quoting an import is never mistaken for one."""
     decls: list[tuple[int, int, str]] = []
     for match in _IMPORT_TOKEN.finditer(code_text):
         start = match.start()
@@ -334,21 +260,12 @@ def _import_declarations(code_text: str) -> list[tuple[int, int, str]]:
     return decls
 
 
-def _listed_names(chunk: str) -> set[str]:
-    """The identifiers named inside an import list. Membership is all
-    this module asks of it, and `decodeUtf8Lenient` lexes as its own
-    identifier, so a coarse identifier scan cannot answer wrongly."""
-    return set(re.findall(r"[A-Za-z_][A-Za-z0-9_']*", chunk))
+def _classify_strict_import(decl: str, rel_path: str, line: int) -> str:
+    """The module qualifier a `STRICT_MODULE` import establishes.
 
-
-def _classify_strict_import(decl: str, rel_path: str,
-                            line: int) -> tuple[str, bool] | None:
-    """`(qualifier, unqualified)` for an import of `STRICT_MODULE` that
-    brings `decodeUtf8` into scope, or None if it does not (a `hiding`
-    list naming it, or an explicit list omitting it).
-
-    Raises `_ImportParseError` when the declaration names the module in
-    a shape this parser does not model."""
+    Raises `_UnqualifiedImportError` when the import is not qualified,
+    and `_ImportParseError` when it names the module in a shape this
+    parser does not model."""
     match = _STRICT_IMPORT.match(decl.strip())
     if match is None:
         raise _ImportParseError(
@@ -360,61 +277,60 @@ def _classify_strict_import(decl: str, rel_path: str,
             f"unscanned.")
 
     rest = match.group("rest").strip()
-    hiding = False
     if rest.startswith("hiding"):
-        hiding = True
         rest = rest[len("hiding"):].strip()
     if rest.startswith("("):
         if not rest.endswith(")"):
             raise _ImportParseError(
                 f"{rel_path}:{line}: unterminated import list on this "
                 f"{STRICT_MODULE} import:\n\n{decl.strip()}")
-        listed = _listed_names(rest)
-        in_scope = (BANNED_IDENTIFIER not in listed) if hiding \
-            else (BANNED_IDENTIFIER in listed)
-    elif rest or hiding:
+    elif rest:
         raise _ImportParseError(
             f"{rel_path}:{line}: unexpected trailing text on this "
             f"{STRICT_MODULE} import:\n\n{decl.strip()}")
-    else:
-        in_scope = True
 
-    if not in_scope:
-        return None
-    alias = match.group("alias")
     qualified = (match.group("prequalified") is not None
                  or match.group("postqualified") is not None)
-    return (alias if alias else STRICT_MODULE, not qualified)
+    if not qualified:
+        raise _UnqualifiedImportError(
+            f"{rel_path}:{line}: this import puts {STRICT_MODULE}'s names in "
+            f"UNQUALIFIED scope:\n\n{decl.strip()}\n\n"
+            f"tools/lua_strict_decode_audit.py resolves {BANNED_IDENTIFIER} "
+            f"by module qualifier (#1605 requirement 3). A BARE occurrence "
+            f"cannot be told from a local binding that legally shadows it "
+            f"without full Haskell scope analysis, so this file cannot be "
+            f"certified as written -- which is not a claim that it decodes "
+            f"strictly.\n\n"
+            f"Import the module qualified, as every {STRICT_MODULE} import "
+            f"in src/ and app/ already is, or record this file in "
+            f"EXEMPTIONS with the reason it is safe.")
+
+    alias = match.group("alias")
+    return alias if alias else STRICT_MODULE
 
 
 def resolve_strict_imports(
         code_text: str,
-        rel_path: str) -> tuple[StrictImports, list[tuple[int, int]]]:
-    """`(how this file can name the banned function, import spans)`.
+        rel_path: str) -> tuple[frozenset[str], list[tuple[int, int]]]:
+    """`(qualifiers naming the banned function, import spans)`.
 
     The spans are returned so the call-site scan can skip the import
-    declarations themselves: importing a name decodes nothing, and the
+    declarations themselves: an import names nothing on its own, and the
     USE it enables is what this audit reports."""
     qualifiers: set[str] = set()
-    unqualified = False
     spans: list[tuple[int, int]] = []
     for start, end, decl in _import_declarations(code_text):
         spans.append((start, end))
         if not _MENTIONS_STRICT_MODULE.search(decl):
             continue
-        classified = _classify_strict_import(
-            decl, rel_path, code_text.count("\n", 0, start) + 1)
-        if classified is None:
-            continue
-        qualifier, is_unqualified = classified
-        qualifiers.add(qualifier)
+        line = code_text.count("\n", 0, start) + 1
+        qualifiers.add(_classify_strict_import(decl, rel_path, line))
         # The unaliased module path always names this module
         # unambiguously wherever it is in scope at all, so accept it
         # alongside whatever alias was declared. On code that compiles
         # this can only ever be the banned function.
         qualifiers.add(STRICT_MODULE)
-        unqualified = unqualified or is_unqualified
-    return StrictImports(frozenset(qualifiers), unqualified), spans
+    return frozenset(qualifiers), spans
 
 
 # ---------------------------------------------------------------------
@@ -457,285 +373,6 @@ def _qualifier_before(text: str, pos: int) -> str:
     return ""
 
 
-def _module_header_span(code_text: str) -> list[tuple[int, int]]:
-    """The `module ... where` header's span, if any.
-
-    Excluded from the call-site scan for the same reason import
-    declarations are: an export list names entities, it does not use
-    them, so `module M (decodeUtf8) where` decodes nothing."""
-    match = _MODULE_TOKEN.search(code_text)
-    if match is None or not _opens_declaration(code_text, match.start()):
-        return []
-    depth = 0
-    i = match.end()
-    n = len(code_text)
-    while i < n:
-        char = code_text[i]
-        if char in "([":
-            depth += 1
-        elif char in ")]":
-            depth = max(0, depth - 1)
-        elif depth == 0:
-            where = _WHERE_TOKEN.match(code_text, i)
-            if where:
-                return [(match.start(), where.end())]
-        i += 1
-    return [(match.start(), n)]
-
-
-def _body_column(code_text: str, skip_spans: list[tuple[int, int]]) -> int:
-    """The column the module body's top-level declarations sit at.
-
-    Every declaration's continuation lines are indented further than its
-    head, so the SMALLEST indent among the body's code lines is the
-    column the heads share -- which is 0 for an ordinary module and 1
-    for one laid out at column 1."""
-    columns = []
-    for offset, line in _lines_with_offsets(code_text):
-        body = line.lstrip(" \t")
-        if not body or _within(offset, skip_spans):
-            continue
-        columns.append(len(line) - len(body))
-    return min(columns) if columns else 0
-
-
-def _is_layout_brace(code_text: str, pos: int) -> bool:
-    """True if the `{` at `pos` opens an explicit layout block rather
-    than record syntax.
-
-    It does exactly when the token before it is `where`, `let`, `do` or
-    `of` -- the four contexts the Haskell 2010 report SS2.7 lets an
-    explicit block replace layout in. Every other `{` is a record
-    construction, update or pattern, whose contents are one
-    expression's field bindings and not declarations of their own."""
-    i = pos - 1
-    while i >= 0 and code_text[i] in " \t\n":
-        i -= 1
-    if i < 0:
-        return True
-    word_end = i + 1
-    while i >= 0 and code_text[i] in _IDENT_CHARS:
-        i -= 1
-    return code_text[i + 1:word_end] in _LAYOUT_BRACE_KEYWORDS
-
-
-def _module_body_brace(code_text: str) -> int | None:
-    """The `{` that opens the MODULE's own explicit layout block, if it
-    has one: the brace directly after `module ... where`.
-
-    Only that one brace introduces top-level declarations. Every other
-    layout brace -- a `do`, `let`, `of` or nested `where` block inside a
-    declaration -- is part of that declaration, and splitting on one
-    would turn its statements into pseudo-declarations whose contents
-    then read as a head."""
-    header = _module_header_span(code_text)
-    if not header:
-        return None
-    i = header[0][1]
-    while i < len(code_text) and code_text[i] in " \t\n":
-        i += 1
-    return i if i < len(code_text) and code_text[i] == "{" else None
-
-
-def _top_level_declarations(
-        code_text: str,
-        skip_spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """The `[start, end)` span of each top-level declaration.
-
-    A declaration head sits at `_body_column`; anything indented further
-    belongs to it. An explicit-layout `;` at bracket depth 0 splits one
-    too. This is the unit a `where` binding or a parameter can shadow
-    across, and nothing outside it can be shadowed by them -- which is
-    what makes per-occurrence resolution possible without a parser."""
-    column = _body_column(code_text, skip_spans)
-    body_brace = _module_body_brace(code_text)
-    boundaries = [0]
-    depth = 0
-    for i, char in enumerate(code_text):
-        if char in "([":
-            depth += 1
-        elif char == "{":
-            # Only the MODULE's own layout brace introduces top-level
-            # declarations. A record brace is part of one expression,
-            # and a nested `do`/`let`/`of`/`where` brace is part of one
-            # declaration; both nest like any other bracket. Splitting
-            # on either would make its contents look like a declaration
-            # head, so a name inside would read as a binder and silence
-            # the real call beside it.
-            if i == body_brace:
-                boundaries.append(i + 1)
-            else:
-                depth += 1
-        elif char in ")]":
-            depth = max(0, depth - 1)
-        elif char == "}":
-            if depth > 0:
-                depth -= 1
-            else:
-                boundaries.append(i + 1)
-        elif depth == 0 and char == ";":
-            boundaries.append(i + 1)
-        elif char == "\n":
-            line_start = i + 1
-            j = line_start
-            while j < len(code_text) and code_text[j] in " \t":
-                j += 1
-            if (j < len(code_text) and code_text[j] != "\n"
-                    and (j - line_start) <= column):
-                boundaries.append(line_start)
-    boundaries.append(len(code_text))
-    ordered = sorted(set(boundaries))
-    return [(a, b) for a, b in zip(ordered, ordered[1:]) if b > a]
-
-
-def _declaration_head_end(code_text: str, start: int, end: int) -> int | None:
-    """Where the declaration at `[start, end)` stops being its own HEAD
-    -- the left-hand side in which every position is a binding position.
-
-    A Haskell function LHS is `f pat1 pat2 ... | guard ... = rhs`, so the
-    head ends at whichever comes first: the declaration's `=`, or the
-    `|` that opens its guards. Guards are ORDINARY EXPRESSIONS sitting
-    before that `=`, so a name in one is a use and not a binder; ending
-    the head at `=` alone would read `f raw | p (decodeUtf8 raw) = ...`
-    as binding the name.
-
-    None when the declaration has neither (a type signature, a
-    `data`/`class` declaration -- nothing in which a bare name is a use).
-
-    Both are read as maximal symbol runs at bracket depth 0, counting
-    `()`, `[]` and record `{}`. So `==`, `=>` and `>=` are not the `=`,
-    an operator definition's `|||` is not the `|`, and neither a nested
-    `=` inside a record construction nor a list comprehension's `|`
-    counts at all."""
-    depth = 0
-    i = start
-    while i < end:
-        char = code_text[i]
-        if char in "([{":
-            depth += 1
-            i += 1
-            continue
-        if char in ")]}":
-            depth -= 1
-            i += 1
-            continue
-        match = _SYMBOL_RUN.match(code_text, i)
-        if match:
-            if depth <= 0 and match.group(0) in _HEAD_TERMINATORS:
-                return match.start()
-            i = match.end()
-            continue
-        i += 1
-    return None
-
-
-def _view_pattern_spans(code_text: str, start: int,
-                        end: int) -> list[tuple[int, int]]:
-    """The spans within `[start, end)` that are VIEW-PATTERN
-    EXPRESSIONS -- the `e` of a `(e -> pat)` pattern.
-
-    `ViewPatterns` is on tree-wide (synarchy.cabal:116), so a function's
-    left-hand side may contain expressions as well as binders, and
-    `f (decodeUtf8 -> _) raw = ...` really does CALL the decoder from
-    inside its own head. Everything from a bracket's open to the first
-    `->` inside it is that expression.
-
-    A `(x :: A -> B)` type annotation is caught by the same shape and
-    its `x` read as an expression too. That is the conservative
-    direction: it can only turn a would-be binder into a reported
-    occurrence, never hide one."""
-    spans: list[tuple[int, int]] = []
-    stack: list[list] = []
-    i = start
-    while i < end:
-        char = code_text[i]
-        if char in "([{":
-            stack.append([i, False])
-            i += 1
-            continue
-        if char in ")]}":
-            if stack:
-                stack.pop()
-            i += 1
-            continue
-        if char == "→":
-            if stack and not stack[-1][1]:
-                stack[-1][1] = True
-                spans.append((stack[-1][0] + 1, i))
-            i += 1
-            continue
-        match = _SYMBOL_RUN.match(code_text, i)
-        if match:
-            if match.group(0) == "->" and stack and not stack[-1][1]:
-                stack[-1][1] = True
-                spans.append((stack[-1][0] + 1, match.start()))
-            i = match.end()
-            continue
-        i += 1
-    return spans
-
-
-def _binds_in_head(code_text: str, decl: tuple[int, int],
-                   skip_spans: list[tuple[int, int]]) -> bool:
-    """True if this declaration binds `decodeUtf8` in its own HEAD --
-    as the name it defines, or as one of its parameters -- never in a
-    guard or a view pattern, both of which are expressions rather than
-    binding positions.
-
-    This is the ONE shadowing case resolved here, because it is the only
-    one that needs no scope analysis: everything left of a declaration's
-    `=` is a binding position by construction, and what it binds is in
-    scope across the whole declaration. Every other binder -- `let`,
-    `where`, lambda, case alternative -- lives inside the body, and
-    placing its scope needs real parsing, so a bare occurrence in the
-    body is REPORTED rather than guessed at."""
-    start, end = decl
-    head_end = _declaration_head_end(code_text, start, end)
-    if head_end is None:
-        # No `=` and no guard bar. That is a BODY-LESS declaration -- a
-        # signature, a type-level declaration, a fixity -- in which the
-        # name is declared rather than used, so the whole span is head.
-        # Anything else with no `=` is not a declaration this function
-        # can read at all, and treating it as all-head would silence
-        # every use inside it, so it binds nothing.
-        if not _is_bodyless_declaration(code_text, start, end):
-            return False
-        stop = end
-    else:
-        stop = head_end
-    # A view-pattern expression sits inside the head but is not a
-    # binding position, so an occurrence there is a USE and must not
-    # make the declaration look like it binds the name.
-    expression_spans = _view_pattern_spans(code_text, start, stop)
-    for pos, lexeme in _identifier_runs(code_text, start, stop):
-        if lexeme != BANNED_IDENTIFIER:
-            continue
-        if _within(pos, skip_spans) or _within(pos, expression_spans):
-            continue
-        return True
-    return False
-
-
-def _is_bodyless_declaration(code_text: str, start: int, end: int) -> bool:
-    """True if `[start, end)` is a declaration that legitimately has no
-    `=`: one led by a type-level or fixity keyword, or a type signature
-    (recognised by its own `::` / `∷`, read as a whole operator so a
-    longer run containing it does not count)."""
-    for _, lexeme in _identifier_runs(code_text, start, end):
-        return lexeme in _BODYLESS_KEYWORDS or bool(
-            _SIGNATURE_TOKEN.search(code_text, start, end))
-    return False
-
-
-def _lines_with_offsets(text: str):
-    """`(offset, line)` for every line of `text`."""
-    offset = 0
-    for line in text.split("\n"):
-        yield offset, line
-        offset += len(line) + 1
-
-
-
 def _line_of(text: str, pos: int) -> int:
     return text.count("\n", 0, pos) + 1
 
@@ -745,10 +382,12 @@ def _within(pos: int, spans: list[tuple[int, int]]) -> bool:
 
 
 def find_violations(text: str, rel_path: str) -> list[Violation]:
-    """Every use of `Data.Text.Encoding.decodeUtf8` in `text` (the
-    source of the file at repo-relative `rel_path`), outside comments,
-    string literals, the module header, import declarations and
-    `EXEMPTIONS`."""
+    """Every qualified use of `Data.Text.Encoding.decodeUtf8` in `text`
+    (the source of the file at repo-relative `rel_path`), outside
+    comments, string literals and import declarations.
+
+    Nothing at all for a path in `EXEMPTIONS`. Raises
+    `_UnscannableSource` for a file this guard cannot certify."""
     if rel_path in EXEMPTIONS:
         return []
     directive = _REWRITING_CPP_DIRECTIVE.search(text)
@@ -757,47 +396,27 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
         raise _PreprocessorError(
             f"{rel_path}:{line}: this file carries a CPP "
             f"`{directive.group(1)}` directive, and "
-            f"tools/lua_strict_decode_audit.py reads UNPREPROCESSED "
-            f"source. A macro can rename the very module alias this scan "
-            f"resolves {BANNED_IDENTIFIER} by, so the file cannot be "
-            f"certified as written.\n\n"
-            f"Either drop the directive, or record the file in "
-            f"EXEMPTIONS with the reason it is safe. Conditional "
-            f"directives (#if / #ifdef) are fine and are not reported."
-        )
+            f"tools/lua_strict_decode_audit.py reads UNPREPROCESSED source. "
+            f"A macro can rename the very module alias this scan resolves "
+            f"{BANNED_IDENTIFIER} by, so the file cannot be certified as "
+            f"written.\n\n"
+            f"Either drop the directive, or record the file in EXEMPTIONS "
+            f"with the reason it is safe. Conditional directives "
+            f"(#if / #ifdef) only select text and are not reported.")
+
     code_text = haskell_code_only(text)
-    imports, import_spans = resolve_strict_imports(code_text, rel_path)
-    skip_spans = import_spans + _module_header_span(code_text)
-
-    # A bare occurrence is the import's unless its own declaration binds
-    # the name in its HEAD, which is the one shadowing case decidable
-    # without scope analysis. Resolved per declaration, because a binder
-    # in one top-level declaration cannot reach into another.
-    shadowed_decls: list[tuple[int, int]] = []
-    if imports.unqualified:
-        shadowed_decls = [
-            decl for decl in _top_level_declarations(code_text, skip_spans)
-            if _binds_in_head(code_text, decl, skip_spans)]
-
-    def bare_is_the_import(pos: int) -> bool:
-        return imports.unqualified and not _within(pos, shadowed_decls)
+    qualifiers, import_spans = resolve_strict_imports(code_text, rel_path)
 
     violations: list[Violation] = []
     for start, end in haskell_code_spans(text):
         for pos, lexeme in _identifier_runs(text, start, end):
-            if lexeme != BANNED_IDENTIFIER or _within(pos, skip_spans):
+            if lexeme != BANNED_IDENTIFIER or _within(pos, import_spans):
                 continue
             qualifier = _qualifier_before(text, pos)
-            if qualifier:
-                if qualifier not in imports.qualifiers:
-                    continue
-                spelling = f"{qualifier}.{lexeme}"
-            else:
-                if not bare_is_the_import(pos):
-                    continue
-                spelling = lexeme
-            violations.append(Violation(rel_path, _line_of(text, pos),
-                                        spelling))
+            if qualifier and qualifier in qualifiers:
+                violations.append(
+                    Violation(rel_path, _line_of(text, pos),
+                              f"{qualifier}.{lexeme}"))
     return violations
 
 
@@ -810,7 +429,7 @@ def scan_tree(repo_root: Path) -> list[Violation]:
 
 
 # ---------------------------------------------------------------------
-# Self-test
+# Self-test (requirement 5)
 # ---------------------------------------------------------------------
 
 # Fixtures, never the shipped tree: each is a synthetic module source
@@ -843,43 +462,33 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         [3],
     ),
     (
-        "an unqualified import with no list, and no binding of the name "
-        "anywhere -- the bare occurrence can only be the import's",
+        "postpositive `qualified` (GHC2024's ImportQualifiedPost)",
         "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f raw = decodeUtf8 raw\n",
+        "import Data.Text.Encoding qualified as TE\n"
+        "f raw = TE.decodeUtf8 raw\n",
         [3],
     ),
     (
-        "an unqualified import whose explicit list NAMES the function",
+        "postpositive `qualified` with no alias",
         "module M where\n"
-        "import Data.Text.Encoding (decodeUtf8, decodeUtf8Lenient)\n"
-        "f raw = decodeUtf8 raw\n",
+        "import Data.Text.Encoding qualified\n"
+        "f raw = Data.Text.Encoding.decodeUtf8 raw\n",
         [3],
     ),
     (
-        "a `hiding` list that hides something ELSE, so the function is "
-        "still in unqualified scope",
+        "a qualified import with an explicit list",
         "module M where\n"
-        "import Data.Text.Encoding hiding (decodeUtf8Lenient)\n"
-        "f raw = decodeUtf8 raw\n",
+        "import qualified Data.Text.Encoding as TE (decodeUtf8)\n"
+        "f raw = TE.decodeUtf8 raw\n",
         [3],
-    ),
-    (
-        "an unqualified import with an alias -- both spellings name the "
-        "banned function",
-        "module M where\n"
-        "import Data.Text.Encoding as TE\n"
-        "f raw = (TE.decodeUtf8 raw, decodeUtf8 raw)\n",
-        [3, 3],
     ),
     (
         "an import list spread over several lines",
         "module M where\n"
-        "import Data.Text.Encoding\n"
+        "import qualified Data.Text.Encoding as TE\n"
         "    ( decodeUtf8\n"
         "    , decodeUtf8Lenient )\n"
-        "f raw = decodeUtf8 raw\n",
+        "f raw = TE.decodeUtf8 raw\n",
         [5],
     ),
     (
@@ -933,172 +542,6 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         [5],
     ),
     (
-        "MIXED SCOPE: a body binder in ONE declaration never silences "
-        "another declaration's call, which a whole-file binder check "
-        "did; here nothing is silenced at all",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "bad raw = decodeUtf8 raw\n"
-        "local raw = let decodeUtf8 = id in decodeUtf8 raw\n",
-        [3, 4, 4],
-    ),
-    (
-        "MIXED SCOPE: an occurrence before a lambda binder is outside "
-        "that binder's scope, and is reported like the rest",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f raw = (decodeUtf8 raw, (\\decodeUtf8 -> decodeUtf8) id)\n",
-        [3, 3, 3],
-    ),
-    (
-        "postpositive `qualified` (GHC2024's ImportQualifiedPost) is a "
-        "qualified import like any other, and its uses are reported",
-        "module M where\n"
-        "import Data.Text.Encoding qualified as TE\n"
-        "f raw = TE.decodeUtf8 raw\n",
-        [3],
-    ),
-    (
-        "postpositive `qualified` with no alias",
-        "module M where\n"
-        "import Data.Text.Encoding qualified\n"
-        "f raw = Data.Text.Encoding.decodeUtf8 raw\n",
-        [3],
-    ),
-    (
-        "CONSERVATIVE: a record construction whose LATER field uses `=` "
-        "must not make the real call look bound -- the declaration's own "
-        "`=` is the only one that ends its head",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f raw = R { first = decodeUtf8 raw, second = 1 }\n",
-        [3],
-    ),
-    (
-        "VIEW PATTERNS: the `e` of a `(e -> pat)` pattern is an "
-        "EXPRESSION inside the head, so a call there is a use -- and it "
-        "must not make the declaration look like it binds the name",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f (decodeUtf8 -> _) raw = decodeUtf8 raw\n",
-        [3, 3],
-    ),
-    (
-        "VIEW PATTERNS: with the project's Unicode arrow",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f (decodeUtf8 → _) raw = raw\n",
-        [3],
-    ),
-    (
-        "NESTED LAYOUT: a `do` block inside a declaration is part of "
-        "that declaration -- splitting on its brace would make its "
-        "statements a pseudo-declaration whose contents read as a head",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f raw = do { pure (decodeUtf8 raw) }\n",
-        [3],
-    ),
-    (
-        "NESTED LAYOUT: an explicit `let` block, likewise",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f raw = let { g = 1 } in g (decodeUtf8 raw)\n",
-        [3],
-    ),
-    (
-        "NESTED LAYOUT: an explicit `where` block, likewise",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f raw = g (decodeUtf8 raw) where { g = id }\n",
-        [3],
-    ),
-    (
-        "NESTED LAYOUT: an explicit `case ... of` block, likewise",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f raw = case raw of { _ -> decodeUtf8 raw }\n",
-        [3],
-    ),
-    (
-        "BODY-LESS: a fragment with no `=` that is not a signature or a "
-        "type-level declaration binds nothing, so the uses inside it "
-        "are still reported",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f raw = do { g (decodeUtf8 raw); h (decodeUtf8 raw) }\n",
-        [3, 3],
-    ),
-    (
-        "RECORD BRACES: a record is one expression, not a block of "
-        "declarations -- its first field must not read as a declaration "
-        "head, or a field label of this name would silence the real "
-        "call beside it",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f raw = R { decodeUtf8 = 1, value = decodeUtf8 raw }\n",
-        [3, 3],
-    ),
-    (
-        "RECORD BRACES: a record update, likewise",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f r raw = r { value = decodeUtf8 raw }\n",
-        [3],
-    ),
-    (
-        "GUARDS: a guard sits before the declaration's `=` but is an "
-        "ORDINARY EXPRESSION, so a call in one is a use -- the head "
-        "ends at the `|`, not at the `=`",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "import qualified Data.Text as T\n"
-        "f raw | T.null (decodeUtf8 raw) = False\n",
-        [4],
-    ),
-    (
-        "GUARDS: several guard alternatives, each an expression",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "import qualified Data.Text as T\n"
-        "f raw\n"
-        "  | T.null (decodeUtf8 raw) = False\n"
-        "  | otherwise = T.length (decodeUtf8 raw) > 0\n",
-        [5, 6],
-    ),
-    (
-        "CONSERVATIVE: a `where` binder is in the BODY, so placing its "
-        "scope needs real parsing -- both occurrences are reported "
-        "rather than guessed shadowed",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f raw = decodeUtf8 raw\n"
-        "  where decodeUtf8 = myOwnTotalThing\n",
-        [3, 4],
-    ),
-    (
-        "CONSERVATIVE: a `let` binder, likewise in the body",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f raw = let decodeUtf8 = myOwnTotalThing in decodeUtf8 raw\n",
-        [3, 3],
-    ),
-    (
-        "CONSERVATIVE: a lambda binder, likewise",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f raw = (\\decodeUtf8 -> decodeUtf8 raw) myOwnTotalThing\n",
-        [3, 3],
-    ),
-    (
-        "CONSERVATIVE: a case-alternative pattern, likewise",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f raw = case g of\n"
-        "    decodeUtf8 -> decodeUtf8 raw\n",
-        [4, 4],
-    ),
-    (
         "two strict calls on one line are both reported",
         "module M where\n" + _TE
         + "f a b = (TE.decodeUtf8 a, TE.decodeUtf8 b)\n",
@@ -1116,6 +559,19 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         "not read it as opening a string and swallow the call",
         "module M where\n" + _TE
         + "f raw = (q, TE.decodeUtf8 raw) where q = '\"'\n",
+        [3],
+    ),
+    (
+        "a qualified call inside a guard, a record and a nested layout "
+        "block -- the scan needs no notion of any of them",
+        "module M where\n" + _TE
+        + "f raw | p (TE.decodeUtf8 raw) = do { g R { v = TE.decodeUtf8 raw } }\n",
+        [3, 3],
+    ),
+    (
+        "a qualified call in a view pattern, likewise",
+        "module M where\n" + _TE
+        + "f (TE.decodeUtf8 -> _) raw = raw\n",
         [3],
     ),
 ]
@@ -1136,6 +592,13 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "module M where\n" + _TE
         + "import qualified Data.Text.Encoding.Error as TEE\n"
         + "f raw = TE.decodeUtf8With TEE.lenientDecode raw\n",
+    ),
+    (
+        "postpositive `qualified` with only a compliant sibling in use "
+        "-- the form must parse, not raise",
+        "module M where\n"
+        "import Data.Text.Encoding qualified as TE\n"
+        "f raw = TE.decodeUtf8Lenient raw\n",
     ),
     (
         "a `--` line comment naming the banned call",
@@ -1161,10 +624,10 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         + "f raw = TE.myDecodeUtf8 raw\n",
     ),
     (
-        "an import with no use -- an import decodes nothing; the USE it "
-        "enables is what fails",
+        "an import with no use -- an import names nothing on its own; "
+        "the USE it enables is what fails",
         "module M where\n"
-        "import Data.Text.Encoding (decodeUtf8)\n"
+        "import qualified Data.Text.Encoding as TE (decodeUtf8)\n"
         "f raw = raw\n",
     ),
     # --- provenance: a same-named function from somewhere else is a
@@ -1191,7 +654,15 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "f raw = Other.decodeUtf8 raw\n",
     ),
     (
-        "PROVENANCE: a local binding of that name in a file that never "
+        "PROVENANCE: Data.Text.Encoding.Error is not Data.Text.Encoding",
+        "module M where\n"
+        "import qualified Data.Text.Encoding.Error as TEE\n"
+        "f raw = TEE.decodeUtf8 raw\n",
+    ),
+    # --- bare names are outside the decidable domain (requirement 3);
+    #     with no unqualified import they are simply somebody else's.
+    (
+        "BARE: a local binding of that name in a file that never "
         "imports the module",
         "module M where\n"
         "decodeUtf8 :: ByteString -> Text\n"
@@ -1199,143 +670,84 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "f raw = decodeUtf8 raw\n",
     ),
     (
-        "PROVENANCE: a bare use where the module is imported QUALIFIED "
-        "only, so the bare name cannot be its export",
+        "BARE: a bare name where the module is imported QUALIFIED only, "
+        "so it cannot be that module's export",
         "module M where\n" + _TE
         + "f raw = decodeUtf8 raw\n",
     ),
     (
-        "PROVENANCE: the module imported unqualified but `hiding` the "
-        "function, so the bare name is not its export",
-        "module M where\n"
-        "import Data.Text.Encoding hiding (decodeUtf8)\n"
-        "f raw = decodeUtf8 raw\n",
-    ),
-    (
-        "PROVENANCE: an explicit import list that omits the function",
-        "module M where\n"
-        "import Data.Text.Encoding (decodeUtf8Lenient)\n"
-        "f raw = decodeUtf8 raw\n",
-    ),
-    (
-        "PROVENANCE: Data.Text.Encoding.Error is not Data.Text.Encoding",
-        "module M where\n"
-        "import qualified Data.Text.Encoding.Error as TEE\n"
-        "f raw = TEE.decodeUtf8 raw\n",
-    ),
-    (
-        "BODY-LESS: a type signature has no `=`, and the name in it is "
-        "DECLARED rather than used",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "decodeUtf8 :: ByteString -> Text\n"
-        "decodeUtf8 = myOwnTotalThing\n",
-    ),
-    (
-        "RECORD BRACES: a head-bound parameter still covers the whole "
-        "declaration when its body contains a record -- the record no "
-        "longer starts a declaration of its own",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f decodeUtf8 raw = R { value = decodeUtf8 raw }\n",
-    ),
-    (
-        "VIEW PATTERNS: a real binder ALONGSIDE a view pattern still "
-        "binds -- only the expression half is excluded, not the head",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f decodeUtf8 (g -> _) raw = decodeUtf8 raw\n",
-    ),
-    (
-        "VIEW PATTERNS: an ordinary constructor pattern has no `->`, "
-        "so it stays a binding position",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f (Just decodeUtf8) raw = decodeUtf8 raw\n",
-    ),
-    (
-        "GUARDS: a parameter of that name still binds when the "
-        "declaration also HAS guards -- the head is what precedes the "
-        "`|`, and the parameter is in it",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f decodeUtf8 raw | p raw = decodeUtf8 raw\n",
-    ),
-    (
-        "GUARDS: a list comprehension's `|` is inside brackets, so it "
-        "never ends a head",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f decodeUtf8 xs = [decodeUtf8 x | x <- xs]\n",
-    ),
-    (
-        "GUARDS: an operator definition's `|||` is one symbol run, not "
-        "the `|` that opens guards",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "decodeUtf8 ||| g = g decodeUtf8\n",
-    ),
-    (
-        "SHADOWING, resolved: a parameter of that name is bound in the "
-        "declaration's own HEAD, which covers the whole declaration and "
-        "needs no scope analysis",
-        "module M where\n"
-        "import Data.Text.Encoding\n"
-        "f decodeUtf8 raw = decodeUtf8 raw\n",
-    ),
-    (
-        "postpositive `qualified` with only a COMPLIANT sibling in use "
-        "-- the form must parse, not raise",
-        "module M where\n"
-        "import Data.Text.Encoding qualified as TE\n"
-        "f raw = TE.decodeUtf8Lenient raw\n",
-    ),
-    (
-        "postpositive `qualified` means the bare name is NOT in scope",
-        "module M where\n"
-        "import Data.Text.Encoding qualified as TE\n"
-        "f raw = decodeUtf8 raw\n",
-    ),
-    (
-        "a module header whose export list names the function -- an "
-        "export names an entity, it does not use one",
-        "module M (decodeUtf8) where\n"
-        "import Data.Text.Encoding\n"
-        "f raw = raw\n",
-    ),
-    (
-        "the composition `f.decodeUtf8` is a bare use, not a qualified "
-        "one -- and stays clean under a qualified import",
+        "BARE: the composition `f.decodeUtf8` is a bare name, not a "
+        "qualified one",
         "module M where\n" + _TE
         + "f = g.decodeUtf8\n",
     ),
+    (
+        "CPP: a conditional directive only SELECTS text, so it is not a "
+        "refusal and the file still scans",
+        "{-# LANGUAGE CPP #-}\n"
+        "module M where\n" + _TE
+        + "#ifdef DARWIN\n"
+        + "f raw = TE.decodeUtf8Lenient raw\n"
+        + "#endif\n",
+    ),
 ]
 
-# Source this guard cannot certify must RAISE, not be scanned as though
-# it were ordinary: an import shape it does not model, or a file whose
-# text CPP will rewrite before GHC parses it.
-UNSCANNABLE_FIXTURES: list[tuple[str, str]] = [
+# Source this guard cannot certify must RAISE (requirement 4).
+UNSCANNABLE_FIXTURES: list[tuple[str, str, type]] = [
+    (
+        "an UNQUALIFIED import: its call sites are bare names, which is "
+        "the case requirement 3 leaves undecided",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "f raw = decodeUtf8 raw\n",
+        _UnqualifiedImportError,
+    ),
+    (
+        "an unqualified import WITH AN ALIAS -- still unqualified scope",
+        "module M where\n"
+        "import Data.Text.Encoding as TE\n"
+        "f raw = TE.decodeUtf8Lenient raw\n",
+        _UnqualifiedImportError,
+    ),
+    (
+        "an unqualified import with an EXPLICIT LIST",
+        "module M where\n"
+        "import Data.Text.Encoding (decodeUtf8Lenient)\n"
+        "f raw = decodeUtf8Lenient raw\n",
+        _UnqualifiedImportError,
+    ),
+    (
+        "an unqualified import with a `hiding` clause -- hiding one "
+        "name still puts the rest in unqualified scope",
+        "module M where\n"
+        "import Data.Text.Encoding hiding (decodeUtf8)\n"
+        "f raw = decodeUtf8Lenient raw\n",
+        _UnqualifiedImportError,
+    ),
     (
         "a package-qualified import shape the parser does not model",
         "module M where\n"
         "import \"text\" qualified Data.Text.Encoding as TE\n"
         "f raw = TE.decodeUtf8 raw\n",
+        _ImportParseError,
     ),
     (
         "an unterminated import list",
         "module M where\n"
-        "import Data.Text.Encoding (decodeUtf8\n"
-        "f raw = decodeUtf8 raw\n",
+        "import qualified Data.Text.Encoding as TE (decodeUtf8\n"
+        "f raw = TE.decodeUtf8 raw\n",
+        _ImportParseError,
     ),
     (
         "CPP: a `#define` that renames the very alias the scan resolves "
         "by -- the compiler sees `TE`, an unpreprocessed scan sees "
-        "`TextEnc`, and the call would resolve against neither",
+        "`TextEnc`, and the call resolves against neither",
         "{-# LANGUAGE CPP #-}\n"
         "module M where\n"
         "#define TextEnc TE\n"
         "import qualified Data.Text.Encoding as TextEnc\n"
         "f raw = TE.decodeUtf8 raw\n",
+        _PreprocessorError,
     ),
     (
         "CPP: a `#define` inside what looks like a Haskell comment is "
@@ -1347,28 +759,29 @@ UNSCANNABLE_FIXTURES: list[tuple[str, str]] = [
         "-}\n"
         "import qualified Data.Text.Encoding as TextEnc\n"
         "f raw = TE.decodeUtf8 raw\n",
+        _PreprocessorError,
     ),
     (
         "CPP: `#undef`, which can un-rename just as destructively",
         "{-# LANGUAGE CPP #-}\n"
         "module M where\n"
-        "#undef TextEnc\n"
-        "import qualified Data.Text.Encoding as TE\n"
-        "f raw = TE.decodeUtf8Lenient raw\n",
+        "#undef TextEnc\n" + _TE
+        + "f raw = TE.decodeUtf8Lenient raw\n",
+        _PreprocessorError,
     ),
     (
         "CPP: `#include`, whose text this scan never sees",
         "{-# LANGUAGE CPP #-}\n"
         "module M where\n"
-        "#include \"aliases.h\"\n"
-        "import qualified Data.Text.Encoding as TE\n"
-        "f raw = TE.decodeUtf8Lenient raw\n",
+        "#include \"aliases.h\"\n" + _TE
+        + "f raw = TE.decodeUtf8Lenient raw\n",
+        _PreprocessorError,
     ),
 ]
 
 
 def _exemptions_missing_reasons() -> list[str]:
-    """Requirement 6: every exemption states its reason inline."""
+    """Requirement 7: every exemption states its reason inline."""
     return [path for path, reason in EXEMPTIONS.items()
             if not isinstance(reason, str) or not reason.strip()]
 
@@ -1377,35 +790,59 @@ def self_test() -> int:
     failures: list[str] = []
 
     for label, source, expected in DETECTED_FIXTURES:
-        got = [v.line for v in find_violations(source, "fixture.hs")]
+        try:
+            got = [v.line for v in find_violations(source, "fixture.hs")]
+        except _UnscannableSource as error:
+            failures.append(f"  DETECTED: {label}\n"
+                            f"    expected violations on lines {expected}, "
+                            f"but the scan refused: {error}")
+            continue
         if got != expected:
             failures.append(f"  DETECTED: {label}\n"
                             f"    expected violations on lines {expected}, "
                             f"got {got}")
 
     for label, source in CLEAN_FIXTURES:
-        got = [str(v) for v in find_violations(source, "fixture.hs")]
+        try:
+            got = [str(v) for v in find_violations(source, "fixture.hs")]
+        except _UnscannableSource as error:
+            failures.append(f"  CLEAN: {label}\n"
+                            f"    expected no violations, but the scan "
+                            f"refused: {error}")
+            continue
         if got:
             failures.append(f"  CLEAN: {label}\n"
                             f"    expected no violations, got {got}")
 
-    for label, source in UNSCANNABLE_FIXTURES:
+    for label, source, expected_error in UNSCANNABLE_FIXTURES:
         try:
             find_violations(source, "fixture.hs")
-        except _UnscannableSource:
+        except expected_error:
+            continue
+        except _UnscannableSource as error:
+            failures.append(f"  UNSCANNABLE: {label}\n"
+                            f"    expected {expected_error.__name__}, got "
+                            f"{type(error).__name__}")
             continue
         failures.append(f"  UNSCANNABLE: {label}\n"
-                        f"    expected _UnscannableSource, got a scan")
+                        f"    expected {expected_error.__name__}, got a scan")
 
     # An exemption must actually suppress, and suppress only its path,
-    # or the table is decorative.
-    exempt_probe = "module M where\n" + _TE + "f raw = TE.decodeUtf8 raw\n"
+    # or the table is decorative. It must also cover a REFUSAL, since
+    # that is the recorded escape requirement 4 points at.
+    strict_probe = "module M where\n" + _TE + "f raw = TE.decodeUtf8 raw\n"
+    refused_probe = ("module M where\nimport Data.Text.Encoding\n"
+                     "f raw = decodeUtf8 raw\n")
     EXEMPTIONS["exempt.hs"] = "self-test probe"
     try:
-        if find_violations(exempt_probe, "exempt.hs"):
+        if find_violations(strict_probe, "exempt.hs"):
             failures.append("  EXEMPTIONS: an exempt path was still flagged")
-        if not find_violations(exempt_probe, "fixture.hs"):
+        if not find_violations(strict_probe, "fixture.hs"):
             failures.append("  EXEMPTIONS: exempting one path silenced another")
+        try:
+            find_violations(refused_probe, "exempt.hs")
+        except _UnscannableSource:
+            failures.append("  EXEMPTIONS: an exempt path was still refused")
     finally:
         del EXEMPTIONS["exempt.hs"]
 
@@ -1420,12 +857,12 @@ def self_test() -> int:
     total = (len(DETECTED_FIXTURES) + len(CLEAN_FIXTURES)
              + len(UNSCANNABLE_FIXTURES))
     print(f"lua_strict_decode_audit self-test: {total} fixtures OK "
-          f"({len(DETECTED_FIXTURES)} detected across every import, "
-          f"qualification and layout form; {len(CLEAN_FIXTURES)} clean, "
-          f"including the total siblings, comments, literals, "
-          f"same-named functions from other modules and a head-bound "
-          f"bare name; {len(UNSCANNABLE_FIXTURES)} unscannable sources "
-          f"that raise rather than pass).")
+          f"({len(DETECTED_FIXTURES)} qualified uses detected across every "
+          f"import, qualification and layout form; {len(CLEAN_FIXTURES)} "
+          f"clean, including the total siblings, comments, literals, bare "
+          f"names and same-named functions from other modules; "
+          f"{len(UNSCANNABLE_FIXTURES)} sources refused rather than "
+          f"certified).")
     return 0
 
 

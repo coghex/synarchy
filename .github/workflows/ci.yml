@@ -528,23 +528,22 @@ jobs:
           python3 tools/test_unicode_operator_audit.py
           python3 tools/unicode_operator_audit.py
 
-      # Cheap, no-engine guard (#1605, restoring #665's sweep): fails if
-      # a direct strict Data.Text.Encoding.decodeUtf8 -- under any
-      # qualification or import alias -- appears in Haskell source under
-      # src/Engine/Scripting/Lua/. A Lua string is an arbitrary byte
-      # array, so a strict decode throws UnicodeException on malformed
-      # input (closed #618) instead of letting the call site refuse the
-      # value. The total siblings decodeUtf8'/decodeUtf8With/
-      # decodeUtf8Lenient are never flagged, and neither are comments,
-      # string literals, or a same-named function from any OTHER module
-      # -- the scan resolves each file's own imports (found by token, so
-      # neither an indented nor an explicit-brace layout hides one, and
-      # both `qualified` positions parse). A bare name it cannot resolve
-      # is reported rather than assumed shadowed; the tree's imports are
-      # all qualified, so that path is quiet. The regression this
-      # catches is commit 893cbd8f
-      # (#1217), which reintroduced two strict calls 37 days after the
-      # sweep and passed both review and the headless suite.
+      # Cheap, no-engine guard (#1605, restoring #665's sweep): fails
+      # if a QUALIFIED reference to Data.Text.Encoding.decodeUtf8 --
+      # under any alias, and with `qualified` written either side of the
+      # module name -- appears in code under src/Engine/Scripting/Lua/.
+      # A Lua string is an arbitrary byte array, so a strict decode
+      # throws UnicodeException on malformed input (closed #618) instead
+      # of letting the call site refuse the value. Never flagged: the
+      # total siblings decodeUtf8'/decodeUtf8With/decodeUtf8Lenient,
+      # comments, string literals, imports, and a same-named function
+      # from any other module. Qualified references are the whole
+      # decidable domain -- a bare name needs Haskell scope analysis, so
+      # a file that would require it (an unqualified import of the
+      # module, or an identifier-rewriting CPP directive) is REFUSED
+      # rather than certified. The regression this catches is commit
+      # 893cbd8f (#1217), which reintroduced two strict calls 37 days
+      # after the sweep and passed both review and the headless suite.
       - name: Lua strict-decode audit
         run: |
           python3 tools/lua_strict_decode_audit.py --self-test
