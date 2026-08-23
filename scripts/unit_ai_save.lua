@@ -7,10 +7,13 @@ local M = {}
 
 -- Reference-field schema, references() traversal, and typed structured-
 -- reference wrap/unwrap (issue #764) live in unit_ai_save_refs.lua --
--- split out to stay under this file's line budget (#538). AI_UNIT_REF_FIELDS/
--- AI_BUILDING_REF_FIELDS are re-exported unchanged so unit_ai.lua's
--- existing `unitAiSave.AI_UNIT_REF_FIELDS`/`AI_BUILDING_REF_FIELDS`
--- access (scrubStaleRefs) keeps working exactly as before.
+-- split out to stay under this file's line budget (#538). Since #1589
+-- that module's REF_SCHEMA is the single declaration the reference
+-- walk, the wire wrap/unwrap, the tag validator and the post-load
+-- reconcile (scripts/unit_ai_reconcile.lua) are all derived from.
+-- AI_UNIT_REF_FIELDS/AI_BUILDING_REF_FIELDS are re-exported unchanged
+-- so any existing `unitAiSave.AI_UNIT_REF_FIELDS`/
+-- `AI_BUILDING_REF_FIELDS` access keeps working exactly as before.
 local refsMod = require("scripts.unit_ai_save_refs")
 M.AI_UNIT_REF_FIELDS     = refsMod.AI_UNIT_REF_FIELDS
 M.AI_BUILDING_REF_FIELDS = refsMod.AI_BUILDING_REF_FIELDS

@@ -58,7 +58,13 @@ import Building.Types (BuildingManager(..), BuildingId(..), BuildingDef)
 import Building.Knowledge (prunedContainerIds, retainContainers)
 import World.Save.Integrity
     ( pageEntitiesFrom, danglingOrderRefErrors, capIntegrityErrors
-    , renderIntegrityReport )
+    , renderIntegrityReport, loadReconcileContextFrom )
+-- The SaveData -> KnownEntities builder the Lua reference-edge
+-- cross-validator already runs for this same load (issue #764). Reused
+-- here rather than re-derived so the load-time "does this edge resolve?"
+-- answer and the reconcile-time "should this reference be cleared?"
+-- answer cannot drift apart (issue #1589).
+import Engine.Scripting.Lua.API.Save.Integrity (knownEntitiesFromSaveData)
 import Unit.Types (UnitManager(..), UnitId, UnitDef)
 import Unit.Faction (fallbackFaction, factionTag)
 import Unit.Sim.Types (UnitSimState)
@@ -187,6 +193,8 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                     , ssCamera        = camera
                     , ssZoomAtlas     = mZoomAtlas
                     , ssPreview       = mPreview
+                    , ssReconcile     = loadReconcileContextFrom
+                                          (knownEntitiesFromSaveData saveData)
                     , ssMaterialRegistry = registry
                     }
 

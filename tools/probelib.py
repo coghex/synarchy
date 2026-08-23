@@ -34,6 +34,8 @@ import subprocess
 import sys
 import time
 
+import probe_engine
+
 # The user's graphical instance lives on 8008; probes must never touch it.
 GUI_PORT = 8008
 
@@ -214,9 +216,11 @@ def boot(port: int, log: str | None = None, args: list[str] | None = None,
         sys.exit(f"refusing to boot on port {GUI_PORT} (the GUI port); pass a 9xxx port")
     logpath = _log_path(port, log)
     logf = open(logpath, "w")
-    cmd = ["cabal", "run", "-v0", "exe:synarchy", "--", *mode, "--port", str(port)]
-    if args:
-        cmd += args
+    # The runner resolves ONE executable before any probe starts and
+    # hands it over through the environment (#1570); with none supplied
+    # this is the historical `cabal run` invocation, so a probe run by
+    # hand still needs no prior build step.
+    cmd = probe_engine.engine_command([*mode, "--port", str(port), *(args or [])])
     proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT)
     proc._probe_log = logpath  # type: ignore[attr-defined]
     deadline = time.time() + ready_timeout

@@ -35,6 +35,7 @@ import Engine.Load.Status (advanceLoad, failLoad, finishLoad, failReconciliation
 import Engine.Scripting.Lua.API.Save (applyLuaLoad, abortLuaLoad)
 import Engine.Scripting.Lua.DebugServer (DebugCommand(..), pollDebugCommand)
 import World.Command.Types (WorldCommand(..))
+import World.Save.Payload (LoadReconcileContext(..))
 
 processLuaMsgs ∷ EngineEnv → LuaBackendState → IORef ThreadControl → IO ()
 processLuaMsgs env ls stateRef = do
@@ -258,7 +259,7 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls "onInterrupt" [ScriptNumber (fromIntegral fid)]
   LuaWorldGenLog text →
     broadcastToModules ls "onWorldGenLog" [ScriptString text]
-  LuaSaveLoaded requestId survUnitIds survBuildingIds → do
+  LuaSaveLoaded requestId survUnitIds survBuildingIds reconcile → do
     -- Issue #763: the debug-console TCP server keeps
     -- accepting commands onto 'lbsDebugQueue' regardless of the save
     -- barrier's capture-lock state — while this load held the boundary
@@ -289,7 +290,13 @@ processLuaMsg env ls stateRef msg = case msg of
     cancelStaleDebugCommands
     reconcileFailures ← broadcastToModulesReportingErrors ls "onSaveLoaded"
       [ intsToScriptArray survUnitIds
-      , intsToScriptArray survBuildingIds ]
+      , intsToScriptArray survBuildingIds
+      -- Issue #1589: appended, never inserted — every shipped
+      -- 'onSaveLoaded' callback reads the two survivor arrays
+      -- positionally, and Lua ignores arguments a function does not
+      -- declare, so only the callbacks that actually want the context
+      -- (today @scripts/unit_ai.lua@'s) have to name it.
+      , reconcileToScriptValue reconcile ]
     -- The transaction is reported
     -- 'LoadPublished' only NOW, once this reconciliation broadcast has
     -- actually run — not the instant the Haskell-side ref swap
@@ -512,6 +519,41 @@ intsToScriptArray xs = ScriptTable $
     zipWith (\i x → ( ScriptNumber (fromIntegral (i ∷ Int))
                     , ScriptNumber (fromIntegral x) ))
             [1..] xs
+
+-- | Marshal the restored session's reconciliation context (issue
+--   #1589) into the one Lua table @onSaveLoaded@'s third argument
+--   carries:
+--
+-- > { item_instance = { [iid] = true, ... },
+-- >   unitPage      = { [uid] = "<page id>", ... },
+-- >   byPage = { craft_bill  = { ["<page id>"] = { [bill] = true, ... } },
+-- >              ground_item = { ["<page id>"] = { [gid]  = true, ... } } } }
+--
+--   Keyed by the same reference-KIND vocabulary
+--   'World.Save.Integrity.luaEdgeResolves' and the Lua @references()@
+--   hooks already speak, and split by SCOPE: the session-global kind
+--   sits at the top level, the two per-page kinds under @byPage@ where
+--   a page id must be supplied to reach a set at all. That shape is
+--   what stops a reconcile from resolving a per-page id session-wide.
+--
+--   Every one of the four tables is always present, empty or not — an
+--   empty session is a real value, and the Lua side treats a MISSING
+--   table as an engine fault rather than as "nothing to check".
+reconcileToScriptValue ∷ LoadReconcileContext → ScriptValue
+reconcileToScriptValue rc = ScriptTable
+    [ (ScriptString "item_instance", idSet (lrcItemInstances rc))
+    , (ScriptString "unitPage", ScriptTable
+        [ (ScriptNumber (fromIntegral uid), ScriptString pid)
+        | (uid, pid) ← lrcUnitPages rc ])
+    , (ScriptString "byPage", ScriptTable
+        [ (ScriptString "craft_bill",  byPage (lrcBillsByPage rc))
+        , (ScriptString "ground_item", byPage (lrcGroundItemsByPage rc)) ])
+    ]
+  where
+    idSet ids = ScriptTable
+        [ (ScriptNumber (fromIntegral i), ScriptBool True) | i ← ids ]
+    byPage entries = ScriptTable
+        [ (ScriptString pid, idSet ids) | (pid, ids) ← entries ]
 
 -- | Encode the optional payload as either @{x=gx, y=gy}@ or 'nil'.
 --   The Lua-side popup module makes a line clickable only when its

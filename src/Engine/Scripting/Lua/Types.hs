@@ -17,6 +17,7 @@ import UI.Types (ElementHandle(..))
 import qualified Graphics.UI.GLFW as GLFW
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Log (LoggerState)
+import World.Save.Payload (LoadReconcileContext)
 import Language.Semantic.Types (Catalogue)
 import Language.Generated.Types (LanguageProvenance)
 import Language.Suggest (NameSuggester)
@@ -273,13 +274,23 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               --   rebuilds each singleton table as "survivors restored from
               --   the blob + every other still-live (off-page) entity's
               --   pre-load state", so a load touches only loaded-page state
-              --   and other live pages are untouched (#191); nested refs are
-              --   scrubbed against the survivor set.
-            | LuaSaveLoaded Int [Int] [Int]
+              --   and other live pages are untouched (#191); nested refs
+              --   are scrubbed against the survivor set, and (issue
+              --   #1589) per-page ones against the trailing context.
+            | LuaSaveLoaded Int [Int] [Int] LoadReconcileContext
               -- ^ The leading 'Int' is the load
               --   transaction's request id, so the dispatcher can
               --   report 'Engine.Load.Status.LoadPublished' only once
-              --   THIS broadcast (below) actually completes.
+              --   THIS broadcast (below) actually completes. The
+              --   trailing 'World.Save.Payload.LoadReconcileContext'
+              --   (issue #1589) carries what the two survivor lists
+              --   cannot: session item instances, unit-to-page
+              --   ownership, and the PER-PAGE craft-bill and
+              --   ground-item id sets. Without it a Lua reconcile
+              --   could only ask the ACTIVE page about a per-page id,
+              --   which is exactly the wrong-entity match
+              --   'World.Save.Integrity.luaEdgeResolves' refuses to
+              --   make on the Haskell side.
             | LuaHudLogInfo Text Text Text
               -- ^ HUD info-panel push: basic, advanced, and a SOURCE
               -- kind ("tile" | "chunk"). The kind lets entity-info

@@ -110,6 +110,7 @@ import qualified Test.Headless.Graphics.FontFallback as GraphicsFontFallback
 import qualified Test.Headless.Graphics.FontRepertoire as GraphicsFontRepertoire
 import qualified Test.Headless.Construct.Corners as ConstructCorners
 import qualified Test.Headless.Construct.Footprint as ConstructFootprint
+import qualified Test.Headless.Construct.PendingRefusal as ConstructPendingRefusal
 import qualified Test.Headless.Craft.Execute as CraftExecute
 import qualified Test.Headless.Craft.Bills as CraftBills
 import qualified Test.Headless.Power.Types as PowerTypes
@@ -137,6 +138,7 @@ import qualified Test.Headless.UI.Clipping as UIClipping
 import qualified Test.Headless.UI.InteractiveBounds as UIInteractiveBounds
 import qualified Test.Headless.UI.PopupPlacement as UIPopupPlacement
 import qualified Test.Headless.Event.PopupCoordPage as PopupCoordPage
+import qualified Test.Headless.UI.PopupQueueTeardown as UIPopupQueueTeardown
 import qualified Test.Headless.UI.ResponsiveMenus as UIResponsiveMenus
 import qualified Test.Headless.UI.ResponsiveGameplay as UIResponsiveGameplay
 import qualified Test.Headless.UI.SettingsDefaultsKeybinds
@@ -215,6 +217,7 @@ import qualified Test.Headless.Lua.UnitAiHold as LuaUnitAiHold
 import qualified Test.Headless.Lua.UnitAiStall as LuaUnitAiStall
 import qualified Test.Headless.Lua.UnitAiLogisticsTargets as LuaUnitAiLogisticsTargets
 import qualified Test.Headless.Lua.UnitAiLoadReset as LuaUnitAiLoadReset
+import qualified Test.Headless.Lua.UnitAiReconcile as LuaUnitAiReconcile
 import qualified Test.Headless.Lua.WorkClaimCapacity as LuaWorkClaimCapacity
 import qualified Test.Headless.Lua.Faction as LuaFaction
 import qualified Test.Headless.Unit.Faction as UnitFaction
@@ -258,6 +261,7 @@ main = hspec $ do
         -- at all, just the live EngineEnv's queues/refs to construct a
         -- real Lua backend and drive processLuaMsg directly.
         describe "Lua.DebugQueue" LuaDebugQueue.spec
+        LuaUnitAiReconcile.envSpec
         describe "Lua.RenderQueue" LuaRenderQueue.spec
         describe "Lua.PreviewGeneration" LuaPreviewGeneration.spec
         describe "Lua.PauseGate" LuaPauseGate.spec
@@ -443,6 +447,7 @@ main = hspec $ do
     LuaUnitAiStall.spec
     LuaUnitAiLogisticsTargets.spec
     LuaUnitAiLoadReset.spec
+    LuaUnitAiReconcile.spec
     LuaWorkClaimCapacity.spec
     LuaFaction.spec
     describe "World.CursorInfo" CursorInfo.spec
@@ -486,6 +491,7 @@ main = hspec $ do
     describe "Font SDF atlas repertoire" GraphicsFontRepertoire.spec
     describe "Construct.Corners" ConstructCorners.spec
     describe "Construct.Footprint" ConstructFootprint.spec
+    describe "Construct.PendingRefusal" ConstructPendingRefusal.spec
     describe "Craft.Execute" CraftExecute.spec
     describe "Craft.Bills" CraftBills.spec
     describe "Power.Types" PowerTypes.spec
@@ -512,6 +518,10 @@ main = hspec $ do
     -- WorldManager and asserts on the event ring), so it registers
     -- here rather than under the shared-worlds aroundAll above.
     PopupCoordPage.spec
+    -- #1592: its own engine AND Lua VM per example — the pre-bootstrap
+    -- popup state it exercises is a once-per-process condition, so a
+    -- shared module table would destroy it.
+    UIPopupQueueTeardown.spec
     describe "UI.ResponsiveMenus" UIResponsiveMenus.spec
     describe "UI.ResponsiveGameplay" UIResponsiveGameplay.spec
     UISettingsDefaultsKeybinds.spec
