@@ -110,6 +110,7 @@ import qualified Test.Headless.Graphics.FontFallback as GraphicsFontFallback
 import qualified Test.Headless.Graphics.FontRepertoire as GraphicsFontRepertoire
 import qualified Test.Headless.Construct.Corners as ConstructCorners
 import qualified Test.Headless.Construct.Footprint as ConstructFootprint
+import qualified Test.Headless.Construct.PendingRefusal as ConstructPendingRefusal
 import qualified Test.Headless.Craft.Execute as CraftExecute
 import qualified Test.Headless.Craft.Bills as CraftBills
 import qualified Test.Headless.Power.Types as PowerTypes
@@ -137,6 +138,7 @@ import qualified Test.Headless.UI.Clipping as UIClipping
 import qualified Test.Headless.UI.InteractiveBounds as UIInteractiveBounds
 import qualified Test.Headless.UI.PopupPlacement as UIPopupPlacement
 import qualified Test.Headless.Event.PopupCoordPage as PopupCoordPage
+import qualified Test.Headless.UI.PopupQueueTeardown as UIPopupQueueTeardown
 import qualified Test.Headless.UI.ResponsiveMenus as UIResponsiveMenus
 import qualified Test.Headless.UI.ResponsiveGameplay as UIResponsiveGameplay
 import qualified Test.Headless.UI.SettingsDefaultsKeybinds
@@ -488,6 +490,7 @@ main = hspec $ do
     describe "Font SDF atlas repertoire" GraphicsFontRepertoire.spec
     describe "Construct.Corners" ConstructCorners.spec
     describe "Construct.Footprint" ConstructFootprint.spec
+    describe "Construct.PendingRefusal" ConstructPendingRefusal.spec
     describe "Craft.Execute" CraftExecute.spec
     describe "Craft.Bills" CraftBills.spec
     describe "Power.Types" PowerTypes.spec
@@ -514,6 +517,10 @@ main = hspec $ do
     -- WorldManager and asserts on the event ring), so it registers
     -- here rather than under the shared-worlds aroundAll above.
     PopupCoordPage.spec
+    -- #1592: its own engine AND Lua VM per example — the pre-bootstrap
+    -- popup state it exercises is a once-per-process condition, so a
+    -- shared module table would destroy it.
+    UIPopupQueueTeardown.spec
     describe "UI.ResponsiveMenus" UIResponsiveMenus.spec
     describe "UI.ResponsiveGameplay" UIResponsiveGameplay.spec
     UISettingsDefaultsKeybinds.spec

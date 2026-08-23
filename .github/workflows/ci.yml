@@ -739,7 +739,11 @@ jobs:
       # -> value, invalid JSON -> text) against a real socket speaking
       # the console protocol, and fails if a probe grows a private JSON
       # console wrapper again — the twenty-two-copy duplication #1160
-      # removed. test_probe_flake mutation-covers probe_protocol.py,
+      # removed. It also owns probe_engine.py's launcher contract
+      # (#1570): under the aggregate runner a probe execs the one
+      # already-resolved binary with no Cabal in its argv, while a probe
+      # run by hand keeps the historical `cabal run` fallback.
+      # test_probe_flake mutation-covers probe_protocol.py,
       # probe_flake.py and probe_census.py's parsers from both sides,
       # engine-free and GPU-free, and every #1426 protocol migration
       # extends it with another standalone case, so each of those

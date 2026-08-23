@@ -52,14 +52,142 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
-from probelib import (FixtureNotRegistered, quit_engine, boot,
-                      load_fixture_yaml, send, wait_load_published)
+from pathlib import Path
+from probelib import (FixtureNotRegistered, capture_request_id, quit_engine,
+                      boot, load_fixture_yaml, send, wait_load_published,
+                      wait_save_complete)
 
 LOG = "/tmp/location_overlay_engine.log"
+REPO = Path(__file__).resolve().parent.parent
+#: Prefix of this invocation's throwaway resource root. The random
+#: suffix mkdtemp appends to it is also the per-invocation save-slot
+#: token, so the root and the slots it holds share one identity.
+ROOT_PREFIX = "location_overlay_probe_"
+
+
+# --------------------------------------------------------------------------
+# Isolated resource root + request-specific save/load completion (#1620)
+# --------------------------------------------------------------------------
+class _PhaseAborted(Exception):
+    """A phase's save or load never reached its own terminal successful
+    status, so the phase must STOP rather than assert against whatever
+    session happens to be live — the reader is exactly what must not
+    start (#1620 requirements 2-4). The failure is already recorded; the
+    surrounding `finally` still shuts the engine down in order."""
+
+
+def make_isolated_root(base: str) -> str:
+    """A throwaway resource root for THIS invocation: the repository's
+    real scripts/assets/data/config symlinked in (read-only content, safe
+    to share) plus its OWN empty saves/ directory.
+
+    Every boot below is handed this root, so the fixtures this probe
+    saves and loads are never written into, and can never be satisfied
+    by, a slot reachable from a normal `cabal run` (#1620 requirement 5;
+    the tools/chop_probe.py pattern). The families are SYMLINKS, and
+    shutil.rmtree unlinks a symlink rather than descending it, so
+    teardown can never reach the repository's own directories.
+    """
+    root = os.path.join(base, "root")
+    os.makedirs(root, exist_ok=True)
+    for family in ("scripts", "assets", "data", "config"):
+        target = os.path.join(root, family)
+        if not os.path.exists(target):
+            os.symlink(os.path.join(REPO, family), target)
+    os.makedirs(os.path.join(root, "saves"), exist_ok=True)
+    return root
+
+
+def remove_isolated_root(base: str) -> str | None:
+    """Remove this invocation's root, REPORTING a failure instead of
+    swallowing it — the "no save artifact the run created remains on
+    disk" guarantee (#1620 requirement 6) is only real if a removal that
+    did not happen is visible. Returns None on success, else the message
+    to fail with.
+    """
+    try:
+        shutil.rmtree(base)
+    except OSError as exc:
+        return (f"could not remove this run's temporary resource root "
+                f"{base}: {exc}")
+    if os.path.exists(base):
+        return (f"this run's temporary resource root {base} still exists "
+                f"after removal")
+    return None
+
+
+def boot_isolated(port: int, root: str):
+    return boot(port, log=LOG, args=["--resource-root", root])
+
+
+def save_and_wait(port: int, page: str, slot: str,
+                  failures: list[str]) -> bool:
+    """engine.saveWorld, then tie completion to THIS request's own id.
+
+    saveWorld only ACCEPTS synchronously — it returns false on a
+    validation failure (the detailed reason goes to the engine log) and
+    true once the command is queued, while the encode and disk write run
+    afterwards. So a sleep proves nothing, and a fixed slot name means a
+    PRIOR generation of the same slot could satisfy the reader
+    (#1620). Every reader here starts only after this returns True.
+    """
+    accepted = send(port, f"return engine.saveWorld('{page}', '{slot}')").strip()
+    if accepted != "true":
+        failures.append(
+            f"engine.saveWorld(page '{page}', slot '{slot}') was not accepted "
+            f"(returned {accepted!r}); the validation reason is logged in {LOG}")
+        return False
+    request_id = capture_request_id(port, "return engine.getSaveStatus()")
+    if request_id is None:
+        failures.append(
+            f"engine.getSaveStatus() never reported a request id for "
+            f"saveWorld(page '{page}', slot '{slot}')")
+        return False
+    ok, status = wait_save_complete(port, request_id)
+    if not ok:
+        failures.append(
+            f"save of page '{page}' to slot '{slot}' (request {request_id}) "
+            f"did not reach SaveCaptureComplete: {status}")
+        return False
+    print(f"  saved '{slot}' (request {request_id}, {status.get('phase')})")
+    return True
+
+
+def load_and_wait(port: int, slot: str, failures: list[str],
+                  seconds: float = 60.0) -> bool:
+    """engine.loadSave, then wait for THAT request id to publish.
+
+    Issue #763: loadSave only ACCEPTS synchronously, and the saved page
+    does not exist live until the transaction publishes. Passing the
+    captured id to wait_load_published is what stops a terminal status
+    left behind by an earlier transaction from satisfying this wait.
+    """
+    accepted = send(port, f"return engine.loadSave('{slot}')").strip()
+    if accepted != "true":
+        failures.append(
+            f"engine.loadSave('{slot}') was not accepted (returned "
+            f"{accepted!r}); the reason is logged in {LOG}")
+        return False
+    request_id = capture_request_id(port, "return engine.getLoadStatus()")
+    if request_id is None:
+        failures.append(
+            f"engine.getLoadStatus() never reported a request id for "
+            f"loadSave('{slot}')")
+        return False
+    published, status = wait_load_published(port, seconds,
+                                            request_id=request_id)
+    if not published:
+        failures.append(f"load of '{slot}' (request {request_id}) did not "
+                        f"publish: {status}")
+        return False
+    return True
 
 
 def placed(port: int) -> list[dict]:
@@ -283,13 +411,40 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=9189)
     args = ap.parse_args()
 
+    # One throwaway resource root per invocation, and slot names carrying
+    # that root's own random token, so two concurrent runs cannot collide
+    # and no developer-visible save slot is created, mutated or rotated
+    # (#1620 requirement 5).
+    base = tempfile.mkdtemp(prefix=ROOT_PREFIX)
+    # The WHOLE random suffix, not the text after the last underscore:
+    # mkdtemp's alphabet includes '_', so splitting on it can throw most
+    # of the entropy away (and can leave nothing at all).
+    token = os.path.basename(base)[len(ROOT_PREFIX):]
+    try:
+        rc = run(args, make_isolated_root(base), token)
+    finally:
+        # Reported, never swallowed, and reported even when `run` is
+        # leaving by an exception (boot() exits the process on a dead
+        # engine) — a root that survived is exactly the artifact #1620
+        # requirement 6 forbids.
+        leftover = remove_isolated_root(base)
+        if leftover:
+            print(f"FAIL: {leftover}", file=sys.stderr)
+    return 1 if leftover else rc
+
+
+def run(args, root: str, token: str) -> int:
+    slot_overlay = f"loc_overlay_probe_{token}"
+    slot_centre = f"loc_centre_probe_{token}"
+
     failures: list[str] = []
+    saved_overlay = False
 
     # ---- Phase 1: placement, determinism, lazy stamping; then save the
     #      world with its locations still UN-STAMPED (saved right after gen,
     #      before any far ruin chunk has loaded) so phase 2 can prove they
     #      are not lost. ----
-    proc = boot(args.port, log=LOG)
+    proc = boot_isolated(args.port, root)
     try:
         send(args.port, "engine.loadLocationYaml('data/locations/ruin_small.yaml'); return 'ok'")
         # The stamper is auto-loaded at boot by scripts/init.lua (as in the
@@ -312,8 +467,10 @@ def main() -> int:
         # reviewer flagged (saved before stamping drains).
         unstamped = sum(1 for e in ruins if not has_floor(args.port, e["gx"], e["gy"]))
         print(f"  {unstamped}/{len(ruins)} ruin(s) un-stamped at save time")
-        send(args.port, "engine.saveWorld('wa', 'loc_overlay_probe'); return 'saved'")
-        time.sleep(1.0)
+        # Phase 2 reads this fixture from a FRESH process, so the save
+        # must be COMPLETE — not merely accepted — before that process
+        # boots (#1620).
+        saved_overlay = save_and_wait(args.port, "wa", slot_overlay, failures)
 
         # In-session lazy stamping: loading a ruin's chunk materializes its
         # geometry (engine dispatch -> stamper -> #88 builder). Doubles as
@@ -358,8 +515,15 @@ def main() -> int:
     with open(THIN_YAML, "w") as fh:
         fh.write(THIN_BODY)
 
-    proc = boot(args.port, log=LOG)
+    proc = boot_isolated(args.port, root) if saved_overlay else None
     try:
+        if proc is None:
+            # Phase 1's save never reached its own terminal successful
+            # status (save_and_wait already recorded why), so the fresh
+            # reader process must not start at all — a stale generation
+            # of this slot is exactly what it would otherwise read
+            # (#1620 requirement 2).
+            raise _PhaseAborted
         # This phase used to load with NO location YAML registered at all,
         # and argued from that that the overlay it read back could not be
         # a recompute. The load transaction's content-validation stage
@@ -372,13 +536,11 @@ def main() -> int:
         # recompute against this registry could only ever place 1, so
         # reading 6 back still proves the overlay came from the save.
         load_fixture_yaml(args.port, "engine.loadLocationYaml", THIN_YAML)
-        send(args.port, "engine.loadSave('loc_overlay_probe'); return 'queued'")
         # Issue #763: the saved page ("wa", its own id verbatim -- no more
         # main_world remap) doesn't exist live until the transaction
         # publishes.
-        published, load_status = wait_load_published(args.port, 60)
-        if not published:
-            failures.append(f"load transaction did not publish: {load_status}")
+        if not load_and_wait(args.port, slot_overlay, failures):
+            raise _PhaseAborted
         send(args.port, "world.show('wa'); return 'ok'")
         time.sleep(1.0)
 
@@ -403,8 +565,11 @@ def main() -> int:
             print(f"PASS: all {m} ruin(s) materialized after load despite being saved un-stamped")
         else:
             failures.append(f"only {m}/{len(ruins_after)} ruin(s) materialized after load")
+    except _PhaseAborted:
+        pass
     finally:
-        quit_engine(args.port, proc)
+        if proc is not None:
+            quit_engine(args.port, proc)
 
     # A dense def places a location on EVERY land chunk, so the centre
     # chunk (0,0) — land for our seed, and the only chunk that is ever
@@ -417,7 +582,7 @@ def main() -> int:
 
     # ---- Phase 3: the SYNCHRONOUS centre chunk (0,0) stamps on fresh gen
     #      (Init hook). ----
-    proc = boot(args.port, log=LOG)
+    proc = boot_isolated(args.port, root)
     try:
         load_fixture_yaml(args.port, "engine.loadLocationYaml", DENSE_YAML)
         gen_world(args.port, "wc", args.seed, args.size, args.plates)
@@ -436,7 +601,7 @@ def main() -> int:
     #      WITHOUT force-loading (0,0) — Save regenerates that chunk
     #      synchronously and excludes it from the queue, so its presence
     #      exercises the Save centre hook. ----
-    proc = boot(args.port, log=LOG)
+    proc = boot_isolated(args.port, root)
     saved_centre = False
     try:
         load_fixture_yaml(args.port, "engine.loadLocationYaml", DENSE_YAML)
@@ -446,28 +611,27 @@ def main() -> int:
         elif not wait_floor(args.port, 8, 8):
             failures.append("phase 4 setup: centre (0,0) did not stamp at gen")
         else:
-            send(args.port, "engine.saveWorld('wd', 'loc_centre_probe'); return 'saved'")
-            time.sleep(1.0)
-            saved_centre = True
+            saved_centre = save_and_wait(args.port, "wd", slot_centre,
+                                         failures)
     finally:
         quit_engine(args.port, proc)
 
     if saved_centre:
-        proc = boot(args.port, log=LOG)
+        proc = boot_isolated(args.port, root)
         try:
             load_fixture_yaml(args.port, "engine.loadLocationYaml", DENSE_YAML)
-            send(args.port, "engine.loadSave('loc_centre_probe'); return 'queued'")
             # Issue #763: the saved page ("wd", its own id verbatim -- no
             # more main_world remap) doesn't exist live until published.
-            published, load_status = wait_load_published(args.port, 60)
-            if not published:
-                failures.append(f"load transaction did not publish: {load_status}")
+            if not load_and_wait(args.port, slot_centre, failures):
+                raise _PhaseAborted
             send(args.port, "world.show('wd'); return 'ok'")
             # Do NOT force-load (0,0) — it is the synchronous centre chunk.
             if wait_floor(args.port, 8, 8):
                 print("PASS: saved-camera centre chunk (0,0) present on first load (Save hook)")
             else:
                 failures.append("saved-camera centre chunk (0,0) NOT present on first load (Save hook)")
+        except _PhaseAborted:
+            pass
         finally:
             quit_engine(args.port, proc)
 
@@ -479,7 +643,7 @@ def main() -> int:
     #      let the arena's floor suppress the hidden page's stamp, and the
     #      write must land on the hidden page at ITS terrain z, not the
     #      arena's. ----
-    proc = boot(args.port, log=LOG)
+    proc = boot_isolated(args.port, root)
     try:
         load_fixture_yaml(args.port, "engine.loadLocationYaml", DENSE_YAML)
         send(args.port, "world.initArena('arena'); world.initArenaDone('arena'); world.show('arena'); return 'ok'")
@@ -550,7 +714,7 @@ def main() -> int:
         # per process the query cannot refer to anything else. The extra
         # boots are seconds against these generations, and each entry is
         # then independently reproducible from its own command line.
-        proc = boot(args.port, log=LOG)
+        proc = boot_isolated(args.port, root)
         try:
             send(args.port,
                  "engine.loadLocationYaml('data/locations/ruin_small.yaml'); return 'ok'")
