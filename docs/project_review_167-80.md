@@ -13,7 +13,7 @@ PR #167's shell `quit`/`exit` commands still call the real lifecycle transition,
 - [x] PRR-3. Notification pauses discard the player's non-default world speed on resume — [#1599]
 - [x] PRR-4. Build placement does not bind pick, validation, and commit to one world page — [#1602]
 - [x] PRR-5. Settings Defaults preserves the live tooltip timing values instead of defaulting them — [no-issue]
-- [ ] PRR-6. The settings Revert regression harness no longer reaches its assertions
+- [x] PRR-6. The settings Revert regression harness no longer reaches its assertions — [#1607]
 - [ ] PRR-7. Exit-to-menu teardown leaves per-entity Lua state accumulating across new sessions
 
 ## 1. Unit simulation page ownership
@@ -140,7 +140,7 @@ PR #167's shell `quit`/`exit` commands still call the real lifecycle transition,
 
 ## 6. Revert regression harness drift
 
-### PRR-6. The settings Revert regression harness no longer reaches its assertions
+### [#1607] PRR-6. The settings Revert regression harness no longer reaches its assertions
 
 > **Captured note:** PR #164 checked in `tools/test_settings_revert.lua` as the regression oracle for its live-preview fix, but later Settings growth added required autosave engine calls without updating the harness. The documented command now crashes in `data.reload()` before testing dwell, hint, save-then-revert, or brightness.
 
