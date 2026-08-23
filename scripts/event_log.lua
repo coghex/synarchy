@@ -653,6 +653,13 @@ end
 -- module's onShowPopup directly with the same shape the engine
 -- broadcasts (so the popup re-spawns at the next free slot with the
 -- original category color + coords).
+--
+-- #1588: ev.page rides along as the 8th argument, exactly where the
+-- engine's own LuaShowPopup broadcast puts it. A replayed popup must be
+-- indistinguishable from a live one in the metadata it carries —
+-- dropping the page here is what used to let a row clicked after a page
+-- switch pan the WRONG world. A row stored with no page (nil) stays nil
+-- and produces a non-panning line.
 function eventLog.onRowClick(elemHandle)
     local idx = eventLog.rowClickBoxes[elemHandle]
     if not idx then return false end
@@ -675,7 +682,8 @@ function eventLog.onRowClick(elemHandle)
     end
 
     local popupMod = require("scripts.popup")
-    popupMod.onShowPopup(ev.category, ev.text, r, g, b, a, ev.coords)
+    popupMod.onShowPopup(ev.category, ev.text, r, g, b, a,
+                         ev.coords, ev.page)
     return true
 end
 

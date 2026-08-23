@@ -56,12 +56,17 @@ applyPeriodEvents worldSize gx gy registry period (elev, mat) =
                                 (gpExplodedEvents period)
 
 -- | Apply erosion for a single period to a tile with explicit neighbor
---   elevations. Caller decides what neighbors to pass (real for the
---   tracked center, self-as-neighbors for the slope-zero fallback).
+--   elevations and the matching neighbor material hardness (#1591 — the
+--   soil-shed donor test needs each neighbour's own material, not just its
+--   elevation). Caller decides what neighbors to pass (real for the
+--   tracked center, self-as-neighbors for the slope-zero fallback), and
+--   the two tuples must stay paired N/S/E/W.
 {-# INLINE applyPeriodErosionAt #-}
 applyPeriodErosionAt ∷ Int → WorldScale → Int → Int → MaterialRegistry → GeoPeriod
-  → (Int, MaterialId) → (Int, Int, Int, Int) → (Int, MaterialId)
-applyPeriodErosionAt worldSize wsc gx gy registry period (elev, mat) nbrs =
+  → (Int, MaterialId) → (Int, Int, Int, Int) → (Float, Float, Float, Float)
+  → (Int, MaterialId)
+applyPeriodErosionAt worldSize wsc gx gy registry period (elev, mat) nbrs
+                     nbrHard =
     let hardness = mpHardness (getMaterialProps registry mat)
         regionalParams = lookupRegionalErosion
             (gpErosion period) (gpRegionalErosion period)
@@ -75,6 +80,7 @@ applyPeriodErosionAt worldSize wsc gx gy registry period (elev, mat) nbrs =
             hardness
             elev
             nbrs
+            nbrHard
         elev' = elev + gmElevDelta erosionMod
         mat' = case gmMaterialOverride erosionMod of
             Just m  → MaterialId m
@@ -160,17 +166,27 @@ applyTimelineFastFrom seed plates worldSize gx gy registry periods riverExploded
                 nS1 = applyPeriodEvents worldSize gx       (gy + 1) registry period nS
                 nE1 = applyPeriodEvents worldSize (gx + 1) gy       registry period nE
                 nW1 = applyPeriodEvents worldSize (gx - 1) gy       registry period nW
+                -- Neighbour hardness pairs 1:1 with the neighbour
+                -- elevations above: the tracked centre sees each
+                -- neighbour's real post-event material, and each
+                -- neighbour's own erosion keeps using itself on all four
+                -- sides, exactly as its slope-zero elevations do (#1591).
+                hardnessOf = mpHardness . getMaterialProps registry
                 c2  = applyPeriodErosionAt worldSize wsc gx gy registry period c1
                           (fst nN1, fst nS1, fst nE1, fst nW1)
+                          ( hardnessOf (snd nN1), hardnessOf (snd nS1)
+                          , hardnessOf (snd nE1), hardnessOf (snd nW1) )
                 eN = fst nN1; eS = fst nS1; eE = fst nE1; eW = fst nW1
+                hNb = hardnessOf (snd nN1); hSb = hardnessOf (snd nS1)
+                hEb = hardnessOf (snd nE1); hWb = hardnessOf (snd nW1)
                 nN2 = applyPeriodErosionAt worldSize wsc gx       (gy - 1) registry period nN1
-                          (eN, eN, eN, eN)
+                          (eN, eN, eN, eN) (hNb, hNb, hNb, hNb)
                 nS2 = applyPeriodErosionAt worldSize wsc gx       (gy + 1) registry period nS1
-                          (eS, eS, eS, eS)
+                          (eS, eS, eS, eS) (hSb, hSb, hSb, hSb)
                 nE2 = applyPeriodErosionAt worldSize wsc (gx + 1) gy       registry period nE1
-                          (eE, eE, eE, eE)
+                          (eE, eE, eE, eE) (hEb, hEb, hEb, hEb)
                 nW2 = applyPeriodErosionAt worldSize wsc (gx - 1) gy       registry period nW1
-                          (eW, eW, eW, eW)
+                          (eW, eW, eW, eW) (hWb, hWb, hWb, hWb)
             in (c2, nN2, nS2, nE2, nW2)
 
         (cFinal, _, _, _, _) =

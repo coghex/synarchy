@@ -343,7 +343,13 @@ processLuaMsg env ls stateRef msg = case msg of
       else
         broadcastToModules ls "onWorldPreviewReady"
           [ScriptNumber (fromIntegral handleInt)]
-  LuaShowPopup category msg r g b a mCoords →
+  LuaShowPopup category msg r g b a mCoords mPage →
+    -- #1588: the page rides alongside the coords, as the 8th argument,
+    -- so a LIVE popup carries the same coordinate frame an event-log
+    -- REPLAY does (scripts/event_log.lua's onRowClick forwards ev.page
+    -- into the same slot). Trailing and optional: a handler written
+    -- against the old seven-argument shape still binds every argument
+    -- it declares, and simply sees no page.
     broadcastToModules ls "onShowPopup"
       [ ScriptString category
       , ScriptString msg
@@ -352,6 +358,7 @@ processLuaMsg env ls stateRef msg = case msg of
       , ScriptNumber (realToFrac b)
       , ScriptNumber (realToFrac a)
       , coordsToScriptValue mCoords
+      , maybe ScriptNil ScriptString mPage
       ]
   LuaLoadStaged requestId → handleLoadStaged env ls requestId
   LuaLoadStagingFailed requestId → do

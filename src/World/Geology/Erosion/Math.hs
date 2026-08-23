@@ -48,13 +48,16 @@ applyErosion ∷ ErosionParams
              → Int       -- ^ this tile's post-event elevation
              → (Int, Int, Int, Int)
                          -- ^ neighbor post-event elevations (N, S, E, W)
+             → (Float, Float, Float, Float)
+                         -- ^ neighbor material hardness, same N/S/E/W order
              → GeoModification
-applyErosion params worldSize duration worldScale matId hardness elev nbrs =
+applyErosion params worldSize duration worldScale matId hardness elev
+             nbrs nbrHard =
     applyErosionScalar
         (epIntensity params) (epHydraulic params) (epThermal params)
         (epWind params) (epChemical params) (epIsLastAge params)
         (\isDep → erosionSediment params matId elev isDep)
-        worldSize duration worldScale matId hardness elev nbrs
+        worldSize duration worldScale matId hardness elev nbrs nbrHard
 
 -- | Fast variant for the chunk-loop in 'World.Generate.Timeline.applyTimelineChunk':
 --   takes the 4 climate-region-corner 'ErosionParams' plus the bilinear
@@ -75,9 +78,12 @@ applyErosionLerp4
     → Int       -- ^ this tile's post-event elevation
     → (Int, Int, Int, Int)
                 -- ^ neighbor post-event elevations (N, S, E, W)
+    → (Float, Float, Float, Float)
+                -- ^ neighbor material hardness, same N/S/E/W order
     → GeoModification
 applyErosionLerp4 ep00 ep10 ep01 ep11 tu tv
-                  worldSize duration worldScale matId hardness elev nbrs =
+                  worldSize duration worldScale matId hardness elev
+                  nbrs nbrHard =
     let lerpHot f =
             let v0 = f ep00 + tu * (f ep10 - f ep00)
                 v1 = f ep01 + tu * (f ep11 - f ep01)
@@ -87,7 +93,7 @@ applyErosionLerp4 ep00 ep10 ep01 ep11 tu tv
         (lerpHot epWind) (lerpHot epChemical) (epIsLastAge ep00)
         (\isDep → erosionSedimentLerp4
             ep00 ep10 ep01 ep11 tu tv matId elev isDep)
-        worldSize duration worldScale matId hardness elev nbrs
+        worldSize duration worldScale matId hardness elev nbrs nbrHard
 
 -- | The actual erosion computation, parameterised on scalar climate
 --   values + a sediment-callback. 'applyErosion' and 'applyErosionLerp4'
@@ -108,10 +114,12 @@ applyErosionScalar
     → Float      -- ^ material hardness
     → Int        -- ^ tile elevation
     → (Int, Int, Int, Int) -- ^ neighbor elevations
+    → (Float, Float, Float, Float) -- ^ neighbor material hardness
     → GeoModification
 applyErosionScalar intensity hydraulic thermal wind chemical isLastAge
                    sedimentFn _worldSize duration worldScale _matId hardness elev
-                   (nN, nS, nE, nW) = if hardness ≥ 1.0
+                   (nN, nS, nE, nW)
+                   (hN, hS, hE, hW) = if isIndestructible hardness
        then noModification  -- indestructible (glacier, mantle)
        else
        let -- Average of 4 cardinal neighbors
@@ -254,10 +262,10 @@ applyErosionScalar intensity hydraulic thermal wind chemical isLastAge
            exposeRock = isLastAge ∧ maxDrop ≥ soilShedRelief
 
            -- Local soil redistribution (#812, closing out #225's
-           -- redistribution requirement that PR #279 left undone): a
-           -- neighbour standing 'soilShedRelief' or more tiles ABOVE this
-           -- one is guaranteed to expose rock itself — its own maxDrop
-           -- toward THIS tile alone already clears the threshold,
+           -- redistribution requirement that PR #279 left undone): an
+           -- ERODIBLE neighbour standing 'soilShedRelief' or more tiles
+           -- ABOVE this one is guaranteed to expose rock itself — its own
+           -- maxDrop toward THIS tile alone already clears the threshold,
            -- whatever its other neighbours look like — so this tile can
            -- recognise a shedding donor from its OWN 1-ring stencil alone,
            -- with no wider lookahead and no drainage/flow model. Counting
@@ -268,8 +276,23 @@ applyErosionScalar intensity hydraulic thermal wind chemical isLastAge
            -- sheds. Capped at 'soilShedRelief' so a tile boxed in by
            -- shedding faces on every side still gets a bounded veneer,
            -- not an unbounded soil tower.
+           --
+           -- (#1591) The "guaranteed to expose rock itself" premise holds
+           -- only for an ERODIBLE neighbour. An indestructible one takes
+           -- the 'isIndestructible' early-out above when it is evaluated
+           -- as the centre tile — it never runs 'exposeRock' and never
+           -- sheds a cap — so it must not credit anyone. Glacier and
+           -- mantle both ship at hardness 1.0 in
+           -- @data/materials/special.yaml@, and glacier centres are
+           -- short-circuited before 'applyErosion' is even reached
+           -- ('World.Generate.Timeline'), making them doubly non-donors.
+           -- Eligibility reads each neighbour's OWN registered hardness
+           -- through the same predicate as the centre gate, so it is not
+           -- tied to any particular material ID.
            shedNeighbors = length
-               [ () | n ← [nN, nS, nE, nW], n - elev ≥ soilShedRelief ]
+               [ () | (n, nh) ← [(nN, hN), (nS, hS), (nE, hE), (nW, hW)]
+                    , n - elev ≥ soilShedRelief
+                    , not (isIndestructible nh) ]
            shedCredit = min soilShedRelief shedNeighbors ∷ Int
 
            -- Soil depth for last-age: continuous function of relief
@@ -338,6 +361,15 @@ applyErosionScalar intensity hydraulic thermal wind chemical isLastAge
                                           then max delta soilDepth
                                           else delta + durationBonus  -- ← deposition strata thickness
                    }
+
+-- | Material hardness at or above which a tile is indestructible
+--   (glacier, mantle). Such a tile erodes not at all: 'applyErosionScalar'
+--   returns 'noModification' for it before any last-age soil logic runs,
+--   so it neither exposes rock nor sheds a soil cap. The soil-shed donor
+--   test uses this SAME predicate on each neighbour's own hardness, which
+--   is what keeps the two in step (#1591).
+isIndestructible ∷ Float → Bool
+isIndestructible h = h ≥ 1.0
 
 -- | Truncate a float toward zero (not toward negative infinity).
 truncateTowardZero ∷ Float → Int
