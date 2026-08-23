@@ -1,0 +1,259 @@
+-- Post-load reconciliation for unit_ai's persisted aiState (issue
+-- #1589). Split out of scripts/unit_ai.lua, which is at its line
+-- budget (#538, tools/lua_module_budget.py); unit_ai.lua's
+-- onSaveLoaded is now a thin forwarder into M.reconcile below.
+--
+-- What this module exists to guarantee: EVERY reference family
+-- scripts/unit_ai_save_refs.lua declares is resolved or cleared on a
+-- surviving row at the reconciliation boundary. Both the Haskell-side
+-- cross-validator (World.Save.Integrity.luaReferenceErrors) and this
+-- component's own validator deliberately TOLERATE a dangling
+-- reference -- a target that legitimately died before the save
+-- boundary must stay representable -- on the stated promise that it is
+-- cleared here instead. Before #1589 the scrub reached only the flat
+-- unit/building fields and the treat/delivery claims, so six declared
+-- families (craftJob, repairJob, pickupOrder, ground forageTarget,
+-- forageLoot, harvestLoot) crossed the boundary untouched.
+--
+-- Per-page ids are the reason this needs an explicit context rather
+-- than live queries. craft_bill and ground_item are PER-PAGE
+-- allocators, and the live Lua queries that could answer "does this id
+-- exist?" resolve through the ACTIVE page (craft.getBill,
+-- item.listGround) while the mutating verb they would authorize
+-- resolves through the OWNING unit's page (item.pickupGround). Asking
+-- the active page about another page's id is exactly the wrong-entity
+-- match World.Save.Integrity.luaEdgeResolves refuses to make, so the
+-- engine hands the restored session's real sets to onSaveLoaded
+-- instead (World.Save.Payload.LoadReconcileContext ->
+-- Engine.Scripting.Lua.Thread.Dispatch's reconcileToScriptValue).
+
+local M = {}
+
+local refs      = require("scripts.unit_ai_save_refs")
+-- Safe at module scope: unit_ai_locations.lua requires nothing at
+-- module scope itself (the same reason unit_ai_save_refs.lua requires
+-- it directly).
+local locations = require("scripts.unit_ai_locations")
+
+-- Session-global reference kinds: one allocator for the whole session,
+-- so the id alone identifies the entity. Mirrors luaEdgeResolves.
+local GLOBAL_KINDS = { unit = true, building = true, item_instance = true }
+-- Per-page kinds: the id means nothing without a page, and the page is
+-- the OWNING unit's (never the active one, never session-wide).
+local PER_PAGE_KINDS = { craft_bill = true, ground_item = true }
+
+-- The engine always sends every one of these tables, empty or not (see
+-- reconcileToScriptValue). A MISSING one is an engine fault, not "an
+-- empty session" -- and silently treating it as empty would clear every
+-- per-page reference in the save, while silently falling back to
+-- active-page queries would resolve them against the wrong page. Both
+-- are worse than failing, so a malformed context raises and the load
+-- reports LoadReconciliationFailed (issue #1204's honest disposition
+-- for a reconcile that did not complete).
+local function validateContext(raw)
+    if type(raw) ~= "table" then
+        return "absent (expected a table, got " .. type(raw) .. ")"
+    end
+    if type(raw.item_instance) ~= "table" then
+        return "missing or malformed 'item_instance' set"
+    end
+    if type(raw.unitPage) ~= "table" then
+        return "missing or malformed 'unitPage' map"
+    end
+    if type(raw.byPage) ~= "table" then
+        return "missing or malformed 'byPage' table"
+    end
+    for kind in pairs(PER_PAGE_KINDS) do
+        if type(raw.byPage[kind]) ~= "table" then
+            return "missing or malformed 'byPage." .. kind .. "' table"
+        end
+    end
+    return nil
+end
+
+-- Does one declared edge still name a real entity in the restored
+-- session? A kind this build does not know about resolves trivially
+-- rather than being invented into a stale reference -- the same
+-- decision luaEdgeResolves makes for the same reason (an unknown kind
+-- is a registration-time vocabulary mismatch, caught elsewhere).
+local function resolves(ctx, kind, id, owner)
+    if GLOBAL_KINDS[kind] then
+        return ctx[kind][id] == true
+    end
+    if PER_PAGE_KINDS[kind] then
+        local page = owner ~= nil and ctx.unitPage[owner] or nil
+        if page == nil then return false end
+        local set = ctx.byPage[kind][page]
+        return set ~= nil and set[id] == true
+    end
+    return true
+end
+
+-- Clear every reference in one surviving row that no longer names a
+-- real entity, and return how many DANGLING DECLARED EDGES were
+-- removed. That count is deliberately per-edge, not per-field: two
+-- dangling subfields of one job count twice (each was its own declared
+-- edge), a duplicate stale gid in a loot list counts once per entry,
+-- and a still-valid sibling removed only because its enclosing job was
+-- dropped counts zero -- it was not itself dangling.
+--
+-- Mutation is deferred until the whole walk has finished so a holder
+-- can be judged on ALL of its edges before being dropped once.
+function M.scrubStaleRefs(uid, s, ctx, hooks)
+    local cleared = 0
+    local dropHolders, staleIndices = {}, {}
+    refs.forEachRefEdge(s, function(row, value, path, index)
+        if value == nil then return end
+        if resolves(ctx, row.kind, value, uid) then return end
+        cleared = cleared + 1
+        if row.holder == "field" then
+            s[row.field] = nil
+        elseif row.holder == "table" then
+            dropHolders[row.field] = row
+        else
+            local drops = staleIndices[row.field]
+            if drops == nil then drops = { row = row }; staleIndices[row.field] = drops end
+            drops[index] = true
+        end
+    end)
+
+    -- A job whose required target is gone is dropped WHOLE: clearing
+    -- one subfield would leave a malformed live job the next thought
+    -- tick would act on. `drop` routes through the owning module's own
+    -- release path (repairJob has an item to hand back and a claim to
+    -- release); `also` clears the siblings that release path clears.
+    for field, row in pairs(dropHolders) do
+        if row.drop ~= nil then
+            hooks[row.drop](uid, s, ctx)
+        else
+            s[field] = nil
+            for _, extra in ipairs(row.also or {}) do s[extra] = nil end
+        end
+    end
+
+    -- A collection is FILTERED, not dropped: the still-resolvable gids
+    -- are real loot this unit is standing over. Surviving entries keep
+    -- their original order as a dense array; a list that empties leaves
+    -- the owning phase exactly where its own exhaustion path leaves it.
+    for field, drops in pairs(staleIndices) do
+        local kept = {}
+        for i, v in ipairs(s[field]) do
+            if not drops[i] then kept[#kept + 1] = v end
+        end
+        if #kept == 0 then
+            for _, f in ipairs(drops.row.onEmpty) do s[f] = nil end
+        else
+            s[field] = kept
+        end
+    end
+    return cleared
+end
+
+-- The module-owned release paths a whole-holder drop must go through,
+-- keyed by the `drop` name unit_ai_save_refs.lua's REF_SCHEMA declares.
+-- Lives here rather than in unit_ai.lua so the reconcile that depends on
+-- them can be driven -- and gated -- without booting the whole AI
+-- orchestration module.
+M.DROP_HOOKS = {
+    -- A repair job past fetch_item has the target item sitting in this
+    -- unit's own inventory, plus a repairClaims entry -- both handled by
+    -- unit_ai_repair.lua's abort path, exactly as on any other abort
+    -- (issue #1589 requirement 3), never by a bare field assignment.
+    --
+    -- The `info` argument decides whether that path may look for a
+    -- technomule to hand the item back to, and it is deliberately
+    -- WITHHELD for a unit that is not on the ACTIVE page: the mule
+    -- search runs through unit.getAllIds(), which only ever lists the
+    -- active page, so an off-page unit would be handing its item to a
+    -- stranger on someone else's map. Passing nil takes abortRepairJob's
+    -- existing no-mule branch, leaving the item in this unit's own
+    -- inventory -- the same outcome as aborting anywhere no mule is in
+    -- reach.
+    --
+    -- Required lazily: unit_ai_repair.lua reaches unit_ai_core.lua,
+    -- which expects scripts.unit_ai to be self-registered already -- a
+    -- bootstrap order only unit_ai.lua's own require chain guarantees,
+    -- and one this module (requireable on its own) must not assume at
+    -- module scope.
+    repairJob = function(uid, s, ctx)
+        local info = nil
+        if ctx.activePage ~= nil and ctx.unitPage[uid] == ctx.activePage then
+            info = unit.getInfo(uid)
+        end
+        require("scripts.unit_ai_repair").abort(uid, s, info)
+    end,
+}
+
+-- Build the resolution context handed to scrubStaleRefs from the two
+-- survivor arrays onSaveLoaded already received and the engine-supplied
+-- reconciliation payload. Unit/building sets come from the survivor
+-- arrays rather than being re-sent, so there is only ever one statement
+-- of which units and buildings exist.
+--
+-- `activePage` is carried for the drop hooks alone: an action module's
+-- own cleanup may reach for active-page-only engine queries, which are
+-- unsafe for a unit that lives on some other page.
+function M.buildContext(survUnitSet, survBuildingSet, raw)
+    local activePage = nil
+    if world ~= nil and world.getActiveWorldId ~= nil then
+        activePage = world.getActiveWorldId()
+    end
+    return { unit = survUnitSet, building = survBuildingSet,
+             item_instance = raw.item_instance,
+             unitPage = raw.unitPage, byPage = raw.byPage,
+             activePage = activePage }
+end
+
+-- The whole post-load reconcile for aiState: the ORPHAN PRUNE (a row
+-- whose unit did not survive is dropped rather than left for a later
+-- id reuse to inherit), then the NESTED-REF SCRUB and the per-page
+-- location-memory scrub on every surviving row. `aiState` is emptied
+-- and refilled IN PLACE -- every module holds the same table.
+function M.reconcile(aiState, survUnitIds, survBuildingIds, raw, hooks)
+    hooks = hooks or M.DROP_HOOKS
+    local survUnitSet, survBuildingSet = {}, {}
+    for _, uid in ipairs(survUnitIds or {})     do survUnitSet[uid] = true end
+    for _, bid in ipairs(survBuildingIds or {}) do survBuildingSet[bid] = true end
+
+    local problem = validateContext(raw)
+    if problem == nil then
+        for _, row in ipairs(refs.REF_SCHEMA) do
+            if row.drop ~= nil and type(hooks[row.drop]) ~= "function" then
+                problem = "no drop hook registered for '" .. row.drop .. "'"
+                break
+            end
+        end
+    end
+    if problem ~= nil then
+        local msg = "Unit AI: post-load reconciliation context " .. problem
+            .. " -- refusing to reconcile aiState against active-page "
+            .. "queries, which cannot resolve a per-page reference"
+        engine.logError(msg)
+        error(msg, 0)
+    end
+
+    local rebuilt = {}
+    for uid in pairs(survUnitSet) do
+        if aiState[uid] ~= nil then rebuilt[uid] = aiState[uid] end
+    end
+    local kept = 0
+    for k in pairs(aiState) do aiState[k] = nil end
+    for k, v in pairs(rebuilt) do aiState[k] = v; kept = kept + 1 end
+
+    local ctx = M.buildContext(survUnitSet, survBuildingSet, raw)
+    local scrubbed, forgotten = 0, 0
+    for uid, s in pairs(aiState) do
+        scrubbed = scrubbed + M.scrubStaleRefs(uid, s, ctx, hooks)
+        -- #915: a location memory is scrubbed against the RESTORED
+        -- session's own instance tables, not against the unit/building
+        -- survivor sets -- its target is a (page, instance id) pair
+        -- owned by the world-pages component, which those sets say
+        -- nothing about. Counted separately for the same reason.
+        forgotten = forgotten + locations.scrubStaleKnownLocations(uid, s)
+    end
+    engine.logInfo("Unit AI: reconciled AI state after load ("
+        .. kept .. " kept, " .. scrubbed .. " stale ref(s) scrubbed, "
+        .. forgotten .. " stale location memory/memories dropped)")
+end
+
+return M

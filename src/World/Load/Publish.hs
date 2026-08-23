@@ -210,7 +210,7 @@ publishStagedSession env logger requestId staged = do
     -- new session is a survivor.
     let bIds = map (fromIntegral . unBuildingId) (HM.keys (bmInstances (ssBuildings staged)))
         uIds = map (fromIntegral . unUnitId) (HM.keys (umInstances (ssUnits staged)))
-    sendSaveLoaded env requestId uIds bIds
+    sendSaveLoaded env requestId uIds bIds (ssReconcile staged)
     -- The one user-facing "done" toast for the whole transaction —
     -- staging deliberately never sends one (requirement 6: no live-queue
     -- work while staging), so this is the sole place a load reports

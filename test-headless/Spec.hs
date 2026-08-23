@@ -214,6 +214,7 @@ import qualified Test.Headless.Lua.UnitAiHold as LuaUnitAiHold
 import qualified Test.Headless.Lua.UnitAiStall as LuaUnitAiStall
 import qualified Test.Headless.Lua.UnitAiLogisticsTargets as LuaUnitAiLogisticsTargets
 import qualified Test.Headless.Lua.UnitAiLoadReset as LuaUnitAiLoadReset
+import qualified Test.Headless.Lua.UnitAiReconcile as LuaUnitAiReconcile
 import qualified Test.Headless.Lua.WorkClaimCapacity as LuaWorkClaimCapacity
 import qualified Test.Headless.Lua.Faction as LuaFaction
 import qualified Test.Headless.Unit.Faction as UnitFaction
@@ -257,6 +258,7 @@ main = hspec $ do
         -- at all, just the live EngineEnv's queues/refs to construct a
         -- real Lua backend and drive processLuaMsg directly.
         describe "Lua.DebugQueue" LuaDebugQueue.spec
+        LuaUnitAiReconcile.envSpec
         describe "Lua.RenderQueue" LuaRenderQueue.spec
         describe "Lua.PreviewGeneration" LuaPreviewGeneration.spec
         describe "Lua.PauseGate" LuaPauseGate.spec
@@ -442,6 +444,7 @@ main = hspec $ do
     LuaUnitAiStall.spec
     LuaUnitAiLogisticsTargets.spec
     LuaUnitAiLoadReset.spec
+    LuaUnitAiReconcile.spec
     LuaWorkClaimCapacity.spec
     LuaFaction.spec
     describe "World.CursorInfo" CursorInfo.spec

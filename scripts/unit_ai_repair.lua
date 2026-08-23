@@ -42,7 +42,7 @@ local roles = require("scripts.unit_roles")
 -- attach to an unrelated item).
 local claimsLib = require("scripts.unit_ai_claims")
 
-local repairUtility, repairExecute, repairOnExit
+local repairUtility, repairExecute, repairOnExit, repairAbort
 
 do
 local repairClaims = claimsLib.track({})   -- instanceId → { uid, at }
@@ -128,6 +128,14 @@ local function abortRepairJob(uid, s, info)
     end
     releaseRepairJob(s, uid)
 end
+-- Published for the post-load reconcile (#1589), which must drop a
+-- repairJob whose item instance or station no longer exists. That is an
+-- abort like any other -- it has the same fetched item to hand back and
+-- the same claim to release -- so it goes through this path rather than
+-- assigning s.repairJob = nil. Callers pass `info` only when the mule
+-- search below is safe for that unit; see scripts/unit_ai.lua's
+-- reconcileDropHooks.
+repairAbort = abortRepairJob
 
 -- How urgent is repairing this one item, and which axis? Condition is
 -- checked before sharpness — a broken/low-condition item is
@@ -427,4 +435,5 @@ end
 end
 
 
-return { utility = repairUtility, execute = repairExecute, onExit = repairOnExit }
+return { utility = repairUtility, execute = repairExecute,
+         onExit = repairOnExit, abort = repairAbort }

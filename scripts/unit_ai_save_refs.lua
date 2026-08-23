@@ -13,31 +13,108 @@ local M = {}
 -- validators (unit.exists / unit.getInfo / building.getInfo) are
 -- GLOBAL raw lookups, so for a collision they'd pass for the wrong
 -- off-page entity and the survivor would resume targeting / delivering
--- to it (#195). unit_ai.lua's scrubStaleRefs clears any ref whose
--- target isn't in the surviving loaded-page set.
+-- to it (#195). scripts/unit_ai_reconcile.lua's scrubStaleRefs clears
+-- any ref whose target isn't in the surviving loaded-page set.
 -- NB: any NEW aiState field that stores a unit/building id MUST be
--- listed here, or it silently reintroduces the stale-ref bug -- AND
--- must be wrapped/unwrapped in wrapUnitState/unwrapUnitState below.
+-- listed here, or it silently reintroduces the stale-ref bug. Since
+-- issue #1589 these two lists feed REF_SCHEMA below, which is the ONE
+-- declaration the wrap, unwrap, reference-report, tag-validate and
+-- post-load reconcile walks are all derived from -- so a field added
+-- here is covered by every one of them, with no second edit to make.
 M.AI_UNIT_REF_FIELDS     = { "attackTargetUid", "retreatThreatUid",
                              "notifyTarget", "lungeTarget" }
 M.AI_BUILDING_REF_FIELDS = { "buildTarget", "storeTarget" }
 
--- Every reference this component carries (requirement 12) -- unit/
--- building/craft-bill/item/ground-item ids reachable from a per-unit
--- aiState entry, including ones nested inside claim/job tables and
--- collection-held ones inside loot lists, plus (round-6 review) the
--- OUTER per-unit key itself -- the same "the id this entry is keyed by
--- is a reference too" pattern building_spawn.lua's own references()
--- already uses for its per-building key:
---   unit_ai_medic.lua's treatClaim/treatPending
---   unit_ai_deliver.lua's deliveryClaim/deliveryPendingTarget
---   unit_ai_craft.lua's craftJob
---   unit_ai_repair.lua's repairJob
---   unit_ai_pickup.lua's pickupOrder
---   unit_ai_needs.lua's forageTarget/forageLoot
---   unit_ai_farm.lua's harvestLoot
---   unit_ai_locations.lua's knownLocations (#915 -- the only kind whose
---     edge also carries its own `page`, see addRef below)
+-------------------------------------------------------------------
+-- THE reference schema (issue #1589)
+-------------------------------------------------------------------
+-- One row per persisted reference edge an aiState entry can carry.
+-- Before #1589 the same field list was spelled out four times here
+-- (unitAiReferences, wrapUnitState, unwrapUnitState, validateRefTags)
+-- and a FIFTH time in unit_ai.lua's post-load scrub, which had
+-- silently fallen six families behind the other four (craftJob,
+-- repairJob, pickupOrder, ground forageTarget, forageLoot,
+-- harvestLoot). All five walks now derive from this table, so a family
+-- declared here is reported, wrapped, unwrapped, validated AND
+-- reconciled by construction.
+--
+-- Row fields:
+--   holder   "field" (top-level field holding a bare id), "table" (a
+--            nested claim/job table whose `sub` holds the id), or
+--            "list" (a field holding an array of ids).
+--   field    the aiState field name; `sub` the id-bearing subfield.
+--   kind     the reference kind -- the same vocabulary
+--            World.Save.Integrity.luaEdgeResolves speaks.
+--   required (table only) validateRefTags rejects a payload whose
+--            holder is present but this subfield is missing. Only for
+--            a subfield set UNCONDITIONALLY at the holder's
+--            construction site (see checkRefTag's own note below).
+--   when     (table only) predicate on the holder -- the edge exists
+--            only in some of its shapes.
+--   also     (table only) sibling fields cleared together with the
+--            holder when a post-load reconcile drops it, so no
+--            half-dismantled job table is left behind.
+--   drop     (table only) the module-owned release path the reconcile
+--            must go through instead of a bare field assignment;
+--            scripts/unit_ai_reconcile.lua refuses to run without a
+--            hook for every `drop` named here.
+--   onEmpty  (list only) fields to clear when a reconcile filters the
+--            list down to nothing -- what the owning action's own
+--            exhaustion path clears.
+local REF_SCHEMA = {}
+for _, f in ipairs(M.AI_UNIT_REF_FIELDS) do
+    REF_SCHEMA[#REF_SCHEMA + 1] = { holder = "field", field = f, kind = "unit" }
+end
+for _, f in ipairs(M.AI_BUILDING_REF_FIELDS) do
+    REF_SCHEMA[#REF_SCHEMA + 1] = { holder = "field", field = f,
+                                    kind = "building" }
+end
+-- forageTarget is the one holder whose reference is conditional: a
+-- "flora" target names a tile, not a ground item, and carries no gid.
+local function isGroundForageTarget(t) return t.kind == "ground" end
+local NESTED_REF_SCHEMA = {
+    { holder = "table", field = "treatClaim",   sub = "patient", kind = "unit" },
+    { holder = "table", field = "treatPending", sub = "uid",     kind = "unit" },
+    { holder = "table", field = "deliveryClaim", sub = "bid", kind = "building" },
+    { holder = "table", field = "deliveryPendingTarget", sub = "bid",
+      kind = "building" },
+    -- craftCandidate is unit_ai_craft.lua's own releaseCraftJob
+    -- companion clear (it is transient and stripped from every save, so
+    -- after a load it is already nil -- this keeps the reconcile drop
+    -- identical to the module's release path either way).
+    { holder = "table", field = "craftJob", sub = "billId", kind = "craft_bill",
+      required = true, also = { "craftCandidate" } },
+    { holder = "table", field = "craftJob", sub = "bid", kind = "building",
+      required = true, also = { "craftCandidate" } },
+    -- repairJob goes out through unit_ai_repair.lua's abort path, not a
+    -- field assignment: an already-fetched item has to be handed back
+    -- and the repairClaims entry released, exactly as on any other
+    -- abort (issue #1589 requirement 3).
+    { holder = "table", field = "repairJob", sub = "instanceId",
+      kind = "item_instance", required = true, drop = "repairJob" },
+    { holder = "table", field = "repairJob", sub = "bid", kind = "building",
+      drop = "repairJob" },
+    { holder = "table", field = "pickupOrder", sub = "gid",
+      kind = "ground_item" },
+    { holder = "table", field = "forageTarget", sub = "gid",
+      kind = "ground_item", when = isGroundForageTarget },
+    { holder = "list", field = "forageLoot", kind = "ground_item",
+      onEmpty = { "foragePhase", "forageLoot", "forageTarget" } },
+    { holder = "list", field = "harvestLoot", kind = "ground_item",
+      onEmpty = { "harvestPhase", "harvestLoot" } },
+}
+for _, row in ipairs(NESTED_REF_SCHEMA) do
+    REF_SCHEMA[#REF_SCHEMA + 1] = row
+end
+M.REF_SCHEMA = REF_SCHEMA
+
+-- Every reference this component carries (requirement 12) -- every
+-- REF_SCHEMA row above, plus knownLocations (#915 -- the only kind
+-- whose edge also carries its own `page`, see addRef below) and
+-- (round-6 review) the OUTER per-unit key itself, the same "the id
+-- this entry is keyed by is a reference too" pattern
+-- building_spawn.lua's own references() already uses for its
+-- per-building key.
 -- (the *Candidate fields carry no reference here at all -- see
 -- unit_ai_save.lua's TRANSIENT_CANDIDATE_FIELDS: they are stripped
 -- before this function ever sees them.) CALLED by saveModules.prepareLoad
@@ -52,11 +129,18 @@ M.AI_BUILDING_REF_FIELDS = { "buildTarget", "storeTarget" }
 -- either that check or this component's own validator (per the #761
 -- issue-review clarification: a target that legitimately died before
 -- the save boundary must stay representable) -- it is cleared at
--- reconcile time instead, by unit_ai.lua's scrubStaleRefs/onSaveLoaded.
+-- reconcile time instead, by scripts/unit_ai_reconcile.lua's
+-- scrubStaleRefs, reached through unit_ai.lua's onSaveLoaded. Since
+-- issue #1589 that promise holds for EVERY family listed above rather
+-- than the flat fields and treat/delivery claims alone: the reconcile
+-- walks this same REF_SCHEMA, so no family can be declared here and
+-- silently skipped there. knownLocations is the one deliberate
+-- exception -- its (page, id) identity is per-page in its OWN declared
+-- page rather than the owning unit's, so it keeps the specialized
+-- scrub (and the separate count) unit_ai_locations.lua owns.
 -- NB: any NEW nested claim/job field, or new loot-style list, that
--- stores a unit/building/bill/item/ground-item id MUST be added here
--- too (mirroring scrubStaleRefs for the claim/job fields it also
--- reconciles, AND wrapUnitState/unwrapUnitState below); any NEW
+-- stores a unit/building/bill/item/ground-item id is added as a
+-- REF_SCHEMA row above -- one edit, not one per walk; any NEW
 -- *Candidate-style scratch field should instead be added to
 -- unit_ai_save.lua's TRANSIENT_CANDIDATE_FIELDS if it can embed a raw
 -- id or a copy of live content, matching the existing ones.
@@ -77,6 +161,37 @@ local function refId(v)
     if type(v) == "table" then return v.id end
     return v
 end
+-- THE walk over one per-unit row's declared reference edges -- the
+-- single traversal every consumer of REF_SCHEMA shares (issue #1589).
+-- `emit(row, value, path, index)` pairs each schema row with the value
+-- actually stored there: `value` may be nil (an absent optional field,
+-- or a `required` one a malformed payload dropped -- precisely what
+-- validateRefTags has to be shown), `path` is the unprefixed field
+-- path ("craftJob.billId", "forageLoot[3]") in the same spelling the
+-- diagnostics already used, and `index` is the array position for a
+-- list-held edge. A `table` holder is visited only when present AND
+-- passing its own `when`, so an absent holder yields no phantom edge.
+local function forEachSchemaEdge(s, emit)
+    for _, row in ipairs(REF_SCHEMA) do
+        if row.holder == "field" then
+            emit(row, s[row.field], row.field)
+        elseif row.holder == "table" then
+            local t = s[row.field]
+            if t ~= nil and (row.when == nil or row.when(t)) then
+                emit(row, t[row.sub], row.field .. "." .. row.sub)
+            end
+        else
+            local list = s[row.field]
+            if list ~= nil then
+                for i, v in ipairs(list) do
+                    emit(row, v, row.field .. "[" .. i .. "]", i)
+                end
+            end
+        end
+    end
+end
+M.forEachRefEdge = forEachSchemaEdge
+
 -- `path` (round-2 review, issue #764) names the field this edge came
 -- from, in the SAME dotted-path style Haskell-side integrity errors
 -- already use (e.g. "craft-bills[page=...].station") -- "attackTargetUid",
@@ -100,54 +215,12 @@ local function unitAiReferences(data)
                                 path = path, page = page }
         end
     end
-    local function addRefList(kind, ids, owner, path)
-        if ids ~= nil then
-            for i, id in ipairs(ids) do
-                addRef(kind, id, owner, path .. "[" .. i .. "]")
-            end
-        end
-    end
     for uid, s in pairs(data) do
         local prefix = "unit[" .. tostring(uid) .. "]"
         addRef("unit", uid, uid, prefix)
-        for _, f in ipairs(M.AI_UNIT_REF_FIELDS) do
-            addRef("unit", s[f], uid, prefix .. "." .. f)
-        end
-        for _, f in ipairs(M.AI_BUILDING_REF_FIELDS) do
-            addRef("building", s[f], uid, prefix .. "." .. f)
-        end
-        if s.treatClaim then
-            addRef("unit", s.treatClaim.patient, uid, prefix .. ".treatClaim.patient")
-        end
-        if s.treatPending then
-            addRef("unit", s.treatPending.uid, uid, prefix .. ".treatPending.uid")
-        end
-        if s.deliveryClaim then
-            addRef("building", s.deliveryClaim.bid, uid,
-                prefix .. ".deliveryClaim.bid")
-        end
-        if s.deliveryPendingTarget then
-            addRef("building", s.deliveryPendingTarget.bid, uid,
-                prefix .. ".deliveryPendingTarget.bid")
-        end
-        if s.craftJob then
-            addRef("craft_bill", s.craftJob.billId, uid, prefix .. ".craftJob.billId")
-            addRef("building", s.craftJob.bid, uid, prefix .. ".craftJob.bid")
-        end
-        if s.repairJob then
-            addRef("item_instance", s.repairJob.instanceId, uid,
-                prefix .. ".repairJob.instanceId")
-            addRef("building", s.repairJob.bid, uid, prefix .. ".repairJob.bid")
-        end
-        if s.pickupOrder then
-            addRef("ground_item", s.pickupOrder.gid, uid, prefix .. ".pickupOrder.gid")
-        end
-        if s.forageTarget and s.forageTarget.kind == "ground" then
-            addRef("ground_item", s.forageTarget.gid, uid,
-                prefix .. ".forageTarget.gid")
-        end
-        addRefList("ground_item", s.forageLoot, uid, prefix .. ".forageLoot")
-        addRefList("ground_item", s.harvestLoot, uid, prefix .. ".harvestLoot")
+        forEachSchemaEdge(s, function(row, value, path)
+            addRef(row.kind, value, uid, prefix .. "." .. path)
+        end)
         -- Per-unit location memory (#915). Each entry IS its own typed
         -- reference on the wire (see wrapUnitState), so the id is read
         -- off the entry itself rather than a nested field.
@@ -201,14 +274,35 @@ end
 local locationsMod  = require("scripts.unit_ai_locations")
 local LOCATION_KIND = locationsMod.REF_KIND
 
--- Shallow-copy `s[field]` and apply `fn` to its own `subfield`.
-local function mapNested(s, field, subfield, fn)
-    if s[field] == nil then return end
-    local t = {}
-    for k, v in pairs(s[field]) do t[k] = v end
-    t[subfield] = fn(t[subfield])
-    s[field] = t
+-- Rewrite every declared reference in a per-unit COPY, driven by the
+-- same REF_SCHEMA the reference walk above uses -- `mapRef(kind, v)`
+-- for a single edge, `mapList(kind, ids)` for a collection-held one.
+-- Nested holders are shallow-copied before being touched (the live
+-- aiState table must never be mutated by a snapshot).
+local function mapSchemaRefs(copy, mapRef, mapList)
+    for _, row in ipairs(REF_SCHEMA) do
+        if row.holder == "field" then
+            copy[row.field] = mapRef(row.kind, copy[row.field])
+        elseif row.holder == "table" then
+            local t = copy[row.field]
+            if t ~= nil and (row.when == nil or row.when(t)) then
+                local n = {}
+                for k, v in pairs(t) do n[k] = v end
+                n[row.sub] = mapRef(row.kind, n[row.sub])
+                copy[row.field] = n
+            end
+        else
+            copy[row.field] = mapList(row.kind, copy[row.field])
+        end
+    end
 end
+
+-- mapSchemaRefs' mapRef/mapList take the edge's kind first; the
+-- unwrap direction reads the wrapper's own tag and does not need
+-- it (checkRefTag has already rejected a wrong-kind wrapper by
+-- the time anything unwraps).
+local function unwrapRefAt(_kind, v) return unwrapRef(v) end
+local function unwrapRefListAt(_kind, vs) return unwrapRefList(vs) end
 
 -- __owner (round-6 review, issue #764): the per-unit KEY this state
 -- table is stored under (`aiState[uid]`) is itself a durable cross-
@@ -230,36 +324,7 @@ local function wrapUnitState(uid, s)
     local copy = {}
     for k, v in pairs(s) do copy[k] = v end
     copy.__owner = wrapRef("unit", uid)
-    for _, f in ipairs(M.AI_UNIT_REF_FIELDS) do
-        copy[f] = wrapRef("unit", copy[f])
-    end
-    for _, f in ipairs(M.AI_BUILDING_REF_FIELDS) do
-        copy[f] = wrapRef("building", copy[f])
-    end
-    mapNested(copy, "treatClaim", "patient", function(v) return wrapRef("unit", v) end)
-    mapNested(copy, "treatPending", "uid", function(v) return wrapRef("unit", v) end)
-    mapNested(copy, "deliveryClaim", "bid", function(v) return wrapRef("building", v) end)
-    mapNested(copy, "deliveryPendingTarget", "bid", function(v) return wrapRef("building", v) end)
-    if copy.craftJob then
-        local t = {}
-        for k, v in pairs(copy.craftJob) do t[k] = v end
-        t.billId = wrapRef("craft_bill", t.billId)
-        t.bid = wrapRef("building", t.bid)
-        copy.craftJob = t
-    end
-    if copy.repairJob then
-        local t = {}
-        for k, v in pairs(copy.repairJob) do t[k] = v end
-        t.instanceId = wrapRef("item_instance", t.instanceId)
-        t.bid = wrapRef("building", t.bid)
-        copy.repairJob = t
-    end
-    mapNested(copy, "pickupOrder", "gid", function(v) return wrapRef("ground_item", v) end)
-    if copy.forageTarget and copy.forageTarget.kind == "ground" then
-        mapNested(copy, "forageTarget", "gid", function(v) return wrapRef("ground_item", v) end)
-    end
-    copy.forageLoot = wrapRefList("ground_item", copy.forageLoot)
-    copy.harvestLoot = wrapRefList("ground_item", copy.harvestLoot)
+    mapSchemaRefs(copy, wrapRef, wrapRefList)
     copy.knownLocations = locationsMod.wrapForSave(copy.knownLocations)
     return copy
 end
@@ -268,32 +333,7 @@ local function unwrapUnitState(s)
     local copy = {}
     for k, v in pairs(s) do copy[k] = v end
     copy.__owner = nil
-    for _, f in ipairs(M.AI_UNIT_REF_FIELDS) do copy[f] = unwrapRef(copy[f]) end
-    for _, f in ipairs(M.AI_BUILDING_REF_FIELDS) do copy[f] = unwrapRef(copy[f]) end
-    mapNested(copy, "treatClaim", "patient", unwrapRef)
-    mapNested(copy, "treatPending", "uid", unwrapRef)
-    mapNested(copy, "deliveryClaim", "bid", unwrapRef)
-    mapNested(copy, "deliveryPendingTarget", "bid", unwrapRef)
-    if copy.craftJob then
-        local t = {}
-        for k, v in pairs(copy.craftJob) do t[k] = v end
-        t.billId = unwrapRef(t.billId)
-        t.bid = unwrapRef(t.bid)
-        copy.craftJob = t
-    end
-    if copy.repairJob then
-        local t = {}
-        for k, v in pairs(copy.repairJob) do t[k] = v end
-        t.instanceId = unwrapRef(t.instanceId)
-        t.bid = unwrapRef(t.bid)
-        copy.repairJob = t
-    end
-    mapNested(copy, "pickupOrder", "gid", unwrapRef)
-    if copy.forageTarget and type(copy.forageTarget.gid) == "table" then
-        mapNested(copy, "forageTarget", "gid", unwrapRef)
-    end
-    copy.forageLoot = unwrapRefList(copy.forageLoot)
-    copy.harvestLoot = unwrapRefList(copy.harvestLoot)
+    mapSchemaRefs(copy, unwrapRefAt, unwrapRefListAt)
     copy.knownLocations = locationsMod.unwrapFromSave(copy.knownLocations)
     return copy
 end
@@ -334,10 +374,10 @@ M.references = unitAiReferences
 -- kind. checkRefTag/M.validateRefTags close that gap at validate() time
 -- (prepareLoadImpl runs validate() straight after decode(), before any
 -- apply() ever touches live state, so a mismatch here aborts the whole
--- load per requirement 11 rather than reaching unwrapUnitState) --
--- mirrors wrapUnitState/unwrapUnitState/unitAiReferences' own field
--- walk; any NEW reference field needs this walk updated too, same as
--- the NB comment above already requires for the other three.
+-- load per requirement 11 rather than reaching unwrapUnitState) -- and
+-- since issue #1589 it walks the SAME REF_SCHEMA wrapUnitState /
+-- unwrapUnitState / unitAiReferences do, so a new reference field is
+-- covered here the moment its row exists.
 --
 -- Round-3 review: a `.__ref` tag matching the field's expected kind is
 -- not enough on its own -- {__ref="unit", id="bad"} would still pass a
@@ -370,9 +410,13 @@ local GROUND_ITEM_KIND = "ground_item"
 -- required today: craftJob.billId/bid (unit_ai_craft.lua sets both
 -- unconditionally the instant craftJob is created) and
 -- repairJob.instanceId (unit_ai_repair.lua, same). Left optional:
--- every other nested field (including repairJob.bid, which
--- unit_ai_repair.lua never actually sets at all -- requiring it would
--- reject every real repair job).
+-- every other nested field -- including repairJob.bid, which
+-- unit_ai_repair.lua DOES set, but only once the job reaches its
+-- walking phase and resolves a station (building.findStation, see that
+-- module's repairExecute). A job saved before that point legitimately
+-- carries no bid, so requiring it would reject a real repair job; it
+-- is still a declared reference, and is still wrapped, validated and
+-- reconciled like any other whenever it IS present.
 local function checkRefTag(v, expectedKind, uid, path, errs, required)
     if v == nil then
         if required then
@@ -440,55 +484,9 @@ end
 
 function M.validateRefTags(uid, s, errs)
     checkOwnerRef(s.__owner, uid, errs)
-    for _, f in ipairs(M.AI_UNIT_REF_FIELDS) do
-        checkRefTag(s[f], "unit", uid, f, errs)
-    end
-    for _, f in ipairs(M.AI_BUILDING_REF_FIELDS) do
-        checkRefTag(s[f], "building", uid, f, errs)
-    end
-    if s.treatClaim then
-        checkRefTag(s.treatClaim.patient, "unit", uid, "treatClaim.patient", errs)
-    end
-    if s.treatPending then
-        checkRefTag(s.treatPending.uid, "unit", uid, "treatPending.uid", errs)
-    end
-    if s.deliveryClaim then
-        checkRefTag(s.deliveryClaim.bid, "building", uid, "deliveryClaim.bid", errs)
-    end
-    if s.deliveryPendingTarget then
-        checkRefTag(s.deliveryPendingTarget.bid, "building", uid,
-            "deliveryPendingTarget.bid", errs)
-    end
-    if s.craftJob then
-        checkRefTag(s.craftJob.billId, "craft_bill", uid, "craftJob.billId",
-            errs, true)
-        checkRefTag(s.craftJob.bid, "building", uid, "craftJob.bid", errs, true)
-    end
-    if s.repairJob then
-        checkRefTag(s.repairJob.instanceId, "item_instance", uid,
-            "repairJob.instanceId", errs, true)
-        -- NOT required: repairJob.bid is listed in unitAiReferences'
-        -- schema (and wrapped/unwrapped symmetrically) but
-        -- unit_ai_repair.lua never actually sets it at job creation --
-        -- requiring it would reject every real repair job.
-        checkRefTag(s.repairJob.bid, "building", uid, "repairJob.bid", errs)
-    end
-    if s.pickupOrder then
-        checkRefTag(s.pickupOrder.gid, "ground_item", uid, "pickupOrder.gid", errs)
-    end
-    if s.forageTarget and s.forageTarget.kind == "ground" then
-        checkRefTag(s.forageTarget.gid, "ground_item", uid, "forageTarget.gid", errs)
-    end
-    if s.forageLoot then
-        for i, v in ipairs(s.forageLoot) do
-            checkRefTag(v, "ground_item", uid, "forageLoot[" .. i .. "]", errs)
-        end
-    end
-    if s.harvestLoot then
-        for i, v in ipairs(s.harvestLoot) do
-            checkRefTag(v, "ground_item", uid, "harvestLoot[" .. i .. "]", errs)
-        end
-    end
+    forEachSchemaEdge(s, function(row, value, path)
+        checkRefTag(value, row.kind, uid, path, errs, row.required)
+    end)
     if s.knownLocations then
         for i, v in ipairs(s.knownLocations) do
             checkKnownLocation(v, uid, "knownLocations[" .. i .. "]", errs)
