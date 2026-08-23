@@ -563,30 +563,45 @@ worldOpenArenaFn env = do
 enqueueSelectionChange ∷ EngineEnv → WorldCommand → IO ()
 enqueueSelectionChange env cmd = do
     atomicModifyIORef' (wsWorldManagerRef (toWorldSimCapability env)) $ \mgr →
-        (requestSelectionChange (selectionRequestIsEffective cmd mgr) mgr, ())
+        let (effective, projected) = selectionRequestEffect cmd mgr
+        in (requestSelectionChange effective projected mgr, ())
     Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) cmd
 
--- | Will this request actually MOVE the selection (#1602)? Only an
---   effective one may invalidate a live placement binding: showing a
---   page that is already visible, or hiding one that is already hidden,
---   is ordinary traffic that changes nothing a placement depends on, and
---   refusing clicks for it would be a regression on the no-page-switch
---   path.
+-- | Will this request actually MOVE the selection, and what does the
+--   projected visible list become (#1602)?
 --
---   Judged against the APPLIED state, which is exact precisely when it
---   matters: if nothing is outstanding, this command is the first
---   selection command in the queue and the state it sees is the state
---   its handler will see. When something IS outstanding the binding is
---   already stale, so a coarse answer here costs nothing — hence the
---   conservative 'True' for every kind whose effect is not trivially
---   decidable (an init REPLACES a page's state; a publish replaces the
---   whole set).
-selectionRequestIsEffective ∷ WorldCommand → WorldManager → Bool
-selectionRequestIsEffective cmd mgr = case cmd of
-    WorldShow pid           → pid `notElem` wmVisible mgr
-    WorldInitArenaDone pid  → pid `notElem` wmVisible mgr
-    WorldHide pid           → pid `elem` wmVisible mgr
-    _                       → True
+--   Only an EFFECTIVE request may invalidate a live placement binding:
+--   showing a page that is already visible, or hiding one that is
+--   already hidden, is ordinary traffic that changes nothing a placement
+--   depends on, and refusing clicks for it would regress the
+--   no-page-switch path.
+--
+--   Judged against the PROJECTED list, never the applied one. The two
+--   differ exactly when it matters: @world.show B@ followed by
+--   @world.hide B@ leaves the applied list untouched at the moment the
+--   hide is requested, so reading it would call that hide a no-op — and
+--   once the show alone had been applied the projection would look
+--   settled again while a real change was still queued, which is the
+--   window a placement would be accepted in and then dropped at the
+--   commit.
+--
+--   The two kinds that move the generation WITHOUT touching the visible
+--   list are effective by construction: an init REPLACES a page's state,
+--   and a publish replaces the whole set.
+selectionRequestEffect ∷ WorldCommand → WorldManager → (Bool, [WorldPageId])
+selectionRequestEffect cmd mgr = case cmd of
+    WorldShow pid          → visibility pid True
+    WorldInitArenaDone pid → visibility pid True
+    WorldHide pid          → visibility pid False
+    WorldDestroy pid       → (True, projectSelectionVisible pid False before)
+    WorldDestroyAll        → (True, [])
+    WorldLoadPublish{}     → (True, [])
+    _                      → (True, before)
+  where
+    before = projectedVisible mgr
+    visibility pid shown =
+        let after = projectSelectionVisible pid shown before
+        in (after ≢ before, after)
 
 -- | world.show(pageId)
 worldShowFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults

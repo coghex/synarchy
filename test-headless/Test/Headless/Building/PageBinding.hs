@@ -40,7 +40,7 @@ module Test.Headless.Building.PageBinding (spec) where
 import UPrelude
 import Test.Hspec
 import Test.Headless.Harness.Isolation (withIsolatedResourceRoot)
-import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -84,7 +84,8 @@ import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Grid (gridToWorld, tileHeight)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types
-    (WorldManager(..), WorldState(..), emptyWorldManager, emptyWorldState)
+    ( WorldManager(..), WorldState(..), emptyWorldManager, emptyWorldState
+    , settleSelectionProjection, selectionChangeInFlight, projectedVisible )
 import World.Thread.Command (handleWorldCommand)
 import World.Thread.Command.Init (handleWorldInitArenaCommand)
 import World.Thread.Command.Cursor.Construct
@@ -364,12 +365,29 @@ committedPlacements env = do
          , biDefName b ≢ occupantDefName ]
 
 -- | Drain the world queue through the REAL world-thread dispatcher, the
---   way "World.Thread" does.
+--   way "World.Thread" does — including its per-command projection
+--   settle, without which a partially drained queue would never
+--   re-synchronise.
 runWorldQueue ∷ EngineEnv → IO ()
 runWorldQueue env = do
-    logger ← readIORef (loggerRef env)
     cmds ← drainWorldQueue env
-    mapM_ (handleWorldCommand env logger) cmds
+    mapM_ (applyWorldCommand env) cmds
+
+-- | One command through the same path, so a scenario can stop the drain
+--   HALFWAY — which is the only way to observe a queue that still holds
+--   a dependent selection change after an earlier one has landed.
+applyWorldCommand ∷ EngineEnv → WorldCommand → IO ()
+applyWorldCommand env cmd = do
+    logger ← readIORef (loggerRef env)
+    handleWorldCommand env logger cmd
+    atomicModifyIORef' (worldManagerRef env) $ \mgr →
+        (settleSelectionProjection mgr, ())
+
+-- | Take exactly one command off the world queue and apply it.
+runOneWorldCommand ∷ EngineEnv → IO ()
+runOneWorldCommand env = do
+    mCmd ← Q.tryReadQueue (worldQueue env)
+    forM_ mCmd (applyWorldCommand env)
 
 -- | Both pages' live designation maps — a stale attempt must leave both
 --   empty, not merely fail to enqueue.
@@ -1193,6 +1211,74 @@ pendingSpec =
         outs `shouldBe` ["accepted|nil"]
         committedPlacements env `shouldReturn`
             [(portalName, fst placeTile, snd placeTile, pageA)]
+
+    it "judges a DEPENDENT sequence in queue order, not against the \
+       \applied list" $ \(env, ls) → do
+        _ ← resetScene env
+        _ ← clearStubs ls
+        -- show(B) then hide(B). Against the APPLIED list the hide looks
+        -- like a no-op — B is not visible yet — so judging there would
+        -- call the pair harmless. Against the projection the show makes
+        -- B visible first, so the hide is a real change.
+        _ ← evalDebug ls $ T.concat
+            [ "world.show('", unWorldPageId pageB, "'); "
+            , "world.hide('", unWorldPageId pageB, "'); "
+            , "return 'queued'" ]
+        mgr0 ← readIORef (worldManagerRef env)
+        -- The projection walked show-then-hide in order and came back
+        -- to [A]; both were counted as real changes.
+        projectedVisible mgr0 `shouldBe` [pageA]
+        selectionChangeInFlight mgr0 `shouldBe` True
+        -- Drain HALFWAY: the show has landed, the hide has not. The
+        -- projection must still report a change in flight — this is the
+        -- exact window a placement would be accepted in and then
+        -- dropped at the commit.
+        runOneWorldCommand env
+        mgr1 ← readIORef (worldManagerRef env)
+        wmVisible mgr1 `shouldBe` [pageB, pageA]
+        wmSelectionPending mgr1 `shouldBe` 1
+        gen ← selectionGen env
+        canPlaceAt ls shedName placeTile (Just (pageB, gen))
+            `shouldReturn` "false|page binding stale|true"
+        -- And it settles honestly once the hide lands.
+        runWorldQueue env
+        mgr2 ← readIORef (worldManagerRef env)
+        wmVisible mgr2 `shouldBe` [pageA]
+        wmProjectedGen mgr2 `shouldBe` wmSelectionGen mgr2
+
+    it "rejects a click made in that half-drained window" $ \(env, ls) → do
+        (wsA, wsB) ← resetScene env
+        _ ← clearStubs ls
+        _ ← armBuildTool ls portalName True
+        _ ← evalDebug ls $ T.concat
+            [ "world.show('", unWorldPageId pageB, "'); "
+            , "world.hide('", unWorldPageId pageB, "'); "
+            , "return 'queued'" ]
+        runOneWorldCommand env
+        -- The show has landed, so page B is what a click now hit-tests;
+        -- aim at ITS terrain so the pick resolves and the rejection is
+        -- the binding's, not an off-world miss.
+        (px, py) ← aimAt env placeTile terrainZB
+        _ ← clickAt ls (px, py)
+        expectStale env wsA wsB ls
+
+    it "heals after a request the handler REFUSES, so a later \
+       \ineffective one still costs nothing" $ \(env, ls) → do
+        _ ← resetScene env
+        _ ← clearStubs ls
+        -- A show for a page that does not exist: predicted effective,
+        -- refused by the handler. Without the settle the projection
+        -- would stay ahead of the applied generation for good, and the
+        -- redundant show below would then read as a change in flight.
+        _ ← evalDebug ls "world.show('bind_page_missing'); return 'queued'"
+        runWorldQueue env
+        gen ← selectionGen env
+        _ ← evalDebug ls $ T.concat
+            [ "world.show('", unWorldPageId pageA, "'); return 'queued'" ]
+        mgr ← readIORef (worldManagerRef env)
+        selectionChangeInFlight mgr `shouldBe` False
+        canPlaceAt ls shedName placeTile (Just (pageA, gen))
+            `shouldReturn` "true|nil|false"
 
     it "settles once the world thread applies the change" $ \(env, ls) → do
         _ ← resetScene env

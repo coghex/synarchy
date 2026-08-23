@@ -60,10 +60,10 @@ import Location.Instance (emptyLocationInstances)
 --   caller — but it is not the commit, and this thread cannot make it
 --   one: 'wmSelectionGen' belongs to the world thread. A bound spawn is
 --   therefore routed to that thread as 'WorldSpawnBoundBuilding', which
---   re-checks the binding where a selection change cannot be
---   interleaved with it and only then forwards the ordinary
---   'BuildingSpawn'. Omitted → the command goes straight to the
---   building queue, exactly as before.
+--   re-checks the binding and performs the insertion itself, in the one
+--   place a selection change cannot be interleaved between the two.
+--   Omitted → the command goes straight to the building queue, exactly
+--   as before.
 buildingSpawnFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingSpawnFn env = do
     nameArg ← Lua.tostring 1
