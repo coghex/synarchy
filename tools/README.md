@@ -573,7 +573,11 @@ exe:synarchy` plus one read-only `cabal list-bin exe:synarchy`, prints the
 resolved path, and hands it to every probe it launches through
 `SYNARCHY_PROBE_ENGINE_EXE`. A preflight that fails is the runner's own
 exit 2 with Cabal's reason — never a retry, never a probe's assertion
-failure. That applies to `--jobs 1` as much as to `--jobs N`, and it
+failure. **The build itself runs inside an EXCLUSIVE `cabal-build` hold**:
+a preflight is a Cabal writer like any other, so two aggregate runs cannot
+build at once, and a build cannot land inside another runner's `cabal
+repl` probe. The hold covers the build alone and is released before any
+probe is dispatched, so a sweep never queues its own probes behind it. That applies to `--jobs 1` as much as to `--jobs N`, and it
 reaches the initial attempt, every parallel worker, every solo retry and
 a nested `run_probes.py` (which adopts the inherited path rather than
 building again).

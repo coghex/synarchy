@@ -1327,7 +1327,7 @@ def test_a_nested_runner_adopts_the_executable_without_rebuilding() -> None:
         recorder = PreflightRecorder(tree.executable)
         with patched(tree, preflight=recorder):
             adopted = run_probes.engine_preflight(
-                {probe_engine.ENV_ENGINE_EXE: str(tree.executable)})
+                environ={probe_engine.ENV_ENGINE_EXE: str(tree.executable)})
         expect(adopted == str(tree.executable),
                f"the inherited executable is adopted verbatim (got {adopted})")
         expect(not recorder.calls,
@@ -1335,7 +1335,7 @@ def test_a_nested_runner_adopts_the_executable_without_rebuilding() -> None:
 
         recorder = PreflightRecorder(tree.executable)
         with patched(tree, preflight=recorder):
-            resolved = run_probes.engine_preflight({})
+            resolved = run_probes.engine_preflight(environ={})
         expect(resolved == str(tree.executable),
                "and with nothing inherited it resolves one itself")
         expect(len(recorder.calls) == 2,
@@ -1397,6 +1397,154 @@ def test_an_ancestors_exclusive_hold_is_not_waited_on() -> None:
             nested.release()
     finally:
         ancestor.release()
+        clear_namespace(namespace)
+
+
+FOREIGN_TRY_SRC = textwrap.dedent("""\
+    # Try ONCE, without waiting, to take one resource in one interest.
+    # Prints "busy" when a live holder refuses it and "free" when it is
+    # granted (released again immediately). A SEPARATE process, because
+    # an flock conflict between two open file descriptions is exactly
+    # what the cross-process layer is made of, and asking from inside
+    # the holding process would prove nothing about another runner.
+    import sys
+    sys.path.insert(0, sys.argv[1])
+    import probe_resource_lock
+    namespace, resource, interest = sys.argv[2], sys.argv[3], sys.argv[4]
+    want = {resource}
+    kwargs = ({"exclusive": want} if interest == "exclusive"
+              else {"shared": want})
+    try:
+        hold = probe_resource_lock.acquire(namespace=namespace,
+                                           purpose="selftest probe", **kwargs)
+    except probe_resource_lock.ResourceBusy:
+        print("busy")
+    else:
+        hold.release()
+        print("free")
+    """)
+
+
+def foreign_interest(namespace: str, resource: str, interest: str) -> str:
+    """"busy" or "free": whether ANOTHER process could take it right now."""
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / "try_acquire.py"
+        script.write_text(FOREIGN_TRY_SRC)
+        done = subprocess.run(
+            [sys.executable, str(script), TOOLS_DIR, namespace, resource,
+             interest],
+            capture_output=True, text=True, timeout=60)
+        return done.stdout.strip() or f"error: {done.stderr.strip()[:200]}"
+
+
+def test_the_preflight_build_excludes_a_foreign_runner() -> None:
+    print("\n-- while the preflight builds, no other runner is in the tree")
+    tree = Tree()
+    try:
+        observed: list[str] = []
+        namespace = f"selftest{uuid.uuid4().hex[:12]}"
+        recorder = PreflightRecorder(tree.executable)
+
+        def watching(argv, cwd=None, capture_output=False, text=False):
+            # Asked from INSIDE the build, which is the only instant that
+            # answers the question the concern is about.
+            observed.append(foreign_interest(namespace,
+                                              run_probes.BUILD_RESOURCE,
+                                              "shared"))
+            observed.append(foreign_interest(namespace,
+                                              run_probes.BUILD_RESOURCE,
+                                              "exclusive"))
+            return recorder(argv, cwd=cwd, capture_output=capture_output,
+                            text=text)
+
+        tree.add("alpha", exit_code=0)
+        with patched(tree, namespace=namespace, preflight=watching):
+            rc, out = _main_with_open(tree, ["--only", "alpha", "--exact"])
+        expect(rc == 0, f"the sweep still passes (got {rc})\n{out}")
+        expect(observed and all(answer == "busy" for answer in observed),
+               f"every foreign interest in the build state was refused for "
+               f"the whole preflight (got {observed})")
+        expect(foreign_interest(namespace, run_probes.BUILD_RESOURCE,
+                                 "exclusive") == "free",
+               "and the hold is released once the preflight is done, so the "
+               "sweep's own probes are never queued behind it")
+    finally:
+        tree.cleanup()
+        clear_namespace(namespace)
+
+
+def test_the_preflight_build_waits_for_a_foreign_runner() -> None:
+    print("\n-- and it waits for a foreign holder rather than building beside it")
+    tree = Tree()
+    namespace = f"selftest{uuid.uuid4().hex[:12]}"
+    holder = None
+    try:
+        recorder = PreflightRecorder(tree.executable)
+        resolved: list[str] = []
+        failed: list[BaseException] = []
+        holder = ForeignHolder(namespace, "exclusive",
+                               run_probes.BUILD_RESOURCE)
+        expect(holder.wait_until_held(), "the foreign runner holds the "
+                                          "build state exclusively")
+
+        def resolve() -> None:
+            try:
+                with patched(tree, namespace=namespace, preflight=recorder):
+                    resolved.append(run_probes.engine_preflight(namespace,
+                                                                 environ={}))
+            except BaseException as error:      # reported, never swallowed
+                failed.append(error)
+
+        worker = threading.Thread(target=resolve, daemon=True)
+        worker.start()
+        worker.join(timeout=4.0)
+        expect(worker.is_alive(),
+               "the preflight is still waiting, not building")
+        expect(not recorder.calls,
+               f"so no Cabal command ran beside the foreign holder "
+               f"(calls: {preflight_argvs(recorder)})")
+        holder.stop()
+        holder = None
+        worker.join(timeout=90.0)
+        expect(not worker.is_alive(), "and it proceeds once that holder lets go")
+        expect(not failed, f"without raising ({failed})")
+        expect(resolved == [str(tree.executable)],
+               f"resolving the executable it was going to resolve "
+               f"(got {resolved})")
+        expect(len(recorder.calls) == 2,
+               f"through the same one build and one query "
+               f"(calls: {preflight_argvs(recorder)})")
+    finally:
+        if holder is not None:
+            holder.stop()
+        tree.cleanup()
+        clear_namespace(namespace)
+
+
+def test_a_nested_preflight_does_not_wait_on_its_ancestor() -> None:
+    print("\n-- a nested runner's preflight is inside its ancestor's hold")
+    tree = Tree()
+    namespace = f"selftest{uuid.uuid4().hex[:12]}"
+    ancestor = None
+    try:
+        recorder = PreflightRecorder(tree.executable)
+        ancestor = probe_resource_lock.acquire(
+            exclusive={run_probes.BUILD_RESOURCE}, namespace=namespace,
+            purpose="selftest ancestor")
+        # The environment a nested runner is handed: no executable (so it
+        # really does build), but its ancestor's exclusive hold declared.
+        env = {run_probes.ENV_HELD_NAMESPACE: namespace,
+               run_probes.ENV_HELD_EXCLUSIVE: run_probes.BUILD_RESOURCE}
+        with patched(tree, namespace=namespace, preflight=recorder):
+            resolved = run_probes.engine_preflight(namespace, environ=env)
+        expect(resolved == str(tree.executable),
+               f"it resolved without waiting on its ancestor (got {resolved})")
+        expect(len(recorder.calls) == 2,
+               f"having really built (calls: {preflight_argvs(recorder)})")
+    finally:
+        if ancestor is not None:
+            ancestor.release()
+        tree.cleanup()
         clear_namespace(namespace)
 
 
@@ -2629,6 +2777,9 @@ def main() -> int:
     test_a_direct_run_one_leaves_the_child_on_the_fallback()
     test_a_nested_runner_adopts_the_executable_without_rebuilding()
     test_an_ancestors_exclusive_hold_is_not_waited_on()
+    test_the_preflight_build_excludes_a_foreign_runner()
+    test_the_preflight_build_waits_for_a_foreign_runner()
+    test_a_nested_preflight_does_not_wait_on_its_ancestor()
     test_the_hold_environment_names_what_a_probe_holds()
     test_a_probe_is_handed_its_runners_exclusive_holds()
     test_no_registered_probe_spells_a_cabal_engine_launch()

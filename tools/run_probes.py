@@ -34,7 +34,10 @@ started. This runner therefore resolves the executable ONCE — one
 freshness build plus one `cabal list-bin`, in `engine_preflight` below,
 after selection is validated and before any probe is spawned — and hands
 every probe that absolute path through the environment, so no probe
-process invokes Cabal while another is running. The few probes that
+process invokes Cabal while another is running. That preflight is itself
+a Cabal writer, so it runs inside an EXCLUSIVE `cabal-build` hold: two
+aggregate runs cannot build at once, and neither can a build and another
+runner's `cabal repl` probe. The few probes that
 legitimately still drive Cabal (GHCi consumers: `cabal repl` behind
 `persistence_snapshot`/`save_compat_audit`) declare `cabal-build`
 EXCLUSIVELY instead, which is the same scheduling mechanism keeping them
@@ -445,14 +448,18 @@ PROBES = [
 # overlap each other, and neither overlaps a probe reading the binary they
 # may be relinking. They are deliberately RETAINED rather than converted —
 # a GHCi consumer is not an engine boot and has no prebuilt equivalent.
-IMPLICIT_SHARED_RESOURCES: tuple[str, ...] = ("repo-config", "cabal-build")
+#: The shared Cabal build state, named once so the preflight below and
+#: the two declaration tables cannot drift apart.
+BUILD_RESOURCE = "cabal-build"
+
+IMPLICIT_SHARED_RESOURCES: tuple[str, ...] = ("repo-config", BUILD_RESOURCE)
 
 EXCLUSIVE_RESOURCES: dict[str, tuple[str, ...]] = {
     "config_migration": ("repo-config",),
     "config_state": ("repo-config",),
-    "persistence_contract": ("cabal-build",),
-    "persistence_contract_sweep": ("cabal-build",),
-    "save_compat_migration": ("cabal-build",),
+    "persistence_contract": (BUILD_RESOURCE,),
+    "persistence_contract_sweep": (BUILD_RESOURCE,),
+    "save_compat_migration": (BUILD_RESOURCE,),
 }
 
 
@@ -773,20 +780,60 @@ ENGINE_EXECUTABLE: str | None = None
 ENGINE_PREFLIGHT_RUNNER = None
 
 
-def engine_preflight(environ=None) -> str:
+@contextlib.contextmanager
+def preflight_hold(namespace, *, announce=None, environ=None):
+    """Hold the shared Cabal build state EXCLUSIVELY across the preflight.
+
+    The preflight is itself a Cabal WRITER — one `cabal build` into the
+    same `dist-newstyle` every probe's engine comes out of — so resolving
+    the executable outside the exclusion would leave exactly the race
+    this issue is about, one level up: two aggregate runs preflighting at
+    once, or one runner's build landing inside another runner's
+    `persistence_contract` / `save_compat_migration` `cabal repl`. Nothing
+    inside a single run can see that; only the cross-process lock can.
+
+    Held for the build alone and released before any probe is dispatched,
+    so the sweep's own probes are never queued behind it. `namespace` of
+    None disables the cross-process layer, exactly as `resource_hold`
+    does, and an ancestor already holding this resource exclusively is
+    inherited rather than waited on — `persistence_contract_sweep`'s
+    nested runner is inside its ancestor's exclusion, not competing with
+    it.
+    """
+    if (namespace is None
+            or BUILD_RESOURCE in inherited_exclusive_resources(namespace,
+                                                                environ)):
+        yield None
+        return
+    hold = probe_resource_lock.wait_acquire(
+        exclusive={BUILD_RESOURCE}, namespace=namespace,
+        purpose="run_probes engine preflight",
+        poll=RESOURCE_WAIT_POLL, announce=announce)
+    try:
+        yield hold
+    finally:
+        hold.release()
+
+
+def engine_preflight(namespace=None, environ=None, *, announce=None) -> str:
     """The one Cabal contact an aggregate run makes, before any probe.
 
     Adopts an executable an ANCESTOR already resolved when there is one —
     that is how `persistence_contract_sweep`'s nested runner reaches its
-    own probes without a second build — and otherwise runs one freshness
-    build plus one `cabal list-bin`. Raises `EngineExecutableError`,
-    which `main` reports as a nonzero exit before a probe is spawned, a
-    retry allocated, or any probe assertion attributed to it.
+    own probes without a second build, and it takes no lock because it
+    builds nothing. Otherwise it runs one freshness build plus one `cabal
+    list-bin`, INSIDE `preflight_hold` so no other runner or GHCi consumer
+    is in the build directory at the same time. Raises
+    `EngineExecutableError`, which `main` reports as a nonzero exit before
+    a probe is spawned, a retry allocated, or any probe assertion
+    attributed to it.
     """
     inherited = probe_engine.runner_executable(environ)
     if inherited is not None:
         return inherited
-    return probe_engine.resolve_executable(REPO_ROOT, run=ENGINE_PREFLIGHT_RUNNER)
+    with preflight_hold(namespace, announce=announce, environ=environ):
+        return probe_engine.resolve_executable(
+            REPO_ROOT, run=ENGINE_PREFLIGHT_RUNNER)
 
 
 # farm_ai_probe.py's O(n^2) TCP tile scan over natural terrain (#336) is the
@@ -1344,17 +1391,28 @@ def main() -> int:
               file=sys.stderr)
         return 2
 
+    def waiting(busy) -> None:
+        print(f"\n    waiting for {busy.resource!r} ({busy.interest}) held "
+              f"outside this runner ... ", end="", flush=True)
+
     # The whole Cabal contact this run makes (#1570): one freshness build
     # plus one `cabal list-bin`, HERE — after `--list` and after every
     # selection and port refusal above, so a rejected or empty selection
     # stays build-free, and before a single probe process exists, so the
-    # concurrent-`cabal run` race cannot happen at all. A failure is this
-    # runner's own nonzero exit, never a retry and never a probe's
-    # assertion failure.
+    # concurrent-`cabal run` race cannot happen at all. The build itself
+    # runs inside an EXCLUSIVE `cabal-build` hold, because a preflight is
+    # a Cabal writer like any other and a second runner's preflight (or
+    # another runner's `cabal repl` probe) must not be in the build
+    # directory beside it. A failure is this runner's own nonzero exit,
+    # never a retry and never a probe's assertion failure.
     try:
-        ENGINE_EXECUTABLE = engine_preflight()
+        ENGINE_EXECUTABLE = engine_preflight(namespace, announce=waiting)
     except probe_engine.EngineExecutableError as error:
         print(f"cannot resolve the engine the probes launch: {error}",
+              file=sys.stderr)
+        return 2
+    except probe_resource_lock.ResourceLockError as error:
+        print(f"cannot coordinate the engine build across processes: {error}",
               file=sys.stderr)
         return 2
     print(f"engine: {ENGINE_EXECUTABLE}")
@@ -1363,10 +1421,6 @@ def main() -> int:
     results: dict[str, tuple[str, str, float, str]] = {}  # key -> (script, status, elapsed, out)
     wall_start = time.time()
     groups = ProbeGroups()
-
-    def waiting(busy) -> None:
-        print(f"\n    waiting for {busy.resource!r} ({busy.interest}) held "
-              f"outside this runner ... ", end="", flush=True)
 
     try:
         if args.jobs <= 1:
