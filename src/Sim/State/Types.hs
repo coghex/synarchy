@@ -47,6 +47,15 @@ data SimChunkState = SimChunkState
     , scsActiveFluid ∷ !(V.Vector (Maybe ActiveFluidCell))  -- ^ Volume-tracked fluid (active only)
     , scsEquilTicks  ∷ !Int               -- ^ Ticks at equilibrium (for deactivation)
     , scsSideDeco    ∷ !(VU.Vector Word8) -- ^ Side-face decorations (waterfall etc.)
+    , scsEditGen     ∷ !Word64
+      -- ^ The owning page's live-edit generation for this chunk, as of
+      --   the message this state was seeded from: 0 from 'SimChunkLoaded',
+      --   the carried value from 'SimChunkEdited' (#1596). Copied verbatim
+      --   into every writeback this chunk produces
+      --   ('World.Command.Types.fwEditGen') so the world thread — the sole
+      --   writer of the tiles — can reject output computed before an edit
+      --   it would overwrite. The sim never compares it; see
+      --   'World.State.Types.wsChunkEditGenRef'.
     }
 
 emptySimState ∷ SimState
