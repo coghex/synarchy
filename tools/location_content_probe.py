@@ -83,16 +83,143 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
-from probelib import (FixtureNotRegistered, quit_engine, boot,
-                      load_fixture_yaml, send, wait_load_published,
-                      load_ai_stack)
+from pathlib import Path
+from probelib import (FixtureNotRegistered, capture_request_id, quit_engine,
+                      boot, load_fixture_yaml, send, wait_load_published,
+                      wait_save_complete, load_ai_stack)
 
 LOG = "/tmp/location_content_engine.log"
+REPO = Path(__file__).resolve().parent.parent
+#: Prefix of this invocation's throwaway resource root. The random
+#: suffix mkdtemp appends to it is also the per-invocation save-slot
+#: token, so the root and the slots it holds share one identity.
+ROOT_PREFIX = "location_content_probe_"
+
+
+# --------------------------------------------------------------------------
+# Isolated resource root + request-specific save/load completion (#1620)
+# --------------------------------------------------------------------------
+class _PhaseAborted(Exception):
+    """A phase's save or load never reached its own terminal successful
+    status, so the phase must STOP rather than assert against whatever
+    session happens to be live — the reader is exactly what must not
+    start (#1620 requirements 2-4). The failure is already recorded; the
+    surrounding `finally` still shuts the engine down in order."""
+
+
+def make_isolated_root(base: str) -> str:
+    """A throwaway resource root for THIS invocation: the repository's
+    real scripts/assets/data/config symlinked in (read-only content, safe
+    to share) plus its OWN empty saves/ directory.
+
+    Every boot belonging to the invocation is handed this root, so the
+    fixtures saved and loaded here are never written into, and can never
+    be satisfied by, a slot reachable from a normal `cabal run` (#1620
+    requirement 5; the tools/chop_probe.py pattern). The families are
+    SYMLINKS, and shutil.rmtree unlinks a symlink rather than descending
+    it, so teardown can never reach the repository's own directories.
+    """
+    root = os.path.join(base, "root")
+    os.makedirs(root, exist_ok=True)
+    for family in ("scripts", "assets", "data", "config"):
+        target = os.path.join(root, family)
+        if not os.path.exists(target):
+            os.symlink(os.path.join(REPO, family), target)
+    os.makedirs(os.path.join(root, "saves"), exist_ok=True)
+    return root
+
+
+def remove_isolated_root(base: str) -> str | None:
+    """Remove this invocation's root, REPORTING a failure instead of
+    swallowing it — the "no save artifact the run created remains on
+    disk" guarantee (#1620 requirement 6) is only real if a removal that
+    did not happen is visible. Returns None on success, else the message
+    to fail with.
+    """
+    try:
+        shutil.rmtree(base)
+    except OSError as exc:
+        return (f"could not remove this run's temporary resource root "
+                f"{base}: {exc}")
+    if os.path.exists(base):
+        return (f"this run's temporary resource root {base} still exists "
+                f"after removal")
+    return None
+
+
+def boot_isolated(port: int, root: str, **kwargs):
+    return boot(port, log=LOG, args=["--resource-root", root], **kwargs)
+
+
+def save_and_wait(port: int, page: str, slot: str,
+                  failures: list[str], log: str = LOG) -> bool:
+    """engine.saveWorld, then tie completion to THIS request's own id.
+
+    saveWorld only ACCEPTS synchronously — it returns false on a
+    validation failure (the detailed reason goes to the engine log) and
+    true once the command is queued, while the encode and disk write run
+    afterwards. So a sleep proves nothing, and a fixed slot name means a
+    PRIOR generation of the same slot could satisfy the reader
+    (#1620). Every reader here starts only after this returns True.
+    """
+    accepted = send(port, f"return engine.saveWorld('{page}', '{slot}')").strip()
+    if accepted != "true":
+        failures.append(
+            f"engine.saveWorld(page '{page}', slot '{slot}') was not accepted "
+            f"(returned {accepted!r}); the validation reason is logged in {log}")
+        return False
+    request_id = capture_request_id(port, "return engine.getSaveStatus()")
+    if request_id is None:
+        failures.append(
+            f"engine.getSaveStatus() never reported a request id for "
+            f"saveWorld(page '{page}', slot '{slot}')")
+        return False
+    ok, status = wait_save_complete(port, request_id)
+    if not ok:
+        failures.append(
+            f"save of page '{page}' to slot '{slot}' (request {request_id}) "
+            f"did not reach SaveCaptureComplete: {status}")
+        return False
+    print(f"  saved '{slot}' (request {request_id}, {status.get('phase')})")
+    return True
+
+
+def load_and_wait(port: int, slot: str, failures: list[str],
+                  seconds: float = 60.0, log: str = LOG) -> bool:
+    """engine.loadSave, then wait for THAT request id to publish.
+
+    Issue #763: loadSave only ACCEPTS synchronously, and the saved page
+    does not exist live until the transaction publishes. Passing the
+    captured id to wait_load_published is what stops a terminal status
+    left behind by an earlier transaction from satisfying this wait.
+    """
+    accepted = send(port, f"return engine.loadSave('{slot}')").strip()
+    if accepted != "true":
+        failures.append(
+            f"engine.loadSave('{slot}') was not accepted (returned "
+            f"{accepted!r}); the reason is logged in {log}")
+        return False
+    request_id = capture_request_id(port, "return engine.getLoadStatus()")
+    if request_id is None:
+        failures.append(
+            f"engine.getLoadStatus() never reported a request id for "
+            f"loadSave('{slot}')")
+        return False
+    published, status = wait_load_published(port, seconds,
+                                            request_id=request_id)
+    if not published:
+        failures.append(f"load of '{slot}' (request {request_id}) did not "
+                        f"publish: {status}")
+        return False
+    return True
 
 #: A location-instance id no page will ever have allocated (#915) —
 #: used to stage a memory whose (page, id) cannot resolve after a load.
@@ -489,7 +616,35 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=9190)
     args = ap.parse_args()
 
+    # One throwaway resource root per invocation, and slot names carrying
+    # that root's own random token, so two concurrent runs cannot collide
+    # and no developer-visible save slot is created, mutated or rotated
+    # (#1620 requirement 5).
+    base = tempfile.mkdtemp(prefix=ROOT_PREFIX)
+    # The WHOLE random suffix, not the text after the last underscore:
+    # mkdtemp's alphabet includes '_', so splitting on it can throw most
+    # of the entropy away (and can leave nothing at all).
+    token = os.path.basename(base)[len(ROOT_PREFIX):]
+    try:
+        rc = run(args, make_isolated_root(base), token)
+    finally:
+        # Reported, never swallowed, and reported even when `run` is
+        # leaving by an exception (boot() exits the process on a dead
+        # engine) — a root that survived is exactly the artifact #1620
+        # requirement 6 forbids.
+        leftover = remove_isolated_root(base)
+        if leftover:
+            print(f"FAIL: {leftover}", file=sys.stderr)
+    return 1 if leftover else rc
+
+
+def run(args, root: str, token: str) -> int:
+    slot_content = f"loc_content_probe_{token}"
+    slot_naming = f"loc_naming_probe_{token}"
+
     failures: list[str] = []
+    saved_content = False
+    saved_naming = False
     ruins: list[dict] = []
     counts1: dict = {}
     geoms1: dict = {}
@@ -504,7 +659,7 @@ def main() -> int:
     sibling_keys: tuple[str, ...] = ()
 
     # ---- Phase 1: content spawns when a ruin's chunk loads. ----
-    proc = boot(args.port, log=LOG)
+    proc = boot_isolated(args.port, root)
     try:
         load_defs(args.port)
         gen_world(args.port, "wa", args.seed, args.size)
@@ -815,8 +970,11 @@ def main() -> int:
             # other unit, unrelated to the ruin's one-time content flag).
             counts1 = spawn_counts(args.port)
 
-            send(args.port, "engine.saveWorld('wa', 'loc_content_probe'); return 'saved'")
-            time.sleep(1.0)
+            # Phase 2 reads this fixture from a FRESH process, so the
+            # save must be COMPLETE — not merely accepted — before that
+            # process boots (#1620).
+            saved_content = save_and_wait(args.port, "wa", slot_content,
+                                          failures)
     finally:
         quit_engine(args.port, proc)
 
@@ -831,7 +989,7 @@ def main() -> int:
     #      ruin got which reward. ----
     if ruins and loot1 and not failures:
         for label, reverse in (("same order", False), ("reversed order", True)):
-            proc = boot(args.port, log=LOG)
+            proc = boot_isolated(args.port, root)
             try:
                 load_defs(args.port)
                 gen_world(args.port, "wa", args.seed, args.size)
@@ -856,8 +1014,8 @@ def main() -> int:
     # ---- Phase 2: save -> quit -> fresh restart -> load -> revisit does
     #      NOT respawn (one-time flag persisted, independent of the
     #      structure.hasAt geometry check). ----
-    if ruins and not failures:
-        proc = boot(args.port, log=LOG)
+    if ruins and saved_content and not failures:
+        proc = boot_isolated(args.port, root)
         try:
             load_defs(args.port)
             # #915: the unit AI stack must be loaded BEFORE the load, so
@@ -866,13 +1024,11 @@ def main() -> int:
             # location memory whose instance is absent from the restored
             # session, actually runs.
             load_ai_stack(args.port)
-            send(args.port, "engine.loadSave('loc_content_probe'); return 'queued'")
             # Issue #763: engine.loadSave only ACCEPTS synchronously -- the
             # saved page ("wa", its own id verbatim -- no more main_world
             # remap) doesn't exist live until the transaction publishes.
-            published, load_status = wait_load_published(args.port, 60)
-            if not published:
-                failures.append(f"load transaction did not publish: {load_status}")
+            if not load_and_wait(args.port, slot_content, failures):
+                raise _PhaseAborted
             send(args.port, "world.show('wa'); return 'ok'")
             time.sleep(1.0)
             for e in ruins:
@@ -1019,6 +1175,8 @@ def main() -> int:
                 failures.append(
                     "phase 2 could not re-check per-unit location memory: "
                     "phase 1 never established one")
+        except _PhaseAborted:
+            pass
         finally:
             quit_engine(args.port, proc)
     elif not ruins:
@@ -1093,7 +1251,7 @@ def main() -> int:
             "  - id: quinoa_sack\n"
             "    weight: 1\n"
         )
-    proc = boot(args.port, log=LOG)
+    proc = boot_isolated(args.port, root)
     try:
         load_defs(args.port)
         # These four fixtures are DELIBERATELY full of unknown ids, but the
@@ -1224,7 +1382,7 @@ def main() -> int:
             "      - { kind: building, id: cargo_hold_S, count: 1, position: {x: 0, y: 0} }\n"
             "      - { kind: unit, id: acolyte, count: 1, faction: hostile, position: {x: 1, y: 1} }\n"
         )
-    proc = boot(args.port, log=LOG)
+    proc = boot_isolated(args.port, root)
     try:
         # Registries only — NOT ruin_small.yaml, which would contend with
         # dense_ruin for chunk (0,0) and make the placement non-deterministic
@@ -1355,7 +1513,7 @@ def main() -> int:
     #      own generated language, falls back to the definition label
     #      when the world has none, and both survive save/load. ----
     named: dict[int, tuple[str, str | None]] = {}
-    proc = boot(args.port, log=LOG)
+    proc = boot_isolated(args.port, root)
     try:
         load_defs(args.port)
         gen_named_world(args.port, "ln", args.seed, args.size)
@@ -1401,49 +1559,46 @@ def main() -> int:
                 print(f"PASS: the same seed with no language falls back to "
                       f"'Small Ruin' on all {len(plain)} ruin(s), no gloss")
 
-            send(args.port,
-                 "engine.saveWorld('ln', 'loc_naming_probe'); return 'saved'")
-            time.sleep(2.0)
+            # The fresh process below reads this fixture (#1620).
+            saved_naming = save_and_wait(args.port, "ln", slot_naming,
+                                         failures)
     finally:
         quit_engine(args.port, proc)
 
-    if named and not failures:
-        proc = boot(args.port, log=LOG)
+    if named and saved_naming and not failures:
+        proc = boot_isolated(args.port, root)
         try:
             load_defs(args.port)
             load_ai_stack(args.port)
-            send(args.port,
-                 "engine.loadSave('loc_naming_probe'); return 'queued'")
-            published, load_status = wait_load_published(args.port, 60)
-            if not published:
-                failures.append(
-                    f"phase 5 (#1101): load did not publish: {load_status}")
+            if not load_and_wait(args.port, slot_naming, failures):
+                raise _PhaseAborted
+            send(args.port, "world.show('ln'); return 'ok'")
+            time.sleep(1.0)
+            after = {e["instance_id"]: (e["name"], e.get("gloss"))
+                     for e in ruins_ready(args.port, "ln")}
+            if after == named:
+                print("PASS: every location name AND gloss survived "
+                      "save -> fresh process -> load byte-exact")
             else:
-                send(args.port, "world.show('ln'); return 'ok'")
-                time.sleep(1.0)
-                after = {e["instance_id"]: (e["name"], e.get("gloss"))
-                         for e in ruins_ready(args.port, "ln")}
-                if after == named:
-                    print("PASS: every location name AND gloss survived "
-                          "save -> fresh process -> load byte-exact")
-                else:
-                    failures.append(
-                        f"phase 5 (#1101): names/glosses changed across "
-                        f"save/load: before={named} after={after}")
+                failures.append(
+                    f"phase 5 (#1101): names/glosses changed across "
+                    f"save/load: before={named} after={after}")
 
-                # Same seed, same language, fresh process: identical
-                # names. Write-once storage would hide a nondeterministic
-                # namer, so this regenerates rather than reloading.
-                gen_named_world(args.port, "ln2", args.seed, args.size)
-                regen = {e["instance_id"]: (e["name"], e.get("gloss"))
-                         for e in ruins_ready(args.port, "ln2")}
-                if regen == named:
-                    print("PASS: regenerating the same seed + language in a "
-                          "fresh process reproduces every name and gloss")
-                else:
-                    failures.append(
-                        f"phase 5 (#1101): regeneration is not deterministic: "
-                        f"first={named} regenerated={regen}")
+            # Same seed, same language, fresh process: identical
+            # names. Write-once storage would hide a nondeterministic
+            # namer, so this regenerates rather than reloading.
+            gen_named_world(args.port, "ln2", args.seed, args.size)
+            regen = {e["instance_id"]: (e["name"], e.get("gloss"))
+                     for e in ruins_ready(args.port, "ln2")}
+            if regen == named:
+                print("PASS: regenerating the same seed + language in a "
+                      "fresh process reproduces every name and gloss")
+            else:
+                failures.append(
+                    f"phase 5 (#1101): regeneration is not deterministic: "
+                    f"first={named} regenerated={regen}")
+        except _PhaseAborted:
+            pass
         finally:
             quit_engine(args.port, proc)
 

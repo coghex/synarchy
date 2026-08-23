@@ -7,8 +7,9 @@ resource root at startup (--resource-root flag > SYNARCHY_ROOT env >
 current directory) and chdirs into it. This probe proves the built
 executable works from a working directory OUTSIDE the repo:
 
-  1. locate (or build) exe:synarchy via cabal, then run everything
-     below as the raw binary from a fresh temp directory;
+  1. take the executable the aggregate runner resolved, or locate (or
+     build) exe:synarchy via cabal when run by hand, then run
+     everything below as the raw binary from a fresh temp directory;
   2. no resource root given from the temp dir -> actionable exit-1
      error naming the root in use and the missing resource paths;
   3. --resource-root pointing at a nonexistent directory -> same, and
@@ -36,6 +37,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import probe_engine
 from probelib import GUI_PORT, send, quit_engine
 
 REPO = Path(__file__).resolve().parent.parent
@@ -49,8 +51,20 @@ def check(name: str, ok: bool, detail: str = "") -> bool:
 
 
 def locate_binary() -> str:
-    """`cabal list-bin exe:synarchy` from the repo root, building first
-    if the binary isn't there yet."""
+    """The executable to run every check against.
+
+    Under the aggregate runner this is the one the preflight already
+    resolved and handed over through the environment (#1570) — no Cabal
+    from inside a parallel sweep. Run by hand it keeps this probe's own
+    `cabal list-bin exe:synarchy`, building first if the binary isn't
+    there yet. That local fallback is deliberately NOT a freshness
+    check: it only covers an ABSENT binary, which is why the runner's
+    preflight builds unconditionally rather than reusing it.
+    """
+    supplied = probe_engine.runner_executable()
+    if supplied is not None:
+        return supplied
+
     def list_bin() -> str | None:
         r = subprocess.run(["cabal", "list-bin", "exe:synarchy"],
                            cwd=REPO, capture_output=True, text=True)

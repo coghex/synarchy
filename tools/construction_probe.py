@@ -17,10 +17,13 @@ next phase's utility scan is clean):
   3. release   : the claimant is destroyed mid-job; the sweep releases
                  the claim ("pending" again — observable), and a second
                  acolyte picks the job up and finishes it.
-  4. occupied  : #805 — re-designating an already-built floor's slot is
-                 rejected (no job, outcome stream says so), a DIFFERENT
-                 slot on that same tile still designates/builds normally
-                 (coexistence), and a slot that fills in AFTER
+  4. occupied  : #1595 — a still-empty tile whose first job is merely
+                 PENDING refuses a second designation (rejected 1/0/1,
+                 first job untouched). #805 — re-designating an
+                 already-built floor's slot is rejected (no job, outcome
+                 stream says so), a DIFFERENT slot on that same tile
+                 still designates/builds normally once the first job has
+                 COMPLETED (coexistence), and a slot that fills in AFTER
                  designation but BEFORE a claimant pays materials is
                  cancelled rather than paid for.
   6. paid_death: #799 — a claimant that dies AFTER paying (progress > 0)
@@ -287,9 +290,58 @@ def phase_ground(port: int) -> None:
 def phase_occupied(port: int) -> None:
     """#805: an already-occupied structure slot must not be re-designated
     (or paid for if it fills in mid-job), while a compatible slot on the
-    same tile keeps working normally."""
-    print("\n[phase 5] occupied structure slots (#805)")
+    same tile keeps working normally. #1595: a tile that already carries
+    an OUTSTANDING designation refuses a second one outright, whatever
+    slot it names, because the designation map is keyed by tile
+    coordinate alone and the second insert would erase the first."""
+    print("\n[phase 5] occupied structure slots (#805, #1595)")
     w = wid(port)
+
+    # --- #1595: a STILL-EMPTY tile whose first job is merely pending
+    # must refuse a second, otherwise-compatible designation. No unit is
+    # alive at this point, so the first job stays pending for the whole
+    # check; #805's placed-slot filter cannot fire here (nothing is
+    # built), which is exactly what isolates the pending-key rule.
+    send(port, f"construction.designate('{w}', 8, 33, 8, 33, "
+               "'structure', 'dungeon_1', 'floor'); return 'ok'")
+    time.sleep(0.5)
+    first = designation_at(port, 8, 33)
+    check("still-empty tile took its first (floor) designation",
+          isinstance(first, dict) and first.get("kind") == "floor")
+
+    send(port, "return debug.drainActionOutcomes()")  # clear the slate
+    send(port, f"construction.designate('{w}', 8, 33, 8, 33, "
+               "'structure', 'dungeon_1', 'wall', 'ne'); return 'ok'")
+    time.sleep(0.5)
+    still = designation_at(port, 8, 33)
+    check("the pending job survives the second designation intact",
+          isinstance(still, dict) and still.get("kind") == "floor"
+          and still.get("edge") is None
+          and still.get("status") == (first or {}).get("status")
+          and still.get("paid") == (first or {}).get("paid"))
+    pendOutcomes = send_json(port, "return debug.drainActionOutcomes()")
+    if not isinstance(pendOutcomes, list):
+        pendOutcomes = []
+    pendMatches = [o for o in pendOutcomes
+                   if isinstance(o, dict)
+                   and o.get("kind") == "construction.designate"
+                   and (o.get("where") or {}).get("x") == 8
+                   and (o.get("where") or {}).get("y") == 33]
+    # Exact accounting, not merely "not accepted": a bare != 'accepted'
+    # would also pass for a 'noop' (empty sweep) or a mis-counted
+    # 'partial', neither of which is the refusal under test.
+    check("the refused designation records rejected 1/0/1",
+          len(pendMatches) == 1
+          and pendMatches[0].get("outcome") == "rejected"
+          and pendMatches[0].get("requested") == 1
+          and pendMatches[0].get("applied") == 0
+          and pendMatches[0].get("dropped") == 1)
+
+    # Leave nothing behind: a stray pending job here would be claimed by
+    # a later phase's acolyte and pollute its utility scan.
+    send(port, "construction.cancelDesignation(8, 33); return 'ok'")
+    cleared = poll_until(port, 10, lambda: designation_at(port, 8, 33) is None)
+    check("pending-refusal fixture cleaned up", cleared is not None)
 
     # --- a slot that's already built must not accept a re-designation.
     send(port, "require('scripts.structures').floor(8, 30); return 'ok'")
@@ -349,7 +401,10 @@ def phase_occupied(port: int) -> None:
                "bt.exitPlacement(); return 'ok'")
 
     # --- coexistence: a DIFFERENT slot on the same tile still designates
-    # and builds normally, and never disturbs the existing floor.
+    # and builds normally, and never disturbs the existing floor. The
+    # floor's own job has COMPLETED and left the map, so #1595's
+    # pending-key rule does not apply — placed pieces coexist, jobs
+    # queue one at a time.
     send(port, f"construction.designate('{w}', 8, 30, 8, 30, "
                "'structure', 'dungeon_1', 'wall', 'ne'); return 'ok'")
     time.sleep(0.5)
@@ -381,8 +436,8 @@ def phase_occupied(port: int) -> None:
     check("racer claimed the tile before the slot filled", claimed is not None)
 
     # Fill the slot out from under the claimant while it's still walking
-    # over — simulates a second worker (or a re-designation) winning the
-    # race for the same slot.
+    # over — simulates a second worker winning the race for the same slot
+    # (a re-designation cannot do this since #1595).
     send(port, "return debug.drainActionOutcomes()")  # clear the slate
     send(port, "require('scripts.structures').floor(8, 36); return 'ok'")
     filled = poll_until(port, 10, lambda: send(

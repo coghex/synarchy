@@ -1199,9 +1199,11 @@ function buildTool.handleMouseDown(button, x, y)
                     -- cancelDesignation pair (and the Lua-side debounce
                     -- table it needed) — the ATOMIC delete is what
                     -- actually serializes competing cancellations (a
-                    -- rapid double right-click, or a new designation
-                    -- quickly replacing the old one at the same tile),
-                    -- which no Lua-side timing heuristic could replicate.
+                    -- rapid double right-click, or a cancel racing the
+                    -- build AI's own completion removal), which no
+                    -- Lua-side timing heuristic could replicate. A new
+                    -- designation cannot race here at all since #1595:
+                    -- admission refuses an already-designated tile.
                     local removed = construction.cancelDesignationForRefund(wid, gx, gy)
                     -- No-silent-loss policy: a structure designation
                     -- whose materials were already paid must not just

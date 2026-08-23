@@ -1177,6 +1177,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Graphics.FontRepertoire
                    Test.Headless.Construct.Corners
                    Test.Headless.Construct.Footprint
+                   Test.Headless.Construct.PendingRefusal
                    Test.Headless.Craft.Execute
                    Test.Headless.Craft.Bills
                    Test.Headless.Power.Types
@@ -1203,6 +1204,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.InteractiveBounds
                    Test.Headless.UI.PopupPlacement
                    Test.Headless.Event.PopupCoordPage
+                   Test.Headless.UI.PopupQueueTeardown
                    Test.Headless.UI.ResponsiveMenus
                    Test.Headless.UI.ResponsiveGameplay
                    Test.Headless.UI.SettingsDefaultsKeybinds
