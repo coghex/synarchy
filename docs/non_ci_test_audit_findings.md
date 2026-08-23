@@ -31,10 +31,10 @@ approval.
 - [x] NCT-9. Legacy river diagnostics present anomalies as tests but never fail — [#1590]
 - [x] NCT-10. Legacy water diagnostics present anomalies as tests but never fail — [#1594]
 - [x] NCT-11. Baseline capture accepts variation in its strict worldgen invariants — [#1598]
-- [ ] NCT-12. Thermo probe treats a failed ice dump as absent evidence
-- [ ] NCT-13. Etymology UI probe skips required location and river entry points
-- [ ] NCT-14. Etymology UI probe skips its real scrolling interaction phase
-- [ ] NCT-15. Tilling probe skips the required fluid-exclusion behavior
+- [x] NCT-12. Thermo probe treats a failed ice dump as absent evidence — [no-issue]
+- [x] NCT-13. Etymology UI probe skips required location and river entry points — [#1604]
+- [x] NCT-14. Etymology UI probe skips its real scrolling interaction phase — [#1608]
+- [x] NCT-15. Tilling probe skips the required fluid-exclusion behavior — [#1609]
 - [ ] NCT-16. Item-temperature probe skips its required cooling-rate behavior
 - [ ] NCT-17. Core queue tests omit the custom timeout contract and real contention
 - [ ] NCT-18. Item-temperature persistence phase can load a stale save
@@ -522,7 +522,17 @@ capture operation accepting a violation of its own strict-invariant contract.
 
 ## Worldgen-derived behavior probes
 
-### NCT-12. Thermo probe treats a failed ice dump as absent evidence
+### [no-issue] NCT-12. Thermo probe treats a failed ice dump as absent evidence
+
+> **Disposition:** No issue — fixed by commit `b6d67ff0` (2026-08-21) before this
+> finding was processed. The `except json.JSONDecodeError: tiles = []` path the
+> finding cites is gone; `run_ice_dump` now raises `DumpFailure` on a nonzero
+> exit, undecodable stdout, or a non-list payload
+> (`tools/thermo_altitude_probe.py:152-164`), and the caller turns that into
+> `rep.abort` and a non-zero exit (`:355-358`). The informational skip survives
+> only for a decoded dump with no interior ice, and ends MISSING rather than
+> passing. `tools/test_probe_flake.py:2124-2148` drives all three failure shapes
+> engine-free and asserts each aborts rather than skips.
 
 The thermo-altitude probe's ice-agreement phase launches a second
 `--dump=terrain,ice` process, but ignores its exit status and maps any JSON
@@ -564,7 +574,7 @@ with worldgen's ice placement.
 
 ## Offscreen Etymology UI probe
 
-### NCT-13. Etymology UI probe skips required location and river entry points
+### [#1604] NCT-13. Etymology UI probe skips required location and river entry points
 
 The offscreen Etymology probe declares a discovered location and a selected
 named river as dedicated real-UI phases, yet both phases return successfully
@@ -609,7 +619,7 @@ and the default fixture is selected specifically to exercise them.
 - **Remaining uncertainty:** The exact durable fixture tuple or construction
   mechanism is a design choice; the current successful skip is direct.
 
-### NCT-14. Etymology UI probe skips its real scrolling interaction phase
+### [#1608] NCT-14. Etymology UI probe skips its real scrolling interaction phase
 
 The Etymology UI probe declares arrow and wheel scrolling to be a real input
 routing phase.  It deliberately shrinks the framebuffer and increases UI
@@ -656,7 +666,7 @@ targets.
 
 ## Tilling behavior probe
 
-### NCT-15. Tilling probe skips the required fluid-exclusion behavior
+### [#1609] NCT-15. Tilling probe skips the required fluid-exclusion behavior
 
 The tilling probe declares that a fluid-covered tile must never receive a till
 designation, but it searches its generated region for a suitable tile and
