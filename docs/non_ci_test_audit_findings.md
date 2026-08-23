@@ -38,7 +38,7 @@ approval.
 - [x] NCT-16. Item-temperature probe skips its required cooling-rate behavior — [#1611]
 - [x] NCT-17. Core queue tests omit the custom timeout contract and real contention — [#1612]
 - [x] NCT-18. Item-temperature persistence phase can load a stale save — [#1613]
-- [ ] NCT-19. Vegetation/farming persistence probes can load stale saves
+- [x] NCT-19. Vegetation/farming persistence probes can load stale saves — [#1616]
 - [ ] NCT-20. Item-identity persistence phase can load a stale save
 - [ ] NCT-21. Foraging persistence phase can load a stale save
 - [ ] NCT-22. Location persistence probes can load stale fixtures
@@ -840,7 +840,7 @@ save/load-oracle correctness problem in the persistence check.
 
 ## Vegetation and farming persistence probes
 
-### NCT-19. Vegetation/farming persistence probes can load stale saves
+### [#1616] NCT-19. Vegetation/farming persistence probes can load stale saves
 
 The farm-AI and flora-growth probes each queue a save into a fixed slot in the
 ordinary resource root, wait an arbitrary three seconds, and load it without
