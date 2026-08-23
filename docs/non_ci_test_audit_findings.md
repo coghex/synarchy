@@ -35,7 +35,7 @@ approval.
 - [x] NCT-13. Etymology UI probe skips required location and river entry points — [#1604]
 - [x] NCT-14. Etymology UI probe skips its real scrolling interaction phase — [#1608]
 - [x] NCT-15. Tilling probe skips the required fluid-exclusion behavior — [#1609]
-- [ ] NCT-16. Item-temperature probe skips its required cooling-rate behavior
+- [x] NCT-16. Item-temperature probe skips its required cooling-rate behavior — [#1611]
 - [ ] NCT-17. Core queue tests omit the custom timeout contract and real contention
 - [ ] NCT-18. Item-temperature persistence phase can load a stale save
 - [ ] NCT-19. Vegetation/farming persistence probes can load stale saves
@@ -699,7 +699,7 @@ fluid-exclusion rule unexercised.
 
 ## Item-temperature behavior probe
 
-### NCT-16. Item-temperature probe skips its required cooling-rate behavior
+### [#1611] NCT-16. Item-temperature probe skips its required cooling-rate behavior
 
 The item-temperature probe declares a Newtonian-rate check: an item farther
 from ambient should close more degrees over the same interval.  It instead
