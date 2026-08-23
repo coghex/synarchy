@@ -1,11 +1,12 @@
 -- Unit info v2 right-click context menus (#542 split from
 -- unit_info_v2.lua).
 --
--- Equip/Unequip/Contents/Store menus for inventory rows, silhouette
--- equipment slots, and accessory rows. Since #1249 "Store" is a queued
--- order-at-a-distance targeting the open container window's endpoint,
--- built by the shared scripts/transfer_gestures.lua rather than here.
--- All three routed via
+-- Equip/Unequip/Contents/Drink/Store menus for inventory rows,
+-- silhouette equipment slots, and accessory rows. Since #1249 "Store"
+-- is a queued order-at-a-distance targeting the open container window's
+-- endpoint, built by the shared scripts/transfer_gestures.lua rather
+-- than here; since #1580 "Drink" is likewise built by
+-- scripts/consumable_gestures.lua. All three routed via
 -- ui_manager into the handleXxxRightClick functions attached below to
 -- the shared unitInfoV2 singleton.
 
@@ -185,6 +186,16 @@ function unitInfoV2.handleInvItemRightClick(item)
     local repairMenuItem = withInvalidate(repairStatus.menuItem(item))
     if repairMenuItem then
         menuItems[#menuItems + 1] = repairMenuItem
+    end
+
+    -- Drink (#1580): one submenu entry per exact instance of a
+    -- registered consumable this row still represents. The row stays
+    -- MERGED and the gesture fans out, because warmth scales the
+    -- effect and item_list.lua's stackKey keeps temperature out of the
+    -- key -- see scripts/consumable_gestures.lua for the whole rule.
+    for _, entry in ipairs(
+            require("scripts.consumable_gestures").drinkEntries(uid, item)) do
+        menuItems[#menuItems + 1] = entry
     end
 
     -- Storage (#1249): "Store 1" / "Store all" into whatever endpoint
