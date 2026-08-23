@@ -132,6 +132,7 @@ import qualified Test.Headless.UI.FocusNavigation as UIFocusNavigation
 import qualified Test.Headless.UI.Clipping as UIClipping
 import qualified Test.Headless.UI.InteractiveBounds as UIInteractiveBounds
 import qualified Test.Headless.UI.PopupPlacement as UIPopupPlacement
+import qualified Test.Headless.Event.PopupCoordPage as PopupCoordPage
 import qualified Test.Headless.UI.ResponsiveMenus as UIResponsiveMenus
 import qualified Test.Headless.UI.ResponsiveGameplay as UIResponsiveGameplay
 import qualified Test.Headless.UI.SettingsDefaultsKeybinds
@@ -480,6 +481,10 @@ main = hspec $ do
     describe "UI.Clipping" UIClipping.spec
     describe "UI.InteractiveBounds" UIInteractiveBounds.spec
     describe "UI.PopupPlacement" UIPopupPlacement.spec
+    -- #1588: its own engine per example (each case installs its own
+    -- WorldManager and asserts on the event ring), so it registers
+    -- here rather than under the shared-worlds aroundAll above.
+    PopupCoordPage.spec
     describe "UI.ResponsiveMenus" UIResponsiveMenus.spec
     describe "UI.ResponsiveGameplay" UIResponsiveGameplay.spec
     UISettingsDefaultsKeybinds.spec

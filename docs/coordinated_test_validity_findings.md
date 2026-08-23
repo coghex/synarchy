@@ -28,18 +28,18 @@ test, tracker item, or remote state was changed.
 
 ## Status
 
-- [ ] CTV-1. Save-pause resume oracle reads a nonexistent page before loading
-- [ ] CTV-2. Location-stamp fixture bypasses its shipped flat-ground precondition
-- [ ] CTV-3. Tooltip timing controls may be too easy to miss below the Graphics fold
-- [ ] CTV-4. Tutorial HUD probe does not establish objective-row legibility
-- [ ] CTV-5. Blood save-load oracle compares unrelated engine-wide texture totals
-- [ ] CTV-6. Construction footprint probe can abort before rendering a blueprint
+- [x] CTV-1. Save-pause resume oracle reads a nonexistent page before loading — [#1572]
+- [x] CTV-2. Location-stamp fixture bypasses its shipped flat-ground precondition — [#1575]
+- [ ] CTV-3. Tooltip timing controls may be too easy to miss below the Graphics fold — [deferred]: needs ≥2 corroborating ≥12-turn playtests
+- [x] CTV-4. Tutorial HUD probe does not establish objective-row legibility — [#1581]
+- [x] CTV-5. Blood save-load oracle compares unrelated engine-wide texture totals — [#1585]
+- [x] CTV-6. Construction footprint probe can abort before rendering a blueprint — [#1587]
 
 ---
 
 ## Manual probe semantics
 
-### CTV-1. Save-pause resume oracle reads a nonexistent page before loading
+### [#1572] CTV-1. Save-pause resume oracle reads a nonexistent page before loading
 
 The save-pause probe claims to establish that a resumed loaded session uses the
 normal time scale. It actually unpauses the live `pausetest` page and then asks
@@ -72,7 +72,7 @@ coverage defect in one oracle, not evidence of a product pause regression.
   the API’s documented absent-page fallback merely to strengthen this probe.
 - **Remaining uncertainty:** None material about the false-green path.
 
-### CTV-2. Location-stamp fixture bypasses its shipped flat-ground precondition
+### [#1575] CTV-2. Location-stamp fixture bypasses its shipped flat-ground precondition
 
 The location-stamp idempotency probe creates a synthetic five-by-five room with
 no placement constraints. Shipped ruin content requires flat ground, but the
@@ -114,7 +114,16 @@ the broader claim that the full footprint materialized correctly.
 
 ## Settings playtest evidence
 
-### CTV-3. Tooltip timing controls may be too easy to miss below the Graphics fold
+### [deferred] CTV-3. Tooltip timing controls may be too easy to miss below the Graphics fold
+
+> **Deferred:** the discoverability claim rests on one incomplete eight-turn
+> model-driven session, which cannot separate a repeatable defect from one
+> player's search path — the objective half (rows 10 and 11 of 11, outside the
+> initial 1920×1080 viewport) is already confirmed. Clears when two or more
+> independent `tools/playtest/run.py` sessions with `--turns 12` or more on the
+> same tooltip-speed goal are run: file if they show the same tab-search pattern
+> or fail to complete the change-apply-return workflow, close as `[no-issue]` if
+> they find the controls and finish.
 
 > **Captured note:** Tooltip timing controls are easy to miss below the
 > Graphics fold, and eight turns were too tight to finish the multi-step
@@ -169,7 +178,7 @@ this search path rather than an independent harness concern.
 
 ## UI and graphics probe validity
 
-### CTV-4. Tutorial HUD probe does not establish objective-row legibility
+### [#1581] CTV-4. Tutorial HUD probe does not establish objective-row legibility
 
 The tutorial HUD probe rigorously measures the rendered glyph bounds of the
 open/closed toggle caption, but it applies no equivalent horizontal-bound
@@ -210,7 +219,7 @@ unproved.
 - **Remaining uncertainty:** The retained synthetic frames suggest a product
   risk but do not prove that current shipped tutorial content is clipped.
 
-### CTV-5. Blood save-load oracle compares unrelated engine-wide texture totals
+### [#1585] CTV-5. Blood save-load oracle compares unrelated engine-wide texture totals
 
 The blood GPU lifecycle probe expects engine-wide bindless and texture-map
 totals after a save-load replacement to equal the totals captured before the
@@ -251,7 +260,7 @@ does not establish a blood texture leak.
   proof of a leak; it does not independently prove disposal of every old
   blood-owned GPU handle.
 
-### CTV-6. Construction footprint probe can abort before rendering a blueprint
+### [#1587] CTV-6. Construction footprint probe can abort before rendering a blueprint
 
 The construction-blueprint footprint probe searches a fixed grid within 25
 tiles of world origin for dry sites. Its seed-0 run generated ocean across that

@@ -58,12 +58,21 @@ import World.Types (WorldGenParams(..), WorldPageId(..), WorldState(..))
 --   'findDiscoveries' still applies the ownership filter itself, so
 --   pre-filtering here changes cost, never behaviour.
 --
---   Every emitted event names its 'peSourcePage' (#780) since this
---   tick runs on every loaded page, not just the active one — but a
---   discovery on a page other than the currently active one omits
---   'peCoords' entirely rather than risk the popup's click-to-pan
---   silently panning the ACTIVE page's camera to a hidden page's
---   coordinates.
+--   Every emitted event names its 'peSourcePage' EXPLICITLY (#780)
+--   since this tick runs on every loaded page, not just the active
+--   one — and an explicit page is the one thing
+--   'Engine.PlayerEvent.Emit.resolveEventPage' will not override, which
+--   is precisely why this emitter passes it: the automatic
+--   active-page snapshot would attribute a hidden page's discovery to
+--   whichever page the player happens to be looking at.
+--
+--   A discovery on a hidden page additionally omits 'peCoords'. Since
+--   #1588 that is an EDITORIAL choice, not a safety measure: a
+--   coordinate now names its own page and the popup refuses to pan
+--   until that page is active, so carrying one would be harmless. It
+--   would just offer the player a location line that cannot act until
+--   they switch worlds, for a place they have not seen — so the event
+--   stays a plain "you found something" notice instead.
 tickLocationDiscovery ∷ EngineEnv → WorldPageId → WorldState → IO ()
 tickLocationDiscovery env pageId@(WorldPageId pageText) ws = do
     mParams ← readIORef (wsGenParamsRef ws)

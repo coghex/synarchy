@@ -14,7 +14,7 @@ PR #832's committed building-footprint expansion, #831's tile-Z UI-wiring regres
 - [x] PRR-4. A freshwater tile above four lower neighbours is still forced back to a flat slope — [#1600]
 - [x] PRR-5. The save barrier can snapshot Lua before processing causal messages produced by acknowledged owners — [no-issue]
 - [x] PRR-6. Negative-infinite pathing cost is clamped to a free step — [#1603]
-- [ ] PRR-7. The repository-wide lenient UTF-8 invariant has no automated static gate
+- [x] PRR-7. The repository-wide lenient UTF-8 invariant has no automated static gate — [#1605]
 
 ## 1. Soil donor eligibility
 
@@ -178,7 +178,7 @@ PR #832's committed building-footprint expansion, #831's tile-Z UI-wiring regres
 
 ## 7. UTF-8 sweep enforcement
 
-### PRR-7. The repository-wide lenient UTF-8 invariant has no automated static gate
+### [#1605] PRR-7. The repository-wide lenient UTF-8 invariant has no automated static gate
 
 > **Captured note:** Turn the exact strict-decoder search used to accept PR #825 into a small CI audit with a self-test. The manual probe covers two representative calls, not the 55-file tree-wide invariant, so one new strict `TE.decodeUtf8` call can silently reintroduce the failure class anywhere else.
 

@@ -12,9 +12,9 @@ PR #167's shell `quit`/`exit` commands still call the real lifecycle transition,
 - [x] PRR-2. A queued fluid writeback can overtake a live edit's sim re-seed — [#1596]
 - [x] PRR-3. Notification pauses discard the player's non-default world speed on resume — [#1599]
 - [x] PRR-4. Build placement does not bind pick, validation, and commit to one world page — [#1602]
-- [ ] PRR-5. Settings Defaults preserves the live tooltip timing values instead of defaulting them
-- [ ] PRR-6. The settings Revert regression harness no longer reaches its assertions
-- [ ] PRR-7. Exit-to-menu teardown leaves per-entity Lua state accumulating across new sessions
+- [x] PRR-5. Settings Defaults preserves the live tooltip timing values instead of defaulting them — [no-issue]
+- [x] PRR-6. The settings Revert regression harness no longer reaches its assertions — [#1607]
+- [x] PRR-7. Exit-to-menu teardown leaves per-entity Lua state accumulating across new sessions — [#1610]
 
 ## 1. Unit simulation page ownership
 
@@ -114,7 +114,9 @@ PR #167's shell `quit`/`exit` commands still call the real lifecycle transition,
 
 ## 5. Tooltip defaults
 
-### PRR-5. Settings Defaults preserves the live tooltip timing values instead of defaulting them
+### [no-issue] PRR-5. Settings Defaults preserves the live tooltip timing values instead of defaulting them
+
+> **Disposition:** No issue — `engine.loadDefaultConfig` writes the factory `VideoConfig` into `rvVideoConfigRef` before returning (`src/Engine/Scripting/Lua/API/Config.hs:102-113`), and that is the same ref `getTooltipDwellMs`/`getTooltipHintDelayMs` read (`:249-252`, `:274-277`). Since `config/video_default.yaml` omits both keys and the decoder defaults them to 400 (`src/Engine/Graphics/Config.hs:201-202`), the getters at `scripts/settings/data.lua:289-290` already return 400, so Defaults resets both fields and re-baselines the Revert snapshots to the factory value. The finding's reproduction stubbed the getters as still returning live values after `loadDefaultConfig`, which the engine does not do.
 
 > **Captured note:** PR #164 added saved snapshots so Back can restore tooltip dwell/hint delays, but the Settings Defaults path reads those two fields from the live engine after loading factory video config. Pressing Defaults therefore treats the player's current tooltip timings as the new defaults and leaves them unchanged.
 
@@ -138,7 +140,7 @@ PR #167's shell `quit`/`exit` commands still call the real lifecycle transition,
 
 ## 6. Revert regression harness drift
 
-### PRR-6. The settings Revert regression harness no longer reaches its assertions
+### [#1607] PRR-6. The settings Revert regression harness no longer reaches its assertions
 
 > **Captured note:** PR #164 checked in `tools/test_settings_revert.lua` as the regression oracle for its live-preview fix, but later Settings growth added required autosave engine calls without updating the harness. The documented command now crashes in `data.reload()` before testing dwell, hint, save-then-revert, or brightness.
 
@@ -162,7 +164,7 @@ PR #167's shell `quit`/`exit` commands still call the real lifecycle transition,
 
 ## 7. New-session Lua state teardown
 
-### PRR-7. Exit-to-menu teardown leaves per-entity Lua state accumulating across new sessions
+### [#1610] PRR-7. Exit-to-menu teardown leaves per-entity Lua state accumulating across new sessions
 
 > **Captured note:** PR #121 made `world.destroyAll` clear Haskell unit/building managers, but the long-lived `unit_ai` and `building_spawn` singletons are only pruned on save-load or engine shutdown. Repeated Exit to Menu → New Game cycles preserve dead per-unit/per-building rows for the life of the process even though snapshots later filter them out.
 

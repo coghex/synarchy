@@ -8,7 +8,7 @@ PR #858's active-world remote-warning guard, #855's per-page location-map icons,
 
 ## Status
 
-- [ ] PRR-1. The embark probe overwrites fixed save slots and never cleans its artifacts
+- [x] PRR-1. The embark probe overwrites fixed save slots and never cleans its artifacts — [#1569]
 - [ ] PRR-2. The embark probe restarts before its asynchronous saves are durable
 - [ ] PRR-3. The clipping regression fixtures inherit the user's local UI scale
 - [ ] PRR-4. Changing a page's modal exclusivity does not invalidate a pending activation
@@ -17,7 +17,7 @@ PR #858's active-world remote-warning guard, #855's per-page location-map icons,
 
 ## 1. Embark-probe artifact ownership
 
-### PRR-1. The embark probe overwrites fixed save slots and never cleans its artifacts
+### [#1569] PRR-1. The embark probe overwrites fixed save slots and never cleans its artifacts
 
 > **Captured note:** Give every embark-probe invocation unique, probe-owned save and log paths and remove all of its saves, screenshots, and logs from a top-level `finally`. The current probe uses ordinary fixed save-slot names under the active resource root and explicitly keeps its screenshot directory, despite issue #782 requiring cleanup after success or failure.
 

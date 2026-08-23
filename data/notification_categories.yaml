@@ -12,8 +12,11 @@
 #   pause — default value of "pause"      checkbox
 # popup buttons   — every popup shows a single OK button. Clicking a
 #                   popup line that carries coords (events emitted via
-#                   engine.emitEventAt) pans the camera there. There are
-#                   no per-category navigation buttons.
+#                   engine.emitEventAt) pans the camera there, PROVIDED
+#                   the world page those coords were emitted in is still
+#                   the active one; otherwise the line reports the
+#                   location as unavailable and nothing moves (#1588).
+#                   There are no per-category navigation buttons.
 # coalesce_window — wall-seconds (sub-second OK). When >0, POPUPS of
 #                   this category arriving within the window collapse
 #                   into a single popup line with an (xN) count and
