@@ -21,6 +21,7 @@ import qualified Test.Headless.WorldGen.BedDepth as BedDepth
 import qualified Test.Headless.WorldGen.FluidSurfaceFold as FluidSurfaceFold
 import qualified Test.Headless.Unit.Pathing.Cost as PathingCost
 import qualified Test.Headless.Unit.Pathing.Hazard as PathingHazard
+import qualified Test.Headless.Unit.Pathing.MoveToApi as PathingMoveToApi
 import qualified Test.Headless.Unit.SimPageOwnership as SimPageOwnership
 import qualified Test.Headless.Unit.Pathing.AStar as PathingAStar
 import qualified Test.Headless.Unit.Pathing.Config as PathingConfig
@@ -93,6 +94,7 @@ import qualified Test.Headless.Lua.DebugQueue as LuaDebugQueue
 import qualified Test.Headless.Lua.RenderQueue as LuaRenderQueue
 import qualified Test.Headless.Lua.PreviewGeneration as LuaPreviewGeneration
 import qualified Test.Headless.Lua.PauseGate as LuaPauseGate
+import qualified Test.Headless.World.PauseSpeed as PauseSpeed
 import qualified Test.Headless.Lua.ScriptState as LuaScriptState
 import qualified Test.Headless.Input.LayerA as InputLayerA
 import qualified Test.Headless.Input.WheelPolicy as InputWheelPolicy
@@ -316,6 +318,10 @@ main = hspec $ do
     -- mutation paths, which would corrupt the shared-worlds engine
     -- above (same precedent as World identity / autosave guards).
     aroundAll withHeadlessEngine UnitTransferApi.spec
+    -- Own engine (#1605): the live unit.moveTo boundary swaps the
+    -- engine's logger to capture the warning it emits and drains the
+    -- unit command queue, so it cannot share the worldgen engine.
+    aroundAll withHeadlessEngine PathingMoveToApi.spec
     -- Own engine for the same reason (#1247): the order executor writes
     -- the unit/building manager refs AND installs its own two-page world
     -- manager so each page brings its own live wsTransferOrdersRef.
@@ -339,6 +345,13 @@ main = hspec $ do
     -- installs TWO live pages and rewrites the unit/world manager refs
     -- to put a unit on the non-active one.
     aroundAll withHeadlessEngine GroundPageOwnership.spec
+    -- Own engine for the same reason (#1599): the pause-speed gate
+    -- installs its own two-page world manager, rewrites wmVisible
+    -- mid-example, and drives the real scripts/pause.lua against the
+    -- live engine. Its pages carry NO gen params, so the real world
+    -- worker skips them -- but the worker has to be RUNNING, because one
+    -- example needs the queued world.setTimeScale drained.
+    aroundAll withHeadlessEngine PauseSpeed.spec
     -- Own engine for the same reason (#1593): the unit-simulation
     -- page-ownership gate installs its own three-page world manager and
     -- rewrites the unit manager to put a unit on each. WORLD-THREAD-FREE

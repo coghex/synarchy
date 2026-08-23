@@ -76,6 +76,7 @@ probeAutosaveRequest ∷ AutosaveRequest
 probeAutosaveRequest = AutosaveRequest
     { arPrePaused    = False
     , arPreTimeScale = 1
+    , arPausedPage   = Nothing
     , arIntentGen    = 0
     }
 
