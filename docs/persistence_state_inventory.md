@@ -189,6 +189,7 @@ divergence: loading used to merge, not replace" for the full writeup.
 | `wsLoadPhaseRef` | Reset to default | — | page load-phase tracker, always starts at the initial phase | none yet |
 | `wsZoomAtlasRef` | Exclude | — | GPU atlas handle | none yet |
 | `wsEditsRef` | Persist exactly | — | `wpsEdits`; core gameplay data (player terrain edits) | `tools/multiworld_save_probe.py`, `tools/world_check.py` |
+| `wsChunkEditGenRef` | Exclude | — | per-chunk live-edit generation, the causal fence the world thread rejects a pre-edit sim fluid writeback on (#1596). Transient cross-thread ordering state, meaningful only against the sim's in-flight `scsEditGen` for the same session: a fresh or loaded page starts empty (every chunk at generation 0) and the sim's own `SimState` is likewise rebuilt from 0, so the two sides agree without either being saved. Nothing derives from it; it is never read as gameplay state | hspec `--match "fluid writeback staleness"`, `--match "persistence contract"` |
 | `wsOreSurveyRef` | Rebuild | loaded chunk/ore data | zoom-map survey memo, derived | none yet |
 | `wsMineDesignationsRef` | Persist exactly | — | `wpsMineDesignations` | `tools/persistence_contract_probe.py` (see §12) |
 | `wsGroundItemsRef` | Persist exactly | — | `wpsGroundItems` | `tools/item_instance_probe.py` |

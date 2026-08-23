@@ -156,6 +156,22 @@ updateChunkLoading env _logger = do
                                 forM_ evicted $ \cc →
                                     Q.writeQueue (wsSimQueue (toWorldSimCapability env))
                                         (SimChunkUnloaded pageId cc)
+                                -- Retire each evicted chunk's live-edit
+                                -- generation (#1596). The sim drops the
+                                -- chunk on the SimChunkUnloaded above and
+                                -- re-seeds scsEditGen to 0 from the
+                                -- SimChunkLoaded a reload sends, so the
+                                -- two sides must return to the same
+                                -- baseline together; leaving the entry
+                                -- behind would make every writeback for
+                                -- the reloaded chunk stale forever. Both
+                                -- writes are the world thread's, so
+                                -- nothing can interleave between them.
+                                unless (null evicted) $
+                                    atomicModifyIORef'
+                                        (wsChunkEditGenRef worldState) $ \gens →
+                                            ( foldl' (flip HM.delete) gens evicted
+                                            , () )
                                 bumpQuadCacheGen worldState
                                 writeIORef (wsZoomQuadCacheRef worldState) Nothing
                                 writeIORef (wsBgQuadCacheRef worldState) Nothing

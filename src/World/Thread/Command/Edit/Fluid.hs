@@ -46,7 +46,7 @@ handleWorldSetFluidTileCommand wsc logger pageId gx gy fluidType = do
                     -- Re-seed the sim with the placed fluid so it flows /
                     -- settles instead of being overwritten by stale sim
                     -- output (#60).
-                    syncEditToSim wsc pageId lc'
+                    syncEditToSim wsc pageId ws lc'
                     bumpQuadCacheGen ws
                     writeIORef (wsZoomQuadCacheRef ws) Nothing
                     writeIORef (wsBgQuadCacheRef ws)   Nothing

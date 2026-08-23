@@ -35,6 +35,10 @@ mkChunk active = SimChunkState
     , scsActiveFluid = active
     , scsEquilTicks  = 0
     , scsSideDeco    = VU.replicate n 0
+    -- Never edited: the seam algorithm is pure and the freshness fence
+    -- (#1596) lives on the world thread, so the baseline generation is
+    -- the right value here.
+    , scsEditGen     = 0
     }
 
 mkState ∷ [(ChunkCoord, SimChunkState)] → SimWorldState

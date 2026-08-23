@@ -244,6 +244,7 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
             -- (so some tile's @ru0@ ≠ the chunk-centre's), the per-
             -- tile path falls back to 'lookupRegionalErosion' so the
             -- correctness boundary stays exactly where it used to.
+            hardnessOf m = mpHardness (getMaterialProps registry m)
             erosionFB    = gpErosion period
             regMap       = gpRegionalErosion period
             regMapEmpty  = HM.null regMap
@@ -288,12 +289,35 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
                                      then postElev VU.! (idx - 1)
                                      else elev
                                 neighbors = (nN, nS, nE, nW)
+                                -- Neighbour MATERIALS, read from the same
+                                -- immutable post-event snapshot and paired
+                                -- N/S/E/W with the elevations above, so the
+                                -- soil-shed donor test can tell an eroding
+                                -- rock face from an indestructible glacier
+                                -- or mantle neighbour (#1591). Border-edge
+                                -- tiles fall back to this tile's own
+                                -- material, matching the elevation
+                                -- fallback's use of 'elev'.
+                                mN = if by > 0
+                                     then postMat VU.! (idx - borderSize)
+                                     else mat
+                                mS = if by < borderSize - 1
+                                     then postMat VU.! (idx + borderSize)
+                                     else mat
+                                mE = if bx < borderSize - 1
+                                     then postMat VU.! (idx + 1)
+                                     else mat
+                                mW = if bx > 0
+                                     then postMat VU.! (idx - 1)
+                                     else mat
+                                nbrHardness =
+                                    ( hardnessOf mN, hardnessOf mS
+                                    , hardnessOf mE, hardnessOf mW )
                                 lx = bx - chunkBorder
                                 ly = by - chunkBorder
                                 gx = cMinGX + lx + chunkBorder
                                 gy = cMinGY + ly + chunkBorder
-                                hardness = mpHardness
-                                    (getMaterialProps registry mat)
+                                hardness = hardnessOf mat
                                 -- Fast path: when this tile lands in
                                 -- the same region cell as the chunk
                                 -- centre (the common case), call the
@@ -312,7 +336,7 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
                                       applyErosion erosionFB worldSize
                                           periodDur wsScaleC
                                           (unMaterialId mat) hardness
-                                          elev neighbors
+                                          elev neighbors nbrHardness
                                   | otherwise =
                                       let RegionGridCoords ru0 _ rv0 _ tu tv =
                                               regionGridCoords chunkSize
@@ -324,6 +348,7 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
                                                   worldSize periodDur
                                                   wsScaleC (unMaterialId mat)
                                                   hardness elev neighbors
+                                                  nbrHardness
                                          else applyErosion
                                                   (lookupRegionalErosion
                                                       erosionFB regMap
@@ -331,6 +356,7 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
                                                   worldSize periodDur
                                                   wsScaleC (unMaterialId mat)
                                                   hardness elev neighbors
+                                                  nbrHardness
                             VUM.write elevM idx (elev + gmElevDelta erosionMod)
                             VUM.write matM  idx (case gmMaterialOverride erosionMod of
                                 Just m  → MaterialId m

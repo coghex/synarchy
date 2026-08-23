@@ -110,6 +110,41 @@ data WorldState = WorldState
       --   doesn't lose them — chunks regenerate, edits replay onto the
       --   fresh chunk. Saved verbatim; restored before any chunk
       --   regeneration on load.
+    , wsChunkEditGenRef ∷ IORef (HM.HashMap ChunkCoord Word64)
+      -- ^ Per-chunk LIVE-EDIT generation for this page: the number of
+      --   live terrain/fluid edits the world thread has committed to
+      --   that chunk (absent = 0). It is the causal fence that lets the
+      --   world thread reject a sim fluid writeback computed BEFORE an
+      --   edit it would otherwise overwrite (#1596).
+      --
+      --   Why a fence is needed at all: 'World.Command.Types.WorldApplyFluids'
+      --   and every edit command share the WORLD queue, but the re-seed
+      --   an edit sends the sim ('World.Thread.Command.Edit.Sync.syncEditToSim')
+      --   goes down the INDEPENDENT sim queue with no acknowledgement.
+      --   Nothing orders the two, so a batch the sim computed from the
+      --   pre-edit chunk can land behind the edit and
+      --   'World.Thread.Command.applyOneWriteback' would replace the
+      --   chunk's whole fluid/terrain-surface/rendered-surface/side-deco
+      --   set with the state the player just changed.
+      --
+      --   The protocol is one number travelling a full round trip:
+      --   'syncEditToSim' bumps this entry and stamps the new value into
+      --   'Sim.Command.Types.SimChunkEdited'; the sim stores it as
+      --   'Sim.State.Types.scsEditGen' when it re-seeds and stamps every
+      --   writeback it later produces for that chunk with
+      --   'World.Command.Types.fwEditGen'; the world applies a writeback
+      --   only when the stamp EQUALS this entry. Equality (not @>=@) is
+      --   deliberate — it also rejects a writeback claiming a generation
+      --   this page never issued, which is what a batch in flight across
+      --   a chunk eviction looks like.
+      --
+      --   Scoped per chunk, so an edit to one chunk never drops a
+      --   writeback for another. Entries are DELETED when the chunk is
+      --   evicted ("World.Thread.ChunkLoading"), matching the fresh
+      --   'SimChunkLoaded' the sim gets for the reloaded chunk, which
+      --   re-seeds 'scsEditGen' to 0. Transient session bookkeeping:
+      --   never saved, never loaded, and a fresh page starts empty (see
+      --   docs/persistence_state_inventory.md).
     , wsOreSurveyRef ∷ IORef (HM.HashMap ChunkCoord ([WorldEdit], Text))
       -- ^ Memo for the zoom-map Resources survey of UNLOADED chunks
       --   (transient generation is ~10–300 ms; reselecting shouldn't
@@ -300,6 +335,7 @@ emptyWorldState = do
     wsLoadPhaseRef ← newIORef LoadIdle
     wsZoomAtlasRef ← newIORef Nothing
     wsEditsRef     ← newIORef emptyWorldEdits
+    wsChunkEditGenRef ← newIORef HM.empty
     wsOreSurveyRef ← newIORef HM.empty
     wsMineDesignationsRef ← newIORef HM.empty
     wsGroundItemsRef ← newIORef emptyGroundItems
@@ -327,6 +363,7 @@ emptyWorldState = do
                         wsMapModeRef
                         wsCursorRef wsToolModeRef wsCursorSnapshotRef
                         wsLoadPhaseRef wsZoomAtlasRef wsEditsRef
+                        wsChunkEditGenRef
                         wsOreSurveyRef wsMineDesignationsRef
                         wsGroundItemsRef wsSpoilRef wsStructureStageRef
                         wsConstructDesignationsRef wsFloraHarvestsRef
