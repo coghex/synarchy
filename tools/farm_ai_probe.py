@@ -298,9 +298,16 @@ def main():
     print(f"isolated resource root: {root}", flush=True)
     print(f"save slot: {slot}", flush=True)
 
-    proc = boot(port, f"{SPROOT}/farm_ai_probe_engine.log",
-                args=["--resource-root", root])
+    # `boot` exits the probe outright when the engine dies before READY
+    # or never prints it, so it belongs INSIDE the try: otherwise that
+    # failure path leaves this run's root — the one thing the cleanup
+    # below exists to remove — sitting in the temp directory. A None
+    # handle is what `quit_engine` already expects when there is no live
+    # process to shut down.
+    proc = None
     try:
+        proc = boot(port, f"{SPROOT}/farm_ai_probe_engine.log",
+                    args=["--resource-root", root])
         bootstrap(port)
         send(port, f"world.init('probe', {args.seed}, {args.size}, "
                    f"{args.plates}); return 'ok'")
