@@ -390,16 +390,21 @@ local config = {
         -- reuse-until-real-art convention as till_equip_anim above).
         plant_equip_anim = "standing_to_holding_shovel",
         plant_work_anim  = "shoveling",
-        -- Auto-harvest (auto_harvest, #336). Instant harvest — mirrors
-        -- forage's shape (#94), not till/chop's progress accumulator,
-        -- since picking ripe fruit is quick. NOT hunger-gated like
-        -- forage: this is routine farm-tending work, weighted by the
-        -- farming skill/role (#265) instead of scaled by need. Reuses
-        -- world.findHarvestableFlora/world.harvestFlora, which cover
-        -- planted crops AND wild flora alike (a diligent farmer keeps
-        -- the whole area picked, not just the tilled fields).
+        -- Auto-harvest (auto_harvest, #336). A skill-scaled progress
+        -- accumulator like till/plant since #1582, not forage's instant
+        -- pick — which is what data/units/acolyte.yaml's farming entry
+        -- and #336's "skill-gated auto-harvest" always promised; picking
+        -- stays the QUICKEST farm job, at more than double till/plant's
+        -- rate. NOT hunger-gated like forage: routine farm-tending,
+        -- weighted by the farming ROLE (#265) in arbitration and by the
+        -- farming SKILL in execution. Reuses world.findHarvestableFlora/
+        -- world.harvestFlora, which cover planted crops AND wild flora
+        -- alike (a diligent farmer keeps the whole area picked).
         harvest_scan_range     = 24.0,
         harvest_base_utility   = 2.0,
+        harvest_rate           = 0.5,  -- picking progress/sec at farming
+                                       -- 50; a plant is WORK_TOTAL = 1.0
+                                       -- (2 s at 50, 4 s at 0, 1.3 s at 100)
         harvest_xp_per_harvest = 1.0,  -- farming XP (#265) per harvest
         -- Equipment repair (repair_job, #302). AI-autonomous kit
         -- maintenance: an acolyte notices its own or the technomule's

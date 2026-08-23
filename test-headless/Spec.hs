@@ -215,6 +215,7 @@ import qualified Test.Headless.Lua.TutorialEvaluation as LuaTutorialEvaluation
 import qualified Test.Headless.Lua.UnitAiLocations as LuaUnitAiLocations
 import qualified Test.Headless.Lua.UnitAiHold as LuaUnitAiHold
 import qualified Test.Headless.Lua.UnitAiStall as LuaUnitAiStall
+import qualified Test.Headless.Lua.UnitAiHarvest as LuaUnitAiHarvest
 import qualified Test.Headless.Lua.UnitAiLogisticsTargets as LuaUnitAiLogisticsTargets
 import qualified Test.Headless.Lua.UnitAiLoadReset as LuaUnitAiLoadReset
 import qualified Test.Headless.Lua.UnitAiReconcile as LuaUnitAiReconcile
@@ -445,6 +446,7 @@ main = hspec $ do
     LuaUnitAiLocations.spec
     LuaUnitAiHold.spec
     LuaUnitAiStall.spec
+    LuaUnitAiHarvest.spec
     LuaUnitAiLogisticsTargets.spec
     LuaUnitAiLoadReset.spec
     LuaUnitAiReconcile.spec

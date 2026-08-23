@@ -1269,6 +1269,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.UnitAiLocations
                    Test.Headless.Lua.UnitAiHold
                    Test.Headless.Lua.UnitAiStall
+                   Test.Headless.Lua.UnitAiHarvest
                    Test.Headless.Lua.UnitAiLogisticsTargets
                    Test.Headless.Lua.UnitAiLoadReset
                    Test.Headless.Lua.UnitAiReconcile
