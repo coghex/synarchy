@@ -214,23 +214,41 @@ def _opens_declaration(code_text: str, start: int) -> bool:
     Haskell grammar allows a declaration to begin at, in either layout
     style -- which is why declarations are found by TOKEN here and never
     by column: GHC accepts a top-level layout indented to any column,
-    and an explicit-brace module body puts imports inline."""
+    and an explicit-brace module body puts imports inline. Where the
+    declaration then ENDS depends on which layout it is in; see
+    `_declaration_end`."""
     i = start - 1
     while i >= 0 and code_text[i] in " \t":
         i -= 1
     return i < 0 or code_text[i] in "\n{;"
 
 
-def _declaration_end(code_text: str, pos: int, column: int) -> int:
-    """Where the declaration opened at `column` and continuing from
-    `pos` ends: at the `;` or `}` that closes it in an explicit layout,
-    or at the first line indented no further than `column` in an
-    implicit one -- whichever comes first.
+def _in_explicit_layout(code_text: str, pos: int) -> bool:
+    """True if `pos` sits inside an explicit-layout `{ ... }` block.
 
-    Bracket depth is tracked so a `;` inside an import list cannot end
-    the declaration early. A continuation line can never itself be the
-    reserved word `import`, so one that is starts a fresh declaration
-    however deeply it is indented."""
+    Any brace ENCLOSING an import is a layout brace: record syntax is
+    one expression and cannot contain a declaration, so a record's
+    braces are always balanced before one. Counting all braces is
+    therefore both simple and exact for this question."""
+    return code_text.count("{", 0, pos) > code_text.count("}", 0, pos)
+
+
+def _declaration_end(code_text: str, pos: int, column: int,
+                     explicit: bool) -> int:
+    """Where the declaration continuing from `pos` ends.
+
+    In an EXPLICIT layout it ends only at the `;` or `}` that closes it;
+    indentation carries no meaning there, so a declaration may wrap
+    across lines at any column and `module M where { import qualified\n
+    Data.Text.Encoding as TE; ... }` is one import. In an IMPLICIT
+    layout it ends at the first line indented no further than its own
+    opening `column`, or at a `;`/`}`, whichever comes first.
+
+    Bracket depth is tracked either way, so a `;` inside an import list
+    cannot end the declaration early. In the implicit case a
+    continuation line can never itself be the reserved word `import`, so
+    one that is starts a fresh declaration however deeply it is
+    indented."""
     depth = 0
     i = pos
     n = len(code_text)
@@ -242,7 +260,7 @@ def _declaration_end(code_text: str, pos: int, column: int) -> int:
             depth = max(0, depth - 1)
         elif depth == 0 and char in ";}":
             return i
-        elif char == "\n":
+        elif char == "\n" and not explicit:
             line_start = i + 1
             j = line_start
             while j < n and code_text[j] in " \t":
@@ -265,7 +283,8 @@ def _import_declarations(code_text: str) -> list[tuple[int, int, str]]:
         if not _opens_declaration(code_text, start):
             continue
         column = start - (code_text.rfind("\n", 0, start) + 1)
-        end = _declaration_end(code_text, match.end(), column)
+        end = _declaration_end(code_text, match.end(), column,
+                               _in_explicit_layout(code_text, start))
         decls.append((start, end, code_text[start:end]))
     return decls
 
@@ -563,6 +582,34 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         "module M where { import qualified Data.Text.Encoding as Enc "
         "(decodeUtf8, decodeUtf8Lenient); f raw = Enc.decodeUtf8 raw }\n",
         [1],
+    ),
+    (
+        "EXPLICIT LAYOUT: an import wrapped across lines at column 0 -- "
+        "indentation carries no meaning inside braces, so the "
+        "declaration runs to its `;` and not to the next line",
+        "module M where { import qualified\n"
+        "Data.Text.Encoding as TE;\n"
+        "f raw = TE.decodeUtf8 raw }\n",
+        [3],
+    ),
+    (
+        "EXPLICIT LAYOUT: the same wrap with the alias and an import "
+        "list on further lines",
+        "module M where { import qualified\n"
+        "Data.Text.Encoding\n"
+        "as TE\n"
+        "( decodeUtf8 );\n"
+        "f raw = TE.decodeUtf8 raw }\n",
+        [5],
+    ),
+    (
+        "EXPLICIT LAYOUT: a nested `do` block's braces do not make the "
+        "module body explicit for a LATER import",
+        "module M where\n"
+        "g = do { pure () }\n"
+        "import qualified Data.Text.Encoding as TE\n"
+        "f raw = TE.decodeUtf8 raw\n",
+        [4],
     ),
     (
         "an import indented past a preceding multi-line import: it is a "
