@@ -225,18 +225,34 @@ maxStepCost = 1.0e6
 --   step cost — regardless of how it was built — is guaranteed sane
 --   before it reaches the search.
 --
---   Deliberately explicit (`isNaN` check first) rather than bare
---   `min`/`max`, whose `Ord`-based implementation would launder a NaN
---   through as a silent side effect rather than a documented rule (see
+--   Deliberately explicit rather than a bare `min`/`max` chain, whose
+--   `Ord`-based implementation would launder a NaN through as a silent
+--   side effect rather than a documented rule (see
 --   `Unit.Pathing.Config.finiteOr`) — `NaN > maxStepCost` and
 --   `NaN < 0` are both `False`, so a bare clamp chain would fall
 --   through to `otherwise` and return the NaN unchanged.
+--
+--   NON-FINITE IS CLASSIFIED FIRST, before any sign-based branch
+--   (#1603). Every non-finite total means the same thing — the cost
+--   model overflowed and this step's real price is unknown — so it is
+--   charged the ceiling and is maximally undesirable, whatever its
+--   sign. Ordering is the whole guard here: `-Infinity` is not NaN,
+--   is not `> maxStepCost`, and IS `< 0`, so a sign branch reached
+--   first would return `0` and hand `Unit.Pathing.AStar` the cheapest
+--   possible edge — the search would then PREFER the overflowed step
+--   over ordinary horizontal movement, exactly inverting this
+--   function's purpose. `-Infinity` is reachable from a
+--   directly-constructed config both literally (`pcClimbFactor =
+--   -1/0`) and by overflow from finite tunables (a very negative
+--   `pcFallFactor` under an odd exponent, e.g. `(-5.0) ** 57`).
+--   FINITE negatives keep returning `0`: a merely cheap step is a
+--   defensible reading of a negative total, an overflowed one is not.
 clampStepCost ∷ Float → Float
 clampStepCost x
-    | isNaN x         = maxStepCost
-    | x > maxStepCost = maxStepCost
-    | x < 0           = 0
-    | otherwise       = x
+    | isNaN x ∨ isInfinite x = maxStepCost
+    | x > maxStepCost        = maxStepCost
+    | x < 0                  = 0
+    | otherwise              = x
 
 -- | Is a single tile traversable on its own merits? True iff its chunk
 --   is loaded (terrain z resolves) and its fluid isn't a non-wadeable
