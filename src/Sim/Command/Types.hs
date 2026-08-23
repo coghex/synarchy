@@ -31,13 +31,22 @@ data SimCommand
         --   terrain surface map
     | SimChunkUnloaded !WorldPageId !ChunkCoord
         -- ^ Chunk evicted from a world — stop simulating it
-    | SimChunkEdited !WorldPageId !ChunkCoord !FluidMap !(VU.Vector Int)
+    | SimChunkEdited !WorldPageId !ChunkCoord !Word64 !FluidMap !(VU.Vector Int)
         -- ^ A live terrain/fluid edit landed in a world's chunk: page id,
-        --   coord, the post-edit fluid map and terrain surface (read from
-        --   the authoritative tiles). Re-seeds the sim chunk AND activates
-        --   it (and its cardinal neighbours) so the new fluid actually
-        --   flows/settles — re-using SimChunkLoaded here left the chunk
-        --   inactive, so edited fluid sat frozen (#60).
+        --   coord, the chunk's new LIVE-EDIT GENERATION, and the post-edit
+        --   fluid map and terrain surface (read from the authoritative
+        --   tiles). Re-seeds the sim chunk AND activates it (and its
+        --   cardinal neighbours) so the new fluid actually flows/settles —
+        --   re-using SimChunkLoaded here left the chunk inactive, so edited
+        --   fluid sat frozen (#60).
+        --
+        --   The generation is the explicit causal provenance the two
+        --   independent queues otherwise lack (#1596): the sim keeps it as
+        --   'Sim.State.Types.scsEditGen' and stamps every writeback it
+        --   later produces for this chunk with it, so the world thread can
+        --   tell a writeback derived from the POST-edit chunk from one
+        --   computed before the edit. See
+        --   'World.State.Types.wsChunkEditGenRef' for the full protocol.
     | SimSetTickRate !Int
         -- ^ Tick rate in microseconds (default 100000 = 10Hz). Global.
     | SimPause
@@ -56,8 +65,8 @@ instance Show SimCommand where
     show (SimDropWorld p)         = "SimDropWorld " <> show p
     show (SimChunkLoaded p cc _ _) = "SimChunkLoaded " <> show p <> " " <> show cc
     show (SimChunkUnloaded p cc)  = "SimChunkUnloaded " <> show p <> " " <> show cc
-    show (SimChunkEdited p cc _ _) =
-        "SimChunkEdited " <> show p <> " " <> show cc
+    show (SimChunkEdited p cc g _ _) =
+        "SimChunkEdited " <> show p <> " " <> show cc <> " gen=" <> show g
     show (SimSetTickRate r) = "SimSetTickRate " <> show r
     show SimPause  = "SimPause"
     show SimResume = "SimResume"

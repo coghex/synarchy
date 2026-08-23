@@ -239,6 +239,19 @@ handleWorldCommand env _ (WorldMarkLocationStamped pageId gx gy)
 --   shared chunk coords, #59). The world thread is the SOLE writer of
 --   'wsTilesRef'; the sim only produces these batches. Acks the batch's
 --   MVar (if any) after applying — the dump's fast-settle waits on it.
+--
+--   Each writeback is applied only if it is FRESH: its 'fwEditGen' must
+--   equal the page's own current live-edit generation for that chunk
+--   ('wsChunkEditGenRef'). A batch the sim computed before a live edit
+--   carries the pre-edit generation and is dropped, so it cannot
+--   overwrite the edit the player just made (#1596). The decision is
+--   per chunk, so an edit to one chunk never drops another chunk's
+--   writeback from the same batch, and it is taken here rather than in
+--   'applyOneWriteback' so the tiles are read and written exactly once.
+--
+--   The ack fires whatever the outcome — batch empty, page gone, or
+--   every writeback dropped — or 'SimFastSettleAll' and the @--dump@
+--   fast-settle path would block forever waiting on it.
 handleApplyFluidsCommand ∷ EngineEnv → FluidWritebackBatch → IO ()
 handleApplyFluidsCommand env (FluidWritebackBatch pageId writebacks mAck) = do
     when (not (null writebacks)) $ do
@@ -246,12 +259,30 @@ handleApplyFluidsCommand env (FluidWritebackBatch pageId writebacks mAck) = do
         case lookup pageId (wmWorlds mgr) of
             Nothing → pure ()  -- world gone (destroyed/unloaded) — drop the batch
             Just ws → do
-                atomicModifyIORef' (wsTilesRef ws) $ \wtd →
-                    (foldl' applyOneWriteback wtd writebacks, ())
-                bumpQuadCacheGen ws
-                writeIORef (wsZoomQuadCacheRef ws) Nothing
-                writeIORef (wsBgQuadCacheRef ws)   Nothing
+                gens ← readIORef (wsChunkEditGenRef ws)
+                let fresh = filter (writebackIsFresh gens) writebacks
+                when (not (null fresh)) $ do
+                    atomicModifyIORef' (wsTilesRef ws) $ \wtd →
+                        (foldl' applyOneWriteback wtd fresh, ())
+                    bumpQuadCacheGen ws
+                    writeIORef (wsZoomQuadCacheRef ws) Nothing
+                    writeIORef (wsBgQuadCacheRef ws)   Nothing
     forM_ mAck (`putMVar` ())
+
+-- | Is this writeback derived from the chunk state the page currently
+--   holds? True exactly when the sim stamped it with the live-edit
+--   generation the world has issued for that chunk — an absent entry
+--   meaning generation 0, the baseline a never-edited (or evicted and
+--   reloaded) chunk sits at on BOTH sides.
+--
+--   Equality, not @>=@: a writeback claiming a generation this page never
+--   issued is no more derived from the current chunk than one claiming an
+--   older, and that is exactly what a batch in flight across a chunk
+--   eviction looks like (the eviction retires the entry, the reload
+--   re-seeds the sim at 0).
+writebackIsFresh ∷ HM.HashMap ChunkCoord Word64 → FluidWriteback → Bool
+writebackIsFresh gens fw =
+    fwEditGen fw ≡ HM.lookupDefault 0 (fwCoord fw) gens
 
 -- | Overwrite one chunk's sim-owned fields (fluid + terrain surface +
 --   render surface + side decos), preserving everything else.

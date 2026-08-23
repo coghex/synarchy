@@ -73,7 +73,7 @@ handleWorldDeleteTileCommand env logger pageId gx gy = do
                         atomicModifyIORef' (wsEditsRef ws) $ \es →
                             (appendEdit coord edit es, ())
                         -- Keep the sim's chunk in step with the new terrain.
-                        syncEditToSim (toWorldSimCapability env) pageId lc'
+                        syncEditToSim (toWorldSimCapability env) pageId ws lc'
                         -- Invalidate all three render caches so the next
                         -- tick rebuilds quads from the modified chunk.
                         bumpQuadCacheGen ws
@@ -132,7 +132,7 @@ handleWorldAddTileCommand env logger pageId gx gy mat = do
                             (insertChunk lc' w, ())
                         atomicModifyIORef' (wsEditsRef ws) $ \es →
                             (appendEdit coord edit es, ())
-                        syncEditToSim (toWorldSimCapability env) pageId lc'
+                        syncEditToSim (toWorldSimCapability env) pageId ws lc'
                         bumpQuadCacheGen ws
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
@@ -233,7 +233,7 @@ handleWorldSetCellCommand env logger pageId gx gy z mat = do
                             (insertChunk lc' w, ())
                         atomicModifyIORef' (wsEditsRef ws) $ \es →
                             (appendEdit coord edit es, ())
-                        syncEditToSim (toWorldSimCapability env) pageId lc'
+                        syncEditToSim (toWorldSimCapability env) pageId ws lc'
                         bumpQuadCacheGen ws
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
