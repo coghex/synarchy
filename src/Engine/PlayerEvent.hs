@@ -23,11 +23,18 @@ data PlayerEvent = PlayerEvent
                                   -- ^ Optional grid coordinates set
                                   --   by 'emitEventAt'. The popup
                                   --   module makes a line carrying
-                                  --   coords clickable (click pans the
-                                  --   camera there); 'Nothing' for
+                                  --   coords clickable; 'Nothing' for
                                   --   events without a natural location
                                   --   (e.g. save success), whose lines
                                   --   are non-clickable.
+                                  --
+                                  --   A coordinate pair is meaningless
+                                  --   without the page it indexes, so
+                                  --   setting this ALWAYS also sets
+                                  --   'peSourcePage' — see there for
+                                  --   the attribution rule and for what
+                                  --   a click actually does with the
+                                  --   pair (#1588).
     , peUid      ∷ !(Maybe Word32)
                                   -- ^ Optional unit this event is ABOUT
                                   --   (set via 'engine.emitEventForUnit').
@@ -35,24 +42,47 @@ data PlayerEvent = PlayerEvent
                                   --   event-log entries to one unit.
                                   --   'Nothing' for world/global events.
     , peSourcePage ∷ !(Maybe Text)
-                                  -- ^ Optional world page (raw
+                                  -- ^ The world page (raw
                                   --   'World.Page.Types.WorldPageId'
-                                  --   text) this event concerns — set
-                                  --   by emitters whose event can fire
-                                  --   on a page other than whichever is
-                                  --   currently active/visible (e.g.
-                                  --   location discovery, #780, which
-                                  --   ticks every loaded page, including
-                                  --   hidden ones). Every other emitter
-                                  --   leaves this 'Nothing'. A caller
-                                  --   that also sets 'peCoords' MUST
-                                  --   only do so when this page is the
-                                  --   one currently active — a popup
-                                  --   click pans the camera on the
-                                  --   ACTIVE page, so coords for a
-                                  --   hidden-page event would silently
-                                  --   pan to the wrong place; omit
-                                  --   'peCoords' instead for those.
+                                  --   text) this event concerns — and,
+                                  --   whenever 'peCoords' is set, the
+                                  --   page those coordinates are
+                                  --   indexed in. The stored event
+                                  --   outlives the emit instant and can
+                                  --   be replayed from the event log
+                                  --   long after the player has
+                                  --   switched pages, so the coordinate
+                                  --   frame travels WITH the coordinate
+                                  --   rather than being re-guessed at
+                                  --   click time (#1588).
+                                  --
+                                  --   Filled by
+                                  --   'Engine.PlayerEvent.Emit.emitEventFullOnPage',
+                                  --   which owns the one attribution
+                                  --   rule: an explicit page from the
+                                  --   emitter wins (#780's location
+                                  --   discovery, which ticks every
+                                  --   loaded page and so knows a page
+                                  --   the active-page snapshot would get
+                                  --   wrong); otherwise a
+                                  --   coords-carrying emit snapshots the
+                                  --   canonically resolved ACTIVE page
+                                  --   ('Engine.Core.State.resolveActiveWorld');
+                                  --   otherwise this stays 'Nothing'.
+                                  --   No emitter has to opt in.
+                                  --
+                                  --   'Nothing' therefore means "no page
+                                  --   is known" — a coords-free event, or
+                                  --   a coords-carrying one emitted with
+                                  --   no world registered at all (the
+                                  --   main menu). Consumers must treat
+                                  --   that as NOT-the-active-page rather
+                                  --   than defaulting to it: the popup's
+                                  --   coordinate line refuses to pan
+                                  --   unless this page is the active one,
+                                  --   so a wrong-world pan is
+                                  --   unrepresentable instead of merely
+                                  --   discouraged.
     , peCount    ∷ !Int
                                   -- ^ How many identical emits (same
                                   --   category + text + uid) have

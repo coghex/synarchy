@@ -38,11 +38,11 @@ approval.
 - [x] NCT-16. Item-temperature probe skips its required cooling-rate behavior — [#1611]
 - [x] NCT-17. Core queue tests omit the custom timeout contract and real contention — [#1612]
 - [x] NCT-18. Item-temperature persistence phase can load a stale save — [#1613]
-- [ ] NCT-19. Vegetation/farming persistence probes can load stale saves
-- [ ] NCT-20. Item-identity persistence phase can load a stale save
-- [ ] NCT-21. Foraging persistence phase can load a stale save
-- [ ] NCT-22. Location persistence probes can load stale fixtures
-- [ ] NCT-23. Position-hold inventory overstates the executable fixture by one acolyte
+- [x] NCT-19. Vegetation/farming persistence probes can load stale saves — [#1616]
+- [x] NCT-20. Item-identity persistence phase can load a stale save — [#1617]
+- [x] NCT-21. Foraging persistence phase can load a stale save — [#1618]
+- [x] NCT-22. Location persistence probes can load stale fixtures — [#1620]
+- [x] NCT-23. Position-hold inventory overstates the executable fixture by one acolyte — [#1621]
 
 ---
 
@@ -393,17 +393,25 @@ the scripts useful exploratory diagnostics, but not regression tests as their
 names imply, and makes any automation that invokes them incapable of detecting
 a regression.
 
+Renamed under #1590: the five now carry the repository's diagnostic-report
+naming (`tools/river_cutoff_report.py`, `river_lake_depth_report.py`,
+`river_lake_gaps_report.py`, `river_mouth_cliff_report.py`,
+`river_mouth_gap_report.py`) and each docstring names the actual river gates.
+The paragraph above describes the pre-rename tree; the analyses themselves are
+unchanged and still report without a verdict, which is the deliberate outcome —
+the misleading name was the defect, not the missing threshold.
+
 **Evidence:**
 
-- `tools/test_river_cutoff.py:62-106` counts dry gap tiles and prints their
+- `tools/river_cutoff_report.py:62-106` counts dry gap tiles and prints their
   severity and examples; its `__main__` only calls `main`.
-- `tools/test_river_lake_depth.py:17-47` reports river tiles sinking beside a
+- `tools/river_lake_depth_report.py:17-47` reports river tiles sinking beside a
   lake but has no pass/fail decision.
-- `tools/test_river_lake_gaps.py:28-109` labels river-lake cliffs and parallel
+- `tools/river_lake_gaps_report.py:28-109` labels river-lake cliffs and parallel
   chains as `ISSUE 1` and `ISSUE 2`, then returns normally.
-- `tools/test_river_mouth_cliff.py:18-49` counts surface cliffs at river mouths
+- `tools/river_mouth_cliff_report.py:18-49` counts surface cliffs at river mouths
   without a threshold or failure exit.
-- `tools/test_river_mouth_gap.py:43-125` distinguishes fillable and blocked
+- `tools/river_mouth_gap_report.py:43-125` distinguishes fillable and blocked
   mouth gaps, including the statement that fillable gaps mean water “should
   exist,” but likewise ends after reporting them.
 - This is distinct from `tools/test_river_pour.py` and
@@ -840,7 +848,7 @@ save/load-oracle correctness problem in the persistence check.
 
 ## Vegetation and farming persistence probes
 
-### NCT-19. Vegetation/farming persistence probes can load stale saves
+### [#1616] NCT-19. Vegetation/farming persistence probes can load stale saves
 
 The farm-AI and flora-growth probes each queue a save into a fixed slot in the
 ordinary resource root, wait an arbitrary three seconds, and load it without
@@ -885,7 +893,7 @@ manual probes that happen to use a fixed sleep.
 
 ## Item-identity persistence probe
 
-### NCT-20. Item-identity persistence phase can load a stale save
+### [#1617] NCT-20. Item-identity persistence phase can load a stale save
 
 The default item-instance probe queues a save into the ordinary resource root
 and immediately loads the shared `issue67_probe` slot.  It neither checks the
@@ -933,7 +941,7 @@ cover different inventory contracts and have independent lifecycle setup.
 
 ## Foraging persistence probe
 
-### NCT-21. Foraging persistence phase can load a stale save
+### [#1618] NCT-21. Foraging persistence phase can load a stale save
 
 The foraging probe saves a freshly harvested tile's regrowth state to a fixed
 slot in the normal resource root, sleeps for three seconds, and then loads
@@ -977,7 +985,7 @@ share the stale player-slot false-green path recorded here.
 
 ## Location persistence probes
 
-### NCT-22. Location persistence probes can load stale fixtures
+### [#1620] NCT-22. Location persistence probes can load stale fixtures
 
 Four location-oriented manual probes save their fixture to fixed slots in the
 ordinary resource root, sleep briefly, then restart or load without proving
@@ -1029,7 +1037,7 @@ already captured separately in `docs/project_review_859-848.md`.
 
 ## Manual-only probe inventory
 
-### NCT-23. Position-hold inventory overstates the executable fixture by one acolyte
+### [#1621] NCT-23. Position-hold inventory overstates the executable fixture by one acolyte
 
 > **Captured note:** Position-hold apparatus overstates its unit count
 

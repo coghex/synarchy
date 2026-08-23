@@ -284,7 +284,7 @@ spawnYieldItems env rngRef logger ws defName (gx, gy) n = do
 --   over the candidate set suffices.
 promoteFullSpoilTiles ∷ EngineEnv → Q.Queue UnitCommand → LoggerState
     → WorldPageId → WorldState → (Int, Int) → IO ()
-promoteFullSpoilTiles env unitQ logger _pageId ws startV = do
+promoteFullSpoilTiles env unitQ logger pageId ws startV = do
     piles ← readIORef (wsSpoilRef ws)
     _registry ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
     let ready = promotableTiles piles (candidateVertices startV)
@@ -318,7 +318,7 @@ promoteFullSpoilTiles env unitQ logger _pageId ws startV = do
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
                         -- Anything standing on the tile rides up.
-                        Q.writeQueue unitQ (UnitReGround tx ty)
+                        Q.writeQueue unitQ (UnitReGround pageId tx ty)
                         logDebug logger CatWorld $
                             "Spoil promoted to terrain at "
                               <> tshow tx <> "," <> tshow ty

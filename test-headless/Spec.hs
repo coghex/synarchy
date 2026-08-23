@@ -21,6 +21,7 @@ import qualified Test.Headless.WorldGen.BedDepth as BedDepth
 import qualified Test.Headless.WorldGen.FluidSurfaceFold as FluidSurfaceFold
 import qualified Test.Headless.Unit.Pathing.Cost as PathingCost
 import qualified Test.Headless.Unit.Pathing.Hazard as PathingHazard
+import qualified Test.Headless.Unit.SimPageOwnership as SimPageOwnership
 import qualified Test.Headless.Unit.Pathing.AStar as PathingAStar
 import qualified Test.Headless.Unit.Pathing.Config as PathingConfig
 import qualified Test.Headless.Unit.Render.PickFrame as PickFrame
@@ -131,6 +132,7 @@ import qualified Test.Headless.UI.FocusNavigation as UIFocusNavigation
 import qualified Test.Headless.UI.Clipping as UIClipping
 import qualified Test.Headless.UI.InteractiveBounds as UIInteractiveBounds
 import qualified Test.Headless.UI.PopupPlacement as UIPopupPlacement
+import qualified Test.Headless.Event.PopupCoordPage as PopupCoordPage
 import qualified Test.Headless.UI.ResponsiveMenus as UIResponsiveMenus
 import qualified Test.Headless.UI.ResponsiveGameplay as UIResponsiveGameplay
 import qualified Test.Headless.UI.SettingsDefaultsKeybinds
@@ -324,6 +326,14 @@ main = hspec $ do
     -- installs TWO live pages and rewrites the unit/world manager refs
     -- to put a unit on the non-active one.
     aroundAll withHeadlessEngine GroundPageOwnership.spec
+    -- Own engine for the same reason (#1593): the unit-simulation
+    -- page-ownership gate installs its own three-page world manager and
+    -- rewrites the unit manager to put a unit on each. WORLD-THREAD-FREE
+    -- for the same reason the etymology gate below is: its pages are
+    -- hand-built emptyWorldStates carrying defaultWorldGenParams, whose
+    -- wgpPlates is empty, so a real world worker picking one up for
+    -- chunk loading would die in twoNearestPlates.
+    aroundAll withHeadlessEngineNoWorld SimPageOwnership.spec
     -- Own engine for the same reason (#1265): the etymology page-scope
     -- gate installs its own two-page world manager, one page inactive,
     -- to drive world.getEtymology across the target/recurrence boundary.
@@ -471,6 +481,10 @@ main = hspec $ do
     describe "UI.Clipping" UIClipping.spec
     describe "UI.InteractiveBounds" UIInteractiveBounds.spec
     describe "UI.PopupPlacement" UIPopupPlacement.spec
+    -- #1588: its own engine per example (each case installs its own
+    -- WorldManager and asserts on the event ring), so it registers
+    -- here rather than under the shared-worlds aroundAll above.
+    PopupCoordPage.spec
     describe "UI.ResponsiveMenus" UIResponsiveMenus.spec
     describe "UI.ResponsiveGameplay" UIResponsiveGameplay.spec
     UISettingsDefaultsKeybinds.spec

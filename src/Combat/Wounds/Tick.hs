@@ -18,7 +18,7 @@ import qualified Data.List as L
 import Data.IORef (readIORef, atomicModifyIORef')
 import System.Environment (lookupEnv)
 import Combat.Types (CombatEvent(..))
-import Engine.Core.State (EngineEnv, activeWorldStateFrom, loggerRef)
+import Engine.Core.State (EngineEnv, loggerRef)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Log (logDebug, LogCategory(..))
@@ -28,9 +28,11 @@ import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..)
                   , Scar(..), bloodMassRatio, TrailState(..))
 import Unit.Command.Types (UnitCommand(..))
 import qualified System.Random as Random
-import World.State.Types (WorldState(..))
+import World.State.Types (WorldManager(..), WorldState(..))
+import World.Page.Types (WorldPageId)
 import World.Generate.Types (WorldGenParams(..))
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
+import World.Weather.Types (ClimateState)
 import Infection.Types (InfectionManager, InfectionDef(..), lookupInfection)
 import Combat.Wounds.Constants
     ( bleedScale, woundCleanupThreshold, unconsciousFraction
@@ -79,15 +81,23 @@ tickAllWounds env dt = do
     infMgr ← readIORef
         (crInfectionManagerRef (toContentRegistriesCapability env))
     testMode ← isJust ⊚ lookupEnv infectionTestModeVar
-    -- Active world's climate, for per-unit infection selection + onset speed.
-    -- Nothing before a world exists (menu / pre-gen) → infection stays untyped.
-    mClim ← do
-        mWs ← activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
-        case mWs of
-            Just ws → do
-                mp ← readIORef (wsGenParamsRef ws)
-                pure (fmap (\p → (wgpClimateState p, wgpWorldSize p)) mp)
-            Nothing → pure Nothing
+    -- Every LOADED page's climate, keyed by page, for per-unit infection
+    -- selection + onset speed. Each page's generation parameters are read
+    -- exactly once per tick (#1593 requirement 8), through @wmWorlds@ —
+    -- so a unit's climate follows its OWN page whether or not that page
+    -- is visible, and changing which page is active can no longer change
+    -- another page's infection onset or type. A page with no generation
+    -- parameters (an arena, or a page mid-generation) contributes no
+    -- entry, so its units keep the historical no-climate behavior:
+    -- untyped infection at the default onset factor, never another
+    -- page's climate.
+    pageClimates ← do
+        wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+        entries ← forM (wmWorlds wm) $ \(pid, ws) → do
+            mp ← readIORef (wsGenParamsRef ws)
+            pure (fmap (\p → (pid, (wgpClimateState p, wgpWorldSize p))) mp)
+        pure (HM.fromList (catMaybes entries)
+                  ∷ HM.HashMap WorldPageId (ClimateState, Int))
     -- One independent generator for this tick's infection-type rolls; split
     -- off statRNGRef (advances the master) so we don't race other consumers.
     tickGen ← atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) Random.splitGen
@@ -108,7 +118,8 @@ tickAllWounds env dt = do
                                 let unitClim = fmap (\(cs, wsz) →
                                         lookupLocalClimate cs wsz
                                             (floor (uiGridX inst))
-                                            (floor (uiGridY inst))) mClim
+                                            (floor (uiGridY inst)))
+                                        (HM.lookup (uiPage inst) pageClimates)
                                     (inst', outcome, gen') =
                                         tickOneUnit gt def dt infMgr unitClim gen inst testMode
                                 in case outcome of
