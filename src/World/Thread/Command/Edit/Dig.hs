@@ -39,6 +39,7 @@ import World.Spoil.Types (SpoilPile(..), spoilCapacity, depositSpoil
                          , candidateVertices, promotableTiles
                          , debitPromotedTile, tileCornerVertices)
 import World.Thread.Command.Edit.Terrain (handleWorldDeleteTileCommand)
+import World.Thread.Command.Edit.Sync (syncEditToSim)
 
 -- | Apply dig progress to the designated tile at (gx, gy).
 --
@@ -314,6 +315,15 @@ promoteFullSpoilTiles env unitQ logger pageId ws startV = do
                             (appendEdit coord edit es, ())
                         atomicModifyIORef' (wsSpoilRef ws) $ \sp →
                             (debitPromotedTile tile sp, ())
+                        -- The same WeAddTile the ordinary add-tile path
+                        -- applies, so it joins the same re-seed +
+                        -- freshness handoff (#1596): it raises
+                        -- lcTerrainSurfaceMap, which a sim writeback
+                        -- overwrites wholesale. Without this the sim kept
+                        -- simulating the pre-promotion terrain and its
+                        -- next batch flattened the promoted tile back.
+                        syncEditToSim (toWorldSimCapability env) pageId
+                                      ws lc'
                         bumpQuadCacheGen ws
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing

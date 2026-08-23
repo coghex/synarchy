@@ -28,7 +28,14 @@ the port a SIGKILLed engine had held. Also covers `select`/`main`'s
 `--exact` unknown-key rejection (issue #1321): a mixed valid/invalid
 request, the pre-existing all-invalid empty-selection diagnostic, a
 wholly valid request's registry-order and duplicate-collapse behavior,
-and substring selection's unchanged permissiveness. And the parallel
+and substring selection's unchanged permissiveness. And the reserved port
+spans (issue #1571): the shipped `PROBE_PORT_SPANS` declaration validated
+against the live registry, an overlap-free parallel allocation over the
+whole registry and over the exact pair that broke, the GUI-port refusal
+covering a span that only REACHES 8008, `--port` basing the parallel
+allocation, and a synthetic two-port probe binding real sockets alongside
+its neighbour -- with the undeclared-span control that proves the same two
+probes collide without the declaration. And the parallel
 scheduler's reader/writer serialization (issues #1322 and #1444): probes
 stamp their own occupancy windows, so a probe declaring an exclusive
 interest is proved never to overlap ANY other probe -- the other config
@@ -43,6 +50,7 @@ Exit codes: 0 = all tests passed, 1 = one or more failed.
 from __future__ import annotations
 
 import os
+import random
 import shutil
 import signal
 import socket
@@ -146,7 +154,8 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
               ignore_term: bool = False, engine_ignores_term: bool = False,
               descendant: bool = True, hold_port: int = 0,
               dwell: float = 0.0,
-              handshake_delay: float = 0.0) -> str:
+              handshake_delay: float = 0.0,
+              bind_span: int = 0, bind_delay: float = 0.0) -> str:
     """A synthetic probe that boots a synthetic 'engine' the way probelib does.
 
     ``ignore_term`` and ``engine_ignores_term`` are independent on purpose:
@@ -159,6 +168,19 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
     measurable occupancy window, which is what lets the scheduler tests
     (#1322) prove which probes overlapped rather than merely that each ran.
     A probe killed before it finishes records only its ``start``.
+
+    ``bind_span`` makes the probe bind its OWN assigned span in-process --
+    ``--port`` through ``--port + bind_span - 1`` -- appending "bound" or
+    "inuse" per port to ``<name>.binds`` and exiting nonzero if any member
+    was taken. That is what a real multi-port probe does
+    (`debug_console_boot_probe.py` and `offscreen_probe.py` each keep a
+    second listener on ``--port + 1``), and it is what makes an
+    overlapping allocation observable rather than merely asserted (#1571).
+    ``bind_delay`` holds that bind back, so a test can order two probes'
+    binds deterministically instead of racing them.
+
+    Every probe records the ``--port`` it was handed to ``<name>.port``,
+    one line per attempt.
     """
     pidfile = root / f"{name}.enginepid"
     startedfile = root / f"{name}.started"
@@ -166,12 +188,18 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
     interval = root / f"{name}.interval"
     term_policy = "ignore-term" if engine_ignores_term else "obey-term"
     lines = [
-        "import argparse, os, signal, subprocess, sys, time",
+        "import argparse, os, signal, socket, subprocess, sys, time",
         # run_probes always appends --port in the parallel path; accept it
         # the way every registered probe does (#723).
         "ap = argparse.ArgumentParser()",
         "ap.add_argument('--port', type=int, default=0)",
-        "ap.parse_args()",
+        "_args = ap.parse_args()",
+        # Appended, not truncated: `--retries` reuses this path, so the
+        # port of every attempt is readable, in order.
+        f"_pf = open({str(root / (name + '.port'))!r}, 'a')",
+        "print(_args.port, file=_pf)",
+        "_pf.flush()",
+        "_pf.close()",
         f"open({str(startedfile)!r}, 'w').write('1')",
         # Appended, not truncated: --retries reuses these paths, so an
         # attempt count is readable from the file too.
@@ -210,6 +238,31 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
             "        pass",
             "    time.sleep(0.02)",
         ]
+    if bind_span:
+        # The probe's own span, bound the way a real multi-port probe
+        # binds it: base first, then each derived port, every socket kept
+        # open for the probe's whole life.
+        if bind_delay:
+            lines.append(f"time.sleep({bind_delay!r})")
+        lines += [
+            "_held = []",
+            "_clash = False",
+            f"_blog = open({str(root / (name + '.binds'))!r}, 'a')",
+            f"for _p in range(_args.port, _args.port + {bind_span}):",
+            "    _s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)",
+            "    try:",
+            "        _s.bind(('127.0.0.1', _p))",
+            "        _s.listen(4)",
+            "        _held.append(_s)",
+            "        _outcome = 'bound'",
+            "    except OSError:",
+            "        _s.close()",
+            "        _clash = True",
+            "        _outcome = 'inuse'",
+            "    print(_outcome, file=_blog)",
+            "    _blog.flush()",
+            "    os.fsync(_blog.fileno())",
+        ]
     for i in range(tail_lines):
         lines.append(f"print('diagnostic line {i}')")
     lines.append("sys.stdout.flush()")
@@ -218,7 +271,13 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
     if hang:
         lines.append("time.sleep(600)")
     lines.append("_stamp('end')")
-    lines.append(f"sys.exit({exit_code})")
+    if bind_span:
+        # A clash is the probe's OWN failure, exactly as a real engine's
+        # "Address already in use" is; the declared exit code still wins
+        # when every port was free.
+        lines.append(f"sys.exit(1 if _clash else {exit_code})")
+    else:
+        lines.append(f"sys.exit({exit_code})")
     return "\n".join(lines) + "\n"
 
 
@@ -284,6 +343,14 @@ class Tree:
         got = self.intervals(name)
         assert len(got) == 1, f"{name} recorded {len(got)} window(s), expected 1"
         return got[0]
+
+    def ports(self, name: str) -> list[int]:
+        """The `--port` this probe was handed, one per attempt, in order."""
+        try:
+            raw = (self.root / f"{name}.port").read_text()
+        except OSError:
+            return []
+        return [int(tok) for tok in raw.split() if tok.lstrip("-").isdigit()]
 
     def binds(self, name: str) -> list[str]:
         """One entry per attempt: "bound" or "inuse"."""
@@ -384,22 +451,32 @@ class patched:
     """
 
     def __init__(self, tree: Tree, grace: float = TEST_GRACE,
-                 namespace: str | None = None) -> None:
+                 namespace: str | None = None,
+                 spans: dict[str, int] | None = None) -> None:
         self.tree, self.grace = tree, grace
         self.namespace = namespace or f"selftest{uuid.uuid4().hex[:12]}"
+        # The synthetic probes have synthetic keys, so the shipped
+        # `PROBE_PORT_SPANS` says nothing about them. A test declaring a
+        # multi-port synthetic probe substitutes its own table (#1571);
+        # passing none leaves every synthetic probe at the default one
+        # port, which is what the shipped table would give them anyway.
+        self.spans = {} if spans is None else dict(spans)
 
     def __enter__(self):
         self._saved = (run_probes.REPO_ROOT, run_probes.PROBES,
-                       run_probes.GROUP_GRACE, run_probes.RESOURCE_NAMESPACE)
+                       run_probes.GROUP_GRACE, run_probes.RESOURCE_NAMESPACE,
+                       run_probes.PROBE_PORT_SPANS)
         run_probes.REPO_ROOT = str(self.tree.root)
         run_probes.PROBES = list(self.tree.probes)
         run_probes.GROUP_GRACE = self.grace
         run_probes.RESOURCE_NAMESPACE = self.namespace
+        run_probes.PROBE_PORT_SPANS = self.spans
         return self
 
     def __exit__(self, *exc):
         (run_probes.REPO_ROOT, run_probes.PROBES, run_probes.GROUP_GRACE,
-         run_probes.RESOURCE_NAMESPACE) = self._saved
+         run_probes.RESOURCE_NAMESPACE,
+         run_probes.PROBE_PORT_SPANS) = self._saved
         clear_namespace(self.namespace)
         return False
 
@@ -601,19 +678,37 @@ def _main_with_open(tree: Tree, argv: list[str]) -> tuple[int, str]:
     return rc, buf.getvalue()
 
 
-def _main_with(tree: Tree, argv: list[str]) -> tuple[int, str]:
+def _main_with(tree: Tree, argv: list[str],
+               spans: dict[str, int] | None = None) -> tuple[int, str]:
     import io
     import contextlib
     buf = io.StringIO()
     saved_argv = sys.argv
     sys.argv = ["run_probes.py"] + argv
     try:
-        with patched(tree), contextlib.redirect_stdout(buf), \
+        with patched(tree, spans=spans), contextlib.redirect_stdout(buf), \
              contextlib.redirect_stderr(buf):
             rc = run_probes.main()
     finally:
         sys.argv = saved_argv
     return rc, buf.getvalue()
+
+
+def _main_refusal(tree: Tree, argv: list[str],
+                  spans: dict[str, int] | None = None) -> tuple[int, str]:
+    """`_main_with`, but reporting a `sys.exit` refusal as its own code.
+
+    `main` refuses a bad port plan two ways: `sys.exit(message)` for the
+    base-is-the-GUI-port case, which predates #1571, and `return 2` for
+    the span-aware plan check. A test asserting the refusal happened at
+    all should not have to know which.
+    """
+    try:
+        return _main_with(tree, argv, spans=spans)
+    except SystemExit as leaving:
+        code = leaving.code
+        return (1 if isinstance(code, str) else (code or 0),
+                code if isinstance(code, str) else "")
 
 
 def test_aggregate_exit_codes_unchanged() -> None:
@@ -1654,6 +1749,251 @@ def test_retry_can_rebind_the_port_a_killed_engine_held() -> None:
         tree.cleanup()
 
 
+# --------------------------------------------------------------------------
+# Reserved port spans (#1571)
+# --------------------------------------------------------------------------
+def free_port_span(width: int) -> int:
+    """A base with `width` consecutive ports all bindable right now.
+
+    An ephemeral port is one port; a multi-port probe needs a run of
+    them, and nothing hands those out. So candidate bases are tried until
+    the whole run binds at once — which is also the only way to know the
+    run is really free rather than merely starting at a free port.
+    """
+    for _ in range(400):
+        base = random.randint(20000, 59000)
+        held: list[socket.socket] = []
+        try:
+            for port in range(base, base + width):
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.bind(("127.0.0.1", port))
+                held.append(sock)
+        except OSError:
+            continue
+        finally:
+            for sock in held:
+                sock.close()
+        if len(held) == width:
+            return base
+    raise AssertionError(f"no free {width}-port span found")
+
+
+def test_port_span_declaration_is_data_about_real_probes() -> None:
+    print("\n-- the shipped PROBE_PORT_SPANS table names registered probes")
+    known = {p[0] for p in run_probes.PROBES}
+    unknown = sorted(k for k in run_probes.PROBE_PORT_SPANS if k not in known)
+    expect(not unknown,
+           f"every declared key names a registered probe (unknown: {unknown})")
+    bad = sorted(k for k, v in run_probes.PROBE_PORT_SPANS.items()
+                 if not isinstance(v, int) or isinstance(v, bool) or v < 1)
+    expect(not bad,
+           f"every declaration is a positive port COUNT (bad: {bad})")
+    expect(run_probes.port_span("debug_console_boot") == 2,
+           "debug_console_boot declares two ports -- it binds base and base+1")
+    expect(run_probes.port_span("offscreen") == 2,
+           "offscreen declares two ports -- its second engine runs alongside "
+           "the first")
+    expect(run_probes.port_span("combat_anim") == run_probes.DEFAULT_PORT_SPAN
+           == 1,
+           "an undeclared probe reserves its base alone")
+    expect(list(run_probes.reserved_ports("debug_console_boot", 9400))
+           == [9400, 9401],
+           "a declared count N reserves base .. base+N-1, contiguously")
+    expect(list(run_probes.reserved_ports("combat_anim", 9400)) == [9400],
+           "and an undeclared probe reserves exactly its base")
+
+
+def test_parallel_allocation_never_overlaps() -> None:
+    print("\n-- the parallel allocation lays declared spans end to end")
+    # Every registered probe at once: whatever the table says, no two
+    # selected probes may be handed a port the other may bind.
+    ports = run_probes.allocate_parallel_ports(run_probes.PROBES)
+    expect(len(ports) == len(run_probes.PROBES),
+           "every selected probe gets exactly one base")
+    claimed: dict[int, str] = {}
+    overlaps: list[str] = []
+    for (key, _, _), base in zip(run_probes.PROBES, ports):
+        for port in run_probes.reserved_ports(key, base):
+            if port in claimed:
+                overlaps.append(f"{key} and {claimed[port]} both reserve {port}")
+            claimed[port] = key
+    expect(not overlaps,
+           f"no two probes reserve the same port (overlaps: {overlaps[:3]})")
+    expect(ports == sorted(ports) and len(set(ports)) == len(ports),
+           "bases are handed out in registry order, each strictly after the last")
+    expect(ports[0] == run_probes.PARALLEL_PORT_BASE,
+           f"the default origin is still {run_probes.PARALLEL_PORT_BASE} "
+           f"(got {ports[0]})")
+
+    # The exact pair from #1571, in the order that broke: a two-port
+    # probe immediately before a one-port one.
+    pair = [("debug_console_boot", "a.py", ""), ("transactional_load", "b.py", "")]
+    got = run_probes.allocate_parallel_ports(pair, 9400)
+    expect(got == [9400, 9402],
+           f"debug_console_boot's neighbour starts past its span (got {got})")
+    expect(run_probes.allocate_parallel_ports(pair, 9500) == [9500, 9502],
+           "and the layout follows a caller-supplied origin")
+
+
+def test_gui_port_refusal_covers_the_whole_span() -> None:
+    print("\n-- a span that REACHES the GUI port is refused, not just a base "
+          "that equals it")
+    expect(run_probes.GUI_PORT == 8008,
+           f"the GUI port is still 8008 (got {run_probes.GUI_PORT})")
+    spans = {"wide": 2}
+    saved = run_probes.PROBE_PORT_SPANS
+    run_probes.PROBE_PORT_SPANS = spans
+    try:
+        conflicts = run_probes.gui_port_conflicts(
+            [("wide", 8007), ("narrow", 8007), ("wide", 9400)])
+        expect(conflicts == [("wide", 8007)],
+               f"only the span that actually covers 8008 conflicts "
+               f"(got {conflicts})")
+        text = run_probes.describe_gui_conflicts(conflicts)
+        expect("8007-8008" in text and "wide" in text and "8008" in text,
+               f"the refusal names the probe and the span (got {text!r})")
+        expect(run_probes.gui_port_conflicts(
+                   [("wide", 8007), ("wide", 8007)]) == [("wide", 8007)],
+               "the same probe at the same base is one conflict, not two -- a "
+               "parallel plan lists it twice (allocation and solo-retry origin)")
+    finally:
+        run_probes.PROBE_PORT_SPANS = saved
+
+    for jobs in ("1", "2"):
+        tree = Tree()
+        try:
+            tree.add("wide", dwell=0.0)
+            tree.add("narrow", dwell=0.0)
+            rc, out = _main_refusal(
+                tree, ["--only", "wide,narrow", "--exact", "--jobs", jobs,
+                       "--port", "8007"],
+                spans={"wide": 2})
+            expect(rc == 2,
+                   f"--jobs {jobs} --port 8007 with a two-port probe is a bad "
+                   f"invocation (got {rc})")
+            expect("8008" in out and "wide" in out,
+                   f"and says which probe reaches the GUI port (got {out!r})")
+            expect(not tree.started("wide") and not tree.started("narrow"),
+                   "nothing was launched -- the plan is validated before any "
+                   "subprocess exists")
+        finally:
+            tree.cleanup()
+
+    # The pre-#1571 exact-base refusal is unchanged.
+    tree = Tree()
+    try:
+        tree.add("narrow")
+        rc, out = _main_refusal(tree, ["--only", "narrow", "--exact",
+                                       "--port", "8008"])
+        expect(rc != 0 and "8008" in out,
+               f"--port 8008 itself is still refused (got {rc}, {out!r})")
+        expect(not tree.started("narrow"), "and still starts nothing")
+    finally:
+        tree.cleanup()
+
+
+def test_port_with_jobs_bases_the_parallel_allocation() -> None:
+    print("\n-- --port is HONOURED with --jobs: it is the allocation origin")
+    tree = Tree()
+    try:
+        base = free_port_span(4)
+        tree.add("wide", bind_span=2)
+        tree.add("narrow", bind_span=1)
+        rc, out = _main_with(tree, ["--only", "wide,narrow", "--exact",
+                                    "--jobs", "2", "--retries", "0",
+                                    "--port", str(base)],
+                             spans={"wide": 2})
+        expect(rc == 0, f"both probes passed (got {rc})\n{out}")
+        expect(tree.ports("wide") == [base],
+               f"the first probe is based at --port itself "
+               f"(got {tree.ports('wide')}, wanted [{base}])")
+        expect(tree.ports("narrow") == [base + 2],
+               f"the second starts past the first's TWO-port span "
+               f"(got {tree.ports('narrow')}, wanted [{base + 2}])")
+    finally:
+        tree.cleanup()
+
+    # Sequential is unchanged: one base, handed to every probe.
+    tree = Tree()
+    try:
+        base = free_port_span(2)
+        tree.add("wide", bind_span=2)
+        tree.add("narrow", bind_span=1)
+        rc, out = _main_with(tree, ["--only", "wide,narrow", "--exact",
+                                    "--port", str(base)],
+                             spans={"wide": 2})
+        expect(rc == 0, f"sequentially both still pass (got {rc})\n{out}")
+        expect(tree.ports("wide") == [base] and tree.ports("narrow") == [base],
+               f"and both still get the same base "
+               f"(wide {tree.ports('wide')}, narrow {tree.ports('narrow')})")
+    finally:
+        tree.cleanup()
+
+    # Unset, the parallel allocation still starts at the default origin.
+    tree = Tree()
+    try:
+        tree.add("alpha")
+        tree.add("beta")
+        rc, _ = _main_with(tree, ["--only", "alpha,beta", "--exact",
+                                  "--jobs", "2"])
+        expect(rc == 0, f"the default-origin run still passes (got {rc})")
+        expect(tree.ports("alpha") == [run_probes.PARALLEL_PORT_BASE]
+               and tree.ports("beta") == [run_probes.PARALLEL_PORT_BASE + 1],
+               f"unset --port keeps the 9400 origin "
+               f"(alpha {tree.ports('alpha')}, beta {tree.ports('beta')})")
+    finally:
+        tree.cleanup()
+
+
+def test_a_two_port_probe_never_takes_its_neighbours_base() -> None:
+    print("\n-- a two-port probe and its neighbour both bind, concurrently")
+    # The #1571 defect, reproduced against real sockets rather than
+    # asserted: `wide` binds base and base+1 and holds both; `narrow`
+    # binds whatever base it was handed, AFTER `wide` has bound (the
+    # delay makes the order deterministic instead of a race).
+    tree = Tree()
+    try:
+        base = free_port_span(4)
+        tree.add("wide", bind_span=2, dwell=2.0)
+        tree.add("narrow", bind_span=1, bind_delay=0.7)
+        rc, out = _main_with(tree, ["--only", "wide,narrow", "--exact",
+                                    "--jobs", "2", "--retries", "0",
+                                    "--port", str(base)],
+                             spans={"wide": 2})
+        expect(rc == 0, f"both probes passed together (got {rc})\n{out}")
+        expect(tree.binds("wide") == ["bound", "bound"],
+               f"the two-port probe bound BOTH its ports "
+               f"(got {tree.binds('wide')})")
+        expect(tree.binds("narrow") == ["bound"],
+               f"and its neighbour bound its own, uncontested "
+               f"(got {tree.binds('narrow')})")
+    finally:
+        tree.cleanup()
+
+    # The control: with the span UNDECLARED the allocator is back to
+    # stride 1 and the same two probes collide. Without this the test
+    # above could pass on a layout that never overlapped anyway.
+    tree = Tree()
+    try:
+        base = free_port_span(4)
+        tree.add("wide", bind_span=2, dwell=2.0)
+        tree.add("narrow", bind_span=1, bind_delay=0.7)
+        rc, out = _main_with(tree, ["--only", "wide,narrow", "--exact",
+                                    "--jobs", "2", "--retries", "0",
+                                    "--port", str(base)],
+                             spans={})
+        expect(rc == 1,
+               f"an undeclared two-port probe really does collide (got {rc})")
+        expect(tree.ports("narrow") == [base + 1],
+               f"because stride 1 hands the neighbour base+1 "
+               f"(got {tree.ports('narrow')})")
+        expect(tree.binds("narrow") == ["inuse"],
+               f"which the two-port probe is already holding "
+               f"(got {tree.binds('narrow')})")
+    finally:
+        tree.cleanup()
+
+
 def test_the_synthetic_fixtures_are_valid_python() -> None:
     print("\n-- the synthetic probe and engine sources are valid Python")
     # These are generated source strings, and a mistake in one does NOT
@@ -1770,6 +2110,11 @@ def main() -> int:
     test_ctrl_c_in_the_launch_window_leaves_nothing()
     test_reap_returns_only_once_the_group_is_observed_gone()
     test_retry_can_rebind_the_port_a_killed_engine_held()
+    test_port_span_declaration_is_data_about_real_probes()
+    test_parallel_allocation_never_overlaps()
+    test_gui_port_refusal_covers_the_whole_span()
+    test_port_with_jobs_bases_the_parallel_allocation()
+    test_a_two_port_probe_never_takes_its_neighbours_base()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:

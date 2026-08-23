@@ -201,6 +201,11 @@ handleSimCommand env logger simStateRef cmd = do
                     , scsActiveFluid = V.replicate sz Nothing
                     , scsEquilTicks  = 0
                     , scsSideDeco    = VU.replicate sz 0
+                    -- A freshly loaded chunk starts at the page's own
+                    -- baseline generation: 'World.Thread.ChunkLoading'
+                    -- deletes an evicted chunk's entry, so the world side
+                    -- reads 0 for it too (#1596).
+                    , scsEditGen     = 0
                     }
             writeIORef simStateRef $
                 modifyWorld pid (\sws →
@@ -211,16 +216,22 @@ handleSimCommand env logger simStateRef cmd = do
                 modifyWorld pid (\sws →
                     sws { swsChunks = HM.delete coord (swsChunks sws) }) ss
 
-        SimChunkEdited pid coord fluidMap terrainMap → do
+        SimChunkEdited pid coord editGen fluidMap terrainMap → do
             let sws = HM.lookupDefault emptySimWorldState pid (ssWorlds ss)
                 sz  = chunkSize * chunkSize
                 -- Re-seed from the authoritative post-edit tiles. Build on
                 -- the existing sim chunk if present, else create one (an
                 -- edit can land before the sim has loaded that chunk).
+                --
+                -- Both branches adopt the carried generation: it is what
+                -- makes the writebacks this chunk produces from here on
+                -- acceptable to the world thread again (#1596), including
+                -- for an edit that lands before the chunk has ever loaded.
                 base = case HM.lookup coord (swsChunks sws) of
                     Just scs → scs { scsFluid       = fluidMap
                                    , scsTerrain     = terrainMap
                                    , scsSettleTicks = reactivateSettleTicks
+                                   , scsEditGen     = editGen
                                    }
                     Nothing  → SimChunkState
                         { scsFluid       = fluidMap
@@ -230,6 +241,7 @@ handleSimCommand env logger simStateRef cmd = do
                         , scsActiveFluid = V.replicate sz Nothing
                         , scsEquilTicks  = 0
                         , scsSideDeco    = VU.replicate sz 0
+                        , scsEditGen     = editGen
                         }
                 -- Force a fresh activation so the volume grid is rebuilt
                 -- from the NEW fluid: activateChunk no-ops on an already-
@@ -360,7 +372,8 @@ emitWorldDirtyFluids env pid sws mAck = do
                         newSurf = VU.imap (\idx terrZ →
                             renderedSurfaceZ terrZ (newFluid V.! idx)
                             ) newTerrain
-                    in Just (FluidWriteback cc newFluid newTerrain newSurf
+                    in Just (FluidWriteback cc (scsEditGen scs) newFluid
+                                            newTerrain newSurf
                                             (scsSideDeco scs))
             ) (HS.toList dirty)
     when (not (null writebacks) ∨ isJust mAck) $
