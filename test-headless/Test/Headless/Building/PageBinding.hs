@@ -1085,6 +1085,55 @@ pendingSpec =
             _ ← clickAt ls (px, py)
             expectStale env wsA wsB ls
 
+    it "counts world.initArenaDone too, whose handler also prepends to \
+       \wmVisible" $ \(env, ls) → do
+        _ ← resetScene env
+        _ ← clearStubs ls
+        gen ← selectionGen env
+        -- The one selection-changing verb that used to enqueue its
+        -- command directly: an already-registered hidden arena's
+        -- initArenaDone queued ahead of a click would make the visible
+        -- page change under a placement the synchronous check had just
+        -- called fresh.
+        _ ← evalDebug ls $ T.concat
+            [ "world.initArenaDone('", unWorldPageId pageB, "'); "
+            , "return 'queued'" ]
+        (wmSelectionPending <$> readIORef (worldManagerRef env))
+            `shouldReturn` 1
+        canPlaceAt ls shedName placeTile (Just (pageA, gen))
+            `shouldReturn` "false|page binding stale|true"
+
+    it "rejects a click queued behind world.initArenaDone, recording the \
+       \outcome and staying armed" $ \(env, ls) → do
+        (wsA, wsB) ← resetScene env
+        _ ← clearStubs ls
+        _ ← armBuildTool ls portalName True
+        _ ← evalDebug ls $ T.concat
+            [ "world.initArenaDone('", unWorldPageId pageB, "'); "
+            , "return 'queued'" ]
+        (px, py) ← aimAt env placeTile terrainZA
+        _ ← clickAt ls (px, py)
+        expectStale env wsA wsB ls
+
+    it "discharges every selection-changing verb it counts" $
+        \(env, ls) → do
+            _ ← resetScene env
+            _ ← clearStubs ls
+            -- One of each, then one drain: a verb that incremented
+            -- without a matching handler discharge would leave the
+            -- count stuck above zero and wedge every later binding.
+            _ ← evalDebug ls $ T.concat
+                [ "world.hide('", unWorldPageId pageA, "'); "
+                , "world.show('", unWorldPageId pageA, "'); "
+                , "world.initArenaDone('", unWorldPageId pageB, "'); "
+                , "world.destroy('", unWorldPageId pageB, "'); "
+                , "return 'queued'" ]
+            (wmSelectionPending <$> readIORef (worldManagerRef env))
+                `shouldReturn` 4
+            runWorldQueue env
+            (wmSelectionPending <$> readIORef (worldManagerRef env))
+                `shouldReturn` 0
+
     it "settles once the world thread applies the change" $ \(env, ls) → do
         _ ← resetScene env
         _ ← clearStubs ls

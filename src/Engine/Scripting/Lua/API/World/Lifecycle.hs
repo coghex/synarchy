@@ -542,7 +542,10 @@ worldInitArenaDoneFn env = do
     let pageId = case pageIdArg of
             Just bs → WorldPageId (TE.decodeUtf8Lenient bs)
             Nothing → WorldPageId "test_arena"
-    Lua.liftIO $ Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) (WorldInitArenaDone pageId)
+    -- #1602: its handler PREPENDS the page to wmVisible, so this is a
+    -- selection change like any other and must be visible to the
+    -- synchronous binding check while it sits unapplied.
+    Lua.liftIO $ enqueueSelectionChange env (WorldInitArenaDone pageId)
     return 0
 
 -- | world.openArena() — convenience function that broadcasts to Lua

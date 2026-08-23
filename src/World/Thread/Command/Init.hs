@@ -483,11 +483,14 @@ handleWorldInitArenaDoneCommand env logger pageId = do
     logInfo logger CatWorld $ "Arena textures ready, showing: " <> unWorldPageId pageId
     
     -- Now safe to make visible — all texture commands have been processed
-    atomicModifyIORef' (wsWorldManagerRef (toWorldSimCapability env)) $ \mgr →
+    atomicModifyIORef' (wsWorldManagerRef (toWorldSimCapability env)) $ \mgr' →
+      -- #1602: the request is discharged either way — it tracks
+      -- requests, not effects — while the GENERATION moves only when the
+      -- visible list actually changes, exactly as in
+      -- handleWorldShowCommand.
+      let mgr = completeSelectionChange mgr' in
         if pageId `elem` wmVisible mgr
         then (mgr, ())
-        -- #1602: same rule as handleWorldShowCommand — the selection
-        -- generation moves with the list, in the same atomic update.
         else (bumpSelectionGen (mgr { wmVisible = pageId : wmVisible mgr }), ())
     
     -- Broadcast to Lua that the arena is ready to display
