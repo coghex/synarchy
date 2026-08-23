@@ -104,8 +104,8 @@ local locations     = require("scripts.unit_ai_locations")
 -- Persistent save-component registration (issue #761), over
 -- unit_ai_ref_schema.lua's REF_SCHEMA -- the one declaration the wire
 -- codec, the reference report, the tag validator and the post-load
--- reconcile all walk. Split out to stay under the #538 module line
--- budget.
+-- reconcile all walk -- plus the #1610 session-teardown registration.
+-- Split out to stay under the #538 module line budget.
 local unitAiSave    = require("scripts.unit_ai_save")
 -- Post-load reconciliation of aiState (#1589): orphan prune + the
 -- schema-driven stale-reference scrub, and the module-owned release
@@ -428,6 +428,12 @@ function unitAi.onSaveLoaded(survUnitIds, survBuildingIds, reconcileCtx)
 end
 
 function unitAi.update(dt)
+    -- #1610: nothing runs between Exit to Menu and the next session --
+    -- the engine's UnitClearAll is still draining, so the entity queries
+    -- below still report the destroyed session's units and ensureState
+    -- would rebuild exactly the rows the teardown just cleared. See
+    -- scripts/lib/session_teardown.lua.
+    if require("scripts.lib.session_teardown").isTornDown() then return end
     -- Location awareness (#915) is recorded BEFORE the pause guard on
     -- purpose. Its engine-side source (the sight predicate #1230 gave
     -- World.Thread.Discovery) is pause-independent -- a freshly loaded,

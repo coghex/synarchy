@@ -1273,6 +1273,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.UnitAiLogisticsTargets
                    Test.Headless.Lua.UnitAiLoadReset
                    Test.Headless.Lua.UnitAiReconcile
+                   Test.Headless.Lua.SessionTeardown
                    Test.Headless.Lua.WorkClaimCapacity
                    Test.Headless.Capability.Building
                    Test.Headless.Capability.Events
@@ -1298,8 +1299,11 @@ test-suite synarchy-test-headless
                    Test.Headless.Graphics.BindlessRelease
     build-depends: base >=4.20 && <5
                 , base-unicode-symbols
-                -- Test.Headless.Core.Queue's concurrent read/write case
-                -- uses Control.Concurrent.Async.concurrently (#1153).
+                -- Test.Headless.Core.Queue's two-thread FIFO case uses
+                -- Control.Concurrent.Async.concurrently (#1153). #1612
+                -- renamed that example away from "concurrent": its reader
+                -- is released only after every write has committed, so it
+                -- is two threads without read/write overlap.
                 , async
                 , containers
                 , GLFW-b

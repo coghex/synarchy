@@ -1295,7 +1295,10 @@ A zoom-band change or a HUD hide reaches the session through
 which is what covers the approach, where the container window's own
 entry has no window to close — while `"resize"` stays exempt. Exit to
 Menu keeps calling `clear` BEFORE `world.destroyAll`, so the release
-still reaches live entities. The SUCCESSFUL-load reset is the one path
+still reaches live entities — since #1610 through
+`scripts/lib/session_teardown.lua`, the one declared boundary that path
+runs, rather than a `pcall` hand-listed in `pauseMenu.onExitToMenu`; the
+ordering is unchanged and is exactly why the boundary runs first. The SUCCESSFUL-load reset is the one path
 that stops neither unit, because its recorded uids no longer name those
 units — a durable Mode B order the unit is carrying survives every
 release untouched, since stopping is all a release does to either end.

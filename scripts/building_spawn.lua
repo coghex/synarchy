@@ -482,6 +482,25 @@ function buildingSpawn.init(scriptId)
                 { kind = "building", component = "building_spawn" })
         end,
     })
+
+    -- `state` across the OTHER session-replacement path (#1610). Exit to
+    -- Menu queues BuildingClearAll and destroys every world without ever
+    -- reaching saveModules, so neither an apply nor onSaveLoaded fires
+    -- and this table kept one row per building for the life of the
+    -- process. The snapshot above already filters to live ids -- that is
+    -- the defence against a stale bid colliding with a live off-page
+    -- building -- but nothing emptied the table itself.
+    --
+    -- Emptied IN PLACE, like shutdown and onSaveLoaded: `state` is the
+    -- package.loaded singleton's own table and is held directly by
+    -- ensureState and the snapshot closure above.
+    require("scripts.lib.session_teardown").register("building_spawn",
+        function()
+            local n = 0
+            for k in pairs(state) do state[k] = nil; n = n + 1 end
+            engine.logInfo("Building spawn: cleared " .. n
+                .. " sequencer row(s) on session teardown")
+        end)
 end
 
 -- Broadcast from the engine once a save has finished loading (#195).
@@ -572,6 +591,11 @@ local function constructionTickOne(bid, dt)
 end
 
 function buildingSpawn.update(dt)
+    -- #1610: between Exit to Menu and the next session activation the
+    -- engine's BuildingClearAll is still draining, so getActiveBuildingIds
+    -- still reports the destroyed session's buildings and ensureState
+    -- would rebuild exactly the rows the teardown just cleared.
+    if require("scripts.lib.session_teardown").isTornDown() then return end
     if require("scripts.pause").isPaused() then return end
     local ids = getActiveBuildingIds()
     if #ids == 0 then return end
