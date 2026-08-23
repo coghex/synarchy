@@ -41,6 +41,10 @@ Reaching that precision takes three parts.
    at the `;`/`}` that closes it, or by layout at the first line indented
    no further than its own opening column, whichever comes first.
 
+   Both `qualified` spellings are understood -- the prepositive one and
+   GHC2024's postpositive `import Data.Text.Encoding qualified as TE`
+   (`ImportQualifiedPost`, on by default in this language edition).
+
    The parser is FAIL-LOUD: a declaration naming `Data.Text.Encoding` in
    a shape it does not model raises rather than being scanned as though
    the module were absent. A silent "no import, so nothing to flag" is
@@ -53,23 +57,32 @@ Reaching that precision takes three parts.
    module qualifier can never be captured by a local term binder, so a
    qualified hit is unambiguous -- there is no shadowing question to ask.
 
-3. A BARE USE IS RESOLVED ONLY WHEN THE FILE BINDS NOTHING BY THAT NAME.
-   `import Data.Text.Encoding` puts `decodeUtf8` in unqualified scope,
-   but a nested binder -- a function parameter, a `let`/`where` binding,
-   a lambda or case pattern -- may legally shadow it. (A TOP-LEVEL
-   binding cannot: clashing with an unqualified import of the same name
-   is an ambiguous-occurrence error, so such a file does not compile.)
-   So bare occurrences are reported only in a file with NO possible
-   binder of that name, where "possible binder" is deliberately
-   over-approximated by `_binds_banned_name` below -- over-approximating
-   can only ever silence, never blame.
+3. A BARE USE IS RESOLVED PER OCCURRENCE, AGAINST THE BINDERS THAT CAN
+   ACTUALLY REACH IT. `import Data.Text.Encoding` puts `decodeUtf8` in
+   unqualified scope, but a nested binder -- a function parameter, a
+   `let`/`where` binding, a lambda or case pattern -- may legally shadow
+   it. (A TOP-LEVEL binding cannot: clashing with an unqualified import
+   of the same name is an ambiguous-occurrence error, so such a file
+   does not compile.) Every nested binder is confined to ONE top-level
+   declaration, so the file is split into those first and each
+   occurrence consults only its own declaration's binders. Within a
+   declaration the reach of a binder follows the construct that made it:
 
-   The residual blind spot is stated rather than hidden: a file that
-   both shadows the name somewhere AND uses the import's strict decoder
-   elsewhere goes unreported. That needs an unqualified import of this
-   module, which no file in `src/` or `app/` has -- all 89 are qualified
-   -- so it is unreachable today, and any file that acquires one is
-   worth reading on its own merits.
+     * a parameter or definition head (a binder left of the
+       declaration's own `=`) and a `where` binding scope over the WHOLE
+       declaration. `where` is why "a binder shadows what follows it" is
+       not enough on its own: a `where` clause is written AFTER the body
+       it scopes over.
+
+     * every other binder -- `let`, lambda, case alternative -- is
+       written BEFORE the body it scopes over, so it shadows only
+       occurrences after it. An occurrence EARLIER in the same
+       declaration is still the import's, and is reported.
+
+   What counts as a possible binder (`_binder_positions`) is
+   deliberately over-approximated, because erring that way can only ever
+   silence an occurrence, never blame one -- the direction a guard may
+   err in when the alternative is guessing at scope.
 
 Two more properties hold throughout: candidates are maximal identifier
 LEXEMES, so the total siblings are safe by construction
@@ -132,13 +145,20 @@ _MENTIONS_STRICT_MODULE = re.compile(
 # [hiding] [( ... )]`. Anything else that names the module is a parse
 # failure, not a pass (see `_ImportParseError`).
 _STRICT_IMPORT = re.compile(
-    r"\Aimport\s+(?P<qualified>qualified\s+)?"
+    r"\Aimport\s+(?P<prequalified>qualified\s+)?"
     + re.escape(STRICT_MODULE) + r"(?![\w'.])"
+    # GHC2024 enables ImportQualifiedPost, so `qualified` may follow the
+    # module name instead of preceding it. Both spellings mean the same
+    # import; rejecting the postpositive one would raise on a perfectly
+    # compliant file.
+    r"(?P<postqualified>\s+qualified(?![\w']))?"
     r"(?:\s+as\s+(?P<alias>[A-Z][\w']*(?:\.[A-Z][\w']*)*))?"
     r"(?P<rest>[\s\S]*)\Z")
 
-# `import` as a whole token, wherever it sits.
+# Reserved words read as whole tokens, wherever they sit.
 _IMPORT_TOKEN = re.compile(r"(?<![\w'])import(?![\w'])")
+_MODULE_TOKEN = re.compile(r"(?<![\w'])module(?![\w'])")
+_WHERE_TOKEN = re.compile(r"(?<![\w'])where(?![\w'])")
 
 # Haskell 2010 report SS2.4's symbolic-operator characters. A maximal run
 # of these is one operator lexeme, which is how `=` is told from `==`,
@@ -304,8 +324,9 @@ def _classify_strict_import(decl: str, rel_path: str,
     if not in_scope:
         return None
     alias = match.group("alias")
-    return (alias if alias else STRICT_MODULE,
-            match.group("qualified") is None)
+    qualified = (match.group("prequalified") is not None
+                 or match.group("postqualified") is not None)
+    return (alias if alias else STRICT_MODULE, not qualified)
 
 
 def resolve_strict_imports(
@@ -378,37 +399,169 @@ def _qualifier_before(text: str, pos: int) -> str:
     return ""
 
 
-def _binds_banned_name(code_text: str, import_spans: list[tuple[int, int]]) -> bool:
-    """True if this file MIGHT bind `decodeUtf8` itself, so a bare
-    occurrence of that name might be the local binding rather than an
-    unqualified import's.
+def _module_header_span(code_text: str) -> list[tuple[int, int]]:
+    """The `module ... where` header's span, if any.
 
-    Deliberately an OVER-approximation, and only ever consulted for bare
-    occurrences. Erring towards "yes" silences those occurrences; it can
-    never blame anything, which is the direction a guard may err in when
-    the alternative is guessing at scope.
+    Excluded from the call-site scan for the same reason import
+    declarations are: an export list names entities, it does not use
+    them, so `module M (decodeUtf8) where` decodes nothing."""
+    match = _MODULE_TOKEN.search(code_text)
+    if match is None or not _opens_declaration(code_text, match.start()):
+        return []
+    depth = 0
+    i = match.end()
+    n = len(code_text)
+    while i < n:
+        char = code_text[i]
+        if char in "([":
+            depth += 1
+        elif char in ")]":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            where = _WHERE_TOKEN.match(code_text, i)
+            if where:
+                return [(match.start(), where.end())]
+        i += 1
+    return [(match.start(), n)]
 
-    An occurrence is treated as a possible binder when it is the first
-    token of its line (a declaration or case-alternative head), when it
-    sits to the left of a `=`, `->` or `::` on its line (a definition
-    head, a parameter, a `let`/`where` binding, a case pattern, or the
-    signature that declares one), or when a `\\` opens a lambda earlier
-    on its line."""
+
+def _body_column(code_text: str, skip_spans: list[tuple[int, int]]) -> int:
+    """The column the module body's top-level declarations sit at.
+
+    Every declaration's continuation lines are indented further than its
+    head, so the SMALLEST indent among the body's code lines is the
+    column the heads share -- which is 0 for an ordinary module and 1
+    for one laid out at column 1."""
+    columns = []
+    for offset, line in _lines_with_offsets(code_text):
+        body = line.lstrip(" \t")
+        if not body or _within(offset, skip_spans):
+            continue
+        columns.append(len(line) - len(body))
+    return min(columns) if columns else 0
+
+
+def _top_level_declarations(
+        code_text: str,
+        skip_spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """The `[start, end)` span of each top-level declaration.
+
+    A declaration head sits at `_body_column`; anything indented further
+    belongs to it. An explicit-layout `;` at bracket depth 0 splits one
+    too. This is the unit a `where` binding or a parameter can shadow
+    across, and nothing outside it can be shadowed by them -- which is
+    what makes per-occurrence resolution possible without a parser."""
+    column = _body_column(code_text, skip_spans)
+    boundaries = [0]
+    depth = 0
+    for i, char in enumerate(code_text):
+        if char in "([":
+            depth += 1
+        elif char in ")]":
+            depth = max(0, depth - 1)
+        elif depth == 0 and char in ";{}":
+            boundaries.append(i + 1)
+        elif char == "\n":
+            line_start = i + 1
+            j = line_start
+            while j < len(code_text) and code_text[j] in " \t":
+                j += 1
+            if (j < len(code_text) and code_text[j] != "\n"
+                    and (j - line_start) <= column):
+                boundaries.append(line_start)
+    boundaries.append(len(code_text))
+    ordered = sorted(set(boundaries))
+    return [(a, b) for a, b in zip(ordered, ordered[1:]) if b > a]
+
+
+def _binder_positions(code_text: str, start: int, end: int,
+                      skip_spans: list[tuple[int, int]]) -> list[int]:
+    """Positions in `code_text[start:end)` where `decodeUtf8` might be
+    BOUND rather than used.
+
+    Deliberately an OVER-approximation: erring towards "this is a
+    binder" can only ever silence a bare occurrence, never blame one,
+    which is the direction a guard may err in when the alternative is
+    guessing at scope. An occurrence counts when it is the first token
+    of its line (a declaration or case-alternative head), when a
+    binding separator (`=`, `->`, `::`, or the project's `→` / `∷`)
+    follows it on its line -- covering a definition head, a parameter, a
+    `let`/`where` binding, a case pattern and the signature that
+    declares one -- or when a `\\` opens a lambda earlier on its line."""
+    binders: list[int] = []
     for line_start, line in _lines_with_offsets(code_text):
+        if line_start >= end:
+            break
+        if line_start + len(line) < start:
+            continue
         for pos, lexeme in _identifier_runs(code_text, line_start,
                                             line_start + len(line)):
-            if lexeme != BANNED_IDENTIFIER:
+            if lexeme != BANNED_IDENTIFIER or not (start <= pos < end):
                 continue
-            if _within(pos, import_spans):
+            if _within(pos, skip_spans):
                 continue
             column = pos - line_start
-            if not line[:column].strip():
-                return True
-            if "\\" in line[:column]:
-                return True
-            if _separator_after(line, column):
-                return True
-    return False
+            if (not line[:column].strip()
+                    or "\\" in line[:column]
+                    or _separator_after(line, column)):
+                binders.append(pos)
+    return binders
+
+
+def _shadowed_region(code_text: str, decl: tuple[int, int],
+                     skip_spans: list[tuple[int, int]]) -> int | None:
+    """From which position in `decl` a bare `decodeUtf8` is shadowed by
+    one of the declaration's own binders -- `decl[0]` when the whole
+    declaration is shadowed, or None when nothing in it is.
+
+    The split is by which construct binds. A PARAMETER or definition
+    head (a binder left of the declaration's first `=`) and a `where`
+    binding both scope over the entire declaration, and the `where` case
+    is why this cannot simply be "binders shadow what follows them": a
+    `where` clause is written AFTER the body it scopes over. Every other
+    binder -- `let`, lambda, case alternative -- is written BEFORE the
+    body it scopes over, so it can only shadow occurrences that come
+    after it, and an occurrence earlier in the same declaration is still
+    the import's."""
+    start, end = decl
+    binders = _binder_positions(code_text, start, end, skip_spans)
+    if not binders:
+        return None
+    first_equals = _first_binding_equals(code_text, start, end)
+    where_at = _keyword_position(code_text, start, end, _WHERE_TOKEN)
+    earliest_local = None
+    for binder in binders:
+        if first_equals is not None and binder < first_equals:
+            return start
+        if where_at is not None and binder > where_at:
+            return start
+        earliest_local = binder if earliest_local is None \
+            else min(earliest_local, binder)
+    return earliest_local
+
+
+def _first_binding_equals(code_text: str, start: int, end: int) -> int | None:
+    """The position of the declaration's own `=` -- the one separating
+    its head from its body. Read as a maximal symbol run, so `==`, `=>`
+    and `>=` are not it."""
+    for match in _SYMBOL_RUN.finditer(code_text, start, end):
+        if match.group(0) != "=":
+            continue
+        # The declaration's own `=` sits outside any bracket; one inside
+        # a list or a record update belongs to a sub-expression.
+        opened = (code_text.count("(", start, match.start())
+                  + code_text.count("[", start, match.start()))
+        closed = (code_text.count(")", start, match.start())
+                  + code_text.count("]", start, match.start()))
+        if opened <= closed:
+            return match.start()
+    return None
+
+
+def _keyword_position(code_text: str, start: int, end: int,
+                      pattern: re.Pattern[str]) -> int | None:
+    match = pattern.search(code_text, start, end)
+    return match.start() if match else None
 
 
 def _lines_with_offsets(text: str):
@@ -421,15 +574,31 @@ def _lines_with_offsets(text: str):
 
 def _separator_after(line: str, column: int) -> bool:
     """True if a binding separator (`=`, `->`, `::`, or the project's
-    `→` / `∷`) appears in `line` after `column`.
+    `→` / `∷`) separates the name at `column` from a body on this line.
 
     Operators are read as MAXIMAL symbol runs, so `==`, `=>`, `>=` and
-    `<-` are correctly not `=` or `->`."""
-    tail = line[column:]
-    if any(sep in tail for sep in _UNICODE_BINDING_SEPARATORS):
-        return True
-    return any(match.group(0) in _BINDING_SEPARATORS
-               for match in _SYMBOL_RUN.finditer(tail))
+    `<-` are correctly not `=` or `->`. Only a separator at bracket
+    depth 0 or less counts: one inside a group OPENED after the name --
+    the `->` of a nested lambda in `(decodeUtf8 x, (\\y -> y) z)` --
+    belongs to that sub-expression, not to a binding of this name, and
+    counting it would misread an ordinary use as a binder and silence
+    it."""
+    depth = 0
+    for index, char in enumerate(line[column:]):
+        if char in "([":
+            depth += 1
+        elif char in ")]":
+            depth -= 1
+        elif depth <= 0 and char in _UNICODE_BINDING_SEPARATORS:
+            return True
+    for match in _SYMBOL_RUN.finditer(line, column):
+        if match.group(0) not in _BINDING_SEPARATORS:
+            continue
+        segment = line[column:match.start()]
+        if (segment.count("(") + segment.count("[")
+                <= segment.count(")") + segment.count("]")):
+            return True
+    return False
 
 
 def _line_of(text: str, pos: int) -> int:
@@ -443,18 +612,35 @@ def _within(pos: int, spans: list[tuple[int, int]]) -> bool:
 def find_violations(text: str, rel_path: str) -> list[Violation]:
     """Every use of `Data.Text.Encoding.decodeUtf8` in `text` (the
     source of the file at repo-relative `rel_path`), outside comments,
-    string literals, import declarations and `EXEMPTIONS`."""
+    string literals, the module header, import declarations and
+    `EXEMPTIONS`."""
     if rel_path in EXEMPTIONS:
         return []
     code_text = haskell_code_only(text)
     imports, import_spans = resolve_strict_imports(code_text, rel_path)
-    bare_is_the_import = imports.unqualified and not _binds_banned_name(
-        code_text, import_spans)
+    skip_spans = import_spans + _module_header_span(code_text)
+
+    # Where a bare occurrence is shadowed by one of its own
+    # declaration's binders, resolved per declaration rather than per
+    # file: a binder in one top-level declaration cannot reach into
+    # another.
+    shadow_from: dict[tuple[int, int], int | None] = {}
+    if imports.unqualified:
+        for decl in _top_level_declarations(code_text, skip_spans):
+            shadow_from[decl] = _shadowed_region(code_text, decl, skip_spans)
+
+    def bare_is_the_import(pos: int) -> bool:
+        if not imports.unqualified:
+            return False
+        for (start, end), from_pos in shadow_from.items():
+            if start <= pos < end:
+                return from_pos is None or pos < from_pos
+        return True
 
     violations: list[Violation] = []
     for start, end in haskell_code_spans(text):
         for pos, lexeme in _identifier_runs(text, start, end):
-            if lexeme != BANNED_IDENTIFIER or _within(pos, import_spans):
+            if lexeme != BANNED_IDENTIFIER or _within(pos, skip_spans):
                 continue
             qualifier = _qualifier_before(text, pos)
             if qualifier:
@@ -462,7 +648,7 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
                     continue
                 spelling = f"{qualifier}.{lexeme}"
             else:
-                if not bare_is_the_import:
+                if not bare_is_the_import(pos):
                     continue
                 spelling = lexeme
             violations.append(Violation(rel_path, _line_of(text, pos),
@@ -600,6 +786,39 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         "  import qualified Data.Text.Encoding as TE\n"
         "f raw = TE.decodeUtf8 raw\n",
         [5],
+    ),
+    (
+        "MIXED SCOPE: one declaration shadows the name, another does "
+        "not -- the unshadowed call is still the import's, and a "
+        "whole-file binder check would have missed it",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "bad raw = decodeUtf8 raw\n"
+        "local raw = let decodeUtf8 = id in decodeUtf8 raw\n",
+        [3],
+    ),
+    (
+        "MIXED SCOPE: within ONE declaration, an occurrence BEFORE a "
+        "lambda binder is not in that binder's scope",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "f raw = (decodeUtf8 raw, (\\decodeUtf8 -> decodeUtf8) id)\n",
+        [3],
+    ),
+    (
+        "postpositive `qualified` (GHC2024's ImportQualifiedPost) is a "
+        "qualified import like any other, and its uses are reported",
+        "module M where\n"
+        "import Data.Text.Encoding qualified as TE\n"
+        "f raw = TE.decodeUtf8 raw\n",
+        [3],
+    ),
+    (
+        "postpositive `qualified` with no alias",
+        "module M where\n"
+        "import Data.Text.Encoding qualified\n"
+        "f raw = Data.Text.Encoding.decodeUtf8 raw\n",
+        [3],
     ),
     (
         "two strict calls on one line are both reported",
@@ -764,6 +983,26 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "    decodeUtf8 -> decodeUtf8 raw\n",
     ),
     (
+        "postpositive `qualified` with only a COMPLIANT sibling in use "
+        "-- the form must parse, not raise",
+        "module M where\n"
+        "import Data.Text.Encoding qualified as TE\n"
+        "f raw = TE.decodeUtf8Lenient raw\n",
+    ),
+    (
+        "postpositive `qualified` means the bare name is NOT in scope",
+        "module M where\n"
+        "import Data.Text.Encoding qualified as TE\n"
+        "f raw = decodeUtf8 raw\n",
+    ),
+    (
+        "a module header whose export list names the function -- an "
+        "export names an entity, it does not use one",
+        "module M (decodeUtf8) where\n"
+        "import Data.Text.Encoding\n"
+        "f raw = raw\n",
+    ),
+    (
         "the composition `f.decodeUtf8` is a bare use, not a qualified "
         "one -- and stays clean under a qualified import",
         "module M where\n" + _TE
@@ -845,8 +1084,8 @@ def self_test() -> int:
           f"({len(DETECTED_FIXTURES)} detected across every import, "
           f"qualification and layout form; {len(CLEAN_FIXTURES)} clean, "
           f"including the total siblings, comments, literals, "
-          f"same-named functions from other modules and five shadowed "
-          f"bare names; {len(UNMODELLED_FIXTURES)} unmodelled imports "
+          f"same-named functions from other modules and shadowed bare "
+          f"names; {len(UNMODELLED_FIXTURES)} unmodelled imports "
           f"that raise rather than pass).")
     return 0
 
