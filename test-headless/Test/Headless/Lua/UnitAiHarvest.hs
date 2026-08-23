@@ -176,6 +176,23 @@ prelude = lns
     , "local function harvested() return CALLS.harvest > 0 end"
     ]
 
+-- | The real @lua.unit_ai@ component, registered against a fake
+--   @aiState@ the case fills in — the same shape
+--   "Test.Headless.Lua.UnitAiStall" uses for its persistence cases.
+--   @unit.exists@ is the only global the snapshot path reaches for a
+--   state table carrying no job or claim fields.
+savePrelude ∷ Text
+savePrelude = lns
+    [ "engine = { logWarn = function() end, logInfo = function() end }"
+    , "unit = { exists = function() return true end }"
+    , "local unitAiSave = require('scripts.unit_ai_save')"
+    , "local saveModules = require('scripts.lib.save_modules')"
+    , "codec = require('scripts.lib.data_codec')"
+    , "aiState = {}"
+    , "unitAiSave.register(aiState)"
+    , "spec = saveModules.registry.unit_ai"
+    ]
+
 spec ∷ Spec
 spec = describe "skill-scaled auto-harvest" $ do
 
@@ -482,6 +499,45 @@ spec = describe "skill-scaled auto-harvest" $ do
                 , "assert(XP == 0, 'a raced pick must grant no XP')"
                 , "assert(S.harvestPhase == nil, 'and enter no collecting phase')"
                 , "assert(S.harvestTarget == nil, 'the target must be forgotten')"
+                ]
+
+        it "leaves the lua.unit_ai payload shape alone: the picking \
+           \accumulator is transient, so no save carries it and no \
+           \component version moves" $
+            runsOk $ lns
+                [ savePrelude
+                -- A unit caught mid-pick at save time.
+                , "aiState[1] = { currentAction = 'auto_harvest',"
+                , "  harvestTarget = { x = 10, y = 0 },"
+                , "  harvestProgress = 0.75,"
+                , "  harvestProgressAt = { x = 10, y = 0 },"
+                , "  lastHarvestAt = 120 }"
+                , "assert(spec.version == 6,"
+                , "  'this change must not move the component version: '"
+                , "  .. tostring(spec.version))"
+                , "local snap = spec.snapshot()"
+                , "local row = snap[1]"
+                , "assert(row, 'the unit must still be snapshotted')"
+                , "assert(row.harvestProgress == nil"
+                , "   and row.harvestProgressAt == nil"
+                , "   and row.lastHarvestAt == nil,"
+                , "  'the accumulator and its clock must not reach the payload')"
+                -- Everything durable about the action is untouched.
+                , "assert(row.currentAction == 'auto_harvest',"
+                , "  'the action itself still persists')"
+                , "assert(row.harvestTarget and row.harvestTarget.x == 10,"
+                , "  'and so does the target, exactly as before #1582')"
+                -- And a real round trip restores a unit that picks from
+                -- zero rather than one carrying a stale clock.
+                , "local decoded = spec.decode(spec.version,"
+                , "  codec.decode(codec.encode(snap)))"
+                , "for k in pairs(aiState) do aiState[k] = nil end"
+                , "spec.apply(decoded, nil)"
+                , "local restored = aiState[1]"
+                , "assert(restored, 'the row must survive the round trip')"
+                , "assert(restored.harvestProgress == nil"
+                , "   and restored.lastHarvestAt == nil,"
+                , "  'a loaded picker starts its plant over, never mid-pick')"
                 ]
 
         it "requiring scripts.unit_ai_farm still attaches all three \
