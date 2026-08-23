@@ -6,7 +6,9 @@ For each seed in seeds.json, runs the dump multiple times to:
   2. Capture the audit output (or a representative thereof)
   3. Record the bug count envelope across runs
 
-Writes one baseline file per seed.
+Writes one baseline file per seed — except for a seed whose strictly
+compared invariants varied across its own capture runs, which is refused
+rather than sampled (see check_strict_invariants).
 """
 
 from __future__ import annotations
@@ -48,6 +50,74 @@ def envelope_of(values: list[int]) -> dict[str, int]:
     }
 
 
+# The invariants world_check.py compares for EXACT equality with no
+# envelope (world_check.py:432-451): the tile count and these four
+# elevation statistics. Anything not in this set is modelled as an
+# envelope or a recorded-variation policy on both sides instead.
+STRICT_ELEVATION_KEYS = ("min", "max", "median", "count")
+
+
+def _observation_sort_key(value: Any) -> tuple[int, Any]:
+    """Order ints numerically and anything else by its rendering.
+
+    The elevation statistics are int-or-None: world_audit.compute_stats
+    yields None for min/max/median when a region holds no real terrain.
+    sorted() over a set mixing the two raises TypeError, which would
+    replace the required failure with a crash on exactly the input that
+    most needs reporting.
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        return (0, value)
+    return (1, repr(value))
+
+
+def distinct_observations(values: list[Any]) -> list[Any]:
+    """The distinct values in `values`, ordered stably for reporting."""
+    return sorted(set(values), key=_observation_sort_key)
+
+
+def check_strict_invariants(seed: int, audit_results: list[Any]) -> None:
+    """Refuse the baseline when an exactly-compared invariant varied.
+
+    world_check.py compares the tile count and every key in
+    STRICT_ELEVATION_KEYS for exact equality against the recorded
+    baseline, so publishing one arbitrary run of a field that varied
+    would make every later check either flaky or a false regression
+    report. Raising is the honest outcome: main() catches RuntimeError
+    per seed, so that seed's existing baseline is left byte-identical,
+    the remaining seeds are still captured, and the run exits non-zero.
+
+    Every violated invariant is reported with all of its distinct
+    observed values, so a capture that varied in several fields at once
+    can be acted on without re-running.
+
+    This is deliberately narrower than "everything must be stable": the
+    fluid and audit-issue envelopes, and the recorded-hash racy policy,
+    model their own variation and are untouched. A hash-racy seed whose
+    strict invariants held is still captured normally.
+    """
+    violations: list[str] = []
+
+    tile_counts = distinct_observations([r.tile_count for r in audit_results])
+    if len(tile_counts) > 1:
+        violations.append(
+            f"tileCount varies across capture runs: "
+            f"{', '.join(repr(v) for v in tile_counts)}")
+
+    for key in STRICT_ELEVATION_KEYS:
+        observed = distinct_observations(
+            [r.elevation_stats.get(key) for r in audit_results])
+        if len(observed) > 1:
+            violations.append(
+                f"elevationStats.{key} varies across capture runs: "
+                f"{', '.join(repr(v) for v in observed)}")
+
+    if violations:
+        raise RuntimeError(
+            f"seed {seed}: strict invariant(s) varied, baseline NOT written "
+            f"(world_check.py compares these exactly): " + "; ".join(violations))
+
+
 def capture_seed(seed: int, world_size: int,
                  region: tuple[int, int, int, int],
                  runs: int) -> dict[str, Any]:
@@ -69,7 +139,15 @@ def capture_seed(seed: int, world_size: int,
     print(f"{'DET' if deterministic else 'RACY'} "
           f"({len(set(hashes))} distinct outputs)", file=sys.stderr)
 
-    # Pick a representative dump for the audit baseline (run 0).
+    # A field the checker compares exactly must not be sampled: refuse the
+    # seed instead of publishing one arbitrary observation of a varying
+    # invariant.
+    check_strict_invariants(seed, audit_results)
+
+    # Pick a representative dump for the audit baseline (run 0). The
+    # strictly compared fields it supplies — tileCount and
+    # elevationStats — are no longer a sample: the check above proved
+    # every run agreed on them.
     representative = audit_results[0].to_dict()
 
     # Compute bug count envelope across all runs
@@ -95,17 +173,6 @@ def capture_seed(seed: int, world_size: int,
         e = envelope_of(counts)
         e["all"] = counts
         fluid_envelope[fluid] = e
-
-    # Tile count and elevation stats should be deterministic
-    tile_counts = sorted(set(r.tile_count for r in audit_results))
-    if len(tile_counts) > 1:
-        print(f"    WARNING: tile count varies! {tile_counts}", file=sys.stderr)
-
-    elev_min_set = sorted(set(r.elevation_stats.get("min") for r in audit_results))
-    elev_max_set = sorted(set(r.elevation_stats.get("max") for r in audit_results))
-    if len(elev_min_set) > 1 or len(elev_max_set) > 1:
-        print(f"    WARNING: elevation stats vary! min={elev_min_set} max={elev_max_set}",
-              file=sys.stderr)
 
     return {
         "metadata": {
