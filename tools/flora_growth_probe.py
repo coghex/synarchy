@@ -504,7 +504,16 @@ def main():
         # engine is closing its own files, and only then does this run's
         # tree (with every save artifact it created) go away — on the
         # failing path exactly as on the passing one.
-        quit_engine(port, proc)
+        #
+        # Shut down ONLY an engine this run actually launched. `boot`
+        # already disposes of the process it started on either of its own
+        # failure paths, and leaves `proc` None — so a None here means
+        # the port belongs to somebody else (an instance that was already
+        # listening is exactly why a boot fails on a busy port), and
+        # `engine.quit()` would be aimed at their engine. Cleanup of the
+        # root stays unconditional: that directory is ours either way.
+        if proc is not None:
+            quit_engine(port, proc)
         cleaned = remove_run_root(base)
     return rc if cleaned else 1
 
