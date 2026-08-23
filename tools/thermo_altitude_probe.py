@@ -46,6 +46,7 @@ Exit 0 = all checks passed.
 from __future__ import annotations
 import argparse, json, subprocess, sys, time
 
+import probe_engine
 import probe_protocol
 from probelib import quit_engine, boot, send
 
@@ -127,11 +128,17 @@ def dump_command(seed, size, cx, cy, engine_args):
     `engine_args` is `rep.engine_args()`. A `+RTS ... -RTS` block is
     consumed by the GHC RTS before `getArgs`, so appending it after the
     engine's own flags is safe.
+
+    The launcher itself is `probe_engine.engine_command` (#1570): the
+    aggregate runner's already-resolved executable when there is one, and
+    otherwise the same `cabal run` this always used. The engine's own
+    arguments, and their order, are identical either way.
     """
-    return ["cabal", "run", "-v0", "exe:synarchy", "--", "--dump=terrain,ice",
-            "--seed", str(seed), "--worldSize", str(size),
-            "--region", f"{cx - 3},{cy - 3},{cx + 3},{cy + 3}",
-            *engine_args]
+    return probe_engine.engine_command(
+        ["--dump=terrain,ice",
+         "--seed", str(seed), "--worldSize", str(size),
+         "--region", f"{cx - 3},{cy - 3},{cx + 3},{cy + 3}",
+         *engine_args])
 
 
 def run_ice_dump(rep, seed, size, cx, cy):

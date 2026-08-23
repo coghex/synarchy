@@ -95,6 +95,8 @@ import sys
 import tempfile
 import time
 
+import probe_engine
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # The user's graphical instance. Never bind it, never kill anything on
@@ -214,9 +216,10 @@ def run_cli(*extra_args: str, timeout: float = FAIL_TIMEOUT):
 
     The separation is load-bearing: #1190 requires the diagnostic on
     stderr and NO READY marker on stdout, and probelib.boot merges the
-    two streams into one file.
+    two streams into one file. That separation is unaffected by which
+    launcher `probe_engine.engine_command` picks (#1570).
     """
-    cmd = ["cabal", "run", "-v0", "exe:synarchy", "--", *extra_args]
+    cmd = probe_engine.engine_command(extra_args)
     return subprocess.run(cmd, capture_output=True, text=True,
                           timeout=timeout, cwd=REPO_ROOT)
 
@@ -392,12 +395,14 @@ def install_cleanup_handlers() -> None:
 def kill_process_tree(proc: subprocess.Popen) -> None:
     """Kill the launched process AND its children.
 
-    `proc` is `cabal`, not the engine it spawns, so `proc.kill()` alone
-    reparents a live engine to init and leaves it holding the listener —
-    which then fails EVERY later boot on that port with a bind error
-    that looks nothing like the original fault. Observed exactly that
-    way (a `synarchy --headless` with PPID 1) while diagnosing this
-    check.
+    Run by hand, `proc` is `cabal`, not the engine it spawns, so
+    `proc.kill()` alone reparents a live engine to init and leaves it
+    holding the listener — which then fails EVERY later boot on that port
+    with a bind error that looks nothing like the original fault.
+    Observed exactly that way (a `synarchy --headless` with PPID 1) while
+    diagnosing this check. Under the aggregate runner `proc` IS the
+    engine (#1570), and the group kill below is correct for both: it
+    reaches whatever the launch actually produced without naming it.
 
     The kill is by PROCESS GROUP, which is why the launch passes
     `start_new_session=True`: it reaches the engine child without
@@ -428,8 +433,7 @@ def check_successful_bind(port: int) -> bool:
     log_err = f"/tmp/debug_console_boot_probe_{port}.err"
     with open(log_out, "w") as fo, open(log_err, "w") as fe:
         proc = subprocess.Popen(
-            ["cabal", "run", "-v0", "exe:synarchy", "--", "--headless",
-             "--port", str(port)],
+            probe_engine.engine_command(["--headless", "--port", str(port)]),
             stdout=fo, stderr=fe, cwd=REPO_ROOT,
             # Own process group, so cleanup can reach the engine child
             # without naming it and without touching anything else.
@@ -500,7 +504,9 @@ def check_successful_bind(port: int) -> bool:
     except OSError as e:
         return check("successful bind", False, f"{type(e).__name__}: {e}")
     finally:
-        # `proc` is cabal; the engine is its child and outlives it.
+        # Run by hand `proc` is cabal and the engine is its child, which
+        # outlives it; under the runner `proc` is the engine itself. The
+        # group kill covers both.
         kill_process_tree(proc)
         if proc in _LAUNCHED:
             _LAUNCHED.remove(proc)
@@ -668,7 +674,7 @@ def observe_widget_modules(port: int, resource_root: str = "",
         args += ["--resource-root", resource_root]
     with open(log_out, "w") as fo, open(log_err, "w") as fe:
         proc = subprocess.Popen(
-            ["cabal", "run", "-v0", "exe:synarchy", "--", *args],
+            probe_engine.engine_command(args),
             stdout=fo, stderr=fe, cwd=REPO_ROOT, start_new_session=True)
     _LAUNCHED.append(proc)
     try:

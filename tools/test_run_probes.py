@@ -49,6 +49,7 @@ Exit codes: 0 = all tests passed, 1 = one or more failed.
 """
 from __future__ import annotations
 
+import ast
 import os
 import random
 import shutil
@@ -64,6 +65,7 @@ import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import probe_engine  # type: ignore
 import probe_resource_lock  # type: ignore
 import run_probes  # type: ignore
 
@@ -200,6 +202,19 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
         "print(_args.port, file=_pf)",
         "_pf.flush()",
         "_pf.close()",
+        # What the runner handed this attempt in the environment (#1570):
+        # the resolved engine executable, and the resources an ancestor
+        # already holds exclusively on its behalf. One line per attempt,
+        # empty when the variable was absent -- which is itself the
+        # assertion for a probe that must be left on the direct-invocation
+        # fallback.
+        f"_ef = open({str(root / (name + '.env'))!r}, 'a')",
+        "print(os.environ.get('SYNARCHY_PROBE_ENGINE_EXE', ''),"
+        " os.environ.get('SYNARCHY_PROBE_HELD_EXCLUSIVE', ''),"
+        " os.environ.get('SYNARCHY_PROBE_HELD_NAMESPACE', ''),"
+        " sep='|', file=_ef)",
+        "_ef.flush()",
+        "_ef.close()",
         f"open({str(startedfile)!r}, 'w').write('1')",
         # Appended, not truncated: --retries reuses these paths, so an
         # attempt count is readable from the file too.
@@ -289,6 +304,29 @@ class Tree:
         (self.root / "tools").mkdir()
         (self.root / "_descendant.py").write_text(DESCENDANT_SRC)
         self.probes: list[tuple[str, str, str]] = []
+        # What the preflight double answers with (#1570). A real file,
+        # executable, at an absolute path, so `probe_engine`'s validation
+        # runs for real rather than being bypassed.
+        self.executable = self.root / "synthetic-synarchy"
+        self.executable.write_text("#!/bin/sh\nexit 0\n")
+        self.executable.chmod(0o755)
+
+    def env_lines(self, name: str) -> list[tuple[str, str, str]]:
+        """`(engine exe, held-exclusive, held-namespace)` per attempt."""
+        try:
+            raw = (self.root / f"{name}.env").read_text()
+        except OSError:
+            return []
+        out = []
+        for line in raw.splitlines():
+            parts = line.split("|")
+            if len(parts) == 3:
+                out.append((parts[0], parts[1], parts[2]))
+        return out
+
+    def engine_exes(self, name: str) -> list[str]:
+        """The engine executable each attempt of this probe was handed."""
+        return [exe for exe, _, _ in self.env_lines(name)]
 
     def add(self, name: str, **kw) -> str:
         script = f"{name}_probe.py"
@@ -438,6 +476,52 @@ def wait_file(path: Path, seconds: float = 60.0) -> bool:
     return False
 
 
+class PreflightRecorder:
+    """A deterministic stand-in for the preflight's subprocess entry point.
+
+    `run_probes.engine_preflight` makes the ONE Cabal contact an aggregate
+    run is allowed (#1570): a freshness `cabal build` and then a read-only
+    `cabal list-bin`. This answers both without a toolchain — the build
+    succeeds silently, the query prints the synthetic tree's own
+    executable — and records every argv it was handed, with the wall-clock
+    instant of each call.
+
+    The RECORD is the point. Counting the calls is what proves the
+    preflight happened exactly once for a whole sweep, and timing them
+    against the probes' own `<name>.interval` stamps is what proves it
+    finished before any probe process existed, rather than merely that it
+    happened.
+
+    `fail` makes the named step exit nonzero, which is how the
+    failure-before-anything-spawns case is driven.
+    """
+
+    def __init__(self, executable, *, fail: str | None = None,
+                 message: str = "synthetic preflight failure") -> None:
+        self.executable = str(executable)
+        self.fail = fail
+        self.message = message
+        self.calls: list[tuple[tuple[str, ...], float]] = []
+
+    def __call__(self, argv, cwd=None, capture_output=False, text=False):
+        argv = tuple(argv)
+        self.calls.append((argv, time.time()))
+        step = "build" if "build" in argv else "locate"
+        if self.fail == step:
+            return subprocess.CompletedProcess(argv, 1, "", self.message)
+        stdout = "" if step == "build" else f"{self.executable}\n"
+        return subprocess.CompletedProcess(argv, 0, stdout, "")
+
+    @property
+    def argvs(self) -> list[tuple[str, ...]]:
+        return [argv for argv, _ in self.calls]
+
+    @property
+    def finished_at(self) -> float:
+        """When the LAST preflight call was made; 0.0 if none was."""
+        return max((when for _, when in self.calls), default=0.0)
+
+
 class patched:
     """Point the real runner at the synthetic tree for one test.
 
@@ -452,8 +536,15 @@ class patched:
 
     def __init__(self, tree: Tree, grace: float = TEST_GRACE,
                  namespace: str | None = None,
-                 spans: dict[str, int] | None = None) -> None:
+                 spans: dict[str, int] | None = None,
+                 preflight: "PreflightRecorder | None" = None) -> None:
         self.tree, self.grace = tree, grace
+        # The engine-executable preflight (#1570) is doubled for the same
+        # reason the namespace is: a synthetic tree is no Cabal project,
+        # and a real `cabal build` here would make every main()-driven
+        # case depend on a toolchain and a warm build directory.
+        self.preflight = (PreflightRecorder(tree.executable)
+                          if preflight is None else preflight)
         self.namespace = namespace or f"selftest{uuid.uuid4().hex[:12]}"
         # The synthetic probes have synthetic keys, so the shipped
         # `PROBE_PORT_SPANS` says nothing about them. A test declaring a
@@ -465,18 +556,33 @@ class patched:
     def __enter__(self):
         self._saved = (run_probes.REPO_ROOT, run_probes.PROBES,
                        run_probes.GROUP_GRACE, run_probes.RESOURCE_NAMESPACE,
-                       run_probes.PROBE_PORT_SPANS)
+                       run_probes.PROBE_PORT_SPANS,
+                       run_probes.ENGINE_EXECUTABLE,
+                       run_probes.ENGINE_PREFLIGHT_RUNNER)
+        # An operator's own export of the runner's variables must not
+        # decide what a case here observes; `main` re-derives all of them.
+        self._saved_env = {name: os.environ.pop(name, None)
+                           for name in run_probes.RUNNER_ENV_VARS}
         run_probes.REPO_ROOT = str(self.tree.root)
         run_probes.PROBES = list(self.tree.probes)
         run_probes.GROUP_GRACE = self.grace
         run_probes.RESOURCE_NAMESPACE = self.namespace
         run_probes.PROBE_PORT_SPANS = self.spans
+        run_probes.ENGINE_EXECUTABLE = None
+        run_probes.ENGINE_PREFLIGHT_RUNNER = self.preflight
         return self
 
     def __exit__(self, *exc):
         (run_probes.REPO_ROOT, run_probes.PROBES, run_probes.GROUP_GRACE,
          run_probes.RESOURCE_NAMESPACE,
-         run_probes.PROBE_PORT_SPANS) = self._saved
+         run_probes.PROBE_PORT_SPANS,
+         run_probes.ENGINE_EXECUTABLE,
+         run_probes.ENGINE_PREFLIGHT_RUNNER) = self._saved
+        for name, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
         clear_namespace(self.namespace)
         return False
 
@@ -947,20 +1053,32 @@ def test_exclusive_resource_declaration_is_data_about_real_probes() -> None:
            "an undeclared probe needs nothing exclusively")
 
 
-def test_every_probe_shares_what_the_config_probes_take_exclusively() -> None:
-    print("\n-- the shipped declaration serializes BOTH config probes against "
-          "the whole registry (#1444)")
+def test_every_probe_declares_what_an_exclusive_holder_takes() -> None:
+    print("\n-- the shipped declaration serializes EVERY exclusive holder "
+          "against the whole registry (#1444, #1570)")
     expect(bool(run_probes.IMPLICIT_SHARED_RESOURCES),
            "there is an implicit shared interest at all "
            f"(got {run_probes.IMPLICIT_SHARED_RESOURCES!r})")
-    solo = {"config_migration", "config_state"}
     declared = set(run_probes.EXCLUSIVE_RESOURCES)
-    expect(declared == solo,
-           f"both config probes are the declared exclusive holders "
+    config_probes = {"config_migration", "config_state"}
+    expect(config_probes <= declared,
+           f"both config probes are still exclusive holders (#1322/#1444) "
            f"(declared: {sorted(declared)})")
-    taken: set[str] = set()
-    for key in solo:
-        taken |= run_probes.exclusive_resources(key)
+    for key in sorted(config_probes):
+        expect("repo-config" in run_probes.exclusive_resources(key),
+               f"{key} still takes repo-config exclusively")
+    # The three probes that still drive Cabal themselves -- a `cabal repl`
+    # through persistence_snapshot / save_compat_audit, which is NOT an
+    # engine boot and has no prebuilt equivalent (#1570).
+    ghci = {"persistence_contract", "persistence_contract_sweep",
+            "save_compat_migration"}
+    expect(ghci <= declared,
+           f"every GHCi consumer is an exclusive holder too "
+           f"(missing: {sorted(ghci - declared)})")
+    for key in sorted(ghci):
+        expect("cabal-build" in run_probes.exclusive_resources(key),
+               f"{key} takes the shared Cabal build state exclusively")
+    for key in sorted(declared):
         # An interest is one or the other, never both, or a release would
         # drop the exclusive half and leave the shared count behind.
         overlap = (run_probes.exclusive_resources(key)
@@ -968,16 +1086,419 @@ def test_every_probe_shares_what_the_config_probes_take_exclusively() -> None:
         expect(not overlap,
                f"{key} holds no resource in both interests "
                f"(both: {sorted(overlap)})")
-    # The whole registry, not a sample: this is what makes requirement 1 --
-    # "no probe's engine may boot while a config probe is running" -- a
-    # property of the shipped data rather than of the three synthetic
-    # probes the scheduling tests above drive.
-    unguarded = sorted(key for key, _, _ in run_probes.PROBES
-                       if key not in solo
-                       and not taken <= run_probes.shared_resources(key))
-    expect(not unguarded,
-           f"every other registered probe holds every resource they take, "
-           f"so none can be scheduled beside them (unguarded: {unguarded})")
+    # The whole registry, per holder, not a sample: this is what makes
+    # "nothing else may run beside an exclusive holder" a property of the
+    # shipped data rather than of the synthetic probes the scheduling
+    # tests above drive. An interest in EITHER direction counts -- two
+    # exclusive holders of one resource exclude each other too, which is
+    # how the three GHCi consumers stay off each other's `cabal repl`.
+    for key in sorted(declared):
+        taken = run_probes.exclusive_resources(key)
+        unguarded = sorted(
+            other for other, _, _ in run_probes.PROBES
+            if other != key
+            and not taken <= (run_probes.shared_resources(other)
+                              | run_probes.exclusive_resources(other)))
+        expect(not unguarded,
+               f"every other registered probe declares an interest in "
+               f"everything {key} takes, so none can be scheduled beside it "
+               f"(unguarded: {unguarded})")
+
+
+# --------------------------------------------------------------------------
+# The engine executable is resolved ONCE, before any probe (#1570)
+#
+# These drive the REAL `run_probes.main` against the synthetic tree, with
+# only the preflight's subprocess entry point doubled — so the ordering,
+# the call count, the refusal path and the environment handed to each
+# probe are the shipped code's, not a restatement of it.
+# --------------------------------------------------------------------------
+def preflight_argvs(recorder: PreflightRecorder) -> list[list[str]]:
+    return [list(argv) for argv in recorder.argvs]
+
+
+def first_start(tree: Tree, name: str) -> float | None:
+    """When this probe's FIRST attempt began, or None if it never ran."""
+    windows = tree.intervals(name)
+    return windows[0][0] if windows else None
+
+
+def test_one_preflight_precedes_every_parallel_probe() -> None:
+    print("\n-- a --jobs sweep makes ONE Cabal contact, before any probe starts")
+    tree = Tree()
+    try:
+        for name in ("alpha", "beta", "gamma"):
+            tree.add(name, exit_code=0)
+        recorder = PreflightRecorder(tree.executable)
+        with patched(tree, preflight=recorder):
+            rc, out = _main_with_open(
+                tree, ["--only", "alpha,beta,gamma", "--exact", "--jobs", "3"])
+        expect(rc == 0, f"every probe still passes (got {rc})\n{out}")
+        expect(preflight_argvs(recorder) == [
+                   ["cabal", "build", "exe:synarchy"],
+                   ["cabal", "list-bin", "exe:synarchy"]],
+               f"exactly one freshness build and one read-only query, in that "
+               f"order (got {preflight_argvs(recorder)})")
+        starts = [first_start(tree, name) for name in ("alpha", "beta", "gamma")]
+        expect(all(when is not None for when in starts),
+               f"all three probes really ran (starts: {starts})")
+        expect(all(when is not None and recorder.finished_at <= when
+                   for when in starts),
+               f"and the preflight finished before the earliest of them "
+               f"(preflight {recorder.finished_at}, starts {starts})")
+    finally:
+        tree.cleanup()
+
+
+def test_one_preflight_precedes_every_sequential_probe() -> None:
+    print("\n-- and a sequential sweep makes the same one contact, first")
+    tree = Tree()
+    try:
+        tree.add("alpha", exit_code=0)
+        tree.add("beta", exit_code=0)
+        recorder = PreflightRecorder(tree.executable)
+        with patched(tree, preflight=recorder):
+            rc, out = _main_with_open(tree, ["--only", "alpha,beta", "--exact"])
+        expect(rc == 0, f"both probes still pass (got {rc})\n{out}")
+        expect(len(recorder.calls) == 2,
+               f"the sequential path preflights once too, not per probe "
+               f"(calls: {preflight_argvs(recorder)})")
+        starts = [first_start(tree, name) for name in ("alpha", "beta")]
+        expect(all(when is not None and recorder.finished_at <= when
+                   for when in starts),
+               f"before either of them (preflight {recorder.finished_at}, "
+               f"starts {starts})")
+    finally:
+        tree.cleanup()
+
+
+def test_a_failed_preflight_spawns_nothing() -> None:
+    print("\n-- a preflight that fails starts no probe, allocates no retry")
+    for failing_step in ("build", "locate"):
+        tree = Tree()
+        try:
+            tree.add("alpha", exit_code=0)
+            recorder = PreflightRecorder(tree.executable, fail=failing_step,
+                                          message="no such package")
+            with patched(tree, preflight=recorder):
+                rc, out = _main_with_open(
+                    tree, ["--only", "alpha", "--exact", "--retries", "2"])
+            expect(rc == 2,
+                   f"the {failing_step} step failing exits 2 (got {rc})")
+            expect("cabal" in out and "no such package" in out,
+                   f"and says which command failed, and why (got {out!r})")
+            expect(not tree.started("alpha"),
+                   "no probe process was spawned")
+            expect(tree.intervals("alpha") == [],
+                   f"so no attempt was recorded either "
+                   f"(got {tree.intervals('alpha')})")
+            expect("PASS" not in out and "FAIL" not in out,
+                   f"and no probe verdict was reported (got {out!r})")
+        finally:
+            tree.cleanup()
+
+
+def test_an_unusable_resolved_path_is_refused_not_ignored() -> None:
+    print("\n-- an executable that cannot be run is a refusal, not a fallback")
+    tree = Tree()
+    try:
+        tree.add("alpha", exit_code=0)
+        missing = tree.root / "not-built-yet"
+        recorder = PreflightRecorder(missing)
+        with patched(tree, preflight=recorder):
+            rc, out = _main_with_open(tree, ["--only", "alpha", "--exact"])
+        expect(rc == 2, f"a list-bin answer naming no file exits 2 (got {rc})")
+        expect(str(missing) in out,
+               f"and names the path it could not use (got {out!r})")
+        expect(not tree.started("alpha"), "and no probe was spawned")
+    finally:
+        tree.cleanup()
+
+
+def test_list_and_rejected_selections_stay_build_free() -> None:
+    print("\n-- --list and a selection that runs nothing never reach Cabal")
+    tree = Tree()
+    try:
+        tree.add("alpha", exit_code=0)
+        for argv, why in (
+                (["--list"], "--list"),
+                (["--only", "nosuchprobe", "--exact"], "an all-invalid --exact"),
+                (["--only", "alpha,nosuchprobe", "--exact"],
+                 "a MIXED --exact selection"),
+                (["--only", "nosuchsubstring"], "a substring matching nothing")):
+            recorder = PreflightRecorder(tree.executable)
+            with patched(tree, preflight=recorder):
+                _rc, _out = _main_with_open(tree, argv)
+            expect(not recorder.calls,
+                   f"{why} builds nothing (calls: {preflight_argvs(recorder)})")
+        expect(not tree.started("alpha"),
+               "and the mixed selection still ran no probe")
+    finally:
+        tree.cleanup()
+
+
+def test_gui_port_refusal_still_precedes_the_build() -> None:
+    print("\n-- a refused port plan is refused before anything is built")
+    tree = Tree()
+    try:
+        tree.add("alpha", exit_code=0)
+        recorder = PreflightRecorder(tree.executable)
+        with patched(tree, preflight=recorder):
+            rc, _out = _main_refusal(
+                tree, ["--only", "alpha", "--exact", "--port",
+                       str(run_probes.GUI_PORT)])
+        expect(rc != 0, f"the GUI port is still refused (got {rc})")
+        expect(not recorder.calls,
+               f"and nothing was built first "
+               f"(calls: {preflight_argvs(recorder)})")
+    finally:
+        tree.cleanup()
+
+
+def test_the_resolved_executable_reaches_every_attempt() -> None:
+    print("\n-- every probe process is handed the one resolved executable")
+    tree = Tree()
+    try:
+        tree.add("alpha", exit_code=0)
+        # Fails once, so the parallel batch's SOLO retry is a second
+        # attempt that must be handed the same executable.
+        tree.add("flaky", exit_code=1)
+        recorder = PreflightRecorder(tree.executable)
+        with patched(tree, preflight=recorder):
+            _rc, out = _main_with_open(
+                tree, ["--only", "alpha,flaky", "--exact", "--jobs", "2",
+                       "--retries", "1"])
+        want = str(tree.executable)
+        expect(tree.engine_exes("alpha") == [want],
+               f"the parallel attempt got it (got {tree.engine_exes('alpha')})")
+        expect(tree.engine_exes("flaky") == [want, want],
+               f"and so did BOTH the parallel attempt and its solo retry "
+               f"(got {tree.engine_exes('flaky')})\n{out}")
+        expect(len(recorder.calls) == 2,
+               f"the retry built nothing further "
+               f"(calls: {preflight_argvs(recorder)})")
+    finally:
+        tree.cleanup()
+
+    tree = Tree()
+    try:
+        tree.add("solo", exit_code=1)
+        recorder = PreflightRecorder(tree.executable)
+        with patched(tree, preflight=recorder):
+            _rc, _out = _main_with_open(
+                tree, ["--only", "solo", "--exact", "--retries", "2"])
+        want = str(tree.executable)
+        expect(tree.engine_exes("solo") == [want, want, want],
+               f"the sequential path's inline retries got it too "
+               f"(got {tree.engine_exes('solo')})")
+        expect(len(recorder.calls) == 2,
+               f"still one preflight (calls: {preflight_argvs(recorder)})")
+    finally:
+        tree.cleanup()
+
+
+def test_a_direct_run_one_leaves_the_child_on_the_fallback() -> None:
+    print("\n-- run_one without a resolved executable hands the child nothing")
+    tree = Tree()
+    try:
+        script = tree.add("bare", exit_code=0)
+        with patched(tree):
+            # `patched` clears the resolved executable; nothing calls the
+            # preflight here. This is `tools/probe_flake.py`'s path, which
+            # runs ONE probe at a time and must keep the direct-invocation
+            # `cabal run` fallback rather than inherit a stale export.
+            os.environ[probe_engine.ENV_ENGINE_EXE] = str(tree.executable)
+            try:
+                ok, _t, _e, _out = run_probes.run_one(script, None, 120.0)
+            finally:
+                os.environ.pop(probe_engine.ENV_ENGINE_EXE, None)
+        expect(ok, "the probe still ran")
+        expect(tree.engine_exes("bare") == [""],
+               f"and saw no runner-supplied executable, so probelib falls "
+               f"back to `cabal run` (got {tree.engine_exes('bare')})")
+    finally:
+        tree.cleanup()
+
+
+def test_a_nested_runner_adopts_the_executable_without_rebuilding() -> None:
+    print("\n-- a nested runner reuses what its ancestor already resolved")
+    tree = Tree()
+    try:
+        recorder = PreflightRecorder(tree.executable)
+        with patched(tree, preflight=recorder):
+            adopted = run_probes.engine_preflight(
+                {probe_engine.ENV_ENGINE_EXE: str(tree.executable)})
+        expect(adopted == str(tree.executable),
+               f"the inherited executable is adopted verbatim (got {adopted})")
+        expect(not recorder.calls,
+               f"with no second build (calls: {preflight_argvs(recorder)})")
+
+        recorder = PreflightRecorder(tree.executable)
+        with patched(tree, preflight=recorder):
+            resolved = run_probes.engine_preflight({})
+        expect(resolved == str(tree.executable),
+               "and with nothing inherited it resolves one itself")
+        expect(len(recorder.calls) == 2,
+               f"through exactly one build and one query "
+               f"(calls: {preflight_argvs(recorder)})")
+    finally:
+        tree.cleanup()
+
+
+def test_an_ancestors_exclusive_hold_is_not_waited_on() -> None:
+    print("\n-- a nested runner never waits on its own ancestor's hold")
+    namespace = f"selftest{uuid.uuid4().hex[:12]}"
+    env = {run_probes.ENV_HELD_NAMESPACE: namespace,
+           run_probes.ENV_HELD_EXCLUSIVE: "cabal-build"}
+    lock_exclusive, lock_shared = run_probes.cross_process_interests(
+        "chop", namespace, env)
+    expect("cabal-build" not in lock_shared,
+           f"an inherited exclusive drops out of a shared request "
+           f"(got {sorted(lock_shared)})")
+    expect("repo-config" in lock_shared,
+           f"while everything else is still requested "
+           f"(got {sorted(lock_shared)})")
+    nested_exclusive, _ = run_probes.cross_process_interests(
+        "save_compat_migration", namespace, env)
+    expect(not nested_exclusive,
+           f"and out of an exclusive request too "
+           f"(got {sorted(nested_exclusive)})")
+
+    # The in-process ledger keeps the FULL declarations, so a nested sweep
+    # still serializes its own probes against each other.
+    expect("cabal-build" in run_probes.exclusive_resources(
+               "save_compat_migration"),
+           "the declaration itself is untouched")
+
+    # A DIFFERENT namespace inherits nothing: a resource name means
+    # nothing outside the repository its lock was taken in.
+    foreign = dict(env, **{run_probes.ENV_HELD_NAMESPACE: "somewhere-else"})
+    _fx, foreign_shared = run_probes.cross_process_interests(
+        "chop", namespace, foreign)
+    expect("cabal-build" in foreign_shared,
+           f"a hold from another namespace is ignored "
+           f"(got {sorted(foreign_shared)})")
+
+    # And the hold really is grantable: take `cabal-build` exclusively
+    # here, then acquire the nested request against the same namespace.
+    ancestor = probe_resource_lock.acquire(
+        exclusive={"cabal-build"}, namespace=namespace,
+        purpose="selftest ancestor")
+    try:
+        try:
+            nested = probe_resource_lock.acquire(
+                exclusive=lock_exclusive, shared=lock_shared,
+                namespace=namespace, purpose="selftest nested")
+        except probe_resource_lock.ResourceBusy as busy:
+            expect(False, f"the nested request still blocked on {busy.resource!r}")
+        else:
+            expect(True, "the nested request is granted under the ancestor's "
+                         "exclusive hold")
+            nested.release()
+    finally:
+        ancestor.release()
+        clear_namespace(namespace)
+
+
+def test_the_hold_environment_names_what_a_probe_holds() -> None:
+    print("\n-- a probe is told what its runner holds exclusively for it")
+    namespace = "selftest-hold-env"
+    env = run_probes.descendant_hold_env("save_compat_migration", namespace)
+    expect(env.get(run_probes.ENV_HELD_EXCLUSIVE) == "cabal-build",
+           f"an exclusive holder exports its resource (got {env!r})")
+    expect(env.get(run_probes.ENV_HELD_NAMESPACE) == namespace,
+           f"qualified by the namespace it was taken in (got {env!r})")
+    expect(run_probes.descendant_hold_env("chop", namespace) == {},
+           "a probe holding nothing exclusively exports nothing")
+    expect(run_probes.descendant_hold_env("save_compat_migration", None) == {},
+           "and without a namespace there is nothing to export")
+
+
+def test_a_probe_is_handed_its_runners_exclusive_holds() -> None:
+    print("\n-- and that environment really reaches the probe process")
+    tree = Tree()
+    try:
+        # Named for a shipped EXCLUSIVE holder, so the real declaration is
+        # what decides — the same trick the scheduling tests above use.
+        tree.add("config_state", exit_code=0)
+        with patched(tree) as fixture:
+            rc, out = _main_with_open(
+                tree, ["--only", "config_state", "--exact"])
+        expect(rc == 0, f"the probe passed (got {rc})\n{out}")
+        lines = tree.env_lines("config_state")
+        expect(len(lines) == 1, f"it ran once (got {lines})")
+        if lines:
+            _exe, held, held_ns = lines[0]
+            expect(held == "repo-config",
+                   f"and was told what its runner holds for it (got {held!r})")
+            expect(held_ns == fixture.namespace,
+                   f"in the runner's own namespace (got {held_ns!r})")
+    finally:
+        tree.cleanup()
+
+
+def registered_probe_sources() -> dict[str, str]:
+    """Every registered probe script's source text, keyed by probe key."""
+    tools = Path(TOOLS_DIR)
+    out = {}
+    for key, script, _ in run_probes.PROBES:
+        path = tools / script
+        if path.is_file():
+            out[key] = path.read_text(encoding="utf-8")
+    return out
+
+
+def cabal_run_launchers(source: str) -> list[str]:
+    """Sequence literals in `source` that spell a `cabal run` launch.
+
+    Structural, over the parsed tree rather than the text: a list or
+    tuple whose first element is the string "cabal" and whose second is
+    "run". That is exactly the engine launch #1570 removed from every
+    probe, and it stays out of reach of a probe that merely MENTIONS
+    cabal in prose or runs a different cabal subcommand behind the
+    runner-supplied-executable check (`resource_root_probe.py`).
+    """
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, (ast.List, ast.Tuple)):
+            continue
+        head = [element.value for element in node.elts[:2]
+                if isinstance(element, ast.Constant)
+                and isinstance(element.value, str)]
+        if head[:2] == ["cabal", "run"]:
+            found.append(ast.unparse(node))
+    return found
+
+
+def test_no_registered_probe_spells_a_cabal_engine_launch() -> None:
+    print("\n-- no registered probe launches its engine through `cabal run`")
+    offenders = {key: launchers
+                 for key, source in registered_probe_sources().items()
+                 if (launchers := cabal_run_launchers(source))}
+    expect(not offenders,
+           f"every engine launch goes through probe_engine.engine_command "
+           f"(offenders: {offenders})")
+    for shared in ("probelib.py", "probe_engine.py"):
+        source = (Path(TOOLS_DIR) / shared).read_text(encoding="utf-8")
+        launchers = cabal_run_launchers(source)
+        if shared == "probelib.py":
+            expect(not launchers,
+                   f"probelib no longer spells one either (got {launchers})")
+        else:
+            expect(len(launchers) == 1,
+                   f"probe_engine owns the ONE remaining fallback spelling "
+                   f"(got {launchers})")
+
+    # Mutation: the guard has to FIRE on a reintroduced launcher, not
+    # merely agree that today's tree is clean.
+    reintroduced = ('cmd = ["cabal", "run", "-v0", "exe:synarchy", "--", '
+                    '"--headless"]\n')
+    expect(cabal_run_launchers(reintroduced),
+           "a reintroduced `cabal run` launcher is caught")
+    expect(not cabal_run_launchers('r = ["cabal", "list-bin", "exe:synarchy"]\n'),
+           "while a non-launching cabal subcommand is not mistaken for one")
+    expect(not cabal_run_launchers('note = "run this with cabal run"\n'),
+           "and neither is prose that merely mentions it")
 
 
 def test_resource_ledger_is_a_reader_writer_lock() -> None:
@@ -1381,6 +1902,18 @@ DRIVER_SRC = textwrap.dedent("""\
     # in-process `patched` fixture supplies it -- otherwise the runner
     # refuses to start and the interrupt below has nothing to interrupt.
     run_probes.RESOURCE_NAMESPACE = {namespace!r}
+    # ... and the engine-executable preflight (#1570) the same way, for
+    # the same reason: the synthetic tree is no Cabal project, so a real
+    # freshness build would refuse the run before the interrupt could
+    # reach it. One build, one list-bin, both answered here.
+    _synthetic_exe = {executable!r}
+
+    def _preflight(argv, cwd=None, capture_output=False, text=False):
+        import subprocess as _sp
+        out = "" if "build" in tuple(argv) else _synthetic_exe + chr(10)
+        return _sp.CompletedProcess(tuple(argv), 0, out, "")
+
+    run_probes.ENGINE_PREFLIGHT_RUNNER = _preflight
     submit_delay = {submit_delay!r}
     if submit_delay:
         # Widen the SUBMISSION window so an interrupt can land inside it.
@@ -1408,7 +1941,7 @@ def _run_driver(tree: Tree, argv: list[str], wait_for: list[str],
     driver.write_text(DRIVER_SRC.format(
         tools=TOOLS_DIR, root=str(tree.root), probes=list(tree.probes),
         grace=grace, argv=argv, submit_delay=submit_delay,
-        namespace=namespace))
+        namespace=namespace, executable=str(tree.executable)))
     proc = subprocess.Popen(
         [sys.executable, str(driver)],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -2085,7 +2618,20 @@ def main() -> int:
     test_reap_group_on_a_dead_group_is_a_noop()
     test_aggregate_exit_codes_unchanged()
     test_exclusive_resource_declaration_is_data_about_real_probes()
-    test_every_probe_shares_what_the_config_probes_take_exclusively()
+    test_every_probe_declares_what_an_exclusive_holder_takes()
+    test_one_preflight_precedes_every_parallel_probe()
+    test_one_preflight_precedes_every_sequential_probe()
+    test_a_failed_preflight_spawns_nothing()
+    test_an_unusable_resolved_path_is_refused_not_ignored()
+    test_list_and_rejected_selections_stay_build_free()
+    test_gui_port_refusal_still_precedes_the_build()
+    test_the_resolved_executable_reaches_every_attempt()
+    test_a_direct_run_one_leaves_the_child_on_the_fallback()
+    test_a_nested_runner_adopts_the_executable_without_rebuilding()
+    test_an_ancestors_exclusive_hold_is_not_waited_on()
+    test_the_hold_environment_names_what_a_probe_holds()
+    test_a_probe_is_handed_its_runners_exclusive_holds()
+    test_no_registered_probe_spells_a_cabal_engine_launch()
     test_resource_ledger_is_a_reader_writer_lock()
     test_declared_conflicts_never_overlap()
     test_a_solo_probe_waits_for_work_already_running()

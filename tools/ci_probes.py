@@ -485,7 +485,8 @@ CORE_GLOBS = [
     "scripts/unit_resources.lua", "scripts/unit_stats.lua",
     "scripts/movement_arena.lua",
     "data/units/*", "data/materials/*", "data/substances/*",
-    "tools/probelib.py", "tools/run_probes.py", "tools/ci_probes.py",
+    "tools/probelib.py", "tools/probe_engine.py", "tools/run_probes.py",
+    "tools/ci_probes.py",
     ".github/workflows/ci.yml",
 ]
 
@@ -917,6 +918,9 @@ def _self_test() -> int:
         # #1359 requirement 4: probe infrastructure and unrecognized tools/
         # paths keep selecting the full set.
         (["tools/probelib.py"], sorted(CI_ELIGIBLE), "probelib -> full"),
+        # The launcher every probe's engine comes out of (#1570).
+        (["tools/probe_engine.py"], sorted(CI_ELIGIBLE),
+         "probe_engine -> full"),
         (["tools/run_probes.py"], sorted(CI_ELIGIBLE), "run_probes -> full"),
         (["tools/ci_probes.py"], sorted(CI_ELIGIBLE), "this mapping -> full"),
         (["tools/world_check.py"], sorted(CI_ELIGIBLE),
