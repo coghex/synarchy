@@ -241,6 +241,73 @@ spec = do
                         isNaN worstCaseAccumulated `shouldBe` False
                     Nothing → expectationFailure "expected Just"
 
+        describe "negative-infinite step costs (#1603)" $ do
+            -- `clampStepCost` classifies non-finite totals BEFORE it
+            -- looks at sign. These examples pin that ordering through
+            -- the public `stepCost`/`stepCostUnder` surface (the helper
+            -- itself is deliberately unexported), and they assert the
+            -- EXACT documented ceiling rather than mere finiteness: a
+            -- `-Infinity` clamped to `0` is finite, non-NaN and `≥ 0`,
+            -- which is precisely why the `1 / 0` example above could
+            -- not have caught this.
+            let maxStepCostValue = 1.0e6 ∷ Float
+
+            it "a negative-infinite climb cost is charged the ceiling, not made free" $ do
+                -- climb_factor -Infinity over a 56-z cliff: the total is
+                -- -Infinity, which is not NaN, is not > the ceiling, and
+                -- IS < 0 — so a sign branch reached first would return 0
+                -- and make an overflowed cliff the cheapest edge in the
+                -- search.
+                let wtd = worldWith $ customChunk $ \(lx, _) →
+                        let z = if lx < 8 then 4 else 60
+                        in (z, Nothing)
+                    pcNegInf = pc { pcClimbFactor = -1 / 0 }
+                case stepCost pcNegInf reg wtd (7, 5) (8, 5) of
+                    Just c  → c `shouldBe` maxStepCostValue
+                    Nothing → expectationFailure "expected Just"
+
+            it "a negative-infinite fall cost is charged the ceiling, not made free" $ do
+                -- A FINITE negative fall_factor overflows negative under
+                -- an odd exponent: (-5.0) ** 57 = -Infinity. Pin that
+                -- precondition first so a platform whose `**` differs
+                -- fails here rather than silently testing nothing.
+                let fallTerm = ((-5.0) ∷ Float) ** 57
+                fallTerm `shouldSatisfy` (\v → isInfinite v ∧ v < 0)
+                let wtd = worldWith $ customChunk $ \(lx, _) →
+                        let z = if lx < 8 then 60 else 3
+                        in (z, Nothing)
+                    pcNegFall = pc { pcFallFactor = -5.0 }
+                case stepCost pcNegFall reg wtd (7, 5) (8, 5) of
+                    Just c  → c `shouldBe` maxStepCostValue
+                    Nothing → expectationFailure "expected Just"
+
+            it "a FINITE negative total still clamps to 0, so not every negative is the ceiling" $ do
+                -- The control for the ordering: clamping finite
+                -- negatives to 0 is unchanged policy. Without this, a
+                -- fix that mapped EVERY negative to the ceiling would
+                -- pass the two examples above.
+                let wtd = worldWith $ customChunk $ \(lx, _) →
+                        let z = if lx < 8 then 5 else 6
+                        in (z, Nothing)
+                    pcNegFinite = pc { pcClimbFactor = -10.0 }
+                -- horizontal 1.0 + (-10.0 * 1) = -9.0, a finite negative.
+                case stepCost pcNegFinite reg wtd (7, 5) (8, 5) of
+                    Just c  → c `shouldBe` 0
+                    Nothing → expectationFailure "expected Just"
+
+            it "non-finite outranks negative: the same fixture diverges on the factor's magnitude alone" $ do
+                -- Both configs below produce a NEGATIVE total on the
+                -- identical 56-z cliff; they differ only in whether that
+                -- total is finite. If sign were classified first the two
+                -- would agree on 0, which is the bug this pins.
+                let wtd = worldWith $ customChunk $ \(lx, _) →
+                        let z = if lx < 8 then 4 else 60
+                        in (z, Nothing)
+                    costWith f = stepCostUnder defaultMoveHazardPolicy
+                                     (pc { pcClimbFactor = f }) reg wtd (7, 5) (8, 5)
+                costWith (-10.0)  `shouldBe` Just 0
+                costWith (-1 / 0) `shouldBe` Just maxStepCostValue
+
         describe "fluid impassability" $ do
             let wtd = worldWith $ customChunk $ \(lx, _) →
                     if lx ≡ 5 then (0, Just Ocean)
