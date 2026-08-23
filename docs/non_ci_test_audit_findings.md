@@ -40,9 +40,9 @@ approval.
 - [x] NCT-18. Item-temperature persistence phase can load a stale save — [#1613]
 - [x] NCT-19. Vegetation/farming persistence probes can load stale saves — [#1616]
 - [x] NCT-20. Item-identity persistence phase can load a stale save — [#1617]
-- [ ] NCT-21. Foraging persistence phase can load a stale save
-- [ ] NCT-22. Location persistence probes can load stale fixtures
-- [ ] NCT-23. Position-hold inventory overstates the executable fixture by one acolyte
+- [x] NCT-21. Foraging persistence phase can load a stale save — [#1618]
+- [x] NCT-22. Location persistence probes can load stale fixtures — [#1620]
+- [x] NCT-23. Position-hold inventory overstates the executable fixture by one acolyte — [#1621]
 
 ---
 
@@ -941,7 +941,7 @@ cover different inventory contracts and have independent lifecycle setup.
 
 ## Foraging persistence probe
 
-### NCT-21. Foraging persistence phase can load a stale save
+### [#1618] NCT-21. Foraging persistence phase can load a stale save
 
 The foraging probe saves a freshly harvested tile's regrowth state to a fixed
 slot in the normal resource root, sleeps for three seconds, and then loads
@@ -985,7 +985,7 @@ share the stale player-slot false-green path recorded here.
 
 ## Location persistence probes
 
-### NCT-22. Location persistence probes can load stale fixtures
+### [#1620] NCT-22. Location persistence probes can load stale fixtures
 
 Four location-oriented manual probes save their fixture to fixed slots in the
 ordinary resource root, sleep briefly, then restart or load without proving
@@ -1037,7 +1037,7 @@ already captured separately in `docs/project_review_859-848.md`.
 
 ## Manual-only probe inventory
 
-### NCT-23. Position-hold inventory overstates the executable fixture by one acolyte
+### [#1621] NCT-23. Position-hold inventory overstates the executable fixture by one acolyte
 
 > **Captured note:** Position-hold apparatus overstates its unit count
 
