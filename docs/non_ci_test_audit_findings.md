@@ -34,7 +34,7 @@ approval.
 - [x] NCT-12. Thermo probe treats a failed ice dump as absent evidence — [no-issue]
 - [x] NCT-13. Etymology UI probe skips required location and river entry points — [#1604]
 - [x] NCT-14. Etymology UI probe skips its real scrolling interaction phase — [#1608]
-- [ ] NCT-15. Tilling probe skips the required fluid-exclusion behavior
+- [x] NCT-15. Tilling probe skips the required fluid-exclusion behavior — [#1609]
 - [ ] NCT-16. Item-temperature probe skips its required cooling-rate behavior
 - [ ] NCT-17. Core queue tests omit the custom timeout contract and real contention
 - [ ] NCT-18. Item-temperature persistence phase can load a stale save
@@ -658,7 +658,7 @@ targets.
 
 ## Tilling behavior probe
 
-### NCT-15. Tilling probe skips the required fluid-exclusion behavior
+### [#1609] NCT-15. Tilling probe skips the required fluid-exclusion behavior
 
 The tilling probe declares that a fluid-covered tile must never receive a till
 designation, but it searches its generated region for a suitable tile and
