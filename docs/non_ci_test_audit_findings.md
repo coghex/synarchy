@@ -39,7 +39,7 @@ approval.
 - [x] NCT-17. Core queue tests omit the custom timeout contract and real contention — [#1612]
 - [x] NCT-18. Item-temperature persistence phase can load a stale save — [#1613]
 - [x] NCT-19. Vegetation/farming persistence probes can load stale saves — [#1616]
-- [ ] NCT-20. Item-identity persistence phase can load a stale save
+- [x] NCT-20. Item-identity persistence phase can load a stale save — [#1617]
 - [ ] NCT-21. Foraging persistence phase can load a stale save
 - [ ] NCT-22. Location persistence probes can load stale fixtures
 - [ ] NCT-23. Position-hold inventory overstates the executable fixture by one acolyte
@@ -893,7 +893,7 @@ manual probes that happen to use a fixed sleep.
 
 ## Item-identity persistence probe
 
-### NCT-20. Item-identity persistence phase can load a stale save
+### [#1617] NCT-20. Item-identity persistence phase can load a stale save
 
 The default item-instance probe queues a save into the ordinary resource root
 and immediately loads the shared `issue67_probe` slot.  It neither checks the
