@@ -73,8 +73,20 @@ waterSlopeAt fluidMap terrSurfMap coord chunkLookup terrLookup lx ly mySurf =
           ⌄ (if gridS then 12 else 0)   -- grid S → pixel SW (bits 4+8)
           ⌄ (if gridW then 9  else 0)   -- grid W → pixel NW (bits 1+8)
           ∷ Word8
-        -- A tile with all four neighbours lower would slope every
-        -- direction at once (raw ≡ 15) — an isolated high point in the
-        -- water, not a lip; flatten it instead of rendering a
-        -- nonsensical pyramid.
+        -- Flatten every combination whose corner bits union to 15 —
+        -- which is NOT only "all four neighbours lower". Each grid
+        -- direction above contributes TWO of the four corner bits, so
+        -- seven of the sixteen lower-neighbour combinations reach 15:
+        -- both OPPOSITE pairs (N+S = 3⌄12, E+W = 6⌄9), all four
+        -- THREE-neighbour sets (N+E+S, N+E+W, N+S+W, E+S+W), and
+        -- N+E+S+W. All seven would slope every direction at once and
+        -- render as a nonsensical pyramid, so all seven flatten; the
+        -- encoding cannot tell a three-sided lip from a four-sided one
+        -- anyway.
+        --
+        -- The terrain path applies the same NUMERIC rule (raw ≡ 15 → 0
+        -- at 'World.Slope.Compute', src/World/Slope/Compute.hs:147 for
+        -- wet tiles and :153 for soft dry terrain). The topologies each
+        -- catches differ: that path sets ONE bit per lower cardinal
+        -- neighbour, so 15 is reachable there only with all four lower.
     in if raw ≡ 15 then 0 else raw
