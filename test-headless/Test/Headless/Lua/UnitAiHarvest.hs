@@ -379,6 +379,7 @@ spec = describe "skill-scaled auto-harvest" $ do
                 , "  'the regrown plant must be picked from zero, not from the old remainder')"
                 ]
 
+    describe "an interruption is never picking time" $ do
         it "keeps the work already done across a preemption but charges \
            \the interruption itself nothing" $
             runsOk $ lns
@@ -396,6 +397,61 @@ spec = describe "skill-scaled auto-harvest" $ do
                 , "  'and the resumed tick must not charge the gap either')"
                 , "assert(not harvested(),"
                 , "  'the interruption alone must not complete the pick')"
+                ]
+
+        it "charges nothing for a collapse or a mid-animation tick, \
+           \which scripts/unit_ai.lua swallows through \
+           \core.suspendOrders without firing any onExit" $
+            runsOk $ lns
+                [ prelude
+                -- The state table the dispatcher itself would pass, so
+                -- core.suspendOrders(uid) reaches this very case's `S`.
+                , "local core = require('scripts.unit_ai_core')"
+                , "S = core.ensureState(1)"
+                , "place(9, 0)"
+                , "tick(1.5)"
+                , "local partial = S.harvestProgress"
+                , "assert(partial > 0 and not harvested(),"
+                , "  'work must be underway but unfinished')"
+                -- unit_ai.lua's pose/activity short-circuit returns
+                -- core.suspendOrders(uid) BEFORE arbitration, so no
+                -- action's onExit runs — this is the only boundary the
+                -- picking clock gets. Deliberately a SHORT stun, well
+                -- inside MAX_CHARGED_INTERVAL so the backstop below
+                -- cannot cover for a missing boundary: 2 s of it is
+                -- more than the farming-50 pick has left to do, so a
+                -- charged one would finish the plant outright.
+                , "for _ = 1, 4 do NOW = NOW + 0.5; core.suspendOrders(1) end"
+                , "step(0.5)"
+                , "assert(S.harvestProgress == partial,"
+                , "  'a swallowed tick must charge the accumulator nothing')"
+                , "assert(not harvested(),"
+                , "  'and a collapse must never complete a pick by itself')"
+                -- ...and the pick then finishes on its own remaining time.
+                , "tick(1.5)"
+                , "assert(harvested(), 'the resumed pick must still complete')"
+                ]
+
+        it "charges nothing for a gap NO path announced either: an \
+           \interval past MAX_CHARGED_INTERVAL is not one uninterrupted \
+           \stretch of picking, so it counts zero rather than the bound" $
+            runsOk $ lns
+                [ prelude
+                , "local stall = require('scripts.unit_ai_stall')"
+                , "place(9, 0)"
+                , "tick(1.5)"
+                , "local partial = S.harvestProgress"
+                , "assert(partial > 0 and not harvested(),"
+                , "  'work must be underway but unfinished')"
+                -- A save/load boundary, or a unit that simply stopped
+                -- being ticked: the clock jumps with no sample and no
+                -- suspendOrders call anywhere.
+                , "NOW = NOW + (stall.MAX_CHARGED_INTERVAL + 600)"
+                , "step(0.5)"
+                , "assert(S.harvestProgress == partial,"
+                , "  'an unannounced gap must charge nothing at all')"
+                , "assert(not harvested(),"
+                , "  'and must not complete the pick')"
                 ]
 
     describe "everything the action already did is unchanged" $ do

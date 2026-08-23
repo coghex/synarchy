@@ -19,6 +19,11 @@ local grantWorkXP = core.grantWorkXP
 
 local mv = require("scripts.movement_speed")
 local roles = require("scripts.unit_roles")
+-- Eligible-time accounting (#1291): the picking clock below charges an
+-- interval by the same two rules the commanded-order stall budget uses,
+-- and shares its constant rather than inventing a second one. Requiring
+-- it here is cycle-free -- unit_ai_stall requires nothing.
+local stall = require("scripts.unit_ai_stall")
 
 -----------------------------------------------------------
 -- Action: auto_harvest (#336, skill-scaled since #1582)
@@ -124,15 +129,31 @@ function unitAi.harvest.execute(uid, s, params)
     if cheb <= 1 then
         unitAi.harvest.bindProgress(s, tgt.x, tgt.y)
         -- Elapsed time is charged only between two consecutive
-        -- ADJACENT, executing ticks: lastHarvestAt is nil on arrival,
-        -- on a new target, while collecting, and after onExit, so
-        -- walking, yield pickup and preemption gaps credit nothing.
-        -- The 2 s cap is till/plant's own bound on the one gap no
-        -- handler sees — unit_ai.lua's collapsed-pose / engine-anim
-        -- short-circuit, which returns before arbitration runs.
+        -- ADJACENT, executing ticks, by #1291's two rules:
+        --
+        --   * Every path that swallows a tick DROPS the stamp as it
+        --     happens, so the next reading charges nothing for the
+        --     interval spanning it. lastHarvestAt is nil on arrival,
+        --     on a new target, while collecting, on onExit (the
+        --     arbitration switch), and on unit_ai.lua's collapsed-pose
+        --     / mid-animation returns and unit_ai_mental.lua's
+        --     preemption, which both funnel through
+        --     unit_ai_stall.suspendOrders.
+        --   * MAX_CHARGED_INTERVAL is the backstop for the gap no path
+        --     can announce — a save/load boundary, a unit that stopped
+        --     being ticked. An interval longer than it is not one
+        --     uninterrupted stretch of picking, so it charges ZERO
+        --     rather than being clamped down to the bound.
+        --
+        -- The work already accumulated on the plant survives all of
+        -- them; only the clock restarts.
         local now = engine.gameTime()
-        local dt = math.min(now - (s.lastHarvestAt or now), 2.0)
+        local elapsed = now - (s.lastHarvestAt or now)
         s.lastHarvestAt = now
+        local dt = 0
+        if elapsed > 0 and elapsed <= stall.MAX_CHARGED_INTERVAL then
+            dt = elapsed
+        end
         -- Farming skill (#265/#336) scales the pick exactly as it
         -- scales tilling and planting: level 50 ≈ baseline, level 0
         -- half rate. Legacy-save units without the key pick at the
