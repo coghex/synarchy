@@ -173,6 +173,9 @@ publishStagedSession env logger requestId staged = do
         -- selection-changing commands were still queued against the old
         -- one, so their requests will never be discharged by a handler.
         , wmSelectionPending = 0
+        -- Settled by construction: nothing is outstanding against the
+        -- replacement session, so the projection is the applied state.
+        , wmProjectedGen = outgoingSelectionGen + 1
         }
 
     -- Restore visibility through the real handler so its side effects

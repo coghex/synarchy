@@ -259,13 +259,18 @@ mkDef name starting = BuildingDef
     , bdPowerNode       = Nothing
     }
 
+-- | The two pre-placed fixture buildings, filtered out of every
+--   commit assertion.
+occupantDefName ∷ Text
+occupantDefName = "bind_occupant"
+
 portalName, shedName ∷ Text
 portalName = "bind_portal"
 shedName   = "bind_shed"
 
 occupantAt ∷ BuildingId → WorldPageId → (Int, Int) → BuildingInstance
 occupantAt _ page (gx, gy) = BuildingInstance
-    { biDefName            = "bind_occupant"
+    { biDefName            = occupantDefName
     , biPage               = page
     , biTexture            = TextureHandle 0
     , biAnchorX            = gx
@@ -341,18 +346,22 @@ drainWorldQueue env = go []
             Nothing  → pure (reverse acc)
             Just cmd → go (cmd : acc)
 
--- | Every building SPAWN that actually reached the building queue,
---   AFTER the real world thread drained whatever the click put on its
---   own queue. A page-BOUND placement lands there first
---   ('WorldSpawnBoundBuilding') and only reaches the building queue if
---   that thread's binding check passes, so running the world queue
---   through the production dispatcher is what makes this ask "did the
---   placement commit", not merely "was something enqueued".
-spawnsQueued ∷ EngineEnv → IO [(Text, Int, Int, WorldPageId)]
-spawnsQueued env = do
+-- | The placements that actually COMMITTED, as (defName, gx, gy, page),
+--   with the two fixture occupants removed.
+--
+--   Both real dispatchers are run first — the world thread's, which is
+--   where a page-BOUND placement is checked AND inserted, and then the
+--   building drain for anything unbound. So this asks "did the placement
+--   land", never "was something enqueued": a click that enqueued a
+--   command the binding check then refused reports nothing here.
+committedPlacements ∷ EngineEnv → IO [(Text, Int, Int, WorldPageId)]
+committedPlacements env = do
     runWorldQueue env
-    cmds ← drainBuildingQueue env
-    pure [ (n, gx, gy, p) | BuildingSpawn _ n gx gy _ p ← cmds ]
+    applyQueuedBuildings env
+    bm ← readIORef (buildingManagerRef env)
+    pure [ (biDefName b, biAnchorX b, biAnchorY b, biPage b)
+         | b ← HM.elems (bmInstances bm)
+         , biDefName b ≢ occupantDefName ]
 
 -- | Drain the world queue through the REAL world-thread dispatcher, the
 --   way "World.Thread" does.
@@ -361,14 +370,6 @@ runWorldQueue env = do
     logger ← readIORef (loggerRef env)
     cmds ← drainWorldQueue env
     mapM_ (handleWorldCommand env logger) cmds
-
--- | Every construction designation enqueued for a page, read off the
---   world queue WITHOUT applying it — for asserting what a stale click
---   did or did not put there.
-designationsQueued ∷ EngineEnv → IO [(WorldPageId, Int, Int)]
-designationsQueued env = do
-    cmds ← drainWorldQueue env
-    pure [ (p, x1, y1) | WorldDesignateConstruct p x1 y1 _ _ _ _ ← cmds ]
 
 -- | Both pages' live designation maps — a stale attempt must leave both
 --   empty, not merely fail to enqueue.
@@ -783,7 +784,7 @@ staleSpec = describe "a moved page selection rejects the placement" $ do
             _ ← clickAt ls (px, py)
             outs ← commitOutcomes ls
             outs `shouldBe` ["accepted|nil"]
-            spawnsQueued env `shouldReturn`
+            committedPlacements env `shouldReturn`
                 [(portalName, fst placeTile, snd placeTile, pageA)]
             designationKeys wsA wsB `shouldReturn` ([], [])
 
@@ -830,10 +831,10 @@ staleSpec = describe "a moved page selection rejects the placement" $ do
             _ ← clickAt ls (px, py)
             outs ← commitOutcomes ls
             outs `shouldBe` ["accepted|routed to construction.designate"]
-            designationsQueued env `shouldReturn`
-                [(pageA, fst placeTile, snd placeTile)]
-            designationKeys wsA wsB `shouldReturn` ([], [])
-            spawnsQueued env `shouldReturn` []
+            -- Applying the world queue turns the enqueued designation
+            -- into a real one on the captured page, and only there.
+            committedPlacements env `shouldReturn` []
+            designationKeys wsA wsB `shouldReturn` ([placeTile], [])
 
     it "rejects a switch between the pick and the validation" $
         \(env, ls) → do
@@ -887,10 +888,7 @@ staleSpec = describe "a moved page selection rejects the placement" $ do
         outs `shouldBe`
             [ "buildTool.remoteWarning|confirmed|nil"
             , "buildTool.remoteWarning|revalidationRejected|page binding changed" ]
-        spawnsQueued env `shouldReturn` []
-        placedBuildings env `shouldReturn`
-            [(pageA, fst occupiedA, snd occupiedA)
-            ,(pageB, fst occupiedB, snd occupiedB)]
+        committedPlacements env `shouldReturn` []
         designationKeys wsA wsB `shouldReturn` ([], [])
 
 -- | Every stale case asserts the same three things (#1602 r6/r8):
@@ -900,14 +898,14 @@ expectStale ∷ EngineEnv → WorldState → WorldState → LuaBackendState → 
 expectStale env wsA wsB ls = do
     outs ← commitOutcomes ls
     outs `shouldBe` ["rejected|page binding changed"]
-    spawnsQueued env `shouldReturn` []
-    designationsQueued env `shouldReturn` []
+    -- Drains and APPLIES both dispatchers first, so this is "nothing
+    -- committed" rather than the weaker "nothing enqueued".
+    committedPlacements env `shouldReturn` []
     designationKeys wsA wsB `shouldReturn` ([], [])
-    -- Only the two fixture occupants remain: nothing was placed.
-    placed ← placedBuildings env
-    placed `shouldMatchList`
-        [ (pageA, fst occupiedA, snd occupiedA)
-        , (pageB, fst occupiedB, snd occupiedB) ]
+    -- Placement stays armed, exactly as an ordinary invalid-tile
+    -- refusal leaves it.
+    evalDebug ls "return require('scripts.build_tool').state.mode"
+        `shouldReturn` "placement"
     -- Placement stays armed, exactly as an ordinary invalid-tile
     -- refusal leaves it.
     evalDebug ls "return require('scripts.build_tool').state.mode"
@@ -941,7 +939,9 @@ applyTimeSpec =
         handleWorldHideCommand wsc logger pageA
         handleWorldShowCommand wsc logger pageB
         runWorldQueue env
-        -- 'BuildingCommand' has no Eq instance; report what was found.
+        -- The insert happens on THIS thread, so there is nothing left
+        -- for a later drain to apply — which is the point: a check that
+        -- only authorised a queued write would leave that window open.
         forwarded ← drainBuildingQueue env
         map show forwarded `shouldBe` []
         applyQueuedBuildings env
@@ -950,16 +950,44 @@ applyTimeSpec =
             [ (pageA, fst occupiedA, snd occupiedA)
             , (pageB, fst occupiedB, snd occupiedB) ]
 
-    it "the world thread forwards the SAME spawn when the binding held" $
+    it "the world thread INSERTS the building itself when the binding \
+       \held, with nothing left to drain" $ \(env, ls) → do
+        _ ← resetScene env
+        _ ← clearStubs ls
+        gen ← selectionGen env
+        Q.writeQueue (worldQueue env) $
+            WorldSpawnBoundBuilding (BuildingId 9) portalName
+                (fst placeTile) (snd placeTile) terrainZA pageA gen
+        runWorldQueue env
+        -- Placed already, before any building-queue drain runs.
+        placed ← placedBuildings env
+        placed `shouldMatchList`
+            [ (pageA, fst occupiedA, snd occupiedA)
+            , (pageB, fst occupiedB, snd occupiedB)
+            , (pageA, fst placeTile, snd placeTile) ]
+        forwarded ← drainBuildingQueue env
+        map show forwarded `shouldBe` []
+
+    it "a hide landing between the check and a LATER drain cannot \
+       \resurrect the placement, because there is no later drain" $
         \(env, ls) → do
             _ ← resetScene env
             _ ← clearStubs ls
             gen ← selectionGen env
+            logger ← readIORef (loggerRef env)
+            let wsc = toWorldSimCapability env
             Q.writeQueue (worldQueue env) $
                 WorldSpawnBoundBuilding (BuildingId 9) portalName
                     (fst placeTile) (snd placeTile) terrainZA pageA gen
             runWorldQueue env
+            -- pageA stays REGISTERED, so the drain's own world-gone
+            -- guard would not have caught this: only doing the insert
+            -- on the selection-owning thread does.
+            handleWorldHideCommand wsc logger pageA
+            handleWorldShowCommand wsc logger pageB
             applyQueuedBuildings env
+            mgr ← readIORef (worldManagerRef env)
+            map fst (wmWorlds mgr) `shouldMatchList` [pageA, pageB]
             placed ← placedBuildings env
             placed `shouldMatchList`
                 [ (pageA, fst occupiedA, snd occupiedA)
@@ -1133,6 +1161,38 @@ pendingSpec =
             runWorldQueue env
             (wmSelectionPending <$> readIORef (worldManagerRef env))
                 `shouldReturn` 0
+
+    it "does NOT invalidate a binding for an INEFFECTIVE request" $
+        \(env, ls) → do
+            _ ← resetScene env
+            _ ← clearStubs ls
+            gen ← selectionGen env
+            -- Showing the already-visible page, and hiding the already
+            -- hidden one: ordinary traffic that moves no selection. A
+            -- click must still be accepted (requirement 12's
+            -- no-page-switch path), even though both are still queued.
+            _ ← evalDebug ls $ T.concat
+                [ "world.show('", unWorldPageId pageA, "'); "
+                , "world.hide('", unWorldPageId pageB, "'); "
+                , "return 'queued'" ]
+            (wmSelectionPending <$> readIORef (worldManagerRef env))
+                `shouldReturn` 2
+            canPlaceAt ls shedName placeTile (Just (pageA, gen))
+                `shouldReturn` "true|nil|false"
+
+    it "commits a click made while only INEFFECTIVE requests are in \
+       \flight" $ \(env, ls) → do
+        _ ← resetScene env
+        _ ← clearStubs ls
+        _ ← armBuildTool ls portalName True
+        _ ← evalDebug ls $ T.concat
+            [ "world.show('", unWorldPageId pageA, "'); return 'queued'" ]
+        (px, py) ← aimAt env placeTile terrainZA
+        _ ← clickAt ls (px, py)
+        outs ← commitOutcomes ls
+        outs `shouldBe` ["accepted|nil"]
+        committedPlacements env `shouldReturn`
+            [(portalName, fst placeTile, snd placeTile, pageA)]
 
     it "settles once the world thread applies the change" $ \(env, ls) → do
         _ ← resetScene env

@@ -563,8 +563,30 @@ worldOpenArenaFn env = do
 enqueueSelectionChange ∷ EngineEnv → WorldCommand → IO ()
 enqueueSelectionChange env cmd = do
     atomicModifyIORef' (wsWorldManagerRef (toWorldSimCapability env)) $ \mgr →
-        (requestSelectionChange mgr, ())
+        (requestSelectionChange (selectionRequestIsEffective cmd mgr) mgr, ())
     Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) cmd
+
+-- | Will this request actually MOVE the selection (#1602)? Only an
+--   effective one may invalidate a live placement binding: showing a
+--   page that is already visible, or hiding one that is already hidden,
+--   is ordinary traffic that changes nothing a placement depends on, and
+--   refusing clicks for it would be a regression on the no-page-switch
+--   path.
+--
+--   Judged against the APPLIED state, which is exact precisely when it
+--   matters: if nothing is outstanding, this command is the first
+--   selection command in the queue and the state it sees is the state
+--   its handler will see. When something IS outstanding the binding is
+--   already stale, so a coarse answer here costs nothing — hence the
+--   conservative 'True' for every kind whose effect is not trivially
+--   decidable (an init REPLACES a page's state; a publish replaces the
+--   whole set).
+selectionRequestIsEffective ∷ WorldCommand → WorldManager → Bool
+selectionRequestIsEffective cmd mgr = case cmd of
+    WorldShow pid           → pid `notElem` wmVisible mgr
+    WorldInitArenaDone pid  → pid `notElem` wmVisible mgr
+    WorldHide pid           → pid `elem` wmVisible mgr
+    _                       → True
 
 -- | world.show(pageId)
 worldShowFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults

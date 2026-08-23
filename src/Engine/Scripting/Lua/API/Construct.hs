@@ -31,7 +31,8 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
 import Engine.Core.State (activeWorldPageFrom, activeWorldStateFrom)
 import Engine.Asset.Handle (TextureHandle(..))
-import World.Types (WorldManager(..), WorldState(..), pageWrapWorldSize)
+import World.Types
+    (WorldManager(..), WorldState(..), pageWrapWorldSize, selectionMovedSince)
 import World.Page.Types (WorldPageId(..))
 import World.Chunk.Types (chunkSize)
 import World.Generate.Coordinates
@@ -77,8 +78,8 @@ constructClearAnchorFn wsc = do
 --   (slot 10) is the page-selection generation @world.pickTile@ reported
 --   for the click this designation commits. When present it is compared
 --   against 'wmSelectionGen' in ONE manager read taken immediately
---   before the command is enqueued; a mismatch — the generation moved,
---   or a selection change is enqueued and not yet applied — enqueues
+--   before the command is enqueued; a mismatch — the selection moved, or
+--   an effective change is enqueued and not yet applied — enqueues
 --   nothing at all and returns false, which is the synchronous answer
 --   the build tool turns into its rejected outcome.
 --
@@ -116,12 +117,12 @@ constructDesignateFn wsc = do
                         Nothing   → pure False
                         Just want → do
                             wm ← readIORef (wsWorldManagerRef wsc)
-                            -- Same two halves as building.canPlaceAt's
-                            -- own check: the generation has moved, or a
-                            -- selection change is already enqueued and
-                            -- has simply not been applied yet.
-                            pure (fromIntegral want ≢ wmSelectionGen wm
-                                  ∨ wmSelectionPending wm > 0)
+                            -- The same predicate building.canPlaceAt
+                            -- uses: the selection has moved, or an
+                            -- EFFECTIVE change is enqueued and simply
+                            -- not applied yet.
+                            pure (selectionMovedSince
+                                      (fromIntegral want) wm)
                     if stale then pure False else do
                         -- The binding travels WITH the command. The check
                         -- above is the SYNCHRONOUS answer this call owes

@@ -10,6 +10,8 @@ module World.State.Types
     , bumpSelectionGen
     , requestSelectionChange
     , completeSelectionChange
+    , settleSelectionProjection
+    , selectionMovedSince
     , pageLanguageProvenance
     , CursorSnapshot(..)
     , LoadPhase(..)
@@ -365,6 +367,29 @@ data WorldManager = WorldManager
       --   NOT persisted: it is a within-session freshness counter, and a
       --   restored session's bindings are all invalidated by the bump
       --   the publish itself performs.
+    , wmProjectedGen ∷ !Word64
+      -- ^ The selection generation as of every request that has been
+      --   MADE, whether or not the world thread has applied it yet
+      --   (#1602). 'wmSelectionGen' above only moves when a change
+      --   lands; this moves when one is asked for, so a synchronous
+      --   caller can tell "a change is already on its way" from "nothing
+      --   is happening" — which is the difference between honestly
+      --   refusing a placement and accepting one the world thread is
+      --   about to drop.
+      --
+      --   It counts only EFFECTIVE requests: showing an already-visible
+      --   page, or hiding an already-hidden one, changes no selection
+      --   and must not invalidate a live binding (a redundant
+      --   @world.show@ is ordinary traffic). Judged against the applied
+      --   state, which is exact when nothing is in flight — and when
+      --   something IS in flight the binding is already stale by this
+      --   field, so a coarser answer there costs nothing.
+      --
+      --   Re-synchronised to 'wmSelectionGen' by
+      --   'settleSelectionProjection' whenever the queue drains, so a
+      --   request the handler ends up refusing (a @world.show@ for a
+      --   page that does not exist) cannot leave the two permanently
+      --   apart.
     , wmSelectionPending ∷ !Int
       -- ^ How many selection-changing commands have been REQUESTED but
       --   not yet applied (#1602). The generation above moves when the
@@ -394,6 +419,7 @@ emptyWorldManager = WorldManager
     { wmWorlds  = []
     , wmVisible = []
     , wmSelectionGen = 0
+    , wmProjectedGen = 0
     , wmSelectionPending = 0
     }
 
@@ -407,10 +433,18 @@ bumpSelectionGen mgr = mgr { wmSelectionGen = wmSelectionGen mgr + 1 }
 -- | Record that a selection-changing command has been ENQUEUED (#1602).
 --   Call it in the same atomic step as the enqueue, from whichever
 --   thread is asking, so no reader can see the request land without
---   seeing the count move.
-requestSelectionChange ∷ WorldManager → WorldManager
-requestSelectionChange mgr =
-    mgr { wmSelectionPending = wmSelectionPending mgr + 1 }
+--   seeing the state move.
+--
+--   @effective@ says whether the request will actually move the
+--   selection; only an effective one advances 'wmProjectedGen' and so
+--   invalidates live bindings. The outstanding COUNT moves either way —
+--   it is what pairs a request with its handler, and must stay exactly
+--   balanced regardless of what the request turns out to do.
+requestSelectionChange ∷ Bool → WorldManager → WorldManager
+requestSelectionChange effective mgr = mgr
+    { wmSelectionPending = wmSelectionPending mgr + 1
+    , wmProjectedGen = wmProjectedGen mgr + (if effective then 1 else 0)
+    }
 
 -- | Record that one such command has now been APPLIED. Clamped at zero:
 --   the same handlers are also driven directly by the load's restore,
@@ -418,6 +452,25 @@ requestSelectionChange mgr =
 completeSelectionChange ∷ WorldManager → WorldManager
 completeSelectionChange mgr =
     mgr { wmSelectionPending = max 0 (wmSelectionPending mgr - 1) }
+
+-- | Once nothing is outstanding, the projection IS the applied state
+--   (#1602). Run after each world-thread command so a request whose
+--   predicted effect never materialised — a @world.show@ the handler
+--   refused because the page does not exist — cannot leave
+--   'wmProjectedGen' permanently ahead and every binding permanently
+--   stale.
+settleSelectionProjection ∷ WorldManager → WorldManager
+settleSelectionProjection mgr
+    | wmSelectionPending mgr ≡ 0 = mgr { wmProjectedGen = wmSelectionGen mgr }
+    | otherwise                  = mgr
+
+-- | Is a live placement binding invalidated by the current selection
+--   state (#1602)? Either the selection has already moved since the
+--   binding was captured, or an effective change has been requested and
+--   is still on its way.
+selectionMovedSince ∷ Word64 → WorldManager → Bool
+selectionMovedSince captured mgr =
+    captured ≢ wmSelectionGen mgr ∨ wmProjectedGen mgr ≢ wmSelectionGen mgr
 
 -- | The page-scoped language-provenance query (#1092 requirement 5):
 --   which generated language named this page, and under which

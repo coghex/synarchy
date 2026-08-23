@@ -22,30 +22,38 @@ module World.Thread.Command.BoundSpawn
 
 import UPrelude
 import Data.IORef (readIORef)
-import Building.Command.Types (BuildingCommand(..))
+import Building.Thread.Command (applyBuildingSpawn)
 import Building.Types (BuildingId(..))
-import Engine.Core.Capability.Building
-    (BuildingCapability(..), toBuildingCapability)
+import Engine.Core.Capability.Building (toBuildingCapability)
+import Engine.Core.Capability.ContentRegistries
+    (toContentRegistriesCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import Engine.Core.State (EngineEnv)
-import qualified Engine.Core.Queue as Q
 import World.Types
 
 -- | Discharge a bound placement's page binding and, if it still holds,
---   forward the ordinary 'BuildingSpawn' the building drain already
---   knows how to apply.
+--   INSERT the building here and now.
 --
---   The forwarded command carries no binding of its own: it has one
---   decision behind it, made against the selection timeline, and
---   re-checking it later would DROP placements that were committed
---   correctly and then had their page hidden — the opposite failure.
+--   The insertion is performed on this thread rather than forwarded to
+--   the building queue, and that is the whole point: a check on one
+--   thread guarding a write another thread performs later is not a
+--   guard at all — a @world.hide@ landing in between would leave the
+--   drain inserting onto a page that is no longer selected (the page is
+--   still in @wmWorlds@, so its own world-gone check would not catch
+--   it). Deciding and writing in the same step, on the thread that owns
+--   selection, is what makes "no page change between validation and
+--   commit" true rather than merely likely.
 --
---   A stale binding forwards nothing, so the placement lands on neither
---   the captured page nor the newly selected one. The existing
---   world-gone guard in the building drain still applies to what is
---   forwarded; this adds to it rather than replacing it.
+--   The write itself is 'Building.Thread.Command.applyBuildingSpawn' —
+--   the SAME body the drain runs for every unbound spawn, so a bound
+--   placement and an ordinary one can never diverge in what they
+--   actually do (including the #58 world-gone guard and #1087's
+--   pending-container seeding).
+--
+--   A stale binding writes nothing, so the placement lands on neither
+--   the captured page nor the newly selected one.
 handleWorldSpawnBoundBuildingCommand
     ∷ EngineEnv → LoggerState → BuildingId → Text
     → Int → Int → Int → WorldPageId → Word64 → IO ()
@@ -56,5 +64,8 @@ handleWorldSpawnBoundBuildingCommand env logger bid defName gx gy gz
     then logDebug logger CatWorld $
         "Bound building placement dropped: page selection moved since the "
         <> "click (" <> defName <> " on " <> unWorldPageId pageId <> ")"
-    else Q.writeQueue (bcBuildingQueue (toBuildingCapability env)) $
-        BuildingSpawn bid defName gx gy gz pageId
+    else applyBuildingSpawn logger
+            (toWorldSimCapability env)
+            (toContentRegistriesCapability env)
+            (toBuildingCapability env)
+            bid defName gx gy gz pageId
