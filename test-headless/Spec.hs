@@ -143,6 +143,8 @@ import qualified Test.Headless.UI.ResponsiveMenus as UIResponsiveMenus
 import qualified Test.Headless.UI.ResponsiveGameplay as UIResponsiveGameplay
 import qualified Test.Headless.UI.SettingsDefaultsKeybinds
     as UISettingsDefaultsKeybinds
+import qualified Test.Headless.UI.SettingsRevert
+    as UISettingsRevert
 import qualified Test.Headless.UI.TutorialHud as UITutorialHud
 import qualified Test.Headless.UI.UnicodeTextEditing as UIUnicodeTextEditing
 import qualified Test.Headless.Lua.TextWrapping as LuaTextWrapping
@@ -527,6 +529,7 @@ main = hspec $ do
     describe "UI.ResponsiveMenus" UIResponsiveMenus.spec
     describe "UI.ResponsiveGameplay" UIResponsiveGameplay.spec
     UISettingsDefaultsKeybinds.spec
+    UISettingsRevert.spec
     describe "UI.ContainerWindowStack" UIContainerWindowStack.spec
     UITransferGestures.spec
     UITransferSession.spec
