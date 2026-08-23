@@ -69,10 +69,13 @@ Reaching that precision takes three parts.
 
    So exactly one shadowing case is resolved, the one that needs no
    scope analysis at all -- a name bound in a declaration's own HEAD,
-   left of its `=`, where every position is a binding position by
-   construction and what it binds covers the whole declaration
-   (`_binds_in_head`). Scoping is per top-level declaration, since a
-   binder in one cannot reach into another.
+   where every position is a binding position by construction and what
+   it binds covers the whole declaration (`_binds_in_head`). The head
+   ends at the declaration's `=` OR at the `|` opening its guards,
+   whichever comes first, because a guard is an ordinary expression
+   sitting before that `=` and a name in one is a use. Scoping is per
+   top-level declaration, since a binder in one cannot reach into
+   another.
 
    Every OTHER bare occurrence under such an import is reported. A file
    that genuinely shadows the name in a `let`, a lambda or a `where` is
@@ -168,8 +171,9 @@ _SYMBOL_RUN = re.compile(r"[!#$%&*+./<=>?@\\^|~:-]+")
 # right: `=` for a definition, `->` for a lambda or case alternative,
 # `::` for the signature that declares one. The project's Unicode
 # spellings count too.
-_BINDING_SEPARATORS = frozenset({"=", "->", "::"})
-_UNICODE_BINDING_SEPARATORS = ("→", "∷")
+# The operator lexemes that end a declaration's binding left-hand side:
+# its own `=`, or the `|` opening its guards, whichever comes first.
+_HEAD_TERMINATORS = frozenset({"=", "|"})
 
 
 class _ImportParseError(Exception):
@@ -474,13 +478,24 @@ def _top_level_declarations(
 
 
 def _declaration_head_end(code_text: str, start: int, end: int) -> int | None:
-    """Where the declaration at `[start, end)` stops being its own HEAD:
-    the position of its `=`, or None if it has none (a type signature, a
+    """Where the declaration at `[start, end)` stops being its own HEAD
+    -- the left-hand side in which every position is a binding position.
+
+    A Haskell function LHS is `f pat1 pat2 ... | guard ... = rhs`, so the
+    head ends at whichever comes first: the declaration's `=`, or the
+    `|` that opens its guards. Guards are ORDINARY EXPRESSIONS sitting
+    before that `=`, so a name in one is a use and not a binder; ending
+    the head at `=` alone would read `f raw | p (decodeUtf8 raw) = ...`
+    as binding the name.
+
+    None when the declaration has neither (a type signature, a
     `data`/`class` declaration -- nothing in which a bare name is a use).
 
-    Read as a maximal symbol run at bracket depth 0, counting `()`, `[]`
-    and record `{}`, so `==`, `=>` and `>=` are not it and neither is a
-    nested `=` inside a record construction or a list."""
+    Both are read as maximal symbol runs at bracket depth 0, counting
+    `()`, `[]` and record `{}`. So `==`, `=>` and `>=` are not the `=`,
+    an operator definition's `|||` is not the `|`, and neither a nested
+    `=` inside a record construction nor a list comprehension's `|`
+    counts at all."""
     depth = 0
     i = start
     while i < end:
@@ -495,7 +510,7 @@ def _declaration_head_end(code_text: str, start: int, end: int) -> int | None:
             continue
         match = _SYMBOL_RUN.match(code_text, i)
         if match:
-            if depth <= 0 and match.group(0) == "=":
+            if depth <= 0 and match.group(0) in _HEAD_TERMINATORS:
                 return match.start()
             i = match.end()
             continue
@@ -506,7 +521,8 @@ def _declaration_head_end(code_text: str, start: int, end: int) -> int | None:
 def _binds_in_head(code_text: str, decl: tuple[int, int],
                    skip_spans: list[tuple[int, int]]) -> bool:
     """True if this declaration binds `decodeUtf8` in its own HEAD --
-    as the name it defines, or as one of its parameters.
+    as the name it defines, or as one of its parameters -- never in a
+    guard, which is an expression rather than a binding position.
 
     This is the ONE shadowing case resolved here, because it is the only
     one that needs no scope analysis: everything left of a declaration's
@@ -758,6 +774,26 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         [3],
     ),
     (
+        "GUARDS: a guard sits before the declaration's `=` but is an "
+        "ORDINARY EXPRESSION, so a call in one is a use -- the head "
+        "ends at the `|`, not at the `=`",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "import qualified Data.Text as T\n"
+        "f raw | T.null (decodeUtf8 raw) = False\n",
+        [4],
+    ),
+    (
+        "GUARDS: several guard alternatives, each an expression",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "import qualified Data.Text as T\n"
+        "f raw\n"
+        "  | T.null (decodeUtf8 raw) = False\n"
+        "  | otherwise = T.length (decodeUtf8 raw) > 0\n",
+        [5, 6],
+    ),
+    (
         "CONSERVATIVE: a `where` binder is in the BODY, so placing its "
         "scope needs real parsing -- both occurrences are reported "
         "rather than guessed shadowed",
@@ -913,6 +949,28 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "module M where\n"
         "import qualified Data.Text.Encoding.Error as TEE\n"
         "f raw = TEE.decodeUtf8 raw\n",
+    ),
+    (
+        "GUARDS: a parameter of that name still binds when the "
+        "declaration also HAS guards -- the head is what precedes the "
+        "`|`, and the parameter is in it",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "f decodeUtf8 raw | p raw = decodeUtf8 raw\n",
+    ),
+    (
+        "GUARDS: a list comprehension's `|` is inside brackets, so it "
+        "never ends a head",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "f decodeUtf8 xs = [decodeUtf8 x | x <- xs]\n",
+    ),
+    (
+        "GUARDS: an operator definition's `|||` is one symbol run, not "
+        "the `|` that opens guards",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "decodeUtf8 ||| g = g decodeUtf8\n",
     ),
     (
         "SHADOWING, resolved: a parameter of that name is bound in the "
