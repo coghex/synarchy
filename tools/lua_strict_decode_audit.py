@@ -162,6 +162,13 @@ _IMPORT_TOKEN = re.compile(r"(?<![\w'])import(?![\w'])")
 _MODULE_TOKEN = re.compile(r"(?<![\w'])module(?![\w'])")
 _WHERE_TOKEN = re.compile(r"(?<![\w'])where(?![\w'])")
 
+# `{` is overloaded in Haskell: it opens an EXPLICIT LAYOUT BLOCK after
+# one of these reserved words, and RECORD SYNTAX (a construction, an
+# update or a record pattern) anywhere else. The two must not be
+# confused -- a layout brace introduces declarations, a record brace
+# introduces field bindings inside one expression.
+_LAYOUT_BRACE_KEYWORDS = frozenset({"where", "let", "do", "of"})
+
 # Haskell 2010 report SS2.4's symbolic-operator characters. A maximal run
 # of these is one operator lexeme, which is how `=` is told from `==`,
 # `=>` or `>=`.
@@ -444,6 +451,26 @@ def _body_column(code_text: str, skip_spans: list[tuple[int, int]]) -> int:
     return min(columns) if columns else 0
 
 
+def _is_layout_brace(code_text: str, pos: int) -> bool:
+    """True if the `{` at `pos` opens an explicit layout block rather
+    than record syntax.
+
+    It does exactly when the token before it is `where`, `let`, `do` or
+    `of` -- the four contexts the Haskell 2010 report SS2.7 lets an
+    explicit block replace layout in. Every other `{` is a record
+    construction, update or pattern, whose contents are one
+    expression's field bindings and not declarations of their own."""
+    i = pos - 1
+    while i >= 0 and code_text[i] in " \t\n":
+        i -= 1
+    if i < 0:
+        return True
+    word_end = i + 1
+    while i >= 0 and code_text[i] in _IDENT_CHARS:
+        i -= 1
+    return code_text[i + 1:word_end] in _LAYOUT_BRACE_KEYWORDS
+
+
 def _top_level_declarations(
         code_text: str,
         skip_spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -460,9 +487,26 @@ def _top_level_declarations(
     for i, char in enumerate(code_text):
         if char in "([":
             depth += 1
+        elif char == "{":
+            # A RECORD brace is part of one expression, so it nests like
+            # any other bracket; only a LAYOUT brace introduces
+            # declarations. Splitting on a record brace would make its
+            # first field look like a declaration head, and a field
+            # label named `decodeUtf8` would then read as a binder and
+            # silence the real call beside it.
+            if _is_layout_brace(code_text, i):
+                if depth == 0:
+                    boundaries.append(i + 1)
+            else:
+                depth += 1
         elif char in ")]":
             depth = max(0, depth - 1)
-        elif depth == 0 and char in ";{}":
+        elif char == "}":
+            if depth > 0:
+                depth -= 1
+            else:
+                boundaries.append(i + 1)
+        elif depth == 0 and char == ";":
             boundaries.append(i + 1)
         elif char == "\n":
             line_start = i + 1
@@ -774,6 +818,23 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         [3],
     ),
     (
+        "RECORD BRACES: a record is one expression, not a block of "
+        "declarations -- its first field must not read as a declaration "
+        "head, or a field label of this name would silence the real "
+        "call beside it",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "f raw = R { decodeUtf8 = 1, value = decodeUtf8 raw }\n",
+        [3, 3],
+    ),
+    (
+        "RECORD BRACES: a record update, likewise",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "f r raw = r { value = decodeUtf8 raw }\n",
+        [3],
+    ),
+    (
         "GUARDS: a guard sits before the declaration's `=` but is an "
         "ORDINARY EXPRESSION, so a call in one is a use -- the head "
         "ends at the `|`, not at the `=`",
@@ -949,6 +1010,14 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "module M where\n"
         "import qualified Data.Text.Encoding.Error as TEE\n"
         "f raw = TEE.decodeUtf8 raw\n",
+    ),
+    (
+        "RECORD BRACES: a head-bound parameter still covers the whole "
+        "declaration when its body contains a record -- the record no "
+        "longer starts a declaration of its own",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "f decodeUtf8 raw = R { value = decodeUtf8 raw }\n",
     ),
     (
         "GUARDS: a parameter of that name still binds when the "
