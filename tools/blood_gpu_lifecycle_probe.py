@@ -17,34 +17,60 @@ early-returns with no Vulkan device, so a GPU-less ``--headless`` boot
 would exercise nothing. Needs a real Vulkan device, so it is
 manual-only / needs-gpu in ``tools/ci_probes.py``.
 
-Metric: ``blood.gpuStats()`` -> {bindless, texSize, bloodHandles}. The
-first two are engine-wide, but the only per-page GPU textures churned by
-this probe are blood (world tile textures load once at startup; the zoom
-atlas and world preview are only produced by the atlas LOD / create-world
-UI, neither of which this probe drives), so the deltas are blood-only.
+Metrics. ``blood.gpuStats()`` -> {bindless, texSize, bloodHandles}:
+the first two are engine-wide totals, the third the ACTIVE page's blood
+handle-map size. ``blood.gpuHandles([handles])`` (#1585) is the
+ownership view the totals cannot give: the blood-OWNED texture handles
+themselves, each with its membership in the bindless handle map and in
+the texture-size cache separately. Texture handles are monotonically
+allocated and never reused, so a captured handle still resident after a
+teardown is a leak of THAT resource and of nothing else.
 
-For each teardown/replacement path — single-page destroy, destroy-all,
-same-id ``world.init`` (real world), arena replacement, and save-load
-replacement — the probe:
-  1. puts K distinct blood textures on the active page and confirms
-     bindless + texSize each rose by exactly K and bloodHandles == K;
-  2. runs the teardown;
-  3. confirms bindless + texSize returned to the pre-spawn baseline
-     (a fixed leak would leave them at baseline+K) — proving the stale
-     bindless registrations and textureSizeRef entries are gone.
-Finally it recreates the page, spawns blood again, and confirms it
-uploads (bloodHandles rises) and renders (blood.getRenderQuads non-empty).
+Every path spawns K distinct blood textures on the active page and
+confirms bindless + texSize each rose by exactly K and bloodHandles == K.
+The teardown oracle then splits, because the two situations are not
+comparable:
 
-PASS = every path returns to baseline and blood re-renders after recreate.
-FAIL = any path leaves resources above baseline (the leak), or re-render
-       fails.
+  Four COMPARABLE paths — single-page destroy, destroy-all, same-id
+  ``world.init`` (real world), arena replacement. Nothing else in the
+  engine allocates a GPU texture across these (world tile textures load
+  once at startup; the zoom atlas and world preview are produced by the
+  atlas LOD / create-world UI, neither of which this probe drives), so
+  the engine-wide totals ARE a valid blood delta: each must return to
+  the exact pre-spawn baseline, and a fixed leak would leave it at
+  baseline+K.
+
+  SAVE-LOAD replacement. A published load brings up a complete
+  replacement session, which registers its own preview texture, zoom
+  atlas and world texture set — non-blood registrations that move the
+  same engine-wide totals. Comparing them to a pre-load baseline
+  compares two different sessions, so it can fail with every blood
+  resource correctly reclaimed (issue #1585 / CTV-5). This path
+  therefore captures the old page's blood-owned handles BEFORE the load
+  and, after confirming THAT load request published, requires every one
+  of them to be gone from BOTH registries. Disposal drops the bindless
+  registration and the size entry separately, so a handle left in either
+  one is a (partial) leak. The replacement page's empty blood map is
+  still checked, but it is corroboration, not the verdict: a fresh
+  page's map is empty whether or not the old page leaked.
+
+Finally the probe recreates the page, spawns blood again, and confirms
+it uploads (bloodHandles rises) and renders (blood.getRenderQuads
+non-empty).
+
+PASS = every path reclaims its blood resources and blood re-renders
+       after recreate.
+FAIL = a comparable path leaves the totals above baseline, the save-load
+       path leaves a captured handle resident in either registry, the
+       load never publishes, or re-render fails.
 """
 from __future__ import annotations
 import argparse
 import sys
 import time
 
-from probelib import boot, quit_engine, send, send_json
+from probelib import (boot, capture_request_id, quit_engine, send,
+                      send_json, wait_load_published)
 
 PORT = 9026
 LOG = "/tmp/blood_gpu_lifecycle_probe_engine.log"
@@ -123,14 +149,31 @@ def fresh_page() -> None:
     wait_stable()
 
 
-def run_path(name: str, teardown_lua: str, wait_after: float,
-             leaves_page: bool) -> None:
-    """One teardown/replacement path: spawn K blood, tear the page down,
-    confirm resources return to the pre-spawn baseline.
+def blood_handles(arg: str = ""):
+    """``blood.gpuHandles(arg)`` rows (#1585), or None if the verb
+    answered nil / the console did not return a table at all.
 
-    leaves_page: True if the teardown leaves a live active page under PAGE
-    (the replacement paths) so bloodHandles is observable as 0 afterward;
-    False if it removes the page entirely (destroy / destroy-all)."""
+    An EMPTY Lua table serializes as the JSON object ``{}`` — the debug
+    console's array detection needs at least one ``1..n`` key — so an
+    empty dict here means "no rows", not a malformed answer."""
+    v = send_json(PORT, f"return blood.gpuHandles({arg})")
+    if isinstance(v, list):
+        return v
+    if isinstance(v, dict) and not v:
+        return []
+    return None
+
+
+def handle_array(handles: list[int]) -> str:
+    """A Lua array literal for the explicit blood.gpuHandles form."""
+    return "{" + ",".join(str(h) for h in handles) + "}"
+
+
+def spawn_phase(name: str) -> tuple[dict, dict]:
+    """The half every path shares: a clean baselined page, K distinct
+    blood textures on it, and the exact upload-delta assertions.
+
+    Returns (pre-spawn baseline stats, post-upload stats)."""
     print(f"\n== path: {name} ==")
     fresh_page()
     base = gpu_stats()
@@ -143,6 +186,24 @@ def run_path(name: str, teardown_lua: str, wait_after: float,
           f"bindless rose by exactly {K} ({base['bindless']}->{up['bindless']})")
     check(up["texSize"] == base["texSize"] + K,
           f"texSize rose by exactly {K} ({base['texSize']}->{up['texSize']})")
+    return base, up
+
+
+def run_path(name: str, teardown_lua: str, wait_after: float,
+             leaves_page: bool) -> None:
+    """One COMPARABLE teardown/replacement path: spawn K blood, tear the
+    page down, confirm the engine-wide counters return to the pre-spawn
+    baseline.
+
+    Sound only because nothing else allocates a GPU texture across these
+    paths, which makes the totals a valid blood delta. The save-load
+    path breaks that premise and has its own oracle
+    ('run_save_load_path'); do not route it through here.
+
+    leaves_page: True if the teardown leaves a live active page under PAGE
+    (the replacement paths) so bloodHandles is observable as 0 afterward;
+    False if it removes the page entirely (destroy / destroy-all)."""
+    base, _ = spawn_phase(name)
 
     # Tear the page down and wait for the world command + the render
     # thread's dispose-queue drain to complete.
@@ -160,6 +221,103 @@ def run_path(name: str, teardown_lua: str, wait_after: float,
     if leaves_page:
         check(post["bloodHandles"] == 0,
               "replacement page's blood handle map is empty")
+
+
+def run_save_load_path(slot: str, wait_after: float) -> None:
+    """The save-load replacement path, judged by OWNERSHIP (#1585).
+
+    A published load brings up a complete replacement session whose own
+    preview, zoom-atlas and world-texture registrations move the same
+    engine-wide counters blood does, so 'run_path''s return-to-baseline
+    comparison would be comparing two different sessions. This oracle
+    instead captures the outgoing page's blood-owned texture handles
+    first and requires each of them, individually, to be gone from the
+    bindless map AND from the texture-size cache — the two registrations
+    'World.Render.BloodQuads.disposeBloodRecord' drops separately, so a
+    handle left in either one is a leak. Handles are never reused, so no
+    allocation the replacement session makes can mask or fake this."""
+    name = "save-load replacement"
+    base, _ = spawn_phase(name)
+
+    owned = blood_handles()
+    if owned is None or len(owned) != K:
+        check(False, f"captured the outgoing page's {K} blood-owned GPU "
+                     f"handles before the load (blood.gpuHandles() -> {owned!r})")
+        return
+    check(all(r.get("bindless") and r.get("texSize") for r in owned),
+          f"all {K} captured blood handles are resident in BOTH registries "
+          f"before the load ({owned})")
+    handles = [r["handle"] for r in owned]
+    arg = handle_array(handles)
+
+    # Wait for THIS load request to publish (#763): loadSave only ACCEPTS
+    # synchronously, and passing the captured request id is what stops a
+    # terminal status left by an earlier transaction from satisfying the
+    # wait. Nothing about the replacement session may be judged before it.
+    accepted = send(PORT, f"return engine.loadSave('{slot}')").strip()
+    if accepted != "true":
+        check(False, f"engine.loadSave('{slot}') was accepted (returned "
+                     f"{accepted!r}; the reason is logged in {LOG})")
+        return
+    rid = capture_request_id(PORT, "return engine.getLoadStatus()")
+    if rid is None:
+        check(False, f"engine.getLoadStatus() reported a request id for "
+                     f"loadSave('{slot}')")
+        return
+    published, status = wait_load_published(PORT, wait_after, request_id=rid)
+    check(published, f"the load published (request {rid})"
+                     + ("" if published else f"; last status {status}"))
+    if not published:
+        return
+
+    # Publication only means the replacement session is live; the old
+    # page's blood records are disposed by the render thread's queue
+    # drain, which runs after.
+    deadline = time.time() + wait_after
+    rows = blood_handles(arg)
+    while time.time() < deadline:
+        if rows is not None and not any(r.get("bindless") or r.get("texSize")
+                                        for r in rows):
+            break
+        time.sleep(0.25)
+        rows = blood_handles(arg)
+
+    if rows is None or len(rows) != len(handles):
+        check(False, f"blood.gpuHandles({arg}) answered about all "
+                     f"{len(handles)} captured handles (got {rows!r})")
+        return
+    still_bindless = [r["handle"] for r in rows if r.get("bindless")]
+    still_texsize = [r["handle"] for r in rows if r.get("texSize")]
+    ok_bindless = not still_bindless
+    ok_texsize = not still_texsize
+    check(ok_bindless,
+          "every pre-load blood handle is gone from the bindless map"
+          + ("" if ok_bindless else f" (still registered: {still_bindless})"))
+    check(ok_texsize,
+          "every pre-load blood handle is gone from the texture-size cache"
+          + ("" if ok_texsize else f" (still cached: {still_texsize})"))
+
+    after = gpu_stats()
+    if not (ok_bindless and ok_texsize):
+        # Requirement 4: say plainly that the totals are NOT the verdict,
+        # so a reader cannot mistake replacement-session growth for the
+        # leak. World textures land in both registries; the preview and
+        # zoom atlas move the bindless map without touching the size
+        # cache -- so neither total is attributable to any one source.
+        print(f"  context: captured blood handles {handles}; engine-wide "
+              f"totals bindless {base['bindless']}->{after['bindless']}, "
+              f"texSize {base['texSize']}->{after['texSize']}. Those totals "
+              f"are NOT the verdict: the replacement session registers its "
+              f"own non-blood textures (world textures in both registries, "
+              f"the preview and zoom atlas in the bindless map only), so "
+              f"they move whether or not blood leaked. The leak is the "
+              f"per-handle residency above.")
+
+    # Corroboration only (#1585 requirement 2): a fresh page's blood map
+    # is empty whether or not the OLD page's handles were released, so
+    # this can never be the assertion that carries the path.
+    check(after["bloodHandles"] == 0,
+          "replacement page's blood handle map is empty")
 
 
 def main() -> int:
@@ -194,9 +352,7 @@ def main() -> int:
                  wait_after=60, leaves_page=True)
         run_path("arena replacement (replace)",
                  f"world.initArena('{PAGE}')", wait_after=30, leaves_page=True)
-        run_path("save-load replacement",
-                 "engine.loadSave('blood_lifecycle_save')",
-                 wait_after=60, leaves_page=True)
+        run_save_load_path("blood_lifecycle_save", wait_after=60)
 
         # Recreate + re-render: blood must still upload and render after a
         # page id has been through teardown.
