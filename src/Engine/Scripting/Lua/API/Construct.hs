@@ -77,9 +77,10 @@ constructClearAnchorFn wsc = do
 --   (slot 10) is the page-selection generation @world.pickTile@ reported
 --   for the click this designation commits. When present it is compared
 --   against 'wmSelectionGen' in ONE manager read taken immediately
---   before the command is enqueued; a mismatch enqueues nothing at all
---   and returns false, which is the synchronous answer the build tool
---   turns into its rejected outcome.
+--   before the command is enqueued; a mismatch — the generation moved,
+--   or a selection change is enqueued and not yet applied — enqueues
+--   nothing at all and returns false, which is the synchronous answer
+--   the build tool turns into its rejected outcome.
 --
 --   The generation ALSO travels on the command, and the world thread
 --   re-checks it before writing anything. That second check is the
@@ -115,7 +116,12 @@ constructDesignateFn wsc = do
                         Nothing   → pure False
                         Just want → do
                             wm ← readIORef (wsWorldManagerRef wsc)
-                            pure (fromIntegral want ≢ wmSelectionGen wm)
+                            -- Same two halves as building.canPlaceAt's
+                            -- own check: the generation has moved, or a
+                            -- selection change is already enqueued and
+                            -- has simply not been applied yet.
+                            pure (fromIntegral want ≢ wmSelectionGen wm
+                                  ∨ wmSelectionPending wm > 0)
                     if stale then pure False else do
                         -- The binding travels WITH the command. The check
                         -- above is the SYNCHRONOUS answer this call owes

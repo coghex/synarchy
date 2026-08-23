@@ -8,6 +8,8 @@ module World.State.Types
     , WorldManager(..)
     , emptyWorldManager
     , bumpSelectionGen
+    , requestSelectionChange
+    , completeSelectionChange
     , pageLanguageProvenance
     , CursorSnapshot(..)
     , LoadPhase(..)
@@ -363,6 +365,28 @@ data WorldManager = WorldManager
       --   NOT persisted: it is a within-session freshness counter, and a
       --   restored session's bindings are all invalidated by the bump
       --   the publish itself performs.
+    , wmSelectionPending ∷ !Int
+      -- ^ How many selection-changing commands have been REQUESTED but
+      --   not yet applied (#1602). The generation above moves when the
+      --   world thread applies a change; this moves when another thread
+      --   asks for one, and closes the window between the two.
+      --
+      --   Without it, a @world.hide@ sitting unapplied in the world
+      --   queue is invisible to a caller reading this record: the
+      --   synchronous check a click needs would answer "still fresh"
+      --   while the world thread was about to (correctly) reject the
+      --   very same placement, leaving the build tool having recorded an
+      --   acceptance for something that never landed. A non-zero count
+      --   means "selection is in flight", and every binding reads as
+      --   stale until it settles — conservative in the safe direction,
+      --   and only for the one world-thread tick the change takes.
+      --
+      --   Robust rather than exactly balanced: a decrement clamps at
+      --   zero (the load's restore drives 'handleWorldShowCommand'
+      --   directly, with no matching request), and
+      --   'World.Load.Publish.publishStagedSession' resets it outright,
+      --   which is also what covers the one path that DISCARDS queued
+      --   commands ('World.Thread.processAuthorizedSave').
     }
 
 emptyWorldManager ∷ WorldManager
@@ -370,6 +394,7 @@ emptyWorldManager = WorldManager
     { wmWorlds  = []
     , wmVisible = []
     , wmSelectionGen = 0
+    , wmSelectionPending = 0
     }
 
 -- | Advance the page-selection generation (#1602). Call inside the SAME
@@ -378,6 +403,21 @@ emptyWorldManager = WorldManager
 --   generation.
 bumpSelectionGen ∷ WorldManager → WorldManager
 bumpSelectionGen mgr = mgr { wmSelectionGen = wmSelectionGen mgr + 1 }
+
+-- | Record that a selection-changing command has been ENQUEUED (#1602).
+--   Call it in the same atomic step as the enqueue, from whichever
+--   thread is asking, so no reader can see the request land without
+--   seeing the count move.
+requestSelectionChange ∷ WorldManager → WorldManager
+requestSelectionChange mgr =
+    mgr { wmSelectionPending = wmSelectionPending mgr + 1 }
+
+-- | Record that one such command has now been APPLIED. Clamped at zero:
+--   the same handlers are also driven directly by the load's restore,
+--   which never went through a request.
+completeSelectionChange ∷ WorldManager → WorldManager
+completeSelectionChange mgr =
+    mgr { wmSelectionPending = max 0 (wmSelectionPending mgr - 1) }
 
 -- | The page-scoped language-provenance query (#1092 requirement 5):
 --   which generated language named this page, and under which

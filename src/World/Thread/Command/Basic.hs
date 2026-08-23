@@ -59,12 +59,13 @@ handleWorldDestroyCommand env logger pageId = do
     enqueueBloodDisposalForPage (rhBloodDisposeQueue handoff) mgr pageId
 
     -- Remove from visible list
-    atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr' →
+    atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr'' →
         -- #1602: destroying a page changes what resolveActiveWorld can
         -- answer with, so it invalidates every live placement binding —
         -- unconditionally, even for an already-hidden page, because the
-        -- page itself is gone.
-        (bumpSelectionGen
+        -- page itself is gone. Discharges the pending request too.
+        let mgr' = completeSelectionChange mgr''
+        in (bumpSelectionGen
             (mgr' { wmVisible = filter (≢ pageId) (wmVisible mgr')
                   , wmWorlds  = filter ((≢ pageId) . fst) (wmWorlds mgr')
                   }), ())
@@ -97,7 +98,8 @@ handleWorldDestroyAllCommand env logger = do
     atomicModifyIORef' (wsWorldManagerRef worldSim) $ \m →
         -- #1602: every page is gone; no binding captured before this
         -- may validate or commit afterwards.
-        (bumpSelectionGen (m { wmWorlds = [], wmVisible = [] }), ())
+        (bumpSelectionGen
+            (completeSelectionChange m) { wmWorlds = [], wmVisible = [] }, ())
     writeIORef (rhWorldQuadsRef handoff) emptyLayeredQuads
     -- Reset the entity managers via the UNIT/BUILDING queues, not directly:
     -- those threads keep draining their queues through the teardown, so

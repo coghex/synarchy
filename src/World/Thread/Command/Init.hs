@@ -114,8 +114,16 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
         -- Dedup by page id: re-initialising an existing page (the common
         -- "main_world" reuse after Exit to Menu) must REPLACE its entry,
         -- not stack a second one in wmWorlds (#58).
-        (mgr { wmWorlds = (pageId, worldState)
-                        : filter ((≢ pageId) . fst) (wmWorlds mgr) }, ())
+        --
+        -- #1602: replacing a page's WorldState under the SAME id is a
+        -- selection change even though wmVisible is untouched — a
+        -- binding captured against the old page would otherwise keep
+        -- matching, and a placement validated against the old terrain
+        -- would commit into the replacement. Bump the generation, and
+        -- discharge the request that brought us here.
+        (bumpSelectionGen (completeSelectionChange mgr)
+            { wmWorlds = (pageId, worldState)
+                       : filter ((≢ pageId) . fst) (wmWorlds mgr) }, ())
 
     -- Step 0.5: Populate the material registry from data/materials/*.yaml.
     -- The registry was initialized empty at engine startup; without this
@@ -426,8 +434,12 @@ handleWorldInitArenaCommand env logger pageId = do
         -- Dedup by page id: re-initialising an existing page (the common
         -- "main_world" reuse after Exit to Menu) must REPLACE its entry,
         -- not stack a second one in wmWorlds (#58).
-        (mgr { wmWorlds = (pageId, worldState)
-                        : filter ((≢ pageId) . fst) (wmWorlds mgr) }, ())
+        -- #1602: as in handleWorldInitCommand — a replaced page is a
+        -- selection change, and the request that asked for it is
+        -- discharged here.
+        (bumpSelectionGen (completeSelectionChange mgr)
+            { wmWorlds = (pageId, worldState)
+                       : filter ((≢ pageId) . fst) (wmWorlds mgr) }, ())
 
     -- Arena chunk set: shared with the save-load restore path (#365) so a
     -- loaded arena page is rebuilt exactly like a fresh one.

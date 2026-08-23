@@ -369,14 +369,22 @@ visiblePageStateFrom env = do
 pageBindingStaleReason ∷ Text
 pageBindingStaleReason = "page binding stale"
 
--- | Has page selection moved since the binding was captured (#1602)?
---   'Nothing' (no binding supplied) is never stale — every pre-#1602
---   caller keeps its exact behaviour. The comparison is against the
---   generation carried by the manager snapshot the CALLER already read,
---   so the check and the page resolution it guards share one read.
+-- | Has page selection moved since the binding was captured, or is a
+--   change already on its way (#1602)? 'Nothing' (no binding supplied)
+--   is never stale — every pre-#1602 caller keeps its exact behaviour.
+--
+--   Both halves are read from the manager snapshot the CALLER already
+--   took, so the check and the page resolution it guards share one read.
+--   The pending half is what makes this answer honest rather than merely
+--   optimistic: a @world.hide@ enqueued before this call has not moved
+--   the generation yet, so comparing generations alone would report
+--   "fresh" for a placement the world thread is about to reject — and
+--   the caller would have recorded an acceptance for something that
+--   never landed.
 bindingStale ∷ Maybe Lua.Integer → WorldManager → Bool
 bindingStale Nothing     _  = False
-bindingStale (Just want) wm = fromIntegral want ≢ wmSelectionGen wm
+bindingStale (Just want) wm =
+    fromIntegral want ≢ wmSelectionGen wm ∨ wmSelectionPending wm > 0
 
 -- | Route a validated spawn to the queue that can actually commit it
 --   (#1602). An UNBOUND spawn — location content-spawning, the AI's

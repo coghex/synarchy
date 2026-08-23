@@ -26,7 +26,7 @@ import qualified Data.Text as T
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.Char (isDigit)
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Exception (IOException, evaluate, try)
 import Control.Concurrent (threadDelay)
 import qualified Engine.Core.Queue as Q
@@ -159,7 +159,8 @@ worldInitFn env = do
                     <> " (worldSize minimum/multiple "
                     <> tshow minimumWorldSize
                     <> ", plateCount min 1)."
-            Q.writeQueue (wsWorldQueue (toWorldSimCapability env))
+            -- As with initArena: a re-init replaces the page's state.
+            enqueueSelectionChange env
                 (WorldInit pageId seed size plates identity)
         Nothing → pure ()
 
@@ -529,7 +530,9 @@ worldInitArenaFn env = do
     let pageId = case pageIdArg of
             Just bs → WorldPageId (TE.decodeUtf8Lenient bs)
             Nothing → WorldPageId "test_arena"    -- default when called with no args
-    Lua.liftIO $ Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) (WorldInitArena pageId)
+    -- A re-init REPLACES an existing page's state, so it counts as a
+    -- selection change too (#1602).
+    Lua.liftIO $ enqueueSelectionChange env (WorldInitArena pageId)
     return 0
 
 -- | world.initArenaDone(pageId) — signal that all arena textures have been sent
@@ -548,6 +551,18 @@ worldOpenArenaFn env = do
     Lua.liftIO $ Q.writeQueue (luaQueue env) (LuaOpenArena)
     return 0
 
+-- | Enqueue a world command that will CHANGE PAGE SELECTION, marking the
+--   request pending in the same step (#1602). Every such request must go
+--   through here: a placement binding cannot be trusted while a
+--   selection change is in flight, and the count is the only thing that
+--   makes an unapplied command visible to the synchronous check
+--   @building.canPlaceAt@ / @construction.designate@ run on this thread.
+enqueueSelectionChange ∷ EngineEnv → WorldCommand → IO ()
+enqueueSelectionChange env cmd = do
+    atomicModifyIORef' (wsWorldManagerRef (toWorldSimCapability env)) $ \mgr →
+        (requestSelectionChange mgr, ())
+    Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) cmd
+
 -- | world.show(pageId)
 worldShowFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldShowFn env = do
@@ -556,7 +571,7 @@ worldShowFn env = do
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) (WorldShow pageId)
+            enqueueSelectionChange env (WorldShow pageId)
         Nothing → pure ()
 
     return 0
@@ -569,7 +584,7 @@ worldHideFn env = do
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) (WorldHide pageId)
+            enqueueSelectionChange env (WorldHide pageId)
         Nothing → pure ()
 
     return 0
@@ -655,7 +670,7 @@ worldDestroyFn env = do
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) (WorldDestroy pageId)
+            enqueueSelectionChange env (WorldDestroy pageId)
         Nothing → pure ()
 
     return 0
@@ -666,5 +681,5 @@ worldDestroyFn env = do
 --   unit/building managers. (#58)
 worldDestroyAllFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldDestroyAllFn env = do
-    Lua.liftIO $ Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) WorldDestroyAll
+    Lua.liftIO $ enqueueSelectionChange env WorldDestroyAll
     return 0

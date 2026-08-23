@@ -168,6 +168,11 @@ publishStagedSession env logger requestId staged = do
         { wmWorlds  = [ (spPageId p, spWorldState p) | p ← ssPages staged ]
         , wmVisible = []
         , wmSelectionGen = outgoingSelectionGen + 1
+        -- Reset rather than carried: a load replaces the whole session,
+        -- and 'World.Thread.processAuthorizedSave' DISCARDS whatever
+        -- selection-changing commands were still queued against the old
+        -- one, so their requests will never be discharged by a handler.
+        , wmSelectionPending = 0
         }
 
     -- Restore visibility through the real handler so its side effects

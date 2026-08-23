@@ -26,7 +26,8 @@ handleWorldShowCommand wsc logger pageId = do
     -- atomicModifyIORef' returns whether the world was found so the
     -- existence check and the visible-list mutation share one consistent
     -- snapshot of the manager.
-    found ← atomicModifyIORef' (wsWorldManagerRef wsc) $ \mgr →
+    found ← atomicModifyIORef' (wsWorldManagerRef wsc) $ \mgr' →
+      let mgr = completeSelectionChange mgr' in
         case lookup pageId (wmWorlds mgr) of
             Nothing → (mgr, False)
             Just _
@@ -68,10 +69,13 @@ handleWorldHideCommand wsc logger pageId = do
     -- Only deactivate sim for a world that was actually visible. Hiding an
     -- invalid / already-hidden page is a no-op for sim state, and hiding one
     -- world never tears down the others' sim (per-world deactivate, #55).
-    wasVisible ← atomicModifyIORef' (wsWorldManagerRef wsc) $ \mgr →
-        -- #1602: as in show above — bump only when the visible list
-        -- actually changes, so hiding an already-hidden page is a true
-        -- no-op for live placement bindings.
+    wasVisible ← atomicModifyIORef' (wsWorldManagerRef wsc) $ \mgr' →
+      let mgr = completeSelectionChange mgr' in
+        -- #1602: as in show above — the GENERATION moves only when the
+        -- visible list actually changes, so hiding an already-hidden
+        -- page is a true no-op for live placement bindings. The PENDING
+        -- count is discharged either way: it tracks requests, not
+        -- effects.
         ( (if pageId `elem` wmVisible mgr then bumpSelectionGen else id)
             (mgr { wmVisible = filter (≢ pageId) (wmVisible mgr) })
         , pageId `elem` wmVisible mgr )

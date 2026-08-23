@@ -86,6 +86,7 @@ import World.Page.Types (WorldPageId(..))
 import World.State.Types
     (WorldManager(..), WorldState(..), emptyWorldManager, emptyWorldState)
 import World.Thread.Command (handleWorldCommand)
+import World.Thread.Command.Init (handleWorldInitArenaCommand)
 import World.Thread.Command.Cursor.Construct
     (handleWorldDesignateConstructCommand)
 import World.Thread.Command.UI
@@ -584,6 +585,7 @@ spec = describe "Build placement page binding (#1602)" $ aroundAll setup $ do
     emptyVisibleSpec
     staleSpec
     applyTimeSpec
+    pendingSpec
   where
     -- Isolation wraps the boot, not the other way round (#1357): engine
     -- init is itself a config writer, so a scratch resource root
@@ -1033,3 +1035,83 @@ applyQueuedBuildings env =
         (toWorldSimCapability env)
         (toContentRegistriesCapability env)
         (toBuildingCapability env)
+
+-- | The window round 3 named: a selection change ENQUEUED before the
+--   click but applied after it. Comparing generations alone reports
+--   "fresh" there — the world thread has not applied anything yet — so
+--   the placement would be accepted synchronously and then correctly
+--   dropped at the commit, leaving the build tool having recorded an
+--   acceptance for a building that never landed. The pending count
+--   closes it: the rejection is SYNCHRONOUS, which is what lets the tool
+--   record the required outcome and stay armed.
+pendingSpec ∷ SpecWith (EngineEnv, LuaBackendState)
+pendingSpec =
+  describe "a selection change ENQUEUED but not yet applied" $ do
+
+    it "makes canPlaceAt report the binding stale before the world \
+       \thread has touched anything" $ \(env, ls) → do
+        _ ← resetScene env
+        _ ← clearStubs ls
+        gen ← selectionGen env
+        _ ← evalDebug ls $ T.concat
+            [ "world.hide('", unWorldPageId pageA, "'); return 'queued'" ]
+        -- Nothing has been applied: the page is still visible and the
+        -- generation has not moved.
+        mgr ← readIORef (worldManagerRef env)
+        wmVisible mgr `shouldBe` [pageA]
+        wmSelectionGen mgr `shouldBe` gen
+        canPlaceAt ls shedName placeTile (Just (pageA, gen))
+            `shouldReturn` "false|page binding stale|true"
+
+    it "rejects the starting-building click, records the outcome and \
+       \leaves placement armed" $ \(env, ls) → do
+        (wsA, wsB) ← resetScene env
+        _ ← clearStubs ls
+        _ ← armBuildTool ls portalName True
+        _ ← evalDebug ls $ T.concat
+            [ "world.hide('", unWorldPageId pageA, "'); return 'queued'" ]
+        (px, py) ← aimAt env placeTile terrainZA
+        _ ← clickAt ls (px, py)
+        expectStale env wsA wsB ls
+
+    it "rejects the construction.designate click the same way" $
+        \(env, ls) → do
+            (wsA, wsB) ← resetScene env
+            _ ← clearStubs ls
+            _ ← armBuildTool ls shedName False
+            _ ← evalDebug ls $ T.concat
+                [ "world.show('", unWorldPageId pageB, "'); return 'queued'" ]
+            (px, py) ← aimAt env placeTile terrainZA
+            _ ← clickAt ls (px, py)
+            expectStale env wsA wsB ls
+
+    it "settles once the world thread applies the change" $ \(env, ls) → do
+        _ ← resetScene env
+        _ ← clearStubs ls
+        _ ← evalDebug ls $ T.concat
+            [ "world.show('", unWorldPageId pageB, "'); return 'queued'" ]
+        runWorldQueue env
+        (wmSelectionPending <$> readIORef (worldManagerRef env))
+            `shouldReturn` 0
+        -- A binding taken AFTER the change settled is good again.
+        gen ← selectionGen env
+        mgr ← readIORef (worldManagerRef env)
+        wmVisible mgr `shouldBe` [pageB, pageA]
+        canPlaceAt ls shedName placeTile (Just (pageB, gen))
+            `shouldReturn` "true|nil|false"
+
+    it "invalidates a binding when a VISIBLE page is re-initialised \
+       \under the same id" $ \(env, ls) → do
+        _ ← resetScene env
+        _ ← clearStubs ls
+        gen ← selectionGen env
+        logger ← readIORef (loggerRef env)
+        -- world.init/initArena REPLACE the page's WorldState while
+        -- leaving wmVisible alone, so the page id still matches: only
+        -- the generation can tell the binding apart from a live one.
+        handleWorldInitArenaCommand env logger pageA
+        mgr ← readIORef (worldManagerRef env)
+        wmVisible mgr `shouldBe` [pageA]
+        wmSelectionGen mgr `shouldNotBe` gen
+        canPlaceAt ls shedName placeTile (Just (pageA, gen))
+            `shouldReturn` "false|page binding stale|true"
