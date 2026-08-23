@@ -118,9 +118,19 @@ TOTAL_SIBLINGS = ("decodeUtf8'", "decodeUtf8With", "decodeUtf8Lenient")
 # empty.
 EXEMPTIONS: dict[str, str] = {}
 
-# Haskell 2010 report SS2.4: the characters a variable or constructor
-# identifier is made of. A MAXIMAL run of these is one lexeme.
-_IDENT_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_'"
+def _is_ident_char(char: str) -> bool:
+    """True for a character a Haskell variable, constructor or module
+    identifier is made of (report SS2.4, as GHC extends it): a letter, a
+    digit, `_`, or `'`.
+
+    Unicode-aware on purpose. GHC accepts non-ASCII letters in names, so
+    `import qualified Data.Text.Encoding as TE\u00c9` is a valid alias --
+    and an ASCII-only lexer would stop mid-qualifier at the `\u00c9`,
+    read `TE\u00c9.decodeUtf8` as unqualified, and miss the call. The
+    same reasoning is why `tools/unicode_operator_audit.py` resolves ITS
+    qualifiers with Unicode-aware `\\w` and `str.isupper()` rather than
+    an ASCII class."""
+    return char.isalnum() or char in "_'"
 
 # `STRICT_MODULE` named as a whole module path -- not as the prefix of a
 # longer one, so `Data.Text.Encoding.Error` is correctly NOT a mention.
@@ -135,7 +145,7 @@ _STRICT_IMPORT = re.compile(
     r"\Aimport\s+(?P<prequalified>qualified\s+)?"
     + re.escape(STRICT_MODULE) + r"(?![\w'.])"
     r"(?P<postqualified>\s+qualified(?![\w']))?"
-    r"(?:\s+as\s+(?P<alias>[A-Z][\w']*(?:\.[A-Z][\w']*)*))?"
+    r"(?:\s+as\s+(?P<alias>\w[\w']*(?:\.\w[\w']*)*))?"
     r"(?P<rest>[\s\S]*)\Z")
 
 # `import` as a whole token, wherever it sits.
@@ -306,7 +316,19 @@ def _classify_strict_import(decl: str, rel_path: str, line: int) -> str:
             f"EXEMPTIONS with the reason it is safe.")
 
     alias = match.group("alias")
-    return alias if alias else STRICT_MODULE
+    if alias is None:
+        return STRICT_MODULE
+    # A module alias is a modid: every dot-separated segment is
+    # uppercase-led. The pattern above is Unicode-aware rather than
+    # `[A-Z]`, so the check is here, where `str.isupper()` covers any
+    # alphabet -- and anything that is not a modid did not come from
+    # source GHC accepts.
+    if not all(seg and seg[0].isupper() for seg in alias.split(".")):
+        raise _ImportParseError(
+            f"{rel_path}:{line}: the `as` clause of this {STRICT_MODULE} "
+            f"import does not name a module (every segment of a module "
+            f"alias is uppercase-led):\n\n{decl.strip()}")
+    return alias
 
 
 def resolve_strict_imports(
@@ -342,11 +364,11 @@ def _identifier_runs(text: str, start: int, end: int):
     `(position, lexeme)`."""
     i = start
     while i < end:
-        if text[i] not in _IDENT_CHARS:
+        if not _is_ident_char(text[i]):
             i += 1
             continue
         run_start = i
-        while i < end and text[i] in _IDENT_CHARS:
+        while i < end and _is_ident_char(text[i]):
             i += 1
         yield run_start, text[run_start:i]
 
@@ -369,7 +391,7 @@ def _qualifier_before(text: str, pos: int) -> str:
     the quote must not hide it. `''Name` (the type-level quote) is
     stripped the same way."""
     start = pos
-    while start > 0 and (text[start - 1] in _IDENT_CHARS
+    while start > 0 and (_is_ident_char(text[start - 1])
                          or text[start - 1] == "."):
         start -= 1
     candidate = text[start:pos]
@@ -573,6 +595,29 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         [3],
     ),
     (
+        "UNICODE ALIAS: GHC accepts non-ASCII letters in names, so an "
+        "ASCII-only qualifier lexer would stop mid-alias and read this "
+        "as unqualified",
+        "module M where\n"
+        "import qualified Data.Text.Encoding as T\u00c9\n"
+        "f raw = T\u00c9.decodeUtf8 raw\n",
+        [3],
+    ),
+    (
+        "UNICODE ALIAS: one whose FIRST letter is non-ASCII uppercase",
+        "module M where\n"
+        "import qualified Data.Text.Encoding as \u00c9nc\n"
+        "f raw = \u00c9nc.decodeUtf8 raw\n",
+        [3],
+    ),
+    (
+        "UNICODE ALIAS: a multi-segment one",
+        "module M where\n"
+        "import qualified Data.Text.Encoding as T\u00c9.Inner\n"
+        "f raw = T\u00c9.Inner.decodeUtf8 raw\n",
+        [3],
+    ),
+    (
         "TEMPLATE HASKELL: a quoted name `'TE.decodeUtf8` -- `'` is an "
         "identifier character, so the quote lands inside the qualifier "
         "run and must be stripped, or the splice that invokes the "
@@ -709,6 +754,25 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         + "f raw = decodeUtf8 raw\n",
     ),
     (
+        "UNICODE ALIAS: a compliant sibling behind one stays clean",
+        "module M where\n"
+        "import qualified Data.Text.Encoding as T\u00c9\n"
+        "f raw = T\u00c9.decodeUtf8Lenient raw\n",
+    ),
+    (
+        "UNICODE ALIAS: another module behind a non-ASCII alias is "
+        "still another module",
+        "module M where\n"
+        "import qualified Data.Text.Lazy.Encoding as T\u00c9\n"
+        "f raw = T\u00c9.decodeUtf8 raw\n",
+    ),
+    (
+        "UNICODE: a non-ASCII identifier merely CONTAINING the banned "
+        "name is a different lexeme",
+        "module M where\n" + _TE
+        + "f raw = TE.decodeUtf8\u00c9 raw\n",
+    ),
+    (
         "TEMPLATE HASKELL: a quoted COMPLIANT sibling stays clean",
         "module M where\n" + _TE
         + "f raw = $(varE 'TE.decodeUtf8Lenient) raw\n",
@@ -768,6 +832,14 @@ UNSCANNABLE_FIXTURES: list[tuple[str, str, type]] = [
         "import Data.Text.Encoding hiding (decodeUtf8)\n"
         "f raw = decodeUtf8Lenient raw\n",
         _UnqualifiedImportError,
+    ),
+    (
+        "an `as` clause that does not name a module -- a modid is "
+        "uppercase-led, so this did not come from source GHC accepts",
+        "module M where\n"
+        "import qualified Data.Text.Encoding as te\n"
+        "f raw = te.decodeUtf8 raw\n",
+        _ImportParseError,
     ),
     (
         "a package-qualified import shape the parser does not model",
