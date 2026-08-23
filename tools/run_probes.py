@@ -24,7 +24,24 @@ reader/writer (#1322, #1444): every probe holds the resources named in
 `IMPLICIT_SHARED_RESOURCES` below in a SHARED interest, and the few probes
 that need one to themselves declare it in `EXCLUSIVE_RESOURCES`, which
 holds such a probe back until nothing else is running and holds every other
-probe back until it has finished. Since #1436 the SAME two tables are also
+probe back until it has finished.
+
+The build directory is one of those resources (#1570). Probes used to
+launch their engine as `cabal run exe:synarchy`, so a `--jobs N` sweep put
+N concurrent Cabal processes on one `dist-newstyle` and an otherwise
+healthy probe died on the inplace package database before its engine
+started. This runner therefore resolves the executable ONCE — one
+freshness build plus one `cabal list-bin`, in `engine_preflight` below,
+after selection is validated and before any probe is spawned — and hands
+every probe that absolute path through the environment, so no probe
+process invokes Cabal while another is running. That preflight is itself
+a Cabal writer, so it runs inside an EXCLUSIVE `cabal-build` hold: two
+aggregate runs cannot build at once, and neither can a build and another
+runner's `cabal repl` probe. The few probes that
+legitimately still drive Cabal (GHCi consumers: `cabal repl` behind
+`persistence_snapshot`/`save_compat_audit`) declare `cabal-build`
+EXCLUSIVELY instead, which is the same scheduling mechanism keeping them
+off everyone else's toes. Since #1436 the SAME two tables are also
 enforced ACROSS processes, through `tools/probe_resource_lock.py`, so a
 `/deflake` measurement or a second runner cannot overlap what this one is
 holding either. A full sequential run is low tens of
@@ -47,9 +64,11 @@ A probe that dies of an unexpected exception after booting its engine
 never reaches its own teardown, and the engine then outlives it holding
 the probe's port; see `reap_group` below.
 
-Exit 0 = all selected probes passed. 1 = at least one failed. 2 = bad
-invocation (e.g. --only matched nothing). 130 = interrupted with Ctrl-C,
-after terminating every probe still running and the engine it booted.
+Exit 0 = all selected probes passed. 1 = at least one failed. 2 = the run
+never started — a bad invocation (e.g. --only matched nothing), an
+unusable cross-process resource namespace, or an engine executable the
+preflight could not resolve. 130 = interrupted with Ctrl-C, after
+terminating every probe still running and the engine it booted.
 """
 from __future__ import annotations
 import argparse
@@ -63,6 +82,7 @@ import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import probe_engine  # noqa: E402
 import probe_protocol  # noqa: E402
 import probe_resource_lock  # noqa: E402
 
@@ -412,11 +432,34 @@ PROBES = [
 # with ~85 probes, and a probe that GAINS an engine boot must not silently
 # lose the guard. Shared-against-shared never blocks, so the conservative
 # reading costs the undeclared probes nothing.
-IMPLICIT_SHARED_RESOURCES: tuple[str, ...] = ("repo-config",)
+#
+# `cabal-build` is this checkout's shared Cabal build state — the one
+# `dist-newstyle` every probe's engine comes out of (#1570). Since the
+# preflight below resolves the executable once and every probe execs that
+# binary, an ordinary probe only READS it, which is the shared interest.
+# Three registered probes still drive Cabal themselves, and they are the
+# reason the resource exists: `persistence_contract` and
+# `persistence_contract_sweep` run `cabal repl test:synarchy-test-headless`
+# through `persistence_snapshot.compare_session_files`, and
+# `save_compat_migration` (and the other two) through
+# `save_compat_audit.dump_canonical_summary`. A `cabal repl` recompiles into
+# the same inplace package database whose concurrent mutation is the defect,
+# so each of them takes `cabal-build` EXCLUSIVELY: two of them cannot
+# overlap each other, and neither overlaps a probe reading the binary they
+# may be relinking. They are deliberately RETAINED rather than converted —
+# a GHCi consumer is not an engine boot and has no prebuilt equivalent.
+#: The shared Cabal build state, named once so the preflight below and
+#: the two declaration tables cannot drift apart.
+BUILD_RESOURCE = "cabal-build"
+
+IMPLICIT_SHARED_RESOURCES: tuple[str, ...] = ("repo-config", BUILD_RESOURCE)
 
 EXCLUSIVE_RESOURCES: dict[str, tuple[str, ...]] = {
     "config_migration": ("repo-config",),
     "config_state": ("repo-config",),
+    "persistence_contract": (BUILD_RESOURCE,),
+    "persistence_contract_sweep": (BUILD_RESOURCE,),
+    "save_compat_migration": (BUILD_RESOURCE,),
 }
 
 
@@ -634,14 +677,163 @@ def resource_hold(key: str, namespace, *, announce=None):
     if namespace is None:
         yield None
         return
+    need_exclusive, need_shared = cross_process_interests(key, namespace)
     hold = probe_resource_lock.wait_acquire(
-        exclusive=exclusive_resources(key), shared=shared_resources(key),
+        exclusive=need_exclusive, shared=need_shared,
         namespace=namespace, purpose=f"run_probes {key}",
         poll=RESOURCE_WAIT_POLL, announce=announce)
     try:
         yield hold
     finally:
         hold.release()
+
+
+# ---------------------------------------------------------------------------
+# Resources an ANCESTOR already holds on this process's behalf (#1570)
+#
+# `persistence_contract_sweep` is a registered probe that itself invokes
+# `run_probes.py` for the probes it cross-references. Once the sweep holds
+# `cabal-build` EXCLUSIVELY, the flock its own nested runner takes for a
+# child probe — in EITHER interest — conflicts with its ancestor's, and the
+# nested runner would then wait forever for a holder that is itself blocked
+# waiting on the nested runner.
+#
+# So a runner exports what it holds EXCLUSIVELY to every probe it launches,
+# and a nested runner drops those names from its CROSS-PROCESS requests: it
+# is inside its ancestor's exclusion, not competing with it. Its own
+# in-process ledger is untouched, so a nested sweep still serialises its own
+# probes against each other exactly as before.
+#
+# Only EXCLUSIVE holds are exported, and that is the whole rule. An
+# ancestor's exclusive hold already excludes every foreign process, so a
+# descendant inside it needs nothing further. An ancestor's SHARED hold
+# cannot stand in for a descendant's exclusive request and must not be
+# skipped — while a descendant's SHARED request against it is granted by the
+# kernel anyway (LOCK_SH beside LOCK_SH), so there is nothing to export.
+#
+# The namespace rides along and is compared before anything is inherited: a
+# name means nothing outside the repository it was taken in.
+ENV_HELD_EXCLUSIVE = "SYNARCHY_PROBE_HELD_EXCLUSIVE"
+ENV_HELD_NAMESPACE = "SYNARCHY_PROBE_HELD_NAMESPACE"
+
+#: Every variable THIS runner owns in a probe's environment, so
+#: `run_one` can strip the lot from what it inherited before
+#: supplying its own — the same rule `probe_protocol` states for its
+#: own four. A nested runner re-derives each of them, so nothing is
+#: lost by dropping a value the parent set.
+RUNNER_ENV_VARS: tuple[str, ...] = (probe_engine.ENV_ENGINE_EXE,
+                                    ENV_HELD_EXCLUSIVE,
+                                    ENV_HELD_NAMESPACE)
+
+
+def descendant_hold_env(key: str, namespace: str | None) -> dict[str, str]:
+    """What probe `key`'s own descendants may treat as already excluded.
+
+    The probe's own exclusive declarations PLUS whatever this runner
+    itself inherited, so the rule survives a second level of nesting.
+    Empty when there is nothing to inherit, which is the ordinary case
+    and passes no environment override at all.
+    """
+    if namespace is None:
+        return {}
+    held = exclusive_resources(key) | inherited_exclusive_resources(namespace)
+    if not held:
+        return {}
+    return {ENV_HELD_EXCLUSIVE: ",".join(sorted(held)),
+            ENV_HELD_NAMESPACE: namespace}
+
+
+def inherited_exclusive_resources(namespace: str | None,
+                                  environ=None) -> set[str]:
+    """Resources an ancestor process already holds exclusively for us."""
+    env = os.environ if environ is None else environ
+    if namespace is None or env.get(ENV_HELD_NAMESPACE) != namespace:
+        return set()
+    raw = env.get(ENV_HELD_EXCLUSIVE) or ""
+    return {name.strip() for name in raw.split(",") if name.strip()}
+
+
+def cross_process_interests(key: str, namespace: str | None,
+                            environ=None) -> tuple[set[str], set[str]]:
+    """`key`'s (exclusive, shared) interests for the CROSS-PROCESS layer.
+
+    The in-process ledger keeps using `exclusive_resources` /
+    `shared_resources` unchanged; only the flocks drop what an ancestor
+    is already holding exclusively on this process's behalf.
+    """
+    inherited = inherited_exclusive_resources(namespace, environ)
+    return (exclusive_resources(key) - inherited,
+            shared_resources(key) - inherited)
+
+
+# ---------------------------------------------------------------------------
+# The engine executable: resolved ONCE per run (#1570)
+#
+# Overridable only so `tools/test_run_probes.py` can drive the preflight
+# with a deterministic subprocess double instead of a real toolchain.
+# Production leaves it None and `main` fills it in.
+ENGINE_EXECUTABLE: str | None = None
+
+#: The subprocess entry point `engine_preflight` resolves through. Tests
+#: substitute a recording double; production leaves it None, which is
+#: `subprocess.run`.
+ENGINE_PREFLIGHT_RUNNER = None
+
+
+@contextlib.contextmanager
+def preflight_hold(namespace, *, announce=None, environ=None):
+    """Hold the shared Cabal build state EXCLUSIVELY across the preflight.
+
+    The preflight is itself a Cabal WRITER — one `cabal build` into the
+    same `dist-newstyle` every probe's engine comes out of — so resolving
+    the executable outside the exclusion would leave exactly the race
+    this issue is about, one level up: two aggregate runs preflighting at
+    once, or one runner's build landing inside another runner's
+    `persistence_contract` / `save_compat_migration` `cabal repl`. Nothing
+    inside a single run can see that; only the cross-process lock can.
+
+    Held for the build alone and released before any probe is dispatched,
+    so the sweep's own probes are never queued behind it. `namespace` of
+    None disables the cross-process layer, exactly as `resource_hold`
+    does, and an ancestor already holding this resource exclusively is
+    inherited rather than waited on — `persistence_contract_sweep`'s
+    nested runner is inside its ancestor's exclusion, not competing with
+    it.
+    """
+    if (namespace is None
+            or BUILD_RESOURCE in inherited_exclusive_resources(namespace,
+                                                                environ)):
+        yield None
+        return
+    hold = probe_resource_lock.wait_acquire(
+        exclusive={BUILD_RESOURCE}, namespace=namespace,
+        purpose="run_probes engine preflight",
+        poll=RESOURCE_WAIT_POLL, announce=announce)
+    try:
+        yield hold
+    finally:
+        hold.release()
+
+
+def engine_preflight(namespace=None, environ=None, *, announce=None) -> str:
+    """The one Cabal contact an aggregate run makes, before any probe.
+
+    Adopts an executable an ANCESTOR already resolved when there is one —
+    that is how `persistence_contract_sweep`'s nested runner reaches its
+    own probes without a second build, and it takes no lock because it
+    builds nothing. Otherwise it runs one freshness build plus one `cabal
+    list-bin`, INSIDE `preflight_hold` so no other runner or GHCi consumer
+    is in the build directory at the same time. Raises
+    `EngineExecutableError`, which `main` reports as a nonzero exit before
+    a probe is spawned, a retry allocated, or any probe assertion
+    attributed to it.
+    """
+    inherited = probe_engine.runner_executable(environ)
+    if inherited is not None:
+        return inherited
+    with preflight_hold(namespace, announce=announce, environ=environ):
+        return probe_engine.resolve_executable(
+            REPO_ROOT, run=ENGINE_PREFLIGHT_RUNNER)
 
 
 # farm_ai_probe.py's O(n^2) TCP tile scan over natural terrain (#336) is the
@@ -956,14 +1148,18 @@ def run_one(script: str, port: int | None, timeout: float,
             event_path: str | None = None,
             artifact_dir: str | None = None,
             engine_log_dir: str | None = None,
-            rts_caps: int | None = None):
+            rts_caps: int | None = None,
+            hold_env: dict[str, str] | None = None):
     """Launch one probe, capture it, and reap its whole process group.
 
-    The four keyword-only parameters are the `probe-result/v1` wiring
-    (#1425), handed to the child through the environment so a migrated
-    probe needs no new command-line flags. Every one defaults to None,
-    which passes no environment override at all — so every pre-existing
-    positional caller behaves exactly as it did.
+    The four `probe-result/v1` keyword parameters are that protocol's
+    wiring (#1425), handed to the child through the environment so a
+    migrated probe needs no new command-line flags. `hold_env` is the
+    same idea for the resources an ancestor holds exclusively on the
+    child's behalf (#1570), which only matters to a probe that nests
+    another runner. Every one defaults to None, which passes no
+    environment override at all — so every pre-existing positional
+    caller behaves exactly as it did.
     """
     cmd = ["python3", os.path.join("tools", script)]
     if port is not None:
@@ -977,8 +1173,21 @@ def run_one(script: str, port: int | None, timeout: float,
     protocol_env = probe_protocol_env(event_path, artifact_dir,
                                       engine_log_dir, rts_caps)
     child_env = {k: v for k, v in os.environ.items()
-                 if k not in probe_protocol.PROTOCOL_ENV_VARS}
+                 if k not in probe_protocol.PROTOCOL_ENV_VARS
+                 and k not in RUNNER_ENV_VARS}
     child_env.update(protocol_env)
+    # The engine every probe launches (#1570), resolved once by `main`'s
+    # preflight. Stripped-then-set for the same reason the protocol
+    # variables are: an operator's stale export must not decide which
+    # binary a sweep runs. A caller that resolved nothing leaves the child
+    # on the `cabal run` fallback it has always used — which is
+    # `tools/probe_flake.py`'s path, deliberately unchanged here: it runs
+    # ONE probe at a time, so it starts no concurrent Cabal of its own,
+    # and the de-flake lab's own inheritance of this race is #1426.
+    if ENGINE_EXECUTABLE is not None:
+        child_env[probe_engine.ENV_ENGINE_EXE] = ENGINE_EXECUTABLE
+    if hold_env:
+        child_env.update(hold_env)
     if groups is not None and groups.stopping.is_set():
         # The runner is tearing down; a queued worker must not boot one
         # more engine on its way out.
@@ -1066,9 +1275,11 @@ def run_with_retry(script, port, timeout, retries, announce=None, groups=None,
     what `tools/test_run_probes.py`'s direct calls rely on.
     """
     attempt = 0
+    hold_env = descendant_hold_env(key, namespace) if key else {}
     while True:
         with resource_hold(key, namespace if key else None, announce=waiting):
-            ok, timed_out, elapsed, out = run_one(script, port, timeout, groups)
+            ok, timed_out, elapsed, out = run_one(script, port, timeout, groups,
+                                                  hold_env=hold_env)
         attempt += 1
         if ok or attempt > retries:
             break
@@ -1079,6 +1290,7 @@ def run_with_retry(script, port, timeout, retries, announce=None, groups=None,
 
 
 def main() -> int:
+    global ENGINE_EXECUTABLE
     ap = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--only", default=None,
@@ -1165,14 +1377,13 @@ def main() -> int:
         print(describe_gui_conflicts(conflicts), file=sys.stderr)
         return 2
 
-    n = len(chosen)
-    results: dict[str, tuple[str, str, float, str]] = {}  # key -> (script, status, elapsed, out)
-    wall_start = time.time()
-    groups = ProbeGroups()
     # Resolved ONCE, here: after --list has had its chance to return without
     # needing a repository, and before any probe runs, so an unusable
     # namespace is a loud refusal in the first second rather than a sweep
-    # that silently coordinates with nobody.
+    # that silently coordinates with nobody. It precedes the executable
+    # preflight below for exactly that reason — the preflight may spend a
+    # build, and a namespace this run can never use should not wait behind
+    # one.
     try:
         namespace = resource_namespace()
     except probe_resource_lock.ResourceLockError as error:
@@ -1183,6 +1394,33 @@ def main() -> int:
     def waiting(busy) -> None:
         print(f"\n    waiting for {busy.resource!r} ({busy.interest}) held "
               f"outside this runner ... ", end="", flush=True)
+
+    # The whole Cabal contact this run makes (#1570): one freshness build
+    # plus one `cabal list-bin`, HERE — after `--list` and after every
+    # selection and port refusal above, so a rejected or empty selection
+    # stays build-free, and before a single probe process exists, so the
+    # concurrent-`cabal run` race cannot happen at all. The build itself
+    # runs inside an EXCLUSIVE `cabal-build` hold, because a preflight is
+    # a Cabal writer like any other and a second runner's preflight (or
+    # another runner's `cabal repl` probe) must not be in the build
+    # directory beside it. A failure is this runner's own nonzero exit,
+    # never a retry and never a probe's assertion failure.
+    try:
+        ENGINE_EXECUTABLE = engine_preflight(namespace, announce=waiting)
+    except probe_engine.EngineExecutableError as error:
+        print(f"cannot resolve the engine the probes launch: {error}",
+              file=sys.stderr)
+        return 2
+    except probe_resource_lock.ResourceLockError as error:
+        print(f"cannot coordinate the engine build across processes: {error}",
+              file=sys.stderr)
+        return 2
+    print(f"engine: {ENGINE_EXECUTABLE}")
+
+    n = len(chosen)
+    results: dict[str, tuple[str, str, float, str]] = {}  # key -> (script, status, elapsed, out)
+    wall_start = time.time()
+    groups = ProbeGroups()
 
     try:
         if args.jobs <= 1:
@@ -1214,12 +1452,13 @@ def main() -> int:
             # below holds a conflicting probe back rather than letting a worker
             # discover the conflict, and takes the cross-process interest at
             # the same point (#1436) so a foreign runner or measurement cannot
-            # overlap it either. Anything not named by either resource table
-            # is unguarded: `tools/probelib.py` still launches shared-tree
-            # `cabal run` processes, and
-            # `docs/project_review_534-518.md:16-30` records a separate
-            # unresolved shared-build-directory race. Retries run SOLO afterward,
-            # since parallel contention is exactly what a retry needs to escape.
+            # overlap it either. Since #1570 the build directory is one of the
+            # scheduled resources rather than an unguarded one: every probe
+            # here execs the executable the preflight already resolved, and the
+            # three GHCi consumers that still run Cabal themselves hold
+            # `cabal-build` EXCLUSIVELY. Anything not named by either resource
+            # table is still unguarded. Retries run SOLO afterward, since
+            # parallel contention is exactly what a retry needs to escape.
             jobs = args.jobs
             print(f"Running {n} probe(s), up to {jobs} concurrently "
                   f"(timeout {args.timeout:.0f}s each)...\n")
@@ -1231,7 +1470,8 @@ def main() -> int:
                 # every other selected probe's (#1571). Never `base + idx`:
                 # a two-port probe binds its neighbour's base under that.
                 ok, timed_out, elapsed, out = run_one(
-                    script, parallel_ports[idx], args.timeout, groups)
+                    script, parallel_ports[idx], args.timeout, groups,
+                    hold_env=descendant_hold_env(key, namespace))
                 status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
                 return key, script, status, elapsed, out
 
@@ -1270,6 +1510,12 @@ def main() -> int:
                             need_shared = shared_resources(probe[0])
                             if ledger.blocked(need_exclusive, need_shared):
                                 continue
+                            # The flock request drops whatever an ancestor
+                            # already holds exclusively for us (#1570); the
+                            # ledger above keeps the full declarations, so
+                            # this runner still serialises its own probes.
+                            lock_exclusive, lock_shared = cross_process_interests(
+                                probe[0], namespace)
                             # The cross-process half, taken at the SAME point
                             # and in the same non-blocking way (#1436): a probe
                             # a foreign holder conflicts with stays pending
@@ -1279,8 +1525,8 @@ def main() -> int:
                             # probe that cannot start.
                             try:
                                 hold = probe_resource_lock.acquire(
-                                    exclusive=need_exclusive,
-                                    shared=need_shared, namespace=namespace,
+                                    exclusive=lock_exclusive,
+                                    shared=lock_shared, namespace=namespace,
                                     purpose=f"run_probes {probe[0]}")
                             except probe_resource_lock.ResourceBusy as busy:
                                 foreign = busy
@@ -1365,7 +1611,8 @@ def main() -> int:
                         # takes the cross-process hold like any other (#1436).
                         with resource_hold(key, namespace, announce=waiting):
                             ok, timed_out, elapsed, out = run_one(
-                                script, parallel_base, args.timeout, groups)
+                                script, parallel_base, args.timeout, groups,
+                                hold_env=descendant_hold_env(key, namespace))
                         status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
                         print(f"  {script} solo retry {r}/{args.retries} ... "
                               f"{status} ({elapsed:.1f}s)")

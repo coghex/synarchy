@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
-"""Unit tests for probelib.send_json and the no-local-copies rule
-(issue #1160).
+"""Unit tests for probelib's shared primitives.
+
+Two contracts live here:
+
+* `probelib.send_json` and the no-local-copies rule (issue #1160), below.
+* Where a probe's ENGINE comes from (issue #1570): under the aggregate
+  runner it execs the one executable the runner already resolved, and run
+  by hand it keeps the `cabal run` invocation probes have always used.
+  That is what stops a `--jobs N` sweep putting N concurrent Cabal
+  processes on one `dist-newstyle`, and requirement 3 of #1570 is the
+  fallback staying intact.
 
 Twenty-two probes each defined their own `jget` JSON wrapper over
 `probelib.send` instead of calling `probelib.send_json`, which already
@@ -29,14 +38,19 @@ from __future__ import annotations
 
 import ast
 import inspect
+import os
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
+import probe_engine  # type: ignore  # noqa: E402
+import probelib  # type: ignore  # noqa: E402
 from probelib import send, send_json  # type: ignore  # noqa: E402
 
 FAILURES: list[str] = []
@@ -436,6 +450,170 @@ def test_no_unused_send_json_import() -> None:
            f"these import send_json but never use it: {offenders}")
 
 
+# ---------------------------------------------------------------------
+# Where the engine comes from (#1570)
+# ---------------------------------------------------------------------
+FAKE_ENGINE = """\
+#!/usr/bin/env python3
+# Stands in for exe:synarchy: records its own argv, then prints the READY
+# marker probelib.boot polls the log for, and stays up until killed.
+import sys, time
+with open(sys.argv[sys.argv.index("--argv-log") + 1], "w") as fh:
+    fh.write("\\n".join(sys.argv))
+print("READY port=%s" % sys.argv[sys.argv.index("--port") + 1], flush=True)
+time.sleep(600)
+"""
+
+
+class engine_env:
+    """Set (or clear) the runner->probe executable variable for one case."""
+
+    def __init__(self, value: str | None) -> None:
+        self.value = value
+
+    def __enter__(self):
+        self._saved = os.environ.get(probe_engine.ENV_ENGINE_EXE)
+        if self.value is None:
+            os.environ.pop(probe_engine.ENV_ENGINE_EXE, None)
+        else:
+            os.environ[probe_engine.ENV_ENGINE_EXE] = self.value
+        return self
+
+    def __exit__(self, *exc):
+        if self._saved is None:
+            os.environ.pop(probe_engine.ENV_ENGINE_EXE, None)
+        else:
+            os.environ[probe_engine.ENV_ENGINE_EXE] = self._saved
+        return False
+
+
+def test_direct_mode_keeps_the_cabal_fallback() -> None:
+    print("\n-- a probe run by hand still launches through `cabal run`")
+    with engine_env(None):
+        cmd = probe_engine.engine_command(["--headless", "--port", "9008"])
+    expect(cmd == ["cabal", "run", "-v0", "exe:synarchy", "--",
+                   "--headless", "--port", "9008"],
+           f"the historical invocation is unchanged, prefix and order "
+           f"(got {cmd})")
+    with engine_env(""):
+        empty = probe_engine.engine_command(["--dump"])
+    expect(empty[:5] == ["cabal", "run", "-v0", "exe:synarchy", "--"],
+           f"an EMPTY variable is 'nobody supplied one', not a launcher "
+           f"(got {empty})")
+
+
+def test_runner_mode_execs_the_resolved_binary() -> None:
+    print("\n-- and under the runner it execs that binary, with no Cabal")
+    with tempfile.TemporaryDirectory() as tmp:
+        exe = Path(tmp) / "synarchy"
+        exe.write_text("#!/bin/sh\nexit 0\n")
+        exe.chmod(0o755)
+        with engine_env(str(exe)):
+            cmd = probe_engine.engine_command(
+                ["--headless", "--port", "9008", "--arena"])
+        expect(cmd[0] == str(exe), f"argv[0] is the resolved binary (got {cmd})")
+        expect("cabal" not in cmd, f"and Cabal appears nowhere (got {cmd})")
+        expect(cmd[1:] == ["--headless", "--port", "9008", "--arena"],
+               f"the engine's own arguments and their ORDER are identical "
+               f"to the fallback's (got {cmd})")
+
+
+def test_an_unusable_supplied_executable_is_refused() -> None:
+    print("\n-- an unusable supplied executable raises, never falls back")
+    with tempfile.TemporaryDirectory() as tmp:
+        cases = [
+            ("relative", "dist-newstyle/synarchy"),
+            ("missing", str(Path(tmp) / "never-built")),
+        ]
+        plain = Path(tmp) / "not-executable"
+        plain.write_text("")
+        plain.chmod(0o644)
+        cases.append(("non-executable", str(plain)))
+        for why, value in cases:
+            with engine_env(value):
+                try:
+                    probe_engine.engine_command(["--headless"])
+                except probe_engine.EngineExecutableError as error:
+                    expect(value in str(error),
+                           f"a {why} path is refused, naming it "
+                           f"(got {error})")
+                else:
+                    expect(False, f"a {why} path was accepted, or silently "
+                                  f"fell back to `cabal run`")
+
+
+def test_boot_launches_the_supplied_executable() -> None:
+    print("\n-- probelib.boot really launches it, with logging unchanged")
+    with tempfile.TemporaryDirectory() as tmp:
+        exe = Path(tmp) / "fake-synarchy"
+        exe.write_text(FAKE_ENGINE)
+        exe.chmod(0o755)
+        argv_log = Path(tmp) / "argv.txt"
+        log = Path(tmp) / "engine.log"
+        port = 9457
+        proc = None
+        with engine_env(str(exe)):
+            try:
+                proc = probelib.boot(port, log=str(log),
+                                      args=["--argv-log", str(argv_log)],
+                                      ready_timeout=30.0)
+            except SystemExit as leaving:
+                expect(False, f"boot did not reach READY: {leaving}")
+        try:
+            expect(proc is not None and proc.poll() is None,
+                   "the engine is up")
+            expect(getattr(proc, "_probe_log", None) == str(log),
+                   "and boot still records the log path it was given")
+            expect("READY" in log.read_text(),
+                   "which really holds the engine's merged output")
+            argv = argv_log.read_text().splitlines() if argv_log.exists() else []
+            expect(argv[:1] == [str(exe)],
+                   f"the process launched IS the supplied binary (got {argv[:1]})")
+            expect(argv[1:] == ["--headless", "--port", str(port),
+                                "--argv-log", str(argv_log)],
+                   f"with mode, --port and the caller's extra args in the "
+                   f"same order as before (got {argv[1:]})")
+        finally:
+            if proc is not None:
+                proc.kill()
+                proc.wait(timeout=10)
+
+
+def test_resolve_executable_builds_then_locates() -> None:
+    print("\n-- resolve_executable builds first, then asks where it landed")
+    with tempfile.TemporaryDirectory() as tmp:
+        exe = Path(tmp) / "synarchy"
+        exe.write_text("#!/bin/sh\nexit 0\n")
+        exe.chmod(0o755)
+        calls: list[tuple[str, ...]] = []
+
+        def double(argv, cwd=None, capture_output=False, text=False):
+            calls.append(tuple(argv))
+            out = "" if "build" in argv else f"Warning: noise\n{exe}\n"
+            return subprocess.CompletedProcess(tuple(argv), 0, out, "")
+
+        resolved = probe_engine.resolve_executable(tmp, run=double)
+        expect(calls == [("cabal", "build", "exe:synarchy"),
+                         ("cabal", "list-bin", "exe:synarchy")],
+               f"one unconditional freshness build, then one read-only "
+               f"query (got {calls})")
+        expect(resolved == str(exe),
+               f"and the path is the LAST line, so a warning above it is "
+               f"not mistaken for one (got {resolved})")
+
+        def failing(argv, cwd=None, capture_output=False, text=False):
+            return subprocess.CompletedProcess(tuple(argv), 1, "",
+                                                "could not resolve deps")
+        try:
+            probe_engine.resolve_executable(tmp, run=failing)
+        except probe_engine.EngineExecutableError as error:
+            expect("could not resolve deps" in str(error),
+                   f"a failed build raises, carrying Cabal's own reason "
+                   f"(got {error})")
+        else:
+            expect(False, "a failed build did not raise")
+
+
 def main() -> int:
     test_valid_json_decodes()
     test_lua_nil_is_none()
@@ -451,12 +629,17 @@ def main() -> int:
     test_a_timeout_forwarding_fixed_query_helper_is_not_caught()
     test_send_json_callers_import_it()
     test_no_unused_send_json_import()
+    test_direct_mode_keeps_the_cabal_fallback()
+    test_runner_mode_execs_the_resolved_binary()
+    test_an_unusable_supplied_executable_is_refused()
+    test_boot_launches_the_supplied_executable()
+    test_resolve_executable_builds_then_locates()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
         return 1
-    print("\nAll probelib send_json tests passed")
+    print("\nAll probelib tests passed")
     return 0
 
 
