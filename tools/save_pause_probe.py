@@ -15,9 +15,15 @@ session is coherent:
 
   1. After engine.saveWorld: engine.isPaused() AND getTimeScale == 0.
   2. After engine.loadSave:  engine.isPaused() AND getTimeScale == 0.
-  3. After resuming the LOADED session: NOT engine.isPaused() AND the
+  3. After resuming a LOADED session: NOT engine.isPaused() AND the
      loaded page runs at the default speed -- never the non-default
      speed this probe deliberately ran at before saving (#1572).
+
+Check 3 is taken against a SECOND load of the same save. Check 2's
+stray-setTimeScale race writes the paused page's pause-epoch resume
+scale, so resuming the page it touched would read the probe's own value
+back; reloading gives the oracle a pause epoch nothing here has written
+to, while leaving the race coverage untouched.
 
 Every page-targeted read after the load names the page
 world.getActiveWorldId() reported, never a hardcoded id: since #763 a
@@ -53,7 +59,8 @@ import subprocess
 import sys
 import time
 import uuid
-from probelib import quit_engine, boot, send, wait_load_published
+from probelib import (quit_engine, boot, send, send_json,
+                      wait_load_published)
 
 LOG = "/tmp/save_pause_probe_engine.log"
 # Unique per run. Saves overwrite in place (World.Save.Serialize), and this
@@ -323,42 +330,85 @@ def main() -> int:
                     f"after load: a stray setTimeScale un-froze a paused world "
                     f"(isPaused={rp} timeScale={rt})")
 
-            # 4. Resume the LOADED session: it runs at the default speed.
+            # 4. Reload, then resume: the loaded session runs at the
+            #    default speed.
             #
-            #    Three things make this observable, where the assertion it
-            #    replaces was not:
-            #      * it runs after the load transaction published, so the
-            #        session under test is the loaded one;
-            #      * it names the page the load actually published,
-            #        validated non-empty above;
-            #      * that page is proven REGISTERED by the frozen check
-            #        above — Clock.hs's absent-page fallback is 1.0 and
-            #        could never have reported timeScale == 0.
+            #    The oracle deliberately runs against a SECOND load rather
+            #    than the one above. #1572 requirement 3 keeps the race
+            #    check ahead of it, and that check enqueues
+            #    setTimeScale(page, 1.0) while paused — which #1599 files
+            #    as that page's pause-epoch resume scale
+            #    (World.Thread.Command.Time). Resuming the page it wrote to
+            #    would read the probe's own 1.0 back and pass even if the
+            #    load had handed back the saved speed. Staging builds fresh
+            #    WorldStates, so the reloaded page carries a pause epoch
+            #    nothing here has written to, and the race coverage above
+            #    is kept exactly as it was.
             #
-            #    What it pins is pause.onSaveLoaded's load policy: a
-            #    published session comes up at the default, never at the
-            #    speed the world was running at when it was saved — which
-            #    this probe made PRE_SAVE_SCALE so the two are different
-            #    readings. One honest limit: the load-race check above
-            #    enqueues setTimeScale(page, 1.0) while paused, and #1599
-            #    files a paused request as the pause epoch's resume scale,
-            #    so it writes the same default this expects. #1572
-            #    requirement 3 fixes that order deliberately — the race
-            #    check needs the paused post-load state — so this asserts
-            #    the resumed session lands on the default, not which writer
-            #    put it there.
+            #    Resume first, so the reload's own pause is a real
+            #    transition and its epoch captures whatever speed the
+            #    staged page came up at — the regression-sensitive step.
             send(args.port, f'{PAUSE}.set(false)', expect_result=False)
-            r_ok, r_paused, r_ts = wait_resumed(args.port, active_page,
-                                                RESUMED_SCALE)
-            print(f"[resume   ] loaded page {active_page!r} -> "
-                  f"isPaused={r_paused} timeScale={r_ts} "
-                  f"{'ok' if r_ok else 'FAIL'}")
-            if not r_ok:
+            pre2_ok, pre2_paused = wait_unpaused(args.port)
+            print(f"[reload   ] resumed before reloading -> "
+                  f"isPaused={pre2_paused} {'ok' if pre2_ok else 'FAIL'}")
+            if not pre2_ok:
                 failures.append(
-                    f"after load/unpause: expected isPaused=False & timeScale="
-                    f"{RESUMED_SCALE} on loaded page {active_page!r}, got "
-                    f"isPaused={r_paused} timeScale={r_ts} (saved while the "
-                    f"world ran at {PRE_SAVE_SCALE})")
+                    f"before reload: expected the session to be running so "
+                    f"the reload's own pause is observable, got "
+                    f"isPaused={pre2_paused}")
+            reload_ok = send(args.port, f'return engine.loadSave("{SAVE_NAME}")')
+            # A second load must be waited for BY ID: the first one left a
+            # terminal LoadPublished behind, which wait_load_published
+            # would otherwise accept immediately (probelib, round-5 note).
+            reload_status = send_json(args.port, "return engine.getLoadStatus()")
+            reload_id = (reload_status.get("id")
+                         if isinstance(reload_status, dict) else None)
+            print(f"[reload   ] engine.loadSave -> {reload_ok} (id={reload_id})")
+            published2, status2 = wait_load_published(args.port,
+                                                      request_id=reload_id)
+            print(f"[reload   ] load transaction published -> {published2} "
+                  f"({status2})")
+            if not published2:
+                failures.append(
+                    f"reload transaction never published: {status2}")
+            page2 = send(args.port,
+                         "return world.getActiveWorldId()").strip().strip('"')
+            print(f"[reload   ] active page after publish -> {page2!r}")
+            if not page2 or page2.lower() in ("nil", "null"):
+                failures.append(
+                    f"after reload: world.getActiveWorldId() named no page "
+                    f"({page2!r}); the resumed-speed check was skipped")
+            else:
+                send(args.port, f'world.show("{page2}")', expect_result=False)
+                # Precondition, and what proves the page is REGISTERED:
+                # Clock.hs answers an unknown page with 1.0, which could
+                # never satisfy timeScale == 0. Everything below therefore
+                # reads a real page, which is the second half of what made
+                # the assertion this replaces vacuous.
+                p2, t2 = wait_paused_and_frozen(args.port, page2)
+                print(f"[reload   ] isPaused={p2} timeScale={t2}")
+                if not (p2 and t2 == 0.0):
+                    failures.append(
+                        f"after reload: expected isPaused=True & timeScale=0, "
+                        f"got isPaused={p2} timeScale={t2}")
+                # The assertion #1572 repaired: it runs after a load
+                # published, names the page that load reported, and the
+                # save under it was taken while the world ran at
+                # PRE_SAVE_SCALE — so "reset to the default" and "kept the
+                # saved speed" are different readings.
+                send(args.port, f'{PAUSE}.set(false)', expect_result=False)
+                r_ok, r_paused, r_ts = wait_resumed(args.port, page2,
+                                                    RESUMED_SCALE)
+                print(f"[resume   ] loaded page {page2!r} -> "
+                      f"isPaused={r_paused} timeScale={r_ts} "
+                      f"{'ok' if r_ok else 'FAIL'}")
+                if not r_ok:
+                    failures.append(
+                        f"after load/unpause: expected isPaused=False & "
+                        f"timeScale={RESUMED_SCALE} on loaded page {page2!r}, "
+                        f"got isPaused={r_paused} timeScale={r_ts} (saved "
+                        f"while the world ran at {PRE_SAVE_SCALE})")
     finally:
         quit_engine(args.port, proc)
         try:
