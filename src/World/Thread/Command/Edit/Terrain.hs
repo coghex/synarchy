@@ -83,7 +83,8 @@ handleWorldDeleteTileCommand env logger pageId gx gy = do
                         -- the new surface (otherwise it floats mid-air
                         -- over the hole — stationary units never
                         -- re-ground on their own).
-                        Q.writeQueue (unitQueue env) (UnitReGround gx gy)
+                        Q.writeQueue (unitQueue env)
+                            (UnitReGround pageId gx gy)
                         logDebug logger CatWorld $
                             "Deleted tile at " <> tshow gx <> ","
                               <> tshow gy <> " z=" <> tshow oldTopZ
@@ -137,7 +138,8 @@ handleWorldAddTileCommand env logger pageId gx gy mat = do
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
                         -- Units standing on the tile ride up.
-                        Q.writeQueue (unitQueue env) (UnitReGround gx gy)
+                        Q.writeQueue (unitQueue env)
+                            (UnitReGround pageId gx gy)
                         logDebug logger CatWorld $
                             "Added tile at " <> tshow gx <> ","
                               <> tshow gy
@@ -239,7 +241,8 @@ handleWorldSetCellCommand env logger pageId gx gy z mat = do
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
                         -- A surface-changing cell write (e.g. a staircase
                         -- mouth) leaves units floating; re-ground them.
-                        Q.writeQueue (unitQueue env) (UnitReGround gx gy)
+                        Q.writeQueue (unitQueue env)
+                            (UnitReGround pageId gx gy)
                         logDebug logger CatWorld $
                             "Set cell at " <> tshow gx <> ","
                               <> tshow gy <> " z=" <> tshow z

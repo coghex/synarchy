@@ -5,14 +5,16 @@
 --   expiries + climb/fall Z-interpolation + stepping together.
 module Unit.Thread.Movement.PathAdvance
     ( tickUnit
-    , snapshotVisibleWorldTiles
-    , TerrainSnapshot(..)
+    , snapshotOwnedWorldTiles
+    , TerrainSnapshots
     , MoveWorld(..)
     , moveWorldFor
     , maxProtectedStep
     ) where
 
 import UPrelude
+import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import Data.IORef (readIORef)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
@@ -39,61 +41,56 @@ import Unit.Thread.Movement.Timers
 arrivalEpsilon ∷ Float
 arrivalEpsilon = 0.1
 
--- | The one terrain snapshot the whole movement batch paths against,
---   tagged with the page it came from so a per-unit caller can tell
---   whether it is that unit's OWN terrain.
-data TerrainSnapshot = TerrainSnapshot
-    { tsPageId ∷ !WorldPageId
-    , tsTiles  ∷ !WorldTileData
-    }
+-- | The terrain this movement batch paths against, keyed by the page it
+--   came from: one 'WorldTileData' per page some mover in the batch OWNS
+--   (#1593). A page missing from the map — unloaded, or simply owned by
+--   nobody moving this tick — yields no terrain at all rather than
+--   another world's heightmap.
+type TerrainSnapshots = HM.HashMap WorldPageId WorldTileData
 
--- | KNOWN FOLLOW-UP (#797 audit clause): like the pre-#797 LOS code,
---   this snapshots wmVisible's HEAD page rather than each unit's own
---   uiPage — a unit on a secondary visible page paths against the
---   ACTIVE page's terrain. Left unfixed here deliberately: this feeds
---   the batched PER-TICK movement update for every moving unit, so a
---   per-unit-page fix is materially larger in scope than #797's LOS
---   change (a per-caller WorldTileData lookup, not a single shared
---   snapshot). Tracked as a deferred follow-up, not fixed in #797.
+-- | Read each requested page's tiles ONCE, so every mover in one batch
+--   sees a single consistent view of its own page (#1593 requirement 3).
 --
---   #1217 does NOT lift that defect, but it does stop a HAZARD-PROTECTED
---   request from riding on it: the snapshot now reports which page it is
---   (see 'moveWorldFor'), and a protected mover whose own page isn't the
---   one snapshotted fails closed rather than judging cliffs against
---   another world's heightmap. A fall-permitted mover keeps the exact
---   pre-#1217 behavior, defect included.
-snapshotVisibleWorldTiles ∷ WorldSimCapability → IO (Maybe TerrainSnapshot)
-snapshotVisibleWorldTiles wsc = do
-    wm ← readIORef (wsWorldManagerRef wsc)
-    case wmVisible wm of
-        []          → pure Nothing
-        (pageId:_)  → case lookup pageId (wmWorlds wm) of
-            Nothing → pure Nothing
-            Just ws → Just . TerrainSnapshot pageId <$> readIORef (wsTilesRef ws)
+--   Resolution is through @wmWorlds@, never @wmVisible@: a mover's own
+--   page is its terrain whether or not that page is currently visible,
+--   and a page absent from @wmWorlds@ contributes no entry. Nothing here
+--   consults or changes visibility.
+snapshotOwnedWorldTiles ∷ WorldSimCapability → HS.HashSet WorldPageId
+                        → IO TerrainSnapshots
+snapshotOwnedWorldTiles wsc pages
+  | HS.null pages = pure HM.empty
+  | otherwise = do
+      wm ← readIORef (wsWorldManagerRef wsc)
+      HM.fromList <$> sequence
+          [ (,) pageId <$> readIORef (wsTilesRef ws)
+          | (pageId, ws) ← wmWorlds wm
+          , HS.member pageId pages ]
 
 -- | What the per-unit stepping path knows about the terrain it is
---   pathing against: the tiles (as before) plus whether they are
---   VERIFIED to be this mover's own page.
+--   pathing against: the tiles, plus whether they are VERIFIED to be
+--   this mover's own page.
 data MoveWorld = MoveWorld
     { mwTiles   ∷ !(Maybe WorldTileData)
     , mwOwnPage ∷ !Bool
-      -- ^ True only when a snapshot exists AND its page is the mover's
-      --   'Unit.Types.uiPage'. Missing, hidden (no visible page),
-      --   unresolvable and wrong-page terrain all read as False, which
-      --   is what a 'FallProhibited' request fails closed on.
+      -- ^ True exactly when 'mwTiles' holds the mover's own page's
+      --   terrain. Since #1593 the two move together — a mover is only
+      --   ever handed its OWN page's tiles — so a missing page, an
+      --   unloaded page and a mover with no instance all read as
+      --   @(Nothing, False)@, which is what a 'FallProhibited' request
+      --   fails closed on.
     }
 
--- | Build the per-unit view of the batch's terrain snapshot. The mover's
---   page is 'Nothing' when the unit has no instance in the manager (a
---   sim state outliving its unit) — which is exactly a case a protected
---   request must not path through.
-moveWorldFor ∷ Maybe TerrainSnapshot → Maybe WorldPageId → MoveWorld
-moveWorldFor mSnap mMoverPage = MoveWorld
-    { mwTiles   = tsTiles <$> mSnap
-    , mwOwnPage = case (mSnap, mMoverPage) of
-        (Just ts, Just pid) → tsPageId ts ≡ pid
-        _                   → False
-    }
+-- | Build the per-unit view of the batch's terrain snapshots: the mover's
+--   OWN page's tiles, or nothing at all.
+--
+--   The mover's page is 'Nothing' when the unit has no instance in the
+--   manager (a sim state outliving its unit) — which is exactly a case a
+--   protected request must not path through, and since #1593 a case that
+--   gets no terrain rather than the active page's.
+moveWorldFor ∷ TerrainSnapshots → Maybe WorldPageId → MoveWorld
+moveWorldFor snaps mMoverPage =
+    let mTiles = mMoverPage ⌦ \pid → HM.lookup pid snaps
+    in MoveWorld { mwTiles = mTiles, mwOwnPage = isJust mTiles }
 
 tickUnit ∷ PathingConfig → MaterialRegistry → Double → Double → MoveWorld
          → UnitMoveStats
