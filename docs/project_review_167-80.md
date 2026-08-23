@@ -14,7 +14,7 @@ PR #167's shell `quit`/`exit` commands still call the real lifecycle transition,
 - [x] PRR-4. Build placement does not bind pick, validation, and commit to one world page — [#1602]
 - [x] PRR-5. Settings Defaults preserves the live tooltip timing values instead of defaulting them — [no-issue]
 - [x] PRR-6. The settings Revert regression harness no longer reaches its assertions — [#1607]
-- [ ] PRR-7. Exit-to-menu teardown leaves per-entity Lua state accumulating across new sessions
+- [x] PRR-7. Exit-to-menu teardown leaves per-entity Lua state accumulating across new sessions — [#1610]
 
 ## 1. Unit simulation page ownership
 
@@ -164,7 +164,7 @@ PR #167's shell `quit`/`exit` commands still call the real lifecycle transition,
 
 ## 7. New-session Lua state teardown
 
-### PRR-7. Exit-to-menu teardown leaves per-entity Lua state accumulating across new sessions
+### [#1610] PRR-7. Exit-to-menu teardown leaves per-entity Lua state accumulating across new sessions
 
 > **Captured note:** PR #121 made `world.destroyAll` clear Haskell unit/building managers, but the long-lived `unit_ai` and `building_spawn` singletons are only pruned on save-load or engine shutdown. Repeated Exit to Menu → New Game cycles preserve dead per-unit/per-building rows for the life of the process even though snapshots later filter them out.
 
