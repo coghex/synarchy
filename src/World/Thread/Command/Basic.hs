@@ -60,14 +60,15 @@ handleWorldDestroyCommand env logger pageId = do
 
     -- Remove from visible list
     atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr'' →
-        -- #1602: destroying a VISIBLE page changes what resolveActiveWorld
-        -- answers with, so it invalidates live placement bindings.
-        -- Destroying a hidden or absent one does not: a binding only ever
-        -- names the visible head, so nothing it depends on moved.
-        -- The pending request is discharged either way.
+        -- #1602: destroying the visible HEAD changes what
+        -- resolveActiveWorld answers with, so it invalidates live
+        -- placement bindings. Destroying a hidden, absent, or
+        -- visible-but-not-head page does not: a binding only ever names
+        -- the head, so nothing it depends on moved. The pending request
+        -- is discharged either way.
         let mgr' = completeSelectionChange mgr''
-            wasVisible = pageId `elem` wmVisible mgr'
-        in ((if wasVisible then bumpSelectionGen else id)
+            wasHead = selectionHead (wmVisible mgr') ≡ Just pageId
+        in ((if wasHead then bumpSelectionGen else id)
             (mgr' { wmVisible = filter (≢ pageId) (wmVisible mgr')
                   , wmWorlds  = filter ((≢ pageId) . fst) (wmWorlds mgr')
                   }), ())
@@ -102,7 +103,8 @@ handleWorldDestroyAllCommand env logger = do
         -- may validate or commit afterwards — unless nothing was visible
         -- to begin with, in which case no binding existed to invalidate.
         let m' = completeSelectionChange m
-        in ((if null (wmVisible m') then id else bumpSelectionGen)
+        in ((if isJust (selectionHead (wmVisible m'))
+               then bumpSelectionGen else id)
             m' { wmWorlds = [], wmVisible = [] }, ())
     writeIORef (rhWorldQuadsRef handoff) emptyLayeredQuads
     -- Reset the entity managers via the UNIT/BUILDING queues, not directly:

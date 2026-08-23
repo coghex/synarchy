@@ -312,6 +312,17 @@ resetScene env = do
     _ ← drainWorldQueue env
     pure (wsA, wsB)
 
+-- | 'resetScene' with BOTH pages visible and page A still the head.
+--   @wmVisible@ is a list, so this is an ordinary state — @world.show@
+--   prepends — and it is the one that separates "the visible SET
+--   changed" from "the page a binding names changed".
+resetSceneBothVisible ∷ EngineEnv → IO (WorldState, WorldState)
+resetSceneBothVisible env = do
+    scene ← resetScene env
+    atomicModifyIORef' (worldManagerRef env) $ \mgr →
+        (mgr { wmVisible = [pageA, pageB] }, ())
+    pure scene
+
 -- | Install only page A (nothing else registered) — the "no worlds at
 --   all" empty state.
 resetNoWorlds ∷ EngineEnv → IO ()
@@ -1305,6 +1316,56 @@ pendingSpec =
         wmSelectionGen mgr `shouldBe` gen
         canPlaceAt ls shedName placeTile (Just (pageA, gen))
             `shouldReturn` "true|nil|false"
+
+    it "ignores a hide/destroy/re-init of a visible page that is NOT \
+       \the head" $ \(env, ls) → do
+        _ ← resetSceneBothVisible env
+        _ ← clearStubs ls
+        gen ← selectionGen env
+        logger ← readIORef (loggerRef env)
+        -- Page B is visible but sits BEHIND A, so nothing done to it can
+        -- move the page a binding names. None of these may cost a click,
+        -- queued or applied.
+        _ ← evalDebug ls $ T.concat
+            [ "world.hide('", unWorldPageId pageB, "'); return 'queued'" ]
+        canPlaceAt ls shedName placeTile (Just (pageA, gen))
+            `shouldReturn` "true|nil|false"
+        runWorldQueue env
+        selectionGen env `shouldReturn` gen
+        mgr ← readIORef (worldManagerRef env)
+        wmVisible mgr `shouldBe` [pageA]
+        -- Re-initialising a non-head visible page, likewise.
+        _ ← resetSceneBothVisible env
+        gen2 ← selectionGen env
+        handleWorldInitArenaCommand env logger pageB
+        selectionGen env `shouldReturn` gen2
+        canPlaceAt ls shedName placeTile (Just (pageA, gen2))
+            `shouldReturn` "true|nil|false"
+        -- And destroying one.
+        _ ← resetSceneBothVisible env
+        gen3 ← selectionGen env
+        _ ← evalDebug ls $ T.concat
+            [ "world.destroy('", unWorldPageId pageB, "'); return 'queued'" ]
+        canPlaceAt ls shedName placeTile (Just (pageA, gen3))
+            `shouldReturn` "true|nil|false"
+        runWorldQueue env
+        selectionGen env `shouldReturn` gen3
+
+    it "DOES invalidate when the HEAD of a multi-visible list is hidden" $
+        \(env, ls) → do
+            _ ← resetSceneBothVisible env
+            _ ← clearStubs ls
+            gen ← selectionGen env
+            -- Same list, but now the page removed IS the head, so the
+            -- page a binding names really does change — to B.
+            _ ← evalDebug ls $ T.concat
+                [ "world.hide('", unWorldPageId pageA, "'); return 'queued'" ]
+            canPlaceAt ls shedName placeTile (Just (pageA, gen))
+                `shouldReturn` "false|page binding stale|true"
+            runWorldQueue env
+            mgr ← readIORef (worldManagerRef env)
+            wmVisible mgr `shouldBe` [pageB]
+            selectionGen env `shouldNotReturn` gen
 
     it "heals after a request the handler REFUSES, so a later \
        \ineffective one still costs nothing" $ \(env, ls) → do

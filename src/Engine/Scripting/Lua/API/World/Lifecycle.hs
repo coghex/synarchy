@@ -585,12 +585,14 @@ enqueueSelectionChange env cmd = do
 --   window a placement would be accepted in and then dropped at the
 --   commit.
 --
---   Destroying a page, and re-initialising one, are effective only when
---   they touch a VISIBLE page. A placement binding only ever names the
---   visible head — that is the page a pick resolves, and
---   @building.canPlaceAt@ refuses outright when nothing is visible — so
---   tearing down or rebuilding a hidden (or absent) page changes nothing
---   it depends on, and rejecting clicks for it would be the same
+--   The test is whether the visible HEAD moves, not whether the visible
+--   SET does. 'wmVisible' is a list and several pages can be visible at
+--   once, but a placement binding only ever names its head — that is
+--   what 'resolveActiveWorld' answers with and what @world.pickTile@
+--   hit-tests, and @building.canPlaceAt@ refuses outright when nothing
+--   is visible. So hiding, destroying or rebuilding a page that is
+--   hidden, absent, or visible-but-not-head changes nothing a binding
+--   depends on, and rejecting clicks for any of them would be the same
 --   no-page-switch regression as a redundant show.
 --
 --   A load publish stays effective unconditionally: it replaces the
@@ -601,16 +603,18 @@ selectionRequestEffect cmd mgr = case cmd of
     WorldInitArenaDone pid → visibility pid True
     WorldHide pid          → visibility pid False
     WorldDestroy pid       → visibility pid False
-    WorldDestroyAll        → (not (null before), [])
-    WorldInit pid _ _ _ _  → (pid `elem` before, before)
-    WorldInitArena pid     → (pid `elem` before, before)
+    WorldDestroyAll        → (isJust (selectionHead before), [])
+    -- These REPLACE a page's state without touching the list, so they
+    -- matter exactly when the page being replaced is the head.
+    WorldInit pid _ _ _ _  → (selectionHead before ≡ Just pid, before)
+    WorldInitArena pid     → (selectionHead before ≡ Just pid, before)
     WorldLoadPublish{}     → (True, [])
     _                      → (True, before)
   where
     before = projectedVisible mgr
     visibility pid shown =
         let after = projectSelectionVisible pid shown before
-        in (after ≢ before, after)
+        in (selectionHead after ≢ selectionHead before, after)
 
 -- | world.show(pageId)
 worldShowFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults

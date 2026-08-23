@@ -72,11 +72,13 @@ handleWorldHideCommand wsc logger pageId = do
     wasVisible ← atomicModifyIORef' (wsWorldManagerRef wsc) $ \mgr' →
       let mgr = completeSelectionChange mgr' in
         -- #1602: as in show above — the GENERATION moves only when the
-        -- visible list actually changes, so hiding an already-hidden
-        -- page is a true no-op for live placement bindings. The PENDING
-        -- count is discharged either way: it tracks requests, not
-        -- effects.
-        ( (if pageId `elem` wmVisible mgr then bumpSelectionGen else id)
+        -- visible HEAD changes, which is the only page a placement
+        -- binding can name. Hiding an already-hidden page, or a visible
+        -- one that is not the head, is a true no-op for live bindings.
+        -- The PENDING count is discharged either way: it tracks
+        -- requests, not effects.
+        ( (if selectionHead (wmVisible mgr) ≡ Just pageId
+             then bumpSelectionGen else id)
             (mgr { wmVisible = filter (≢ pageId) (wmVisible mgr) })
         , pageId `elem` wmVisible mgr )
 

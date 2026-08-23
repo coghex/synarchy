@@ -12,6 +12,7 @@ module World.State.Types
     , completeSelectionChange
     , settleSelectionProjection
     , projectSelectionVisible
+    , selectionHead
     , selectionMovedSince
     , selectionChangeInFlight
     , projectedVisible
@@ -561,6 +562,18 @@ projectSelectionVisible
 projectSelectionVisible pid shown projected
     | shown     = if pid `elem` projected then projected else pid : projected
     | otherwise = filter (≢ pid) projected
+
+-- | The one page a placement binding can ever name (#1602): the head of
+--   the visible list, which is what 'resolveActiveWorld' answers with
+--   and what @world.pickTile@ hit-tests.
+--
+--   'wmVisible' is a LIST — several pages can be visible at once, and
+--   @world.show@ prepends — so "the visible set changed" and "the page a
+--   binding depends on changed" are different questions. Only the second
+--   may invalidate a placement: hiding, destroying or rebuilding a
+--   visible page that is not the head leaves every binding untouched.
+selectionHead ∷ [WorldPageId] → Maybe WorldPageId
+selectionHead = listToMaybe
 
 -- | Is a live placement binding invalidated by the current selection
 --   state (#1602)? Either the selection has already moved since the
