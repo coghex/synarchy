@@ -43,6 +43,7 @@ import qualified Test.Headless.Item.GroundPageOwnership as GroundPageOwnership
 import qualified Test.Headless.Item.Temperature as ItemTemp
 import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Item.QualityTier as ItemQualityTier
+import qualified Test.Headless.Item.ContentsSignature as ItemContentsSig
 import qualified Test.Headless.Item.Condition as ItemCondition
 import qualified Test.Headless.Item.Materialize as ItemMaterialize
 import qualified Test.Headless.Item.BulkStorage as ItemBulkStorage
@@ -403,6 +404,7 @@ main = hspec $ do
     describe "Item.Temperature" ItemTemp.spec
     describe "Item.BuffYaml" ItemBuffYaml.spec
     describe "Item.QualityTier" ItemQualityTier.spec
+    describe "Item.ContentsSignature" ItemContentsSig.spec
     describe "Item.BulkStorage" ItemBulkStorage.spec
     describe "Item.Materialize" ItemMaterialize.spec
     describe "World.Save.Sanitize" SaveSanitize.spec

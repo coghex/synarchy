@@ -281,9 +281,10 @@ def main() -> int:
         # That makes one shared contentsKey the CORRECT answer, not a
         # collapse: #67A's rule is that same-def containers merge until
         # their internal state diverges (itemContentsSig hashes each
-        # child's defName/fill/condition/sharpness and never the instance
-        # id, so two kits freshly minted from one definition MUST hash
-        # alike). What has to separate them is a real divergence, so this
+        # child's defName/fill/quality/condition/weight/sharpness and
+        # never the instance id or tracked temperature (#1597), so two
+        # kits freshly minted from one definition MUST hash alike).
+        # What has to separate them is a real divergence, so this
         # block draws bandages out of one kit through the shipped medical
         # path and re-reads both.
         muid = as_int(send(args.port,

@@ -1110,6 +1110,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Item.Temperature
                    Test.Headless.Item.BuffYaml
                    Test.Headless.Item.QualityTier
+                   Test.Headless.Item.ContentsSignature
                    Test.Headless.Item.Condition
         Test.Headless.Item.BulkStorage
                    Test.Headless.Item.Discovery
