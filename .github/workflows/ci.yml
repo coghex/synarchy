@@ -535,8 +535,10 @@ jobs:
       # array, so a strict decode throws UnicodeException on malformed
       # input (closed #618) instead of letting the call site refuse the
       # value. The total siblings decodeUtf8'/decodeUtf8With/
-      # decodeUtf8Lenient are never flagged, and neither are comments or
-      # string literals. The regression this catches is commit 893cbd8f
+      # decodeUtf8Lenient are never flagged, and neither are comments,
+      # string literals, or a same-named function from any OTHER module
+      # -- the scan resolves each file's own imports, so it is exact in
+      # both directions. The regression this catches is commit 893cbd8f
       # (#1217), which reintroduced two strict calls 37 days after the
       # sweep and passed both review and the headless suite.
       - name: Lua strict-decode audit

@@ -323,6 +323,17 @@ def haskell_code_spans(text: str) -> list[tuple[int, int]]:
     return _code_runs(text)
 
 
+def haskell_code_only(text: str) -> str:
+    """`text` with every non-code position blanked, positions and line
+    numbers preserved.
+
+    The public name for `_code_only`, for the same reuse reason as
+    `haskell_code_spans`: a sibling guard that hunts for a DECLARATION
+    (an import, say) must not find one inside a comment that merely
+    quotes it."""
+    return _code_only(text)
+
+
 def _within(pos: int, spans: list[tuple[int, int]]) -> bool:
     return any(start <= pos < end for start, end in spans)
 
