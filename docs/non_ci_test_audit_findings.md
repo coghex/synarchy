@@ -32,7 +32,7 @@ approval.
 - [x] NCT-10. Legacy water diagnostics present anomalies as tests but never fail — [#1594]
 - [x] NCT-11. Baseline capture accepts variation in its strict worldgen invariants — [#1598]
 - [x] NCT-12. Thermo probe treats a failed ice dump as absent evidence — [no-issue]
-- [ ] NCT-13. Etymology UI probe skips required location and river entry points
+- [x] NCT-13. Etymology UI probe skips required location and river entry points — [#1604]
 - [ ] NCT-14. Etymology UI probe skips its real scrolling interaction phase
 - [ ] NCT-15. Tilling probe skips the required fluid-exclusion behavior
 - [ ] NCT-16. Item-temperature probe skips its required cooling-rate behavior
@@ -566,7 +566,7 @@ with worldgen's ice placement.
 
 ## Offscreen Etymology UI probe
 
-### NCT-13. Etymology UI probe skips required location and river entry points
+### [#1604] NCT-13. Etymology UI probe skips required location and river entry points
 
 The offscreen Etymology probe declares a discovered location and a selected
 named river as dedicated real-UI phases, yet both phases return successfully
