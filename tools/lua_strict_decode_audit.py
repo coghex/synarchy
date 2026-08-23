@@ -73,9 +73,11 @@ Reaching that precision takes three parts.
    it binds covers the whole declaration (`_binds_in_head`). The head
    ends at the declaration's `=` OR at the `|` opening its guards,
    whichever comes first, because a guard is an ordinary expression
-   sitting before that `=` and a name in one is a use. Scoping is per
-   top-level declaration, since a binder in one cannot reach into
-   another.
+   sitting before that `=` and a name in one is a use. A view pattern
+   (`ViewPatterns` is on tree-wide) puts an expression INSIDE the head
+   itself, so its `(e -> pat)` expression half is excluded from the
+   binding region too. Scoping is per top-level declaration, since a
+   binder in one cannot reach into another.
 
    Every OTHER bare occurrence under such an import is reported. A file
    that genuinely shadows the name in a `let`, a lambda or a `where` is
@@ -592,11 +594,58 @@ def _declaration_head_end(code_text: str, start: int, end: int) -> int | None:
     return None
 
 
+def _view_pattern_spans(code_text: str, start: int,
+                        end: int) -> list[tuple[int, int]]:
+    """The spans within `[start, end)` that are VIEW-PATTERN
+    EXPRESSIONS -- the `e` of a `(e -> pat)` pattern.
+
+    `ViewPatterns` is on tree-wide (synarchy.cabal:116), so a function's
+    left-hand side may contain expressions as well as binders, and
+    `f (decodeUtf8 -> _) raw = ...` really does CALL the decoder from
+    inside its own head. Everything from a bracket's open to the first
+    `->` inside it is that expression.
+
+    A `(x :: A -> B)` type annotation is caught by the same shape and
+    its `x` read as an expression too. That is the conservative
+    direction: it can only turn a would-be binder into a reported
+    occurrence, never hide one."""
+    spans: list[tuple[int, int]] = []
+    stack: list[list] = []
+    i = start
+    while i < end:
+        char = code_text[i]
+        if char in "([{":
+            stack.append([i, False])
+            i += 1
+            continue
+        if char in ")]}":
+            if stack:
+                stack.pop()
+            i += 1
+            continue
+        if char == "→":
+            if stack and not stack[-1][1]:
+                stack[-1][1] = True
+                spans.append((stack[-1][0] + 1, i))
+            i += 1
+            continue
+        match = _SYMBOL_RUN.match(code_text, i)
+        if match:
+            if match.group(0) == "->" and stack and not stack[-1][1]:
+                stack[-1][1] = True
+                spans.append((stack[-1][0] + 1, match.start()))
+            i = match.end()
+            continue
+        i += 1
+    return spans
+
+
 def _binds_in_head(code_text: str, decl: tuple[int, int],
                    skip_spans: list[tuple[int, int]]) -> bool:
     """True if this declaration binds `decodeUtf8` in its own HEAD --
     as the name it defines, or as one of its parameters -- never in a
-    guard, which is an expression rather than a binding position.
+    guard or a view pattern, both of which are expressions rather than
+    binding positions.
 
     This is the ONE shadowing case resolved here, because it is the only
     one that needs no scope analysis: everything left of a declaration's
@@ -619,9 +668,16 @@ def _binds_in_head(code_text: str, decl: tuple[int, int],
         stop = end
     else:
         stop = head_end
+    # A view-pattern expression sits inside the head but is not a
+    # binding position, so an occurrence there is a USE and must not
+    # make the declaration look like it binds the name.
+    expression_spans = _view_pattern_spans(code_text, start, stop)
     for pos, lexeme in _identifier_runs(code_text, start, stop):
-        if lexeme == BANNED_IDENTIFIER and not _within(pos, skip_spans):
-            return True
+        if lexeme != BANNED_IDENTIFIER:
+            continue
+        if _within(pos, skip_spans) or _within(pos, expression_spans):
+            continue
+        return True
     return False
 
 
@@ -867,6 +923,22 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         "module M where\n"
         "import Data.Text.Encoding\n"
         "f raw = R { first = decodeUtf8 raw, second = 1 }\n",
+        [3],
+    ),
+    (
+        "VIEW PATTERNS: the `e` of a `(e -> pat)` pattern is an "
+        "EXPRESSION inside the head, so a call there is a use -- and it "
+        "must not make the declaration look like it binds the name",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "f (decodeUtf8 -> _) raw = decodeUtf8 raw\n",
+        [3, 3],
+    ),
+    (
+        "VIEW PATTERNS: with the project's Unicode arrow",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "f (decodeUtf8 → _) raw = raw\n",
         [3],
     ),
     (
@@ -1117,6 +1189,20 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "module M where\n"
         "import Data.Text.Encoding\n"
         "f decodeUtf8 raw = R { value = decodeUtf8 raw }\n",
+    ),
+    (
+        "VIEW PATTERNS: a real binder ALONGSIDE a view pattern still "
+        "binds -- only the expression half is excluded, not the head",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "f decodeUtf8 (g -> _) raw = decodeUtf8 raw\n",
+    ),
+    (
+        "VIEW PATTERNS: an ordinary constructor pattern has no `->`, "
+        "so it stays a binding position",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "f (Just decodeUtf8) raw = decodeUtf8 raw\n",
     ),
     (
         "GUARDS: a parameter of that name still binds when the "
