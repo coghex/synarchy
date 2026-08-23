@@ -21,25 +21,43 @@ total:
   decodeUtf8With    -> caller-supplied `OnDecodeError` handler
   decodeUtf8Lenient -> substitutes U+FFFD
 
-WHAT IS DETECTED, exactly: a use of the function
-`Data.Text.Encoding.decodeUtf8` -- that ONE module's export -- at a
-call site under the scoped tree, however it is spelled. Detection is
-therefore PROVENANCE-AWARE in both directions:
+WHAT IS DETECTED, exactly: the function
+`Data.Text.Encoding.decodeUtf8` -- that ONE module's export -- reaching
+code under the scoped tree, however it is spelled. Each file's own
+import declarations are parsed for exactly that module, and the two
+ways its export can be named are handled DIFFERENTLY, because only one
+of them can be answered without full scope analysis:
 
-  * every spelling of THAT function is caught. Each file's own import
-    declarations are parsed for `Data.Text.Encoding`, and the qualifiers
-    they establish drive the scan: `TE.decodeUtf8` under the repository's
-    standard alias, `Enc.decodeUtf8` under any other alias, the
-    unaliased `Data.Text.Encoding.decodeUtf8`, and a bare `decodeUtf8`
-    where the module is imported unqualified. Renaming the alias cannot
-    walk past this.
+  * A QUALIFIED use is reported at the call site. Every alias is
+    covered, because the alias comes from the file's own import:
+    `TE.decodeUtf8` under the repository's standard one,
+    `Enc.decodeUtf8` under any other, and the unaliased
+    `Data.Text.Encoding.decodeUtf8`. Renaming the alias cannot walk past
+    this, and a qualifier can never be captured by a local term binder,
+    so a qualified hit is unambiguous.
 
-  * a same-named function from ANYWHERE ELSE is not caught, because it
-    is not the banned one: `Data.Text.Lazy.Encoding.decodeUtf8`, some
-    unrelated `Other.decodeUtf8`, or a local binding in a file that does
-    not import `Data.Text.Encoding` unqualified. Widening the ban to
-    those is a separate decision from #1605's, and the fixture set below
-    pins each of them passing.
+  * A BARE use cannot be. `import Data.Text.Encoding` puts `decodeUtf8`
+    in unqualified scope, but a nested binder -- a function parameter, a
+    `let`/`where` binding, a lambda -- may legally shadow it, and
+    deciding which one a given occurrence means needs real scope
+    analysis. Guessing either way is wrong: guessing "shadowed" hides a
+    real strict decode, guessing "the import's" blames innocent code.
+    So bare occurrences are never reported, and what IS reported is the
+    UNQUALIFIED IMPORT that puts the strict decoder in bare scope --
+    a syntactic fact about the file, not a guess about a call, and the
+    single edit that removes the hazard (import it qualified, `hiding`
+    it, or take the lenient sibling instead).
+
+    A qualified import is NOT reported: it names nothing on its own, and
+    every use it enables is caught precisely by the first rule. Under
+    the scoped tree today all 89 `Data.Text.Encoding` imports are
+    qualified, so this second rule reports nothing.
+
+A same-named function from ANYWHERE ELSE is never caught, because it is
+not the banned one: `Data.Text.Lazy.Encoding.decodeUtf8`, an unrelated
+`Other.decodeUtf8`, or a local binding of that name. Widening the ban
+to those is a separate decision from #1605's, and the fixture set below
+pins each of them passing.
 
 Two supporting rules keep that precision from becoming a bypass:
 
@@ -47,17 +65,16 @@ Two supporting rules keep that precision from becoming a bypass:
     `Data.Text.Encoding` in a shape this module does not model raises
     rather than being scanned as though the module were absent -- a
     silent "no import, so nothing to flag" is exactly how an
-    import-resolving guard would be walked past.
+    import-resolving guard would be walked past. Import declarations are
+    found by LAYOUT, not by column 0, so an indented top-level layout
+    (`module M where` followed by a body indented one space) is parsed
+    like any other.
 
   * candidates are maximal identifier LEXEMES, so the three total
     siblings are safe by construction: `decodeUtf8Lenient` is a
     DIFFERENT identifier, never a `decodeUtf8` followed by something,
     and a longer name that merely ends in it (`myDecodeUtf8`) is
     different again.
-
-IMPORT DECLARATIONS THEMSELVES ARE NOT CALL SITES. Importing the name
-decodes nothing, so `import Data.Text.Encoding (decodeUtf8)` with no use
-is clean; the USE it enables is what fails.
 
 Comment and string-literal awareness comes from
 `tools/unicode_operator_audit.py`'s lexer via its public
@@ -137,8 +154,19 @@ class Violation:
     path: str
     line: int
     spelling: str
+    #: "use" -- a qualified call site naming the banned function.
+    #: "unqualified-import" -- an import putting it in bare scope, where
+    #: call sites cannot be resolved without full scope analysis.
+    kind: str = "use"
 
     def __str__(self) -> str:
+        if self.kind == "unqualified-import":
+            return (f"{self.path}:{self.line}: `{self.spelling}` puts "
+                    f"{STRICT_MODULE}.{BANNED_IDENTIFIER} in UNQUALIFIED "
+                    f"scope -- a bare occurrence then cannot be told from a "
+                    f"local binding that shadows it, so the import is what "
+                    f"is reported. Import the module qualified, `hiding` "
+                    f"{BANNED_IDENTIFIER}, or take a total sibling")
         return (f"{self.path}:{self.line}: strict decode "
                 f"`{self.spelling}` ({STRICT_MODULE}.{BANNED_IDENTIFIER}) "
                 f"-- Lua strings are arbitrary bytes; use "
@@ -147,16 +175,19 @@ class Violation:
 
 @dataclass(frozen=True)
 class StrictImports:
-    """How `STRICT_MODULE`'s `decodeUtf8` can be named in one file."""
+    """How `STRICT_MODULE`'s `decodeUtf8` can be named in one file.
+
+    `unqualified_sites` are the import declarations that put it in bare
+    scope, each `(line, declaration head)`; `qualifiers` are the module
+    qualifiers a call site may write it behind."""
     qualifiers: frozenset[str]
-    unqualified: bool
+    unqualified_sites: tuple[tuple[int, str], ...]
 
     def names_banned(self, qualifier: str) -> bool:
-        """True if `qualifier` (`""` for an unqualified use) spells this
-        file's in-scope `Data.Text.Encoding.decodeUtf8`."""
-        if not qualifier:
-            return self.unqualified
-        return qualifier in self.qualifiers
+        """True if `qualifier` spells this file's
+        `Data.Text.Encoding.decodeUtf8`. Only qualified uses are asked:
+        a bare occurrence is deliberately never resolved here."""
+        return bool(qualifier) and qualifier in self.qualifiers
 
 
 # ---------------------------------------------------------------------
@@ -166,11 +197,18 @@ class StrictImports:
 def _import_declarations(code_text: str) -> list[tuple[int, int, str]]:
     """Every import declaration in `code_text` as `(start, end, text)`.
 
-    An import declaration begins with `import` at column 0 and continues
-    through the indented lines that follow it, so a multi-line import
-    list is one declaration. `code_text` must already be comment- and
-    string-masked, so a comment quoting an import is never mistaken for
-    one."""
+    Found by LAYOUT, not by column 0. A declaration begins at any line
+    whose first token is the reserved word `import` -- GHC accepts a
+    top-level layout indented to any column, so `module M where`
+    followed by a body at column 1 is ordinary valid source, and a
+    column-0 rule would leave every import in such a file unparsed and
+    every use in it unreported. It continues through the following lines
+    indented STRICTLY MORE than its own opening column, which is exactly
+    the layout rule that makes a multi-line import list one declaration.
+
+    `code_text` must already be comment- and string-masked, so a comment
+    quoting an import is never mistaken for one. `import` is a reserved
+    word, so a line whose first token is `import` can be nothing else."""
     lines = code_text.split("\n")
     offsets: list[int] = []
     pos = 0
@@ -181,18 +219,29 @@ def _import_declarations(code_text: str) -> list[tuple[int, int, str]]:
     decls: list[tuple[int, int, str]] = []
     i = 0
     while i < len(lines):
-        if not _IMPORT_KEYWORD.match(lines[i]):
+        stripped = lines[i].lstrip(" \t")
+        if not _IMPORT_KEYWORD.match(stripped):
             i += 1
             continue
+        column = len(lines[i]) - len(stripped)
         last = i
         j = i + 1
-        while j < len(lines) and lines[j][:1] in (" ", "\t"):
-            if lines[j].strip():
+        while j < len(lines):
+            body = lines[j].lstrip(" \t")
+            if body and ((len(lines[j]) - len(body)) <= column
+                         # A continuation line can never itself start
+                         # with the reserved word `import`; treating one
+                         # as a fresh declaration keeps a malformed file
+                         # from folding two imports into one and then
+                         # reporting the wrong shape.
+                         or _IMPORT_KEYWORD.match(body)):
+                break
+            if body:
                 last = j
             j += 1
         decls.append((offsets[i], offsets[last] + len(lines[last]),
-                      "\n".join(lines[i:last + 1])))
-        i = j
+                      "\n".join(line.strip() for line in lines[i:last + 1])))
+        i = last + 1
     return decls
 
 
@@ -250,16 +299,17 @@ def resolve_strict_imports(code_text: str, rel_path: str) -> tuple[StrictImports
     """`(how this file can name the banned function, import spans)`.
 
     The spans are returned so the call-site scan can skip the import
-    declarations themselves -- importing a name decodes nothing."""
+    declarations themselves -- a qualified import names nothing on its
+    own, and the unqualified case is reported here instead."""
     qualifiers: set[str] = set()
-    unqualified = False
+    unqualified_sites: list[tuple[int, str]] = []
     spans: list[tuple[int, int]] = []
     for start, end, decl in _import_declarations(code_text):
         spans.append((start, end))
         if not _MENTIONS_STRICT_MODULE.search(decl):
             continue
-        classified = _classify_strict_import(
-            decl, rel_path, code_text.count("\n", 0, start) + 1)
+        line = code_text.count("\n", 0, start) + 1
+        classified = _classify_strict_import(decl, rel_path, line)
         if classified is None:
             continue
         qualifier, is_unqualified = classified
@@ -269,8 +319,10 @@ def resolve_strict_imports(code_text: str, rel_path: str) -> tuple[StrictImports
         # alongside whatever alias was declared. On code that compiles
         # this can only ever be the banned function.
         qualifiers.add(STRICT_MODULE)
-        unqualified = unqualified or is_unqualified
-    return StrictImports(frozenset(qualifiers), unqualified), spans
+        if is_unqualified:
+            unqualified_sites.append((line, decl.split("\n")[0].strip()))
+    return (StrictImports(frozenset(qualifiers), tuple(unqualified_sites)),
+            spans)
 
 
 # ---------------------------------------------------------------------
@@ -321,15 +373,20 @@ def _within(pos: int, spans: list[tuple[int, int]]) -> bool:
 
 
 def find_violations(text: str, rel_path: str) -> list[Violation]:
-    """Every use of `Data.Text.Encoding.decodeUtf8` in `text` (the
-    source of the file at repo-relative `rel_path`), outside comments,
-    string literals, import declarations and `EXEMPTIONS`."""
+    """Every way `Data.Text.Encoding.decodeUtf8` reaches code in `text`
+    (the source of the file at repo-relative `rel_path`): each qualified
+    use outside comments, string literals and import declarations, plus
+    each import that puts the function in unqualified scope. Nothing at
+    all for a path in `EXEMPTIONS`."""
     if rel_path in EXEMPTIONS:
         return []
     code_text = haskell_code_only(text)
     imports, import_spans = resolve_strict_imports(code_text, rel_path)
 
-    violations: list[Violation] = []
+    violations: list[Violation] = [
+        Violation(rel_path, line, decl, kind="unqualified-import")
+        for line, decl in imports.unqualified_sites
+    ]
     for start, end in haskell_code_spans(text):
         for pos, lexeme in _identifier_runs(text, start, end):
             if lexeme != BANNED_IDENTIFIER or _within(pos, import_spans):
@@ -337,9 +394,10 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
             qualifier = _qualifier_before(text, pos)
             if not imports.names_banned(qualifier):
                 continue
-            spelling = f"{qualifier}.{lexeme}" if qualifier else lexeme
-            violations.append(Violation(rel_path, _line_of(text, pos), spelling))
-    return violations
+            violations.append(
+                Violation(rel_path, _line_of(text, pos),
+                          f"{qualifier}.{lexeme}"))
+    return sorted(violations, key=lambda v: (v.line, v.kind))
 
 
 def scan_tree(repo_root: Path) -> list[Violation]:
@@ -384,34 +442,36 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         [3],
     ),
     (
-        "an unqualified import with no list, so the call site is bare",
+        "an unqualified import with no list: the IMPORT is reported, "
+        "because a bare occurrence cannot be told from a local binding "
+        "that shadows it",
         "module M where\n"
         "import Data.Text.Encoding\n"
         "f raw = decodeUtf8 raw\n",
-        [3],
+        [2],
     ),
     (
         "an unqualified import whose explicit list NAMES the function",
         "module M where\n"
         "import Data.Text.Encoding (decodeUtf8, decodeUtf8Lenient)\n"
         "f raw = decodeUtf8 raw\n",
-        [3],
+        [2],
     ),
     (
-        "an unqualified import with an alias -- both spellings are the "
-        "banned function",
+        "an unqualified import with an alias -- the import for its bare "
+        "exposure, and the qualified use at its own call site",
         "module M where\n"
         "import Data.Text.Encoding as TE\n"
         "f raw = (TE.decodeUtf8 raw, decodeUtf8 raw)\n",
-        [3, 3],
+        [2, 3],
     ),
     (
         "a `hiding` list that hides something ELSE, so the function is "
-        "still in scope",
+        "still in unqualified scope",
         "module M where\n"
         "import Data.Text.Encoding hiding (decodeUtf8Lenient)\n"
         "f raw = decodeUtf8 raw\n",
-        [3],
+        [2],
     ),
     (
         "an import list spread over several lines",
@@ -420,6 +480,35 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         "    ( decodeUtf8\n"
         "    , decodeUtf8Lenient )\n"
         "f raw = decodeUtf8 raw\n",
+        [2],
+    ),
+    (
+        "an INDENTED top-level layout -- GHC accepts a module body at "
+        "any column, and a column-0 import rule would leave the whole "
+        "file unparsed and this call unreported",
+        "module M where\n"
+        " import qualified Data.Text.Encoding as TE\n"
+        " f raw = TE.decodeUtf8 raw\n",
+        [3],
+    ),
+    (
+        "an indented layout whose import list also continues, so the "
+        "declaration ends by column and not by column 0",
+        "module M where\n"
+        "  import qualified Data.Text.Encoding as TE\n"
+        "      ( decodeUtf8 )\n"
+        "  f raw = TE.decodeUtf8 raw\n",
+        [4],
+    ),
+    (
+        "an import indented past a preceding multi-line import: a "
+        "continuation line can never start with `import`, so this is a "
+        "fresh declaration and the call it enables is still reported",
+        "module M where\n"
+        "import Other\n"
+        "    ( thing )\n"
+        "  import qualified Data.Text.Encoding as TE\n"
+        "f raw = TE.decodeUtf8 raw\n",
         [5],
     ),
     (
@@ -485,10 +574,10 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         + "f raw = TE.myDecodeUtf8 raw\n",
     ),
     (
-        "importing the name without using it -- an import decodes "
-        "nothing; the USE it enables is what fails",
+        "a QUALIFIED import with no use -- it names nothing on its own, "
+        "and every use it enables is caught at its own call site",
         "module M where\n"
-        "import Data.Text.Encoding (decodeUtf8)\n"
+        "import qualified Data.Text.Encoding as TE (decodeUtf8)\n"
         "f raw = raw\n",
     ),
     # --- provenance: a same-named function from somewhere else is a
@@ -527,6 +616,20 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "only, so the bare name cannot be its export",
         "module M where\n" + _TE
         + "f raw = decodeUtf8 raw\n",
+    ),
+    (
+        "SHADOWING: a `where`-bound decodeUtf8 legally shadows the "
+        "unqualified import at this call site, so the CALL is never "
+        "blamed (the import above it is what the audit reports)",
+        "module M where\n" + _TE
+        + "f raw = decodeUtf8 raw\n"
+        + "  where decodeUtf8 = myOwnTotalThing\n",
+    ),
+    (
+        "SHADOWING: a parameter named decodeUtf8 under a qualified "
+        "import",
+        "module M where\n" + _TE
+        + "f decodeUtf8 raw = decodeUtf8 raw\n",
     ),
     (
         "PROVENANCE: the module imported unqualified but `hiding` the "
@@ -624,11 +727,12 @@ def self_test() -> int:
         return 1
     total = len(DETECTED_FIXTURES) + len(CLEAN_FIXTURES) + len(UNMODELLED_FIXTURES)
     print(f"lua_strict_decode_audit self-test: {total} fixtures OK "
-          f"({len(DETECTED_FIXTURES)} detected through every import and "
-          f"qualification form; {len(CLEAN_FIXTURES)} clean, including the "
-          f"total siblings, comments, literals and same-named functions "
-          f"from other modules; {len(UNMODELLED_FIXTURES)} unmodelled "
-          f"imports that raise rather than pass).")
+          f"({len(DETECTED_FIXTURES)} detected through every import, "
+          f"qualification and layout form; {len(CLEAN_FIXTURES)} clean, "
+          f"including the total siblings, comments, literals, shadowed "
+          f"bare names and same-named functions from other modules; "
+          f"{len(UNMODELLED_FIXTURES)} unmodelled imports that raise "
+          f"rather than pass).")
     return 0
 
 
@@ -647,8 +751,9 @@ def main() -> int:
         print(f"lua_strict_decode_audit: {error}")
         return 1
     if violations:
-        print(f"{len(violations)} strict `{STRICT_MODULE}.{BANNED_IDENTIFIER}` "
-              f"call(s) under {SCOPED_TREE}/:")
+        print(f"{len(violations)} way(s) "
+              f"`{STRICT_MODULE}.{BANNED_IDENTIFIER}` reaches code under "
+              f"{SCOPED_TREE}/:")
         for violation in violations:
             print(f"  {violation}")
         print(f"\nLua strings are arbitrary byte arrays (#665, #618): a "
