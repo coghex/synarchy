@@ -787,8 +787,11 @@ def main() -> int:
     install_cleanup_handlers()
     # `--port` is a BASE: check 4 binds it, and checks 7 and 8 bind
     # port + 1 (check 8 SEQUENTIALLY reuses check 7's, so #1365 widened
-    # the probe's coverage without widening the ports it claims — which
-    # also keeps run_probes.py's stride-1 parallel allocation valid).
+    # the probe's coverage without widening the ports it claims). This
+    # probe therefore RESERVES two ports, base and base + 1, which is why
+    # `run_probes.PROBE_PORT_SPANS` declares 2 for it — stride-1 parallel
+    # allocation is NOT valid for it and handed the next probe in the
+    # batch this one's second port (#1571).
     # Guarding only the base let `--port 8007` put check 7 on the GUI
     # port, where it would boot against the user's own running game and
     # then kill that process tree on the way out.
