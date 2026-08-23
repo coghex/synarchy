@@ -177,6 +177,7 @@ publishStagedSession env logger requestId staged = do
         -- Settled by construction: nothing is outstanding against the
         -- replacement session, so the projection is the applied state.
         , wmProjectedGen = outgoingSelectionGen + 1
+        , wmProjectedWorlds = [ spPageId p | p ← ssPages staged ]
         , wmProjectedVisible = []
         }
 

@@ -454,6 +454,17 @@ data WorldManager = WorldManager
       --   request the handler ends up refusing (a @world.show@ for a
       --   page that does not exist) cannot leave the two permanently
       --   apart.
+    , wmProjectedWorlds ∷ ![WorldPageId]
+      -- ^ Which page ids will be REGISTERED once every queued selection
+      --   command has applied (#1602) — the companion to
+      --   'wmProjectedVisible', and needed for the same reason.
+      --
+      --   @world.show@ refuses a page that is not in 'wmWorlds', so
+      --   predicting its effect from the visible list alone calls a show
+      --   of a missing page a real change and rejects a click for a
+      --   command that will do nothing. A queued @world.init@ ahead of
+      --   it flips that back, which is exactly why this has to be
+      --   projected rather than read off the applied set.
     , wmProjectedVisible ∷ ![WorldPageId]
       -- ^ What 'wmVisible' will be once every queued selection command
       --   has been applied (#1602). Requests are judged against THIS,
@@ -499,6 +510,7 @@ emptyWorldManager = WorldManager
     , wmVisible = []
     , wmSelectionGen = 0
     , wmProjectedGen = 0
+    , wmProjectedWorlds = []
     , wmProjectedVisible = []
     , wmSelectionPending = 0
     }
@@ -520,11 +532,13 @@ bumpSelectionGen mgr = mgr { wmSelectionGen = wmSelectionGen mgr + 1 }
 --   invalidates live bindings. The outstanding COUNT moves either way —
 --   it is what pairs a request with its handler, and must stay exactly
 --   balanced regardless of what the request turns out to do.
-requestSelectionChange ∷ Bool → [WorldPageId] → WorldManager → WorldManager
-requestSelectionChange effective projected mgr = mgr
+requestSelectionChange
+    ∷ Bool → ([WorldPageId], [WorldPageId]) → WorldManager → WorldManager
+requestSelectionChange effective (worlds, visible) mgr = mgr
     { wmSelectionPending = wmSelectionPending mgr + 1
     , wmProjectedGen = wmProjectedGen mgr + (if effective then 1 else 0)
-    , wmProjectedVisible = projected
+    , wmProjectedWorlds = worlds
+    , wmProjectedVisible = visible
     }
 
 -- | Record that one such command has now been APPLIED. Clamped at zero:
@@ -544,6 +558,7 @@ settleSelectionProjection ∷ WorldManager → WorldManager
 settleSelectionProjection mgr
     | wmSelectionPending mgr ≡ 0 = mgr
         { wmProjectedGen     = wmSelectionGen mgr
+        , wmProjectedWorlds  = map fst (wmWorlds mgr)
         , wmProjectedVisible = wmVisible mgr }
     | otherwise                  = mgr
 
@@ -595,10 +610,10 @@ selectionChangeInFlight mgr =
 
 -- | The projected visible list — the applied one whenever nothing is
 --   outstanding, for the same reason 'selectionChangeInFlight' derives.
-projectedVisible ∷ WorldManager → [WorldPageId]
+projectedVisible ∷ WorldManager → ([WorldPageId], [WorldPageId])
 projectedVisible mgr
-    | wmSelectionPending mgr ≡ 0 = wmVisible mgr
-    | otherwise                  = wmProjectedVisible mgr
+    | wmSelectionPending mgr ≡ 0 = (map fst (wmWorlds mgr), wmVisible mgr)
+    | otherwise = (wmProjectedWorlds mgr, wmProjectedVisible mgr)
 -- | The page whose clock is "the world clock" for pause and save
 --   purposes: the head of @wmVisible@ that is still a live page.
 --

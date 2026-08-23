@@ -1238,7 +1238,7 @@ pendingSpec =
         mgr0 ← readIORef (worldManagerRef env)
         -- The projection walked show-then-hide in order and came back
         -- to [A]; both were counted as real changes.
-        projectedVisible mgr0 `shouldBe` [pageA]
+        snd (projectedVisible mgr0) `shouldBe` [pageA]
         selectionChangeInFlight mgr0 `shouldBe` True
         -- Drain HALFWAY: the show has landed, the hide has not. The
         -- projection must still report a change in flight — this is the
@@ -1367,6 +1367,41 @@ pendingSpec =
             wmVisible mgr `shouldBe` [pageB]
             selectionGen env `shouldNotReturn` gen
 
+    -- One table rather than an example per verb: every selection verb,
+    -- in a configuration where its OWN handler will change no selection,
+    -- must leave a live binding alone — queued AND once applied. Adding
+    -- a verb, or narrowing one's precondition, without extending the
+    -- prediction fails here instead of in review.
+    describe "no selection verb invalidates a binding when its handler \
+             \will change nothing" $
+      forM_ noOpSelectionRequests $ \(label, luaCall) →
+        it label $ \(env, ls) → do
+            _ ← resetSceneBothVisible env
+            _ ← clearStubs ls
+            gen ← selectionGen env
+            _ ← evalDebug ls (luaCall <> " return 'queued'")
+            canPlaceAt ls shedName placeTile (Just (pageA, gen))
+                `shouldReturn` "true|nil|false"
+            runWorldQueue env
+            selectionGen env `shouldReturn` gen
+            canPlaceAt ls shedName placeTile (Just (pageA, gen))
+                `shouldReturn` "true|nil|false"
+
+    it "still invalidates for a show that a queued init makes REAL" $
+        \(env, ls) → do
+            _ ← resetScene env
+            _ ← clearStubs ls
+            gen ← selectionGen env
+            -- The show alone would be refused (the page is not
+            -- registered), but the init ahead of it registers the page,
+            -- so the show WILL prepend and move the head. Predicting
+            -- from the applied registration set would miss this.
+            _ ← evalDebug ls
+                "world.initArena('bind_page_new'); \
+                \world.show('bind_page_new'); return 'queued'"
+            canPlaceAt ls shedName placeTile (Just (pageA, gen))
+                `shouldReturn` "false|page binding stale|true"
+
     it "heals after a request the handler REFUSES, so a later \
        \ineffective one still costs nothing" $ \(env, ls) → do
         _ ← resetScene env
@@ -1415,3 +1450,33 @@ pendingSpec =
         wmSelectionGen mgr `shouldNotBe` gen
         canPlaceAt ls shedName placeTile (Just (pageA, gen))
             `shouldReturn` "false|page binding stale|true"
+
+-- | Every selection-changing verb, paired with a call its own handler
+--   will turn into a no-op given 'resetSceneBothVisible' (pages A then
+--   B visible, A the head, both registered). None may cost a click.
+noOpSelectionRequests ∷ [(String, Text)]
+noOpSelectionRequests =
+    [ ( "world.show of the page that is already the head"
+      , call "world.show" pageA )
+    , ( "world.show of a page that is visible but NOT the head"
+      , call "world.show" pageB )
+    , ( "world.show of a page that is not registered at all"
+      , "world.show('bind_page_missing');" )
+    , ( "world.hide of a visible page that is not the head"
+      , call "world.hide" pageB )
+    , ( "world.hide of a page that is not visible"
+      , "world.hide('bind_page_missing');" )
+    , ( "world.destroy of a visible page that is not the head"
+      , call "world.destroy" pageB )
+    , ( "world.destroy of a page that does not exist"
+      , "world.destroy('bind_page_missing');" )
+    , ( "world.initArena replacing a visible page that is not the head"
+      , call "world.initArena" pageB )
+    , ( "world.initArena registering a brand new page"
+      , "world.initArena('bind_page_new');" )
+    , ( "world.initArenaDone for the page that is already the head"
+      , call "world.initArenaDone" pageA )
+    ]
+  where
+    call verb (WorldPageId pid) =
+        T.concat [verb, "('", pid, "');"]

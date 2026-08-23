@@ -590,31 +590,60 @@ enqueueSelectionChange env cmd = do
 --   once, but a placement binding only ever names its head — that is
 --   what 'resolveActiveWorld' answers with and what @world.pickTile@
 --   hit-tests, and @building.canPlaceAt@ refuses outright when nothing
---   is visible. So hiding, destroying or rebuilding a page that is
---   hidden, absent, or visible-but-not-head changes nothing a binding
---   depends on, and rejecting clicks for any of them would be the same
---   no-page-switch regression as a redundant show.
+--   is visible.
+--
+--   Each case below mirrors ITS HANDLER's own precondition, against the
+--   PROJECTED state rather than the applied one, so a request that the
+--   handler will turn into a no-op is predicted as one:
+--
+--     * a @world.show@ of a page that is already the head, or that is
+--       not registered at all (the handler refuses those) — but a
+--       queued @world.init@ ahead of it makes the same show real, which
+--       is why registration is projected too;
+--     * a @world.hide@ or @world.destroy@ of a page that is hidden,
+--       absent, or visible-but-not-head;
+--     * a @world.init@ / @world.initArena@ replacing anything but the
+--       head;
+--     * a @world.destroyAll@ with nothing visible to lose.
+--
+--   Over-predicting only ever costs a click, and never a wrong commit —
+--   but it costs one on the no-page-switch path, which is the whole
+--   point of predicting rather than blanket-invalidating.
 --
 --   A load publish stays effective unconditionally: it replaces the
 --   whole session, and it is never ordinary traffic during placement.
-selectionRequestEffect ∷ WorldCommand → WorldManager → (Bool, [WorldPageId])
+selectionRequestEffect
+    ∷ WorldCommand → WorldManager → (Bool, ([WorldPageId], [WorldPageId]))
 selectionRequestEffect cmd mgr = case cmd of
-    WorldShow pid          → visibility pid True
-    WorldInitArenaDone pid → visibility pid True
-    WorldHide pid          → visibility pid False
-    WorldDestroy pid       → visibility pid False
-    WorldDestroyAll        → (isJust (selectionHead before), [])
-    -- These REPLACE a page's state without touching the list, so they
-    -- matter exactly when the page being replaced is the head.
-    WorldInit pid _ _ _ _  → (selectionHead before ≡ Just pid, before)
-    WorldInitArena pid     → (selectionHead before ≡ Just pid, before)
-    WorldLoadPublish{}     → (True, [])
-    _                      → (True, before)
+    -- handleWorldShowCommand refuses an unregistered page outright.
+    WorldShow pid
+        | pid `notElem` worlds → unchanged
+        | otherwise            → visibility pid True
+    -- handleWorldInitArenaDoneCommand has no such registration check.
+    WorldInitArenaDone pid     → visibility pid True
+    WorldHide pid              → visibility pid False
+    WorldDestroy pid           → register (filter (≢ pid) worlds)
+                                          (visibility pid False)
+    WorldDestroyAll            → (isJust (selectionHead visible), ([], []))
+    -- These REPLACE a page's state without touching the visible list,
+    -- so they matter exactly when the page being replaced is the head.
+    -- They also REGISTER it, which a later queued show depends on.
+    WorldInit pid _ _ _ _      → registering pid
+    WorldInitArena pid         → registering pid
+    WorldLoadPublish{}         → (True, ([], []))
+    _                          → unchanged
   where
-    before = projectedVisible mgr
+    (worlds, visible) = projectedVisible mgr
+    unchanged = (False, (worlds, visible))
+    registering pid =
+        ( selectionHead visible ≡ Just pid
+        , (if pid `elem` worlds then worlds else pid : worlds, visible) )
     visibility pid shown =
-        let after = projectSelectionVisible pid shown before
-        in (selectionHead after ≢ selectionHead before, after)
+        let after = projectSelectionVisible pid shown visible
+        in ( selectionHead after ≢ selectionHead visible
+           , (worlds, after) )
+    register worlds' (effective, (_, visible')) =
+        (effective, (worlds', visible'))
 
 -- | world.show(pageId)
 worldShowFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults

@@ -501,7 +501,7 @@ handleLoadStaged env ls requestId = do
                 -- count outright, so this is balanced however the
                 -- transaction ends.
                 atomicModifyIORef' (worldManagerRef env) $ \mgr →
-                    (requestSelectionChange True [] mgr, ())
+                    (requestSelectionChange True ([], []) mgr, ())
                 Q.writeQueue (worldQueue env) (WorldLoadPublish requestId)
 
 -- | Build a Lua array @{ id1, id2, ... }@ from a list of integer ids.
