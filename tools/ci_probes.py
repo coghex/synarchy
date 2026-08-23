@@ -65,6 +65,22 @@ CI_ELIGIBLE = {
     # coverage of the infection / location-def / loot-table writer+reader
     # pairs.
     "content_registry",
+    # #1577: re-measured against #722's standard instead of inheriting the
+    # bare `targeted` label direct commit b09c1518 left behind. Deterministic
+    # by construction — `scripts.unit_ai`'s update is neutralised at
+    # bootstrap and every assertion is a direct `craft.*` / `unit.*` /
+    # `building.*` read, so nothing here grades AI arbitration or reaction
+    # timing. One flat-arena boot, no worldgen, no GPU: 6/6 measured
+    # attempts passed — 42.7/40.0/39.6 s solo and 39.2/39.3/39.2 s inside a
+    # --jobs 2 batch (macOS/aarch64, 6e12c9c3), a 3.5 s total spread across
+    # a machine whose load average moved between 14 and 46. Broad rather than
+    # narrow: it is the only automated gate over kitchen.yaml built through
+    # the real materials + build-progress machinery and the operations it
+    # then advertises, the technomule depot as a REAL supply path,
+    # all-or-nothing input consumption, #343 crafter-derived quality, and
+    # the #344/#346 `output_temp` hook. `craft` stays the generic craft
+    # smoke; this is the content integration beside it.
+    "cooking",
     "craft",
     # #1190: the only automated proof that --headless/--offscreen refuse
     # to boot without their one control surface. Deterministic (no AI, no
@@ -79,6 +95,21 @@ CI_ELIGIBLE = {
     # and cost ~2 s together — the probe stays in the seconds range that
     # makes it CI-eligible.
     "debug_console_boot",
+    # #1577: re-promoted. #600 promoted this probe on the strength of #593
+    # making it self-contained, and direct commit b09c1518 removed it an
+    # hour later with no recorded evidence. The #593 property still holds:
+    # it sets SYNARCHY_INFECTION_TEST_MODE=1 on its OWN engine subprocess,
+    # so growth and sepsis are observable over fixed seconds instead of the
+    # production rate's real minutes, `unit_ai.update` is neutralised, and
+    # every assertion is a direct wound/stat read over a monotone engine
+    # tick with a wide margin — no AI arbitration, no skip path. One
+    # flat-arena boot, no worldgen, no GPU: 6/6 measured attempts passed —
+    # 57.8/58.0/58.0 s solo and 57.5/57.5/56.8 s inside a --jobs 2 batch
+    # (macOS/aarch64, 6e12c9c3), a 1.2 s total spread across a machine whose
+    # load average moved between 14 and 46. Broad: all four halves of the loop
+    # (growth, antiseptic prevention, antibiotic cure, sepsis meter) have no
+    # other automated end-to-end coverage.
+    "infection",
     "medic_coord",
     "persistence_contract",
     "preview_cli",
@@ -174,7 +205,6 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                             "release, blueprint staking (4 phases, "
                                             "~123-168s solo); 14/14 checks passed all 3 "
                                             "solo runs (#724)"),),
-    "infection": (Reason(SCENARIO_HEAVY, "timed infection/sepsis scenario with deliberate sleeps"),),
     "location_content": (Reason(SCENARIO_HEAVY, "four real-engine-boot scenario: ruin content "
                                                 "spawn + geometry, save/quit/restart/load "
                                                 "round-trip, bogus/valid content-registry "
@@ -196,7 +226,25 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                              "refill excursion out to a lake and back, and a "
                                              "post-release work resume -- every stage is a "
                                              "real-time AI-arbitration leg, ~4 minutes solo"),),
-    "power_workshop": (Reason(SCENARIO_HEAVY, "long powered-workshop AI plus day/night balance scenario"),),
+    "power_workshop": (Reason(SCENARIO_HEAVY,
+        "#1577 measured it against #722's standard rather than inheriting "
+        "b09c1518's bare label, and it did not qualify. Its check 5 is a "
+        "REAL craft_job end-to-end leg: the AI has to claim the bill, fetch "
+        "a steel_bar, walk to the built station and mark itself working "
+        "inside 20 s + 20 s polling windows, then complete inside a 60 s "
+        "one. That is AI arbitration and reaction timing, which is what the "
+        "probe GRADES rather than merely what it waits on, and 3 of 6 "
+        "measured attempts (1/3 solo, 2/3 in a --jobs 2 batch; "
+        "macOS/aarch64, 6e12c9c3) failed on exactly the same two checks "
+        "there -- 'AI reaches the working phase' and the drainW read that "
+        "depends on it -- while every non-AI check passed in all 6. It is "
+        "also the most expensive of the three probes #1577 reviewed by "
+        "~2.5x (88.9-107.9 s solo vs cooking's 39.6-42.7 s), and three of "
+        "its stages are real-time by construction: a 5 s browned-out stall "
+        "observation and two 5 s day/night fast-forwards that no runner "
+        "speed shortens. Per #722's disarm lesson, a probe whose graded "
+        "assertions ride AI timing does not become gate-worthy by passing "
+        "locally"),),
     "power": (Reason(SCENARIO_HEAVY, "long build-tool power-node placement + wire network + "
                                      "day/night balance + save/restart/load round-trip scenario"),),
     "save_compat_migration": (Reason(SCENARIO_HEAVY, "two real engine boots plus a real "
@@ -224,7 +272,6 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
     "concussion_revive": (Reason(TARGETED, "narrow #304 concussion revive hysteresis regression"),),
     "config_migration": (Reason(TARGETED, "narrow #786 pre-#661 legacy config upgrade regression"),),
     "config_state": (Reason(TARGETED, "narrow #638 config load/save vs git-tracking regression"),),
-    "cooking": (Reason(TARGETED, "cooking content integration; craft remains the generic craft smoke gate"),),
     "disarm": (Reason(TARGETED, "narrow #193 disabled-hand auto-drop regression"),),
     "injury_log": (Reason(TARGETED, "injury-log backend plumbing, narrower than the combat subsystem"),),
     "lua_strict_msg": (Reason(TARGETED, "narrow #622 LuaToEngineMsg/LuaMsg strictness crash regression"),),
@@ -497,20 +544,68 @@ CORE_GLOBS = [
 FEATURE_RULES: list[tuple[list[str], set[str]]] = [
     (["src/Combat/*", "scripts/acolyte_combat.lua", "scripts/combat_log.lua",
       "scripts/injury_log*.lua"],
-     {"medic_coord"}),
+     # medic_coord gates the bestMedicFor/medicAvailable distance-discounted
+     # selection. #1577 added infection here because the mechanism that probe
+     # grades lives under THIS glob, not under src/Infection/*: the wound
+     # infection/necrosis tuning is src/Combat/Wounds/Infection.hs, the tick
+     # that accrues it is src/Combat/Wounds/Tick.hs, and src/Infection/ holds
+     # only the catalogue types.
+     {"medic_coord", "infection"}),
     (["src/Infection/*", "data/infections/*"],
-     # The infection SCENARIO probe stays manual-only (#593); the #890
-     # content-registry smoke does gate the infection catalogue's
-     # load+query path, which previously had no CI coverage at all.
-     {"content_registry"}),
+     # content_registry is the #890 smoke over this catalogue's load+query
+     # path. #1577 restored the scenario probe direct commit b09c1518
+     # removed: it loads data/infections/*.yaml and then drives a real wound
+     # through growth -> antiseptic prevention -> antibiotic cure -> sepsis,
+     # which is the only automated proof the catalogue a change here edits is
+     # actually consumed by the wound tick.
+     {"content_registry", "infection"}),
     (["src/Craft/*", "data/recipes/*", "scripts/crafting_panel.lua",
       "scripts/craft*.lua", "scripts/cooking*.lua"],
      # data/recipes/* also covers repair.yaml (repair-tagged recipes) and
      # brew_coffee (consumable_effects' brew step) — both promoted probes
      # (#722) load the full data/recipes/*.yaml glob at bootstrap.
-     {"craft", "consumable_effects", "repair", "content_registry"}),
+     #
+     # cooking is the selection PR #535's own review required here (7f7cd03b)
+     # and direct commit b09c1518 removed; #1577 restored it on re-measured
+     # evidence. It is the only probe that asserts basic_food.yaml's
+     # brew_coffee DECLARATION — station/inputs/outputs/skill/knowledge/
+     # output_temp — against what the engine actually crafts from it, so an
+     # edit to this glob that the generic craft smoke would still pass no
+     # longer lands unwatched.
+     {"craft", "consumable_effects", "repair", "content_registry", "cooking"}),
     (["src/Power/*", "scripts/wire.lua", "scripts/power*.lua",
       "data/structure_packs/*"],
+     # The one rule that deliberately selects NOTHING, and #1577 re-measured
+     # that rather than restating the value direct commit b09c1518 left here.
+     # All three power probes stay manual-only for grounds recorded in
+     # MANUAL_ONLY_REASONS above: `power` and `power_workshop` are
+     # scenario-heavy, `machine_shop` is targeted. `power_workshop` is the
+     # closest candidate and the one #1577 actually measured: its craft_job
+     # leg GRADES AI arbitration and reaction timing inside real-time
+     # polling windows, and 3 of 6 measured attempts failed on exactly those
+     # two checks while every non-AI check passed in all 6.
+     #
+     # The accepted gap is therefore specific, not general: no BLOCKING
+     # check exercises Power.Network.activeCraftConsumersOn — a live claimed
+     # AND working craft bill's draw folded into a real network's balance
+     # inside a running engine. Test.Headless.Power.Network's own module
+     # header names that function as the one thing it cannot cover and
+     # points at tools/power_workshop_probe.py for it.
+     #
+     # What DOES gate a change here is the always-blocking headless hspec
+     # suite. Those are unit/integration specs, not behavior probes — they
+     # assert on functions and on the engine's own command queues, never on
+     # a scripted play session:
+     #   * Test.Headless.Power.Network — wire connectivity, solar intensity,
+     #     charge/discharge/brownout, #361 consumer drain, and #590's
+     #     combineConsumers always-on + active-job union, over synthetic
+     #     nodes and consumers.
+     #   * Test.Headless.Power.Types — the pure node-registry transitions.
+     #   * Test.Headless.Power.Placement (#1205) and .Demolition (#1206) —
+     #     a real headless engine driven through the production
+     #     power.placeNode and BuildingDestroy paths.
+     #   * Test.Headless.Craft.Bills' "working (#590)" group — the cbWorking
+     #     lifecycle every active-job draw keys off.
      set()),
     (["src/Item/*", "data/items/*", "src/Equipment/*", "data/equipment/*"],
      # consumable_effects exercises coffee_pot/coffee_grounds/water; repair
@@ -519,8 +614,12 @@ FEATURE_RULES: list[tuple[list[str], set[str]]] = [
       "content_registry"}),
     (["src/Building/*", "data/buildings/*"],
      # consumable_effects builds a kitchen; repair builds a furnace +
-     # workbench (#722).
-     {"craft", "consumable_effects", "repair"}),
+     # workbench (#722). cooking (#1577) builds kitchen.yaml through the real
+     # materials-delivery + build-progress machinery and then asserts the
+     # operation set the built instance advertises and that
+     # building.findStation resolves to it — the def's own
+     # declaration-to-behaviour join, which neither of the other two checks.
+     {"craft", "consumable_effects", "repair", "cooking"}),
     # The Lua widget kit (#1365). Before this rule a widget-module change
     # matched nothing and fell through to the fail-safe full set, paying
     # every CI-eligible probe for a change none of them exercise.
@@ -855,6 +954,17 @@ def _self_test() -> int:
         for k in keys:
             if k not in CI_ELIGIBLE:
                 problems.append(f"FEATURE_RULES references non-eligible probe: {k} ({globs[0]})")
+    # #1577 requirement 7: a feature rule exists to BOUND what a PR touching
+    # that area pays. One that selects the whole eligible set is the fail-safe
+    # fallthrough written out by hand, and costs the gate its bound — so a
+    # promotion may only ever ADD a probe to a rule, never widen one to
+    # everything. CORE_GLOBS and the unclassified fallthrough are the two
+    # routes that are SUPPOSED to select the full set; their cases below pin
+    # that, and this check deliberately does not touch them.
+    for globs, keys in FEATURE_RULES:
+        if keys == CI_ELIGIBLE:
+            problems.append(f"FEATURE_RULES entry selects the whole CI-eligible "
+                            f"set, defeating its own bound: {globs[0]}")
     # every registered probe is classified exactly once (#540): CI-eligible
     # XOR manual-only-with-a-reason. This is what keeps --status from ever
     # silently drifting behind a newly-registered probe.
@@ -876,27 +986,51 @@ def _self_test() -> int:
     cases = [
         (["README.md"], [], "docs only"),
         (["docs/foo.md", "assets/x.png"], [], "docs+assets"),
+        # #1577: the EXACT set, not merely "cooking is in there" — restoring
+        # the selection #535's review required must not cost this glob any
+        # of the coverage #722 put on it.
         (["data/recipes/smelting.yaml"],
-         sorted({"craft", "consumable_effects", "repair", "content_registry"}),
-         "recipes -> craft + consumable_effects + repair + content_registry"),
+         sorted({"craft", "consumable_effects", "repair", "content_registry",
+                 "cooking"}),
+         "recipes -> craft + consumable_effects + repair + content_registry "
+         "+ cooking (#1577 restored #535's cooking selection)"),
         (["data/buildings/furnace.yaml"],
-         sorted({"craft", "consumable_effects", "repair"}),
-         "buildings -> craft + consumable_effects + repair"),
+         sorted({"craft", "consumable_effects", "repair", "cooking"}),
+         "buildings -> craft + consumable_effects + repair + cooking (#1577)"),
         (["data/items/coffee_pot.yaml"],
          sorted({"cargo_capacity", "repair_item", "consumable_effects", "repair",
                  "content_registry"}),
          "items -> cargo_capacity + repair_item + consumable_effects + repair "
          "+ content_registry"),
-        (["src/Power/Network.hs"], [], "power probes are manual-only"),
-        (["data/infections/staph.yaml"],
-         ["content_registry"],
-         "infections -> the #890 registry smoke (the scenario probe stays "
-         "manual-only, #593)"),
+        # #1577 requirement 5: these three cases assert the decision reached
+        # in #1577 — power_workshop was MEASURED against #722's standard and
+        # kept manual-only for the recorded reason above — rather than
+        # restating the value direct commit b09c1518 left here. The empty
+        # expectation is unchanged; what changed is that it is now evidenced.
+        (["src/Power/Network.hs"], [],
+         "power selects nothing: all three power probes stay manual-only on "
+         "#1577's measured grounds"),
+        # #1577: bacteria.yaml is the tracked infection catalogue file.
+        (["data/infections/bacteria.yaml"],
+         sorted({"content_registry", "infection"}),
+         "infections -> the #890 registry smoke PLUS the scenario probe "
+         "b09c1518 removed and #1577 re-promoted"),
+        # #1577: the infection tick itself lives under src/Combat/Wounds/, so
+        # the Combat rule selects the probe that grades it.
+        (["src/Combat/Wounds/Tick.hs"],
+         sorted({"medic_coord", "infection"}),
+         "combat -> medic_coord + infection (the wound-infection tick lives "
+         "here, #1577)"),
+        (["src/Infection/Types.hs"],
+         sorted({"content_registry", "infection"}),
+         "the infection catalogue types -> the same pair as its data glob"),
         (["scripts/unit_ai.lua"], sorted(CI_ELIGIBLE), "core -> full"),
         (["scripts/unit_ai_combat.lua"], sorted(CI_ELIGIBLE),
          "unit_ai_*.lua submodule (#538) -> full"),
         (["src/SomethingNew/X.hs"], sorted(CI_ELIGIBLE), "unclassified -> full"),
-        (["README.md", "src/Power/Network.hs"], [], "docs ignored, power manual-only"),
+        (["README.md", "src/Power/Network.hs"], [],
+         "docs ignored, and power still selects nothing on #1577's measured "
+         "grounds"),
         # #1359 requirement 1: either test tree alone selects nothing.
         (["test-headless/Test/Headless/UI/ItemList.hs"], [],
          "test-headless source -> no probes"),
@@ -911,7 +1045,8 @@ def _self_test() -> int:
                  "content_registry"}),
          "test + items -> exactly the items set"),
         (["test/Spec.hs", "src/Power/Network.hs"], [],
-         "test + a subsystem whose probes are manual-only -> still nothing"),
+         "test + power (whose probes are all manual-only on #1577's measured "
+         "grounds) -> still nothing"),
         # #1359 requirement 3: the fail-safe still fires through a test path.
         (["test-headless/Spec.hs", "src/SomethingNew/X.hs"], sorted(CI_ELIGIBLE),
          "test + unclassified production -> full"),
