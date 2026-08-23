@@ -38,7 +38,8 @@ import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Grid (gridToWorld)
 import World.Page.Types (WorldPageId(..))
 import World.Render (updateWorldTiles, surfaceHeadroom)
-import World.State.Types (WorldState(..), WorldManager(..), emptyWorldState)
+import World.State.Types
+    ( WorldState(..), WorldManager(..), emptyWorldState, emptyWorldManager )
 import World.Tile.Types (WorldTileData(..))
 
 pid ∷ WorldPageId
@@ -91,7 +92,9 @@ setUp env tiles (camGX, camGY) = do
     writeIORef (wsGenParamsRef ws)
         (Just defaultWorldGenParams { wgpWorldSize = worldSize })
     writeIORef (wsTilesRef ws) tiles
-    writeIORef (worldManagerRef env) (WorldManager [(pid, ws)] [pid])
+    writeIORef (worldManagerRef env) (emptyWorldManager
+        { wmWorlds = [(pid, ws)]
+        , wmVisible = [pid] })
     let (camX, camY) = gridToWorld FaceSouth camGX camGY
     writeIORef (cameraRef env) defaultCamera
         { camPosition = (camX, camY)

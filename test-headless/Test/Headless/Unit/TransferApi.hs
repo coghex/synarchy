@@ -62,7 +62,7 @@ import Unit.Types
     , UnitInstance(..), UnitManager(..), defaultNaturalResistance
     , emptyUnitManager )
 import World.Page.Types (WorldPageId(..))
-import World.State.Types (WorldManager(..), emptyWorldState)
+import World.State.Types (WorldManager(..), emptyWorldState, emptyWorldManager)
 
 -- * Fixture ids
 
@@ -195,7 +195,7 @@ resetWorld env acolyteInv acolyteWorn holdStorage depotStorage = do
     -- in-memory, so this costs no worldgen (the technique
     -- Test.Headless.Building.Knowledge's own scene uses).
     ws ← emptyWorldState
-    writeIORef (worldManagerRef env) WorldManager
+    writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds = [(fixturePage, ws)], wmVisible = [fixturePage] }
     writeIORef (itemManagerRef env) emptyItemManager
     writeIORef (unitManagerRef env) emptyUnitManager

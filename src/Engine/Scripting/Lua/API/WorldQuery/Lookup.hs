@@ -11,6 +11,7 @@
 module Engine.Scripting.Lua.API.WorldQuery.Lookup
     ( getWorldTileData
     , mVisibleWorldState
+    , mVisiblePageState
     , worldStateByPage
     , getWorldGenParams
     ) where
@@ -35,8 +36,15 @@ getWorldTileData wsc = do
 --   building operate on; a hidden page can sit at the wmWorlds head, so
 --   the raw head is not a safe proxy for "what the player sees".
 mVisibleWorldState ∷ WorldManager → Maybe WorldState
-mVisibleWorldState manager = case wmVisible manager of
-    (pageId:_) → lookup pageId (wmWorlds manager)
+mVisibleWorldState manager = snd <$> mVisiblePageState manager
+
+-- | 'mVisibleWorldState' with the page's IDENTITY kept (#1602). A caller
+--   that needs to say WHICH page it resolved — a placement binding, say —
+--   must not re-derive the id from a second manager read, so the one
+--   resolution reports both halves.
+mVisiblePageState ∷ WorldManager → Maybe (WorldPageId, WorldState)
+mVisiblePageState manager = case wmVisible manager of
+    (pageId:_) → (\ws → (pageId, ws)) <$> lookup pageId (wmWorlds manager)
     []         → Nothing
 
 -- | The 'WorldState' of a named page (any page in wmWorlds), or Nothing.

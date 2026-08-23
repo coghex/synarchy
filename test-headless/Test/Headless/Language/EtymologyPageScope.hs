@@ -73,7 +73,8 @@ import World.Chunk.Types (ChunkCoord(..))
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldIdentity(..), WorldPageId(..))
 import World.River.Naming (RiverName(..), RiverNames(..))
-import World.State.Types (WorldManager(..), WorldState(..), emptyWorldState)
+import World.State.Types
+    ( WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager )
 
 -- * Fixture identities ------------------------------------------------
 
@@ -179,7 +180,7 @@ installScene env cat opts = do
         else Nothing
     writeIORef (wsGenParamsRef wsO) $
         Just (paramsFor cat (soOtherProv opts) otherLocE otherRiverE)
-    writeIORef (worldManagerRef env) WorldManager
+    writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds  = [(pageActive, wsA), (pageOther, wsO)]
         , wmVisible = soVisible opts }
 

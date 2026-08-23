@@ -368,12 +368,23 @@ end
 -- for this (defName, gx, gy); distance/thresholdTiles are display-only.
 -- Repeated calls while already open are ignored — one click can't stack
 -- a second modal or silently replace the pending tile.
-function buildToolRemoteWarning.open(defName, gx, gy, distance, thresholdTiles)
+--
+-- #1602: bindPage/bindGen are the ORIGINAL click's page binding, handed
+-- over by buildTool.handleMouseDown. The pending state carries them
+-- verbatim; it never resolves a page of its own here, so what
+-- establishHere() re-checks below is the page the click actually
+-- hit-tested rather than whatever was active when the modal opened.
+-- `worldId` is the #844 fallback for a caller that supplies no binding
+-- (the guard probe drives open() directly): the production click path
+-- always passes one and never populates it.
+function buildToolRemoteWarning.open(defName, gx, gy, distance, thresholdTiles,
+                                     bindPage, bindGen)
     if buildToolRemoteWarning.pending then return end
     buildToolRemoteWarning.pending = {
         defName = defName, gx = gx, gy = gy,
         distance = distance, thresholdTiles = thresholdTiles,
-        worldId = world.getActiveWorldId(),
+        bindPage = bindPage, bindGen = bindGen,
+        worldId = (bindGen == nil) and world.getActiveWorldId() or nil,
     }
     createUI(distance, thresholdTiles)
     UI.showPage(buildToolRemoteWarning.page)
@@ -419,15 +430,17 @@ function buildToolRemoteWarning.establishHere()
         where = { x = pending.gx, y = pending.gy },
     }
     -- Re-validate the SAVED tile now, not the state from when the
-    -- warning opened — terrain/occupancy/location overlap/active-world
-    -- state may have changed while the modal was up. building.canPlaceAt
-    -- and commitStartingPlacement's building.spawn both resolve the
-    -- CURRENTLY active world page implicitly, so if the active page
-    -- changed while the modal was open, validating against it would
-    -- silently spawn against the wrong page's terrain/locations instead
-    -- of rejecting the stale confirmation — checked first, before
-    -- canPlaceAt runs at all.
-    if world.getActiveWorldId() ~= pending.worldId then
+    -- warning opened — terrain/occupancy/location overlap/page-selection
+    -- state may have changed while the modal was up. Validating against
+    -- whatever page is active at this instant would silently spawn
+    -- against the wrong page's terrain/locations instead of rejecting
+    -- the stale confirmation, so the binding is what both the check and
+    -- the commit below are pinned to.
+    --
+    -- #844's own active-id capture is retained ONLY for a caller that
+    -- passed no binding; the production path carries one and skips it.
+    if pending.bindGen == nil
+        and world.getActiveWorldId() ~= pending.worldId then
         debug.recordOutcome{
             kind = "buildTool.remoteWarning", outcome = "revalidationRejected",
             where = { x = pending.gx, y = pending.gy },
@@ -435,11 +448,36 @@ function buildToolRemoteWarning.establishHere()
         }
         return
     end
-    local valid, invalidReason =
-        building.canPlaceAt(pending.defName, pending.gx, pending.gy)
+    -- #1602: one engine-side resolution answers both "is the binding
+    -- still fresh" and "is the tile still placeable", so a page change
+    -- cannot slip between them.
+    local valid, invalidReason, stale =
+        building.canPlaceAt(pending.defName, pending.gx, pending.gy,
+                            pending.bindPage, pending.bindGen)
+    if stale then
+        debug.recordOutcome{
+            kind = "buildTool.remoteWarning", outcome = "revalidationRejected",
+            where = { x = pending.gx, y = pending.gy },
+            reason = "page binding changed",
+        }
+        return
+    end
     if valid then
-        require("scripts.build_tool").commitStartingPlacement(
-            pending.defName, pending.gx, pending.gy)
+        -- The commit re-checks the binding a second time, atomically with
+        -- its own page resolution: a page change in the window between
+        -- the validation above and the spawn rejects rather than
+        -- retargets, and leaves the tool armed like every other refusal.
+        local status = require("scripts.build_tool").commitStartingPlacement(
+            pending.defName, pending.gx, pending.gy,
+            pending.bindPage, pending.bindGen)
+        if status == "stale" then
+            debug.recordOutcome{
+                kind = "buildTool.remoteWarning",
+                outcome = "revalidationRejected",
+                where = { x = pending.gx, y = pending.gy },
+                reason = "page binding changed",
+            }
+        end
     else
         debug.recordOutcome{
             kind = "buildTool.remoteWarning", outcome = "revalidationRejected",

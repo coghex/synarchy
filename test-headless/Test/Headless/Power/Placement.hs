@@ -54,7 +54,8 @@ import World.Chunk.Types
 import World.Flora.Types (emptyFloraChunkData)
 import World.Fluid.Types (emptyIceMap)
 import World.Page.Types (WorldPageId(..))
-import World.State.Types (WorldManager(..), WorldState(..), emptyWorldState)
+import World.State.Types
+    ( WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager )
 import World.Tile.Types (WorldTileData(..))
 
 -- * Fixture identities
@@ -228,7 +229,7 @@ resetScene env = do
     writeIORef (wsTilesRef wsHidden) flatTiles
     writeIORef (wsPowerNodesRef wsActive) emptyPowerNodes
     writeIORef (wsPowerNodesRef wsHidden) emptyPowerNodes
-    writeIORef (worldManagerRef env) WorldManager
+    writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds  = [(activePage, wsActive), (hiddenPage, wsHidden)]
         , wmVisible = [activePage]
         }

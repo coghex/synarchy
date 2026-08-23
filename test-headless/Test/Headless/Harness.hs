@@ -191,7 +191,7 @@ hudDefaultWorldPageId = WorldPageId "main_world"
 installHudWorldPage ∷ EngineEnv → IO ()
 installHudWorldPage env = do
     ws ← emptyWorldState
-    writeIORef (worldManagerRef env) WorldManager
+    writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds  = [(hudDefaultWorldPageId, ws)]
         , wmVisible = [] }
 

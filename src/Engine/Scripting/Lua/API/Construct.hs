@@ -66,12 +66,22 @@ constructClearAnchorFn wsc = do
         _ → pure ()
     return 0
 
--- | construction.designate(pageId, x1, y1, x2, y2, category, a, b, c)
---   commits the rectangle for a build target:
+-- | construction.designate(pageId, x1, y1, x2, y2, category, a, b, c
+--   [, bindGen]) — commits the rectangle for a build target:
 --     * category "structure": a=pack, b=kind ("wall"/"floor"/"ceiling"/
 --       "post"), c=wall edge ("ne"/"nw"/"se"/"sw"; nil for non-walls)
 --     * category "building":  a=building def name (rest ignored)
 --   Unknown categories are ignored. A building only marks the anchor.
+--
+--   Returns whether the designation was actually committed. #1602:
+--   @bindGen@ (slot 10) is the page-selection generation
+--   @world.pickTile@ reported for the click this designation commits.
+--   When present it is compared against 'wmSelectionGen' in ONE manager
+--   read taken immediately before the command is enqueued; a mismatch
+--   enqueues nothing at all and returns false, so a stale click creates
+--   no designation on the captured page NOR on the newly selected one.
+--   Omitted (every AI and structure caller) → no check, enqueue as
+--   before.
 constructDesignateFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 constructDesignateFn wsc = do
     pageIdArg ← Lua.tostring 1
@@ -83,17 +93,26 @@ constructDesignateFn wsc = do
     aArg ← Lua.tostring 7
     bArg ← Lua.tostring 8
     cArg ← Lua.tostring 9
-    case (pageIdArg, x1Arg, y1Arg, x2Arg, y2Arg, catArg) of
+    bindArg ← Lua.tointeger 10
+    committed ← case (pageIdArg, x1Arg, y1Arg, x2Arg, y2Arg, catArg) of
         (Just pageIdBS, Just x1, Just y1, Just x2, Just y2, Just catBS) →
             case mkTarget (TE.decodeUtf8Lenient catBS) aArg bArg cArg of
-                Nothing → pure ()
+                Nothing → pure False
                 Just tgt → Lua.liftIO $ do
                     let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                    Q.writeQueue (wsWorldQueue wsc) $
-                        WorldDesignateConstruct pageId
-                            (round x1) (round y1) (round x2) (round y2) tgt
-        _ → pure ()
-    return 0
+                    stale ← case bindArg of
+                        Nothing   → pure False
+                        Just want → do
+                            wm ← readIORef (wsWorldManagerRef wsc)
+                            pure (fromIntegral want ≢ wmSelectionGen wm)
+                    if stale then pure False else do
+                        Q.writeQueue (wsWorldQueue wsc) $
+                            WorldDesignateConstruct pageId
+                                (round x1) (round y1) (round x2) (round y2) tgt
+                        pure True
+        _ → pure False
+    Lua.pushboolean committed
+    return 1
   where
     mkTarget "structure" (Just packBS) (Just kindBS) edge =
         Just $ CtStructure $ StructurePiece

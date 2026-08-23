@@ -32,7 +32,13 @@ handleWorldShowCommand wsc logger pageId = do
             Just _
                 | pageId `elem` wmVisible mgr → (mgr, True)
                 | otherwise →
-                    (mgr { wmVisible = pageId : wmVisible mgr }, True)
+                    -- #1602: the selection generation moves in the SAME
+                    -- atomic update as the list it describes, and only on
+                    -- the branch that actually changes it — a re-show of an
+                    -- already-visible page must not invalidate a live
+                    -- placement binding.
+                    (bumpSelectionGen
+                        (mgr { wmVisible = pageId : wmVisible mgr }), True)
 
     if not found
     then logWarn logger CatWorld $
@@ -63,7 +69,11 @@ handleWorldHideCommand wsc logger pageId = do
     -- invalid / already-hidden page is a no-op for sim state, and hiding one
     -- world never tears down the others' sim (per-world deactivate, #55).
     wasVisible ← atomicModifyIORef' (wsWorldManagerRef wsc) $ \mgr →
-        ( mgr { wmVisible = filter (≢ pageId) (wmVisible mgr) }
+        -- #1602: as in show above — bump only when the visible list
+        -- actually changes, so hiding an already-hidden page is a true
+        -- no-op for live placement bindings.
+        ( (if pageId `elem` wmVisible mgr then bumpSelectionGen else id)
+            (mgr { wmVisible = filter (≢ pageId) (wmVisible mgr) })
         , pageId `elem` wmVisible mgr )
 
     -- Clear this page's cursor selection on hide: the ground-item

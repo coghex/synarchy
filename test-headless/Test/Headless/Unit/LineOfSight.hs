@@ -32,7 +32,8 @@ import World.Fluid.Types (emptyIceMap)
 import World.Flora.Types (emptyFloraChunkData)
 import Structure.Types (emptyChunkStructures)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
-import World.State.Types (WorldState(..), emptyWorldState, WorldManager(..))
+import World.State.Types
+    ( WorldState(..), emptyWorldState, WorldManager(..), emptyWorldManager )
 import World.Page.Types (WorldPageId(..))
 import World.Time.Types (WorldTime(..), worldTimeToSunAngle)
 import World.Time.Local (localSunAngle)
@@ -128,7 +129,9 @@ setupPages visibleOrder = do
     writeIORef (wsTilesRef wsB) (wtdWith (wallChunk 5 40))
     writeIORef (wsTimeRef wsB) (WorldTime 0 0)    -- midnight
     writeIORef (wsGenParamsRef wsB) (Just defaultWorldGenParams { wgpWorldSize = 256 })
-    pure (WorldManager [(pageA, wsA), (pageB, wsB)] visibleOrder)
+    pure (emptyWorldManager
+        { wmWorlds = [(pageA, wsA), (pageB, wsB)]
+        , wmVisible = visibleOrder })
 
 initEnv ∷ IO EngineEnv
 initEnv = do
@@ -230,7 +233,9 @@ spec = beforeAll initEnv $ do
             writeIORef (wsTimeRef wsB) (WorldTime 3 0)
             writeIORef (wsGenParamsRef wsB) (Just defaultWorldGenParams { wgpWorldSize = 256 })
             writeIORef (worldManagerRef env)
-                (WorldManager [(pageB, wsB), (pageA, wsA)] [pageB, pageA])
+                (emptyWorldManager
+                    { wmWorlds = [(pageB, wsB), (pageA, wsA)]
+                    , wmVisible = [pageB, pageA] })
             let defA = testUnit pageA 12 4 5 DirE
                 atkA = testUnit pageA 12 4 5 DirE
                 defB = testUnit pageB 12 4 5 DirE
@@ -268,8 +273,9 @@ spec = beforeAll initEnv $ do
                 writeIORef (wsTimeRef wsNight) (WorldTime 0 0)
                 writeIORef (wsGenParamsRef wsNight)
                     (Just defaultWorldGenParams { wgpWorldSize = 256 })
-                pure (WorldManager [(dayPage, wsDay), (nightPage, wsNight)]
-                                   [dayPage, nightPage])
+                pure (emptyWorldManager
+                    { wmWorlds = [(dayPage, wsDay), (nightPage, wsNight)]
+                    , wmVisible = [dayPage, nightPage] })
             -- Facing east from (8,8) with perception 1.0: radius 6 by
             -- day, 3 at midnight. (13,8) is 5 tiles east — inside the
             -- daytime radius, outside the night one, and inside the

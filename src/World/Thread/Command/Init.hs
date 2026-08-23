@@ -474,7 +474,9 @@ handleWorldInitArenaDoneCommand env logger pageId = do
     atomicModifyIORef' (wsWorldManagerRef (toWorldSimCapability env)) $ \mgr →
         if pageId `elem` wmVisible mgr
         then (mgr, ())
-        else (mgr { wmVisible = pageId : wmVisible mgr }, ())
+        -- #1602: same rule as handleWorldShowCommand — the selection
+        -- generation moves with the list, in the same atomic update.
+        else (bumpSelectionGen (mgr { wmVisible = pageId : wmVisible mgr }), ())
     
     -- Broadcast to Lua that the arena is ready to display
     let lteq = ivLuaQueue (toInputViewCapability env)

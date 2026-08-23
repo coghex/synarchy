@@ -2005,7 +2005,7 @@ def generate_current_format_session(
 
         # world.show (not just world.init) puts the page in wmVisible --
         # mirrors tools/multiworld_save_probe.py's identical note: without
-        # it, building.spawn/canPlaceAt's snapshotVisibleWorldTiles read
+        # it, building.spawn/canPlaceAt's visible-page terrain read
         # can reject a spawn, and the saved snapshot's own visiblePages/
         # live-camera-owner-page would come out empty/null instead of
         # matching an ordinary player session's shape.

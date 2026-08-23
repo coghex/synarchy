@@ -7,6 +7,7 @@ module World.State.Types
     , bumpQuadCacheGen
     , WorldManager(..)
     , emptyWorldManager
+    , bumpSelectionGen
     , pageLanguageProvenance
     , CursorSnapshot(..)
     , LoadPhase(..)
@@ -341,13 +342,42 @@ bumpQuadCacheGen ws =
 data WorldManager = WorldManager
     { wmWorlds  ∷ [(WorldPageId, WorldState)]
     , wmVisible ∷ [WorldPageId]
+    , wmSelectionGen ∷ !Word64
+      -- ^ Monotonic page-SELECTION generation (#1602). Bumped by every
+      --   mutation that can change which page 'resolveActiveWorld'
+      --   answers with — a show that actually prepends, a hide that
+      --   actually removes, a page destroy, a destroy-all, and a load's
+      --   whole-session republish. A caller that resolves the manager
+      --   ONCE can carry this number away as a freshness token and later
+      --   prove the selection has not moved since: equality is exact
+      --   page binding, not a "the id still matches" guess, so an
+      --   A→B→A sequence back to the same page id reads as STALE
+      --   (which a page-id comparison cannot see).
+      --
+      --   Monotonic across a transactional load as well
+      --   ('World.Load.Publish.publishStagedSession' seeds the
+      --   replacement manager from the outgoing one rather than from 0)
+      --   — a load REPLACES the page set, so a binding captured before
+      --   it must never read fresh after it.
+      --
+      --   NOT persisted: it is a within-session freshness counter, and a
+      --   restored session's bindings are all invalidated by the bump
+      --   the publish itself performs.
     }
 
 emptyWorldManager ∷ WorldManager
 emptyWorldManager = WorldManager
     { wmWorlds  = []
     , wmVisible = []
+    , wmSelectionGen = 0
     }
+
+-- | Advance the page-selection generation (#1602). Call inside the SAME
+--   'atomicModifyIORef'' that changes 'wmVisible' / 'wmWorlds', so a
+--   reader can never observe a moved selection under an unmoved
+--   generation.
+bumpSelectionGen ∷ WorldManager → WorldManager
+bumpSelectionGen mgr = mgr { wmSelectionGen = wmSelectionGen mgr + 1 }
 
 -- | The page-scoped language-provenance query (#1092 requirement 5):
 --   which generated language named this page, and under which

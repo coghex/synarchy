@@ -62,7 +62,7 @@ import World.Fluid.Types (emptyIceMap)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types
-    (WorldManager(..), WorldState(..), emptyWorldState)
+    (WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager)
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData)
 import World.Weather.Types (ClimateState(..), initClimateState)
 
@@ -287,7 +287,7 @@ resetScene env vis wounds = do
     writeIORef (wsGenParamsRef wsLow)  (Just (paramsAtTemp coldTemp))
     -- Deliberately absent: a loaded page that cannot answer a climate.
     writeIORef (wsGenParamsRef wsBare) Nothing
-    writeIORef (worldManagerRef env) WorldManager
+    writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds  = [ (pageHigh, wsHigh), (pageLow, wsLow)
                       , (pageBare, wsBare) ]
         , wmVisible = visibleFor vis }

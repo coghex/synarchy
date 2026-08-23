@@ -70,7 +70,7 @@ import World.Save.Component.Page
 import World.Render.CursorQuads (renderWorldCursorQuads)
 import World.Save.Snapshot (PageSnapshot(..))
 import World.State.Types
-    (WorldManager(..), WorldState(..), emptyWorldState)
+    (WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager)
 import World.Thread.Command.Cursor
     ( handleWorldCancelChopCommand, handleWorldCancelConstructCommand
     , handleWorldCancelPlantCommand, handleWorldCancelTillCommand
@@ -647,7 +647,7 @@ resetPage env veg flora = do
     writeIORef (wsGenParamsRef ws)
         (Just defaultWorldGenParams { wgpWorldSize = worldSize })
     writeIORef (wsTilesRef ws) (seamTiles veg flora)
-    writeIORef (worldManagerRef env) WorldManager
+    writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds = [(fixturePage, ws)], wmVisible = [fixturePage] }
     pure ws
 

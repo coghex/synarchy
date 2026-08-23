@@ -59,7 +59,7 @@ import Engine.Scripting.Lua.Thread.Dispatch (processLuaMsg)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaMsg(..))
 import Test.Headless.Harness (withHeadlessEngine)
 import World.Page.Types (WorldPageId(..))
-import World.Types (WorldManager(..), emptyWorldState)
+import World.Types (WorldManager(..), emptyWorldState, emptyWorldManager)
 
 -----------------------------------------------------------
 -- Fixture pages
@@ -86,7 +86,7 @@ installPages ∷ EngineEnv → [Text] → IO ()
 installPages env visible = do
     alpha ← emptyWorldState
     beta  ← emptyWorldState
-    writeIORef (worldManagerRef env) WorldManager
+    writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds  = [ (WorldPageId alphaPage, alpha)
                       , (WorldPageId betaPage,  beta) ]
         , wmVisible = map WorldPageId visible }
@@ -94,7 +94,7 @@ installPages env visible = do
 -- | No worlds at all — the main menu, and requirement 6's other half.
 installNoPages ∷ EngineEnv → IO ()
 installNoPages env =
-    writeIORef (worldManagerRef env) WorldManager
+    writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds = [], wmVisible = [] }
 
 -----------------------------------------------------------

@@ -155,9 +155,19 @@ publishStagedSession env logger requestId staged = do
     -- no remap, no collision suffix — a load replaces the complete
     -- session, so nothing survives to collide with). wmVisible starts
     -- empty so handleWorldShowCommand below starts from a clean slate.
+    --
+    -- #1602: the replacement manager's page-SELECTION generation is
+    -- seeded from the outgoing one rather than restarting at 0. A load
+    -- replaces the whole page set, so every placement binding captured
+    -- before it must read as stale afterwards — a fresh counter would
+    -- hand the new session the same low numbers the old one had already
+    -- issued, which is exactly the ABA hazard the generation exists to
+    -- close. (The handleWorldShowCommand calls below bump it further.)
+    outgoingSelectionGen ← wmSelectionGen <$> readIORef (worldManagerRef env)
     writeIORef (worldManagerRef env) WorldManager
         { wmWorlds  = [ (spPageId p, spWorldState p) | p ← ssPages staged ]
         , wmVisible = []
+        , wmSelectionGen = outgoingSelectionGen + 1
         }
 
     -- Restore visibility through the real handler so its side effects
