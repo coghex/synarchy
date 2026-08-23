@@ -39,6 +39,7 @@ registerItemAPI env = do
   registerLuaFunction "getTextureCap"  (bloodGetTextureCapFn env)
   registerLuaFunction "getRenderQuads" (bloodGetRenderQuadsFn env)
   registerLuaFunction "gpuStats"       (bloodGpuStatsFn env)
+  registerLuaFunction "gpuHandles"     (bloodGpuHandlesFn env)
   registerLuaFunction "clear"          (bloodClearFn env)
   registerLuaFunction "getTrailState"  (bloodGetTrailStateFn env)
   Lua.setglobal (Lua.Name "blood")
