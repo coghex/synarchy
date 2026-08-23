@@ -157,6 +157,7 @@ import qualified Test.Headless.UI.TransferContextMenu as UITransferContextMenu
 import qualified Test.Headless.UI.ItemList as UIItemList
 import qualified Test.Headless.UI.ContainerWindowStack as UIContainerWindowStack
 import qualified Test.Headless.UI.TransferGestures as UITransferGestures
+import qualified Test.Headless.UI.ConsumableGesture as UIConsumableGesture
 import qualified Test.Headless.UI.TransferSession as UITransferSession
 import qualified Test.Headless.World.Calendar as Calendar
 import qualified Test.Headless.World.FloraGrowth as FloraGrowth
@@ -527,6 +528,7 @@ main = hspec $ do
     UISettingsDefaultsKeybinds.spec
     describe "UI.ContainerWindowStack" UIContainerWindowStack.spec
     UITransferGestures.spec
+    UIConsumableGesture.spec
     UITransferSession.spec
     describe "Tutorial HUD" UITutorialHud.spec
     describe "UI.UnicodeTextEditing" UIUnicodeTextEditing.spec
