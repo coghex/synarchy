@@ -51,7 +51,10 @@ import Building.Types
     ( BuildingDef(..), BuildingId(..), BuildingInstance(..)
     , BuildingManager(..), emptyBuildingManager )
 import Building.Command.Types (BuildingCommand(..))
+import Building.Thread.Command (processAllBuildingCommands)
 import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Core.Capability.Building (toBuildingCapability)
+import Engine.Core.Capability.ContentRegistries (toContentRegistriesCapability)
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.State (EngineEnv(..))
@@ -73,6 +76,7 @@ import Structure.Types (emptyChunkStructures)
 import World.Chunk.Types
     (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
 import World.Command.Types (WorldCommand(..))
+import World.Construct.Types (ConstructTarget(..))
 import World.Flora.Types (emptyFloraChunkData)
 import World.Fluid.Types (emptyIceMap)
 import World.Generate.Coordinates (canonicalTile, tileAliasStep)
@@ -81,6 +85,8 @@ import World.Grid (gridToWorld, tileHeight)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types
     (WorldManager(..), WorldState(..), emptyWorldManager, emptyWorldState)
+import World.Thread.Command.Cursor.Construct
+    (handleWorldDesignateConstructCommand)
 import World.Thread.Command.UI
     (handleWorldHideCommand, handleWorldShowCommand)
 import World.Tile.Types (WorldTileData(..))
@@ -337,13 +343,13 @@ drainWorldQueue env = go []
 spawnsQueued ∷ EngineEnv → IO [(Text, Int, Int, WorldPageId)]
 spawnsQueued env = do
     cmds ← drainBuildingQueue env
-    pure [ (n, gx, gy, p) | BuildingSpawn _ n gx gy _ p ← cmds ]
+    pure [ (n, gx, gy, p) | BuildingSpawn _ n gx gy _ p _ ← cmds ]
 
 -- | Every queued construction designation as (page, x1, y1).
 designationsQueued ∷ EngineEnv → IO [(WorldPageId, Int, Int)]
 designationsQueued env = do
     cmds ← drainWorldQueue env
-    pure [ (p, x1, y1) | WorldDesignateConstruct p x1 y1 _ _ _ ← cmds ]
+    pure [ (p, x1, y1) | WorldDesignateConstruct p x1 y1 _ _ _ _ ← cmds ]
 
 -- | Both pages' live designation maps — a stale attempt must leave both
 --   empty, not merely fail to enqueue.
@@ -559,6 +565,7 @@ spec = describe "Build placement page binding (#1602)" $ aroundAll setup $ do
     apiCoherenceSpec
     emptyVisibleSpec
     staleSpec
+    applyTimeSpec
   where
     -- Isolation wraps the boot, not the other way round (#1357): engine
     -- init is itself a config writer, so a scratch resource root
@@ -885,3 +892,118 @@ expectStale env wsA wsB ls = do
     -- refusal leaves it.
     evalDebug ls "return require('scripts.build_tool').state.mode"
         `shouldReturn` "placement"
+
+-- | Enqueuing is not committing. Both placement commands are applied by
+--   ANOTHER thread after the Lua-side check answered its caller, so page
+--   selection can move in between — the check therefore travels WITH the
+--   command and is re-run at the point the state actually changes. These
+--   examples drive the real handlers directly, with the selection moved
+--   after the command was built and before it is applied.
+applyTimeSpec ∷ SpecWith (EngineEnv, LuaBackendState)
+applyTimeSpec =
+  describe "the binding is re-checked where the command is APPLIED" $ do
+
+    it "the building-command drain drops a queued spawn whose binding \
+       \went stale after it was enqueued" $ \(env, ls) → do
+        _ ← resetScene env
+        _ ← clearStubs ls
+        gen ← selectionGen env
+        logger ← readIORef (loggerRef env)
+        let wsc = toWorldSimCapability env
+            cmd = BuildingSpawn (BuildingId 9) portalName
+                      (fst placeTile) (snd placeTile) terrainZA pageA
+                      (Just gen)
+        -- The selection moves AFTER the command exists: this is exactly
+        -- the window between enqueue and apply.
+        handleWorldHideCommand wsc logger pageA
+        handleWorldShowCommand wsc logger pageB
+        applyBuildingCommand env cmd
+        placed ← placedBuildings env
+        placed `shouldMatchList`
+            [ (pageA, fst occupiedA, snd occupiedA)
+            , (pageB, fst occupiedB, snd occupiedB) ]
+
+    it "the drain still applies the SAME command when the binding held" $
+        \(env, ls) → do
+            _ ← resetScene env
+            _ ← clearStubs ls
+            gen ← selectionGen env
+            applyBuildingCommand env $
+                BuildingSpawn (BuildingId 9) portalName
+                    (fst placeTile) (snd placeTile) terrainZA pageA (Just gen)
+            placed ← placedBuildings env
+            placed `shouldMatchList`
+                [ (pageA, fst occupiedA, snd occupiedA)
+                , (pageB, fst occupiedB, snd occupiedB)
+                , (pageA, fst placeTile, snd placeTile) ]
+
+    it "an UNBOUND spawn is unaffected by a selection change" $
+        \(env, ls) → do
+            _ ← resetScene env
+            _ ← clearStubs ls
+            logger ← readIORef (loggerRef env)
+            let wsc = toWorldSimCapability env
+            handleWorldHideCommand wsc logger pageA
+            handleWorldShowCommand wsc logger pageB
+            -- Location content-spawning, blueprint staking and power
+            -- placement all carry no click binding and must keep
+            -- landing on their explicit page.
+            applyBuildingCommand env $
+                BuildingSpawn (BuildingId 9) portalName
+                    (fst placeTile) (snd placeTile) terrainZA pageA Nothing
+            placed ← placedBuildings env
+            placed `shouldMatchList`
+                [ (pageA, fst occupiedA, snd occupiedA)
+                , (pageB, fst occupiedB, snd occupiedB)
+                , (pageA, fst placeTile, snd placeTile) ]
+
+    it "the world thread writes NO designation for a binding that went \
+       \stale after the command was enqueued" $ \(env, ls) → do
+        (wsA, wsB) ← resetScene env
+        _ ← clearStubs ls
+        gen ← selectionGen env
+        logger ← readIORef (loggerRef env)
+        let wsc = toWorldSimCapability env
+        handleWorldHideCommand wsc logger pageA
+        handleWorldShowCommand wsc logger pageB
+        handleWorldDesignateConstructCommand env logger pageA
+            (fst placeTile) (snd placeTile) (fst placeTile) (snd placeTile)
+            (CtBuilding shedName) (Just gen)
+        designationKeys wsA wsB `shouldReturn` ([], [])
+
+    it "the world thread writes the SAME designation when the binding \
+       \held" $ \(env, ls) → do
+        (wsA, wsB) ← resetScene env
+        _ ← clearStubs ls
+        gen ← selectionGen env
+        logger ← readIORef (loggerRef env)
+        handleWorldDesignateConstructCommand env logger pageA
+            (fst placeTile) (snd placeTile) (fst placeTile) (snd placeTile)
+            (CtBuilding shedName) (Just gen)
+        designationKeys wsA wsB `shouldReturn` ([placeTile], [])
+
+    it "an UNBOUND designation is unaffected by a selection change" $
+        \(env, ls) → do
+            (wsA, wsB) ← resetScene env
+            _ ← clearStubs ls
+            logger ← readIORef (loggerRef env)
+            let wsc = toWorldSimCapability env
+            handleWorldHideCommand wsc logger pageA
+            handleWorldShowCommand wsc logger pageB
+            handleWorldDesignateConstructCommand env logger pageA
+                (fst placeTile) (snd placeTile)
+                (fst placeTile) (snd placeTile) (CtBuilding shedName) Nothing
+            designationKeys wsA wsB `shouldReturn` ([placeTile], [])
+
+-- | Put one 'BuildingCommand' on the real queue and run the REAL drain
+--   over it — the same 'processAllBuildingCommands' the unit thread runs
+--   (there is no separate building thread; see
+--   'Building.Thread.Command'). Nothing is reimplemented here, so the
+--   apply-time guard under test is the shipped one.
+applyBuildingCommand ∷ EngineEnv → BuildingCommand → IO ()
+applyBuildingCommand env cmd = do
+    Q.writeQueue (buildingQueue env) cmd
+    processAllBuildingCommands (loggerRef env)
+        (toWorldSimCapability env)
+        (toContentRegistriesCapability env)
+        (toBuildingCapability env)

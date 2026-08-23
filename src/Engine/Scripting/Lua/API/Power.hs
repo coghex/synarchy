@@ -214,7 +214,10 @@ placeNodeOn env ws pid defName uid gx gy role param = do
                                         let (bid', bm'') = nextBuildingId bm'
                                         in (bm'', bid')
                             Q.writeQueue (bcBuildingQueue (toBuildingCapability env)) $
-                                BuildingSpawn bid defName cgx cgy gz pid
+                                -- #1602: power placement is page-bound by
+                                -- #1205's own unit-ownership rule, not by a
+                                -- click binding, so it carries none.
+                                BuildingSpawn bid defName cgx cgy gz pid Nothing
                             nid ← atomicModifyIORef' (wsPowerNodesRef ws) $
                                 addPowerNode bid role param
                             pure (Right (nid, bid))

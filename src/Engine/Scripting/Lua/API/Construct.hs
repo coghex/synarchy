@@ -73,15 +73,26 @@ constructClearAnchorFn wsc = do
 --     * category "building":  a=building def name (rest ignored)
 --   Unknown categories are ignored. A building only marks the anchor.
 --
---   Returns whether the designation was actually committed. #1602:
---   @bindGen@ (slot 10) is the page-selection generation
---   @world.pickTile@ reported for the click this designation commits.
---   When present it is compared against 'wmSelectionGen' in ONE manager
---   read taken immediately before the command is enqueued; a mismatch
---   enqueues nothing at all and returns false, so a stale click creates
---   no designation on the captured page NOR on the newly selected one.
---   Omitted (every AI and structure caller) → no check, enqueue as
---   before.
+--   Returns whether the designation was ACCEPTED. #1602: @bindGen@
+--   (slot 10) is the page-selection generation @world.pickTile@ reported
+--   for the click this designation commits. When present it is compared
+--   against 'wmSelectionGen' in ONE manager read taken immediately
+--   before the command is enqueued; a mismatch enqueues nothing at all
+--   and returns false, which is the synchronous answer the build tool
+--   turns into its rejected outcome.
+--
+--   The generation ALSO travels on the command, and the world thread
+--   re-checks it before writing anything. That second check is the
+--   authoritative one and it is exact rather than best-effort: the world
+--   thread is where world.show / world.hide are applied too, so a
+--   selection change enqueued before this designation is already applied
+--   when the check runs, and one enqueued after is genuinely after the
+--   commit. A stale click therefore creates no designation on the
+--   captured page NOR on the newly selected one, even if selection moved
+--   while the command sat in the queue.
+--
+--   Omitted (every AI and structure caller) → no check at either point,
+--   enqueue as before.
 constructDesignateFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 constructDesignateFn wsc = do
     pageIdArg ← Lua.tostring 1
@@ -106,9 +117,17 @@ constructDesignateFn wsc = do
                             wm ← readIORef (wsWorldManagerRef wsc)
                             pure (fromIntegral want ≢ wmSelectionGen wm)
                     if stale then pure False else do
+                        -- The binding travels WITH the command. The check
+                        -- above is the SYNCHRONOUS answer this call owes
+                        -- its caller (the build tool records its rejection
+                        -- from it and stays armed); the copy carried here
+                        -- is what the world thread re-checks at the actual
+                        -- commit, where it is exactly serialized against
+                        -- world.show / world.hide.
                         Q.writeQueue (wsWorldQueue wsc) $
                             WorldDesignateConstruct pageId
                                 (round x1) (round y1) (round x2) (round y2) tgt
+                                (fromIntegral <$> bindArg)
                         pure True
         _ → pure False
     Lua.pushboolean committed

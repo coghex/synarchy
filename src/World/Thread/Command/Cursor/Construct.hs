@@ -103,10 +103,26 @@ structureOccupiedAt worldSize tileData gx gy slot =
 --   grid of buildings) and are unaffected by the occupancy check.
 --   Unloaded-chunk tiles are skipped. Clears the anchor afterwards.
 handleWorldDesignateConstructCommand ∷ EngineEnv → LoggerState → WorldPageId
-    → Int → Int → Int → Int → ConstructTarget → IO ()
-handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt = do
+    → Int → Int → Int → Int → ConstructTarget → Maybe Word64 → IO ()
+handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt
+                                     mBindGen = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
-    case lookup pageId (wmWorlds mgr) of
+    -- #1602: the page BINDING is re-checked here, not merely where the
+    -- command was enqueued. This is the exact commit point for a
+    -- designation, and it is EXACTLY serialized against page selection:
+    -- world.show / world.hide are world-thread commands drained from the
+    -- same queue, so a selection change enqueued before this designation
+    -- has already been applied to the snapshot above, and one enqueued
+    -- after is genuinely after the commit. A stale binding writes
+    -- nothing at all — not on the captured page, not on the newly
+    -- selected one. An unbound designation (every AI caller, and the
+    -- two-click structure rectangle) is unaffected.
+    let bindingMoved = maybe False (≢ wmSelectionGen mgr) mBindGen
+    case (if bindingMoved then Nothing else lookup pageId (wmWorlds mgr)) of
+        Nothing | bindingMoved →
+            logDebug logger CatWorld $
+                "Construct designation dropped: page binding stale on "
+                <> unWorldPageId pageId
         Nothing → recordMissingWorldOutcome env "construction.designate"
             pageId gx1 gy1
         Just worldState → do

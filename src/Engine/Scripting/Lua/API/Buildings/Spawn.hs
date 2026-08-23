@@ -50,9 +50,15 @@ import Location.Instance (emptyLocationInstances)
 --   When present it is compared against 'wmSelectionGen' inside the SAME
 --   manager read that resolves the target page, so page selection cannot
 --   move between the check and the resolution: a mismatch spawns
---   nothing and answers @(nil, "page binding stale")@ — the commit-side
---   half of the binding, distinct from every ordinary placement refusal.
---   Omitted → no binding check at all, exactly as before.
+--   nothing and answers @(nil, "page binding stale")@, distinct from
+--   every ordinary placement refusal.
+--
+--   That is the SYNCHRONOUS half, and it is what this call owes its
+--   caller — but it is not the commit. The generation therefore travels
+--   ON the queued 'BuildingSpawn' and is checked a second time by the
+--   drain that actually inserts the instance, which is the only place
+--   the two can be adjacent. Omitted → no binding check at either
+--   point, exactly as before.
 buildingSpawnFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingSpawnFn env = do
     nameArg ← Lua.tostring 1
@@ -105,7 +111,12 @@ buildingSpawnFn env = do
                                             let (bid', bm'') = nextBuildingId bm'
                                             in (bm'', bid')
                                 Q.writeQueue (bcBuildingQueue (toBuildingCapability env)) $
+                                    -- The binding travels WITH the command:
+                                    -- the check above answers this call, the
+                                    -- copy here is re-checked on the building
+                                    -- thread immediately before the insert.
                                     BuildingSpawn bid defName cgx cgy gz pid
+                                        (fromIntegral <$> bindArg)
                                 pure (Right bid)
                     (_, Nothing, _) → pure (Left "unknown building")
                     (_, _, Nothing)  → pure (Left "no active world")

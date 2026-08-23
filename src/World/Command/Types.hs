@@ -123,6 +123,18 @@ data WorldCommand
         -- ^ Construction tool: cancel the pending rectangle (right-click /
         --   Escape / tool switch).
     | WorldDesignateConstruct WorldPageId Int Int Int Int ConstructTarget
+                              (Maybe Word64)
+        -- ^ …, plus the expected page-SELECTION generation (#1602).
+        --   'Nothing' is an unbound designation (every AI caller, and
+        --   the two-click structure rectangle) and is never checked.
+        --   'Just' is a placement bound to the click that made it: the
+        --   world thread re-checks it against 'wmSelectionGen' before
+        --   writing anything, which is exact rather than best-effort
+        --   because THIS thread is also the one that applies
+        --   world.show / world.hide — a selection change enqueued
+        --   before this command is therefore already applied when the
+        --   check runs, and one enqueued after is genuinely after the
+        --   commit.
         -- ^ Construction tool: second click commits the rectangle
         --   (gx1,gy1)–(gx2,gy2) for the given build target. Tiles in
         --   loaded chunks land in wsConstructDesignationsRef with their
