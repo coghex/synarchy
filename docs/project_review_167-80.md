@@ -11,7 +11,7 @@ PR #167's shell `quit`/`exit` commands still call the real lifecycle transition,
 - [x] PRR-1. Per-world units still move, re-ground, and infect against another page's environment — [#1593]
 - [x] PRR-2. A queued fluid writeback can overtake a live edit's sim re-seed — [#1596]
 - [x] PRR-3. Notification pauses discard the player's non-default world speed on resume — [#1599]
-- [ ] PRR-4. Build placement does not bind pick, validation, and commit to one world page
+- [x] PRR-4. Build placement does not bind pick, validation, and commit to one world page — [#1602]
 - [ ] PRR-5. Settings Defaults preserves the live tooltip timing values instead of defaulting them
 - [ ] PRR-6. The settings Revert regression harness no longer reaches its assertions
 - [ ] PRR-7. Exit-to-menu teardown leaves per-entity Lua state accumulating across new sessions
@@ -90,7 +90,7 @@ PR #167's shell `quit`/`exit` commands still call the real lifecycle transition,
 
 ## 4. Build-placement page transaction
 
-### PRR-4. Build placement does not bind pick, validation, and commit to one world page
+### [#1602] PRR-4. Build placement does not bind pick, validation, and commit to one world page
 
 > **Captured note:** PR #77 made the click use a synchronous live tile pick, but the pick returns coordinates without page identity. `building.canPlaceAt` and `building.spawn` each resolve “active” again, and `canPlaceAt` itself reads the active page and visible tile snapshot separately. A visibility switch can validate one page's building/location metadata against another page's terrain, or place the click into a page other than the one that was hit-tested.
 
