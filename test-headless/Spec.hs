@@ -21,6 +21,7 @@ import qualified Test.Headless.WorldGen.BedDepth as BedDepth
 import qualified Test.Headless.WorldGen.FluidSurfaceFold as FluidSurfaceFold
 import qualified Test.Headless.Unit.Pathing.Cost as PathingCost
 import qualified Test.Headless.Unit.Pathing.Hazard as PathingHazard
+import qualified Test.Headless.Unit.Pathing.MoveToApi as PathingMoveToApi
 import qualified Test.Headless.Unit.SimPageOwnership as SimPageOwnership
 import qualified Test.Headless.Unit.Pathing.AStar as PathingAStar
 import qualified Test.Headless.Unit.Pathing.Config as PathingConfig
@@ -43,6 +44,7 @@ import qualified Test.Headless.Item.GroundPageOwnership as GroundPageOwnership
 import qualified Test.Headless.Item.Temperature as ItemTemp
 import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Item.QualityTier as ItemQualityTier
+import qualified Test.Headless.Item.ContentsSignature as ItemContentsSig
 import qualified Test.Headless.Item.Condition as ItemCondition
 import qualified Test.Headless.Item.Materialize as ItemMaterialize
 import qualified Test.Headless.Item.BulkStorage as ItemBulkStorage
@@ -314,6 +316,10 @@ main = hspec $ do
     -- mutation paths, which would corrupt the shared-worlds engine
     -- above (same precedent as World identity / autosave guards).
     aroundAll withHeadlessEngine UnitTransferApi.spec
+    -- Own engine (#1605): the live unit.moveTo boundary swaps the
+    -- engine's logger to capture the warning it emits and drains the
+    -- unit command queue, so it cannot share the worldgen engine.
+    aroundAll withHeadlessEngine PathingMoveToApi.spec
     -- Own engine for the same reason (#1247): the order executor writes
     -- the unit/building manager refs AND installs its own two-page world
     -- manager so each page brings its own live wsTransferOrdersRef.
@@ -403,6 +409,7 @@ main = hspec $ do
     describe "Item.Temperature" ItemTemp.spec
     describe "Item.BuffYaml" ItemBuffYaml.spec
     describe "Item.QualityTier" ItemQualityTier.spec
+    describe "Item.ContentsSignature" ItemContentsSig.spec
     describe "Item.BulkStorage" ItemBulkStorage.spec
     describe "Item.Materialize" ItemMaterialize.spec
     describe "World.Save.Sanitize" SaveSanitize.spec

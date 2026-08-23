@@ -78,14 +78,14 @@ SAVE_COMPAT_PATHS="$(python3 tools/ci_expensive_gates.py --local-changed-paths)"
 # needs to be injected here.
 printf 'package synarchy\n  ghc-options: -fforce-recomp\n' > "$LOCAL"
 
-echo "==> [1/20] build (library + executable, -Werror)"
+echo "==> [1/21] build (library + executable, -Werror)"
 cabal build all
 
-echo "==> [2/20] build test suites"
+echo "==> [2/21] build test suites"
 cabal build synarchy-test-headless
 cabal build synarchy-test-graphical
 
-echo "==> [3/20] headless hspec suite (full tier)"
+echo "==> [3/21] headless hspec suite (full tier)"
 # SYNARCHY_FULL_TESTS=1 turns the full-tier examples from pending into
 # real runs (#1364) -- today exactly one, the w128 seed-42 volcano
 # exposure regression in test-headless/Test/Headless/WorldGen/Exposure.hs.
@@ -97,29 +97,33 @@ echo "==> [3/20] headless hspec suite (full tier)"
 # enabled.
 SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless --test-show-details=direct
 
-echo "==> [4/20] test audit"
+echo "==> [4/21] test audit"
 python3 tools/test_audit.py
 
-echo "==> [5/20] lua module line budget"
+echo "==> [5/21] lua module line budget"
 python3 tools/lua_module_budget.py
 
-echo "==> [6/20] lua duplicate function audit"
+echo "==> [6/21] lua duplicate function audit"
 python3 tools/test_lua_duplicate_function_audit.py
 python3 tools/lua_duplicate_function_audit.py
 
-echo "==> [7/20] haskell module line budget"
+echo "==> [7/21] haskell module line budget"
 python3 tools/test_haskell_module_budget.py
 python3 tools/haskell_module_budget.py
 
-echo "==> [8/20] unicode operator audit"
+echo "==> [8/21] unicode operator audit"
 python3 tools/test_unicode_operator_audit.py
 python3 tools/unicode_operator_audit.py
 
-echo "==> [9/20] persistence inventory audit"
+echo "==> [9/21] lua strict-decode audit"
+python3 tools/lua_strict_decode_audit.py --self-test
+python3 tools/lua_strict_decode_audit.py
+
+echo "==> [10/21] persistence inventory audit"
 python3 tools/test_persistence_inventory_audit.py
 python3 tools/persistence_inventory_audit.py
 
-echo "==> [10/20] EngineEnv capability inventory audit"
+echo "==> [11/21] EngineEnv capability inventory audit"
 python3 tools/test_engine_env_capability_audit.py
 python3 tools/engine_env_capability_audit.py
 
@@ -133,7 +137,7 @@ python3 tools/engine_env_capability_audit.py
 # this working tree's own changes touch a path that can move its result.
 # Every other member and the whole real audit still run on every local
 # invocation.
-echo "==> [11/20] save compatibility audit"
+echo "==> [12/21] save compatibility audit"
 python3 tools/test_save_compat_audit.py --without-reproducibility
 python3 tools/save_compat_audit.py
 
@@ -159,26 +163,26 @@ python3 tools/save_compat_audit.py
 # write.
 SAVE_COMPAT_REPRO="$(printf '%s\n' "$SAVE_COMPAT_PATHS" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat)"
 if [ "$SAVE_COMPAT_REPRO" = true ]; then
-  echo "==> [11/20] save compatibility fixture reproducibility (selected)"
+  echo "==> [12/21] save compatibility fixture reproducibility (selected)"
   python3 tools/test_save_compat_audit.py --only-reproducibility
 else
-  echo "==> [11/20] save compatibility fixture reproducibility: skipped (no save-format, fixture, save-tooling or Cabal path changed)"
+  echo "==> [12/21] save compatibility fixture reproducibility: skipped (no save-format, fixture, save-tooling or Cabal path changed)"
 fi
 # <<< save-compat reproducibility selection <<<
 
-echo "==> [12/20] enum append-only audit"
+echo "==> [13/21] enum append-only audit"
 python3 tools/enum_append_only_audit.py --self-test
 python3 tools/enum_append_only_audit.py
 
-echo "==> [13/20] cabal library module inventory audit"
+echo "==> [14/21] cabal library module inventory audit"
 python3 tools/test_cabal_module_audit.py
 python3 tools/cabal_module_audit.py
 
-echo "==> [14/20] material id/name correspondence audit"
+echo "==> [15/21] material id/name correspondence audit"
 python3 tools/material_id_audit.py --self-test
 python3 tools/material_id_audit.py
 
-echo "==> [15/20] findings report status audit"
+echo "==> [16/21] findings report status audit"
 python3 tools/test_findings_report_audit.py
 python3 tools/findings_report_audit.py
 
@@ -186,11 +190,11 @@ python3 tools/findings_report_audit.py
 # comparison against a fresh regeneration, and #1262's image/slot and
 # resident-memory budgets. --strict is what makes a budget breach fail
 # rather than merely print.
-echo "==> [16/20] unit asset inventory, freshness and budget"
+echo "==> [17/21] unit asset inventory, freshness and budget"
 python3 tools/test_pack_atlas.py
 python3 tools/pack_atlas.py --validate-only --strict
 
-echo "==> [17/20] world_check --quick"
+echo "==> [18/21] world_check --quick"
 python3 tools/world_check.py --quick
 
 # Validate the probe-runner harness itself (cheap, no engine, no GPU) --
@@ -224,7 +228,7 @@ python3 tools/world_check.py --quick
 # throwaway censuses. No probe is ever executed by any of them, and the
 # real engine-booting ten-run measurement is deliberately NOT wired into
 # this gate or CI (tools/README.md states why).
-echo "==> [18/20] probe runner self-tests"
+echo "==> [19/21] probe runner self-tests"
 python3 tools/ci_probes.py --self-test
 python3 tools/ci_expensive_gates.py --self-test
 python3 tools/ci_docs_fast_path.py --self-test
@@ -246,7 +250,7 @@ python3 tools/test_deflake.py
 # either cache step to the combined `actions/cache` action would empty
 # `cache-matched-key` and turn every prefix hit into a reported cold
 # cache, with nothing failing.
-echo "==> [19/20] CI cache policy and report self-tests"
+echo "==> [20/21] CI cache policy and report self-tests"
 python3 tools/ci_cache_epoch.py --self-test
 python3 tools/ci_cache_cleanup.py --self-test
 python3 tools/ci_cache_report.py --self-test
@@ -256,7 +260,7 @@ python3 tools/ci_cache_report.py --self-test
 # here, or here and not there, outside the audit's hard-coded exemption
 # list. Without it the two drift silently, and they already had --- the
 # original five of the probe-runner self-tests above ran only in CI.
-echo "==> [20/20] CI/local gate parity audit"
+echo "==> [21/21] CI/local gate parity audit"
 python3 tools/ci_parity_audit.py --self-test
 python3 tools/ci_parity_audit.py
 

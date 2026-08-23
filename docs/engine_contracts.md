@@ -87,7 +87,10 @@ exemptions.
 The set: warning-clean (`-Werror`) build of library/exe + both test
 suites, the headless hspec suite, `test_audit.py`, the Lua/Haskell
 module-budget guards, the Lua duplicate-function audit, the
-Unicode-operator audit, the persistence-inventory / EngineEnv-capability
+Unicode-operator audit, the Lua strict-decoder audit
+(`lua_strict_decode_audit.py --self-test` then the bare audit, #1605 —
+no direct `Data.Text.Encoding.decodeUtf8` under
+`src/Engine/Scripting/Lua/`), the persistence-inventory / EngineEnv-capability
 / save-compat / enum-append-only / cabal-library-module-inventory /
 material-id / findings-report-status audits (each with its own
 self-test), the unit-asset inventory gate (`test_pack_atlas.py` +
