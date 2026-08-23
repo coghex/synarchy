@@ -100,5 +100,15 @@ function mineTool.onToolMode(toolName)
     end
 end
 
+-- #102, migrated onto the declared session-teardown boundary (#1610):
+-- a pending anchor is transient state naming a tile in THIS world, and
+-- the next world's first click must not commit a rectangle from it.
+-- Registered at module scope because this module has no init hook --
+-- hud.setup requires it while the gameplay UI is being built, which is
+-- before any world exists to anchor in.
+require("scripts.lib.session_teardown").register("mine_tool", function()
+    mineTool.cancel()
+end)
+
 package.loaded["scripts.mine_tool"] = mineTool
 return mineTool
