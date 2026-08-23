@@ -52,15 +52,122 @@ Checks:
      crop makes it plant the NEW crop, not the stale one it originally
      walked over for (plant.designate replaces in place, HM.insert).
  11. Save/load: the row-crop instance (WePlaceFlora, save v79) survives
-     save → loadSave.
+     save → loadSave. The engine runs on a throwaway resource root,
+     so that slot lands in this run's own saves/ and is deleted with
+     it — the developer's saves/ is never read, written or rotated
+     (#1616).
 
 Usage: python3 tools/farm_ai_probe.py [--port 9336] [--seed 42]
        [--size 64] [--plates 3]
 """
-import argparse, glob, socket, subprocess, sys, time
-from probelib import clear_find_water, quit_engine, boot, send, send_json, wait_load_published
+import argparse, glob, os, shutil, socket, subprocess, sys, tempfile, time, uuid
+from probelib import (boot, capture_request_id, clear_find_water, quit_engine,
+                      send, send_json, wait_load_published, wait_save_complete)
 
 SPROOT = "/tmp"
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def make_isolated_root(base: str) -> str:
+    """A throwaway resource root for one invocation (#1616): the
+    read-only content families symlinked, `config/` COPIED without the
+    developer's `*.local.yaml` overrides, and its OWN empty `saves/`.
+
+    `app/App/ResourceRoot.hs` chdirs the engine into this directory and
+    `World.Save.Serialize` resolves `saves` relative to it, so the round
+    trip below writes here instead of the developer's live `saves/` —
+    which is gitignored and therefore accumulates abandoned slots
+    silently. Copying `config/` rather than symlinking it keeps a
+    personal `config/save.local.yaml` out of the run: `scripts/init.lua`
+    loads the autosave scheduler, so a local autosave interval could
+    otherwise fire a competing save partway through this probe's
+    eleven-minute run and rotate slots underneath it.
+    """
+    root = os.path.join(base, "root")
+    os.makedirs(root, exist_ok=True)
+    for family in ("scripts", "assets", "data"):
+        target = os.path.join(root, family)
+        if not os.path.exists(target):
+            os.symlink(os.path.join(REPO, family), target)
+    config_dst = os.path.join(root, "config")
+    if not os.path.exists(config_dst):
+        shutil.copytree(os.path.join(REPO, "config"), config_dst,
+                        ignore=shutil.ignore_patterns("*.local.yaml"))
+    os.makedirs(os.path.join(root, "saves"), exist_ok=True)
+    return root
+
+
+def remove_run_root(base: str) -> bool:
+    """Delete this invocation's own throwaway tree, save artifacts and
+    all, and say whether it is really gone.
+
+    Only ever removes the directory THIS process made with
+    `tempfile.mkdtemp`, so nothing pre-existing is at risk; `rmtree`
+    unlinks the symlinked content families rather than recursing into
+    them, so the real `scripts/`, `assets/` and `data/` are never
+    followed. A survivor makes the run non-zero: a green result sitting
+    beside leftover saves is precisely the outcome this isolation
+    exists to prevent, so it must not be reported as a pass.
+    """
+    try:
+        shutil.rmtree(base)
+    except OSError as exc:
+        print(f"  [FAIL] could not remove this run's resource root "
+              f"{base}: {exc}")
+        return False
+    if os.path.exists(base):
+        print(f"  [FAIL] this run's resource root survived removal: {base}")
+        return False
+    return True
+
+
+def save_and_reload(port, page, slot):
+    """The persistence round trip, tied at every step to THIS run's own
+    requests (#1616).
+
+    `engine.saveWorld` and `engine.loadSave` only ACCEPT synchronously
+    (`src/Engine/Scripting/Lua/API/Save.hs`), so neither return value
+    means the work finished and no fixed sleep can stand in for one.
+    Each half therefore asserts acceptance, captures that request's own
+    id, and waits for a terminal status carrying it. A missing id is
+    itself a failure rather than something to wait past: without one the
+    wait falls back to accepting whichever terminal status it sees
+    first, which is the stale-status hole the request ids exist to
+    close.
+
+    Returns None on success, or a message naming the step that broke.
+    """
+    saved = send(port, f"return engine.saveWorld('{page}', '{slot}')")
+    if saved.strip() != "true":
+        return f"engine.saveWorld('{slot}') was not accepted (got {saved!r})"
+    save_id = capture_request_id(port, "return engine.getSaveStatus()")
+    if save_id is None:
+        return (f"engine.getSaveStatus() never reported a request id for "
+                f"saveWorld('{slot}')")
+    ok, save_status = wait_save_complete(port, save_id)
+    print(f"  save '{slot}' request {save_id} -> {save_status}")
+    if not ok:
+        return (f"save '{slot}' (request {save_id}) did not reach "
+                f"SaveCaptureComplete: {save_status}")
+    if not isinstance(save_status, dict) or save_status.get("id") != save_id:
+        return (f"save '{slot}' reported terminal status {save_status!r}, "
+                f"which does not carry this run's request id {save_id}")
+
+    loaded = send(port, f"return engine.loadSave('{slot}')")
+    if loaded.strip() != "true":
+        return f"engine.loadSave('{slot}') was not accepted (got {loaded!r})"
+    load_id = capture_request_id(port, "return engine.getLoadStatus()")
+    if load_id is None:
+        return (f"engine.getLoadStatus() never reported a request id for "
+                f"loadSave('{slot}')")
+    published, load_status = wait_load_published(port, 200, request_id=load_id)
+    print(f"  load '{slot}' request {load_id} -> {load_status}")
+    if not published:
+        return f"load transaction {load_id} did not publish: {load_status}"
+    if not isinstance(load_status, dict) or load_status.get("id") != load_id:
+        return (f"load '{slot}' reported terminal status {load_status!r}, "
+                f"which does not carry this run's request id {load_id}")
+    return None
 
 
 def bootstrap(port):
@@ -180,7 +287,19 @@ def main():
     port = args.port
     passed = True
 
-    proc = boot(port, f"{SPROOT}/farm_ai_probe_engine.log")
+    # This invocation owns its resource root and therefore its saves/
+    # (#1616): the round trip at the end writes a slot that no ordinary
+    # `cabal run` can reach, and the whole tree goes away below.
+    base = tempfile.mkdtemp(prefix="synarchy_farm_ai_")
+    root = make_isolated_root(base)
+    # Unique per invocation as well as per root, so the slot NAME alone
+    # identifies this run even in a log shared with another.
+    slot = f"farm_ai_v79_check_{uuid.uuid4().hex[:8]}"
+    print(f"isolated resource root: {root}", flush=True)
+    print(f"save slot: {slot}", flush=True)
+
+    proc = boot(port, f"{SPROOT}/farm_ai_probe_engine.log",
+                args=["--resource-root", root])
     try:
         bootstrap(port)
         send(port, f"world.init('probe', {args.seed}, {args.size}, "
@@ -544,13 +663,9 @@ def main():
 
         # --- 11. Save/load: the AI-planted row crop (WePlaceFlora, v79)
         #     survives save -> loadSave. ---
-        send(port, "engine.saveWorld('probe', 'farm_ai_v79_check'); "
-                   "return 'ok'")
-        time.sleep(3.0)
-        send(port, "engine.loadSave('farm_ai_v79_check'); return 'ok'")
-        published, load_status = wait_load_published(port, 200)
-        if not published:
-            print(f"  [FAIL] load transaction did not publish: {load_status}")
+        failure = save_and_reload(port, "probe", slot)
+        if failure:
+            print(f"  [FAIL] {failure}")
             return 1
         send(port, "world.show('probe'); return 'ok'")
         send(port, "engine.setPaused(false); return 'ok'")
@@ -563,9 +678,15 @@ def main():
               f"save/load: {eb2}")
 
         print("\n" + ("ALL FARM AI CHECKS PASSED" if passed else "SOME FAILED"))
-        return 0 if passed else 1
+        rc = 0 if passed else 1
     finally:
+        # Orderly shutdown FIRST: the root must still exist while the
+        # engine is closing its own files, and only then does this run's
+        # tree (with every save artifact it created) go away — on the
+        # failing path exactly as on the passing one.
         quit_engine(port, proc)
+        cleaned = remove_run_root(base)
+    return rc if cleaned else 1
 
 
 if __name__ == "__main__":
