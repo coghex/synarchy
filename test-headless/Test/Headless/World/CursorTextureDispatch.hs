@@ -47,7 +47,7 @@ import Engine.Core.State (EngineEnv(..))
 import World.Cursor.Types (CursorState(..))
 import World.Page.Types (WorldPageId(..))
 import World.State.Types
-    (WorldManager(..), WorldState(..), emptyWorldState)
+    (WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager)
 import World.Thread.Command.Cursor.Select
     ( handleWorldSetZoomCursorSelectTextureCommand
     , handleWorldSetZoomCursorHoverTextureCommand
@@ -126,7 +126,7 @@ scene ∷ IO (WorldSimCapability, WorldState)
 scene = do
     EngineInitResult env ← initializeEngineHeadless
     ws ← emptyWorldState
-    writeIORef (worldManagerRef env) WorldManager
+    writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds = [(presentPage, ws)], wmVisible = [] }
     pure (toWorldSimCapability env, ws)
 

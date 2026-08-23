@@ -19,6 +19,8 @@ import World.Thread.Command.Basic (handleWorldTickCommand
 import World.Thread.Command.Init (handleWorldInitCommand
                                  , handleWorldInitArenaCommand
                                  , handleWorldInitArenaDoneCommand)
+import World.Thread.Command.BoundSpawn
+    (handleWorldSpawnBoundBuildingCommand)
 import World.Thread.Command.Cursor (handleWorldSetZoomCursorHoverCommand
                                    , handleWorldSetZoomCursorSelectCommand
                                    , handleWorldSetZoomCursorDeselectCommand
@@ -145,8 +147,14 @@ handleWorldCommand env logger (WorldSetConstructAnchor pageId gx gy)
   = handleWorldSetConstructAnchorCommand env logger pageId gx gy
 handleWorldCommand env logger (WorldClearConstructAnchor pageId)
   = handleWorldClearConstructAnchorCommand env logger pageId
-handleWorldCommand env logger (WorldDesignateConstruct pageId gx1 gy1 gx2 gy2 tgt)
+handleWorldCommand env logger
+    (WorldSpawnBoundBuilding bid defName gx gy gz pageId bindGen)
+  = handleWorldSpawnBoundBuildingCommand env logger bid defName gx gy gz
+                                         pageId bindGen
+handleWorldCommand env logger
+    (WorldDesignateConstruct pageId gx1 gy1 gx2 gy2 tgt mBindGen)
   = handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt
+                                         mBindGen
 handleWorldCommand env logger (WorldCancelConstruct pageId gx gy)
   = handleWorldCancelConstructCommand env logger pageId gx gy
 handleWorldCommand env logger (WorldSetConstructStatus pageId gx gy st)

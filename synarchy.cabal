@@ -632,6 +632,7 @@ library
                      World.Thread.ChunkLoading
                      World.Thread.Command
                      World.Thread.Command.Basic
+                     World.Thread.Command.BoundSpawn
                      World.Thread.Command.Init
                      World.Thread.Command.Save
                      World.Thread.Command.Save.WriteWorld
@@ -1257,6 +1258,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Tutorial.Definitions
                    Test.Headless.Building.Knowledge
                    Test.Headless.Item.NestedContents
+                   Test.Headless.Building.PageBinding
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning
                    Test.Headless.Lua.SaveModules

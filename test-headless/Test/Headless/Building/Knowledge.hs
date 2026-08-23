@@ -57,7 +57,8 @@ import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
 import World.Save.Types (BuildingSnapshot(..), missingItemDefReferences)
 import World.Save.Snapshot.Adapter (snapshotToSaveData)
 import World.Save.Types (SaveData(..), WorldPageSave(..))
-import World.State.Types (WorldManager(..), WorldState(..), emptyWorldState)
+import World.State.Types
+    ( WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager )
 
 -- Fixtures -----------------------------------------------------------
 
@@ -223,7 +224,7 @@ newScene ∷ IO Scene
 newScene = do
     wsA ← emptyWorldState
     wsB ← emptyWorldState
-    worldsRef ← newIORef WorldManager
+    worldsRef ← newIORef emptyWorldManager
         { wmWorlds = [(pageA, wsA), (pageB, wsB)], wmVisible = [pageA] }
     buildingsRef ← newIORef emptyBuildingManager
         { bmDefs = HM.fromList [ ("cargo_hold_S", cargoDef), ("shed", shedDef) ]

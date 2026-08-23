@@ -70,7 +70,7 @@ import World.Save.Component.Page
 import World.Render.CursorQuads (renderWorldCursorQuads)
 import World.Save.Snapshot (PageSnapshot(..))
 import World.State.Types
-    (WorldManager(..), WorldState(..), emptyWorldState)
+    (WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager)
 import World.Thread.Command.Cursor
     ( handleWorldCancelChopCommand, handleWorldCancelConstructCommand
     , handleWorldCancelPlantCommand, handleWorldCancelTillCommand
@@ -368,7 +368,7 @@ engineSpec = beforeAll setup $ do
       logger ← readIORef (loggerRef env)
       handleWorldDesignateConstructCommand env logger fixturePage
           (fst anchorTile) (snd anchorTile)
-          (fst farTilePicked) (snd farTilePicked) wirePiece
+          (fst farTilePicked) (snd farTilePicked) wirePiece Nothing
       keysOf (wsConstructDesignationsRef ws) `shouldReturn` drawnKeys
 
     it "chop" $ \(env, _) → do
@@ -511,7 +511,7 @@ engineSpec = beforeAll setup $ do
       let alias@(agx, agy) = aliasOf anchorTile
           (cgx, cgy) = anchorTile
       handleWorldDesignateConstructCommand env logger fixturePage
-          agx agy agx agy wirePiece
+          agx agy agx agy wirePiece Nothing
       HM.keys <$> readIORef (wsConstructDesignationsRef ws)
           `shouldReturn` [anchorTile]
 
@@ -557,7 +557,7 @@ engineSpec = beforeAll setup $ do
       HM.size <$> readIORef (wsConstructDesignationsRef ws) `shouldReturn` 0
 
       handleWorldDesignateConstructCommand env logger fixturePage
-          cgx cgy cgx cgy wirePiece
+          cgx cgy cgx cgy wirePiece Nothing
       handleWorldCancelConstructCommand env logger fixturePage
           (fst alias) (snd alias)
       HM.size <$> readIORef (wsConstructDesignationsRef ws) `shouldReturn` 0
@@ -571,7 +571,7 @@ engineSpec = beforeAll setup $ do
       logger ← readIORef (loggerRef env)
       handleWorldDesignateConstructCommand env logger fixturePage
           (fst farTilePicked) (snd farTilePicked)
-          (fst farTilePicked) (snd farTilePicked) wirePiece
+          (fst farTilePicked) (snd farTilePicked) wirePiece Nothing
       HM.keys <$> readIORef (wsConstructDesignationsRef ws)
           `shouldReturn` [farTilePicked]
       -- Listing it at all needs the region test to count chunk aliases;
@@ -647,7 +647,7 @@ resetPage env veg flora = do
     writeIORef (wsGenParamsRef ws)
         (Just defaultWorldGenParams { wgpWorldSize = worldSize })
     writeIORef (wsTilesRef ws) (seamTiles veg flora)
-    writeIORef (worldManagerRef env) WorldManager
+    writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds = [(fixturePage, ws)], wmVisible = [fixturePage] }
     pure ws
 

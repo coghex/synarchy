@@ -44,7 +44,8 @@ import Unit.Types
     ( UnitDef(..), UnitId(..), UnitInstance(..), UnitManager(..)
     , defaultNaturalResistance, emptyUnitManager )
 import World.Page.Types (WorldPageId(..))
-import World.State.Types (WorldManager(..), WorldState(..), emptyWorldState)
+import World.State.Types
+    ( WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager )
 
 -- * Fixture identities
 
@@ -199,7 +200,7 @@ holder = UnitInstance
 resetScene ∷ EngineEnv → IO WorldState
 resetScene env = do
     ws ← emptyWorldState
-    writeIORef (worldManagerRef env) WorldManager
+    writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds = [(page, ws)], wmVisible = [page] }
     writeIORef (itemManagerRef env) testItems
     writeIORef (gameTimeRef env) revealTime

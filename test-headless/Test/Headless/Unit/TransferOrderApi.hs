@@ -45,7 +45,8 @@ import World.Page.Types (WorldPageId(..))
 import World.Save.Integrity
     ( IntegrityError(..), PageEntities(..), danglingOrderRefErrors
     , transferOrderRefs )
-import World.State.Types (WorldManager(..), WorldState(..), emptyWorldState)
+import World.State.Types
+    ( WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager )
 import Test.Headless.Unit.TransferApi
     ( evalDebug, mkBuilding, mkItem, mkUnit, minimalDef, newBareLuaBackend
     , storageDef )
@@ -109,7 +110,7 @@ resetOrderWorld ∷ EngineEnv → [ItemInstance] → [ItemInstance] → IO ()
 resetOrderWorld env acolyteInv holdStorage = do
     wsA ← emptyWorldState
     wsB ← emptyWorldState
-    writeIORef (worldManagerRef env) WorldManager
+    writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds = [(pageA, wsA), (pageB, wsB)], wmVisible = [pageA] }
     writeIORef (itemManagerRef env) emptyItemManager
     writeIORef (unitManagerRef env) emptyUnitManager

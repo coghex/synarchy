@@ -50,7 +50,7 @@ import World.Fluid.Types (emptyIceMap)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types
-    (WorldManager(..), WorldState(..), emptyWorldState)
+    (WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager)
 import World.Thread.Command.Cursor
     ( handleWorldCancelConstructCommand, handleWorldDesignateConstructCommand )
 import World.Tile.Types (WorldTileData(..))
@@ -230,7 +230,11 @@ designate ∷ EngineEnv → WorldState → (Int, Int) → (Int, Int)
           → ConstructTarget → IO ()
 designate env _ws (ax, ay) (bx, by) tgt = do
     logger ← readIORef (loggerRef env)
-    handleWorldDesignateConstructCommand env logger fixturePage ax ay bx by tgt
+    -- #1602: unbound — this fixture drives the handler directly, with no
+    -- click binding behind it, so it takes the no-binding path every AI
+    -- caller does.
+    handleWorldDesignateConstructCommand env logger fixturePage ax ay bx by
+                                         tgt Nothing
 
 -- | Atomically read and clear the F4 outcome ring, exactly as
 --   @debug.drainActionOutcomes@ does.
@@ -254,7 +258,7 @@ resetPage env = do
     writeIORef (wsGenParamsRef ws)
         (Just defaultWorldGenParams { wgpWorldSize = worldSize })
     writeIORef (wsTilesRef ws) flatTiles
-    writeIORef (worldManagerRef env) WorldManager
+    writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds = [(fixturePage, ws)], wmVisible = [fixturePage] }
     pure ws
 

@@ -10,6 +10,7 @@
 --   its whole environment across the boundary.
 module Building.Thread.Command
     ( processAllBuildingCommands
+    , applyBuildingSpawn
     ) where
 
 import UPrelude
@@ -21,6 +22,7 @@ import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.Log (LoggerState, logWarn, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import World.State.Types (WorldManager(..))
+import World.Page.Types (WorldPageId)
 import Building.Types
 import Building.Knowledge (SeedTrigger(..), seedTriggerFor)
 import Building.Knowledge.Live
@@ -61,6 +63,49 @@ handleBuildingCommand ∷ IORef LoggerState → WorldSimCapability
                       → BuildingCommand → IO ()
 handleBuildingCommand logRef sim reg bld
                       (BuildingSpawn bid defName gx gy gz pageId) = do
+    logger ← readIORef logRef
+    applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId
+
+handleBuildingCommand _ sim _ bld (BuildingDestroy bid) = do
+    atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
+        let cleared = if bmSelected bm ≡ Just bid
+                      then Nothing
+                      else bmSelected bm
+        in (bm { bmInstances = HM.delete bid (bmInstances bm)
+               , bmSelected  = cleared }, ())
+    -- #1087: demolishing a container drops the player's memory of it,
+    -- so nothing can later inherit that record — and so the container
+    -- reads as never-inspected again rather than as a permanently
+    -- stale ghost with no surface to clear it.
+    forgetContainerEverywhere (wsWorldManagerRef sim) bid
+    -- #1206: same reasoning for the power registry, which declares the
+    -- building manager the authority for a node's lifetime. Demolition
+    -- has to honour that HERE, in the live transaction, because a node
+    -- has no cancel surface of its own: unlike a demolished station's
+    -- craft bills (which linger deliberately, visible + cancellable —
+    -- the #758 tolerance), nothing the player can reach could ever
+    -- clear a node whose building is gone, and load staging restores
+    -- such a row verbatim, so it would persist forever.
+    retirePowerNodeEverywhere (wsWorldManagerRef sim) bid
+
+handleBuildingCommand _ sim _ bld BuildingClearAll = do
+    -- Queue-ordered wipe (runs after any pending BuildingSpawns), #58.
+    atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
+        (bm { bmInstances = HM.empty, bmSelected = Nothing }, ())
+    forgetAllContainers (wsWorldManagerRef sim)
+
+-- | Insert one spawned building into the manager. Shared by the drain
+--   above and by 'World.Thread.Command.BoundSpawn' (#1602): a PAGE-BOUND
+--   placement is applied by the WORLD thread instead, because that is
+--   the thread page selection belongs to, and its binding check would be
+--   meaningless if the insertion it guards happened somewhere else
+--   afterwards. One body, two callers — the two can never diverge on
+--   what a spawn actually does.
+applyBuildingSpawn ∷ LoggerState → WorldSimCapability
+                   → ContentRegistriesCapability → BuildingCapability
+                   → BuildingId → Text → Int → Int → Int → WorldPageId
+                   → IO ()
+applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId = do
     bm ← readIORef (bcBuildingManagerRef bld)
     -- Drop the spawn if its world is gone — a spawn queued before
     -- world.destroyAll would otherwise re-insert an orphan building into
@@ -69,8 +114,7 @@ handleBuildingCommand logRef sim reg bld
     let worldGone = pageId `notElem` map fst (wmWorlds wmgr)
     case HM.lookup defName (bmDefs bm) of
         _ | worldGone → pure ()
-        Nothing → do
-            logger ← readIORef logRef
+        Nothing →
             logWarn logger CatThread $
                 "BuildingSpawn: unknown def '" <> defName <> "'"
         Just def → do
@@ -112,31 +156,3 @@ handleBuildingCommand logRef sim reg bld
             -- progress crossing.
             when (seedTriggerFor def ≡ SeedWhenBuilt) $
                 markPendingSeed (containerObserver bld sim reg) bid
-
-handleBuildingCommand _ sim _ bld (BuildingDestroy bid) = do
-    atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
-        let cleared = if bmSelected bm ≡ Just bid
-                      then Nothing
-                      else bmSelected bm
-        in (bm { bmInstances = HM.delete bid (bmInstances bm)
-               , bmSelected  = cleared }, ())
-    -- #1087: demolishing a container drops the player's memory of it,
-    -- so nothing can later inherit that record — and so the container
-    -- reads as never-inspected again rather than as a permanently
-    -- stale ghost with no surface to clear it.
-    forgetContainerEverywhere (wsWorldManagerRef sim) bid
-    -- #1206: same reasoning for the power registry, which declares the
-    -- building manager the authority for a node's lifetime. Demolition
-    -- has to honour that HERE, in the live transaction, because a node
-    -- has no cancel surface of its own: unlike a demolished station's
-    -- craft bills (which linger deliberately, visible + cancellable —
-    -- the #758 tolerance), nothing the player can reach could ever
-    -- clear a node whose building is gone, and load staging restores
-    -- such a row verbatim, so it would persist forever.
-    retirePowerNodeEverywhere (wsWorldManagerRef sim) bid
-
-handleBuildingCommand _ sim _ bld BuildingClearAll = do
-    -- Queue-ordered wipe (runs after any pending BuildingSpawns), #58.
-    atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
-        (bm { bmInstances = HM.empty, bmSelected = Nothing }, ())
-    forgetAllContainers (wsWorldManagerRef sim)

@@ -202,7 +202,7 @@ def build_scenario(chk: Checks, port: int) -> tuple[int, int, int]:
         f"return 'ok'")
     chk.ok("ok" in inited, f"world.init accepted (got {inited!r})")
     # world.show (not just world.init) puts the page in wmVisible --
-    # without it, building.spawn/canPlaceAt's snapshotVisibleWorldTiles
+    # without it, building.spawn/canPlaceAt's visible-page terrain
     # read can reject a spawn (mirrors save_compat_audit.py's identical
     # note in generate_current_format_session).
     send(port, f"world.show('{PAGE}'); return 'ok'")

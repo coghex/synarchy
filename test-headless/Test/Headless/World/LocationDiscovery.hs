@@ -52,7 +52,8 @@ import Structure.Types (emptyChunkStructures)
 import World.Time.Types (WorldTime(..))
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
-import World.State.Types (WorldState(..), WorldManager(..), emptyWorldState)
+import World.State.Types
+    ( WorldState(..), WorldManager(..), emptyWorldState, emptyWorldManager )
 import World.Thread.Discovery (tickLocationDiscovery)
 import World.Thread.Time (tickWorldTime)
 import Language.Semantic.Types (ConceptId(..))
@@ -164,7 +165,9 @@ newPage ∷ EngineEnv → WorldPageId → IO WorldState
 newPage env pageId = do
     ws ← emptyWorldState
     writeIORef (wsGenParamsRef ws) $ Just pageParams
-    writeIORef (worldManagerRef env) $ WorldManager [(pageId, ws)] [pageId]
+    writeIORef (worldManagerRef env) $ emptyWorldManager
+        { wmWorlds = [(pageId, ws)]
+        , wmVisible = [pageId] }
     pure ws
 
 -- | A fresh page carrying loc1's overlay AND real terrain + a real
@@ -180,7 +183,9 @@ newSightPage env pageId chunk time = do
     writeIORef (wsGenParamsRef ws) $ Just pageParams
     writeIORef (wsTilesRef ws) (wtdWith chunk)
     writeIORef (wsTimeRef ws) time
-    writeIORef (worldManagerRef env) $ WorldManager [(pageId, ws)] [pageId]
+    writeIORef (worldManagerRef env) $ emptyWorldManager
+        { wmWorlds = [(pageId, ws)]
+        , wmVisible = [pageId] }
     pure ws
 
 -- | The gen params every page below starts from: loc1's overlay plus
@@ -308,8 +313,10 @@ spec = beforeAll initEnv $
             -- (simulated) but not shown — mirrors a second live world
             -- page kept around while the player looks at the first.
             writeIORef (worldManagerRef env) $
-                WorldManager [(pageActive, wsActive), (pageHidden, wsHidden)]
-                             [pageActive]
+                emptyWorldManager
+                    { wmWorlds = [ (pageActive, wsActive)
+                                 , (pageHidden, wsHidden) ]
+                    , wmVisible = [pageActive] }
             writeIORef (unitManagerRef env) $ emptyUnitManager
                 { umInstances = HM.fromList
                     [ (UnitId 301, testUnit pageActive FactionPlayer 8 8)
@@ -467,7 +474,9 @@ spec = beforeAll initEnv $
                 (wtdAt seamChunkKey (wallChunk 5 40 11))   -- x=27 → local 11
             writeIORef (wsTimeRef ws) (WorldTime 12 0)
             writeIORef (worldManagerRef env) $
-                WorldManager [(pageId, ws)] [pageId]
+                emptyWorldManager
+                    { wmWorlds = [(pageId, ws)]
+                    , wmVisible = [pageId] }
             writeIORef (unitManagerRef env) $ emptyUnitManager
                 { umInstances = HM.singleton (UnitId 601)
                     (facingUnit pageId 28 8 DirW 1.0) }
@@ -490,7 +499,9 @@ spec = beforeAll initEnv $
             writeIORef (wsTilesRef ws) (wtdAt seamChunkKey (flatChunk 5))
             writeIORef (wsTimeRef ws) (WorldTime 12 0)
             writeIORef (worldManagerRef env) $
-                WorldManager [(pageId, ws)] [pageId]
+                emptyWorldManager
+                    { wmWorlds = [(pageId, ws)]
+                    , wmVisible = [pageId] }
             writeIORef (unitManagerRef env) $ emptyUnitManager
                 { umInstances = HM.singleton (UnitId 602)
                     (facingUnit pageId 28 8 DirW 1.0) }

@@ -14,6 +14,7 @@ import Engine.Scripting.Lua.Util (isValidRef, broadcastToModules
 import Engine.Core.Log (logWarn, logDebug, LogCategory(..))
 import Engine.Core.Thread
 import Engine.Core.State (EngineEnv(..))
+import World.State.Types (requestSelectionChange)
 import Engine.Input.Types (keyToText, clickRouteText)
 import UI.Types (ElementHandle(..))
 import qualified Graphics.UI.GLFW as GLFW
@@ -23,7 +24,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified HsLua as Lua
 import Data.List (find)
-import Data.IORef (IORef, readIORef, writeIORef)
+import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent.STM (readTVarIO)
 import Control.Concurrent.MVar (tryPutMVar)
 import Engine.Save.Barrier
@@ -501,6 +502,13 @@ handleLoadStaged env ls requestId = do
                     logWarn logger CatWorld $
                         "Load publish discarded " <> tshow (length stale)
                         <> " stale Lua message(s) queued during staging"
+                -- #1602: a publish REPLACES the page set, so it is a
+                -- selection change and must read as pending from the
+                -- moment it is queued. 'publishStagedSession' resets the
+                -- count outright, so this is balanced however the
+                -- transaction ends.
+                atomicModifyIORef' (worldManagerRef env) $ \mgr →
+                    (requestSelectionChange True ([], []) mgr, ())
                 Q.writeQueue (worldQueue env) (WorldLoadPublish requestId)
 
 -- | Build a Lua array @{ id1, id2, ... }@ from a list of integer ids.

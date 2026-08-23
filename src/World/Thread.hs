@@ -5,7 +5,7 @@ module World.Thread
     ) where
 
 import UPrelude
-import Data.IORef (IORef, readIORef, writeIORef, newIORef)
+import Data.IORef (IORef, readIORef, writeIORef, newIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.List (partition)
@@ -30,6 +30,8 @@ import World.Thread.Time (tickWorldTime)
 import World.Thread.ChunkLoading (updateChunkLoading, drainInitQueues)
 import World.Thread.Command (handleWorldCommand)
 import World.Command.Types (WorldCommand(..))
+import World.State.Types (settleSelectionProjection)
+import World.Types (WorldManager(..))
 import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
 
 -- * Start World Thread
@@ -110,6 +112,7 @@ processAllCommands env logger = do
     case mCmd of
         Just cmd → do
             handleWorldCommand env logger cmd
+            settleSelection env
             processAllCommands env logger
         Nothing → return ()
 
@@ -146,8 +149,34 @@ processAuthorizedSave env logger = do
         logWarn logger CatWorld $
             "Load publish discarded " <> tshow discarded
             <> " stale WorldCommand(s) queued before the whole-session replacement"
-    forM_ authorized $ handleWorldCommand env logger
+    forM_ authorized $ \cmd → handleWorldCommand env logger cmd
+                               >> settleSelection env
     forM_ deferred $ Q.writeQueue (wsWorldQueue (toWorldSimCapability env))
+
+-- | Once the queue holds no outstanding selection request, the
+-- projection IS the applied state (#1602). Running it after every
+-- command keeps a request whose predicted effect never materialised —
+-- a @world.show@ the handler refused because the page does not exist —
+-- from leaving every later placement binding permanently stale.
+settleSelection ∷ EngineEnv → IO ()
+settleSelection env = do
+    -- Read first, write only when there is something to settle. This
+    -- runs after EVERY world command, and the world-manager ref is read
+    -- by several threads, so an unconditional atomicModifyIORef' here
+    -- would add a contended write to the hot command path for no reason
+    -- — the overwhelming majority of commands are not selection changes.
+    --
+    -- The read is not the decision: 'settleSelectionProjection'
+    -- re-checks inside the atomic update, so a request that lands
+    -- between the two is not swallowed.
+    mgr ← readIORef ref
+    when (needsSettle mgr) $
+        atomicModifyIORef' ref $ \m → (settleSelectionProjection m, ())
+  where
+    ref = wsWorldManagerRef (toWorldSimCapability env)
+    needsSettle m = wmSelectionPending m ≡ 0
+        ∧ (wmProjectedGen m ≢ wmSelectionGen m
+           ∨ wmProjectedVisible m ≢ wmVisible m)
 
 -- | Pure split of one captureLocked-window batch into (authorized to run
 -- now, preserved for after release) -- see 'processAuthorizedSave' for

@@ -26,7 +26,7 @@ import qualified Data.Text as T
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.Char (isDigit)
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Exception (IOException, evaluate, try)
 import Control.Concurrent (threadDelay)
 import qualified Engine.Core.Queue as Q
@@ -159,7 +159,8 @@ worldInitFn env = do
                     <> " (worldSize minimum/multiple "
                     <> tshow minimumWorldSize
                     <> ", plateCount min 1)."
-            Q.writeQueue (wsWorldQueue (toWorldSimCapability env))
+            -- As with initArena: a re-init replaces the page's state.
+            enqueueSelectionChange env
                 (WorldInit pageId seed size plates identity)
         Nothing → pure ()
 
@@ -529,7 +530,9 @@ worldInitArenaFn env = do
     let pageId = case pageIdArg of
             Just bs → WorldPageId (TE.decodeUtf8Lenient bs)
             Nothing → WorldPageId "test_arena"    -- default when called with no args
-    Lua.liftIO $ Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) (WorldInitArena pageId)
+    -- A re-init REPLACES an existing page's state, so it counts as a
+    -- selection change too (#1602).
+    Lua.liftIO $ enqueueSelectionChange env (WorldInitArena pageId)
     return 0
 
 -- | world.initArenaDone(pageId) — signal that all arena textures have been sent
@@ -539,7 +542,10 @@ worldInitArenaDoneFn env = do
     let pageId = case pageIdArg of
             Just bs → WorldPageId (TE.decodeUtf8Lenient bs)
             Nothing → WorldPageId "test_arena"
-    Lua.liftIO $ Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) (WorldInitArenaDone pageId)
+    -- #1602: its handler PREPENDS the page to wmVisible, so this is a
+    -- selection change like any other and must be visible to the
+    -- synchronous binding check while it sits unapplied.
+    Lua.liftIO $ enqueueSelectionChange env (WorldInitArenaDone pageId)
     return 0
 
 -- | world.openArena() — convenience function that broadcasts to Lua
@@ -547,6 +553,97 @@ worldOpenArenaFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldOpenArenaFn env = do
     Lua.liftIO $ Q.writeQueue (luaQueue env) (LuaOpenArena)
     return 0
+
+-- | Enqueue a world command that will CHANGE PAGE SELECTION, marking the
+--   request pending in the same step (#1602). Every such request must go
+--   through here: a placement binding cannot be trusted while a
+--   selection change is in flight, and the count is the only thing that
+--   makes an unapplied command visible to the synchronous check
+--   @building.canPlaceAt@ / @construction.designate@ run on this thread.
+enqueueSelectionChange ∷ EngineEnv → WorldCommand → IO ()
+enqueueSelectionChange env cmd = do
+    atomicModifyIORef' (wsWorldManagerRef (toWorldSimCapability env)) $ \mgr →
+        let (effective, projected) = selectionRequestEffect cmd mgr
+        in (requestSelectionChange effective projected mgr, ())
+    Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) cmd
+
+-- | Will this request actually MOVE the selection, and what does the
+--   projected visible list become (#1602)?
+--
+--   Only an EFFECTIVE request may invalidate a live placement binding:
+--   showing a page that is already visible, or hiding one that is
+--   already hidden, is ordinary traffic that changes nothing a placement
+--   depends on, and refusing clicks for it would regress the
+--   no-page-switch path.
+--
+--   Judged against the PROJECTED list, never the applied one. The two
+--   differ exactly when it matters: @world.show B@ followed by
+--   @world.hide B@ leaves the applied list untouched at the moment the
+--   hide is requested, so reading it would call that hide a no-op — and
+--   once the show alone had been applied the projection would look
+--   settled again while a real change was still queued, which is the
+--   window a placement would be accepted in and then dropped at the
+--   commit.
+--
+--   The test is whether the visible HEAD moves, not whether the visible
+--   SET does. 'wmVisible' is a list and several pages can be visible at
+--   once, but a placement binding only ever names its head — that is
+--   what 'resolveActiveWorld' answers with and what @world.pickTile@
+--   hit-tests, and @building.canPlaceAt@ refuses outright when nothing
+--   is visible.
+--
+--   Each case below mirrors ITS HANDLER's own precondition, against the
+--   PROJECTED state rather than the applied one, so a request that the
+--   handler will turn into a no-op is predicted as one:
+--
+--     * a @world.show@ of a page that is already the head, or that is
+--       not registered at all (the handler refuses those) — but a
+--       queued @world.init@ ahead of it makes the same show real, which
+--       is why registration is projected too;
+--     * a @world.hide@ or @world.destroy@ of a page that is hidden,
+--       absent, or visible-but-not-head;
+--     * a @world.init@ / @world.initArena@ replacing anything but the
+--       head;
+--     * a @world.destroyAll@ with nothing visible to lose.
+--
+--   Over-predicting only ever costs a click, and never a wrong commit —
+--   but it costs one on the no-page-switch path, which is the whole
+--   point of predicting rather than blanket-invalidating.
+--
+--   A load publish stays effective unconditionally: it replaces the
+--   whole session, and it is never ordinary traffic during placement.
+selectionRequestEffect
+    ∷ WorldCommand → WorldManager → (Bool, ([WorldPageId], [WorldPageId]))
+selectionRequestEffect cmd mgr = case cmd of
+    -- handleWorldShowCommand refuses an unregistered page outright.
+    WorldShow pid
+        | pid `notElem` worlds → unchanged
+        | otherwise            → visibility pid True
+    -- handleWorldInitArenaDoneCommand has no such registration check.
+    WorldInitArenaDone pid     → visibility pid True
+    WorldHide pid              → visibility pid False
+    WorldDestroy pid           → register (filter (≢ pid) worlds)
+                                          (visibility pid False)
+    WorldDestroyAll            → (isJust (selectionHead visible), ([], []))
+    -- These REPLACE a page's state without touching the visible list,
+    -- so they matter exactly when the page being replaced is the head.
+    -- They also REGISTER it, which a later queued show depends on.
+    WorldInit pid _ _ _ _      → registering pid
+    WorldInitArena pid         → registering pid
+    WorldLoadPublish{}         → (True, ([], []))
+    _                          → unchanged
+  where
+    (worlds, visible) = projectedVisible mgr
+    unchanged = (False, (worlds, visible))
+    registering pid =
+        ( selectionHead visible ≡ Just pid
+        , (if pid `elem` worlds then worlds else pid : worlds, visible) )
+    visibility pid shown =
+        let after = projectSelectionVisible pid shown visible
+        in ( selectionHead after ≢ selectionHead visible
+           , (worlds, after) )
+    register worlds' (effective, (_, visible')) =
+        (effective, (worlds', visible'))
 
 -- | world.show(pageId)
 worldShowFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -556,7 +653,7 @@ worldShowFn env = do
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) (WorldShow pageId)
+            enqueueSelectionChange env (WorldShow pageId)
         Nothing → pure ()
 
     return 0
@@ -569,7 +666,7 @@ worldHideFn env = do
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) (WorldHide pageId)
+            enqueueSelectionChange env (WorldHide pageId)
         Nothing → pure ()
 
     return 0
@@ -655,7 +752,7 @@ worldDestroyFn env = do
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) (WorldDestroy pageId)
+            enqueueSelectionChange env (WorldDestroy pageId)
         Nothing → pure ()
 
     return 0
@@ -666,5 +763,5 @@ worldDestroyFn env = do
 --   unit/building managers. (#58)
 worldDestroyAllFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldDestroyAllFn env = do
-    Lua.liftIO $ Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) WorldDestroyAll
+    Lua.liftIO $ enqueueSelectionChange env WorldDestroyAll
     return 0

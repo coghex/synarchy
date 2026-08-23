@@ -48,7 +48,7 @@ import UI.Types (emptyUIPageManager)
 import Unit.Faction (Faction(..))
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..), emptyUnitManager)
 import World.Page.Types (WorldPageId(..))
-import World.State.Types (WorldManager(..), emptyWorldState)
+import World.State.Types (WorldManager(..), emptyWorldState, emptyWorldManager)
 
 -- * Fixture ids
 
@@ -113,7 +113,7 @@ onPage u = u { uiPage = fixturePage }
 resetWorld ∷ EngineEnv → IO ()
 resetWorld env = do
     ws ← emptyWorldState
-    writeIORef (worldManagerRef env) WorldManager
+    writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds = [(fixturePage, ws)], wmVisible = [fixturePage] }
     writeIORef (itemManagerRef env) emptyItemManager
     writeIORef (unitManagerRef env) emptyUnitManager

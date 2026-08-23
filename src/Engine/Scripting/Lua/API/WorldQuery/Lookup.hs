@@ -10,7 +10,6 @@
 --   'WorldSimCapability'\'s world-manager handle, never an 'EngineEnv'.
 module Engine.Scripting.Lua.API.WorldQuery.Lookup
     ( getWorldTileData
-    , mVisibleWorldState
     , worldStateByPage
     , getWorldGenParams
     ) where
@@ -29,15 +28,6 @@ getWorldTileData wsc = do
     case mWs of
         Just ws → Just <$> readIORef (wsTilesRef ws)
         Nothing → pure Nothing
-
--- | Helper: the WorldState of the currently VISIBLE world (head of
---   wmVisible), looked up in wmWorlds. This is the world rendering and
---   building operate on; a hidden page can sit at the wmWorlds head, so
---   the raw head is not a safe proxy for "what the player sees".
-mVisibleWorldState ∷ WorldManager → Maybe WorldState
-mVisibleWorldState manager = case wmVisible manager of
-    (pageId:_) → lookup pageId (wmWorlds manager)
-    []         → Nothing
 
 -- | The 'WorldState' of a named page (any page in wmWorlds), or Nothing.
 worldStateByPage ∷ WorldSimCapability → Text → IO (Maybe WorldState)
