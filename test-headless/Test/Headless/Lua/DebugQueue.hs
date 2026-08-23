@@ -36,6 +36,10 @@ import Engine.Scripting.Lua.DebugServer (DebugCommand(..))
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Dispatch (processLuaMsg)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaMsg(..), LuaScript(..))
+-- Issue #1589: the reconciliation context 'LuaSaveLoaded' now carries.
+-- These cases drive the DISPATCHER, not any reconciling module, so the
+-- honest value is a real empty session's context.
+import World.Save.Payload (emptyLoadReconcileContext)
 
 -- | A bare Lua backend (full API registered, no script loaded — the
 --   'LuaSaveLoaded' handler's 'broadcastToModules' call is a no-op
@@ -135,7 +139,8 @@ staleDebugCommandSpec = describe "LuaSaveLoaded stale debug-command cancellation
         atomically $ writeTQueue (lbsDebugQueue ls)
             (DebugCommand "world.setDate('some_page', 9999, 1, 1)" respVar)
 
-        processLuaMsg env ls stateRef (LuaSaveLoaded 123456 [] [])
+        processLuaMsg env ls stateRef
+            (LuaSaveLoaded 123456 [] [] emptyLoadReconcileContext)
 
         resp ← tryTakeMVar respVar
         case resp of
@@ -159,7 +164,8 @@ staleDebugCommandSpec = describe "LuaSaveLoaded stale debug-command cancellation
         atomically $ writeTQueue (lbsDebugQueue ls)
             (DebugCommand "return 2" respVar2)
 
-        processLuaMsg env ls stateRef (LuaSaveLoaded 654321 [] [])
+        processLuaMsg env ls stateRef
+            (LuaSaveLoaded 654321 [] [] emptyLoadReconcileContext)
 
         r1 ← tryTakeMVar respVar1
         r2 ← tryTakeMVar respVar2
@@ -174,7 +180,8 @@ staleDebugCommandSpec = describe "LuaSaveLoaded stale debug-command cancellation
         atomically $ writeTQueue (lbsDebugQueue ls)
             (DebugCommand "return 1" respVar)
 
-        processLuaMsg env ls stateRef (LuaSaveLoaded 42 [] [])
+        processLuaMsg env ls stateRef
+            (LuaSaveLoaded 42 [] [] emptyLoadReconcileContext)
 
         remaining ← atomically $ tryReadTQueue (lbsDebugQueue ls)
         isNothing remaining `shouldBe` True
@@ -207,7 +214,8 @@ reconciliationFailureSpec = describe "LuaSaveLoaded reconciliation failure dispo
         stateRef ← newIORef ThreadRunning
         requestId ← beginLoadOrFail env
 
-        processLuaMsg env ls stateRef (LuaSaveLoaded requestId [] [])
+        processLuaMsg env ls stateRef
+            (LuaSaveLoaded requestId [] [] emptyLoadReconcileContext)
 
         markSet ls "gamma" `shouldReturn` True
         status ← readLoadStatus (loadStatusRef env)
@@ -223,7 +231,8 @@ reconciliationFailureSpec = describe "LuaSaveLoaded reconciliation failure dispo
         stateRef ← newIORef ThreadRunning
         requestId ← beginLoadOrFail env
 
-        processLuaMsg env ls stateRef (LuaSaveLoaded requestId [] [])
+        processLuaMsg env ls stateRef
+            (LuaSaveLoaded requestId [] [] emptyLoadReconcileContext)
 
         -- Isolation is intact: both failing callbacks got far enough to
         -- mutate their own state before raising (which is exactly the

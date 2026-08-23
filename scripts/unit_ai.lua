@@ -101,10 +101,17 @@ local mentalAi      = require("scripts.unit_ai_mental")
 -- player-wide cartographic discovery state. Own submodule because
 -- unit_ai_core.lua is at its line budget.
 local locations     = require("scripts.unit_ai_locations")
--- Persistent save-component registration (issue #761) + the raw-id
--- reference field lists scrubStaleRefs below needs -- split out to
--- stay under the #538 module line budget.
+-- Persistent save-component registration (issue #761), over
+-- unit_ai_ref_schema.lua's REF_SCHEMA -- the one declaration the wire
+-- codec, the reference report, the tag validator and the post-load
+-- reconcile all walk. Split out to stay under the #538 module line
+-- budget.
 local unitAiSave    = require("scripts.unit_ai_save")
+-- Post-load reconciliation of aiState (#1589): orphan prune + the
+-- schema-driven stale-reference scrub, and the module-owned release
+-- paths that scrub drops a job through. Own submodule for the same
+-- line-budget reason every other domain has one.
+local reconcile     = require("scripts.unit_ai_reconcile")
 
 -----------------------------------------------------------
 -- Action registry per unit type. Per-species ambient action lists,
@@ -380,37 +387,6 @@ function unitAi.init(scriptId)
     locations.register(unitAi, aiState)
 end
 
--- Clear any ref that doesn't point at a surviving loaded-page entity out
--- of one surviving state entry. Setting a field to nil is exactly the
--- self-heal the AI already runs when a target legitimately vanishes, so
--- the next tick re-decides cleanly. Nested claim tables are dropped
--- wholesale when their target didn't survive (the execute paths treat a
--- nil claim as "release"). Returns #fields cleared.
-local function scrubStaleRefs(s, liveUnitSet, liveBuildingSet)
-    local cleared = 0
-    for _, f in ipairs(unitAiSave.AI_UNIT_REF_FIELDS) do
-        local v = s[f]
-        if v ~= nil and not liveUnitSet[v] then s[f] = nil; cleared = cleared + 1 end
-    end
-    for _, f in ipairs(unitAiSave.AI_BUILDING_REF_FIELDS) do
-        local v = s[f]
-        if v ~= nil and not liveBuildingSet[v] then s[f] = nil; cleared = cleared + 1 end
-    end
-    if s.treatClaim and not liveUnitSet[s.treatClaim.patient] then
-        s.treatClaim = nil; cleared = cleared + 1
-    end
-    if s.treatPending and not liveUnitSet[s.treatPending.uid] then
-        s.treatPending = nil; cleared = cleared + 1
-    end
-    if s.deliveryClaim and not liveBuildingSet[s.deliveryClaim.bid] then
-        s.deliveryClaim = nil; cleared = cleared + 1
-    end
-    if s.deliveryPendingTarget and not liveBuildingSet[s.deliveryPendingTarget.bid] then
-        s.deliveryPendingTarget = nil; cleared = cleared + 1
-    end
-    return cleared
-end
-
 -- Broadcast from the engine once a save has finished loading (#195).
 -- Since issue #900 the restore itself is per-entity: aiState already
 -- holds exactly the rows the payload carried for units present in the
@@ -428,40 +404,27 @@ end
 --     isn't a survivor is dropped rather than left to be inherited by a
 --     later id reuse;
 --   * the NESTED-REF SCRUB on every surviving row, whose targets are
---     other entities that may not have survived.
-function unitAi.onSaveLoaded(survUnitIds, survBuildingIds)
-    local survUnitSet, survBuildingSet = {}, {}
-    for _, uid in ipairs(survUnitIds or {})     do survUnitSet[uid] = true end
-    for _, bid in ipairs(survBuildingIds or {}) do survBuildingSet[bid] = true end
-
-    local blob = aiState   -- current contents = the just-restored rows
-
-    local rebuilt = {}
-    for uid in pairs(survUnitSet) do
-        if blob[uid] ~= nil then rebuilt[uid] = blob[uid] end
-    end
-
-    -- Swap into the singleton in place (preserve table identity).
-    local kept = 0
-    for k in pairs(aiState) do aiState[k] = nil end
-    for k, v in pairs(rebuilt) do aiState[k] = v; kept = kept + 1 end
-
-    local scrubbed = 0
-    local forgotten = 0
-    for uid, s in pairs(aiState) do
-        if survUnitSet[uid] then
-            scrubbed = scrubbed + scrubStaleRefs(s, survUnitSet, survBuildingSet)
-            -- #915: a location memory is scrubbed against the RESTORED
-            -- session's own instance tables, not against the unit/
-            -- building survivor sets above -- its target is a
-            -- (page, instance id) pair owned by the world-pages
-            -- component, which those sets say nothing about.
-            forgotten = forgotten + locations.scrubStaleKnownLocations(uid, s)
-        end
-    end
-    engine.logInfo("Unit AI: reconciled AI state after load ("
-        .. kept .. " kept, " .. scrubbed .. " stale ref(s) scrubbed, "
-        .. forgotten .. " stale location memory/memories dropped)")
+--     other entities that may not have survived. Since #1589 that
+--     covers EVERY family unit_ai_ref_schema.lua's REF_SCHEMA declares
+--     -- craftJob, repairJob, pickupOrder, a ground forageTarget and
+--     the forageLoot/harvestLoot collections included, none of which
+--     the original #195 scrub reached -- because the scrub walks that
+--     one schema rather than a hand-maintained list beside it. That is
+--     what makes the tolerated-dangling-reference promise both save
+--     validators rely on actually true. knownLocations keeps the
+--     specialized page-qualified scrub unit_ai_locations.lua owns.
+--
+-- Both live in scripts/unit_ai_reconcile.lua, along with the release
+-- paths a dropped job goes out through (this file is at its line
+-- budget).
+--
+-- `reconcileCtx` (#1589) is the restored session's item-instance /
+-- unit-page / per-page bill + ground-item context, APPENDED by the
+-- engine broadcast rather than inserted -- every other shipped
+-- onSaveLoaded callback reads the two survivor arrays positionally and
+-- simply never declares this one.
+function unitAi.onSaveLoaded(survUnitIds, survBuildingIds, reconcileCtx)
+    reconcile.reconcile(aiState, survUnitIds, survBuildingIds, reconcileCtx)
 end
 
 function unitAi.update(dt)

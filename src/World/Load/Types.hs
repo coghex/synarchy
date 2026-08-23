@@ -30,6 +30,7 @@ import Building.Types (BuildingManager)
 import Unit.Types (UnitManager, UnitId)
 import Unit.Sim.Types (UnitSimState)
 import World.Material (MaterialRegistry)
+import World.Save.Payload (LoadReconcileContext)
 import World.Types
     ( WorldPageId, WorldState, ChunkCoord, FluidCell )
 import qualified Data.Vector as V
@@ -70,6 +71,15 @@ data StagedSession = StagedSession
     , ssCamera        ∷ !Camera2D
     , ssZoomAtlas     ∷ !(Maybe (Int, Int, ByteString))
     , ssPreview       ∷ !(Maybe (Int, Int, ByteString))
+    , ssReconcile     ∷ !LoadReconcileContext
+      -- ^ The restored session's item-instance / unit-page /
+      --   per-page bill + ground-item context (issue #1589), computed
+      --   in "World.Load.Stage" from the SAME decoded save the
+      --   reference-edge cross-validator reads and carried through to
+      --   publish, which hands it to Lua's @onSaveLoaded@ reconcile
+      --   broadcast. Data, not a live query: the Lua side must never
+      --   have to ask the ACTIVE page about a per-page id belonging to
+      --   some other page.
     , ssMaterialRegistry ∷ !MaterialRegistry
       -- ^ The off-session registry staged against (see
       --   "World.Load.Stage"'s haddock) — carried through so publish is

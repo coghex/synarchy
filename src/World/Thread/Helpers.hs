@@ -14,6 +14,7 @@ import Engine.Core.Capability.InputView
     (InputViewCapability(..), toInputViewCapability)
 import qualified Engine.Core.Queue as Q
 import Engine.Scripting.Lua.Types (LuaMsg(..))
+import World.Save.Payload (LoadReconcileContext)
 
 -- | Send a progress message to Lua
 sendGenLog ∷ EngineEnv → Text → IO ()
@@ -34,10 +35,19 @@ sendGenLog env msg = Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaW
 --   + every other still-live (off-page) entity's pre-load state", so a
 --   load replaces only loaded-page state and other live pages are
 --   untouched. Emit only after units + buildings have been written back.
-sendSaveLoaded ∷ EngineEnv → Int → [Int] → [Int] → IO ()
-sendSaveLoaded env requestId survivingUnitIds survivingBuildingIds =
+--
+--   The trailing 'LoadReconcileContext' (issue #1589) carries the three
+--   identity scopes those two survivor lists cannot answer — session
+--   item instances, unit-to-page ownership, and the per-page craft-bill
+--   and ground-item sets — so a Lua component reconciling a PER-PAGE
+--   reference resolves it against the owning unit's page instead of
+--   asking whichever page happens to be active.
+sendSaveLoaded ∷ EngineEnv → Int → [Int] → [Int] → LoadReconcileContext
+               → IO ()
+sendSaveLoaded env requestId survivingUnitIds survivingBuildingIds reconcile =
    Q.writeQueue (ivLuaQueue (toInputViewCapability env))
-       (LuaSaveLoaded requestId survivingUnitIds survivingBuildingIds)
+       (LuaSaveLoaded requestId survivingUnitIds survivingBuildingIds
+                      reconcile)
 
 -- | Info message to lua's HUD, tagged with its SOURCE kind so the
 --   entity-info watchers can tell a zoomed-in tile selection ("tile")
