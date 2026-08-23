@@ -4,7 +4,7 @@
 -- onSaveLoaded is now a thin forwarder into M.reconcile below.
 --
 -- What this module exists to guarantee: EVERY reference family
--- scripts/unit_ai_save_refs.lua declares is resolved or cleared on a
+-- scripts/unit_ai_ref_schema.lua declares is resolved or cleared on a
 -- surviving row at the reconciliation boundary. Both the Haskell-side
 -- cross-validator (World.Save.Integrity.luaReferenceErrors) and this
 -- component's own validator deliberately TOLERATE a dangling
@@ -29,7 +29,10 @@
 
 local M = {}
 
-local refs      = require("scripts.unit_ai_save_refs")
+-- The reference schema and its one walk (issue #1589). Deliberately the
+-- SCHEMA module, not unit_ai_save_refs.lua: the reconcile shares the
+-- declaration, not that module's wire codec.
+local schema    = require("scripts.unit_ai_ref_schema")
 -- Safe at module scope: unit_ai_locations.lua requires nothing at
 -- module scope itself (the same reason unit_ai_save_refs.lua requires
 -- it directly).
@@ -90,21 +93,36 @@ local function resolves(ctx, kind, id, owner)
 end
 
 -- Clear every reference in one surviving row that no longer names a
--- real entity, and return how many DANGLING DECLARED EDGES were
+-- real entity, and return how many UNRESOLVED DECLARED EDGES were
 -- removed. That count is deliberately per-edge, not per-field: two
 -- dangling subfields of one job count twice (each was its own declared
 -- edge), a duplicate stale gid in a loot list counts once per entry,
 -- and a still-valid sibling removed only because its enclosing job was
--- dropped counts zero -- it was not itself dangling.
+-- dropped counts zero -- it was not itself unresolved. A present
+-- holder missing its own id subfield counts once, the same as the
+-- dangling case: it is one declared edge this reconcile removed.
 --
 -- Mutation is deferred until the whole walk has finished so a holder
 -- can be judged on ALL of its edges before being dropped once.
 function M.scrubStaleRefs(uid, s, ctx, hooks)
     local cleared = 0
     local dropHolders, staleIndices = {}, {}
-    refs.forEachRefEdge(s, function(row, value, path, index)
-        if value == nil then return end
-        if resolves(ctx, row.kind, value, uid) then return end
+    schema.forEach(s, function(row, value, path, index)
+        if value == nil then
+            -- A PRESENT nested holder whose id-bearing subfield is
+            -- absent names nothing at all: it cannot be resolved, and
+            -- the next thought tick would run its lock-state action
+            -- against a nil target. That is unresolved, not "no edge
+            -- here" -- the pre-#1589 scrub dropped exactly these
+            -- (`liveUnitSet[nil]` is falsy), and `absentOk` marks the
+            -- one pair where absence is a legitimate job phase.
+            -- A "field"/"list" holder has no such distinction: an
+            -- absent field is simply an absent field, and ipairs never
+            -- yields a nil element.
+            if row.holder ~= "table" or row.absentOk then return end
+        elseif resolves(ctx, row.kind, value, uid) then
+            return
+        end
         cleared = cleared + 1
         if row.holder == "field" then
             s[row.field] = nil
@@ -150,7 +168,7 @@ function M.scrubStaleRefs(uid, s, ctx, hooks)
 end
 
 -- The module-owned release paths a whole-holder drop must go through,
--- keyed by the `drop` name unit_ai_save_refs.lua's REF_SCHEMA declares.
+-- keyed by the `drop` name unit_ai_ref_schema.lua's REF_SCHEMA declares.
 -- Lives here rather than in unit_ai.lua so the reconcile that depends on
 -- them can be driven -- and gated -- without booting the whole AI
 -- orchestration module.
@@ -217,7 +235,7 @@ function M.reconcile(aiState, survUnitIds, survBuildingIds, raw, hooks)
 
     local problem = validateContext(raw)
     if problem == nil then
-        for _, row in ipairs(refs.REF_SCHEMA) do
+        for _, row in ipairs(schema.REF_SCHEMA) do
             if row.drop ~= nil and type(hooks[row.drop]) ~= "function" then
                 problem = "no drop hook registered for '" .. row.drop .. "'"
                 break

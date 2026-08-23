@@ -902,25 +902,58 @@ def _delegated_reference_module_paths(cleaned_text: str) -> set[str]:
     return paths
 
 
+def _required_module_paths(cleaned_text: str) -> set[str]:
+    """relpaths of every module `cleaned_text` `require()`s into a local.
+
+    Only ever applied to a DELEGATE helper module (see
+    `find_lua_reference_kinds`), never to registration sites at large.
+    """
+    return {
+        m.group(2).replace(".", "/") + ".lua"
+        for m in _LUA_REQUIRE_LOCAL_RE.finditer(cleaned_text)
+    }
+
+
 def find_lua_reference_kinds(
         scripts_text_by_file: dict[str, str]) -> list[tuple[str, str]]:
     """(kind, relpath) for every distinct reference-kind literal in a
     file that registers a `references()` hook, OR in a helper module a
     registration site `require()`s and delegates its `references = `
-    spec field to (see LUA_REFERENCE_KIND_RES for the two kind-literal
-    call shapes recognised, and `_delegated_reference_module_paths` for
-    the delegation-following that closes the round-5 review gap)."""
+    spec field to, OR in a module THAT helper itself `require()`s (see
+    LUA_REFERENCE_KIND_RES for the two kind-literal call shapes
+    recognised, and `_delegated_reference_module_paths` for the
+    delegation-following that closes the round-5 review gap).
+
+    The last hop closes the same class of gap one level further out
+    (issue #1589): a delegate helper can itself be split, moving the
+    kind literals into a module it requires -- as
+    scripts/unit_ai_save_refs.lua did when its reference SCHEMA moved to
+    scripts/unit_ai_ref_schema.lua. Without following it, four of the
+    nine documented kinds silently stopped being scanned and the audit
+    kept passing. It is deliberately taken only from a DELEGATE module,
+    not from every registration site: a registration site requires the
+    whole world (claim registries, the codec, save_modules), while a
+    delegate helper is by construction the reference layer itself. Even
+    so the direction stays the audit's usual fail-safe one -- an extra
+    scanned file can only demand one more documented vocabulary entry,
+    never hide a kind."""
     cleaned_by_file = {
         relpath: _strip_lua_comments(text)
         for relpath, text in scripts_text_by_file.items()
     }
     scannable: set[str] = set()
+    delegates: set[str] = set()
     for relpath, cleaned in cleaned_by_file.items():
         if _LUA_REFERENCES_SPEC_FIELD_RE.search(cleaned):
             scannable.add(relpath)
         for delegated in _delegated_reference_module_paths(cleaned):
             if delegated in scripts_text_by_file:
                 scannable.add(delegated)
+                delegates.add(delegated)
+    for delegate in sorted(delegates):
+        for required in _required_module_paths(cleaned_by_file[delegate]):
+            if required in scripts_text_by_file:
+                scannable.add(required)
 
     out: list[tuple[str, str]] = []
     for relpath in sorted(scannable):

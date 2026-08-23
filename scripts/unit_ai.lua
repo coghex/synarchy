@@ -102,7 +102,7 @@ local mentalAi      = require("scripts.unit_ai_mental")
 -- unit_ai_core.lua is at its line budget.
 local locations     = require("scripts.unit_ai_locations")
 -- Persistent save-component registration (issue #761), over
--- unit_ai_save_refs.lua's REF_SCHEMA -- the one declaration the wire
+-- unit_ai_ref_schema.lua's REF_SCHEMA -- the one declaration the wire
 -- codec, the reference report, the tag validator and the post-load
 -- reconcile all walk. Split out to stay under the #538 module line
 -- budget.
@@ -405,7 +405,7 @@ end
 --     later id reuse;
 --   * the NESTED-REF SCRUB on every surviving row, whose targets are
 --     other entities that may not have survived. Since #1589 that
---     covers EVERY family unit_ai_save_refs.lua's REF_SCHEMA declares
+--     covers EVERY family unit_ai_ref_schema.lua's REF_SCHEMA declares
 --     -- craftJob, repairJob, pickupOrder, a ground forageTarget and
 --     the forageLoot/harvestLoot collections included, none of which
 --     the original #195 scrub reached -- because the scrub walks that

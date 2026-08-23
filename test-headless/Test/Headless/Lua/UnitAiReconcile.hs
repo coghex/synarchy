@@ -1,5 +1,5 @@
 -- | The "unit AI reconciliation boundary" gate (#1589): every typed
---   reference family @scripts/unit_ai_save_refs.lua@'s @REF_SCHEMA@
+--   reference family @scripts/unit_ai_ref_schema.lua@'s @REF_SCHEMA@
 --   declares is resolved or cleared on a surviving @aiState@ row when a
 --   load publishes, and the PER-PAGE kinds are resolved against the
 --   OWNING unit's page rather than whichever page happens to be active.
@@ -116,7 +116,7 @@ prelude = lns
     , "  comfort = function() return 1.0 end, ordered = function() return 1.15 end,"
     , "  sprint = function() return 2.0 end, meander = function() return 0.5 end }"
     , "R = require('scripts.unit_ai_reconcile')"
-    , "REFS = require('scripts.unit_ai_save_refs')"
+    , "SCHEMA = require('scripts.unit_ai_ref_schema')"
     , "REPAIR = require('scripts.unit_ai_repair')"
     , "CTX = { item_instance = { [900] = true },"
     , "        unitPage = { [1] = 'A', [2] = 'B' },"
@@ -177,11 +177,13 @@ spec = describe "unit AI reconciliation boundary (#1589)" $ do
        \that lives there and for nobody else, and a ground item present \
        \only on page A is absent for a page B unit" $ runsOk $ lns
         [ prelude
-        , "local ai = { [1] = { craftJob = { billId = 5, recipeId = 'x' },"
+        , "local ai = { [1] = { craftJob = { billId = 5, bid = 42,"
+        , "                                   recipeId = 'x' },"
         , "                     pickupOrder = { gid = 7 } },"
-        , "             [2] = { craftJob = { billId = 5, recipeId = 'x' },"
+        , "             [2] = { craftJob = { billId = 5, bid = 42,"
+        , "                                   recipeId = 'x' },"
         , "                     pickupOrder = { gid = 7 } } }"
-        , "R.reconcile(ai, { 1, 2 }, {}, CTX)"
+        , "R.reconcile(ai, { 1, 2 }, { 42 }, CTX)"
         , "assert(ai[1].craftJob ~= nil,"
         , "  'the page A unit keeps its own page A bill 5')"
         , "assert(ai[1].pickupOrder ~= nil,"
@@ -263,9 +265,10 @@ spec = describe "unit AI reconciliation boundary (#1589)" $ do
        \through" $ runsOk $ lns
         [ prelude
         , "local ai = { [1] = { pickupOrder = { gid = 7 },"
-        , "                     craftJob = { billId = 5, recipeId = 'x' },"
+        , "                     craftJob = { billId = 5, bid = 42,"
+        , "                                  recipeId = 'x' },"
         , "                     repairJob = { instanceId = 900 } } }"
-        , "R.reconcile(ai, { 1 }, {}, { item_instance = {}, unitPage = {},"
+        , "R.reconcile(ai, { 1 }, { 42 }, { item_instance = {}, unitPage = {},"
         , "  byPage = { craft_bill = {}, ground_item = {} } })"
         , "assert(ai[1].pickupOrder == nil and ai[1].craftJob == nil"
         , "       and ai[1].repairJob == nil,"
@@ -278,13 +281,45 @@ spec = describe "unit AI reconciliation boundary (#1589)" $ do
        \field assignment" $ runsOk $ lns
         [ prelude
         , "local hooked = false"
-        , "for _, row in ipairs(REFS.REF_SCHEMA) do"
+        , "for _, row in ipairs(SCHEMA.REF_SCHEMA) do"
         , "  if row.drop ~= nil then hooked = true end"
         , "end"
         , "assert(hooked, 'the schema must declare at least one drop path,'"
         , "  .. ' or this case proves nothing')"
         , "assert(not pcall(R.reconcile, { [1] = {} }, { 1 }, {}, CTX, {}),"
         , "  'an empty hook table must be refused')"
+        ]
+
+    it "drops a nested claim or order holder whose OWN id subfield is \
+       \absent -- a present treatClaim/deliveryClaim naming nobody resolves \
+       \to nothing and would otherwise run a lock-state action against a \
+       \nil target -- while leaving the one subfield that is legitimately \
+       \absent in a live row, repairJob.bid before its walking phase, \
+       \untouched" $ runsOk $ lns
+        [ prelude
+        , "local ai = { [1] = { treatClaim = {}, treatPending = {},"
+        , "                     deliveryClaim = {}, deliveryPendingTarget = {},"
+        , "                     pickupOrder = {},"
+        , "                     forageTarget = { kind = 'ground', x = 1, y = 1 } },"
+        , "             -- A real pre-walking repair job: instanceId set at"
+        , "             -- creation, bid not yet resolved to a station."
+        , "             [2] = { repairJob = { instanceId = 900, defName = 'axe' },"
+        , "                     repairPhase = 'fetch_item' } }"
+        , "R.reconcile(ai, { 1, 2 }, {}, CTX)"
+        , "local one = ai[1]"
+        , "assert(one.treatClaim == nil and one.treatPending == nil,"
+        , "  'a treatment claim with no patient names nobody')"
+        , "assert(one.deliveryClaim == nil and one.deliveryPendingTarget == nil,"
+        , "  'a delivery claim with no building names nothing')"
+        , "assert(one.pickupOrder == nil, 'a pickup order with no gid too')"
+        , "assert(one.forageTarget == nil,"
+        , "  'and a ground forage target with no gid')"
+        , "assert(scrubbedCount() == 6,"
+        , "  'each absent-id holder counts once, got ' .. tostring(scrubbedCount()))"
+        , "local two = ai[2]"
+        , "assert(two.repairJob ~= nil and two.repairPhase == 'fetch_item',"
+        , "  'repairJob.bid is legitimately absent before the walking phase, "
+          <> "so the job must survive untouched')"
         ]
 
     it "still prunes an orphan row and preserves aiState's table identity, \

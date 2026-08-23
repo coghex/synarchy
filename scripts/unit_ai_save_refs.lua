@@ -1,9 +1,22 @@
--- Reference-field schema, references() traversal, and typed structured-
--- reference wrap/unwrap for unit_ai's persisted aiState (issue #764,
+-- references() traversal, typed structured-reference wrap/unwrap, and
+-- wrapper-tag validation for unit_ai's persisted aiState (issue #764,
 -- save-overhaul C3 requirement 13). Split out of scripts/unit_ai_save.lua
--- to stay under its line budget (#538, tools/lua_module_budget.py).
+-- to stay under its line budget (#538, tools/lua_module_budget.py); the
+-- reference schema all three walks read is itself split one level
+-- further out, in scripts/unit_ai_ref_schema.lua (issue #1589).
 
 local M = {}
+
+-- THE declaration every walk below is derived from (issue #1589): the
+-- schema rows and the one traversal over them. Own module because the
+-- post-load reconcile (scripts/unit_ai_reconcile.lua) shares it and
+-- must not drag this file's wire codec along; re-exported here so the
+-- existing `unit_ai_save_refs` entry points keep working.
+local schema             = require("scripts.unit_ai_ref_schema")
+local REF_SCHEMA         = schema.REF_SCHEMA
+local forEachSchemaEdge  = schema.forEach
+M.REF_SCHEMA             = REF_SCHEMA
+M.forEachRefEdge         = forEachSchemaEdge
 
 -- aiState fields on a per-unit entry that hold a direct reference to
 -- another entity by raw id. After a load these can point at an id that
@@ -16,97 +29,20 @@ local M = {}
 -- to it (#195). scripts/unit_ai_reconcile.lua's scrubStaleRefs clears
 -- any ref whose target isn't in the surviving loaded-page set.
 -- NB: any NEW aiState field that stores a unit/building id MUST be
--- listed here, or it silently reintroduces the stale-ref bug. Since
--- issue #1589 these two lists feed REF_SCHEMA below, which is the ONE
--- declaration the wrap, unwrap, reference-report, tag-validate and
--- post-load reconcile walks are all derived from -- so a field added
--- here is covered by every one of them, with no second edit to make.
-M.AI_UNIT_REF_FIELDS     = { "attackTargetUid", "retreatThreatUid",
-                             "notifyTarget", "lungeTarget" }
-M.AI_BUILDING_REF_FIELDS = { "buildTarget", "storeTarget" }
-
--------------------------------------------------------------------
--- THE reference schema (issue #1589)
--------------------------------------------------------------------
--- One row per persisted reference edge an aiState entry can carry.
--- Before #1589 the same field list was spelled out four times here
--- (unitAiReferences, wrapUnitState, unwrapUnitState, validateRefTags)
--- and a FIFTH time in unit_ai.lua's post-load scrub, which had
--- silently fallen six families behind the other four (craftJob,
--- repairJob, pickupOrder, ground forageTarget, forageLoot,
--- harvestLoot). All five walks now derive from this table, so a family
--- declared here is reported, wrapped, unwrapped, validated AND
--- reconciled by construction.
---
--- Row fields:
---   holder   "field" (top-level field holding a bare id), "table" (a
---            nested claim/job table whose `sub` holds the id), or
---            "list" (a field holding an array of ids).
---   field    the aiState field name; `sub` the id-bearing subfield.
---   kind     the reference kind -- the same vocabulary
---            World.Save.Integrity.luaEdgeResolves speaks.
---   required (table only) validateRefTags rejects a payload whose
---            holder is present but this subfield is missing. Only for
---            a subfield set UNCONDITIONALLY at the holder's
---            construction site (see checkRefTag's own note below).
---   when     (table only) predicate on the holder -- the edge exists
---            only in some of its shapes.
---   also     (table only) sibling fields cleared together with the
---            holder when a post-load reconcile drops it, so no
---            half-dismantled job table is left behind.
---   drop     (table only) the module-owned release path the reconcile
---            must go through instead of a bare field assignment;
---            scripts/unit_ai_reconcile.lua refuses to run without a
---            hook for every `drop` named here.
---   onEmpty  (list only) fields to clear when a reconcile filters the
---            list down to nothing -- what the owning action's own
---            exhaustion path clears.
-local REF_SCHEMA = {}
-for _, f in ipairs(M.AI_UNIT_REF_FIELDS) do
-    REF_SCHEMA[#REF_SCHEMA + 1] = { holder = "field", field = f, kind = "unit" }
+-- declared, or it silently reintroduces the stale-ref bug -- but the
+-- declaration is now a "field" row in unit_ai_ref_schema.lua's
+-- REF_SCHEMA, which the wrap, unwrap, reference-report, tag-validate
+-- and post-load reconcile walks are ALL derived from. These two
+-- long-standing exports are derived from those same rows rather than
+-- restated, so they cannot fall behind the schema either.
+M.AI_UNIT_REF_FIELDS, M.AI_BUILDING_REF_FIELDS = {}, {}
+for _, row in ipairs(REF_SCHEMA) do
+    if row.holder == "field" then
+        local out = (row.kind == "unit") and M.AI_UNIT_REF_FIELDS
+                                          or M.AI_BUILDING_REF_FIELDS
+        out[#out + 1] = row.field
+    end
 end
-for _, f in ipairs(M.AI_BUILDING_REF_FIELDS) do
-    REF_SCHEMA[#REF_SCHEMA + 1] = { holder = "field", field = f,
-                                    kind = "building" }
-end
--- forageTarget is the one holder whose reference is conditional: a
--- "flora" target names a tile, not a ground item, and carries no gid.
-local function isGroundForageTarget(t) return t.kind == "ground" end
-local NESTED_REF_SCHEMA = {
-    { holder = "table", field = "treatClaim",   sub = "patient", kind = "unit" },
-    { holder = "table", field = "treatPending", sub = "uid",     kind = "unit" },
-    { holder = "table", field = "deliveryClaim", sub = "bid", kind = "building" },
-    { holder = "table", field = "deliveryPendingTarget", sub = "bid",
-      kind = "building" },
-    -- craftCandidate is unit_ai_craft.lua's own releaseCraftJob
-    -- companion clear (it is transient and stripped from every save, so
-    -- after a load it is already nil -- this keeps the reconcile drop
-    -- identical to the module's release path either way).
-    { holder = "table", field = "craftJob", sub = "billId", kind = "craft_bill",
-      required = true, also = { "craftCandidate" } },
-    { holder = "table", field = "craftJob", sub = "bid", kind = "building",
-      required = true, also = { "craftCandidate" } },
-    -- repairJob goes out through unit_ai_repair.lua's abort path, not a
-    -- field assignment: an already-fetched item has to be handed back
-    -- and the repairClaims entry released, exactly as on any other
-    -- abort (issue #1589 requirement 3).
-    { holder = "table", field = "repairJob", sub = "instanceId",
-      kind = "item_instance", required = true, drop = "repairJob" },
-    { holder = "table", field = "repairJob", sub = "bid", kind = "building",
-      drop = "repairJob" },
-    { holder = "table", field = "pickupOrder", sub = "gid",
-      kind = "ground_item" },
-    { holder = "table", field = "forageTarget", sub = "gid",
-      kind = "ground_item", when = isGroundForageTarget },
-    { holder = "list", field = "forageLoot", kind = "ground_item",
-      onEmpty = { "foragePhase", "forageLoot", "forageTarget" } },
-    { holder = "list", field = "harvestLoot", kind = "ground_item",
-      onEmpty = { "harvestPhase", "harvestLoot" } },
-}
-for _, row in ipairs(NESTED_REF_SCHEMA) do
-    REF_SCHEMA[#REF_SCHEMA + 1] = row
-end
-M.REF_SCHEMA = REF_SCHEMA
 
 -- Every reference this component carries (requirement 12) -- every
 -- REF_SCHEMA row above, plus knownLocations (#915 -- the only kind
@@ -161,37 +97,6 @@ local function refId(v)
     if type(v) == "table" then return v.id end
     return v
 end
--- THE walk over one per-unit row's declared reference edges -- the
--- single traversal every consumer of REF_SCHEMA shares (issue #1589).
--- `emit(row, value, path, index)` pairs each schema row with the value
--- actually stored there: `value` may be nil (an absent optional field,
--- or a `required` one a malformed payload dropped -- precisely what
--- validateRefTags has to be shown), `path` is the unprefixed field
--- path ("craftJob.billId", "forageLoot[3]") in the same spelling the
--- diagnostics already used, and `index` is the array position for a
--- list-held edge. A `table` holder is visited only when present AND
--- passing its own `when`, so an absent holder yields no phantom edge.
-local function forEachSchemaEdge(s, emit)
-    for _, row in ipairs(REF_SCHEMA) do
-        if row.holder == "field" then
-            emit(row, s[row.field], row.field)
-        elseif row.holder == "table" then
-            local t = s[row.field]
-            if t ~= nil and (row.when == nil or row.when(t)) then
-                emit(row, t[row.sub], row.field .. "." .. row.sub)
-            end
-        else
-            local list = s[row.field]
-            if list ~= nil then
-                for i, v in ipairs(list) do
-                    emit(row, v, row.field .. "[" .. i .. "]", i)
-                end
-            end
-        end
-    end
-end
-M.forEachRefEdge = forEachSchemaEdge
-
 -- `path` (round-2 review, issue #764) names the field this edge came
 -- from, in the SAME dotted-path style Haskell-side integrity errors
 -- already use (e.g. "craft-bills[page=...].station") -- "attackTargetUid",
