@@ -209,6 +209,17 @@ spec = describe "Blood.LuaApi blood.gpuHandles (#1585)" $ do
         gpuHandles ls "{47, a = 1}"   ⌦ (`shouldBe` "nil")
         gpuHandles ls "{47, 'x'}"     ⌦ (`shouldBe` "nil")
         gpuHandles ls "{47, {}}"      ⌦ (`shouldBe` "nil")
+        gpuHandles ls "{47, true}"    ⌦ (`shouldBe` "nil")
+        -- A numeric STRING is the one Lua converts silently: @tointeger@
+        -- accepts "47" exactly as it accepts 47, so the element's TYPE
+        -- has to be checked first or a handle spelled as a string would
+        -- be answered as if it were valid (round-1 review).
+        gpuHandles ls "{'47'}"        ⌦ (`shouldBe` "nil")
+        gpuHandles ls "{47, '44'}"    ⌦ (`shouldBe` "nil")
+        -- A number with no integer representation is rejected too, and
+        -- an integer-valued float is still a valid handle.
+        gpuHandles ls "{47.5}"        ⌦ (`shouldBe` "nil")
+        gpuHandles ls "{47.0}"        ⌦ (`shouldBe` "rows:nil/47/false/true")
 
     it "observes only: no form of the call mutates the handle map, the \
        \size cache, or the blood store" $ \env → do
@@ -232,6 +243,7 @@ spec = describe "Blood.LuaApi blood.gpuHandles (#1585)" $ do
         _ ← gpuHandles ls "{}"
         _ ← gpuHandles ls "'nope'"
         _ ← gpuHandles ls "{a = 1}"
+        _ ← gpuHandles ls "{'47'}"
 
         liveHandles ws ⌦ (`shouldBe` handlesBefore)
         liveSizes env  ⌦ (`shouldBe` sizesBefore)

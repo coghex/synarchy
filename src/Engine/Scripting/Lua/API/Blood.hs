@@ -320,7 +320,9 @@ data HandleSelection
 --   blood-OWNED GPU identities, which 'bloodGpuStatsFn' only counts.
 --
 --   With a dense array of integer texture handles it reports exactly
---   those, in the order given and WITHOUT an @id@: the handles need not
+--   those, in the order given and WITHOUT an @id@ — an element that is
+--   not a Lua number with an integer value, a numeric STRING included,
+--   rejects the whole call. The handles need not
 --   belong to any live page, which is the whole point. #788's lifecycle
 --   probe captures a page's blood handles BEFORE a teardown and asks
 --   about them after, when that page is gone and no live map could
@@ -357,6 +359,12 @@ bloodGpuHandlesFn env = do
 
 -- | Read a dense Lua array of integers at @idx@, rejecting (Nothing)
 --   any element that is not an integer.
+--
+--   The element's Lua TYPE is checked before conversion: 'Lua.tointeger'
+--   coerces a convertible STRING ("47") as readily as a number, and a
+--   texture handle spelled as a string is a caller mistake this verb
+--   must report, not silently accept. A non-integral number (47.5) has
+--   no integer representation and is rejected by 'Lua.tointeger' itself.
 readHandleArray ∷ Lua.StackIndex → Lua.LuaE Lua.Exception (Maybe [Int])
 readHandleArray idx = do
     n ← Lua.rawlen idx
@@ -364,7 +372,9 @@ readHandleArray idx = do
           | i > fromIntegral n = pure (Just (reverse acc))
           | otherwise = do
               _  ← Lua.rawgeti idx i
-              mv ← Lua.tointeger (-1)
+              ty ← Lua.ltype (-1)
+              mv ← if ty ≡ Lua.TypeNumber then Lua.tointeger (-1)
+                                          else pure Nothing
               Lua.pop 1
               case mv of
                   Just v  → go (i + 1) (fromIntegral v : acc)

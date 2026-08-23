@@ -319,7 +319,9 @@ The complete registered Lua surface:
   texture id); with a dense array of integer texture handles it reports
   exactly those, in order and without an `id`, so a probe can re-check
   handles it captured before a teardown once that page is gone. A
-  malformed argument returns `nil`. `bindless` and `texSize` are
+  malformed argument returns `nil` — including an element that is not a
+  Lua number with an integer value, a numeric string such as `'47'`
+  included. `bindless` and `texSize` are
   membership in the two registries `disposeBloodRecord` drops
   SEPARATELY, so a partial leak is visible; both read false with no
   bindless system (headless). Purely observational — it mutates no blood
