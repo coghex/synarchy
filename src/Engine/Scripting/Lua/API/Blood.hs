@@ -18,12 +18,13 @@ module Engine.Scripting.Lua.API.Blood
     , bloodGetTextureCapFn
     , bloodGetRenderQuadsFn
     , bloodGpuStatsFn
+    , bloodGpuHandlesFn
     , bloodClearFn
     , bloodGetTrailStateFn
     ) where
 
 import UPrelude
-import Data.List (elemIndex)
+import Data.List (elemIndex, sortOn)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map as Map
@@ -34,7 +35,9 @@ import Engine.Core.Capability.WorldSim
 import Engine.Core.Capability.RenderView
     (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.State (EngineEnv, unitManagerRef, activeWorldPageFrom)
+import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
+import Engine.Scripting.Lua.Util (isDenseArray)
 import World.Page.Types (WorldPageId(..))
 import World.Types (WorldManager(..), WorldState(..))
 import Unit.Types (UnitId(..), UnitManager(..), UnitInstance(..), TrailState(..))
@@ -294,6 +297,124 @@ bloodGpuStatsFn env = do
     putI "texSize"      texSize
     putI "bloodHandles" bloodHandles
     return 1
+
+-- | Which set of texture handles 'bloodGpuHandlesFn' was asked about.
+data HandleSelection
+    = ActivePageBlood
+      -- ^ No argument: the active page's own blood handle map.
+    | ExplicitHandles [Int]
+      -- ^ A caller-supplied array of raw 'TextureHandle' values.
+
+-- | blood.gpuHandles([handles]) → array of
+--   @{ handle, bindless, texSize [, id] }@ tables, or @nil@ when the
+--   argument is present but is not a dense array of integers.
+--
+--   Purely OBSERVATIONAL (issue #1585): it reads membership in the
+--   bindless handle map and the texture-size cache and mutates neither
+--   those nor any blood state. Upload, FIFO pooling, disposal and
+--   teardown behaviour are untouched by this verb existing.
+--
+--   With NO argument it reports the ACTIVE page's live blood handle map
+--   ('World.State.Types.wsBloodTextureHandlesRef'), ascending by
+--   'BloodTextureId', each row additionally carrying that @id@ — the
+--   blood-OWNED GPU identities, which 'bloodGpuStatsFn' only counts.
+--
+--   With a dense array of integer texture handles it reports exactly
+--   those, in the order given and WITHOUT an @id@ — an element that is
+--   not a Lua number with an integer value, a numeric STRING included,
+--   rejects the whole call. The handles need not
+--   belong to any live page, which is the whole point. #788's lifecycle
+--   probe captures a page's blood handles BEFORE a teardown and asks
+--   about them after, when that page is gone and no live map could
+--   answer. Handles are monotonically allocated and never reused
+--   ('Engine.Asset.Manager.generateTextureHandle'), so a captured handle
+--   still resident afterwards is a leak of THAT resource specifically —
+--   unlike the engine-wide totals 'bloodGpuStatsFn' reports, which a
+--   replacement session's own unrelated uploads also move.
+--
+--   @bindless@ is membership in 'btsHandleMap', @texSize@ membership in
+--   'rvTextureSizeRef'. 'World.Render.BloodQuads.disposeBloodRecord'
+--   drops those two SEPARATELY, so a caller must check BOTH to catch a
+--   partial leak. Both read false with no bindless system (headless).
+bloodGpuHandlesFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+bloodGpuHandlesFn env = do
+    argTy ← Lua.ltype 1
+    mSel ← if argTy ≡ Lua.TypeNone ∨ argTy ≡ Lua.TypeNil
+              then pure (Just ActivePageBlood)
+              else if argTy ≢ Lua.TypeTable
+                     then pure Nothing
+                     else do
+                       dense ← isDenseArray 1
+                       if not dense then pure Nothing
+                                    else fmap ExplicitHandles ⊚ readHandleArray 1
+    case mSel of
+        Nothing  → Lua.pushnil >> return 1
+        Just sel → do
+            rows ← Lua.liftIO (gpuHandleRows env sel)
+            Lua.newtable
+            forM_ (zip [1 ∷ Int ..] rows) $ \(i, r) → do
+                pushHandleRow r
+                Lua.rawseti (-2) (fromIntegral i)
+            return 1
+
+-- | Read a dense Lua array of integers at @idx@, rejecting (Nothing)
+--   any element that is not an integer.
+--
+--   The element's Lua TYPE is checked before conversion: 'Lua.tointeger'
+--   coerces a convertible STRING ("47") as readily as a number, and a
+--   texture handle spelled as a string is a caller mistake this verb
+--   must report, not silently accept. A non-integral number (47.5) has
+--   no integer representation and is rejected by 'Lua.tointeger' itself.
+readHandleArray ∷ Lua.StackIndex → Lua.LuaE Lua.Exception (Maybe [Int])
+readHandleArray idx = do
+    n ← Lua.rawlen idx
+    let go i acc
+          | i > fromIntegral n = pure (Just (reverse acc))
+          | otherwise = do
+              _  ← Lua.rawgeti idx i
+              ty ← Lua.ltype (-1)
+              mv ← if ty ≡ Lua.TypeNumber then Lua.tointeger (-1)
+                                          else pure Nothing
+              Lua.pop 1
+              case mv of
+                  Just v  → go (i + 1) (fromIntegral v : acc)
+                  Nothing → pure Nothing
+    go 1 []
+
+-- | One @(id, handle, in-bindless, in-texture-size)@ row per selected
+--   handle. Both registries are read ONCE for the whole batch so every
+--   row in a single call describes the same observation.
+gpuHandleRows ∷ EngineEnv → HandleSelection → IO [(Maybe Word32, Int, Bool, Bool)]
+gpuHandleRows env sel = do
+    mSys     ← readIORef (rvTextureSystemRef (toRenderViewCapability env))
+    texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
+    let row mId h@(TextureHandle n) =
+            ( mId, n
+            , maybe False (Map.member h . btsHandleMap) mSys
+            , HM.member h texSizes )
+    case sel of
+        ExplicitHandles hs → pure [ row Nothing (TextureHandle h) | h ← hs ]
+        ActivePageBlood    → do
+            mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
+            case mPage of
+                Nothing      → pure []
+                Just (_, ws) → do
+                    known ← readIORef (wsBloodTextureHandlesRef ws)
+                    pure [ row (Just (unBloodTextureId tid)) h
+                         | (tid, (h, _)) ← sortOn fst (HM.toList known) ]
+
+-- | Push one 'gpuHandleRows' row. @id@ is present only for the
+--   active-page form — an explicitly named handle has no live
+--   'BloodTextureId' to report.
+pushHandleRow ∷ (Maybe Word32, Int, Bool, Bool) → Lua.LuaE Lua.Exception ()
+pushHandleRow (mId, h, inBindless, inTexSize) = do
+    Lua.newtable
+    let putI k v = Lua.pushinteger (fromIntegral v) >> Lua.setfield (-2) k
+        putB k v = Lua.pushboolean v >> Lua.setfield (-2) k
+    forM_ mId (putI "id")
+    putI "handle" h
+    putB "bindless" inBindless
+    putB "texSize"  inTexSize
 
 -- | blood.getRenderQuads([pageId]) → array of render-record tables
 --   (issue #606: the resolved per-decal data a world-space quad needs —
