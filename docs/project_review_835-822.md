@@ -12,7 +12,7 @@ PR #832's committed building-footprint expansion, #831's tile-Z UI-wiring regres
 - [x] PRR-2. Slot-aware occupancy still stores only one pending construction job per tile — [#1595]
 - [ ] PRR-3. The location-content probe shares four fixed temporary fixture paths and never cleans them — [deferred]: NCT-22 unprocessed
 - [x] PRR-4. A freshwater tile above four lower neighbours is still forced back to a flat slope — [#1600]
-- [ ] PRR-5. The save barrier can snapshot Lua before processing causal messages produced by acknowledged owners
+- [x] PRR-5. The save barrier can snapshot Lua before processing causal messages produced by acknowledged owners — [no-issue]
 - [ ] PRR-6. Negative-infinite pathing cost is clamped to a free step
 - [ ] PRR-7. The repository-wide lenient UTF-8 invariant has no automated static gate
 
@@ -123,7 +123,9 @@ PR #832's committed building-footprint expansion, #831's tile-Z UI-wiring regres
 
 ## 5. Lua participation in save quiescence
 
-### PRR-5. The save barrier can snapshot Lua before processing causal messages produced by acknowledged owners
+### [no-issue] PRR-5. The save barrier can snapshot Lua before processing causal messages produced by acknowledged owners
+
+> **Disposition:** No issue — the finding's own filing precondition resolves the other way. Enumerating every `luaQueue` writer shows four of the six save owners (`SaveUnit`, `SaveBuilding`, `SaveCombat`, `SaveSimulation`) enqueue nothing at all; the world thread's only non-load site is `LuaStampLocation`, which `World/Thread/ChunkLoading.hs:165-172` documents as re-issued on every chunk load precisely so no queue drain is needed, backed by the persisted `wgpLocationStamped` (`World/Generate/Types.hs:3,178`; `World/Save/Component/WorldGen.hs:1142,1175`) and two independent one-time gates in `scripts/location_stamper.lua:43-56` and `scripts/locations.lua:511-534`; the world's remaining sites belong to the mutually exclusive load transaction; and every `SaveInput` message is player input the finding itself says must stay queued for the resumed session.
 
 > **Captured note:** Treat engine-to-Lua messages produced by pre-boundary worker work as part of Lua's quiescence obligation. `SaveLua` cannot remain permanently acknowledged across passes merely because the interpreter is blocked inside `engine.saveWorld`; blocking the interpreter also prevents it from consuming newly queued causal work.
 
