@@ -297,7 +297,6 @@ library
                      Engine.Scripting.Lua.API.Save.Bridge
                      Engine.Scripting.Lua.API.Save.Config
                      Engine.Scripting.Lua.API.Save.Integrity
-                     Engine.Scripting.Lua.API.Save.Page
                      Engine.Scripting.Lua.API.PlayerEvent
                      Engine.Scripting.Lua.API.Graphics
                      Engine.Scripting.Lua.API.Input
@@ -622,6 +621,7 @@ library
                      World.Edit.Types
                      World.Edit.Apply
                      World.Types
+                     World.Pause
                      World.Thread
                      World.Thread.Helpers
                      World.Thread.Cursor
@@ -1128,6 +1128,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Components
                    Test.Headless.World.TransferOrders
                    Test.Headless.World.FluidWritebackStaleness
+                   Test.Headless.World.PauseSpeed
                    Test.Headless.World.Save.Compat
                    Test.Headless.World.Save.Integrity
                    Test.Headless.World.Save.Storage

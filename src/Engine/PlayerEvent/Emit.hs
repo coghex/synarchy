@@ -25,7 +25,7 @@ import qualified Data.HashMap.Strict as HM
 import Data.Sequence (Seq, (|>))
 import qualified Data.Sequence as Seq
 import Data.Foldable (toList)
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (readIORef)
 import Control.Concurrent.STM (STM, atomically, readTVarIO)
 import Control.Concurrent.STM.TVar (TVar, modifyTVar')
 import qualified Engine.Core.Queue as Q
@@ -34,6 +34,7 @@ import Engine.Core.State (EngineEnv, activeWorldPageFrom)
 import Engine.PlayerEvent
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Page.Types (WorldPageId(..))
+import World.Pause (imposePause)
 
 -- | Emit a player-visible event. Honors the player's per-category
 --   notification settings: appends to the log ring, queues a popup,
@@ -45,8 +46,9 @@ import World.Page.Types (WorldPageId(..))
 --
 --   Thread-safe as a PRIMITIVE: 'ecEventStoreRef' and
 --   'ecPopupQueueRef' are STM TVars, the Lua queue is internally
---   STM-backed, and the pause flag is a single atomic 'writeIORef',
---   so concurrent callers on any thread are safe. That is a property
+--   STM-backed, and the pause is one 'World.Pause.imposePause' call,
+--   whose flag write is a single atomic read-modify-write, so
+--   concurrent callers on any thread are safe. That is a property
 --   of the primitive, not a claim about who calls it: the only call
 --   sites that exist today are on the @WorldThread@
 --   ("World.Thread.Discovery", @World.Thread.Command.Save.WriteWorld@)
@@ -165,8 +167,12 @@ emitEventFullOnPage env category source eventText mCoords mUid mSourcePage = do
                 Q.writeQueue (ivLuaQueue (toInputViewCapability env))
                     (LuaShowPopup category eventText r g b a mCoords
                                   effectivePage)
-            when (ccPause cfg) $
-                writeIORef (wsEnginePausedRef worldSim) True
+            -- #1599: the pause and the paused page's clock are ONE
+            -- pair, and 'World.Pause' is what maintains it. A bare
+            -- flag write here left the page's chosen speed nowhere the
+            -- resume path could find it, so the player's own Space
+            -- resume dropped them back to 1x.
+            when (ccPause cfg) $ imposePause worldSim
 
 -- | The ONE page-attribution rule behind 'peSourcePage' (#1588).
 --

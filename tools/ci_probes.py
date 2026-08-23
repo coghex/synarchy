@@ -210,6 +210,7 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                         "on racing the post-capture storage-write window -- neither is "
                         "cheap or stable enough for a blocking per-PR gate"),),
     "save_pause": (Reason(SCENARIO_HEAVY, "real worldgen plus save/load pause race checks"),),
+    "pause_speed": (Reason(SCENARIO_HEAVY, "#1599: real worldgen plus four pause sources driven end to end -- a notification, a whole manual engine.saveWorld waited to its terminal outcome, a second save taken from an already-paused session, and a published load -- each with its own poll-until-settled window"),),
     "save_barrier": (Reason(SCENARIO_HEAVY, "two real engine boots plus worldgen/save/load boundary smoke"),),
     "save_storage": (Reason(SCENARIO_HEAVY, "worldgen plus ~10 real engine boots exercising the "
                                             "atomic storage transaction's restart-and-select fallback"),),
