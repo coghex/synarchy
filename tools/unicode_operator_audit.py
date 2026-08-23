@@ -309,6 +309,20 @@ def _code_runs(text: str) -> list[tuple[int, int]]:
     return _scan_code(text)[0]
 
 
+def haskell_code_spans(text: str) -> list[tuple[int, int]]:
+    """The `[start, end)` spans of `text` that are genuine Haskell code
+    -- outside `--` line comments, nestable `{- -}` block comments and
+    `"..."` string literals.
+
+    The public name for `_code_runs`, so a sibling guard that needs the
+    same comment/string awareness (tools/lua_strict_decode_audit.py)
+    reuses this one lexer instead of keeping a second copy free to
+    drift from it. `_scan_code`'s subtleties -- nested block comments,
+    atomically skipped char literals so a `'"'` cannot open a phantom
+    string -- are exactly the ones a copy would get wrong."""
+    return _code_runs(text)
+
+
 def _within(pos: int, spans: list[tuple[int, int]]) -> bool:
     return any(start <= pos < end for start, end in spans)
 
