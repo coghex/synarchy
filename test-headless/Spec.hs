@@ -135,6 +135,7 @@ import qualified Test.Headless.UI.Clipping as UIClipping
 import qualified Test.Headless.UI.InteractiveBounds as UIInteractiveBounds
 import qualified Test.Headless.UI.PopupPlacement as UIPopupPlacement
 import qualified Test.Headless.Event.PopupCoordPage as PopupCoordPage
+import qualified Test.Headless.UI.PopupQueueTeardown as UIPopupQueueTeardown
 import qualified Test.Headless.UI.ResponsiveMenus as UIResponsiveMenus
 import qualified Test.Headless.UI.ResponsiveGameplay as UIResponsiveGameplay
 import qualified Test.Headless.UI.SettingsDefaultsKeybinds
@@ -498,6 +499,10 @@ main = hspec $ do
     -- WorldManager and asserts on the event ring), so it registers
     -- here rather than under the shared-worlds aroundAll above.
     PopupCoordPage.spec
+    -- #1592: its own engine AND Lua VM per example — the pre-bootstrap
+    -- popup state it exercises is a once-per-process condition, so a
+    -- shared module table would destroy it.
+    UIPopupQueueTeardown.spec
     describe "UI.ResponsiveMenus" UIResponsiveMenus.spec
     describe "UI.ResponsiveGameplay" UIResponsiveGameplay.spec
     UISettingsDefaultsKeybinds.spec
