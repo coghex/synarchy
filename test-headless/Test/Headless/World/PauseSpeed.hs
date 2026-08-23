@@ -29,9 +29,9 @@
 --   the function @engine.saveWorld@ calls to impose its pause, and the
 --   only place in that path where the speed is captured or lost. The
 --   whole-verb proof (@engine.saveWorld@ returning true and the
---   transaction reaching a terminal outcome before the resume) belongs
---   to @tools\/save_pause_probe.py@, which boots a real process with
---   every owner thread live.
+--   transaction reaching a terminal outcome before the resume) is
+--   @tools\/pause_speed_probe.py@, which boots a real process with every
+--   owner thread live and drives the same four pause sources end to end.
 module Test.Headless.World.PauseSpeed (spec) where
 
 import UPrelude

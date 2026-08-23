@@ -292,6 +292,11 @@ PROBES = [
      "refusal, ordered rotation, and depth-reduction/disable retention"),
     ("save_pause", "save_pause_probe.py",
      "save/load pause-semantics regression (#42)"),
+    ("pause_speed", "pause_speed_probe.py",
+     "the player's chosen world speed survives a pause imposed by a "
+     "pause: true notification, a whole manual engine.saveWorld driven to a "
+     "terminal outcome, and a save taken from an already-paused session; "
+     "load policy still resumes at the default speed (#1599)"),
     ("save_barrier", "save_barrier_probe.py",
      "coordinated save owner acknowledgement and paused reload smoke test (#757)"),
     ("save_storage", "save_storage_probe.py",
