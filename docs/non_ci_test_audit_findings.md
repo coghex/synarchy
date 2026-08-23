@@ -33,7 +33,7 @@ approval.
 - [x] NCT-11. Baseline capture accepts variation in its strict worldgen invariants — [#1598]
 - [x] NCT-12. Thermo probe treats a failed ice dump as absent evidence — [no-issue]
 - [x] NCT-13. Etymology UI probe skips required location and river entry points — [#1604]
-- [ ] NCT-14. Etymology UI probe skips its real scrolling interaction phase
+- [x] NCT-14. Etymology UI probe skips its real scrolling interaction phase — [#1608]
 - [ ] NCT-15. Tilling probe skips the required fluid-exclusion behavior
 - [ ] NCT-16. Item-temperature probe skips its required cooling-rate behavior
 - [ ] NCT-17. Core queue tests omit the custom timeout contract and real contention
@@ -611,7 +611,7 @@ and the default fixture is selected specifically to exercise them.
 - **Remaining uncertainty:** The exact durable fixture tuple or construction
   mechanism is a design choice; the current successful skip is direct.
 
-### NCT-14. Etymology UI probe skips its real scrolling interaction phase
+### [#1608] NCT-14. Etymology UI probe skips its real scrolling interaction phase
 
 The Etymology UI probe declares arrow and wheel scrolling to be a real input
 routing phase.  It deliberately shrinks the framebuffer and increases UI
