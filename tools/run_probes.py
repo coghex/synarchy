@@ -203,7 +203,8 @@ PROBES = [
     ("location_overlay", "location_overlay_probe.py",
      "world-gen location-overlay placement (#89)"),
     ("location_stamp_idempotent", "location_stamp_idempotent_probe.py",
-     "geometry-stamp idempotency survives a cleared anchor floor + save/reload (#424)"),
+     "geometry-stamp idempotency survives a cleared anchor floor + save/reload (#424), "
+     "and the stamped 5x5 footprint really materialized level (#1575)"),
     ("lua_orphan_prune", "lua_orphan_prune_probe.py",
      "Lua per-id AI state pruned (not inherited) after a save load (#195)"),
     ("lua_strict_msg", "lua_strict_msg_probe.py",
