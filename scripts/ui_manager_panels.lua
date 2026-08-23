@@ -84,8 +84,10 @@ function uiManager.onUnitLogTabClick(elemHandle)
     return false
 end
 
--- Dispatched when a popup line is clicked. Routes to popup.onLineClick
--- which cycles the camera through the line's stored coords.
+-- Dispatched when a popup line is clicked. Routes to popup.onLineClick,
+-- which cycles the camera through the line's stored coords — skipping,
+-- and reporting as unavailable, any whose recorded world page is not
+-- the active one (#1588).
 function uiManager.onPopupLineClick(elemHandle)
     if popup.onLineClick then
         return popup.onLineClick(elemHandle)

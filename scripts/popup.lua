@@ -7,11 +7,25 @@
 -- the same popup (up to popup.maxLines, oldest dropped). Each line
 -- is clickable: pans the camera to the line's first stored coord,
 -- subsequent clicks cycle through additional coords until the
--- player moves the camera (then the cycle resets).
+-- player moves the camera (then the cycle resets) — subject to the
+-- page rule below.
+--
+-- #1588 — a coordinate is only meaningful in ONE world page, and a
+-- popup outlives the moment it was emitted (the same entry can be
+-- replayed from the event log an arbitrary number of page switches
+-- later). So every stored coord is page-qualified: onShowPopup takes
+-- the source page as its 8th argument, each target keeps its OWN page
+-- (a coalesced line can hold targets from more than one), and an
+-- activation whose target page is not the page currently active makes
+-- NO camera call at all. It reports the location as unavailable, leaves
+-- the cycle position exactly where it was, and leaves the popup open —
+-- so returning to that page and clicking again just works. A target
+-- with no page (a legacy seven-argument call, or an event emitted with
+-- no world at all) is treated the same way: unknown is never "here".
 --
 -- One bottom button: OK, dismisses the popup. Navigation is handled
--- entirely by clicking a popup line (pans the camera to that event's
--- coords) — there is no per-category "go_to" button.
+-- entirely by clicking a popup line — there is no per-category
+-- "go_to" button.
 
 local scale    = require("scripts.ui.scale")
 local panel    = require("scripts.ui.panel")
@@ -106,6 +120,15 @@ local MUTE_TOGGLE_CALLBACK = "onPopupMuteToggleClick"
 local POPUP_TEX_ENABLED  = "assets/textures/ui/hud/popup_enabled.png"
 local POPUP_TEX_DISABLED = "assets/textures/ui/hud/popup_disabled.png"
 
+-- #1588: appended to a line's rendered text after an activation whose
+-- recorded page is not the active one (or which records no page at
+-- all). The marker is the "location unavailable" report requirement 4
+-- asks for: the popup stays open and readable, the message is
+-- untouched, nothing pans, and the player can see WHY nothing
+-- happened. Cleared again by a successful pan or by a new event
+-- folding into the line.
+local UNAVAILABLE_MARKER = " (location unavailable)"
+
 -----------------------------------------------------------
 -- Forward declarations
 -----------------------------------------------------------
@@ -116,6 +139,51 @@ local renderPopup
 local destroyVisuals
 local foldEventIntoPopup
 local spawnFromEntry
+
+-----------------------------------------------------------
+-- Page-qualified coordinate targets (#1588)
+-----------------------------------------------------------
+
+-- Build ONE stored, self-describing pan target out of an entry's
+-- coords + page, or nil when the entry carries no location.
+--
+-- The page is copied onto the TARGET rather than onto the line,
+-- because a coalesced line accumulates targets from several separate
+-- events (foldEventIntoPopup appends to line.coords) and those events
+-- need not share a page — a single unqualified page for a mixed-page
+-- coordinate list would be a lie about at least one of them. A fresh
+-- table each time, never the caller's own `coords`, so a stored
+-- event-log row can be replayed repeatedly without this module ever
+-- writing into it.
+local function makeTarget(coords, page)
+    if not coords then return nil end
+    return { x = coords.x, y = coords.y, page = page }
+end
+
+-- The page the camera would actually act on, resolved the same way
+-- camera.goToTile resolves it: world.getActiveWorldId() is
+-- Engine.Core.State.resolveActiveWorld's page id, which is exactly the
+-- world camera.goToTile pans. Returns nil when no world is registered
+-- (the main menu), which no target may ever match.
+--
+-- The call is wrapped in a closure rather than passed to pcall
+-- directly, so that a missing `world` table is caught here instead of
+-- raising out of a click handler.
+local function activePageId()
+    local ok, pageId = pcall(function() return world.getActiveWorldId() end)
+    if not ok then return nil end
+    return pageId
+end
+
+-- Requirement 4/6: a target is reachable only when it names a page AND
+-- that page is the active one. An absent page on either side is never a
+-- match — "unknown" must not collapse into "wherever the player is".
+local function targetIsReachable(target)
+    if not target or not target.page then return false end
+    local active = activePageId()
+    if not active then return false end
+    return target.page == active
+end
 
 -----------------------------------------------------------
 -- Slot picker
@@ -169,12 +237,19 @@ end
 -- "ages since this popup opened" rather than wall clock).
 local function lineDisplayText(p, line)
     local stamp = formatElapsed(line.firstEventTime - p.spawnTime)
+    local body
     if line.count > 1 then
-        return stamp .. " " .. (line.text or "")
+        body = stamp .. " " .. (line.text or "")
             .. " (x" .. line.count .. ")"
     else
-        return stamp .. " " .. (line.text or "")
+        body = stamp .. " " .. (line.text or "")
     end
+    -- #1588: the original message is never replaced, only suffixed, so
+    -- an unreachable location still reads as the event it was.
+    if line.unavailable then
+        body = body .. UNAVAILABLE_MARKER
+    end
+    return body
 end
 
 -----------------------------------------------------------
@@ -532,8 +607,13 @@ foldEventIntoPopup = function(p, entry, window, now)
         -- Same burst: bump existing line.
         lastLine.count = lastLine.count + 1
         lastLine.text = entry.text
-        if entry.coords then
-            table.insert(lastLine.coords, entry.coords)
+        -- #1588: each folded coord keeps its OWN page. Two emits of the
+        -- same category within the window can come from different
+        -- pages, so the list this builds is potentially mixed and every
+        -- element has to answer for itself at activation time.
+        local target = makeTarget(entry.coords, entry.page)
+        if target then
+            table.insert(lastLine.coords, target)
         end
         lastLine.lastUpdateTime = now
         -- A new event invalidates any previous click-cycle the
@@ -543,15 +623,18 @@ foldEventIntoPopup = function(p, entry, window, now)
         lastLine.cycleIdx = 0
         lastLine.lastPannedX = nil
         lastLine.lastPannedY = nil
+        lastLine.unavailable = nil
     else
         -- New burst (or never a last line): add a fresh row.
+        local firstTarget = makeTarget(entry.coords, entry.page)
         local newLine = {
             text          = entry.text,
             count         = 1,
-            coords        = (entry.coords and {entry.coords}) or {},
+            coords        = (firstTarget and {firstTarget}) or {},
             cycleIdx      = 0,
             lastPannedX   = nil,
             lastPannedY   = nil,
+            unavailable   = nil,
             firstEventTime = now,
             lastUpdateTime = now,
             labelId       = nil,
@@ -605,13 +688,15 @@ spawnFromEntry = function(entry)
         panelId      = nil,
     }
 
+    local initialTarget = makeTarget(entry.coords, entry.page)
     local initialLine = {
         text          = entry.text,
         count         = 1,
-        coords        = (entry.coords and {entry.coords}) or {},
+        coords        = (initialTarget and {initialTarget}) or {},
         cycleIdx      = 0,
         lastPannedX   = nil,
         lastPannedY   = nil,
+        unavailable   = nil,
         firstEventTime = now,
         lastUpdateTime = now,
         labelId       = nil,
@@ -682,17 +767,42 @@ function popup.onLineClick(elemHandle)
         return math.abs((a or 0) - (b or 0)) < 0.5
     end
 
+    -- #1588: compute the target WITHOUT committing to it. The
+    -- availability check below has to be able to decline without
+    -- advancing or resetting the cycle, so `nextIdx` stays local until
+    -- the pan is actually going to happen.
+    local nextIdx
     if line.lastPannedX
        and approxEq(cx, line.lastPannedX)
        and approxEq(cy, line.lastPannedY) then
         -- Camera unchanged; advance modulo
-        line.cycleIdx = (line.cycleIdx % #line.coords) + 1
+        nextIdx = (line.cycleIdx % #line.coords) + 1
     else
         -- Camera moved (or first click); restart
-        line.cycleIdx = 1
+        nextIdx = 1
     end
 
-    local target = line.coords[line.cycleIdx]
+    local target = line.coords[nextIdx]
+    -- #1588: evaluated on EVERY activation, against the live active
+    -- page, immediately before the camera call — never cached at spawn
+    -- time, because the player can switch pages between two clicks on
+    -- the same line (in either direction).
+    if not targetIsReachable(target) then
+        -- Report, don't move: no camera call, cycle state untouched
+        -- (so the very same activation succeeds once this page is
+        -- active again), popup left open with its original message.
+        if not line.unavailable then
+            line.unavailable = true
+            renderPopup(p)
+        end
+        return true
+    end
+
+    line.cycleIdx = nextIdx
+    if line.unavailable then
+        line.unavailable = nil
+        renderPopup(p)
+    end
     pcall(function()
         camera.goToTile(target.x, target.y)
     end)
@@ -738,12 +848,19 @@ end
 -- Engine broadcast handler
 -----------------------------------------------------------
 
-function popup.onShowPopup(category, text, r, g, b, a, coords)
+-- `page` (#1588) is the world page `coords` is indexed in — the 8th
+-- argument the engine's LuaShowPopup broadcast now carries, and the
+-- same value scripts/event_log.lua forwards from a stored row on
+-- replay. It is optional on purpose: a seven-argument call is still
+-- valid and produces a page-less, non-panning entry rather than one
+-- that pans whichever world happens to be active.
+function popup.onShowPopup(category, text, r, g, b, a, coords, page)
     local entry = {
         category = category,
         text     = text,
         color    = { r or 1.0, g or 1.0, b or 1.0, a or 1.0 },
         coords   = coords,    -- nil or {x, y}
+        page     = page,      -- nil or world page id string
     }
     -- Coalesce path: if this category has an active popup AND the
     -- category opts in via coalesce_window > 0, fold the new event

@@ -296,14 +296,24 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               -- is), not at upload-completion time — see
               -- 'Engine.Core.State.worldPreviewGenerationRef'.
             | LuaShowPopup Text Text Float Float Float Float
-                           (Maybe (Int, Int))
+                           (Maybe (Int, Int)) (Maybe Text)
               -- ^ Player-events popup. Fields, in order:
               --     1. category id (e.g. "save_load")
               --     2. body text
               --     3-6. text color r,g,b,a
               --     7. optional (gx, gy) grid coords. When present the
-              --        popup line is clickable (click pans the camera
-              --        there); 'Nothing' leaves the line non-clickable.
+              --        popup line is clickable; 'Nothing' leaves the
+              --        line non-clickable.
+              --     8. optional source world page — the raw
+              --        'World.Page.Types.WorldPageId' text field 7's
+              --        coordinates are indexed in
+              --        ('Engine.PlayerEvent.peSourcePage', #1588).
+              --        Carried alongside the coords precisely because a
+              --        popup outlives the emit instant: the click
+              --        refuses to pan unless this page is still the
+              --        active one, so 'Nothing' (no world at emit time)
+              --        is a non-panning line, never "wherever the
+              --        player happens to be now".
             | LuaLoadStaged Int
               -- ^ Issue #763 (save-overhaul C2): the world thread just
               --   finished STAGING a whole-session load transaction

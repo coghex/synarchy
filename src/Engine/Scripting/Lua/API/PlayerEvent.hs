@@ -41,8 +41,14 @@ emitEventFn env = do
 
 -- | @engine.emitEventAt(category, text, gx, gy)@ — fire a popup with
 --   a location payload. The popup makes that event's line clickable —
---   clicking it pans the camera to @(gx, gy)@. Events emitted without
---   coordinates produce non-clickable lines.
+--   clicking it pans the camera to @(gx, gy)@ if the event's page is
+--   still the active one, and reports the location as unavailable if it
+--   is not (#1588). Events emitted without coordinates produce
+--   non-clickable lines.
+--
+--   Lua does not pass, and cannot pass, a page here: the coordinates
+--   are attributed to the active page automatically inside
+--   'Engine.PlayerEvent.Emit.resolveEventPage'.
 emitEventAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 emitEventAtFn env = do
     catArg  ← Lua.tostring 1
@@ -61,9 +67,10 @@ emitEventAtFn env = do
 
 -- | @engine.emitEventForUnit(category, text, uid [, gx, gy])@ — fire an
 --   event tagged with the UNIT it concerns, so the per-unit log panel
---   can filter it. @gx@/@gy@ are optional (same location payload as
---   'emitEventAt'). Used by unit-attributable emitters (survival
---   warnings/criticals, unit events) that already know the uid.
+--   can filter it. @gx@/@gy@ are optional (same location payload —
+--   and the same automatic page attribution — as 'emitEventAt'). Used
+--   by unit-attributable emitters (survival warnings/criticals, unit
+--   events) that already know the uid.
 emitEventForUnitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 emitEventForUnitFn env = do
     catArg  ← Lua.tostring 1
@@ -88,14 +95,21 @@ emitEventForUnitFn env = do
 -- | @engine.getEventLog()@ — return the event-log ring buffer as a
 --   Lua array of @{category, text, gameTime, source, uid, count,
 --   coords, page}@ tables, oldest-first. @coords@ is either @{x, y}@ or
---   @nil@. @page@ is the source world-page id string, or @nil@ for the
---   vast majority of events that don't set 'peSourcePage' (#780 —
---   emitters whose event can fire on a page other than whichever is
---   active/visible, e.g. location discovery, tag it so a hidden-page
---   event stays attributable even though it can't safely carry
---   pannable coords). Sufficient payload for the event-log panel to
---   re-pop the popup from a row click without a second engine
---   round-trip.
+--   @nil@. @page@ is the source world-page id string, or @nil@ when the
+--   event names no page at all.
+--
+--   The two travel together (#1588): every coords-carrying event also
+--   carries the page those coordinates are indexed in, so a row click
+--   can decide whether the location is reachable from the world the
+--   player is currently looking at instead of panning the active page
+--   blindly. A page WITHOUT coords is still possible and still
+--   meaningful — that is #780's location discovery on a hidden page,
+--   which tags the event so it stays attributable while deliberately
+--   showing no location.
+--
+--   Sufficient payload for the event-log panel to re-pop the popup from
+--   a row click without a second engine round-trip; @page@ is what
+--   makes that replay carry the same metadata a live popup does.
 getEventLogFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getEventLogFn env = do
     events ← Lua.liftIO $ readEventLog env
@@ -135,8 +149,9 @@ getEventLogFn env = do
                 Lua.pushnil
                 Lua.setfield (-2) "coords"
 
-        -- page: the source world-page id (#780), or nil for every
-        -- event that doesn't set peSourcePage.
+        -- page: the world page this event's coords are indexed in
+        -- (#1588), or the page a coords-free discovery event concerns
+        -- (#780); nil when the event names no page.
         case peSourcePage ev of
             Just pg → Lua.pushstring (TE.encodeUtf8 pg)
             Nothing → Lua.pushnil
