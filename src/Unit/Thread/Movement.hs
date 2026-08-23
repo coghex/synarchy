@@ -38,6 +38,7 @@ import Engine.Core.Capability.UnitCombat
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import Combat.Types (pushInjuryEvent)
 import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef')
@@ -66,14 +67,14 @@ import Unit.Thread.Movement.Leap
 import Unit.Thread.Movement.Climb
     (rollClimbSlips, convertSlippedClimb, applyClimbXP, clearPendingClimbXP)
 import Unit.Thread.Movement.PathAdvance
-    (tickUnit, snapshotVisibleWorldTiles, moveWorldFor)
+    (tickUnit, snapshotOwnedWorldTiles, moveWorldFor)
 
 -- | Advance all units with active move targets, using cost-aware
---   greedy movement + local A* replan. World tile data is snapshotted
---   once per tick so all units in this batch see the same world.
+--   greedy movement + local A* replan. Each OWNING page's tile data is
+--   snapshotted once per tick, so all units in this batch see one
+--   consistent view of their own world (#1593).
 tickAllMovement ∷ Double → EngineEnv → IORef UnitThreadState → IO ()
 tickAllMovement dt env utsRef = do
-    mSnap ← snapshotVisibleWorldTiles (toWorldSimCapability env)
     now  ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     -- Snapshot per-unit body_mass + toughness so the pure movement
     -- tick can compute fall impact without reading the unit manager.
@@ -90,11 +91,11 @@ tickAllMovement dt env utsRef = do
     -- soft/loose ground slows the unit and biases A* toward firm routes.
     -- Read once per tick (single IORef deref), like the pathing config.
     reg ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
-    -- Per-unit view of the shared snapshot (#1217): the tiles as before,
-    -- plus whether they are verified to be this mover's OWN page. Only a
-    -- hazard-protected request consults the verification; every other
-    -- mover keeps the historical "path against the active page" behavior.
-    let worldFor mInst = moveWorldFor mSnap (uiPage <$> mInst)
+    -- Per-unit view of the batch's snapshots: this mover's OWN page's
+    -- tiles, flagged as verified. #1217 made a hazard-protected request
+    -- fail closed on anything else; #1593 makes that the only terrain any
+    -- mover ever sees, so nobody paths against another page's heightmap.
+    let worldFor mInst snaps = moveWorldFor snaps (uiPage <$> mInst)
         statsFor uid   = statsForInst (HM.lookup uid (umInstances um))
         statsForInst mInst = case mInst of
             Just inst →
@@ -117,12 +118,21 @@ tickAllMovement dt env utsRef = do
             Nothing → defaultMoveStats
     uts ← readIORef utsRef
     let simStates  = utsSimStates uts
-        -- The stats and the terrain view both derive from the mover's
+    -- Terrain comes from each mover's OWN page (#1593), so the batch
+    -- snapshots exactly the pages this tick's movers stand on — each read
+    -- once, so every mover on one page sees one consistent view of it. A
+    -- sim state whose unit is gone contributes no page and gets no
+    -- terrain, rather than borrowing whichever page happens to be active.
+    mSnaps ← snapshotOwnedWorldTiles (toWorldSimCapability env) $ HS.fromList
+        [ uiPage inst
+        | uid ← HM.keys simStates
+        , Just inst ← [HM.lookup uid (umInstances um)] ]
+    let -- The stats and the terrain view both derive from the mover's
         -- instance, so they share ONE lookup per moving unit per tick.
         simStates' = HM.mapWithKey
                         (\uid ss →
                             let mInst = HM.lookup uid (umInstances um)
-                            in tickUnit pc reg now dt (worldFor mInst)
+                            in tickUnit pc reg now dt (worldFor mInst mSnaps)
                                         (statsForInst mInst) ss)
                         simStates
 

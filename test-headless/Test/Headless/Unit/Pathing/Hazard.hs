@@ -9,7 +9,11 @@
 --       protected request never launches a fall, terminates when it can
 --       make no safe progress, and fails closed on terrain that isn't
 --       verified to be the mover's own page, while a fall-permitted
---       request on the SAME terrain behaves exactly as it does today;
+--       request keeps its "never gives up" behavior there. Since #1593 a
+--       mover is only ever handed its OWN page's tiles, so "another
+--       page's terrain" and "no terrain" are the same input; the
+--       PER-PAGE resolution that produces it is
+--       'Test.Headless.Unit.SimPageOwnership';
 --     * the WIRING layer — source guards proving every shipped aimless
 --       mover (acolyte and technomule @wander@, @bear_wander@,
 --       @squirrel_wander@) selects the ONE shared mechanism, and that the
@@ -34,7 +38,7 @@ import Unit.Pathing.Cost
 import Unit.Pathing.AStar (localAStar, localAStarUnder, defaultMaxRadius)
 import Unit.Sim.Types
 import Unit.Thread.Movement.PathAdvance
-    (tickUnit, moveWorldFor, TerrainSnapshot(..), MoveWorld(..)
+    (tickUnit, moveWorldFor, TerrainSnapshots, MoveWorld(..)
     , maxProtectedStep)
 import Unit.Thread.Movement.Types (UnitMoveStats(..), defaultMoveStats)
 
@@ -144,9 +148,13 @@ pageA, pageB ∷ WorldPageId
 pageA = WorldPageId "page-a"
 pageB = WorldPageId "page-b"
 
--- | Own-page terrain: the batch snapshot is this mover's page.
+-- | A batch that snapshotted exactly one page.
+snapshotOf ∷ WorldPageId → WorldTileData → TerrainSnapshots
+snapshotOf = HM.singleton
+
+-- | Own-page terrain: the batch snapshotted this mover's page.
 ownPageWorld ∷ WorldTileData → MoveWorld
-ownPageWorld wtd = moveWorldFor (Just (TerrainSnapshot pageA wtd)) (Just pageA)
+ownPageWorld wtd = moveWorldFor (snapshotOf pageA wtd) (Just pageA)
 
 -- | Run the movement tick repeatedly at a fixed dt, collecting each
 --   intermediate state. Deterministic — 'tickUnit' is pure.
@@ -422,40 +430,51 @@ spec = do
             map usRealX states `shouldSatisfy` any (> 8.0)
 
         it "abandons a protected request when the terrain is another page" $ do
-            let wrongPage = moveWorldFor (Just (TerrainSnapshot pageB ridge))
-                                         (Just pageA)
+            let wrongPage = moveWorldFor (snapshotOf pageB ridge) (Just pageA)
                 us' = tickUnit pc reg 0.1 0.1 wrongPage stats (start FallProhibited)
             usTarget us' `shouldBe` Nothing
             usState us' `shouldBe` Idle
 
         it "abandons a protected request when there is no snapshot at all" $ do
-            let noTerrain = moveWorldFor Nothing (Just pageA)
+            let noTerrain = moveWorldFor HM.empty (Just pageA)
                 us' = tickUnit pc reg 0.1 0.1 noTerrain stats (start FallProhibited)
             usTarget us' `shouldBe` Nothing
 
         it "abandons a protected request when the mover has no page" $ do
-            -- A sim state outliving its unit instance: nothing to verify
-            -- the snapshot against, so fail closed.
-            let noMover = moveWorldFor (Just (TerrainSnapshot pageA ridge)) Nothing
+            -- A sim state outliving its unit instance: no page to resolve
+            -- terrain from, so fail closed.
+            let noMover = moveWorldFor (snapshotOf pageA ridge) Nothing
                 us' = tickUnit pc reg 0.1 0.1 noMover stats (start FallProhibited)
             usTarget us' `shouldBe` Nothing
 
-        it "leaves a fall-permitted request alone on unverified terrain" $ do
-            -- The #797 secondary-page defect is NOT lifted for ordinary
-            -- movement; only protected requests fail closed.
-            let wrongPage = moveWorldFor (Just (TerrainSnapshot pageB ridge))
-                                         (Just pageA)
+        it "keeps a fall-permitted request alive with no terrain at all" $ do
+            -- Since #1593 a mover is only ever handed its OWN page's
+            -- tiles, so the wrong-page case IS the no-terrain case. A
+            -- fall-permitted request keeps its "never gives up" behavior
+            -- there — only protected requests abandon.
+            let wrongPage = moveWorldFor (snapshotOf pageB ridge) (Just pageA)
                 us' = tickUnit pc reg 0.1 0.1 wrongPage stats (start FallPermitted)
             usTarget us' `shouldSatisfy` isJust
+            mwTiles wrongPage `shouldSatisfy` isNothing
 
-        it "moveWorldFor verifies the page it was snapshotted from" $ do
-            mwOwnPage (moveWorldFor (Just (TerrainSnapshot pageA ridge)) (Just pageA))
+        it "moveWorldFor hands over the mover's OWN page and nothing else" $ do
+            mwOwnPage (moveWorldFor (snapshotOf pageA ridge) (Just pageA))
                 `shouldBe` True
-            mwOwnPage (moveWorldFor (Just (TerrainSnapshot pageB ridge)) (Just pageA))
+            mwOwnPage (moveWorldFor (snapshotOf pageB ridge) (Just pageA))
                 `shouldBe` False
-            mwOwnPage (moveWorldFor Nothing (Just pageA)) `shouldBe` False
-            mwOwnPage (moveWorldFor (Just (TerrainSnapshot pageA ridge)) Nothing)
+            mwOwnPage (moveWorldFor HM.empty (Just pageA)) `shouldBe` False
+            mwOwnPage (moveWorldFor (snapshotOf pageA ridge) Nothing)
                 `shouldBe` False
+            -- The tiles track the flag exactly: no unverified terrain is
+            -- ever handed out for a mover to path against.
+            mwTiles (moveWorldFor (snapshotOf pageB ridge) (Just pageA))
+                `shouldSatisfy` isNothing
+            mwTiles (moveWorldFor (snapshotOf pageA ridge) Nothing)
+                `shouldSatisfy` isNothing
+            -- A batch holding BOTH pages still gives each mover its own.
+            let both = HM.fromList [(pageA, flatWorld), (pageB, ridge)]
+            mwOwnPage (moveWorldFor both (Just pageB)) `shouldBe` True
+            mwTiles (moveWorldFor both (Just pageA)) `shouldSatisfy` isJust
 
     describe "which movers select the shared mechanism" $ do
         -- Source guards (#1217 requirement 2 / the review's integration
