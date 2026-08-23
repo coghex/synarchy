@@ -36,7 +36,7 @@ approval.
 - [x] NCT-14. Etymology UI probe skips its real scrolling interaction phase — [#1608]
 - [x] NCT-15. Tilling probe skips the required fluid-exclusion behavior — [#1609]
 - [x] NCT-16. Item-temperature probe skips its required cooling-rate behavior — [#1611]
-- [ ] NCT-17. Core queue tests omit the custom timeout contract and real contention
+- [x] NCT-17. Core queue tests omit the custom timeout contract and real contention — [#1612]
 - [ ] NCT-18. Item-temperature persistence phase can load a stale save
 - [ ] NCT-19. Vegetation/farming persistence probes can load stale saves
 - [ ] NCT-20. Item-identity persistence phase can load a stale save
@@ -752,7 +752,7 @@ cooling-rate behavior.
 
 ## Core queue Hspec tests
 
-### NCT-17. Core queue tests omit the custom timeout contract and real contention
+### [#1612] NCT-17. Core queue tests omit the custom timeout contract and real contention
 
 The core queue suite covers only immediate `tryReadQueue`, `writeQueue`, and
 `flushQueue` behavior.  It never calls the blocking `readQueue` operation or
