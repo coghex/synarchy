@@ -316,19 +316,24 @@ end
 function pauseMenu.onExitToMenu()
     engine.logInfo("Pause menu: Exit to Menu")
     local worldManager = require("scripts.world_manager")
-    -- Clear transient build-tool placement so an armed action can't carry
-    -- into the next world (#82).
-    pcall(function() require("scripts.build_tool").exitPlacement() end)
-    -- Clear any pending mine-tool anchor so the next world's first click
-    -- doesn't commit a rectangle from a stale origin (#102).
-    pcall(function() require("scripts.mine_tool").cancel() end)
-    -- Clear any pending transfer session (#1014) — it's transient,
-    -- unsaved state naming a source unit/receiver in THIS world; the
-    -- save-load reset hook (scripts/transfer_session.lua) only fires on
-    -- an actual load, never on this destroyAll-and-fresh-init path, so
-    -- without this a session survives into the next game pointing at
-    -- entities that no longer exist.
-    pcall(function() require("scripts.transfer_session").clear() end)
+    -- Every module holding session-scoped state clears here, through the
+    -- ONE declared boundary (#1610). This used to be a hand-maintained
+    -- list of per-module pcalls — build-tool placement (#82), the
+    -- mine-tool anchor (#102), the transfer session (#1014) — each added
+    -- by its own issue, with unit_ai's aiState and building_spawn's
+    -- state never added at all. A module now joins by registering
+    -- itself; see scripts/lib/session_teardown.lua for why this fires
+    -- here and not on the load path (which has its own reset hooks and
+    -- onSaveLoaded broadcast, and must not clear twice).
+    --
+    -- BEFORE world.destroyAll, deliberately: the callbacks release live
+    -- entities (transfer_session stops the units it holds) and reach
+    -- engine-side per-world state (the mine anchor), both of which need
+    -- the session to still exist. runAll pcalls each callback
+    -- independently, so one failure can't stop the rest or the world
+    -- teardown below; the outer pcall covers the module itself failing
+    -- to load, for the same reason.
+    pcall(function() require("scripts.lib.session_teardown").runAll() end)
     if worldManager.currentWorld then
         world.hide(worldManager.currentWorld)
     end

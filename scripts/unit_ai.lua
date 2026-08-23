@@ -98,12 +98,11 @@ local medic         = require("scripts.unit_ai_medic")
 local sleepGoal     = require("scripts.unit_ai_sleep")
 local mentalAi      = require("scripts.unit_ai_mental")
 -- Per-unit location knowledge (#915): the experiential layer beside the
--- player-wide cartographic discovery state. Own submodule because
--- unit_ai_core.lua is at its line budget.
+-- cartographic one. Own submodule -- unit_ai_core.lua is at its budget.
 local locations     = require("scripts.unit_ai_locations")
--- Persistent save-component registration (issue #761) + the raw-id
--- reference field lists scrubStaleRefs below needs -- split out to
--- stay under the #538 module line budget.
+-- Persistent save-component registration (#761), the session-teardown
+-- registration (#1610), and the raw-id reference field lists
+-- scrubStaleRefs below needs -- split out to stay under the #538 budget.
 local unitAiSave    = require("scripts.unit_ai_save")
 
 -----------------------------------------------------------
@@ -465,23 +464,25 @@ function unitAi.onSaveLoaded(survUnitIds, survBuildingIds)
 end
 
 function unitAi.update(dt)
+    -- #1610: nothing between Exit to Menu and the next session -- the
+    -- engine's UnitClearAll is still draining, so the queries below
+    -- would rebuild the cleared rows. scripts/lib/session_teardown.lua.
+    if require("scripts.lib.session_teardown").isTornDown() then return end
     -- Location awareness (#915) is recorded BEFORE the pause guard on
-    -- purpose. Its engine-side source (the sight predicate #1230 gave
+    -- purpose: its engine-side source (the sight predicate #1230 gave
     -- World.Thread.Discovery) is pause-independent -- a freshly loaded,
     -- auto-paused save can come up with a unit already LOOKING AT a
-    -- location -- and gating acquisition on unpause here would quietly
-    -- reintroduce the dependency the engine side avoids.
-    -- Recording a memory is not simulation: it mutates only aiState,
-    -- never the world.
+    -- location -- and gating acquisition on unpause would reintroduce the
+    -- dependency the engine side avoids. Recording a memory is not
+    -- simulation: it mutates only aiState, never the world.
     locations.ingestAwareness(core.ensureState)
     if require("scripts.pause").isPaused() then return end
     local ids = unit.getAllIds()
     if not ids or #ids == 0 then return end
 
-    -- All unit types now use the same utility-AI tickOne. Each def
-    -- needs an entry in `config[defName]` + `actions[defName]`;
-    -- bears + acolytes are registered above. Unknown defs are
-    -- silently skipped by tickOne (params/actList lookup fails).
+    -- All unit types use the same utility-AI tickOne: each def needs an
+    -- entry in `config[defName]` + `actions[defName]` (bears + acolytes
+    -- above). Unknown defs are silently skipped (params/actList lookup).
     for _, uid in ipairs(ids) do
         local info = unit.getInfo(uid)
         if info and info.defName then
@@ -491,8 +492,7 @@ function unitAi.update(dt)
 end
 
 function unitAi.shutdown()
-    -- Empty the singleton state in-place so all references see it
-    -- (reassigning the local would orphan the package.loaded copy).
+    -- In place: rebinding would orphan the package.loaded copy.
     for k in pairs(aiState) do aiState[k] = nil end
     engine.logInfo("Unit AI shut down")
 end

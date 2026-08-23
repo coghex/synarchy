@@ -1268,6 +1268,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.UnitAiStall
                    Test.Headless.Lua.UnitAiLogisticsTargets
                    Test.Headless.Lua.UnitAiLoadReset
+                   Test.Headless.Lua.SessionTeardown
                    Test.Headless.Lua.WorkClaimCapacity
                    Test.Headless.Capability.Building
                    Test.Headless.Capability.Events

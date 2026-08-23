@@ -460,6 +460,27 @@ function M.register(aiState)
                 .. " transient claim/priority entries on load")
         end
     end)
+
+    -- aiState across the OTHER session-replacement path (#1610). Exit to
+    -- Menu destroys every world and resets the entity managers without
+    -- ever reaching saveModules, so neither the reset hook above nor
+    -- unitAi.onSaveLoaded fires -- and aiState kept one row per unit for
+    -- the life of the process, growing across every
+    -- Exit-to-Menu -> New Game cycle.
+    --
+    -- Registered HERE and not in unit_ai.lua because that file is at its
+    -- #538 line budget; the session boundary is registry wiring, which
+    -- is this module's job either way. The clear empties aiState IN
+    -- PLACE for the same reason shutdown/onSaveLoaded do: the table is
+    -- published on the package.loaded singleton and held directly by
+    -- unit_ai_core and every submodule.
+    local teardown = require("scripts.lib.session_teardown")
+    teardown.register("unit_ai", function()
+        local n = 0
+        for k in pairs(aiState) do aiState[k] = nil; n = n + 1 end
+        engine.logInfo("Unit AI: cleared " .. n
+            .. " AI state row(s) on session teardown")
+    end)
 end
 
 return M

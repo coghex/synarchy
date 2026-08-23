@@ -1188,6 +1188,16 @@ function buildTool.init(scriptId)
     engine.logInfo("Build tool initializing...")
 end
 
+-- #82, migrated onto the declared session-teardown boundary (#1610): an
+-- armed placement is transient state naming THIS world's target and
+-- anchor, and must not carry into the next game. At module scope, not in
+-- init, because the pcall this replaces `require`d the module
+-- unconditionally -- a caller holding it loaded but never initialized
+-- still had its placement cleared.
+require("scripts.lib.session_teardown").register("build_tool", function()
+    buildTool.exitPlacement()
+end)
+
 function buildTool.shutdown()
     destroyPicker()
     buildTool.exitPlacement()
