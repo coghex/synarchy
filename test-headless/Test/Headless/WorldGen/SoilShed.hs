@@ -36,9 +36,13 @@ hardness = 0.5
 
 -- | Run the final-age erosion at @elev@ with the four cardinal
 --   neighbours at the given elevations.
+--   All four neighbours are erodible granite, so the (#1591) donor
+--   material gate never fires here — this spec is about the donor-side
+--   relief threshold alone.
 run ∷ Int → (Int, Int, Int, Int) → GeoModification
 run elev nbrs =
     applyErosion lastAgeParams 128 1 1.0 granite hardness elev nbrs
+                 (hardness, hardness, hardness, hardness)
 
 isSoil ∷ Word8 → Bool
 isSoil m = (m ≥ 50 ∧ m ≤ 67) ∨ (m ≥ 110 ∧ m ≤ 113)
@@ -83,6 +87,7 @@ spec = do
             -- clearly-negative erosion delta, so the override is present.
             let gm = applyErosion defaultErosionParams 128 15 1.0 granite hardness
                                   100 (0, 100, 100, 100)
+                                  (hardness, hardness, hardness, hardness)
             -- Mid-timeline erosion produces sedimentary rock, never bare
             -- exposure, so the override is present (a rock id, not a soil).
             gmMaterialOverride gm `shouldSatisfy` maybe False (not . isSoil)
