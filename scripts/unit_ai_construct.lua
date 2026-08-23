@@ -409,10 +409,10 @@ local function constructExecute(uid, s, params)
             unit.stop(uid)
             if not job.consumed then
                 -- Revalidate the requested slot immediately before the
-                -- irreversible material payment (#805): a race can fill
-                -- it between claim and arrival (another worker's piece,
-                -- or a re-designation). Cancel rather than pay and
-                -- overwrite — no material lost, no stuck designation.
+                -- irreversible material payment (#805): another worker's
+                -- piece can fill it between claim and arrival (a
+                -- re-designation cannot, since #1595). Cancel rather than
+                -- pay and overwrite — no material lost, no stuck job.
                 local slot = jobSlot(job)
                 if slot and structure.hasAt(job.x, job.y, slot) then
                     reportFailure(uid,

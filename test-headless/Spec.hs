@@ -110,6 +110,7 @@ import qualified Test.Headless.Graphics.FontFallback as GraphicsFontFallback
 import qualified Test.Headless.Graphics.FontRepertoire as GraphicsFontRepertoire
 import qualified Test.Headless.Construct.Corners as ConstructCorners
 import qualified Test.Headless.Construct.Footprint as ConstructFootprint
+import qualified Test.Headless.Construct.PendingRefusal as ConstructPendingRefusal
 import qualified Test.Headless.Craft.Execute as CraftExecute
 import qualified Test.Headless.Craft.Bills as CraftBills
 import qualified Test.Headless.Power.Types as PowerTypes
@@ -486,6 +487,7 @@ main = hspec $ do
     describe "Font SDF atlas repertoire" GraphicsFontRepertoire.spec
     describe "Construct.Corners" ConstructCorners.spec
     describe "Construct.Footprint" ConstructFootprint.spec
+    describe "Construct.PendingRefusal" ConstructPendingRefusal.spec
     describe "Craft.Execute" CraftExecute.spec
     describe "Craft.Bills" CraftBills.spec
     describe "Power.Types" PowerTypes.spec
