@@ -6,6 +6,13 @@ Pattern: river tile adjacent to lake tile where the river's water
 surface is significantly BELOW the lake's water surface. This looks
 visually like the river is "sinking" into the ground at the lake
 edge (water drops from the lake's higher level to the river's lower).
+
+This is an exploratory DIAGNOSTIC, not a gate: it reports what it measures and
+never turns an anomaly count into a failure, so every analysis that completes
+exits 0 no matter how many anomalies it just printed.  (A missing file, invalid
+JSON, or other runtime error still fails the way it always has.)  The pass/fail
+river gates are `tools/test_river_pour.py` and `tools/test_river_stress.py`,
+and the thresholds they enforce live in `tools/river_thresholds.py`.
 """
 import json, sys
 from collections import Counter
