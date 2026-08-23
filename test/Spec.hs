@@ -63,20 +63,35 @@ main = do
             pure newState
         _ → error "Failed to create GLFW window"
 
-    hspec $ do
+    -- The project-owned `createWindow` coverage (#1573) is driven from
+    -- HERE rather than from inside an example. `createWindow` registers
+    -- `GLFW.terminate` in its outermost `allocResource` scope, and
+    -- `allocResource` runs cleanup when its continuation exits -- so an
+    -- example-local invocation would terminate GLFW, destroying the
+    -- window created above, under every later example including the
+    -- Vulkan surface and device specs. Wrapping the whole `hspec` run
+    -- keeps both windows and the GLFW initialization alive for every
+    -- example, and still runs the destroy/terminate cleanup once, after
+    -- the run exits. The observation it captures is passed to the GLFW
+    -- spec as data.
+    TestGLFW.withCreatedWindow env initialState $ \createObservation ->
+      hspec $ do
         -- Every spec below needs the GLFW window created above: the
         -- GLFW specs query it, and the Vulkan surface/device specs pass
         -- it to `createWindowSurface`. The GPU-free specs moved to
         -- `synarchy-test-headless` in #1153.
         -- GLFW tests
-        describe "GLFW Tests" $ TestGLFW.spec env initialState
+        describe "GLFW Tests" $ TestGLFW.spec env initialState createObservation
         -- Vulkan tests
         describe "Vulkan Tests" $ do
             describe "Engine.Graphics.Vulkan.Instance" $ VulkanInstance.spec env initialState
             describe "Engine.Graphics.Vulkan.Surface" $ VulkanSurface.spec env initialState
             describe "Engine.Graphics.Vulkan.Device" $ VulkanDevice.spec env initialState
 
-    -- Cleanup GLFW
+    -- Cleanup GLFW. `withCreatedWindow`'s resource cleanup has already
+    -- run its own `GLFW.terminate` by this point; a second call is
+    -- harmless (GLFW tolerates terminate on an uninitialized library)
+    -- and keeps this teardown correct if that bracket is ever removed.
     putStrLn "[Debug] Terminating GLFW..."
     GLFW.terminate
     putStrLn "[Debug] GLFW terminated"

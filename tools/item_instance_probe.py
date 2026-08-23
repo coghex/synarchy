@@ -22,7 +22,10 @@ item APIs target by it. This probe verifies, headless and without a GPU:
                  exact kit asked for.
   4. PERSIST   — save + load preserves instanceIds and the allocator
                  continues above every loaded id (a fresh item gets a new,
-                 non-colliding id). Best-effort; skipped with --no-save.
+                 non-colliding id). The save and the load are each tied to
+                 THEIR OWN request id, and run against a throwaway resource
+                 root, so the assertions cannot read a generation this
+                 invocation did not write. Skipped with --no-save.
 
 Exit 0 = all enabled checks passed.
 
@@ -35,15 +38,52 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import os
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
-from probelib import quit_engine, boot, send, wait_load_published
+from probelib import (boot, capture_request_id, quit_engine, send,
+                      wait_load_published, wait_save_complete)
 
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG = "/tmp/item_instance_engine.log"
 WEAPON = "pick_steel"   # kind: weapon — matches the humanoid right_hand slot
 SLOT = "right_hand"
+PAGE = "arena"          # an ORDINARY generated page that merely carries that
+                        # name (world.init, not world.initArena), so NB #365's
+                        # arena-save prohibition does not apply.
+
+
+def make_isolated_root(base: str) -> str:
+    """A throwaway resource root under `base`: the read-only content
+    families symlinked, `config/` COPIED without `*.local.yaml` (so the
+    run starts from the tracked defaults rather than this developer's
+    settings, and cannot write into theirs), and its OWN empty `saves/`.
+
+    The PERSIST phase below saves and loads for real. Without this the
+    engine would resolve the repository as its resource root and write
+    `saves/<slot>/` into the developer's live one, where the slot is
+    reachable — and rotatable — by an ordinary `cabal run`. The whole
+    root is created by this probe and deleted by it, so nothing the
+    probe did not create is ever removed (`shutil.rmtree` unlinks the
+    symlinks themselves, never walking into the repository they name).
+    Pattern from `tools/unified_transfer_probe.py:make_isolated_root`.
+    """
+    root = os.path.join(base, "root")
+    os.makedirs(root, exist_ok=True)
+    for family in ("scripts", "assets", "data"):
+        target = os.path.join(root, family)
+        if not os.path.exists(target):
+            os.symlink(os.path.join(REPO, family), target)
+    config_dst = os.path.join(root, "config")
+    if not os.path.exists(config_dst):
+        shutil.copytree(os.path.join(REPO, "config"), config_dst,
+                        ignore=shutil.ignore_patterns("*.local.yaml"))
+    os.makedirs(os.path.join(root, "saves"), exist_ok=True)
+    return root
 
 
 def bootstrap_defs(port: int) -> None:
@@ -150,6 +190,83 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(f"  [{mark}] {name}" + (f" — {detail}" if detail else ""))
 
 
+def persist_phase(port: int, uid: int, slot: str) -> None:
+    """PERSIST: a save and a load, each tied to ITS OWN request id.
+
+    Both `engine.saveWorld` and `engine.loadSave` only ACCEPT
+    synchronously; the encode + disk write (issue #758) and the
+    per-page reconstruction + publication (issue #763) both run
+    afterwards. So the acceptance booleans have to be READ, and
+    completion has to come from `engine.getSaveStatus()` /
+    `engine.getLoadStatus()` reaching a terminal phase carrying THIS
+    invocation's request id — a fixed-slot, sleep-paced sequence could
+    otherwise assert against whatever generation happened to be on disk.
+
+    Every step short-circuits: a rejected request, an uncaptured request
+    id, or an unsuccessful/timed-out terminal status stops the phase
+    before the next transaction or state assertion, so the two identity
+    assertions below only ever run against a session this call knows it
+    saved and loaded.
+    """
+    print("\n== PERSIST (save / load) ==")
+    ids_before = sorted({it["instanceId"] for it in picks(inventory(port, uid))})
+
+    accepted = send(port, f"return engine.saveWorld('{PAGE}', '{slot}')").strip()
+    check(f"engine.saveWorld('{PAGE}', '{slot}') accepted the request",
+          accepted == "true",
+          f"returned {accepted!r}" + ("" if accepted == "true" else
+                                      f"; the validation reason is logged in {LOG}"))
+    if accepted != "true":
+        return
+    save_id = capture_request_id(port, "return engine.getSaveStatus()")
+    check("engine.getSaveStatus() reports this save's own request id",
+          save_id is not None, f"request id={save_id}")
+    if save_id is None:
+        return
+    saved, save_status = wait_save_complete(port, save_id)
+    check(f"save request {save_id} reached SaveCaptureComplete", saved,
+          f"terminal status={save_status}")
+    if not saved:
+        return
+
+    # Issue #763: engine.loadSave only ACCEPTS synchronously -- the
+    # saved page (PAGE, its own id verbatim -- no more main_world remap)
+    # doesn't exist live until the transaction actually publishes.
+    load_accepted = send(port, f"return engine.loadSave('{slot}')").strip()
+    check(f"engine.loadSave('{slot}') accepted the request",
+          load_accepted == "true",
+          f"returned {load_accepted!r}" + ("" if load_accepted == "true" else
+                                           f"; the reason is logged in {LOG}"))
+    if load_accepted != "true":
+        return
+    load_id = capture_request_id(port, "return engine.getLoadStatus()")
+    check("engine.getLoadStatus() reports this load's own request id",
+          load_id is not None, f"request id={load_id}")
+    if load_id is None:
+        return
+    published, load_status = wait_load_published(port, 60, request_id=load_id)
+    check(f"load request {load_id} published", published,
+          f"terminal status={load_status}")
+    if not published:
+        return
+
+    send(port, f"world.show('{PAGE}'); return 'ok'")
+    # Unit ids are preserved across save/load (UnitSnapshot is keyed
+    # by UnitId), so the same uid still addresses the acolyte.
+    ids_after = sorted({it["instanceId"] for it in picks(inventory(port, uid))})
+    check("loaded inventory preserves instanceIds",
+          ids_after == ids_before and len(ids_after) > 0,
+          f"before={ids_before} after={ids_after}")
+    # A fresh item after load must get an id above every loaded one.
+    send(port, f"return unit.addItem({uid}, '{WEAPON}', 0)")
+    new_ids = sorted({it["instanceId"] for it in picks(inventory(port, uid))})
+    fresh = [i for i in new_ids if i not in ids_after]
+    allmax = max(ids_after) if ids_after else 0
+    check("post-load fresh item id continues above loaded ids",
+          bool(fresh) and min(fresh) > allmax,
+          f"fresh={fresh} loaded_max={allmax}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--seed", type=int, default=42)
@@ -158,12 +275,23 @@ def main() -> int:
     ap.add_argument("--no-save", action="store_true")
     args = ap.parse_args()
 
-    proc = boot(args.port, log=LOG)
+    # The PERSIST phase saves and loads for real, so this run gets its
+    # OWN resource root and its OWN per-invocation slot: nothing it
+    # writes lands in the developer's live `saves/`, two concurrent runs
+    # cannot collide, and the whole root (the only thing this probe
+    # created) goes away below whether the run passes or fails. `proc`
+    # is bound BEFORE the boundary because `boot` itself can `SystemExit`
+    # -- the root must still be cleaned up when it does.
+    tmpdir = tempfile.mkdtemp(prefix="item_instance_probe_")
+    slot = f"issue67_probe_{os.getpid()}"
+    proc = None
     try:
+        root = make_isolated_root(tmpdir)
+        proc = boot(args.port, log=LOG, args=["--resource-root", root])
         bootstrap_defs(args.port)
-        send(args.port, f"world.init('arena', {args.seed}, {args.size}, 3); return 'ok'")
+        send(args.port, f"world.init('{PAGE}', {args.seed}, {args.size}, 3); return 'ok'")
         send(args.port, "return world.waitForInit(180)", timeout=190)
-        send(args.port, "world.show('arena'); return 'ok'")
+        send(args.port, f"world.show('{PAGE}'); return 'ok'")
         send(args.port, "return world.loadChunksInRegion(-1,-1,1,1)")
         send(args.port, "return world.waitForChunks(120)", timeout=125)
 
@@ -391,35 +519,16 @@ def main() -> int:
 
 
         if not args.no_save:
-            print("\n== PERSIST (save / load) ==")
-            ids_before = sorted({it["instanceId"] for it in picks(inventory(args.port, uid))})
-            send(args.port, "engine.saveWorld('arena', 'issue67_probe'); return 'ok'")
-            send(args.port, "engine.loadSave('issue67_probe'); return 'ok'")
-            # Issue #763: engine.loadSave only ACCEPTS synchronously -- the
-            # saved page ("arena", its own id verbatim -- no more
-            # main_world remap) doesn't exist live until the transaction
-            # actually publishes.
-            published, load_status = wait_load_published(args.port, 60)
-            check("load transaction published", published, str(load_status))
-            send(args.port, "world.show('arena'); return 'ok'")
-            # Unit ids are preserved across save/load (UnitSnapshot is keyed
-            # by UnitId), so the same uid still addresses the acolyte.
-            ids_after = sorted({it["instanceId"] for it in picks(inventory(args.port, uid))})
-            check("loaded inventory preserves instanceIds",
-                  ids_after == ids_before and len(ids_after) > 0,
-                  f"before={ids_before} after={ids_after}")
-            # A fresh item after load must get an id above every loaded one.
-            send(args.port, f"return unit.addItem({uid}, '{WEAPON}', 0)")
-            new_ids = sorted({it["instanceId"] for it in picks(inventory(args.port, uid))})
-            fresh = [i for i in new_ids if i not in ids_after]
-            allmax = max(ids_after) if ids_after else 0
-            check("post-load fresh item id continues above loaded ids",
-                  bool(fresh) and min(fresh) > allmax,
-                  f"fresh={fresh} loaded_max={allmax}")
+            persist_phase(args.port, uid, slot)
 
         return summarize()
     finally:
-        quit_engine(args.port, proc)
+        # Shut the engine down BEFORE deleting the root it is running
+        # out of, then remove it -- passing or failing, that leaves no
+        # save artifact this run created behind.
+        if proc is not None:
+            quit_engine(args.port, proc)
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def summarize() -> int:
