@@ -536,11 +536,13 @@ jobs:
       # input (closed #618) instead of letting the call site refuse the
       # value. The total siblings decodeUtf8'/decodeUtf8With/
       # decodeUtf8Lenient are never flagged, and neither are comments,
-      # string literals, a same-named function from any OTHER module, or
-      # a local binding that shadows the name -- the scan resolves each
-      # file's own imports (found by token, so neither an indented nor
-      # an explicit-brace layout hides one), so it is exact in both
-      # directions. The regression this catches is commit 893cbd8f
+      # string literals, or a same-named function from any OTHER module
+      # -- the scan resolves each file's own imports (found by token, so
+      # neither an indented nor an explicit-brace layout hides one, and
+      # both `qualified` positions parse). A bare name it cannot resolve
+      # is reported rather than assumed shadowed; the tree's imports are
+      # all qualified, so that path is quiet. The regression this
+      # catches is commit 893cbd8f
       # (#1217), which reintroduced two strict calls 37 days after the
       # sweep and passed both review and the headless suite.
       - name: Lua strict-decode audit
