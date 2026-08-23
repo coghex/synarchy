@@ -37,7 +37,7 @@ approval.
 - [x] NCT-15. Tilling probe skips the required fluid-exclusion behavior — [#1609]
 - [x] NCT-16. Item-temperature probe skips its required cooling-rate behavior — [#1611]
 - [x] NCT-17. Core queue tests omit the custom timeout contract and real contention — [#1612]
-- [ ] NCT-18. Item-temperature persistence phase can load a stale save
+- [x] NCT-18. Item-temperature persistence phase can load a stale save — [#1613]
 - [ ] NCT-19. Vegetation/farming persistence probes can load stale saves
 - [ ] NCT-20. Item-identity persistence phase can load a stale save
 - [ ] NCT-21. Foraging persistence phase can load a stale save
@@ -800,7 +800,7 @@ revalidate `TQueue` itself.
 
 ## Item-temperature persistence probe
 
-### NCT-18. Item-temperature persistence phase can load a stale save
+### [#1613] NCT-18. Item-temperature persistence phase can load a stale save
 
 The item-temperature probe queues a save, sleeps for three seconds, then
 loads a fixed slot without observing whether the save was accepted or durably
