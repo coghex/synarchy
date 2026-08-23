@@ -585,16 +585,25 @@ enqueueSelectionChange env cmd = do
 --   window a placement would be accepted in and then dropped at the
 --   commit.
 --
---   The two kinds that move the generation WITHOUT touching the visible
---   list are effective by construction: an init REPLACES a page's state,
---   and a publish replaces the whole set.
+--   Destroying a page, and re-initialising one, are effective only when
+--   they touch a VISIBLE page. A placement binding only ever names the
+--   visible head — that is the page a pick resolves, and
+--   @building.canPlaceAt@ refuses outright when nothing is visible — so
+--   tearing down or rebuilding a hidden (or absent) page changes nothing
+--   it depends on, and rejecting clicks for it would be the same
+--   no-page-switch regression as a redundant show.
+--
+--   A load publish stays effective unconditionally: it replaces the
+--   whole session, and it is never ordinary traffic during placement.
 selectionRequestEffect ∷ WorldCommand → WorldManager → (Bool, [WorldPageId])
 selectionRequestEffect cmd mgr = case cmd of
     WorldShow pid          → visibility pid True
     WorldInitArenaDone pid → visibility pid True
     WorldHide pid          → visibility pid False
-    WorldDestroy pid       → (True, projectSelectionVisible pid False before)
-    WorldDestroyAll        → (True, [])
+    WorldDestroy pid       → visibility pid False
+    WorldDestroyAll        → (not (null before), [])
+    WorldInit pid _ _ _ _  → (pid `elem` before, before)
+    WorldInitArena pid     → (pid `elem` before, before)
     WorldLoadPublish{}     → (True, [])
     _                      → (True, before)
   where

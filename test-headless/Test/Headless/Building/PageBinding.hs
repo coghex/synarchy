@@ -1262,6 +1262,50 @@ pendingSpec =
         _ ← clickAt ls (px, py)
         expectStale env wsA wsB ls
 
+    it "does NOT invalidate a binding for a destroy that touches no \
+       \visible page" $ \(env, ls) → do
+        _ ← resetScene env
+        _ ← clearStubs ls
+        gen ← selectionGen env
+        -- A page that does not exist, and one that is registered but
+        -- HIDDEN. Neither is what any binding names — a pick only ever
+        -- resolves the visible head — so neither may cost a click.
+        _ ← evalDebug ls $ T.concat
+            [ "world.destroy('bind_page_missing'); "
+            , "world.destroy('", unWorldPageId pageB, "'); "
+            , "return 'queued'" ]
+        canPlaceAt ls shedName placeTile (Just (pageA, gen))
+            `shouldReturn` "true|nil|false"
+        runWorldQueue env
+        -- Still fresh once they have actually been applied.
+        selectionGen env `shouldReturn` gen
+        canPlaceAt ls shedName placeTile (Just (pageA, gen))
+            `shouldReturn` "true|nil|false"
+
+    it "DOES invalidate for a destroy of the visible page" $ \(env, ls) → do
+        _ ← resetScene env
+        _ ← clearStubs ls
+        gen ← selectionGen env
+        _ ← evalDebug ls $ T.concat
+            [ "world.destroy('", unWorldPageId pageA, "'); return 'queued'" ]
+        canPlaceAt ls shedName placeTile (Just (pageA, gen))
+            `shouldReturn` "false|page binding stale|true"
+
+    it "does NOT invalidate a binding when a HIDDEN page is \
+       \re-initialised" $ \(env, ls) → do
+        _ ← resetScene env
+        _ ← clearStubs ls
+        gen ← selectionGen env
+        logger ← readIORef (loggerRef env)
+        -- The visible-page counterpart of this is asserted below; a
+        -- hidden page's replacement leaves the binding alone.
+        handleWorldInitArenaCommand env logger pageB
+        mgr ← readIORef (worldManagerRef env)
+        wmVisible mgr `shouldBe` [pageA]
+        wmSelectionGen mgr `shouldBe` gen
+        canPlaceAt ls shedName placeTile (Just (pageA, gen))
+            `shouldReturn` "true|nil|false"
+
     it "heals after a request the handler REFUSES, so a later \
        \ineffective one still costs nothing" $ \(env, ls) → do
         _ ← resetScene env

@@ -115,13 +115,15 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
         -- "main_world" reuse after Exit to Menu) must REPLACE its entry,
         -- not stack a second one in wmWorlds (#58).
         --
-        -- #1602: replacing a page's WorldState under the SAME id is a
-        -- selection change even though wmVisible is untouched — a
-        -- binding captured against the old page would otherwise keep
+        -- #1602: replacing a VISIBLE page's WorldState under the SAME
+        -- id is a selection change even though wmVisible is untouched —
+        -- a binding captured against the old page would otherwise keep
         -- matching, and a placement validated against the old terrain
-        -- would commit into the replacement. Bump the generation, and
-        -- discharge the request that brought us here.
-        (bumpSelectionGen (completeSelectionChange mgr)
+        -- would commit into the replacement. Replacing a hidden one, or
+        -- registering a new id, invalidates nothing: a binding only ever
+        -- names the visible head. The request is discharged either way.
+        ((if pageId `elem` wmVisible mgr then bumpSelectionGen else id)
+            (completeSelectionChange mgr)
             { wmWorlds = (pageId, worldState)
                        : filter ((≢ pageId) . fst) (wmWorlds mgr) }, ())
 
@@ -434,10 +436,11 @@ handleWorldInitArenaCommand env logger pageId = do
         -- Dedup by page id: re-initialising an existing page (the common
         -- "main_world" reuse after Exit to Menu) must REPLACE its entry,
         -- not stack a second one in wmWorlds (#58).
-        -- #1602: as in handleWorldInitCommand — a replaced page is a
-        -- selection change, and the request that asked for it is
-        -- discharged here.
-        (bumpSelectionGen (completeSelectionChange mgr)
+        -- #1602: as in handleWorldInitCommand — replacing a VISIBLE
+        -- page is a selection change; the request is discharged either
+        -- way.
+        ((if pageId `elem` wmVisible mgr then bumpSelectionGen else id)
+            (completeSelectionChange mgr)
             { wmWorlds = (pageId, worldState)
                        : filter ((≢ pageId) . fst) (wmWorlds mgr) }, ())
 
