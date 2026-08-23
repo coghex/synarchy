@@ -78,10 +78,11 @@ prelude = lns
     , "NOW = 0"
     , "POS = { gridX = 0, gridY = 0 }"
     , "SKILL = 50.0"
+    , "ACTIVITY = 'idle'"
     , "GROUND = {}"
     , "XP = 0"
     , "CALLS = { find = 0, harvest = 0, pickup = 0, moveTo = 0,"
-    , "          setSkill = 0, tags = {} }"
+    , "          stop = 0, setSkill = 0, tags = {} }"
     , "FLORA = { ['10,0'] = { { gid = 1 }, { gid = 2 } } }"
     , "local function key(x, y) return string.format('%d,%d', x, y) end"
     , "engine = { gameTime = function() return NOW end,"
@@ -99,7 +100,9 @@ prelude = lns
     , "  pickup = function() CALLS.pickup = CALLS.pickup + 1 end,"
     , "  moveTo = function(_, x, y) CALLS.moveTo = CALLS.moveTo + 1"
     , "    MOVED_TO = { x = x, y = y } end,"
-    , "  stop = function() end,"
+    , "  getActivity = function() return ACTIVITY end,"
+    , "  stop = function() CALLS.stop = CALLS.stop + 1"
+    , "    ACTIVITY = 'idle' end,"
     , "  setAnimOverride = function() end,"
     , "  clearAnimOverride = function() end }"
     , "item = { pickupGround = function(_, gid)"
@@ -143,13 +146,19 @@ prelude = lns
     , "S = {}"
     , "local STEP = 0.5"
     , "local function place(x, y) POS.gridX, POS.gridY = x, y end"
-    -- One arbitration pass over the single action under test: score it,
-    -- then execute it, exactly as unit_ai.lua does for an idle unit
-    -- whose highest-scoring action this is.
+    -- One arbitration pass over the single action under test, on
+    -- scripts/unit_ai.lua's own re-execute rule: score it, take it as
+    -- the winner, and execute on a SWITCH or when the unit is idle —
+    -- never on a repeat tick of an action whose unit is still walking.
     , "local function step(dt)"
     , "  NOW = NOW + dt"
     , "  local u = harvest.utility(1, S, PARAMS)"
-    , "  if u > -math.huge then harvest.execute(1, S, PARAMS) end"
+    , "  if u <= -math.huge then return u end"
+    , "  local switching = S.currentAction ~= 'auto_harvest'"
+    , "  S.currentAction = 'auto_harvest'"
+    , "  if switching or ACTIVITY == 'idle' then"
+    , "    harvest.execute(1, S, PARAMS)"
+    , "  end"
     , "  return u"
     , "end"
     , "local function tick(seconds)"
@@ -165,6 +174,7 @@ prelude = lns
     -- until it wins back.
     , "local function preempt(seconds)"
     , "  harvest.onExit(1, S, PARAMS)"
+    , "  S.currentAction = 'treat_ally'"
     , "  NOW = NOW + seconds"
     , "end"
     -- The collecting phase runs on execute alone: it is bookkeeping
@@ -261,7 +271,7 @@ spec = describe "skill-scaled auto-harvest" $ do
                 , "local function run(skill, seconds)"
                 , "  NOW = 0; SKILL = skill; XP = 0; GROUND = {}"
                 , "  CALLS = { find = 0, harvest = 0, pickup = 0, moveTo = 0,"
-                , "            setSkill = 0, tags = {} }"
+                , "            stop = 0, setSkill = 0, tags = {} }"
                 , "  FLORA = { ['10,0'] = { { gid = 1 } } }"
                 , "  S = {}"
                 , "  place(9, 0)"
@@ -290,7 +300,7 @@ spec = describe "skill-scaled auto-harvest" $ do
                 , "local function timeToPick(r)"
                 , "  NOW = 0; SKILL = 50.0"
                 , "  CALLS = { find = 0, harvest = 0, pickup = 0, moveTo = 0,"
-                , "            setSkill = 0, tags = {} }"
+                , "            stop = 0, setSkill = 0, tags = {} }"
                 , "  FLORA = { ['10,0'] = { { gid = 1 } } }"
                 , "  S = {}"
                 , "  PARAMS.harvest_rate = r"
@@ -339,7 +349,7 @@ spec = describe "skill-scaled auto-harvest" $ do
                 -- take exactly as long as each other.
                 , "local function runRole(role)"
                 , "  NOW = 0; SKILL = 50.0; CALLS = { find = 0, harvest = 0,"
-                , "    pickup = 0, moveTo = 0, setSkill = 0, tags = {} }"
+                , "    pickup = 0, moveTo = 0, stop = 0, setSkill = 0, tags = {} }"
                 , "  FLORA = { ['10,0'] = { { gid = 1 } } }"
                 , "  S = { role = role }"
                 , "  place(9, 0)"
@@ -414,6 +424,38 @@ spec = describe "skill-scaled auto-harvest" $ do
                 , "  'and the resumed tick must not charge the gap either')"
                 , "assert(not harvested(),"
                 , "  'the interruption alone must not complete the pick')"
+                ]
+
+        it "charges nothing for the walk a switch lands in the middle \
+           \of: dispatch executes a winning action while the unit is \
+           \still moving, so picking must stop it first and start no \
+           \clock" $
+            runsOk $ lns
+                [ prelude
+                -- Another action owned the unit and had it walking; the
+                -- route happens to pass right by a ripe plant, so
+                -- auto_harvest wins arbitration mid-stride. This is
+                -- unit_ai.lua's `switching` branch: execute fires even
+                -- though the unit is NOT idle.
+                , "S.currentAction = 'store_materials'"
+                , "ACTIVITY = 'walking'"
+                , "place(9, 0)   -- already adjacent, but still moving"
+                , "step(0.5)"
+                , "assert(CALLS.stop == 1,"
+                , "  'entering adjacent harvest while moving must stop the unit')"
+                , "assert(S.lastHarvestAt == nil,"
+                , "  'and must start no picking clock on that tick')"
+                , "assert(not harvested(), 'nor harvest anything yet')"
+                -- Whatever the walk was still doing takes a while to
+                -- settle; none of it is picking.
+                , "NOW = NOW + 4.0"
+                , "step(0.5)"
+                , "assert((S.harvestProgress or 0) == 0,"
+                , "  'the travel interval must not be charged as picking')"
+                -- From here it is an ordinary stationary pick.
+                , "tick(2.0)"
+                , "assert(harvested(),"
+                , "  'and the pick then completes on its own working time')"
                 ]
 
         it "charges nothing for a collapse or a mid-animation tick, \

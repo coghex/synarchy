@@ -127,9 +127,25 @@ function unitAi.harvest.execute(uid, s, params)
     local cheb = math.max(math.abs(utx - tgt.x), math.abs(uty - tgt.y))
 
     if cheb <= 1 then
+        -- A unit that is adjacent but still MOVING is not picking yet.
+        -- Dispatch executes an action the moment it wins arbitration,
+        -- walking or not (scripts/unit_ai.lua's `switching or activity
+        -- == "idle"`), so a switch into auto_harvest can land here
+        -- mid-stride with the previous action's walk still under way.
+        -- Stop first and start no clock: the walk that follows is
+        -- travel, and the next tick would otherwise charge it as
+        -- picking. till/plant take the same unit.stop on arrival, and
+        -- the progress already banked on this plant is untouched.
+        local activity = unit.getActivity(uid)
+        if activity == "walking" or activity == "running" then
+            unit.stop(uid)
+            s.lastHarvestAt = nil
+            return
+        end
+
         unitAi.harvest.bindProgress(s, tgt.x, tgt.y)
         -- Elapsed time is charged only between two consecutive
-        -- ADJACENT, executing ticks, by #1291's two rules:
+        -- ADJACENT, STATIONARY, executing ticks, by #1291's two rules:
         --
         --   * Every path that swallows a tick DROPS the stamp as it
         --     happens, so the next reading charges nothing for the
