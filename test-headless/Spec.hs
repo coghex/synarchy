@@ -143,6 +143,8 @@ import qualified Test.Headless.UI.ResponsiveMenus as UIResponsiveMenus
 import qualified Test.Headless.UI.ResponsiveGameplay as UIResponsiveGameplay
 import qualified Test.Headless.UI.SettingsDefaultsKeybinds
     as UISettingsDefaultsKeybinds
+import qualified Test.Headless.UI.SettingsRevert
+    as UISettingsRevert
 import qualified Test.Headless.UI.TutorialHud as UITutorialHud
 import qualified Test.Headless.UI.UnicodeTextEditing as UIUnicodeTextEditing
 import qualified Test.Headless.Lua.TextWrapping as LuaTextWrapping
@@ -219,6 +221,7 @@ import qualified Test.Headless.Lua.UnitAiStall as LuaUnitAiStall
 import qualified Test.Headless.Lua.UnitAiLogisticsTargets as LuaUnitAiLogisticsTargets
 import qualified Test.Headless.Lua.UnitAiLoadReset as LuaUnitAiLoadReset
 import qualified Test.Headless.Lua.UnitAiReconcile as LuaUnitAiReconcile
+import qualified Test.Headless.Lua.SessionTeardown as LuaSessionTeardown
 import qualified Test.Headless.Lua.WorkClaimCapacity as LuaWorkClaimCapacity
 import qualified Test.Headless.Lua.Faction as LuaFaction
 import qualified Test.Headless.Unit.Faction as UnitFaction
@@ -449,6 +452,7 @@ main = hspec $ do
     LuaUnitAiLogisticsTargets.spec
     LuaUnitAiLoadReset.spec
     LuaUnitAiReconcile.spec
+    LuaSessionTeardown.spec
     LuaWorkClaimCapacity.spec
     LuaFaction.spec
     describe "World.CursorInfo" CursorInfo.spec
@@ -526,6 +530,7 @@ main = hspec $ do
     describe "UI.ResponsiveMenus" UIResponsiveMenus.spec
     describe "UI.ResponsiveGameplay" UIResponsiveGameplay.spec
     UISettingsDefaultsKeybinds.spec
+    UISettingsRevert.spec
     describe "UI.ContainerWindowStack" UIContainerWindowStack.spec
     UITransferGestures.spec
     UIConsumableGesture.spec

@@ -58,10 +58,10 @@
 -- stale session pointing at a dead endpoint can never survive a LOAD.
 -- A reset hook only fires from saveModules.applyAll(), never from an
 -- ordinary "Exit to Menu" -> world.destroyAll() -> fresh world.init()
--- -- that path clears the session explicitly in
--- scripts/pause_menu.lua's onExitToMenu, the same place
--- build_tool/mine_tool clear their own transient armed state for the
--- identical reason. Both paths run the SAME coupled teardown, so
+-- -- so this module also registers with the session-teardown boundary
+-- (scripts/lib/session_teardown.lua, #1610), which pause_menu runs on
+-- that path and nowhere else. build_tool/mine_tool register there for
+-- the identical reason. Both paths run the SAME coupled teardown, so
 -- neither can leave panels open or a unit held.
 --
 -- FAILURE HANDLING (#1254, slice UIT-5B). Every way a session can be
@@ -959,11 +959,27 @@ function M.onLevelClosed(sessionId, reason)
     return M.close(reason or "closed")
 end
 
--- Explicit teardown, kept under its historical name because
--- scripts/pause_menu.lua's onExitToMenu speaks it (#1014 review round
--- 1: the save-load reset hook alone misses that path).
+-- Explicit teardown, kept under its historical name because the
+-- session-teardown registration below speaks it (#1014 review round 1:
+-- the save-load reset hook alone misses the Exit to Menu path).
 function M.clear()
     M.close("cleared")
 end
+
+-- #1014, migrated onto the declared session-teardown boundary (#1610).
+-- Exit to Menu is the OTHER session-replacement path, and M.init's reset
+-- hook never sees it: that one fires only from saveModules.applyAll,
+-- which only a load reaches. Unlike it, this runs while the old session
+-- is still live (pauseMenu calls the boundary BEFORE world.destroyAll),
+-- so it is the ORDINARY coupled teardown -- `unitsAreStale` is
+-- deliberately not passed, because the uids this session recorded still
+-- name the units it is holding and they must actually be stopped.
+--
+-- At module scope rather than in M.init because the pcall this replaces
+-- `require`d the module unconditionally: a caller that has this module
+-- loaded but never initialized still had its session cleared, and still
+-- must.
+require("scripts.lib.session_teardown").register("transfer_session",
+    function() M.clear() end)
 
 return M
