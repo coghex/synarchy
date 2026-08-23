@@ -12,9 +12,9 @@ PR #832's committed building-footprint expansion, #831's tile-Z UI-wiring regres
 - [x] PRR-2. Slot-aware occupancy still stores only one pending construction job per tile — [#1595]
 - [ ] PRR-3. The location-content probe shares four fixed temporary fixture paths and never cleans them — [deferred]: NCT-22 unprocessed
 - [x] PRR-4. A freshwater tile above four lower neighbours is still forced back to a flat slope — [#1600]
-- [ ] PRR-5. The save barrier can snapshot Lua before processing causal messages produced by acknowledged owners
-- [ ] PRR-6. Negative-infinite pathing cost is clamped to a free step
-- [ ] PRR-7. The repository-wide lenient UTF-8 invariant has no automated static gate
+- [x] PRR-5. The save barrier can snapshot Lua before processing causal messages produced by acknowledged owners — [no-issue]
+- [x] PRR-6. Negative-infinite pathing cost is clamped to a free step — [#1603]
+- [x] PRR-7. The repository-wide lenient UTF-8 invariant has no automated static gate — [#1605]
 
 ## 1. Soil donor eligibility
 
@@ -123,7 +123,9 @@ PR #832's committed building-footprint expansion, #831's tile-Z UI-wiring regres
 
 ## 5. Lua participation in save quiescence
 
-### PRR-5. The save barrier can snapshot Lua before processing causal messages produced by acknowledged owners
+### [no-issue] PRR-5. The save barrier can snapshot Lua before processing causal messages produced by acknowledged owners
+
+> **Disposition:** No issue — the finding's own filing precondition resolves the other way. Enumerating every `luaQueue` writer shows four of the six save owners (`SaveUnit`, `SaveBuilding`, `SaveCombat`, `SaveSimulation`) enqueue nothing at all; the world thread's only non-load site is `LuaStampLocation`, which `World/Thread/ChunkLoading.hs:165-172` documents as re-issued on every chunk load precisely so no queue drain is needed, backed by the persisted `wgpLocationStamped` (`World/Generate/Types.hs:3,178`; `World/Save/Component/WorldGen.hs:1142,1175`) and two independent one-time gates in `scripts/location_stamper.lua:43-56` and `scripts/locations.lua:511-534`; the world's remaining sites belong to the mutually exclusive load transaction; and every `SaveInput` message is player input the finding itself says must stay queued for the resumed session.
 
 > **Captured note:** Treat engine-to-Lua messages produced by pre-boundary worker work as part of Lua's quiescence obligation. `SaveLua` cannot remain permanently acknowledged across passes merely because the interpreter is blocked inside `engine.saveWorld`; blocking the interpreter also prevents it from consuming newly queued causal work.
 
@@ -150,7 +152,7 @@ PR #832's committed building-footprint expansion, #831's tile-Z UI-wiring regres
 
 ## 6. Negative-infinite step costs
 
-### PRR-6. Negative-infinite pathing cost is clamped to a free step
+### [#1603] PRR-6. Negative-infinite pathing cost is clamped to a free step
 
 > **Captured note:** Classify every non-finite derived cost before sign clamping and map both infinities and NaN to `maxStepCost` (or reject the step). The current order handles NaN and positive infinity but lets negative infinity fall through the ordinary negative-cost branch to zero.
 
@@ -176,7 +178,7 @@ PR #832's committed building-footprint expansion, #831's tile-Z UI-wiring regres
 
 ## 7. UTF-8 sweep enforcement
 
-### PRR-7. The repository-wide lenient UTF-8 invariant has no automated static gate
+### [#1605] PRR-7. The repository-wide lenient UTF-8 invariant has no automated static gate
 
 > **Captured note:** Turn the exact strict-decoder search used to accept PR #825 into a small CI audit with a self-test. The manual probe covers two representative calls, not the 55-file tree-wide invariant, so one new strict `TE.decodeUtf8` call can silently reintroduce the failure class anywhere else.
 

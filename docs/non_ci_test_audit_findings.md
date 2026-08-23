@@ -31,18 +31,18 @@ approval.
 - [x] NCT-9. Legacy river diagnostics present anomalies as tests but never fail — [#1590]
 - [x] NCT-10. Legacy water diagnostics present anomalies as tests but never fail — [#1594]
 - [x] NCT-11. Baseline capture accepts variation in its strict worldgen invariants — [#1598]
-- [ ] NCT-12. Thermo probe treats a failed ice dump as absent evidence
-- [ ] NCT-13. Etymology UI probe skips required location and river entry points
-- [ ] NCT-14. Etymology UI probe skips its real scrolling interaction phase
-- [ ] NCT-15. Tilling probe skips the required fluid-exclusion behavior
-- [ ] NCT-16. Item-temperature probe skips its required cooling-rate behavior
-- [ ] NCT-17. Core queue tests omit the custom timeout contract and real contention
-- [ ] NCT-18. Item-temperature persistence phase can load a stale save
-- [ ] NCT-19. Vegetation/farming persistence probes can load stale saves
-- [ ] NCT-20. Item-identity persistence phase can load a stale save
-- [ ] NCT-21. Foraging persistence phase can load a stale save
-- [ ] NCT-22. Location persistence probes can load stale fixtures
-- [ ] NCT-23. Position-hold inventory overstates the executable fixture by one acolyte
+- [x] NCT-12. Thermo probe treats a failed ice dump as absent evidence — [no-issue]
+- [x] NCT-13. Etymology UI probe skips required location and river entry points — [#1604]
+- [x] NCT-14. Etymology UI probe skips its real scrolling interaction phase — [#1608]
+- [x] NCT-15. Tilling probe skips the required fluid-exclusion behavior — [#1609]
+- [x] NCT-16. Item-temperature probe skips its required cooling-rate behavior — [#1611]
+- [x] NCT-17. Core queue tests omit the custom timeout contract and real contention — [#1612]
+- [x] NCT-18. Item-temperature persistence phase can load a stale save — [#1613]
+- [x] NCT-19. Vegetation/farming persistence probes can load stale saves — [#1616]
+- [x] NCT-20. Item-identity persistence phase can load a stale save — [#1617]
+- [x] NCT-21. Foraging persistence phase can load a stale save — [#1618]
+- [x] NCT-22. Location persistence probes can load stale fixtures — [#1620]
+- [x] NCT-23. Position-hold inventory overstates the executable fixture by one acolyte — [#1621]
 
 ---
 
@@ -393,17 +393,25 @@ the scripts useful exploratory diagnostics, but not regression tests as their
 names imply, and makes any automation that invokes them incapable of detecting
 a regression.
 
+Renamed under #1590: the five now carry the repository's diagnostic-report
+naming (`tools/river_cutoff_report.py`, `river_lake_depth_report.py`,
+`river_lake_gaps_report.py`, `river_mouth_cliff_report.py`,
+`river_mouth_gap_report.py`) and each docstring names the actual river gates.
+The paragraph above describes the pre-rename tree; the analyses themselves are
+unchanged and still report without a verdict, which is the deliberate outcome —
+the misleading name was the defect, not the missing threshold.
+
 **Evidence:**
 
-- `tools/test_river_cutoff.py:62-106` counts dry gap tiles and prints their
+- `tools/river_cutoff_report.py:62-106` counts dry gap tiles and prints their
   severity and examples; its `__main__` only calls `main`.
-- `tools/test_river_lake_depth.py:17-47` reports river tiles sinking beside a
+- `tools/river_lake_depth_report.py:17-47` reports river tiles sinking beside a
   lake but has no pass/fail decision.
-- `tools/test_river_lake_gaps.py:28-109` labels river-lake cliffs and parallel
+- `tools/river_lake_gaps_report.py:28-109` labels river-lake cliffs and parallel
   chains as `ISSUE 1` and `ISSUE 2`, then returns normally.
-- `tools/test_river_mouth_cliff.py:18-49` counts surface cliffs at river mouths
+- `tools/river_mouth_cliff_report.py:18-49` counts surface cliffs at river mouths
   without a threshold or failure exit.
-- `tools/test_river_mouth_gap.py:43-125` distinguishes fillable and blocked
+- `tools/river_mouth_gap_report.py:43-125` distinguishes fillable and blocked
   mouth gaps, including the statement that fillable gaps mean water “should
   exist,” but likewise ends after reporting them.
 - This is distinct from `tools/test_river_pour.py` and
@@ -514,7 +522,17 @@ capture operation accepting a violation of its own strict-invariant contract.
 
 ## Worldgen-derived behavior probes
 
-### NCT-12. Thermo probe treats a failed ice dump as absent evidence
+### [no-issue] NCT-12. Thermo probe treats a failed ice dump as absent evidence
+
+> **Disposition:** No issue — fixed by commit `b6d67ff0` (2026-08-21) before this
+> finding was processed. The `except json.JSONDecodeError: tiles = []` path the
+> finding cites is gone; `run_ice_dump` now raises `DumpFailure` on a nonzero
+> exit, undecodable stdout, or a non-list payload
+> (`tools/thermo_altitude_probe.py:152-164`), and the caller turns that into
+> `rep.abort` and a non-zero exit (`:355-358`). The informational skip survives
+> only for a decoded dump with no interior ice, and ends MISSING rather than
+> passing. `tools/test_probe_flake.py:2124-2148` drives all three failure shapes
+> engine-free and asserts each aborts rather than skips.
 
 The thermo-altitude probe's ice-agreement phase launches a second
 `--dump=terrain,ice` process, but ignores its exit status and maps any JSON
@@ -556,7 +574,7 @@ with worldgen's ice placement.
 
 ## Offscreen Etymology UI probe
 
-### NCT-13. Etymology UI probe skips required location and river entry points
+### [#1604] NCT-13. Etymology UI probe skips required location and river entry points
 
 The offscreen Etymology probe declares a discovered location and a selected
 named river as dedicated real-UI phases, yet both phases return successfully
@@ -601,7 +619,7 @@ and the default fixture is selected specifically to exercise them.
 - **Remaining uncertainty:** The exact durable fixture tuple or construction
   mechanism is a design choice; the current successful skip is direct.
 
-### NCT-14. Etymology UI probe skips its real scrolling interaction phase
+### [#1608] NCT-14. Etymology UI probe skips its real scrolling interaction phase
 
 The Etymology UI probe declares arrow and wheel scrolling to be a real input
 routing phase.  It deliberately shrinks the framebuffer and increases UI
@@ -648,7 +666,7 @@ targets.
 
 ## Tilling behavior probe
 
-### NCT-15. Tilling probe skips the required fluid-exclusion behavior
+### [#1609] NCT-15. Tilling probe skips the required fluid-exclusion behavior
 
 The tilling probe declares that a fluid-covered tile must never receive a till
 designation, but it searches its generated region for a suitable tile and
@@ -689,7 +707,7 @@ fluid-exclusion rule unexercised.
 
 ## Item-temperature behavior probe
 
-### NCT-16. Item-temperature probe skips its required cooling-rate behavior
+### [#1611] NCT-16. Item-temperature probe skips its required cooling-rate behavior
 
 The item-temperature probe declares a Newtonian-rate check: an item farther
 from ambient should close more degrees over the same interval.  It instead
@@ -734,7 +752,7 @@ cooling-rate behavior.
 
 ## Core queue Hspec tests
 
-### NCT-17. Core queue tests omit the custom timeout contract and real contention
+### [#1612] NCT-17. Core queue tests omit the custom timeout contract and real contention
 
 The core queue suite covers only immediate `tryReadQueue`, `writeQueue`, and
 `flushQueue` behavior.  It never calls the blocking `readQueue` operation or
@@ -782,7 +800,7 @@ revalidate `TQueue` itself.
 
 ## Item-temperature persistence probe
 
-### NCT-18. Item-temperature persistence phase can load a stale save
+### [#1613] NCT-18. Item-temperature persistence phase can load a stale save
 
 The item-temperature probe queues a save, sleeps for three seconds, then
 loads a fixed slot without observing whether the save was accepted or durably
@@ -830,7 +848,7 @@ save/load-oracle correctness problem in the persistence check.
 
 ## Vegetation and farming persistence probes
 
-### NCT-19. Vegetation/farming persistence probes can load stale saves
+### [#1616] NCT-19. Vegetation/farming persistence probes can load stale saves
 
 The farm-AI and flora-growth probes each queue a save into a fixed slot in the
 ordinary resource root, wait an arbitrary three seconds, and load it without
@@ -875,7 +893,7 @@ manual probes that happen to use a fixed sleep.
 
 ## Item-identity persistence probe
 
-### NCT-20. Item-identity persistence phase can load a stale save
+### [#1617] NCT-20. Item-identity persistence phase can load a stale save
 
 The default item-instance probe queues a save into the ordinary resource root
 and immediately loads the shared `issue67_probe` slot.  It neither checks the
@@ -923,7 +941,7 @@ cover different inventory contracts and have independent lifecycle setup.
 
 ## Foraging persistence probe
 
-### NCT-21. Foraging persistence phase can load a stale save
+### [#1618] NCT-21. Foraging persistence phase can load a stale save
 
 The foraging probe saves a freshly harvested tile's regrowth state to a fixed
 slot in the normal resource root, sleeps for three seconds, and then loads
@@ -967,7 +985,7 @@ share the stale player-slot false-green path recorded here.
 
 ## Location persistence probes
 
-### NCT-22. Location persistence probes can load stale fixtures
+### [#1620] NCT-22. Location persistence probes can load stale fixtures
 
 Four location-oriented manual probes save their fixture to fixed slots in the
 ordinary resource root, sleep briefly, then restart or load without proving
@@ -1019,7 +1037,7 @@ already captured separately in `docs/project_review_859-848.md`.
 
 ## Manual-only probe inventory
 
-### NCT-23. Position-hold inventory overstates the executable fixture by one acolyte
+### [#1621] NCT-23. Position-hold inventory overstates the executable fixture by one acolyte
 
 > **Captured note:** Position-hold apparatus overstates its unit count
 
