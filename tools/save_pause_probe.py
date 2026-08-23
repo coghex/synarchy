@@ -59,7 +59,7 @@ import subprocess
 import sys
 import time
 import uuid
-from probelib import (quit_engine, boot, send, send_json,
+from probelib import (quit_engine, boot, send, capture_request_id,
                       wait_load_published)
 
 LOG = "/tmp/save_pause_probe_engine.log"
@@ -300,6 +300,7 @@ def main() -> int:
         # publishes. Wait for that before touching anything it names.
         published, status = wait_load_published(args.port)
         print(f"[load     ] load transaction published -> {published} ({status})")
+        first_load_id = status.get("id") if isinstance(status, dict) else None
         if not published:
             failures.append(f"load transaction never published: {status}")
         active_page = send(args.port, "return world.getActiveWorldId()").strip().strip('"')
@@ -358,28 +359,45 @@ def main() -> int:
                     f"the reload's own pause is observable, got "
                     f"isPaused={pre2_paused}")
             reload_ok = send(args.port, f'return engine.loadSave("{SAVE_NAME}")')
-            # A second load must be waited for BY ID: the first one left a
-            # terminal LoadPublished behind, which wait_load_published
-            # would otherwise accept immediately (probelib, round-5 note).
-            reload_status = send_json(args.port, "return engine.getLoadStatus()")
-            reload_id = (reload_status.get("id")
-                         if isinstance(reload_status, dict) else None)
+            # The reload must be waited for BY ITS OWN ID: the first load
+            # left a terminal LoadPublished behind, and an id-less wait
+            # accepts the first terminal phase it sees (probelib's round-5
+            # note), which here would be that stale one — the reloaded page
+            # is the whole point of this block. Capture it with
+            # capture_request_id, not a single query: a getLoadStatus()
+            # queued right as a load replaces the session comes back as a
+            # REJECTED string rather than a table, and a fast tiny-world
+            # load makes that a real window (probelib).
+            reload_id = capture_request_id(args.port,
+                                           "return engine.getLoadStatus()")
             print(f"[reload   ] engine.loadSave -> {reload_ok} (id={reload_id})")
-            published2, status2 = wait_load_published(args.port,
-                                                      request_id=reload_id)
-            print(f"[reload   ] load transaction published -> {published2} "
-                  f"({status2})")
-            if not published2:
+            if reload_id is None or reload_id == first_load_id:
+                # Without a distinct id there is no way to tell the reload's
+                # publication from the first load's, so the fresh-epoch
+                # guarantee this block exists for is gone. Fail rather than
+                # wait on an id that could match the wrong transaction.
                 failures.append(
-                    f"reload transaction never published: {status2}")
-            page2 = send(args.port,
-                         "return world.getActiveWorldId()").strip().strip('"')
-            print(f"[reload   ] active page after publish -> {page2!r}")
-            if not page2 or page2.lower() in ("nil", "null"):
-                failures.append(
-                    f"after reload: world.getActiveWorldId() named no page "
-                    f"({page2!r}); the resumed-speed check was skipped")
+                    f"after reload: could not capture the reload's own load "
+                    f"request id (got {reload_id!r}, first load was "
+                    f"{first_load_id!r}); the resumed-speed check was skipped")
+                page2 = ""
             else:
+                published2, status2 = wait_load_published(args.port,
+                                                          request_id=reload_id)
+                print(f"[reload   ] load transaction published -> {published2} "
+                      f"({status2})")
+                if not published2:
+                    failures.append(
+                        f"reload transaction never published: {status2}")
+                page2 = send(args.port,
+                             "return world.getActiveWorldId()").strip().strip('"')
+                print(f"[reload   ] active page after publish -> {page2!r}")
+                if not page2 or page2.lower() in ("nil", "null"):
+                    failures.append(
+                        f"after reload: world.getActiveWorldId() named no page "
+                        f"({page2!r}); the resumed-speed check was skipped")
+                    page2 = ""
+            if page2:
                 send(args.port, f'world.show("{page2}")', expect_result=False)
                 # Precondition, and what proves the page is REGISTERED:
                 # Clock.hs answers an unknown page with 1.0, which could
