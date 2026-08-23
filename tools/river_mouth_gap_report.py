@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test for the river mouth gap: dry tiles between flowing river
+Analyze the river mouth gap: dry tiles between flowing river
 water and a body of water (ocean/lake).
 
 The visual pattern:
@@ -16,11 +16,18 @@ A fillable gap is a sim/mask bug (water should exist).
 A blocked gap is a carving bug (terrain should be lower).
 
 Usage:
-  python3 tools/test_river_mouth_gap.py [path]
+  python3 tools/river_mouth_gap_report.py [path]
     path defaults to /tmp/dump.json; '-' reads from stdin.
 
   cabal run exe:synarchy -- --dump=terrain,fluid --seed N --worldSize 32 \\
-      --region -3,-3,3,3 2>/dev/null | python3 tools/test_river_mouth_gap.py -
+      --region -3,-3,3,3 2>/dev/null | python3 tools/river_mouth_gap_report.py -
+
+This is an exploratory DIAGNOSTIC, not a gate: it reports what it measures and
+never turns an anomaly count into a failure, so every analysis that completes
+exits 0 no matter how many anomalies it just printed.  (A missing file, invalid
+JSON, or other runtime error still fails the way it always has.)  The pass/fail
+river gates are `tools/test_river_pour.py` and `tools/test_river_stress.py`,
+and the thresholds they enforce live in `tools/river_thresholds.py`.
 """
 
 import json

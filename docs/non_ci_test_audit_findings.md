@@ -393,17 +393,25 @@ the scripts useful exploratory diagnostics, but not regression tests as their
 names imply, and makes any automation that invokes them incapable of detecting
 a regression.
 
+Renamed under #1590: the five now carry the repository's diagnostic-report
+naming (`tools/river_cutoff_report.py`, `river_lake_depth_report.py`,
+`river_lake_gaps_report.py`, `river_mouth_cliff_report.py`,
+`river_mouth_gap_report.py`) and each docstring names the actual river gates.
+The paragraph above describes the pre-rename tree; the analyses themselves are
+unchanged and still report without a verdict, which is the deliberate outcome —
+the misleading name was the defect, not the missing threshold.
+
 **Evidence:**
 
-- `tools/test_river_cutoff.py:62-106` counts dry gap tiles and prints their
+- `tools/river_cutoff_report.py:62-106` counts dry gap tiles and prints their
   severity and examples; its `__main__` only calls `main`.
-- `tools/test_river_lake_depth.py:17-47` reports river tiles sinking beside a
+- `tools/river_lake_depth_report.py:17-47` reports river tiles sinking beside a
   lake but has no pass/fail decision.
-- `tools/test_river_lake_gaps.py:28-109` labels river-lake cliffs and parallel
+- `tools/river_lake_gaps_report.py:28-109` labels river-lake cliffs and parallel
   chains as `ISSUE 1` and `ISSUE 2`, then returns normally.
-- `tools/test_river_mouth_cliff.py:18-49` counts surface cliffs at river mouths
+- `tools/river_mouth_cliff_report.py:18-49` counts surface cliffs at river mouths
   without a threshold or failure exit.
-- `tools/test_river_mouth_gap.py:43-125` distinguishes fillable and blocked
+- `tools/river_mouth_gap_report.py:43-125` distinguishes fillable and blocked
   mouth gaps, including the statement that fillable gaps mean water “should
   exist,” but likewise ends after reporting them.
 - This is distinct from `tools/test_river_pour.py` and
