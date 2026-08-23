@@ -225,6 +225,67 @@ rollbackFixtureLua = lns
     , "_G.payloadFor = function(v) return codec.encode({ v = v }) end"
     ]
 
+
+-- | Everything the REAL @lua.unit_ai@ component and
+--   @scripts/unit_ai_reconcile.lua@ reach outside a live engine, plus
+--   the registration and the reconciliation context both #1589 cases
+--   share (issue #1589).
+--
+--   @CTX@ describes a restored two-page session: item instance 900
+--   exists session-wide, unit 1 lives on page A and unit 2 on page B,
+--   BOTH pages carry their own bill 5, and ground item 7 exists on page
+--   A only. @MULE_MOVES@ counts the item hand-backs
+--   @unit_ai_repair.lua@'s abort path performs, which is how the
+--   repairJob drop proves it went through that path rather than a bare
+--   field assignment.
+unitAiReconcilePrelude ∷ [Text]
+unitAiReconcilePrelude =
+    [ "package.loaded['scripts.unit_ai'] = {}"
+    , "package.loaded['scripts.movement_speed'] = {"
+    , "  comfort = function() return 1.0 end, ordered = function() return 1.15 end,"
+    , "  sprint = function() return 2.0 end, meander = function() return 0.5 end }"
+    , "LOG, MULE_MOVES = {}, 0"
+    , "engine = { gameTime = function() return 1000 end,"
+    , "  logInfo = function(m) LOG[#LOG + 1] = m end,"
+    , "  logWarn = function() end, logError = function() end,"
+    , "  emitEventForUnit = function() end, loadYaml = function() return nil end }"
+    , "unit = { exists = function() return true end,"
+    , "  getInfo = function(u)"
+    , "    if u == 77 then"
+    , "      return { gridX = 0, gridY = 0, defName = 'technomule' } end"
+    , "    return { gridX = 0, gridY = 0, defName = 'acolyte' } end,"
+    , "  getAllIds = function() return { 77 } end,"
+    , "  getStat = function() return 1.0 end, getSkill = function() return 25.0 end,"
+    , "  getInventory = function() return {} end,"
+    , "  transferItemToUnit = function() MULE_MOVES = MULE_MOVES + 1"
+    , "    return true end,"
+    , "  moveTo = function() end, stop = function() end, addXP = function() end,"
+    , "  setAnimOverride = function() end, clearAnimOverride = function() end }"
+    , "world = { getActiveWorldId = function() return 'A' end,"
+    , "  getLocationInstance = function() return nil end }"
+    , "craft = { get = function(id)"
+    , "  if id == 'known_recipe' then return { id = id } end end }"
+    , "repair = { get = function(id)"
+    , "  if id == 'known_repair' then return { id = id } end end,"
+    , "  repairAt = function() return true end }"
+    , "item = { listGround = function() return {} end,"
+    , "  listDefs = function() return { { name = 'axe_steel' },"
+    , "                                 { name = 'whetstone' } } end }"
+    , "building = { findStation = function() return nil end,"
+    , "  getInfo = function() return nil end,"
+    , "  listDefs = function() return { { name = 'hut' } } end }"
+    , "flora = { exists = function() return true end }"
+    , "aiState = {}"
+    , "require('scripts.unit_ai_save').register(aiState)"
+    , "reconcile = require('scripts.unit_ai_reconcile')"
+    , "saveModules = require('scripts.lib.save_modules')"
+    , "codec = require('scripts.lib.data_codec')"
+    , "CTX = { item_instance = { [900] = true },"
+    , "        unitPage = { [1] = 'A', [2] = 'B' },"
+    , "        byPage = { craft_bill = { A = { [5] = true }, B = { [5] = true } },"
+    , "                   ground_item = { A = { [7] = true }, B = {} } } }"
+    ]
+
 spec ∷ Spec
 spec = do
     describe "data_codec (issue #761 requirement 8)" $ do
@@ -2253,15 +2314,18 @@ spec = do
             , "  recipeId = 'x', defName = 'wood' } } })"
             , "assert(not noInstanceId.ok,"
             , "  'a repairJob with no instanceId at all must reject the load')"
-            , "-- repairJob.bid is deliberately OPTIONAL -- unit_ai_repair.lua"
-            , "-- never actually sets it, so a repairJob with everything"
-            , "-- else present but no bid must NOT be rejected."
+            , "-- repairJob.bid is deliberately OPTIONAL. unit_ai_repair.lua"
+            , "-- DOES set it -- but only once the job reaches its walking"
+            , "-- phase and building.findStation resolves a station -- so a"
+            , "-- job saved in an earlier phase legitimately carries none,"
+            , "-- and requiring it would reject a real repair job."
             , "local repairNoBid = prepareWith({ [2] = { repairJob = {"
             , "  instanceId = { __ref = 'item_instance', id = 900 },"
             , "  recipeId = 'x', defName = 'wood' } } })"
             , "assert(repairNoBid.ok,"
-            , "  'repairJob.bid must stay optional (it is never actually set '"
-            , "  .. 'by unit_ai_repair.lua): ' .. table.concat(repairNoBid.errors or {}, '; '))"
+            , "  'repairJob.bid must stay optional (it is only set once the '"
+            , "  .. 'job reaches the walking phase in unit_ai_repair.lua): '"
+            , "  .. table.concat(repairNoBid.errors or {}, '; '))"
             ]
 
         it "extends the same missing-content-reference rejection to \
@@ -2775,6 +2839,110 @@ spec = do
             , "local errs = saveModules.registryStaticErrors()"
             , "assert(#errs == 0, 'the real registrations must resolve their "
               <> "own deps cleanly: ' .. table.concat(errs, '; '))"
+            ]
+
+    describe "unit_ai post-load reconciliation (issue #1589)" $ do
+        -- The WHOLE persisted path, not a hand-built table: a versioned
+        -- payload goes through the REAL registered lua.unit_ai
+        -- component's decode/migrate/validate/apply, and only then
+        -- through the REAL reconcile -- so the wire wrap/unwrap, the
+        -- per-entity apply and the stale-reference scrub are all
+        -- exercised against the same rows in one pass. Requirement 9
+        -- asks for exactly that here, including the per-page cases:
+        -- bill 5 exists on BOTH pages (two different entities that
+        -- share a number) and ground item 7 on page A only.
+        it "resolves or clears EVERY reference family the schema \
+           \declares on a row restored through the real component -- \
+           \including the six the pre-#1589 scrub never reached -- and \
+           \resolves the per-page kinds against the OWNING unit's page, \
+           \so a same-numbered bill on another page is a different \
+           \entity and a page A ground item is absent for a page B unit" $
+            runsOk $ lns $ unitAiReconcilePrelude ⧺
+            [ "-- v1 (bare ids) so the migration + wire wrap/unwrap run"
+            , "-- before the reconcile ever sees a row."
+            , "local prep = saveModules.prepareLoad({ { id = 'unit_ai',"
+            , "  version = 1, payload = codec.encode({"
+            , "  [1] = { attackTargetUid = 99,"
+            , "          craftJob = { billId = 5, bid = 3,"
+            , "                       recipeId = 'known_recipe' },"
+            , "          repairJob = { instanceId = 901, itemFetched = true,"
+            , "                        recipeId = 'known_repair',"
+            , "                        defName = 'axe_steel',"
+            , "                        consumable = 'whetstone' },"
+            , "          pickupOrder = { gid = 7 },"
+            , "          forageTarget = { kind = 'ground', gid = 71, x = 1, y = 1 },"
+            , "          forageLoot = { 7, 71 }, foragePhase = 'collecting',"
+            , "          harvestLoot = { 70 }, harvestPhase = 'collecting' },"
+            , "  [2] = { craftJob = { billId = 5, bid = 42,"
+            , "                       recipeId = 'known_recipe' },"
+            , "          pickupOrder = { gid = 7 } } }) } },"
+            , "  1, false, { unit = { [1] = true, [2] = true },"
+            , "              building = { [42] = true },"
+            , "              unitPage = { [1] = 'A', [2] = 'B' } })"
+            , "assert(prep.ok, 'a DANGLING reference is tolerated at load, "
+              <> "never a failure: ' .. table.concat(prep.errors or {}, '; '))"
+            , "saveModules.applyAll()"
+            , "assert(aiState[1] ~= nil and aiState[2] ~= nil,"
+            , "  'both rows apply -- their units are in the restored session')"
+            , "assert(aiState[1].craftJob.billId == 5,"
+            , "  'apply unwraps the wire reference back to a bare number, "
+              <> "which is what the reconcile then resolves')"
+            , ""
+            , "reconcile.reconcile(aiState, { 1, 2 }, { 42 }, CTX)"
+            , ""
+            , "local one = aiState[1]"
+            , "assert(one.attackTargetUid == nil,"
+            , "  'a unit ref outside the survivor set clears (the #195 case)')"
+            , "assert(one.craftJob == nil,"
+            , "  'craftJob is dropped WHOLE: its bill resolved, but its "
+              <> "station did not')"
+            , "assert(one.repairJob == nil and one.repairPhase == nil,"
+            , "  'repairJob goes out through unit_ai_repair.lua\\'s abort "
+              <> "path, which clears the phase too')"
+            , "assert(MULE_MOVES == 1,"
+            , "  'and hands the already-fetched item back to the mule, "
+              <> "rather than leaving it stranded: ' .. tostring(MULE_MOVES))"
+            , "assert(one.pickupOrder ~= nil and one.pickupOrder.gid == 7,"
+            , "  'ground item 7 exists on page A, where unit 1 lives, so its "
+              <> "order survives untouched')"
+            , "assert(one.forageTarget == nil,"
+            , "  'a ground forageTarget naming no live ground item clears')"
+            , "assert(#one.forageLoot == 1 and one.forageLoot[1] == 7,"
+            , "  'forageLoot keeps its resolvable gid as a dense array')"
+            , "assert(one.foragePhase == 'collecting',"
+            , "  'a still-populated forage list keeps its phase')"
+            , "assert(one.harvestLoot == nil and one.harvestPhase == nil,"
+            , "  'an EMPTIED harvest list leaves the shape its own "
+              <> "exhaustion path leaves')"
+            , ""
+            , "local two = aiState[2]"
+            , "assert(two.craftJob ~= nil and two.craftJob.billId == 5,"
+            , "  'unit 2 lives on page B, which has its OWN bill 5 -- a "
+              <> "different entity that happens to share the number')"
+            , "assert(two.pickupOrder == nil,"
+            , "  'ground item 7 exists only on page A, so it is absent for "
+              <> "a page B unit -- never resolved session-wide')"
+            , ""
+            , "-- Seven dangling declared edges: attackTargetUid,"
+            , "-- craftJob.bid, repairJob.instanceId, forageTarget.gid,"
+            , "-- forageLoot[2] and harvestLoot[1] on unit 1, plus unit 2's"
+            , "-- pickupOrder.gid. craftJob.billId resolved, so the sibling"
+            , "-- removed with the dropped job counts nothing."
+            , "local reported = tonumber(LOG[#LOG]:match('(%d+) stale ref'))"
+            , "assert(reported == 7,"
+            , "  'the reconcile log must count every dangling edge removed, "
+              <> "got ' .. tostring(reported))"
+            ]
+
+        it "refuses to reconcile at all when the engine supplies no \
+           \reconciliation context, rather than silently resolving \
+           \per-page ids against whichever page is active" $
+            runsOk $ lns $ unitAiReconcilePrelude ⧺
+            [ "aiState[1] = { pickupOrder = { gid = 7 } }"
+            , "assert(not pcall(reconcile.reconcile, aiState, { 1 }, {}, nil),"
+            , "  'an absent context must raise, not be treated as empty')"
+            , "assert(aiState[1].pickupOrder ~= nil,"
+            , "  'and must not have cleared anything on its way out')"
             ]
 
     describe "component version bounds (issue #761 round-4 review)" $ do

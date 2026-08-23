@@ -32,9 +32,23 @@ post-load reconcile prunes it:
   1. spawn unit A on flat ground, let the AI tick so aiState[A] exists,
   2. destroy A  → A no longer exists, but aiState[A] lingers (the leak),
   3. spawn unit B and keep it alive (control — its state must survive),
-  4. saveWorld + loadSave  → the engine fires onSaveLoaded after the
+  4. plant a stale reference from EVERY family unit_ai_save_refs.lua
+     declares onto B, while paused so the AI cannot self-heal them,
+  5. saveWorld + loadSave  → the engine fires onSaveLoaded after the
      load settles,
-  5. assert aiState[A] was pruned and aiState[B] preserved.
+  6. assert aiState[A] was pruned, aiState[B] preserved, and every
+     planted stale reference cleared.
+
+Step 4/6 is issue #1589. Before it, this probe planted only
+attackTargetUid and treatPending and still printed a general "stale
+nested references scrubbed" pass, while six declared families
+(craftJob, repairJob, pickupOrder, a ground forageTarget, forageLoot
+and harvestLoot) crossed the load boundary untouched. The planting
+happens BEFORE the save and the assertions read the state the engine's
+own automatic broadcast left behind — calling unitAi.onSaveLoaded by
+hand afterwards would skip the new Haskell→Lua reconciliation-context
+carrier entirely, which is the half that decides a PER-PAGE id against
+the owning unit's page.
 
 `unitAi.getState(uid)` is the public observation hook (returns the live
 aiState entry or nil). Exit 0 = fix verified.
@@ -68,6 +82,9 @@ def bootstrap_defs(port: int) -> None:
         ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
         ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
         ("data/units/*.yaml",      "engine.loadUnitYaml"),
+        # #1589: a planted craftJob/repairJob persists a RECIPE id, and
+        # prepareLoad rejects the whole load if it no longer resolves.
+        ("data/recipes/*.yaml",    "engine.loadRecipeYaml"),
     ]
     for pattern, fn in loaders:
         for path in sorted(glob.glob(pattern)):
@@ -107,6 +124,52 @@ def find_flat(port: int) -> tuple[int, int] | None:
             return int(gx), int(gy)
         time.sleep(1.0)
     return None
+
+
+# #1589: the stale ENTITY ids planted on the survivor before the save.
+# Deliberately far above every allocator this scenario can reach, so no
+# real entity in the restored session can ever answer to one of them.
+FAKE_UNIT = 987654
+FAKE_BILL = 987655
+FAKE_BUILDING = 987656
+FAKE_INSTANCE = 987657
+# Ground-item ids are a ZERO-based per-page allocator (Item.Ground), so
+# a low number here would be a plausible real gid rather than a stale
+# one. FAKE_GID..FAKE_GID+4 are used.
+FAKE_GID = 987700
+
+
+# Every declared reference family planted on the survivor, in the order
+# present_families() reports them. The pre-save check requires exactly
+# this string (an unplantable family would make the post-load all-clear
+# vacuous); the post-load check requires the empty string.
+PLANTED_FAMILIES = ("attackTargetUid,treatPending,craftJob,repairJob,"
+                    "pickupOrder,forageTarget,forageLoot,harvestLoot")
+
+
+def present_families(port: int, uid: int) -> str:
+    """Which of the planted stale families are still present on `uid`?
+
+    A comma-separated list in PLANTED_FAMILIES order, "" when none is,
+    or "NOSTATE" when the row itself is gone. Used twice: before the
+    save (proving the plant took) and after the load (proving the
+    reconcile cleared every one).
+    """
+    return send(port,
+        f"local s=require('scripts.unit_ai').getState({uid}); "
+        "if not s then return 'NOSTATE' end; "
+        "local held={}; "
+        "local function chk(name, present) "
+        "  if present then held[#held+1]=name end end; "
+        "chk('attackTargetUid', s.attackTargetUid ~= nil); "
+        "chk('treatPending', s.treatPending ~= nil); "
+        "chk('craftJob', s.craftJob ~= nil); "
+        "chk('repairJob', s.repairJob ~= nil); "
+        "chk('pickupOrder', s.pickupOrder ~= nil); "
+        "chk('forageTarget', s.forageTarget ~= nil); "
+        "chk('forageLoot', s.forageLoot ~= nil); "
+        "chk('harvestLoot', s.harvestLoot ~= nil); "
+        "return table.concat(held, ',')").strip().strip('"')
 
 
 def getstate(port: int, uid: int) -> str:
@@ -200,6 +263,50 @@ def main() -> int:
                   "missing) — snapshot filter not working")
             ok = False
 
+        # #1589: plant one stale reference from EVERY declared family on
+        # the SURVIVOR, before the save, so the post-load assertions read
+        # what the engine's own automatic onSaveLoaded broadcast did.
+        #
+        # Paused first, and this matters: several of these families
+        # self-heal on the very next thought tick (craftUtility drops a
+        # job whose bill has vanished, pickupUtility retires an order
+        # whose ground item is gone), so an unpaused plant would be
+        # cleared before it ever reached the save and the whole check
+        # would pass vacuously.
+        #
+        # The content ids are REAL (a live recipe, live item defs) while
+        # the ENTITY ids are not: a content reference that no longer
+        # resolves is rejected by prepareLoad before any live state is
+        # touched, whereas a dangling entity reference is exactly the
+        # tolerated case this probe exists to see cleared at reconcile.
+        ai = "require('scripts.unit_ai')"
+        if ok:
+            send(args.port, "engine.setPaused(true); return 'ok'",
+                 expect_result=False)
+            send(args.port,
+                 f"local s={ai}.getState({b}); "
+                 f"s.attackTargetUid={FAKE_UNIT}; "
+                 f"s.treatPending={{uid={FAKE_UNIT}}}; "
+                 f"s.craftJob={{billId={FAKE_BILL},bid={FAKE_BUILDING},"
+                 f"recipeId='forge_steel_dagger'}}; "
+                 f"s.repairJob={{instanceId={FAKE_INSTANCE},"
+                 f"recipeId='repair_sharpness',defName='axe_steel',"
+                 f"consumable='whetstone'}}; "
+                 f"s.pickupOrder={{gid={FAKE_GID},issuedAt=engine.gameTime()}}; "
+                 f"s.forageTarget={{kind='ground',gid={FAKE_GID + 1},x=0,y=0}}; "
+                 f"s.forageLoot={{{FAKE_GID + 2},{FAKE_GID + 3}}}; "
+                 f"s.foragePhase='collecting'; "
+                 f"s.harvestLoot={{{FAKE_GID + 4}}}; "
+                 f"s.harvestPhase='collecting'; return 'ok'",
+                 expect_result=False)
+            planted = present_families(args.port, b)
+            print(f"Planted stale families on B: {planted}")
+            if planted != PLANTED_FAMILIES:
+                print(f"FAIL: could not plant every stale family (got "
+                      f"{planted!r}, want {PLANTED_FAMILIES!r}) — the "
+                      f"post-load assertions would pass vacuously")
+                return 1
+
         # Save + load. The engine fires onSaveLoaded after the load
         # settles; the reconcile should prune A while keeping B.
         save_cmd = f'return engine.saveWorld("arena","{SAVE_NAME}")'
@@ -260,37 +367,43 @@ def main() -> int:
         else:
             print("PASS: dropped-unit AI state pruned, live-unit state kept")
 
-        # onSaveLoaded signature: (survUnitIds, survBuildingIds).
-        ai = "require('scripts.unit_ai')"
-
-        # (i) Nested-reference scrub on a loaded-page survivor: a survivor can
-        # embed a stale id in a nested field (attackTargetUid / treatPending).
-        # A loaded-page unit can only validly reference a page-mate, so an id
-        # outside the survivor set is stale and must be scrubbed. Plant fakes
-        # in B, call onSaveLoaded with B as the only survivor, assert refs
-        # cleared while B's entry stays intact.
-        FAKE = 987654
+        # (i) Nested-reference scrub on a loaded-page survivor (#195,
+        # extended to every declared family by #1589). A survivor can
+        # embed a stale id in any of the reference families
+        # unit_ai_save_refs.lua's REF_SCHEMA declares; a loaded-page unit
+        # can only validly reference a page-mate (and, for the per-page
+        # kinds, an entity on its OWN page), so every id planted above is
+        # stale and must be gone. These read the state the engine's own
+        # automatic onSaveLoaded broadcast left — nothing here calls the
+        # callback by hand, which is what makes the Haskell-side
+        # reconciliation context part of what is under test.
         if ok:
-            send(args.port,
-                 f"local s={ai}.getState({b}); "
-                 f"if s then s.attackTargetUid={FAKE}; "
-                 f"s.treatPending={{uid={FAKE}}} end; return 'ok'",
-                 expect_result=False)
-            send(args.port, f"{ai}.onSaveLoaded({{{b}}}, {{}}); return 'ok'",
-                 expect_result=False)
-            ref = send(args.port, f"local s={ai}.getState({b}); "
-                 f"return s and tostring(s.attackTargetUid) or 'NOSTATE'")
-            tp = send(args.port, f"local s={ai}.getState({b}); "
-                 f"return s and tostring(s.treatPending) or 'NOSTATE'")
-            print(f"Nested scrub: B.attackTargetUid -> {ref}, B.treatPending -> {tp}")
-            if ref != "nil" or tp != "nil":
-                print("FAIL: stale id in a survivor's nested field NOT scrubbed")
-                ok = False
-            elif getstate(args.port, b) != "present":
+            remaining = present_families(args.port, b)
+            print(f"Nested scrub: stale families still present -> {remaining}")
+            if remaining == "NOSTATE":
                 print("FAIL: B's own state was wrongly dropped (B is a survivor)")
                 ok = False
+            elif remaining != "":
+                print(f"FAIL: stale reference(s) survived the load reconcile: "
+                      f"{remaining}")
+                ok = False
             else:
-                print("PASS: stale nested references scrubbed, survivor kept")
+                # The collection families clear their owning phase on the
+                # same rule their own exhaustion path uses; a phase left
+                # behind with no list is the malformed leftover #1589
+                # requirement 3 forbids.
+                phases = send(args.port,
+                    f"local s=require('scripts.unit_ai').getState({b}); "
+                    "return tostring(s.foragePhase) .. ',' "
+                    ".. tostring(s.harvestPhase)").strip().strip('"')
+                print(f"Collection phases after scrub -> {phases}")
+                if phases != "nil,nil":
+                    print("FAIL: an emptied loot list left its collecting "
+                          "phase behind")
+                    ok = False
+                else:
+                    print("PASS: stale nested references scrubbed across every "
+                          "declared family, survivor kept")
 
         # (ii) Per-entity apply (issue #900). The registered component's
         # apply() now resolves EACH ROW against the restored session's own
