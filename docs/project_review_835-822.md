@@ -13,7 +13,7 @@ PR #832's committed building-footprint expansion, #831's tile-Z UI-wiring regres
 - [ ] PRR-3. The location-content probe shares four fixed temporary fixture paths and never cleans them — [deferred]: NCT-22 unprocessed
 - [x] PRR-4. A freshwater tile above four lower neighbours is still forced back to a flat slope — [#1600]
 - [x] PRR-5. The save barrier can snapshot Lua before processing causal messages produced by acknowledged owners — [no-issue]
-- [ ] PRR-6. Negative-infinite pathing cost is clamped to a free step
+- [x] PRR-6. Negative-infinite pathing cost is clamped to a free step — [#1603]
 - [ ] PRR-7. The repository-wide lenient UTF-8 invariant has no automated static gate
 
 ## 1. Soil donor eligibility
@@ -152,7 +152,7 @@ PR #832's committed building-footprint expansion, #831's tile-Z UI-wiring regres
 
 ## 6. Negative-infinite step costs
 
-### PRR-6. Negative-infinite pathing cost is clamped to a free step
+### [#1603] PRR-6. Negative-infinite pathing cost is clamped to a free step
 
 > **Captured note:** Classify every non-finite derived cost before sign clamping and map both infinities and NaN to `maxStepCost` (or reject the step). The current order handles NaN and positive infinity but lets negative infinity fall through the ordinary negative-cost branch to zero.
 
