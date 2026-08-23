@@ -32,6 +32,17 @@ function uiManager.showMenu(menuName, params)
     uiManager.previousMenu = previousMenu
     uiManager.currentMenu = menuName
 
+    -- A gameplay surface is being shown, so a session is live again:
+    -- release the #1610 teardown latch Exit to Menu set. These two menu
+    -- names are the ONE place a new game, a loaded save (loadingScreen
+    -- switches here once the transaction publishes) and the test arena
+    -- all converge -- and they are already the definition of "gameplay"
+    -- for uiManager.isGameplayView(). Only ever releases; the latch is
+    -- set exclusively by pauseMenu.onExitToMenu.
+    if menuName == "world_view" or menuName == "test_arena_view" then
+        require("scripts.lib.session_teardown").beginSession()
+    end
+
     -- When opening settings from a game view, keep the world visible behind
     local keepWorld = (menuName == "settings")
         and (previousMenu == "world_view" or previousMenu == "test_arena_view")
@@ -162,6 +173,14 @@ function uiManager.onSaveLoaded(survUnitIds, survBuildingIds)
     if activeId then
         worldManager.currentWorld = activeId
         worldManager.active = true
+        -- A published load IS a live session, so release the #1610
+        -- teardown latch here too. This broadcast is the ONE hook every
+        -- load reaches regardless of trigger (see above), and a load
+        -- fired from the debug console while sitting in the menu after an
+        -- Exit to Menu never passes through showMenu's gameplay branch.
+        -- RELEASING only: this fires no session-teardown callback and
+        -- clears nothing, so the load transaction is unchanged.
+        require("scripts.lib.session_teardown").beginSession()
         hud.worldId = activeId
         worldView.sendTexturesToWorld(activeId)
     end
