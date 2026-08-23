@@ -96,8 +96,9 @@ buildings:
 # spot instead of the anchor just designated. The grid is split into two
 # DISJOINT interleaved halves so the 1x1 control and the 2x3 target can
 # never land on the same tile — construction.designate keys a
-# CtBuilding purely by its anchor, so two fixtures on one tile would
-# silently overwrite the first instead of adding a second job.
+# CtBuilding purely by its anchor, so a second fixture on one tile
+# would be REFUSED outright (#1595) and this probe would silently be
+# testing one blueprint instead of two.
 def _candidate_grid(step: int, extent: int):
     pts = [(dx, dy) for dx in range(-extent, extent + 1, step)
                      for dy in range(-extent, extent + 1, step)]
