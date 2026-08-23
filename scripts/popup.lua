@@ -60,7 +60,24 @@ popup.texPopupDisabled = popup.texPopupDisabled or nil
 -- Read by popup.onMuteToggleClick to resolve which popup was clicked.
 popup.muteToggleByHandle = popup.muteToggleByHandle or {}
 
-popup.queue   = popup.queue  or {}  -- pending entries waiting for a slot
+-- Pending entries waiting for a slot.
+--
+-- #1592 -- PRE-BOOTSTRAP QUEUEING IS A DELIVERY DEFERRAL, NOT A DROP.
+-- onShowPopup accepts entries from the moment this script loads, which
+-- is well before the first ensureGameplayUI calls popup.bootstrap (an
+-- ordinary session sits on the main menu with popups queueable and no
+-- gameplay UI at all). Every entry accepted in that window stays
+-- eligible: popup.bootstrap drains the queue, so it is presented then,
+-- under the same maxActive bound, the same maxQueue backpressure cap
+-- and the same drain-time coalescing decision a post-bootstrap entry
+-- gets. The policy is category-independent -- no category is delivered
+-- early, and none is silently discarded for having arrived first.
+--
+-- The only things that end that eligibility are the two explicit
+-- teardowns, popup.dismissAll() and popup.shutdown(), both of which
+-- clear the queue unconditionally. Nothing else does, and in
+-- particular whether a card happens to be ACTIVE never decides it.
+popup.queue   = popup.queue  or {}
 popup.active  = popup.active or {}  -- currently-rendered popups
 
 -- Per-category active popup: cat → popup record. Used for the
@@ -723,6 +740,10 @@ dismiss = function(p)
 end
 
 drainQueue = function()
+    -- #1592: before bootstrap there is no page, font or texture set to
+    -- render into, so entries WAIT here rather than being dropped --
+    -- popup.bootstrap calls back into this function once there is. See
+    -- the popup.queue declaration for the full policy.
     if not popup.bootstrapped then return end
     while #popup.queue > 0 and #popup.active < popup.maxActive do
         local entry = table.remove(popup.queue, 1)
@@ -1038,10 +1059,33 @@ function popup.dismissTopmost()
 end
 
 function popup.dismissAll()
-    if #popup.active == 0 then return 0 end
+    -- #1592: the pending queue is discarded FIRST and unconditionally.
+    -- There used to be an `if #popup.active == 0 then return 0 end`
+    -- guard here, which is correct once the module is bootstrapped
+    -- (drainQueue keeps #active at maxActive while the queue is
+    -- non-empty, so no active cards implies an empty queue) but is
+    -- exactly wrong in the pre-bootstrap window: onShowPopup accepts
+    -- and queues entries from the moment the script loads, while
+    -- drainQueue refuses to run until popup.bootstrap. A teardown
+    -- reached before the first ensureGameplayUI -- Shift+Escape on the
+    -- main menu, whose cascade is deliberately ungated (#742) -- is
+    -- therefore the one state where the queue is the ONLY thing there
+    -- is to clear, and the guard returned before clearing it.
+    --
+    -- The snapshot is still taken before anything is dismissed: dismiss
+    -- drains the queue, so iterating popup.active live would mutate the
+    -- list being walked.
     local snapshot = {}
     for i = 1, #popup.active do snapshot[i] = popup.active[i] end
     popup.queue = {}
+    -- #1592: the return value counts the ACTIVE CARDS this call
+    -- dismissed, never the queued entries it discarded. Only one of the
+    -- two callers reads it -- scripts/init_keys.lua:50 treats `> 0` as
+    -- "Escape was consumed" (scripts/ui/view_teardown.lua's hudHide
+    -- sweep ignores it) -- and silently discarding a pending queue is
+    -- not something the player can see, so a queue-only teardown must
+    -- return 0 and let the same press continue down the cascade to the
+    -- log panels below.
     for _, p in ipairs(snapshot) do dismiss(p) end
     return #snapshot
 end
