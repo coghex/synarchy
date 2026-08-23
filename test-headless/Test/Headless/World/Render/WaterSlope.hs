@@ -8,8 +8,12 @@
 --   in all four branches, so a waterfall lip beside a multi-level drop
 --   rendered flat. The fix relaxes each branch from @≡ mySurf - 1@ to
 --   @< mySurf@ (one or more levels lower), leaving the wet/dry branch
---   split, equal/higher/unavailable handling, and the all-four-lower
---   flatten (@raw ≡ 15 → 0@) untouched.
+--   split, equal/higher/unavailable handling, and the mask-15 flatten
+--   (@raw ≡ 15 → 0@) untouched. That flatten is not an all-four-lower
+--   rule: each direction sets two corner bits, so seven of the sixteen
+--   lower-neighbour combinations union to 15 (issue #1600) — all seven
+--   are pinned by the mask-15 flatten describe below, and the four
+--   adjacent pairs that still slope by the describe after it.
 module Test.Headless.World.Render.WaterSlope (spec) where
 
 import UPrelude
@@ -72,6 +76,11 @@ west = (tx - 1, ty)
 north = (tx, ty - 1)
 south = (tx, ty + 1)
 
+-- | A dry terrain map with exactly the named neighbour cells one level
+--   below the home tile and every other cell at its own height.
+lowerAt ∷ [(Int, Int)] → VU.Vector Int
+lowerAt cells = terrMapWith [ (c, mySurf - 1) | c ← cells ]
+
 spec ∷ Spec
 spec = do
   describe "dry neighbour" $ do
@@ -105,12 +114,42 @@ spec = do
       waterSlopeAt dryMap flatTerr home noChunkLookup noTerrLookup 0 ty mySurf
         `shouldBe` 0
 
-  describe "fully enclosed water (all four neighbours lower)" $
-    it "flattens instead of sloping in all four directions at once" $
+  -- #1600: each grid direction contributes TWO corner bits (N=3, E=6,
+  -- S=12, W=9), so the @raw ≡ 15 → 0@ guard is NOT an all-four-lower
+  -- rule. Seven of the sixteen lower-neighbour combinations union to 15
+  -- and every one of them flattens; all seven are pinned here.
+  describe "mask-15 flatten (every combination whose corner bits union to 15)" $ do
+    it "flattens the opposite pair N+S (3|12)" $
+      slopeAt dryMap (lowerAt [north, south]) `shouldBe` 0
+    it "flattens the opposite pair E+W (6|9)" $
+      slopeAt dryMap (lowerAt [east, west]) `shouldBe` 0
+    it "flattens the three-neighbour set N+E+S (3|6|12)" $
+      slopeAt dryMap (lowerAt [north, east, south]) `shouldBe` 0
+    it "flattens the three-neighbour set N+E+W (3|6|9)" $
+      slopeAt dryMap (lowerAt [north, east, west]) `shouldBe` 0
+    it "flattens the three-neighbour set N+S+W (3|12|9)" $
+      slopeAt dryMap (lowerAt [north, south, west]) `shouldBe` 0
+    it "flattens the three-neighbour set E+S+W (6|12|9)" $
+      -- The combination observed in a live seed-1337 dump (issue #1600).
+      slopeAt dryMap (lowerAt [east, south, west]) `shouldBe` 0
+    it "flattens all four neighbours lower (3|6|12|9), at mixed depths" $
       slopeAt dryMap (terrMapWith
         [ (east, mySurf - 1), (west, mySurf - 2)
         , (north, mySurf - 3), (south, mySurf - 1)
         ]) `shouldBe` 0
+
+  -- The other side of that boundary: the four ADJACENT pairs union to a
+  -- three-corner mask, below 15, and still slope — so the seven above
+  -- are exactly the flattening combinations and no more.
+  describe "adjacent pairs still slope (the flatten boundary from below)" $ do
+    it "N+E maps to bits 1+2+4 (7)" $
+      slopeAt dryMap (lowerAt [north, east]) `shouldBe` 7
+    it "E+S maps to bits 2+4+8 (14)" $
+      slopeAt dryMap (lowerAt [east, south]) `shouldBe` 14
+    it "S+W maps to bits 1+4+8 (13)" $
+      slopeAt dryMap (lowerAt [south, west]) `shouldBe` 13
+    it "N+W maps to bits 1+2+8 (11)" $
+      slopeAt dryMap (lowerAt [north, west]) `shouldBe` 11
 
   describe "grid-to-render slope-direction mapping" $ do
     it "north neighbour maps to bits 1+2 (3)" $
