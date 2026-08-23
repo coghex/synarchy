@@ -7,7 +7,7 @@ module World.Thread.Command.Time
 import UPrelude
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.Capability.WorldSim
-    (WorldSimCapability(..))
+    (WorldSimCapability(..), withPlayerIntentHeld)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import World.Pause (setPauseResumeScale)
 import World.Types
@@ -76,12 +76,17 @@ handleWorldSetTimeScaleCommand wsc logger pageId scale = do
             -- effect when the clock starts again instead of silently
             -- becoming 1x. The live clock still reads 0 for the whole pause,
             -- so the invariant above is unchanged.
-            paused ← readIORef (wsEnginePausedRef wsc)
-            if paused
-                then do
-                    writeIORef (wsTimeScaleRef worldState) 0
-                    setPauseResumeScale worldState scale
-                else writeIORef (wsTimeScaleRef worldState) scale
+            -- Under the epoch mutex, so the pause READ and whichever
+            -- write it selects are one step: without it a pause epoch
+            -- opening or closing concurrently could pair this read with
+            -- the other branch's write.
+            withPlayerIntentHeld wsc $ \_ → do
+                paused ← readIORef (wsEnginePausedRef wsc)
+                if paused
+                    then do
+                        writeIORef (wsTimeScaleRef worldState) 0
+                        setPauseResumeScale worldState scale
+                    else writeIORef (wsTimeScaleRef worldState) scale
         Nothing →
             logDebug logger CatWorld $
                 "World not found for time scale update: " <> unWorldPageId pageId

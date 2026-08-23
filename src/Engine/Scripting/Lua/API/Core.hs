@@ -34,7 +34,7 @@ import Engine.Core.Types
     , PreviewBuilding(..), PreviewBuildingEntry(..))
 import Engine.Core.Log (logInfo, logWarn, logDebug, LogCategory(..))
 import Engine.Load.Status (loadInProgress)
-import World.Pause (imposePause, releasePause)
+import World.Pause (imposePauseHeld, releasePauseHeld)
 import Engine.Asset.Discovery (walkFilesWithExtension)
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
@@ -116,9 +116,12 @@ setPausedFn env = do
             -- over-counting is the safe direction and under-counting is
             -- not. A REJECTED call above deliberately doesn't count:
             -- nothing changed for anyone.
+            -- The @…Held@ variants: 'withPlayerIntent' already holds
+            -- the MVar that is also the epoch mutex ("World.Pause"), and
+            -- re-entering it would deadlock.
             withPlayerIntent (toWorldSimCapability env) $
-                if b then imposePause (toWorldSimCapability env)
-                     else releasePause (toWorldSimCapability env)
+                if b then imposePauseHeld (toWorldSimCapability env)
+                     else releasePauseHeld (toWorldSimCapability env)
             pure True
   Lua.pushboolean applied
   return 1

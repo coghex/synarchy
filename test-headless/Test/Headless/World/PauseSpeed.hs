@@ -36,7 +36,7 @@ module Test.Headless.World.PauseSpeed (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (readMVar)
 import Control.Exception (finally)
 import Data.IORef (newIORef, readIORef, writeIORef, modifyIORef')
@@ -46,7 +46,8 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
 import Engine.Core.Capability.Events (toEventsCapability, EventsCapability(..))
-import Engine.Core.Capability.WorldSim (toWorldSimCapability)
+import Engine.Core.Capability.WorldSim
+    (toWorldSimCapability, withPlayerIntentHeld)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Load.Status (beginLoad, failLoad)
@@ -57,6 +58,7 @@ import Engine.Scripting.Lua.API.Save (acceptSaveRequest)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import World.Pause (beginPauseEpoch, imposePause, releasePause, setPauseResumeScale)
+import World.Thread.Command.Save.WriteWorld (restoreAfterAutosave)
 import World.Types
 
 -- | The active page every example fast-forwards, and the bystander page
@@ -336,19 +338,19 @@ spec = describe "pause preserves the chosen world speed (#1599)" $ do
        \pause-configured save_load event, resumes to that speed" $ \env → do
         (wsA, _) ← installSession env 12
         ls ← newBackend env
+        logger ← readIORef (loggerRef env)
         runLua_ ls "require('scripts.pause')"
         withPausingCategory env "save_load" $ do
             mgr ← readIORef (worldManagerRef env)
             req ← acceptSaveRequest env mgr True
-            arPreScale req `shouldBe` Just 12
+            fmap arPreTimeScale req `shouldBe` Just 12
+            fmap arPausedPage req `shouldBe` Just (Just pageA)
 
-            -- The two writes World.Thread.Command.Save.WriteWorld's
-            -- restoreAfterAutosave performs once the transaction has
-            -- succeeded and the player has stayed idle: hand the
-            -- pre-request speed to the epoch, then close it.
-            forM_ (arPreScale req) $ setPauseResumeScale wsA
-            releasePause (toWorldSimCapability env)
+            -- The REAL restore the world thread runs once the
+            -- transaction has succeeded and the player has stayed idle.
+            restoreAfterAutosave env logger req `shouldReturn` True
             readIORef (wsTimeScaleRef wsA) `shouldReturn` 12
+            readIORef (enginePausedRef env) `shouldReturn` False
 
             -- The success event fires next, and this category is
             -- configured to pause on it. Its result is authoritative —
@@ -361,10 +363,50 @@ spec = describe "pause preserves the chosen world speed (#1599)" $ do
             runLua_ ls "require('scripts.pause').set(false)"
             readIORef (wsTimeScaleRef wsA) `shouldReturn` 12
 
--- | The pre-request scale an 'acceptSaveRequest' result carries, without
---   importing the DTO's field name into every example.
-arPreScale ∷ Maybe AutosaveRequest → Maybe Float
-arPreScale = fmap arPreTimeScale
+    it "an autosave restores the page it paused even when a different \
+       \page became visible while it ran" $ \env → do
+        (wsA, wsB) ← installSession env 12
+        logger ← readIORef (loggerRef env)
+
+        mgr ← readIORef (worldManagerRef env)
+        req ← acceptSaveRequest env mgr True
+        fmap arPausedPage req `shouldBe` Just (Just pageA)
+
+        -- The player brings the bystander to the front mid-transaction.
+        -- Restoring by \"whichever page is visible now\" would write 12
+        -- onto pageB, which this save never paused.
+        modifyIORef' (worldManagerRef env) $ \m → m { wmVisible = [pageB] }
+        restoreAfterAutosave env logger req `shouldReturn` True
+
+        readIORef (wsTimeScaleRef wsA) `shouldReturn` 12
+        readIORef (wsResumeScaleRef wsA) `shouldReturn` Nothing
+        readIORef (wsTimeScaleRef wsB) `shouldReturn` bystanderScale
+        readIORef (wsResumeScaleRef wsB) `shouldReturn` Nothing
+
+    it "opening and closing an epoch are serialized against each other, \
+       \so the flag can never be published before the capture" $ \env → do
+        (wsA, _) ← installSession env 10
+
+        -- Hold the mutex every epoch transition takes, then start a
+        -- pause on another thread. Its three writes are one critical
+        -- section, so NONE of them may land while the lock is held —
+        -- including the flag, which a concurrent resume would otherwise
+        -- observe before the capture it has to see.
+        done ← newIORef False
+        withPlayerIntentHeld (toWorldSimCapability env) $ \_ → do
+            _ ← forkIO $ do
+                imposePause (toWorldSimCapability env)
+                writeIORef done True
+            threadDelay 50000
+            readIORef (enginePausedRef env) `shouldReturn` False
+            readIORef (wsTimeScaleRef wsA) `shouldReturn` 10
+            readIORef (wsResumeScaleRef wsA) `shouldReturn` Nothing
+
+        waitUntil "the blocked imposePause to complete" (readIORef done)
+        readIORef (enginePausedRef env) `shouldReturn` True
+        readIORef (wsTimeScaleRef wsA) `shouldReturn` 0
+        readIORef (wsResumeScaleRef wsA) `shouldReturn` Just 10
+        releasePause (toWorldSimCapability env)
 
 -- | Run @body@ with one notification category temporarily configured to
 --   pause, restoring the session's real registry afterwards.

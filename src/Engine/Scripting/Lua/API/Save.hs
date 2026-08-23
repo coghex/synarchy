@@ -72,9 +72,9 @@ import World.Save.Integrity
     , capIntegrityErrors, renderIntegrityReport )
 import World.Types
     ( WorldCommand(..), WorldManager(wmWorlds)
-    , WorldState(wsGenParamsRef, wsTimeScaleRef), visiblePageState )
+    , WorldState(wsGenParamsRef, wsTimeScaleRef), visiblePage )
 import World.Page.Types (WorldPageId(..))
-import World.Pause (imposePause)
+import World.Pause (imposePause, imposePauseHeld)
 import Data.IORef (readIORef, atomicModifyIORef')
 import qualified Data.Set as Set
 import Engine.Save.Barrier
@@ -450,28 +450,33 @@ saveWorldFn env = do
 --   longer be captured as "the pre-save state" and handed straight back
 --   on success.
 --
---   The visible page is resolved exactly the way
---   "World.Thread.Command.Save.WriteWorld" resolves it — the head of
---   @wmVisible@ that is still a live page — so the scale captured here,
---   the one zeroed here, and the one the world thread zeroes are always
---   the same page's. With no visible page there is no clock at all; that
---   case is unreachable through the scheduler (which only fires in a
---   gameplay view) and is defensive only.
+--   The visible page is resolved by 'World.State.Types.visiblePage', the
+--   same rule "World.Pause" uses — the head of @wmVisible@ that is still
+--   a live page — so the scale captured here, the page zeroed here, and
+--   the page an eventual restore writes back to are always the same one.
+--   With no visible page there is no clock at all; that case is
+--   unreachable through the scheduler (which only fires in a gameplay
+--   view) and is defensive only.
 acceptSaveRequest
     ∷ EngineEnv → WorldManager → Bool → IO (Maybe AutosaveRequest)
 acceptSaveRequest env mgr wantAutosave =
     withPlayerIntentHeld (toWorldSimCapability env) $ \gen → do
         prePaused ← readIORef (enginePausedRef env)
-        -- Read BEFORE 'imposePause' zeroes it.
-        scale ← case visiblePageState mgr of
-            Just ws → readIORef (wsTimeScaleRef ws)
-            Nothing → pure 0
+        -- Read BEFORE 'imposePauseHeld' zeroes it, and record WHICH page
+        -- it came from: that page, not whatever is visible when the
+        -- transaction finishes, is the one an autosave restore may write.
+        let mVisible = visiblePage mgr
+        scale ← case mVisible of
+            Just (_, ws) → readIORef (wsTimeScaleRef ws)
+            Nothing      → pure 0
         -- The pause is authoritative and remains set even if the barrier
-        -- times out or serialization fails.
-        imposePause (toWorldSimCapability env)
+        -- times out or serialization fails. 'imposePauseHeld' because
+        -- this whole function already holds the epoch mutex.
+        imposePauseHeld (toWorldSimCapability env)
         pure $ if not wantAutosave then Nothing else Just AutosaveRequest
             { arPrePaused    = prePaused
             , arPreTimeScale = scale
+            , arPausedPage   = fst <$> mVisible
             , arIntentGen    = gen
             }
 

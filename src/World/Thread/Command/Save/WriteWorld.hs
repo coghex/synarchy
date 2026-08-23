@@ -12,6 +12,7 @@
 --   (issue #561).
 module World.Thread.Command.Save.WriteWorld
     ( handleWorldSaveCommand
+    , restoreAfterAutosave
     ) where
 
 import UPrelude
@@ -28,7 +29,7 @@ import Engine.Core.Capability.WorldSim
 import Engine.Core.Log (logInfo, logError, logWarn, LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
-import World.Pause (imposePause, releasePause, setPauseResumeScale)
+import World.Pause (imposePause, releasePauseHeld, setPauseResumeScale)
 import World.Save.Serialize (encodeSessionSnapshot, writeSaveFiles)
 import World.Save.Snapshot
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
@@ -421,7 +422,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                             -- later resume returns to it
                                             -- rather than to 1x.
                                             void $ restoreAfterAutosave
-                                                env logger visibleId mAutosave
+                                                env logger mAutosave
                                             emitEvent env "save_load" "World.Save" $
                                                 "Game saved: " <> saveName)
                                           `finally` completeTransaction env
@@ -434,6 +435,9 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
 -- | #913: hand an AUTOSAVE's pre-request pause state and visible-world
 --   time scale back to the player, once the transaction has actually
 --   succeeded. Returns whether anything was restored.
+--
+--   Restores onto 'World.Save.Types.arPausedPage', the page the request
+--   recorded at acceptance, rather than whatever is visible by now.
 --
 --   Three ways this deliberately does nothing:
 --
@@ -453,10 +457,9 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
 --   one-way "a failed save leaves you paused" safety ratchet is
 --   preserved untouched.
 restoreAfterAutosave
-    ∷ EngineEnv → LoggerState → Maybe WorldPageId → Maybe AutosaveRequest
-    → IO Bool
-restoreAfterAutosave _ _ _ Nothing = pure False
-restoreAfterAutosave env logger visibleId (Just ar)
+    ∷ EngineEnv → LoggerState → Maybe AutosaveRequest → IO Bool
+restoreAfterAutosave _ _ Nothing = pure False
+restoreAfterAutosave env logger (Just ar)
     | arPrePaused ar = pure False
     | otherwise = do
         -- The comparison and the writes are ONE critical section, under
@@ -464,20 +467,30 @@ restoreAfterAutosave env logger visibleId (Just ar)
         -- Read-then-write would leave a window in which the Lua thread
         -- applies a pause, sees a bump land, and has it overwritten here
         -- anyway by a value that was already stale when it was read.
+        -- 'restoreIfPlayerIdle' holds that lock across the action, which
+        -- is also the epoch mutex — hence the @…Held@ variants below.
         restored ← restoreIfPlayerIdle (toWorldSimCapability env)
                                        (arIntentGen ar) $ do
             -- The pre-request scale is handed to the pause epoch this
             -- save opened rather than written straight onto the page, so
-            -- 'releasePause' installs it in the same scale-then-flag
+            -- 'releasePauseHeld' installs it in the same scale-then-flag
             -- order every other resume uses — there is never even a
             -- momentary "unpaused at scale 0" reading of the pair, and
             -- the epoch is closed rather than left behind for the next
             -- resume to re-apply.
-            forM_ visibleId $ \vid → do
+            --
+            -- The target is 'arPausedPage' — the page this save's own
+            -- pause zeroed — and deliberately NOT the currently visible
+            -- one: the player can bring a different page to the front
+            -- while an autosave runs, and writing the speed there would
+            -- retime a page the save never paused (#1599 requirement 8).
+            -- A page that is gone by now simply gets nothing, which is
+            -- also what its vanished epoch does.
+            forM_ (arPausedPage ar) $ \vid → do
                 mgr ← readIORef (worldManagerRef env)
                 forM_ (lookup vid (wmWorlds mgr)) $ \ws →
                     setPauseResumeScale ws (arPreTimeScale ar)
-            releasePause (toWorldSimCapability env)
+            releasePauseHeld (toWorldSimCapability env)
         unless restored $
             logInfo logger CatWorld
                 "Autosave finished, but the player changed pause or time \

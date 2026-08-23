@@ -7,6 +7,7 @@ module World.State.Types
     , bumpQuadCacheGen
     , WorldManager(..)
     , emptyWorldManager
+    , visiblePage
     , visiblePageState
     , pageLanguageProvenance
     , CursorSnapshot(..)
@@ -384,18 +385,21 @@ emptyWorldManager = WorldManager
 --   start of a pause epoch, and @engine.saveWorld@'s acceptance
 --   ('Engine.Scripting.Lua.API.Save.acceptSaveRequest') reads the same
 --   page's scale into its 'World.Save.Types.AutosaveRequest'.
---   "World.Thread.Command.Save.WriteWorld" needs the page's ID rather
---   than its state and so spells the same rule out on @wmVisible@
---   directly; that is the one copy, and it exists only because this
---   returns the state.
+--   "World.Thread.Command.Save.WriteWorld" spells the same rule out on
+--   @wmVisible@ directly for its snapshot's own camera\/clock
+--   attribution; that is the one copy.
 --
 --   It lives here, on the record it projects, so nothing has to reach
 --   through an @EngineEnv@ to ask (issue #985's reason for the module
 --   this moved out of).
-visiblePageState ∷ WorldManager → Maybe WorldState
-visiblePageState mgr = case wmVisible mgr of
-    (vid:_) → lookup vid (wmWorlds mgr)
+visiblePage ∷ WorldManager → Maybe (WorldPageId, WorldState)
+visiblePage mgr = case wmVisible mgr of
+    (vid:_) → (\ws → (vid, ws)) <$> lookup vid (wmWorlds mgr)
     _       → Nothing
+
+-- | 'visiblePage' for a caller that needs only the state.
+visiblePageState ∷ WorldManager → Maybe WorldState
+visiblePageState = fmap snd ∘ visiblePage
 
 -- | The page-scoped language-provenance query (#1092 requirement 5):
 --   which generated language named this page, and under which
