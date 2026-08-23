@@ -1208,6 +1208,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.ResponsiveMenus
                    Test.Headless.UI.ResponsiveGameplay
                    Test.Headless.UI.SettingsDefaultsKeybinds
+                   Test.Headless.UI.SettingsRevert
                    Test.Headless.UI.TutorialHud
                    Test.Headless.UI.UnicodeTextEditing
                    Test.Headless.UI.Slider
