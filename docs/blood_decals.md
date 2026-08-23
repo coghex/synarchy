@@ -311,7 +311,21 @@ The complete registered Lua surface:
   a GPU.
 - `blood.gpuStats()` — GPU-side resource counts (bindless registrations,
   texture-size cache entries, the active page's live blood handle-map
-  size) for teardown/leak probes.
+  size) for teardown/leak probes. The first two are engine-wide totals,
+  not blood-only.
+- `blood.gpuHandles([handles])` — the blood-OWNED GPU identities those
+  totals only count. With no argument it reports the active page's blood
+  handle map (`{ id, handle, bindless, texSize }` per row, ascending by
+  texture id); with a dense array of integer texture handles it reports
+  exactly those, in order and without an `id`, so a probe can re-check
+  handles it captured before a teardown once that page is gone. A
+  malformed argument returns `nil` — including an element that is not a
+  Lua number with an integer value, a numeric string such as `'47'`
+  included. `bindless` and `texSize` are
+  membership in the two registries `disposeBloodRecord` drops
+  SEPARATELY, so a partial leak is visible; both read false with no
+  bindless system (headless). Purely observational — it mutates no blood
+  or GPU state.
 - `blood.clear()` — empties both the decal list and the texture pool on
   the active world.
 - `blood.getTrailState(uid)` — the per-unit ongoing-bleeding

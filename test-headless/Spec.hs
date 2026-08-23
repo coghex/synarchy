@@ -128,6 +128,7 @@ import qualified Test.Headless.Blood.Texture as BloodTexture
 import qualified Test.Headless.Blood.Impact as BloodImpact
 import qualified Test.Headless.Blood.Trail as BloodTrail
 import qualified Test.Headless.Blood.Teardown as BloodTeardown
+import qualified Test.Headless.Blood.LuaApi as BloodLuaApi
 import qualified Test.Headless.UI.CreateWorldControls as CreateWorldControls
 import qualified Test.Headless.UI.Tooltip as UITooltip
 import qualified Test.Headless.UI.InputOwnership as UIInputOwnership
@@ -350,6 +351,11 @@ main = hspec $ do
     -- installs its own two-page world manager and drives the real
     -- building-command drain, which would disturb the shared engine.
     aroundAll withHeadlessEngine PowerDemolition.spec
+    -- Own engine (#1585): the blood.gpuHandles gate installs its own
+    -- single-page world manager and writes that page's blood handle map
+    -- plus the engine-wide texture-size cache, which would disturb the
+    -- shared worldgen engine above.
+    aroundAll withHeadlessEngine BloodLuaApi.spec
     -- Own engine for the same reason: the #1208 ground-ownership gate
     -- installs TWO live pages and rewrites the unit/world manager refs
     -- to put a unit on the non-active one.
