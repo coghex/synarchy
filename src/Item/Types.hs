@@ -457,8 +457,10 @@ data ItemInstance = ItemInstance
 --     #1268 settled in @item_list.lua@: it cools continuously, so keying
 --     on it would split and re-merge a row forever. The group's
 --     temperature is presented honestly through @tempSummary@ instead,
---     and a future temperature-SENSITIVE action defines its own instance
---     selection rather than inheriting the representative from here.
+--     and a temperature-SENSITIVE action defines its own instance
+--     selection rather than inheriting the representative from here —
+--     the Drink gesture (#1580) fans out into one submenu entry per
+--     member, and any further such action owes the same.
 itemContentsSig ∷ ItemInstance → Text
 itemContentsSig inst
     | null (iiContents inst) = T.empty
