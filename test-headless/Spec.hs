@@ -91,6 +91,7 @@ import qualified Test.Headless.Lua.DebugQueue as LuaDebugQueue
 import qualified Test.Headless.Lua.RenderQueue as LuaRenderQueue
 import qualified Test.Headless.Lua.PreviewGeneration as LuaPreviewGeneration
 import qualified Test.Headless.Lua.PauseGate as LuaPauseGate
+import qualified Test.Headless.World.PauseSpeed as PauseSpeed
 import qualified Test.Headless.Lua.ScriptState as LuaScriptState
 import qualified Test.Headless.Input.LayerA as InputLayerA
 import qualified Test.Headless.Input.WheelPolicy as InputWheelPolicy
@@ -326,6 +327,13 @@ main = hspec $ do
     -- installs TWO live pages and rewrites the unit/world manager refs
     -- to put a unit on the non-active one.
     aroundAll withHeadlessEngine GroundPageOwnership.spec
+    -- Own engine for the same reason (#1599): the pause-speed gate
+    -- installs its own two-page world manager, rewrites wmVisible
+    -- mid-example, and drives the real scripts/pause.lua against the
+    -- live engine. Its pages carry NO gen params, so the real world
+    -- worker skips them -- but the worker has to be RUNNING, because one
+    -- example needs the queued world.setTimeScale drained.
+    aroundAll withHeadlessEngine PauseSpeed.spec
     -- Own engine for the same reason (#1593): the unit-simulation
     -- page-ownership gate installs its own three-page world manager and
     -- rewrites the unit manager to put a unit on each. WORLD-THREAD-FREE

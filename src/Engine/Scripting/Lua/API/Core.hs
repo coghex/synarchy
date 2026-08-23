@@ -34,6 +34,7 @@ import Engine.Core.Types
     , PreviewBuilding(..), PreviewBuildingEntry(..))
 import Engine.Core.Log (logInfo, logWarn, logDebug, LogCategory(..))
 import Engine.Load.Status (loadInProgress)
+import World.Pause (imposePause, releasePause)
 import Engine.Asset.Discovery (walkFilesWithExtension)
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
@@ -59,9 +60,16 @@ getFPSFn env = do
   Lua.pushnumber (Lua.Number fps)
   return 1
 
--- | engine.setPaused(bool) → bool (applied?) — write the global pause
---   flag. Side effects (timeScale, etc.) are handled Lua-side in
---   scripts/pause.lua so the engine doesn't depend on world state.
+-- | engine.setPaused(bool) → bool (applied?) — flip the global pause
+--   flag AND the paused page's clock, as one pair ("World.Pause").
+--
+--   #1599 moved that pairing in here from scripts/pause.lua. Lua could
+--   only maintain it for a pause Lua itself imposed, and every
+--   engine-side writer of the flag (a @pause: true@ notification
+--   category, a save's acceptance, a load publish) bypassed it — so the
+--   player's own resume handed back a stale speed. The engine now
+--   captures the visible page's chosen speed when a pause epoch opens
+--   and gives it back when the epoch closes, whoever opened it.
 --
 --   Issue #763: an UNPAUSE (setPaused(false)) while a
 --   load transaction is in flight is rejected outright — staging runs
@@ -75,14 +83,14 @@ getFPSFn env = do
 --   paused instead. A PAUSE (setPaused(true)) is never blocked: pausing
 --   an already-paused-or-not session can't violate that contract.
 --
---   The boolean return (previously no return value
---   at all) reports whether the flag was actually flipped —
---   scripts/pause.lua's pause.set was applying its OWN side effects
---   (the paused-state mirror, world.setTimeScale) unconditionally,
---   with no way to notice a rejection, which reintroduced the exact
---   "half-paused world: ticks frozen, but world time still advancing"
---   desync the module's own comments already describe for OTHER
---   causes — see that module for the fix on the calling side.
+--   The boolean return (previously no return value at all) reports
+--   whether the flag was actually flipped. It was added because
+--   scripts/pause.lua's pause.set applied its OWN side effects
+--   unconditionally, with no way to notice a rejection, which left
+--   "ticks frozen, but world time still advancing". The side effects
+--   have since moved in here (#1599), so a rejection now leaves both
+--   halves of the pair untouched by construction; the module still
+--   reads the answer to keep its own mirror honest.
 setPausedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 setPausedFn env = do
   b ← Lua.toboolean 1
@@ -109,7 +117,8 @@ setPausedFn env = do
             -- not. A REJECTED call above deliberately doesn't count:
             -- nothing changed for anyone.
             withPlayerIntent (toWorldSimCapability env) $
-                writeIORef (wsEnginePausedRef (toWorldSimCapability env)) b
+                if b then imposePause (toWorldSimCapability env)
+                     else releasePause (toWorldSimCapability env)
             pure True
   Lua.pushboolean applied
   return 1

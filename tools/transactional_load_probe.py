@@ -533,15 +533,16 @@ def _run(args, root: str) -> int:
             # publish, corrupting the retained old session's stored time
             # scale).
             #
-            # pause.paused and pause.prevTimeScale are the right
-            # observables here, and world.getTimeScale is not: the
-            # side effect a wrongly-applied unpause would have is
-            # `world.setTimeScale`, a QUEUED world command, so while the
-            # world thread is parked it would be invisible — and after
-            # publication the old page's scale is gone anyway, since
-            # publish replaces the whole session. These two are the
-            # state pause.set writes on the very code path being pinned,
-            # immediately after the `applied == false` early return.
+            # Three observables, all of which a wrongly-applied unpause
+            # would move. pause.paused and pause.prevTimeScale are the
+            # state pause.set itself writes on the very code path being
+            # pinned, immediately after the `applied == false` early
+            # return. world.getTimeScale is the third since #1599: the
+            # resume now retimes the paused page inside engine.setPaused
+            # (World.Pause), a direct write rather than the QUEUED
+            # world.setTimeScale it used to be, so it is visible here
+            # even with the world thread parked — which it was not
+            # before, and which is why this check could not exist then.
             mirror_before = send(args.port,
                 "return require('scripts.pause').paused").strip()
             prev_ts_before = send(args.port,
@@ -557,6 +558,8 @@ def _run(args, root: str) -> int:
                 "return require('scripts.pause').paused").strip()
             prev_ts = send(args.port,
                 "return require('scripts.pause').prevTimeScale").strip()
+            live_scale = send(args.port,
+                "return world.getTimeScale(world.getActiveWorldId())").strip()
             chk.ok(still_paused == "true",
                    "scripts.pause.set(false) during an in-flight load "
                    "leaves the engine paused")
@@ -570,6 +573,11 @@ def _run(args, root: str) -> int:
                    f"applies no time-scale side effect — pause."
                    f"prevTimeScale is untouched ({prev_ts_before!r} -> "
                    f"{prev_ts!r})")
+            chk.ok(abs(float(live_scale)) < 1e-6,
+                   f"scripts.pause.set(false) during an in-flight load "
+                   f"leaves the paused page's clock at 0 — the rejected "
+                   f"resume reinstated no speed (#1599) (got "
+                   f"{live_scale!r})")
             assert_original_still_authoritative("rejected unpause")
 
             # Inject stale old-session work (requirement 12) from inside

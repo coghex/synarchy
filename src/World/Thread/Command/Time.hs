@@ -9,6 +9,7 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
+import World.Pause (setPauseResumeScale)
 import World.Types
 
 handleWorldSetTimeCommand ∷ WorldSimCapability → LoggerState → WorldPageId → Int → Int → IO ()
@@ -66,11 +67,21 @@ handleWorldSetTimeScaleCommand wsc logger pageId scale = do
             -- has taken effect — e.g. a WorldSetTimeScale landing after a
             -- WorldSave, or a stale speed control. Applying it would leave
             -- isPaused() true alongside a nonzero stored scale, the exact
-            -- state #42 is about. The player's chosen speed is held by
-            -- scripts/pause.lua (prevTimeScale) and re-applied on resume,
-            -- where wsEnginePausedRef is already false and this clamp no-ops.
+            -- state #42 is about.
+            --
+            -- #1599: the request is REMEMBERED rather than dropped. It goes
+            -- to the page's pause epoch ('World.Pause'), which is what a
+            -- resume reinstates — so a speed chosen while paused, or one
+            -- whose queued command lost the race with a pause, still takes
+            -- effect when the clock starts again instead of silently
+            -- becoming 1x. The live clock still reads 0 for the whole pause,
+            -- so the invariant above is unchanged.
             paused ← readIORef (wsEnginePausedRef wsc)
-            writeIORef (wsTimeScaleRef worldState) (if paused then 0 else scale)
+            if paused
+                then do
+                    writeIORef (wsTimeScaleRef worldState) 0
+                    setPauseResumeScale worldState scale
+                else writeIORef (wsTimeScaleRef worldState) scale
         Nothing →
             logDebug logger CatWorld $
                 "World not found for time scale update: " <> unWorldPageId pageId
