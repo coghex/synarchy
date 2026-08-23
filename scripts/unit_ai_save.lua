@@ -65,29 +65,11 @@ local TRANSIENT_CANDIDATE_FIELDS = {
 local TRANSIENT_ORDER_FIELDS = { "transferOrder" }
 
 -- #1582: auto-harvest's picking accumulator and its work clock. Its own
--- list again, for a third distinct reason:
---
---   * It is a few seconds of work on ONE flora instance, re-earned in
---     under four game-seconds after a load. Persisting it buys nothing
---     a player could notice, and the same trade-off already classified
---     `repairPriority` transient (docs/persistence_state_inventory.md
---     §the unit_ai_claims row) rather than spend a `lua.unit_ai`
---     version bump plus a save-compat fixture on it.
---   * `lastHarvestAt` is a raw game-time stamp, and #1291's own rule
---     for an interval the AI could not tick through -- a save/load
---     boundary being the named example -- is that it charges nothing.
---     Dropping the stamp IS that answer, applied at the boundary
---     instead of after it.
---   * `harvestProgressAt` names a TILE, and progress is only ever
---     valid for the instance standing on it. A load replaces the whole
---     session, so nothing guarantees the same plant is still there.
---
--- Restarting is therefore the honest post-load state, and it is what
--- the absent fields already produce: unitAi.harvest.bindProgress seeds
--- a fresh accumulator on the first adjacent tick.
-local TRANSIENT_WORK_FIELDS = {
-    "harvestProgress", "harvestProgressAt", "lastHarvestAt",
-}
+-- list for a third distinct reason -- restarting the pick is the HONEST
+-- post-load state, not a loss. The three-part why is stated where the
+-- fields are owned, in scripts/unit_ai_harvest.lua's TRANSIENCE note.
+local TRANSIENT_WORK_FIELDS =
+    { "harvestProgress", "harvestProgressAt", "lastHarvestAt" }
 
 local function buildItemDefSet()
     local set = {}
@@ -269,10 +251,11 @@ end
 -- A shallow copy of one unit's aiState entry with every transient
 -- candidate field stripped (requirement 13/14) -- see
 -- TRANSIENT_CANDIDATE_FIELDS, TRANSIENT_ORDER_FIELDS and
--- TRANSIENT_WORK_FIELDS, which strip for three different reasons. Nested tables that DO get persisted
--- (craftJob, treatClaim, ...) are shared by reference with the live
--- state, which is safe: the snapshot is encoded (deep-copied into a
--- byte string) before this tick's AI loop could mutate them again.
+-- TRANSIENT_WORK_FIELDS, which strip for three different reasons.
+-- Nested tables that DO get persisted (craftJob, treatClaim, ...) are
+-- shared by reference with the live state, which is safe: the snapshot
+-- is encoded (deep-copied into a byte string) before this tick's AI
+-- loop could mutate them again.
 local function snapshotUnitState(s)
     local copy = {}
     for k, v in pairs(s) do copy[k] = v end

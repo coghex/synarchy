@@ -60,6 +60,31 @@ unitAi.harvest = {}
 -- WORK_TOTAL / (harvest_rate * (0.5 + farming/100)).
 unitAi.harvest.WORK_TOTAL = 1.0
 
+-- TRANSIENCE (#1582). s.harvestProgress, s.harvestProgressAt and
+-- s.lastHarvestAt are stripped from the lua.unit_ai save payload
+-- (scripts/unit_ai_save.lua's TRANSIENT_WORK_FIELDS), so a load starts
+-- every picker on a fresh plant. That is the honest post-load state,
+-- not a loss, for three reasons:
+--
+--   * Under four game-seconds of work is re-earned immediately.
+--     Persisting it buys nothing a player could notice, and the same
+--     trade-off already classified repairPriority transient rather
+--     than spend a lua.unit_ai version bump plus a save-compat fixture
+--     on it (docs/persistence_state_inventory.md, the unit_ai_claims
+--     row).
+--   * lastHarvestAt is a raw game-time stamp, and #1291's rule for an
+--     interval the AI could not tick through -- a save/load boundary
+--     being its named example -- is that it charges nothing. Dropping
+--     the stamp IS that answer, applied at the boundary rather than
+--     after it.
+--   * harvestProgressAt names a TILE, and the progress is only ever
+--     valid for the instance standing on it. A load replaces the whole
+--     session, so nothing promises the same plant is still there.
+--
+-- Nothing has to re-populate them: bindProgress below seeds a fresh
+-- accumulator on the first adjacent tick. s.harvestTarget is NOT in
+-- that set -- it persisted before #1582 and still does.
+
 -- Progress belongs to ONE flora instance, identified by its tile.
 -- Dropping it here is what stops partial work on a plant that vanished,
 -- was picked by someone else, or stopped being the nearest candidate
