@@ -111,6 +111,15 @@ spec = do
         it "a grandchild differing only in weight gives unequal signatures" $
             deepSigWith id `shouldNotBe` deepSigWith (\c → c { iiWeight = 0.75 })
 
+        it "a grandchild differing only in fill gives unequal signatures" $
+            deepSigWith id `shouldNotBe` deepSigWith (\c → c { iiCurrentFill = 1 })
+
+        it "a grandchild differing only in condition gives unequal signatures" $
+            deepSigWith id `shouldNotBe` deepSigWith (\c → c { iiCondition = 50 })
+
+        it "a grandchild differing only in sharpness gives unequal signatures" $
+            deepSigWith id `shouldNotBe` deepSigWith (\c → c { iiSharpness = 10 })
+
         it "a grandchild differing only in tracked temperature gives EQUAL signatures" $
             deepSigWith id `shouldBe` deepSigWith (\c → c { iiTemp = Just 60 })
 
