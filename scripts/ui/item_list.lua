@@ -96,24 +96,33 @@ end
 -- invisible, confusing split) + the nested contents signature (#67A).
 --
 -- What merging licenses is bounded by what a host can DO to a row
--- (#1268). The members of a group are interchangeable FOR THE
--- TEMPERATURE-INSENSITIVE, SINGLE-INSTANCE ACTIONS its hosts offer --
--- Equip / Unequip, Contents, Prioritize / Un-prioritize Repair, and the
--- singular "Store 1" / "Retrieve 1" -- so routing those to the
--- representative instanceId is correct (#67). A BATCH action does not
--- inherit that: "Store all" / "Retrieve all" name every member
--- explicitly through `instanceIds` (#1249), because the transfer
--- contract takes exact item references and a representative cannot
--- stand for twelve of them.
+-- (#1268). Three kinds of row action, and they read a group
+-- differently:
 --
--- Merging is NOT a claim that the members are mechanically
--- identical: tracked temperature (#344) is deliberately not a key
--- field (it cools continuously, so keying on it would split and
--- re-merge a row forever), and consumption effects scale continuously
--- with it (scripts/consumable.lua). A future temperature-SENSITIVE row
--- action must therefore define how the player picks the exact instance
--- it acts on; it may not inherit the representative from here.
--- The group's own temperature is presented honestly instead -- see
+--   TEMPERATURE-INSENSITIVE, SINGLE-INSTANCE -- Equip / Unequip,
+--   Contents, Prioritize / Un-prioritize Repair, and the singular
+--   "Store 1" / "Retrieve 1". The members are interchangeable for
+--   these, so routing them to the representative instanceId is correct
+--   (#67).
+--
+--   BATCH -- "Store all" / "Retrieve all". These do not inherit that:
+--   they name every member explicitly through `instanceIds` (#1249),
+--   because the transfer contract takes exact item references and a
+--   representative cannot stand for twelve of them.
+--
+--   TEMPERATURE-SENSITIVE -- "Drink" (#1580). Merging is NOT a claim
+--   that the members are mechanically identical: tracked temperature
+--   (#344) is deliberately not a key field (it cools continuously, so
+--   keying on it would split and re-merge a row forever), and
+--   consumption effects scale continuously with it
+--   (scripts/consumable.lua). So such an action may NOT inherit the
+--   representative and must let the player pick the exact instance:
+--   scripts/consumable_gestures.lua walks `instanceIds` and fans the
+--   gesture out into one submenu entry per member, each labelled with
+--   its OWN effective temperature. Any further temperature-sensitive
+--   action owes the same.
+--
+-- The group's own temperature is presented honestly alongside -- see
 -- `tempSummary` below.
 --
 -- Returns nil for an equipped entry when the host asked for equipped

@@ -1208,6 +1208,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.ResponsiveMenus
                    Test.Headless.UI.ResponsiveGameplay
                    Test.Headless.UI.SettingsDefaultsKeybinds
+                   Test.Headless.UI.SettingsRevert
                    Test.Headless.UI.TutorialHud
                    Test.Headless.UI.UnicodeTextEditing
                    Test.Headless.UI.Slider
@@ -1216,6 +1217,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.ItemList
                    Test.Headless.UI.ContainerWindowStack
         Test.Headless.UI.TransferGestures
+        Test.Headless.UI.ConsumableGesture
         Test.Headless.UI.TransferSession
                    Test.Headless.World.Calendar
                    Test.Headless.World.Climate
@@ -1272,6 +1274,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.UnitAiLogisticsTargets
                    Test.Headless.Lua.UnitAiLoadReset
                    Test.Headless.Lua.UnitAiReconcile
+                   Test.Headless.Lua.SessionTeardown
                    Test.Headless.Lua.WorkClaimCapacity
                    Test.Headless.Capability.Building
                    Test.Headless.Capability.Events
@@ -1297,8 +1300,11 @@ test-suite synarchy-test-headless
                    Test.Headless.Graphics.BindlessRelease
     build-depends: base >=4.20 && <5
                 , base-unicode-symbols
-                -- Test.Headless.Core.Queue's concurrent read/write case
-                -- uses Control.Concurrent.Async.concurrently (#1153).
+                -- Test.Headless.Core.Queue's two-thread FIFO case uses
+                -- Control.Concurrent.Async.concurrently (#1153). #1612
+                -- renamed that example away from "concurrent": its reader
+                -- is released only after every write has committed, so it
+                -- is two threads without read/write overlap.
                 , async
                 , containers
                 , GLFW-b
