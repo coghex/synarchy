@@ -10,10 +10,20 @@ enginePausedRef directly but left wsTimeScaleRef alone, so World.Thread.Time
 kept advancing the clock of a world the engine reported as "paused".
 
 This probe drives the real save/load path through the world thread and
-asserts the invariant holds on BOTH sides:
+asserts the invariant holds on BOTH sides, then that resuming the loaded
+session is coherent:
 
   1. After engine.saveWorld: engine.isPaused() AND getTimeScale == 0.
   2. After engine.loadSave:  engine.isPaused() AND getTimeScale == 0.
+  3. After resuming the LOADED session: NOT engine.isPaused() AND the
+     loaded page runs at the default speed -- never the non-default
+     speed this probe deliberately ran at before saving (#1572).
+
+Every page-targeted read after the load names the page
+world.getActiveWorldId() reported, never a hardcoded id: since #763 a
+loaded page keeps its saved id verbatim, and Clock.hs answers an
+UNREGISTERED page with its documented 1.0 default, so a wrong id reads
+as a healthy default world instead of failing.
 
 The timescale is zeroed on the world thread (handleWorldSaveCommand /
 handleWorldLoadSaveCommand), which runs asynchronously after the API call
@@ -30,7 +40,8 @@ the debug console to observe it headless).
 Usage:
   python3 tools/save_pause_probe.py [--port 9142] [--seed 42]
 
-Exit 0 = invariant held on both sides.
+Exit 0 = the invariant held on both sides and the loaded session
+resumed at the default speed.
 """
 from __future__ import annotations
 
@@ -51,6 +62,26 @@ LOG = "/tmp/save_pause_probe_engine.log"
 # make a later run falsely pass by loading old data. A fresh random name avoids
 # both, and main() additionally refuses to run if the directory already exists.
 SAVE_NAME = "probe_pause_" + uuid.uuid4().hex[:12]
+
+# Pause/resume goes through scripts.pause, the single source of truth for
+# the paired engine.setPaused + retime effect, rather than the raw engine
+# binding. It has to be reached through package.loaded the way the other
+# save/load probes do (tools/transactional_load_probe.py): loadScript
+# sandboxes each script's globals, so `type(pause)` in the debug console
+# is nil and the bare `pause.set(false)` this file used to send raised
+# instead of unpausing anything.
+PAUSE = "require('scripts.pause')"
+
+# The speed this probe runs the world at BEFORE saving. Deliberately not
+# 1.0: with a session that begins and ends at the default, "the load reset
+# the speed" and "the load kept the saved speed" are the same observation,
+# and check 3 above cannot distinguish them (#1572).
+PRE_SAVE_SCALE = 4.0
+
+# What a resumed loaded session must run at. This is the value check 3
+# compares against; flipping it to something the engine will not report is
+# the one-line edit that demonstrates the oracle can fail.
+RESUMED_SCALE = 1.0
 
 
 def wait_for_init(port: int, timeout: float = 300.0) -> str:
@@ -117,6 +148,51 @@ def stays_frozen_under_race(port: int, page: str, hold: float = 2.5):
     return True, paused, ts
 
 
+def wait_time_scale(port: int, page: str, expected: float,
+                    timeout: float = 10.0):
+    """Poll until `page` reports `expected`, or timeout. world.setTimeScale
+    is QUEUED to the world thread (World.Thread.Command.Time), so a fixed
+    sleep is not a completion boundary. Returns (ok, last_ts)."""
+    deadline = time.time() + timeout
+    ts = float("nan")
+    while time.time() < deadline:
+        ts = as_float(send(port, f'return world.getTimeScale("{page}")'))
+        if ts == expected:
+            return True, ts
+        time.sleep(0.3)
+    return False, ts
+
+
+def wait_unpaused(port: int, timeout: float = 10.0):
+    """Poll until the engine reports itself running. Returns (ok, paused)."""
+    deadline = time.time() + timeout
+    paused = True
+    while time.time() < deadline:
+        paused = as_bool(send(port, "return engine.isPaused()"))
+        if not paused:
+            return True, paused
+        time.sleep(0.3)
+    return False, paused
+
+
+def wait_resumed(port: int, page: str, expected: float, timeout: float = 15.0):
+    """Poll until (NOT isPaused AND page reports `expected`), or timeout.
+
+    Both halves need polling for different reasons: pause.set flips the
+    engine flag synchronously but the speed it reinstates rides the queued
+    WorldSetTimeScale path. Returns the last (ok, paused, ts) observed, so
+    a timeout reports which half was wrong."""
+    deadline = time.time() + timeout
+    paused, ts = True, float("nan")
+    while time.time() < deadline:
+        paused = as_bool(send(port, "return engine.isPaused()"))
+        ts = as_float(send(port, f'return world.getTimeScale("{page}")'))
+        if not paused and ts == expected:
+            return True, paused, ts
+        time.sleep(0.3)
+    return False, paused, ts
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9142)
@@ -143,6 +219,23 @@ def main() -> int:
         pre_paused = as_bool(send(args.port, "return engine.isPaused()"))
         print(f"[pre-save ] isPaused={pre_paused} timeScale={pre_ts}")
 
+        # Run the world at a NON-default speed before saving. Without this
+        # the session begins and ends at 1.0, so the post-load resumed-speed
+        # check below cannot tell "the load reset the speed to the default"
+        # from "the load handed back the speed the save was taken at" — both
+        # read 1.0. Fast-forwarding here makes those two different
+        # observations (#1572).
+        send(args.port, f'world.setTimeScale("pausetest", {PRE_SAVE_SCALE})',
+             expect_result=False)
+        ff_ok, ff_ts = wait_time_scale(args.port, "pausetest", PRE_SAVE_SCALE)
+        print(f"[pre-save ] fast-forward to {PRE_SAVE_SCALE} -> timeScale={ff_ts} "
+              f"{'ok' if ff_ok else 'FAIL'}")
+        if not ff_ok:
+            failures.append(
+                f"before save: could not run the world at a non-default speed "
+                f"(asked for {PRE_SAVE_SCALE}, page reports {ff_ts}); the "
+                f"post-load resumed-speed check would be vacuous")
+
         # 2. Save → world thread auto-pauses AND must freeze the clock.
         save_ok = send(args.port, f'return engine.saveWorld("pausetest", "{SAVE_NAME}")')
         print(f"[save     ] engine.saveWorld -> {save_ok}")
@@ -160,14 +253,32 @@ def main() -> int:
                 f"after save: a stray setTimeScale un-froze a paused world "
                 f"(isPaused={rp} timeScale={rt})")
 
-        # A resumed loaded session uses the normal default speed, never the
-        # pre-save fast-forward speed retained by older save formats.
-        send(args.port, 'pause.set(false)', expect_result=False)
-        time.sleep(0.5)
-        resumed = as_float(send(args.port, 'return world.getTimeScale("main_world")'))
-        print(f"[resume   ] loaded timeScale={resumed}")
-        if resumed != 1.0:
-            failures.append(f"after load/unpause: expected default scale 1, got {resumed}")
+        # Resume before loading, so "the load left the session paused" below
+        # is a real transition rather than a state that was already true.
+        # engine.loadSave pauses synchronously on acceptance
+        # (Engine.Scripting.Lua.API.Save), so this is the precondition that
+        # check 2 needs to mean anything.
+        #
+        # This is where #1572's broken resumed-speed assertion used to sit —
+        # BEFORE engine.loadSave, reading a "main_world" page this probe
+        # never registers, so Clock.hs's absent-page 1.0 default made it
+        # compare 1.0 to 1.0 whatever any real page was doing. The repaired
+        # check is at the end of the run, on the page the load published.
+        #
+        # Note the speed this resumes at is 1.0, not PRE_SAVE_SCALE: the
+        # save-race check just above enqueued setTimeScale(page, 1.0) while
+        # paused, and #1599 routes a paused request into the page's
+        # pause-epoch resume scale, which is what a resume reinstates. The
+        # save on disk was still taken at PRE_SAVE_SCALE, which is what the
+        # post-load check cares about.
+        send(args.port, f'{PAUSE}.set(false)', expect_result=False)
+        unpaused_ok, pre_load_paused = wait_unpaused(args.port)
+        print(f"[pre-load ] resumed before loading -> isPaused={pre_load_paused} "
+              f"{'ok' if unpaused_ok else 'FAIL'}")
+        if not unpaused_ok:
+            failures.append(
+                f"before load: expected the session to be running so the load's "
+                f"own pause is observable, got isPaused={pre_load_paused}")
 
         # 3. Load → world thread must restore paused AND a frozen clock.
         #    Wait for the file to actually land first (saveWorld returns on
@@ -184,22 +295,70 @@ def main() -> int:
         print(f"[load     ] load transaction published -> {published} ({status})")
         if not published:
             failures.append(f"load transaction never published: {status}")
-        active_page = send(args.port, "return world.getActiveWorldId()").strip('"')
-        print(f"[load     ] active page after publish -> {active_page}")
-        send(args.port, f'world.show("{active_page}")', expect_result=False)
-        paused, ts = wait_paused_and_frozen(args.port, active_page)
-        print(f"[post-load] isPaused={paused} timeScale={ts}")
-        if not (paused and ts == 0.0):
+        active_page = send(args.port, "return world.getActiveWorldId()").strip().strip('"')
+        print(f"[load     ] active page after publish -> {active_page!r}")
+        # worldGetActiveWorldIdFn returns nil when no page is active, while
+        # worldGetTimeScaleFn answers an unknown page with its documented
+        # 1.0 default — so an unusable id here would silently turn every
+        # page-targeted check below into a read of nothing. Fail instead,
+        # and skip those checks rather than run them against a bogus name.
+        if not active_page or active_page.lower() in ("nil", "null"):
             failures.append(
-                f"after load: expected isPaused=True & timeScale=0, "
-                f"got isPaused={paused} timeScale={ts}")
-        ok, rp, rt = stays_frozen_under_race(args.port, active_page)
-        print(f"[load-race] stray setTimeScale while paused -> "
-              f"isPaused={rp} timeScale={rt} {'ok' if ok else 'FAIL'}")
-        if not ok:
-            failures.append(
-                f"after load: a stray setTimeScale un-froze a paused world "
-                f"(isPaused={rp} timeScale={rt})")
+                f"after load: world.getActiveWorldId() named no page "
+                f"({active_page!r}); the post-load frozen, race and "
+                f"resumed-speed checks were skipped")
+        else:
+            send(args.port, f'world.show("{active_page}")', expect_result=False)
+            paused, ts = wait_paused_and_frozen(args.port, active_page)
+            print(f"[post-load] isPaused={paused} timeScale={ts}")
+            if not (paused and ts == 0.0):
+                failures.append(
+                    f"after load: expected isPaused=True & timeScale=0, "
+                    f"got isPaused={paused} timeScale={ts}")
+            ok, rp, rt = stays_frozen_under_race(args.port, active_page)
+            print(f"[load-race] stray setTimeScale while paused -> "
+                  f"isPaused={rp} timeScale={rt} {'ok' if ok else 'FAIL'}")
+            if not ok:
+                failures.append(
+                    f"after load: a stray setTimeScale un-froze a paused world "
+                    f"(isPaused={rp} timeScale={rt})")
+
+            # 4. Resume the LOADED session: it runs at the default speed.
+            #
+            #    Three things make this observable, where the assertion it
+            #    replaces was not:
+            #      * it runs after the load transaction published, so the
+            #        session under test is the loaded one;
+            #      * it names the page the load actually published,
+            #        validated non-empty above;
+            #      * that page is proven REGISTERED by the frozen check
+            #        above — Clock.hs's absent-page fallback is 1.0 and
+            #        could never have reported timeScale == 0.
+            #
+            #    What it pins is pause.onSaveLoaded's load policy: a
+            #    published session comes up at the default, never at the
+            #    speed the world was running at when it was saved — which
+            #    this probe made PRE_SAVE_SCALE so the two are different
+            #    readings. One honest limit: the load-race check above
+            #    enqueues setTimeScale(page, 1.0) while paused, and #1599
+            #    files a paused request as the pause epoch's resume scale,
+            #    so it writes the same default this expects. #1572
+            #    requirement 3 fixes that order deliberately — the race
+            #    check needs the paused post-load state — so this asserts
+            #    the resumed session lands on the default, not which writer
+            #    put it there.
+            send(args.port, f'{PAUSE}.set(false)', expect_result=False)
+            r_ok, r_paused, r_ts = wait_resumed(args.port, active_page,
+                                                RESUMED_SCALE)
+            print(f"[resume   ] loaded page {active_page!r} -> "
+                  f"isPaused={r_paused} timeScale={r_ts} "
+                  f"{'ok' if r_ok else 'FAIL'}")
+            if not r_ok:
+                failures.append(
+                    f"after load/unpause: expected isPaused=False & timeScale="
+                    f"{RESUMED_SCALE} on loaded page {active_page!r}, got "
+                    f"isPaused={r_paused} timeScale={r_ts} (saved while the "
+                    f"world ran at {PRE_SAVE_SCALE})")
     finally:
         quit_engine(args.port, proc)
         try:
@@ -217,7 +376,8 @@ def main() -> int:
         for f in failures:
             print("  - " + f)
         return 1
-    print("\nPASS: engine.isPaused() and world time stay consistent across save/load.")
+    print("\nPASS: engine.isPaused() and world time stay consistent across "
+          "save/load, and the loaded session resumes at the default speed.")
     return 0
 
 
