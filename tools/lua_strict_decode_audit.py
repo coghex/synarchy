@@ -169,6 +169,17 @@ _WHERE_TOKEN = re.compile(r"(?<![\w'])where(?![\w'])")
 # introduces field bindings inside one expression.
 _LAYOUT_BRACE_KEYWORDS = frozenset({"where", "let", "do", "of"})
 
+# A declaration with no `=` is a BODY-LESS one -- a type signature, a
+# type-level declaration, a fixity or a `deriving` clause -- in which a
+# bare name is a declaration, not a use. Recognised by its leading
+# keyword or by a `::`/`∷`, so that "no `=`" alone can never make an
+# arbitrary fragment read as all-head and silence the uses inside it.
+_BODYLESS_KEYWORDS = frozenset({
+    "data", "newtype", "type", "class", "instance", "foreign",
+    "deriving", "pattern", "infix", "infixl", "infixr"})
+_SIGNATURE_TOKEN = re.compile(r"(?<![!#$%&*+./<=>?@\\^|~:-])(?:::|∷)"
+                              r"(?![!#$%&*+./<=>?@\\^|~:-])")
+
 # Haskell 2010 report SS2.4's symbolic-operator characters. A maximal run
 # of these is one operator lexeme, which is how `=` is told from `==`,
 # `=>` or `>=`.
@@ -471,6 +482,24 @@ def _is_layout_brace(code_text: str, pos: int) -> bool:
     return code_text[i + 1:word_end] in _LAYOUT_BRACE_KEYWORDS
 
 
+def _module_body_brace(code_text: str) -> int | None:
+    """The `{` that opens the MODULE's own explicit layout block, if it
+    has one: the brace directly after `module ... where`.
+
+    Only that one brace introduces top-level declarations. Every other
+    layout brace -- a `do`, `let`, `of` or nested `where` block inside a
+    declaration -- is part of that declaration, and splitting on one
+    would turn its statements into pseudo-declarations whose contents
+    then read as a head."""
+    header = _module_header_span(code_text)
+    if not header:
+        return None
+    i = header[0][1]
+    while i < len(code_text) and code_text[i] in " \t\n":
+        i += 1
+    return i if i < len(code_text) and code_text[i] == "{" else None
+
+
 def _top_level_declarations(
         code_text: str,
         skip_spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -482,21 +511,22 @@ def _top_level_declarations(
     across, and nothing outside it can be shadowed by them -- which is
     what makes per-occurrence resolution possible without a parser."""
     column = _body_column(code_text, skip_spans)
+    body_brace = _module_body_brace(code_text)
     boundaries = [0]
     depth = 0
     for i, char in enumerate(code_text):
         if char in "([":
             depth += 1
         elif char == "{":
-            # A RECORD brace is part of one expression, so it nests like
-            # any other bracket; only a LAYOUT brace introduces
-            # declarations. Splitting on a record brace would make its
-            # first field look like a declaration head, and a field
-            # label named `decodeUtf8` would then read as a binder and
-            # silence the real call beside it.
-            if _is_layout_brace(code_text, i):
-                if depth == 0:
-                    boundaries.append(i + 1)
+            # Only the MODULE's own layout brace introduces top-level
+            # declarations. A record brace is part of one expression,
+            # and a nested `do`/`let`/`of`/`where` brace is part of one
+            # declaration; both nest like any other bracket. Splitting
+            # on either would make its contents look like a declaration
+            # head, so a name inside would read as a binder and silence
+            # the real call beside it.
+            if i == body_brace:
+                boundaries.append(i + 1)
             else:
                 depth += 1
         elif char in ")]":
@@ -577,10 +607,32 @@ def _binds_in_head(code_text: str, decl: tuple[int, int],
     body is REPORTED rather than guessed at."""
     start, end = decl
     head_end = _declaration_head_end(code_text, start, end)
-    stop = end if head_end is None else head_end
+    if head_end is None:
+        # No `=` and no guard bar. That is a BODY-LESS declaration -- a
+        # signature, a type-level declaration, a fixity -- in which the
+        # name is declared rather than used, so the whole span is head.
+        # Anything else with no `=` is not a declaration this function
+        # can read at all, and treating it as all-head would silence
+        # every use inside it, so it binds nothing.
+        if not _is_bodyless_declaration(code_text, start, end):
+            return False
+        stop = end
+    else:
+        stop = head_end
     for pos, lexeme in _identifier_runs(code_text, start, stop):
         if lexeme == BANNED_IDENTIFIER and not _within(pos, skip_spans):
             return True
+    return False
+
+
+def _is_bodyless_declaration(code_text: str, start: int, end: int) -> bool:
+    """True if `[start, end)` is a declaration that legitimately has no
+    `=`: one led by a type-level or fixity keyword, or a type signature
+    (recognised by its own `::` / `∷`, read as a whole operator so a
+    longer run containing it does not count)."""
+    for _, lexeme in _identifier_runs(code_text, start, end):
+        return lexeme in _BODYLESS_KEYWORDS or bool(
+            _SIGNATURE_TOKEN.search(code_text, start, end))
     return False
 
 
@@ -818,6 +870,45 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         [3],
     ),
     (
+        "NESTED LAYOUT: a `do` block inside a declaration is part of "
+        "that declaration -- splitting on its brace would make its "
+        "statements a pseudo-declaration whose contents read as a head",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "f raw = do { pure (decodeUtf8 raw) }\n",
+        [3],
+    ),
+    (
+        "NESTED LAYOUT: an explicit `let` block, likewise",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "f raw = let { g = 1 } in g (decodeUtf8 raw)\n",
+        [3],
+    ),
+    (
+        "NESTED LAYOUT: an explicit `where` block, likewise",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "f raw = g (decodeUtf8 raw) where { g = id }\n",
+        [3],
+    ),
+    (
+        "NESTED LAYOUT: an explicit `case ... of` block, likewise",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "f raw = case raw of { _ -> decodeUtf8 raw }\n",
+        [3],
+    ),
+    (
+        "BODY-LESS: a fragment with no `=` that is not a signature or a "
+        "type-level declaration binds nothing, so the uses inside it "
+        "are still reported",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "f raw = do { g (decodeUtf8 raw); h (decodeUtf8 raw) }\n",
+        [3, 3],
+    ),
+    (
         "RECORD BRACES: a record is one expression, not a block of "
         "declarations -- its first field must not read as a declaration "
         "head, or a field label of this name would silence the real "
@@ -1010,6 +1101,14 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "module M where\n"
         "import qualified Data.Text.Encoding.Error as TEE\n"
         "f raw = TEE.decodeUtf8 raw\n",
+    ),
+    (
+        "BODY-LESS: a type signature has no `=`, and the name in it is "
+        "DECLARED rather than used",
+        "module M where\n"
+        "import Data.Text.Encoding\n"
+        "decodeUtf8 :: ByteString -> Text\n"
+        "decodeUtf8 = myOwnTotalThing\n",
     ),
     (
         "RECORD BRACES: a head-bound parameter still covers the whole "
