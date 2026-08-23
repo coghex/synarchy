@@ -143,6 +143,8 @@ import qualified Test.Headless.UI.ResponsiveMenus as UIResponsiveMenus
 import qualified Test.Headless.UI.ResponsiveGameplay as UIResponsiveGameplay
 import qualified Test.Headless.UI.SettingsDefaultsKeybinds
     as UISettingsDefaultsKeybinds
+import qualified Test.Headless.UI.SettingsRevert
+    as UISettingsRevert
 import qualified Test.Headless.UI.TutorialHud as UITutorialHud
 import qualified Test.Headless.UI.UnicodeTextEditing as UIUnicodeTextEditing
 import qualified Test.Headless.Lua.TextWrapping as LuaTextWrapping
@@ -157,6 +159,7 @@ import qualified Test.Headless.UI.TransferContextMenu as UITransferContextMenu
 import qualified Test.Headless.UI.ItemList as UIItemList
 import qualified Test.Headless.UI.ContainerWindowStack as UIContainerWindowStack
 import qualified Test.Headless.UI.TransferGestures as UITransferGestures
+import qualified Test.Headless.UI.ConsumableGesture as UIConsumableGesture
 import qualified Test.Headless.UI.TransferSession as UITransferSession
 import qualified Test.Headless.World.Calendar as Calendar
 import qualified Test.Headless.World.FloraGrowth as FloraGrowth
@@ -215,6 +218,7 @@ import qualified Test.Headless.Lua.TutorialEvaluation as LuaTutorialEvaluation
 import qualified Test.Headless.Lua.UnitAiLocations as LuaUnitAiLocations
 import qualified Test.Headless.Lua.UnitAiHold as LuaUnitAiHold
 import qualified Test.Headless.Lua.UnitAiStall as LuaUnitAiStall
+import qualified Test.Headless.Lua.UnitAiHarvest as LuaUnitAiHarvest
 import qualified Test.Headless.Lua.UnitAiLogisticsTargets as LuaUnitAiLogisticsTargets
 import qualified Test.Headless.Lua.UnitAiLoadReset as LuaUnitAiLoadReset
 import qualified Test.Headless.Lua.UnitAiReconcile as LuaUnitAiReconcile
@@ -446,6 +450,7 @@ main = hspec $ do
     LuaUnitAiLocations.spec
     LuaUnitAiHold.spec
     LuaUnitAiStall.spec
+    LuaUnitAiHarvest.spec
     LuaUnitAiLogisticsTargets.spec
     LuaUnitAiLoadReset.spec
     LuaUnitAiReconcile.spec
@@ -527,8 +532,10 @@ main = hspec $ do
     describe "UI.ResponsiveMenus" UIResponsiveMenus.spec
     describe "UI.ResponsiveGameplay" UIResponsiveGameplay.spec
     UISettingsDefaultsKeybinds.spec
+    UISettingsRevert.spec
     describe "UI.ContainerWindowStack" UIContainerWindowStack.spec
     UITransferGestures.spec
+    UIConsumableGesture.spec
     UITransferSession.spec
     describe "Tutorial HUD" UITutorialHud.spec
     describe "UI.UnicodeTextEditing" UIUnicodeTextEditing.spec

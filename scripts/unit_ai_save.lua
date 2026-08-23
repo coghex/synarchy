@@ -64,6 +64,13 @@ local TRANSIENT_CANDIDATE_FIELDS = {
 --     charges a pending order nothing, however long it lasted.
 local TRANSIENT_ORDER_FIELDS = { "transferOrder" }
 
+-- #1582: auto-harvest's picking accumulator and its work clock. Its own
+-- list for a third distinct reason -- restarting the pick is the HONEST
+-- post-load state, not a loss. The three-part why is stated where the
+-- fields are owned, in scripts/unit_ai_harvest.lua's TRANSIENCE note.
+local TRANSIENT_WORK_FIELDS =
+    { "harvestProgress", "harvestProgressAt", "lastHarvestAt" }
+
 local function buildItemDefSet()
     local set = {}
     for _, d in ipairs(item.listDefs() or {}) do
@@ -243,15 +250,18 @@ end
 
 -- A shallow copy of one unit's aiState entry with every transient
 -- candidate field stripped (requirement 13/14) -- see
--- TRANSIENT_CANDIDATE_FIELDS. Nested tables that DO get persisted
--- (craftJob, treatClaim, ...) are shared by reference with the live
--- state, which is safe: the snapshot is encoded (deep-copied into a
--- byte string) before this tick's AI loop could mutate them again.
+-- TRANSIENT_CANDIDATE_FIELDS, TRANSIENT_ORDER_FIELDS and
+-- TRANSIENT_WORK_FIELDS, which strip for three different reasons.
+-- Nested tables that DO get persisted (craftJob, treatClaim, ...) are
+-- shared by reference with the live state, which is safe: the snapshot
+-- is encoded (deep-copied into a byte string) before this tick's AI
+-- loop could mutate them again.
 local function snapshotUnitState(s)
     local copy = {}
     for k, v in pairs(s) do copy[k] = v end
     for _, f in ipairs(TRANSIENT_CANDIDATE_FIELDS) do copy[f] = nil end
     for _, f in ipairs(TRANSIENT_ORDER_FIELDS) do copy[f] = nil end
+    for _, f in ipairs(TRANSIENT_WORK_FIELDS) do copy[f] = nil end
     -- constructJob (round-5 review) retains the full parsed structure-
     -- pack YAML build-cost table (unit_ai_construct.lua's
     -- packBuildInfo -- materials/build_work/etc.) rather than a stable

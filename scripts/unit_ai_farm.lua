@@ -1,12 +1,16 @@
 -- Unit AI farming actions (#538 split from unit_ai.lua).
 --
--- till_designation (#333), plant_designation (#336), and auto_harvest
--- (#336) — the farming epic's tile-work actions. Each is grouped
--- under unitAi.till / unitAi.plant / unitAi.harvest (plain field
--- assignments on the shared singleton, established by #333) rather
--- than top-level locals returned from this module; kept exactly as-is
--- across this split so the existing public shape (e.g. any debug-
--- console or future caller poking unitAi.till.claims) doesn't move.
+-- till_designation (#333) and plant_designation (#336) — the farming
+-- epic's player-DESIGNATED tile-work actions. Each is grouped under
+-- unitAi.till / unitAi.plant (plain field assignments on the shared
+-- singleton, established by #333) rather than top-level locals
+-- returned from this module; kept exactly as-is across every split so
+-- the existing public shape (e.g. any debug-console or future caller
+-- poking unitAi.till.claims) doesn't move.
+--
+-- The third farming action, auto_harvest, moved to
+-- scripts/unit_ai_harvest.lua with #1582 and is required back in at the
+-- bottom of this file — see there for why.
 
 local unitAi = package.loaded["scripts.unit_ai"]
 local core = require("scripts.unit_ai_core")
@@ -420,78 +424,9 @@ function unitAi.plant.onExit(uid, s, params)
     end
 end
 
-
--- Action: auto_harvest (#336)
---
--- Skill-gated colony farm-tending: pick up any ripe harvestable flora
--- in range — planted crops AND wild flora alike (world.
--- findHarvestableFlora / world.harvestFlora, #94, don't distinguish the
--- two; #334's crop species carry worldGen.density 0.0, so any crop
--- instance found here was deliberately planted, never a wild spawn).
--- Instant harvest, mirroring forage's shape rather than till/plant's
--- progress accumulator — picking ripe fruit is quick. NOT hunger-gated
--- like forage: this is routine farm-tending work, weighted by the
--- farming skill/role (#265) instead of scaled by need.
---
--- Grouped under unitAi.harvest (the unitAi.till convention, #333) —
--- kept as-is by this split.
------------------------------------------------------------
-unitAi.harvest = {}
-
-function unitAi.harvest.utility(uid, s, params)
-    if not world.findHarvestableFlora then return -math.huge end
-    local info = unit.getInfo(uid)
-    if not info then return -math.huge end
-    local ux = math.floor(info.gridX)
-    local uy = math.floor(info.gridY)
-    local spot = world.findHarvestableFlora(ux, uy, params.harvest_scan_range)
-    if not spot then
-        s.harvestTarget = nil
-        return -math.huge
-    end
-    s.harvestTarget = { x = spot.gx, y = spot.gy }
-    local distFactor = math.max(0, 1 - spot.dist / params.harvest_scan_range)
-    return params.harvest_base_utility * distFactor
-         * roles.weight(s, "auto_harvest")
-end
-
-function unitAi.harvest.execute(uid, s, params)
-    -- Collecting: pull the harvested yield off the ground, one item
-    -- per tick (mirrors forageExecute's collecting phase).
-    if s.harvestPhase == "collecting" then
-        local loot = s.harvestLoot or {}
-        local nextGid = table.remove(loot)
-        if not nextGid or not item.pickupGround(uid, nextGid) then
-            s.harvestPhase = nil
-            s.harvestLoot  = nil
-        end
-        return
-    end
-
-    local tgt = s.harvestTarget
-    if not tgt then return end
-    local info = unit.getInfo(uid)
-    if not info then return end
-    local utx = math.floor(info.gridX)
-    local uty = math.floor(info.gridY)
-    local cheb = math.max(math.abs(utx - tgt.x), math.abs(uty - tgt.y))
-
-    if cheb <= 1 then
-        local yields = world.harvestFlora(tgt.x, tgt.y)
-        if yields and #yields > 0 then
-            unit.pickup(uid)   -- bend-down anim over the plant
-            local gids = {}
-            for _, yi in ipairs(yields) do gids[#gids + 1] = yi.gid end
-            s.harvestLoot  = gids
-            s.harvestPhase = "collecting"
-            grantWorkXP(uid, "farming", params.harvest_xp_per_harvest or 0)
-        end
-        -- Raced / regrowing after all, or a completed harvest either
-        -- way: forget the target; the next decision re-finds.
-        s.harvestTarget = nil
-        return
-    end
-
-    unit.moveTo(uid, tgt.x + 0.5, tgt.y + 0.5, mv.comfort(uid))
-end
-
+-- auto_harvest (#336) lives in its own module since #1582 — the
+-- skill-scaled work accumulator it grew there did not fit under
+-- tools/lua_module_budget.py's 500-line cap here. Required from this
+-- file, not from unit_ai.lua, so requiring EITHER scripts.unit_ai or
+-- scripts.unit_ai_farm still attaches all three farming actions.
+require("scripts.unit_ai_harvest")

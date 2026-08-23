@@ -89,7 +89,8 @@ local construct     = require("scripts.unit_ai_construct")
 local craft_        = require("scripts.unit_ai_craft")
 local dig           = require("scripts.unit_ai_dig")
 local chop          = require("scripts.unit_ai_chop")
--- Attaches unitAi.till / unitAi.plant / unitAi.harvest (#333 convention).
+-- Attaches unitAi.till / unitAi.plant (#333 convention), and pulls in
+-- scripts.unit_ai_harvest for unitAi.harvest (#1582).
 require("scripts.unit_ai_farm")
 local repairMod     = require("scripts.unit_ai_repair")
 local pickup        = require("scripts.unit_ai_pickup")
@@ -192,7 +193,7 @@ unitAi.registerActions("acolyte", {
     { name = "chop_designation", utility = chop.chopUtility, execute = chop.chopExecute, onExit = chop.chopOnExit },
     { name = "till_designation", utility = unitAi.till.utility, execute = unitAi.till.execute, onExit = unitAi.till.onExit },
     { name = "plant_designation", utility = unitAi.plant.utility, execute = unitAi.plant.execute, onExit = unitAi.plant.onExit },
-    { name = "auto_harvest", utility = unitAi.harvest.utility, execute = unitAi.harvest.execute },
+    { name = "auto_harvest", utility = unitAi.harvest.utility, execute = unitAi.harvest.execute, onExit = unitAi.harvest.onExit },
     { name = "repair_job", utility = repairMod.utility, execute = repairMod.execute, onExit = repairMod.onExit },
     { name = "pickup_ground", utility = pickup.pickupUtility, execute = pickup.pickupExecute },
     transfer.action, transfer.escortAction,
