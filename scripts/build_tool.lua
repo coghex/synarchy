@@ -919,10 +919,14 @@ end
 -- once, per the issue's own requirement.
 --
 -- #1602: bindPage/bindGen are the click's page binding from
--- world.pickTile. building.spawn re-checks them in the SAME manager
--- read that resolves the target page, so page selection moving between
--- validation and this commit rejects the attempt instead of spawning on
--- the newly selected page. Returns "accepted" / "rejected" / "stale".
+-- world.pickTile. building.spawn re-checks them against the page it is
+-- about to spawn on and answers "page binding stale" when they no longer
+-- hold, so page selection moving between validation and this commit
+-- rejects the attempt instead of spawning on the newly selected page.
+-- (That answer is the synchronous half; the engine additionally routes a
+-- bound spawn through the world thread, which owns page selection, so
+-- nothing stale can land even if selection moves while the command is
+-- still queued.) Returns "accepted" / "rejected" / "stale".
 -- "stale" is deliberately quiet here: it records nothing and does NOT
 -- exit placement, because the two callers record their OWN branch's
 -- outcome kind (buildTool.commitPlacement for a direct click,

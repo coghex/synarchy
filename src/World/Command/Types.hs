@@ -15,6 +15,7 @@ import Location.Instance (LocationInstanceId, LocationLifecycle)
 import World.Chunk.Types (ChunkCoord(..))
 import World.Material.Id (MaterialId(..))
 import World.Material (MaterialRegistry)
+import Building.Types (BuildingId(..))
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
@@ -354,6 +355,29 @@ data WorldCommand
         --   cleared → depleted@ ('Location.Instance.promoteLifecycle');
         --   a backward or same-state request is silently refused, so
         --   the one-way discovery guarantee holds no matter who asks.
+    | WorldSpawnBoundBuilding !BuildingId !Text !Int !Int !Int !WorldPageId
+                              !Word64
+        -- ^ A PAGE-BOUND building placement (#1602): pre-allocated id,
+        --   defName, canonical anchor gx/gy, floor z, target page, and
+        --   the page-SELECTION generation the click that produced it was
+        --   hit-tested under.
+        --
+        --   It lands HERE rather than straight on the building queue for
+        --   one reason: this thread is the sole mutator of 'wmVisible'
+        --   and therefore of 'wmSelectionGen'
+        --   (@handleWorldShow/Hide/InitArenaDone/Destroy/DestroyAll@ and
+        --   @publishStagedSession@ all run on it), so a check performed
+        --   here cannot be interleaved with a selection change — a
+        --   change enqueued before this command is already applied, and
+        --   one enqueued after is genuinely after the decision. Checking
+        --   on the Lua thread, or on the building drain the unit thread
+        --   runs, could only ever be best-effort against a counter
+        --   another thread is free to move.
+        --
+        --   A live binding forwards an ordinary 'BuildingSpawn' to the
+        --   building queue (its binding already discharged); a stale one
+        --   forwards nothing at all, so the placement lands on neither
+        --   the captured page nor the newly selected one.
     | WorldMarkLocationStamped WorldPageId Int Int
         -- ^ worldId, gx, gy. One-time geometry-stamp flag (#424): marks the
         --   chunk containing (gx, gy) as having had its placed location's

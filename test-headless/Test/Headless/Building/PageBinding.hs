@@ -85,6 +85,7 @@ import World.Grid (gridToWorld, tileHeight)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types
     (WorldManager(..), WorldState(..), emptyWorldManager, emptyWorldState)
+import World.Thread.Command (handleWorldCommand)
 import World.Thread.Command.Cursor.Construct
     (handleWorldDesignateConstructCommand)
 import World.Thread.Command.UI
@@ -339,13 +340,30 @@ drainWorldQueue env = go []
             Nothing  → pure (reverse acc)
             Just cmd → go (cmd : acc)
 
--- | Every queued building SPAWN as (defName, gx, gy, page).
+-- | Every building SPAWN that actually reached the building queue,
+--   AFTER the real world thread drained whatever the click put on its
+--   own queue. A page-BOUND placement lands there first
+--   ('WorldSpawnBoundBuilding') and only reaches the building queue if
+--   that thread's binding check passes, so running the world queue
+--   through the production dispatcher is what makes this ask "did the
+--   placement commit", not merely "was something enqueued".
 spawnsQueued ∷ EngineEnv → IO [(Text, Int, Int, WorldPageId)]
 spawnsQueued env = do
+    runWorldQueue env
     cmds ← drainBuildingQueue env
-    pure [ (n, gx, gy, p) | BuildingSpawn _ n gx gy _ p _ ← cmds ]
+    pure [ (n, gx, gy, p) | BuildingSpawn _ n gx gy _ p ← cmds ]
 
--- | Every queued construction designation as (page, x1, y1).
+-- | Drain the world queue through the REAL world-thread dispatcher, the
+--   way "World.Thread" does.
+runWorldQueue ∷ EngineEnv → IO ()
+runWorldQueue env = do
+    logger ← readIORef (loggerRef env)
+    cmds ← drainWorldQueue env
+    mapM_ (handleWorldCommand env logger) cmds
+
+-- | Every construction designation enqueued for a page, read off the
+--   world queue WITHOUT applying it — for asserting what a stale click
+--   did or did not put there.
 designationsQueued ∷ EngineEnv → IO [(WorldPageId, Int, Int)]
 designationsQueued env = do
     cmds ← drainWorldQueue env
@@ -893,69 +911,79 @@ expectStale env wsA wsB ls = do
     evalDebug ls "return require('scripts.build_tool').state.mode"
         `shouldReturn` "placement"
 
--- | Enqueuing is not committing. Both placement commands are applied by
---   ANOTHER thread after the Lua-side check answered its caller, so page
---   selection can move in between — the check therefore travels WITH the
---   command and is re-run at the point the state actually changes. These
---   examples drive the real handlers directly, with the selection moved
---   after the command was built and before it is applied.
+-- | Enqueuing is not committing. The Lua-side check answers the caller,
+--   but page selection belongs to the WORLD thread, so that is where a
+--   bound placement's binding is actually discharged — for the spawn via
+--   'World.Command.Types.WorldSpawnBoundBuilding', for the designation
+--   in its own handler. These examples move the selection AFTER the
+--   command was enqueued, through the real handlers, and drive the real
+--   dispatchers over it.
 applyTimeSpec ∷ SpecWith (EngineEnv, LuaBackendState)
 applyTimeSpec =
-  describe "the binding is re-checked where the command is APPLIED" $ do
+  describe "the binding is discharged on the thread that owns selection" $ do
 
-    it "the building-command drain drops a queued spawn whose binding \
-       \went stale after it was enqueued" $ \(env, ls) → do
+    it "the world thread forwards NOTHING for a bound spawn whose \
+       \binding went stale after it was enqueued" $ \(env, ls) → do
         _ ← resetScene env
         _ ← clearStubs ls
         gen ← selectionGen env
         logger ← readIORef (loggerRef env)
         let wsc = toWorldSimCapability env
-            cmd = BuildingSpawn (BuildingId 9) portalName
-                      (fst placeTile) (snd placeTile) terrainZA pageA
-                      (Just gen)
-        -- The selection moves AFTER the command exists: this is exactly
-        -- the window between enqueue and apply.
+        Q.writeQueue (worldQueue env) $
+            WorldSpawnBoundBuilding (BuildingId 9) portalName
+                (fst placeTile) (snd placeTile) terrainZA pageA gen
+        -- Selection moves AFTER the command was enqueued — exactly the
+        -- window a Lua-thread check cannot cover — and it moves through
+        -- the REAL handlers, on the same thread that then drains the
+        -- command, so the two cannot interleave.
         handleWorldHideCommand wsc logger pageA
         handleWorldShowCommand wsc logger pageB
-        applyBuildingCommand env cmd
+        runWorldQueue env
+        -- 'BuildingCommand' has no Eq instance; report what was found.
+        forwarded ← drainBuildingQueue env
+        map show forwarded `shouldBe` []
+        applyQueuedBuildings env
         placed ← placedBuildings env
         placed `shouldMatchList`
             [ (pageA, fst occupiedA, snd occupiedA)
             , (pageB, fst occupiedB, snd occupiedB) ]
 
-    it "the drain still applies the SAME command when the binding held" $
+    it "the world thread forwards the SAME spawn when the binding held" $
         \(env, ls) → do
             _ ← resetScene env
             _ ← clearStubs ls
             gen ← selectionGen env
-            applyBuildingCommand env $
-                BuildingSpawn (BuildingId 9) portalName
-                    (fst placeTile) (snd placeTile) terrainZA pageA (Just gen)
+            Q.writeQueue (worldQueue env) $
+                WorldSpawnBoundBuilding (BuildingId 9) portalName
+                    (fst placeTile) (snd placeTile) terrainZA pageA gen
+            runWorldQueue env
+            applyQueuedBuildings env
             placed ← placedBuildings env
             placed `shouldMatchList`
                 [ (pageA, fst occupiedA, snd occupiedA)
                 , (pageB, fst occupiedB, snd occupiedB)
                 , (pageA, fst placeTile, snd placeTile) ]
 
-    it "an UNBOUND spawn is unaffected by a selection change" $
-        \(env, ls) → do
-            _ ← resetScene env
-            _ ← clearStubs ls
-            logger ← readIORef (loggerRef env)
-            let wsc = toWorldSimCapability env
-            handleWorldHideCommand wsc logger pageA
-            handleWorldShowCommand wsc logger pageB
-            -- Location content-spawning, blueprint staking and power
-            -- placement all carry no click binding and must keep
-            -- landing on their explicit page.
-            applyBuildingCommand env $
-                BuildingSpawn (BuildingId 9) portalName
-                    (fst placeTile) (snd placeTile) terrainZA pageA Nothing
-            placed ← placedBuildings env
-            placed `shouldMatchList`
-                [ (pageA, fst occupiedA, snd occupiedA)
-                , (pageB, fst occupiedB, snd occupiedB)
-                , (pageA, fst placeTile, snd placeTile) ]
+    it "an UNBOUND spawn never reaches that gate at all" $ \(env, ls) → do
+        _ ← resetScene env
+        _ ← clearStubs ls
+        logger ← readIORef (loggerRef env)
+        let wsc = toWorldSimCapability env
+        -- Location content-spawning, blueprint staking and power
+        -- placement carry no click binding: they go straight to the
+        -- building queue and keep landing on their explicit page
+        -- however selection moves.
+        Q.writeQueue (buildingQueue env) $
+            BuildingSpawn (BuildingId 9) portalName
+                (fst placeTile) (snd placeTile) terrainZA pageA
+        handleWorldHideCommand wsc logger pageA
+        handleWorldShowCommand wsc logger pageB
+        applyQueuedBuildings env
+        placed ← placedBuildings env
+        placed `shouldMatchList`
+            [ (pageA, fst occupiedA, snd occupiedA)
+            , (pageB, fst occupiedB, snd occupiedB)
+            , (pageA, fst placeTile, snd placeTile) ]
 
     it "the world thread writes NO designation for a binding that went \
        \stale after the command was enqueued" $ \(env, ls) → do
@@ -995,14 +1023,12 @@ applyTimeSpec =
                 (fst placeTile) (snd placeTile) (CtBuilding shedName) Nothing
             designationKeys wsA wsB `shouldReturn` ([placeTile], [])
 
--- | Put one 'BuildingCommand' on the real queue and run the REAL drain
---   over it — the same 'processAllBuildingCommands' the unit thread runs
---   (there is no separate building thread; see
---   'Building.Thread.Command'). Nothing is reimplemented here, so the
---   apply-time guard under test is the shipped one.
-applyBuildingCommand ∷ EngineEnv → BuildingCommand → IO ()
-applyBuildingCommand env cmd = do
-    Q.writeQueue (buildingQueue env) cmd
+-- | Run the REAL building-command drain — the same
+--   'processAllBuildingCommands' the unit thread runs (there is no
+--   separate building thread; see 'Building.Thread.Command'). Nothing is
+--   reimplemented here, so what lands is what the engine would land.
+applyQueuedBuildings ∷ EngineEnv → IO ()
+applyQueuedBuildings env =
     processAllBuildingCommands (loggerRef env)
         (toWorldSimCapability env)
         (toContentRegistriesCapability env)

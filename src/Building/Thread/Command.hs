@@ -60,35 +60,22 @@ handleBuildingCommand ∷ IORef LoggerState → WorldSimCapability
                       → ContentRegistriesCapability → BuildingCapability
                       → BuildingCommand → IO ()
 handleBuildingCommand logRef sim reg bld
-                      (BuildingSpawn bid defName gx gy gz pageId mBindGen) = do
+                      (BuildingSpawn bid defName gx gy gz pageId) = do
     bm ← readIORef (bcBuildingManagerRef bld)
-    -- Game-clock so the appear-anim countdown freezes on pause. Read
-    -- BEFORE the world-manager snapshot below so nothing but a pure
-    -- lookup separates that snapshot from the insert it guards.
-    now ← readIORef (wsGameTimeRef sim)
-    -- ONE world-manager read answers BOTH guards, taken as late as this
-    -- handler can take it:
-    --
-    --   * Drop the spawn if its world is gone — a spawn queued before
-    --     world.destroyAll would otherwise re-insert an orphan building
-    --     into the cleared manager after teardown (#58).
-    --   * Drop it if the placement's page BINDING has gone stale
-    --     (#1602). Enqueuing is not committing: the caller's own check
-    --     ran when 'building.spawn' returned, and 'wmVisible' can move
-    --     between there and here, so the binding is re-checked at the
-    --     point the instance actually lands. Nothing runs between this
-    --     read and the insert but a pure def lookup and building the
-    --     record, and an unbound spawn (Nothing) is unaffected.
+    -- Drop the spawn if its world is gone — a spawn queued before
+    -- world.destroyAll would otherwise re-insert an orphan building into
+    -- the cleared manager after teardown (#58).
     wmgr ← readIORef (wsWorldManagerRef sim)
-    let worldGone    = pageId `notElem` map fst (wmWorlds wmgr)
-        bindingMoved = maybe False (≢ wmSelectionGen wmgr) mBindGen
+    let worldGone = pageId `notElem` map fst (wmWorlds wmgr)
     case HM.lookup defName (bmDefs bm) of
-        _ | worldGone ∨ bindingMoved → pure ()
+        _ | worldGone → pure ()
         Nothing → do
             logger ← readIORef logRef
             logWarn logger CatThread $
                 "BuildingSpawn: unknown def '" <> defName <> "'"
         Just def → do
+            -- Game-clock so the appear-anim countdown freezes on pause.
+            now ← readIORef (wsGameTimeRef sim)
             let inst = BuildingInstance
                     { biDefName   = defName
                     , biPage      = pageId

@@ -9,27 +9,20 @@ import World.Page.Types (WorldPageId(..))
 
 data BuildingCommand
     = BuildingSpawn !BuildingId !Text !Int !Int !Int !WorldPageId
-                    !(Maybe Word64)
         -- ^ pre-allocated id, defName, anchor gx, gy, gz, owning world
         --   page (stamped from the active world so the building is
-        --   world-scoped, #76), and the expected page-SELECTION
-        --   generation (#1602).
+        --   world-scoped, #76).
         --   Placement validation is the caller's responsibility — the
         --   handler trusts these coords. (We do this in the Lua API:
         --   spawn checks canPlaceAt before enqueuing.)
         --
-        --   The generation is the exception, and it exists precisely
-        --   because enqueuing is not committing: the check
-        --   'building.spawn' runs answers the CALLER synchronously, but
-        --   this command is applied later, by the building-command drain
-        --   ('Building.Thread.Command', which the unit thread runs), and
-        --   'wmVisible' can move in between. 'Nothing' means "not a
-        --   page-bound placement" (location content-spawning, the AI's
-        --   blueprint staking, power nodes) and is never checked; 'Just'
-        --   is re-checked against the live 'wmSelectionGen' immediately
-        --   before the instance is inserted, so a placement whose page
-        --   selection moved after the click is DROPPED rather than
-        --   landing on a page the player is no longer looking at.
+        --   A PAGE-BOUND placement (#1602) never reaches this queue
+        --   directly: it goes to the world thread as
+        --   'World.Command.Types.WorldSpawnBoundBuilding', which
+        --   discharges the binding where page selection is actually
+        --   owned and only then forwards an ordinary 'BuildingSpawn'
+        --   here. By the time this command exists, its binding has
+        --   already been decided.
     | BuildingDestroy !BuildingId
     | BuildingClearAll
         -- ^ Drop every building instance + selection. Enqueued by

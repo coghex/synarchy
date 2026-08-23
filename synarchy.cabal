@@ -632,6 +632,7 @@ library
                      World.Thread.ChunkLoading
                      World.Thread.Command
                      World.Thread.Command.Basic
+                     World.Thread.Command.BoundSpawn
                      World.Thread.Command.Init
                      World.Thread.Command.Save
                      World.Thread.Command.Save.WriteWorld

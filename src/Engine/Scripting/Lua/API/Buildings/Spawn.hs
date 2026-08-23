@@ -22,6 +22,7 @@ import World.Page.Types (WorldPageId(..))
 import qualified Engine.Core.Queue as Q
 import Building.Types
 import Building.Command.Types (BuildingCommand(..))
+import World.Command.Types (WorldCommand(..))
 import Building.Placement
     ( canPlaceAt, PlacementResult(..), RemoteCheck(..), remoteCheck, isRemote
     )
@@ -54,11 +55,13 @@ import Location.Instance (emptyLocationInstances)
 --   every ordinary placement refusal.
 --
 --   That is the SYNCHRONOUS half, and it is what this call owes its
---   caller — but it is not the commit. The generation therefore travels
---   ON the queued 'BuildingSpawn' and is checked a second time by the
---   drain that actually inserts the instance, which is the only place
---   the two can be adjacent. Omitted → no binding check at either
---   point, exactly as before.
+--   caller — but it is not the commit, and this thread cannot make it
+--   one: 'wmSelectionGen' belongs to the world thread. A bound spawn is
+--   therefore routed to that thread as 'WorldSpawnBoundBuilding', which
+--   re-checks the binding where a selection change cannot be
+--   interleaved with it and only then forwards the ordinary
+--   'BuildingSpawn'. Omitted → the command goes straight to the
+--   building queue, exactly as before.
 buildingSpawnFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingSpawnFn env = do
     nameArg ← Lua.tostring 1
@@ -110,13 +113,8 @@ buildingSpawnFn env = do
                                         (bcBuildingManagerRef (toBuildingCapability env)) $ \bm' →
                                             let (bid', bm'') = nextBuildingId bm'
                                             in (bm'', bid')
-                                Q.writeQueue (bcBuildingQueue (toBuildingCapability env)) $
-                                    -- The binding travels WITH the command:
-                                    -- the check above answers this call, the
-                                    -- copy here is re-checked on the building
-                                    -- thread immediately before the insert.
-                                    BuildingSpawn bid defName cgx cgy gz pid
-                                        (fromIntegral <$> bindArg)
+                                enqueueSpawn env bindArg
+                                    bid defName cgx cgy gz pid
                                 pure (Right bid)
                     (_, Nothing, _) → pure (Left "unknown building")
                     (_, _, Nothing)  → pure (Left "no active world")
@@ -379,6 +377,22 @@ pageBindingStaleReason = "page binding stale"
 bindingStale ∷ Maybe Lua.Integer → WorldManager → Bool
 bindingStale Nothing     _  = False
 bindingStale (Just want) wm = fromIntegral want ≢ wmSelectionGen wm
+
+-- | Route a validated spawn to the queue that can actually commit it
+--   (#1602). An UNBOUND spawn — location content-spawning, the AI's
+--   blueprint staking, anything with no click behind it — goes straight
+--   to the building queue exactly as it always has. A BOUND one goes to
+--   the world thread instead, because that is the only thread page
+--   selection cannot move underneath: it discharges the binding and
+--   forwards the same 'BuildingSpawn' from there
+--   ("World.Thread.Command.BoundSpawn").
+enqueueSpawn ∷ EngineEnv → Maybe Lua.Integer
+             → BuildingId → Text → Int → Int → Int → WorldPageId → IO ()
+enqueueSpawn env mBind bid defName gx gy gz pid = case mBind of
+    Nothing   → Q.writeQueue (bcBuildingQueue (toBuildingCapability env)) $
+        BuildingSpawn bid defName gx gy gz pid
+    Just want → Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) $
+        WorldSpawnBoundBuilding bid defName gx gy gz pid (fromIntegral want)
 
 -- | Is the page a binding names no longer the visible one (#1602)? The
 --   generation check above already covers this — it moves on every
