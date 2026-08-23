@@ -359,13 +359,24 @@ def _qualifier_before(text: str, pos: int) -> str:
     `[\\w'.]` run ending in `.` directly ahead of the name -- and only
     when every one of its dot-separated segments is uppercase-led, which
     is what separates `TE.decodeUtf8` from the composition
-    `f.decodeUtf8`."""
+    `f.decodeUtf8`.
+
+    A leading Template Haskell name quote is stripped first. `'` is an
+    identifier CHARACTER in Haskell (`map'`), so it lands inside that
+    run, and `$(varE 'TE.decodeUtf8)` would otherwise present the
+    segment `'TE` -- not uppercase-led, hence read as no qualifier at
+    all. The splice names and invokes the very function this guards, so
+    the quote must not hide it. `''Name` (the type-level quote) is
+    stripped the same way."""
     start = pos
     while start > 0 and (text[start - 1] in _IDENT_CHARS
                          or text[start - 1] == "."):
         start -= 1
     candidate = text[start:pos]
     if not candidate.endswith("."):
+        return ""
+    candidate = candidate.lstrip("'")
+    if not candidate:
         return ""
     segments = candidate[:-1].split(".")
     if segments and all(seg and seg[0].isupper() for seg in segments):
@@ -562,6 +573,28 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         [3],
     ),
     (
+        "TEMPLATE HASKELL: a quoted name `'TE.decodeUtf8` -- `'` is an "
+        "identifier character, so the quote lands inside the qualifier "
+        "run and must be stripped, or the splice that invokes the "
+        "decoder goes unreported",
+        "module M where\n" + _TE
+        + "f raw = $(varE 'TE.decodeUtf8) raw\n",
+        [3],
+    ),
+    (
+        "TEMPLATE HASKELL: a quoted fully qualified name",
+        "module M where\n"
+        "import qualified Data.Text.Encoding\n"
+        "f raw = $(varE 'Data.Text.Encoding.decodeUtf8) raw\n",
+        [3],
+    ),
+    (
+        "TEMPLATE HASKELL: the type-level `''` quote is stripped too",
+        "module M where\n" + _TE
+        + "f = $(reify ''TE.decodeUtf8)\n",
+        [3],
+    ),
+    (
         "a qualified call inside a guard, a record and a nested layout "
         "block -- the scan needs no notion of any of them",
         "module M where\n" + _TE
@@ -674,6 +707,18 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "so it cannot be that module's export",
         "module M where\n" + _TE
         + "f raw = decodeUtf8 raw\n",
+    ),
+    (
+        "TEMPLATE HASKELL: a quoted COMPLIANT sibling stays clean",
+        "module M where\n" + _TE
+        + "f raw = $(varE 'TE.decodeUtf8Lenient) raw\n",
+    ),
+    (
+        "TEMPLATE HASKELL: a quoted name from another module stays "
+        "clean -- stripping the quote does not widen the target",
+        "module M where\n"
+        "import qualified Data.Text.Lazy.Encoding as TLE\n"
+        "f raw = $(varE 'TLE.decodeUtf8) raw\n",
     ),
     (
         "BARE: the composition `f.decodeUtf8` is a bare name, not a "
