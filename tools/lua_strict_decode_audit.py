@@ -48,7 +48,11 @@ Reaching that precision takes three parts.
    The parser is FAIL-LOUD: a declaration naming `Data.Text.Encoding` in
    a shape it does not model raises rather than being scanned as though
    the module were absent. A silent "no import, so nothing to flag" is
-   exactly how an import-resolving guard gets walked past.
+   exactly how an import-resolving guard gets walked past. A file
+   carrying an identifier-rewriting CPP directive (`#define`, `#undef`,
+   `#include`) raises for the same reason: this scan reads
+   UNPREPROCESSED source, so a macro could rename the very alias it
+   resolves by. Conditional directives only SELECT text and are fine.
 
 2. A QUALIFIED USE IS RESOLVED EXACTLY. `TE.decodeUtf8` under the
    repository's standard alias, `Enc.decodeUtf8` under any other, and
@@ -159,6 +163,14 @@ _STRICT_IMPORT = re.compile(
     r"(?:\s+as\s+(?P<alias>[A-Z][\w']*(?:\.[A-Z][\w']*)*))?"
     r"(?P<rest>[\s\S]*)\Z")
 
+# CPP directives that can rewrite identifiers before GHC ever sees
+# them, or hide text from this scan. Matched on the RAW file text, not
+# the comment-masked copy: CPP runs before Haskell is parsed, so a
+# `#define` inside what looks like a Haskell comment is still a real
+# directive.
+_REWRITING_CPP_DIRECTIVE = re.compile(
+    r"^[ \t]*#[ \t]*(define|undef|include)\b", re.MULTILINE)
+
 # Reserved words read as whole tokens, wherever they sit.
 _IMPORT_TOKEN = re.compile(r"(?<![\w'])import(?![\w'])")
 _MODULE_TOKEN = re.compile(r"(?<![\w'])module(?![\w'])")
@@ -196,12 +208,35 @@ _SYMBOL_RUN = re.compile(r"[!#$%&*+./<=>?@\\^|~:-]+")
 _HEAD_TERMINATORS = frozenset({"=", "|"})
 
 
-class _ImportParseError(Exception):
-    """A `Data.Text.Encoding` import this module cannot classify.
+class _UnscannableSource(Exception):
+    """Source this guard cannot certify, for any reason.
 
-    Raised rather than swallowed: treating an unmodelled import shape as
-    "the module is not imported here" would make every use in that file
-    invisible, which is the one failure mode a guard must not have."""
+    Raised rather than swallowed, always. Every alternative -- scanning
+    a file whose imports were not understood, or one whose text the
+    compiler will rewrite before it sees it -- makes the uses in that
+    file invisible, which is the one failure mode a guard must not
+    have."""
+
+
+class _ImportParseError(_UnscannableSource):
+    """A `Data.Text.Encoding` import this module cannot classify."""
+
+
+class _PreprocessorError(_UnscannableSource):
+    """A file whose text CPP will rewrite before GHC parses it.
+
+    This audit reads UNPREPROCESSED source, so an object-like or
+    function-like `#define` can rename anything it resolves by -- a
+    module qualifier most of all. `#define TextEnc TE` next to
+    `import qualified Data.Text.Encoding as TextEnc` makes the compiler
+    see the alias `TE` while this scan records `TextEnc`, and a
+    `TE.decodeUtf8` call would then resolve against an alias the scan
+    never learned. `#include` is the same hazard at one remove, since
+    the included text is invisible here.
+
+    CONDITIONAL directives are deliberately NOT an error: `#if`/`#ifdef`
+    only SELECT text, and a scan that reads every branch over-reports at
+    worst, which is the safe direction."""
 
 
 @dataclass(frozen=True)
@@ -716,6 +751,20 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
     `EXEMPTIONS`."""
     if rel_path in EXEMPTIONS:
         return []
+    directive = _REWRITING_CPP_DIRECTIVE.search(text)
+    if directive:
+        line = text.count("\n", 0, directive.start()) + 1
+        raise _PreprocessorError(
+            f"{rel_path}:{line}: this file carries a CPP "
+            f"`{directive.group(1)}` directive, and "
+            f"tools/lua_strict_decode_audit.py reads UNPREPROCESSED "
+            f"source. A macro can rename the very module alias this scan "
+            f"resolves {BANNED_IDENTIFIER} by, so the file cannot be "
+            f"certified as written.\n\n"
+            f"Either drop the directive, or record the file in "
+            f"EXEMPTIONS with the reason it is safe. Conditional "
+            f"directives (#if / #ifdef) are fine and are not reported."
+        )
     code_text = haskell_code_only(text)
     imports, import_spans = resolve_strict_imports(code_text, rel_path)
     skip_spans = import_spans + _module_header_span(code_text)
@@ -1262,9 +1311,10 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
     ),
 ]
 
-# A `Data.Text.Encoding` import this parser cannot classify must RAISE,
-# not be scanned as though the module were absent.
-UNMODELLED_FIXTURES: list[tuple[str, str]] = [
+# Source this guard cannot certify must RAISE, not be scanned as though
+# it were ordinary: an import shape it does not model, or a file whose
+# text CPP will rewrite before GHC parses it.
+UNSCANNABLE_FIXTURES: list[tuple[str, str]] = [
     (
         "a package-qualified import shape the parser does not model",
         "module M where\n"
@@ -1276,6 +1326,43 @@ UNMODELLED_FIXTURES: list[tuple[str, str]] = [
         "module M where\n"
         "import Data.Text.Encoding (decodeUtf8\n"
         "f raw = decodeUtf8 raw\n",
+    ),
+    (
+        "CPP: a `#define` that renames the very alias the scan resolves "
+        "by -- the compiler sees `TE`, an unpreprocessed scan sees "
+        "`TextEnc`, and the call would resolve against neither",
+        "{-# LANGUAGE CPP #-}\n"
+        "module M where\n"
+        "#define TextEnc TE\n"
+        "import qualified Data.Text.Encoding as TextEnc\n"
+        "f raw = TE.decodeUtf8 raw\n",
+    ),
+    (
+        "CPP: a `#define` inside what looks like a Haskell comment is "
+        "still a real directive, because CPP runs first",
+        "{-# LANGUAGE CPP #-}\n"
+        "module M where\n"
+        "{- harmless?\n"
+        "#define TextEnc TE\n"
+        "-}\n"
+        "import qualified Data.Text.Encoding as TextEnc\n"
+        "f raw = TE.decodeUtf8 raw\n",
+    ),
+    (
+        "CPP: `#undef`, which can un-rename just as destructively",
+        "{-# LANGUAGE CPP #-}\n"
+        "module M where\n"
+        "#undef TextEnc\n"
+        "import qualified Data.Text.Encoding as TE\n"
+        "f raw = TE.decodeUtf8Lenient raw\n",
+    ),
+    (
+        "CPP: `#include`, whose text this scan never sees",
+        "{-# LANGUAGE CPP #-}\n"
+        "module M where\n"
+        "#include \"aliases.h\"\n"
+        "import qualified Data.Text.Encoding as TE\n"
+        "f raw = TE.decodeUtf8Lenient raw\n",
     ),
 ]
 
@@ -1302,13 +1389,13 @@ def self_test() -> int:
             failures.append(f"  CLEAN: {label}\n"
                             f"    expected no violations, got {got}")
 
-    for label, source in UNMODELLED_FIXTURES:
+    for label, source in UNSCANNABLE_FIXTURES:
         try:
             find_violations(source, "fixture.hs")
-        except _ImportParseError:
+        except _UnscannableSource:
             continue
-        failures.append(f"  UNMODELLED: {label}\n"
-                        f"    expected _ImportParseError, got a clean scan")
+        failures.append(f"  UNSCANNABLE: {label}\n"
+                        f"    expected _UnscannableSource, got a scan")
 
     # An exemption must actually suppress, and suppress only its path,
     # or the table is decorative.
@@ -1331,13 +1418,13 @@ def self_test() -> int:
             print(failure)
         return 1
     total = (len(DETECTED_FIXTURES) + len(CLEAN_FIXTURES)
-             + len(UNMODELLED_FIXTURES))
+             + len(UNSCANNABLE_FIXTURES))
     print(f"lua_strict_decode_audit self-test: {total} fixtures OK "
           f"({len(DETECTED_FIXTURES)} detected across every import, "
           f"qualification and layout form; {len(CLEAN_FIXTURES)} clean, "
           f"including the total siblings, comments, literals, "
           f"same-named functions from other modules and a head-bound "
-          f"bare name; {len(UNMODELLED_FIXTURES)} unmodelled imports "
+          f"bare name; {len(UNSCANNABLE_FIXTURES)} unscannable sources "
           f"that raise rather than pass).")
     return 0
 
@@ -1353,7 +1440,7 @@ def main() -> int:
 
     try:
         violations = scan_tree(REPO_ROOT)
-    except _ImportParseError as error:
+    except _UnscannableSource as error:
         print(f"lua_strict_decode_audit: {error}")
         return 1
     if violations:
