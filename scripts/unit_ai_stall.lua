@@ -123,12 +123,13 @@ function M.charge(order, eligible, now)
     return acc
 end
 
--- Record an interruption boundary on whatever orders `s` is carrying:
--- the AI could not pursue them over the interval that just elapsed, so
--- the next sample must charge nothing for it. Dropping the last-sample
--- stamp is exactly that -- M.charge reads a missing stamp as a
--- zero-length interval and picks the accounting back up from `now`,
--- leaving everything already charged charged.
+-- Record an interruption boundary on whatever orders -- and whatever
+-- elapsed-time work accumulator -- `s` is carrying: the AI could not
+-- pursue them over the interval that just elapsed, so the next sample
+-- must charge nothing for it. Dropping the last-sample stamp is exactly
+-- that -- M.charge reads a missing stamp as a zero-length interval and
+-- picks the accounting back up from `now`, leaving everything already
+-- charged charged.
 --
 -- Takes the state table (nil-tolerant, since a short-circuited tick
 -- may run for a unit that has no AI state yet) rather than a uid, and
@@ -144,6 +145,18 @@ function M.suspendOrders(s)
     -- against the same budget by the same rules, so it takes the same
     -- boundary.
     if s.holdAnchor     then s.holdAnchor.stallSeenAt     = nil end
+    -- Auto-harvest's picking clock (#1582) takes the boundary for the
+    -- same reason and by the same mechanism: it is a last-sample stamp
+    -- whose next reading would otherwise charge the swallowed interval
+    -- as picking. scripts/unit_ai.lua's collapsed-pose and
+    -- mid-animation returns are the paths that need it -- they swallow
+    -- the tick WITHOUT firing the outgoing action's onExit, which is
+    -- how every other preemption clears the same stamp
+    -- (unit_ai_mental.lua's preempt documents that hazard for
+    -- construct/craft). Only the stamp is dropped: the work already
+    -- accumulated on the plant survives the interruption, exactly as a
+    -- partially spent stall budget does.
+    s.lastHarvestAt = nil
 end
 
 -- A new closest approach: the whole budget is available again.
