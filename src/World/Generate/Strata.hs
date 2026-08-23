@@ -63,13 +63,25 @@ data StrataZState = StrataZState
 buildStrataCache ∷ GeoTimeline → Int → WorldScale → Int → Int
                  → MaterialRegistry → (Int, MaterialId)
                  → (Int, Int, Int, Int)
+                 → (MaterialId, MaterialId, MaterialId, MaterialId)
                  → V.Vector PeriodStrataCache
 buildStrataCache timeline worldSize wsc gx gy registry (baseElev, baseMat)
-                 (nFinalN, nFinalS, nFinalE, nFinalW) =
+                 (nFinalN, nFinalS, nFinalE, nFinalW)
+                 (mFinalN, mFinalS, mFinalE, mFinalW) =
     let initState = (baseElev, baseMat)
         caches = snd $ foldl' step (initState, []) (gtPeriods timeline)
     in V.fromList (reverse caches)
   where
+    hardnessOf m = mpHardness (getMaterialProps registry m)
+    -- Final neighbour MATERIALS, the same approximation the final
+    -- neighbour ELEVATIONS already are, and paired with them N/S/E/W.
+    -- The soil-shed donor test needs them so an indestructible neighbour
+    -- (glacier, mantle) credits nothing (#1591); this is the production
+    -- consumer that records the resulting 'gmIntrusionDepth'.
+    nbrHardness =
+        ( hardnessOf mFinalN, hardnessOf mFinalS
+        , hardnessOf mFinalE, hardnessOf mFinalW )
+
     step ((elev, surfMat), acc) period =
         let -- Filter to events whose bbox contains this column.
             -- Most events are spatially local (volcanoes, craters, rivers),
@@ -98,6 +110,7 @@ buildStrataCache timeline worldSize wsc gx gy registry (baseElev, baseMat)
                 hardness
                 elev'
                 (nFinalN, nFinalS, nFinalE, nFinalW)
+                nbrHardness
 
             erosionDelta = gmElevDelta erosionMod
             erosionMat = case gmMaterialOverride erosionMod of

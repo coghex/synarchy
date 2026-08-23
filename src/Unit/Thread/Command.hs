@@ -59,8 +59,8 @@ handleUnitCommand env utsRef UnitClearAll
   = handleUnitClearAllCommand env utsRef
 handleUnitCommand env utsRef (UnitTeleport uid gx gy mGz)
   = handleUnitTeleportCommand env utsRef uid gx gy mGz
-handleUnitCommand env utsRef (UnitReGround gx gy)
-  = handleUnitReGroundCommand env utsRef gx gy
+handleUnitCommand env utsRef (UnitReGround pageId gx gy)
+  = handleUnitReGroundCommand env utsRef pageId gx gy
 handleUnitCommand env utsRef (UnitMoveTo uid tx ty speed hazard)
   = handleUnitMoveToCommand env utsRef uid tx ty speed hazard
 handleUnitCommand env utsRef (UnitSetMoveSpeed uid speed)

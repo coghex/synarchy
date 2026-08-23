@@ -328,7 +328,7 @@ promoteFullSpoilTiles env unitQ logger pageId ws startV = do
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
                         -- Anything standing on the tile rides up.
-                        Q.writeQueue unitQ (UnitReGround tx ty)
+                        Q.writeQueue unitQ (UnitReGround pageId tx ty)
                         logDebug logger CatWorld $
                             "Spoil promoted to terrain at "
                               <> tshow tx <> "," <> tshow ty

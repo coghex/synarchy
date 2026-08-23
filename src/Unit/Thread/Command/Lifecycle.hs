@@ -21,6 +21,7 @@ import Unit.Types
 import Unit.Sim.Types
 import Unit.Transfer.Live (retireTransferOrdersEverywhere)
 import World.Types (WorldManager(..), WorldState(..), LoadedChunk(..), columnIndex, lookupChunk)
+import World.Page.Types (WorldPageId(..))
 import World.Generate (globalToChunk)
 
 handleUnitDestroyCommand ∷ EngineEnv → IORef UnitThreadState → UnitId → IO ()
@@ -60,9 +61,17 @@ handleUnitTeleportCommand env utsRef uid gx gy mGz = do
     gz ← case mGz of
         Just z  → return z
         Nothing → do
+            -- Ground on the TELEPORTED UNIT'S OWN page (#1593), not on
+            -- whichever page happens to be visible first: this uid has
+            -- always carried the page that answers the question. A unit
+            -- the manager no longer holds names no page and so gets no
+            -- surface — the same z = 0 fallback an unloaded chunk gets.
+            mPage ← unitPageOf env uid
             let gxi = floor gx ∷ Int
                 gyi = floor gy ∷ Int
-            mSurf ← lookupSurfaceZ env gxi gyi
+            mSurf ← case mPage of
+                Nothing     → pure Nothing
+                Just pageId → lookupSurfaceZ env pageId gxi gyi
             case mSurf of
                 Just z  → return z
                 Nothing → return 0
@@ -98,31 +107,39 @@ handleUnitTeleportCommand env utsRef uid gx gy mGz = do
                                  }
                 in (um { umInstances = HM.insert uid inst' insts }, ())
 
-handleUnitReGroundCommand ∷ EngineEnv → IORef UnitThreadState → Int → Int → IO ()
-handleUnitReGroundCommand env utsRef gx gy = do
-    -- Terrain at (gx, gy) changed under our feet (dig / delete-tile).
-    -- Re-snap idle units standing on that tile to the new surface;
-    -- moving units re-ground themselves on every tile crossing, and
-    -- transitioning/falling/climbing units are mid-state-machine and
-    -- must not be teleport-snapped.
-    mSurf ← lookupSurfaceZ env gx gy
+handleUnitReGroundCommand ∷ EngineEnv → IORef UnitThreadState → WorldPageId
+                          → Int → Int → IO ()
+handleUnitReGroundCommand env utsRef pageId gx gy = do
+    -- Terrain at (gx, gy) changed under our feet (dig / delete-tile) ON
+    -- ONE PAGE — the emitting edit handler always knew which, and since
+    -- #1593 it says so. Re-snap idle units standing on that tile OF THAT
+    -- PAGE to the new surface; moving units re-ground themselves on every
+    -- tile crossing, and transitioning/falling/climbing units are
+    -- mid-state-machine and must not be teleport-snapped. A
+    -- coordinate-matched unit on any OTHER page is not standing on the
+    -- edited tile at all and must not move.
+    mSurf ← lookupSurfaceZ env pageId gx gy
     case mSurf of
         Nothing → pure ()
         Just z → do
+            -- Ownership lives on the instance, so the set of uids on the
+            -- edited page is resolved once, before the sim-state swap.
+            onPage ← unitIdsOnPage env pageId
             snapped ← atomicModifyIORef' utsRef $ \uts →
                 let simStates = utsSimStates uts
-                    affects ss =
-                        floor (usRealX ss) ≡ gx
+                    affects uid ss =
+                        HS.member uid onPage
+                      ∧ floor (usRealX ss) ≡ gx
                       ∧ floor (usRealY ss) ≡ gy
                       ∧ usState ss ≡ Idle
                       ∧ usGridZ ss ≢ z
-                    snap ss
-                        | affects ss = ss { usGridZ = z
-                                          , usRealZ = fromIntegral z }
-                        | otherwise  = ss
+                    snap uid ss
+                        | affects uid ss = ss { usGridZ = z
+                                              , usRealZ = fromIntegral z }
+                        | otherwise      = ss
                     hit = [ uid | (uid, ss) ← HM.toList simStates
-                                , affects ss ]
-                in (uts { utsSimStates = HM.map snap simStates }, hit)
+                                , affects uid ss ]
+                in (uts { utsSimStates = HM.mapWithKey snap simStates }, hit)
             -- Mirror into the render-facing instances so the visual z
             -- updates this frame, same as UnitTeleport does.
             forM_ snapped $ \uid →
@@ -135,29 +152,37 @@ handleUnitReGroundCommand env utsRef gx gy = do
                             in (um { umInstances =
                                     HM.insert uid inst' (umInstances um) }, ())
 
--- | KNOWN FOLLOW-UP (#797 audit clause): scans wmVisible in order and
---   returns the first page with a loaded chunk at (gx, gy), rather than
---   resolving a specific page's own tiles — the same head/order
---   assumption #797 fixed in Unit.LineOfSight. Left unfixed here
---   deliberately: one caller (handleUnitTeleportCommand) has a uid and
---   could pass its page, but the other (handleUnitReGroundCommand)
---   takes only a bare (gx, gy) with no page context at all — the tile
---   edit that triggers it isn't page-tagged either — so giving this
---   helper page ownership needs signature changes up through BOTH call
---   chains, materially larger in scope than #797's LOS change. Tracked
---   as a deferred follow-up.
-lookupSurfaceZ ∷ EngineEnv → Int → Int → IO (Maybe Int)
-lookupSurfaceZ env gx gy = do
+-- | The unit's own world page, or 'Nothing' when the manager no longer
+--   holds it — the ownership lookup #1593's two lifecycle commands both
+--   resolve their page through.
+unitPageOf ∷ EngineEnv → UnitId → IO (Maybe WorldPageId)
+unitPageOf env uid = do
+    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+    pure $ uiPage <$> HM.lookup uid (umInstances um)
+
+-- | Every unit id currently standing on one page.
+unitIdsOnPage ∷ EngineEnv → WorldPageId → IO (HS.HashSet UnitId)
+unitIdsOnPage env pageId = do
+    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+    pure $ HS.fromList (HM.keys (unitsOnPage pageId (umInstances um)))
+
+-- | The surface z of one NAMED page's own tiles at (gx, gy) (#1593).
+--
+--   Resolves through @wmWorlds@, so a loaded page answers whether or not
+--   it is visible, and returns 'Nothing' — never another page's z — when
+--   that page is not loaded or holds no loaded chunk at the coordinates.
+--   This replaces the pre-#1593 @wmVisible@ scan, which returned the
+--   first visible page with a matching chunk and so let a terrain edit on
+--   one page snap coordinate-matched units on another.
+lookupSurfaceZ ∷ EngineEnv → WorldPageId → Int → Int → IO (Maybe Int)
+lookupSurfaceZ env pageId gx gy = do
     wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
-    go (wmVisible wm) (wmWorlds wm)
+    case lookup pageId (wmWorlds wm) of
+        Nothing → return Nothing
+        Just ws → do
+            td ← readIORef (wsTilesRef ws)
+            return $ case lookupChunk chunkCoord td of
+                Just lc → Just (lcSurfaceMap lc VU.! columnIndex lx ly)
+                Nothing → Nothing
   where
     (chunkCoord, (lx, ly)) = globalToChunk gx gy
-    go [] _ = return Nothing
-    go (pageId:rest) worlds =
-        case lookup pageId worlds of
-            Nothing → go rest worlds
-            Just ws → do
-                td ← readIORef (wsTilesRef ws)
-                case lookupChunk chunkCoord td of
-                    Just lc → return $ Just ((lcSurfaceMap lc) VU.! columnIndex lx ly)
-                    Nothing → go rest worlds

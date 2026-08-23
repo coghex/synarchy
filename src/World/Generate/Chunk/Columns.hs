@@ -39,12 +39,15 @@ buildChunkColumns
     → VU.Vector Bool               -- ^ lavaShell
     → VU.Vector Int                -- ^ terrainSurfaceMap (post-smoothing)
     → (Int → Int → Int → Int)      -- ^ lookupElevOr (bordered elev, fallback)
+    → (Int → Int → MaterialId → MaterialId)
+                                   -- ^ lookupMatOr (bordered mat, fallback)
     → V.Vector (Maybe FluidCell)   -- ^ rawFluidMap
     → Int                          -- ^ chunkArea
     → V.Vector ColumnTiles
 buildChunkColumns timeline worldSize wsc registry coordBeyond coordGX coordGY
                   lookupFinal lookupBase magmaOverlay lavaShell
-                  terrainSurfaceMap lookupElevOr rawFluidMap chunkArea =
+                  terrainSurfaceMap lookupElevOr lookupMatOr rawFluidMap
+                  chunkArea =
     V.generate chunkArea $ \idx →
         if coordBeyond VU.! idx
         then ColumnTiles
@@ -124,10 +127,22 @@ buildChunkColumns timeline worldSize wsc registry coordBeyond coordGX coordGY
                 -- rawSurfZ-20 limits the erosion to realistic levels.
                 -- This doesn't change ctStartZ or strata range.
                 clampN n = max (rawSurfZ - 20) n
+                -- Post-coastal neighbor MATERIALS, read from the same
+                -- bordered final grid and paired N/S/E/W with the
+                -- elevations above, with the same own-surface fallback
+                -- outside the border. The strata cache needs them so an
+                -- indestructible neighbour sheds no soil credit (#1591).
+                -- Only the material is read, so the elevation clamp above
+                -- has no counterpart here.
+                matN = lookupMatOr lx (ly - 1) rawSurfMat
+                matS = lookupMatOr lx (ly + 1) rawSurfMat
+                matE = lookupMatOr (lx + 1) ly rawSurfMat
+                matW = lookupMatOr (lx - 1) ly rawSurfMat
                 cache = buildStrataCache timeline worldSize wsc
                                          gx' gy' registry base
                                          (clampN finalN, clampN finalS
                                          , clampN finalE, clampN finalW)
+                                         (matN, matS, matE, matW)
                 -- Strata built using the ORIGINAL (un-capped) surface
                 -- so the cache's per-period erosion math stays valid.
                 -- The cap is then appended as a pure basalt extension.

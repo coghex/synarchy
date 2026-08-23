@@ -253,6 +253,15 @@ generateChunk registry catalog params coord =
             then finalElevVec VU.! toIndex lx ly
             else fallback
 
+        -- Material companion to 'lookupElevOr', reading the same bordered
+        -- final grid with the same out-of-border fallback, so the strata
+        -- cache can pair each neighbour elevation with its own material
+        -- (#1591).
+        lookupMatOr lx ly fallback =
+            if inBorder lx ly
+            then seabedMatVec VU.! toIndex lx ly
+            else fallback
+
         -- (timeline elevation lookup removed — strata now use clamped
         -- post-coastal neighbors to prevent over-erosion without the
         -- mismatch that creates air-tile gaps near the surface)
@@ -366,6 +375,7 @@ generateChunk registry catalog params coord =
         rawChunk = buildChunkColumns timeline worldSize wsc registry
                        coordBeyond coordGX coordGY lookupFinal lookupBase
                        magmaOverlay lavaShell terrainSurfaceMap lookupElevOr
+                       lookupMatOr
                        rawFluidMap chunkArea
 
         noNeighborLookup ∷ ChunkCoord → Maybe (VU.Vector Int)

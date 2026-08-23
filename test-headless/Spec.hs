@@ -21,6 +21,7 @@ import qualified Test.Headless.WorldGen.BedDepth as BedDepth
 import qualified Test.Headless.WorldGen.FluidSurfaceFold as FluidSurfaceFold
 import qualified Test.Headless.Unit.Pathing.Cost as PathingCost
 import qualified Test.Headless.Unit.Pathing.Hazard as PathingHazard
+import qualified Test.Headless.Unit.SimPageOwnership as SimPageOwnership
 import qualified Test.Headless.Unit.Pathing.AStar as PathingAStar
 import qualified Test.Headless.Unit.Pathing.Config as PathingConfig
 import qualified Test.Headless.Unit.Render.PickFrame as PickFrame
@@ -336,6 +337,14 @@ main = hspec $ do
     -- installs TWO live pages and rewrites the unit/world manager refs
     -- to put a unit on the non-active one.
     aroundAll withHeadlessEngine GroundPageOwnership.spec
+    -- Own engine for the same reason (#1593): the unit-simulation
+    -- page-ownership gate installs its own three-page world manager and
+    -- rewrites the unit manager to put a unit on each. WORLD-THREAD-FREE
+    -- for the same reason the etymology gate below is: its pages are
+    -- hand-built emptyWorldStates carrying defaultWorldGenParams, whose
+    -- wgpPlates is empty, so a real world worker picking one up for
+    -- chunk loading would die in twoNearestPlates.
+    aroundAll withHeadlessEngineNoWorld SimPageOwnership.spec
     -- Own engine for the same reason (#1265): the etymology page-scope
     -- gate installs its own two-page world manager, one page inactive,
     -- to drive world.getEtymology across the target/recurrence boundary.

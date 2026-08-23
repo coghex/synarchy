@@ -91,12 +91,17 @@ data UnitCommand
         --   against state_animations to pick the anim; missing assets
         --   yield a 0-duration transition that completes on the next
         --   tick. While transitioning, movement orders are ignored.
-    | UnitReGround !Int !Int
-        -- ^ Terrain under tile (gx, gy) changed (delete-tile edit /
-        --   dig completion): re-snap the z of any IDLE unit standing
-        --   on that tile to the new surface. Moving units re-ground
-        --   themselves on every tile crossing; stationary ones would
-        --   otherwise keep a stale z and float mid-air over the hole.
+    | UnitReGround !WorldPageId !Int !Int
+        -- ^ Terrain under tile (gx, gy) OF THE NAMED PAGE changed
+        --   (delete-tile edit / dig completion): re-snap the z of any
+        --   IDLE unit of that page standing on that tile to the new
+        --   surface. Moving units re-ground themselves on every tile
+        --   crossing; stationary ones would otherwise keep a stale z and
+        --   float mid-air over the hole. The page is carried because
+        --   tiles are page-local (#1593): every emit site already
+        --   operates on one known 'World.State.Types.WorldState', and
+        --   without it a coordinate-matched unit on ANOTHER page got
+        --   snapped to this page's surface.
     | UnitClearAll
         -- ^ Drop every unit instance + selection + sim state. Enqueued by
         --   world.destroyAll (Exit to Menu) so the clear is ordered AFTER
