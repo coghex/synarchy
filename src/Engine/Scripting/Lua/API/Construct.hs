@@ -218,9 +218,11 @@ constructGetDesignationAtFn wsc = do
 --   thread), this removes the designation and returns its final state
 --   in ONE atomic step, so a caller computing a materials refund from
 --   the returned job's 'paid' field never races a second caller over
---   the SAME entry — whether that's a rapid double right-click on one
---   designation, or a genuinely new designation quickly replacing it
---   at the same tile. See 'World.Thread.Command.Cursor.Construct.popConstructDesignation'.
+--   the SAME entry — a rapid double right-click on one designation, or
+--   a cancel racing the build AI's own completion removal. (A new
+--   designation is no longer such a racer: since #1595 admission
+--   refuses a tile that already carries a job instead of replacing it.)
+--   See 'World.Thread.Command.Cursor.Construct.popConstructDesignation'.
 constructCancelDesignationForRefundFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 constructCancelDesignationForRefundFn wsc = do
     pageIdArg ← Lua.tostring 1
