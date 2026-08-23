@@ -239,6 +239,13 @@ unitSetPosFn env = do
 --   and enqueues nothing — rather than silently degrading to
 --   @"allow_falls"@, which would turn a typo in an ambient mover into
 --   exactly the cliff walk the policy exists to prevent.
+--
+--   The token arrives as a raw Lua byte string, so it is decoded
+--   LENIENTLY (#665's convention, restored by #1605): bytes that are
+--   not valid UTF-8 become replacement characters, which parse as an
+--   unrecognized token and take the refusal path above. A strict decode
+--   here would throw a @UnicodeException@ out of the Lua call instead
+--   of producing the warning this code was written to emit.
 unitMoveToFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitMoveToFn env = do
     idArg     ← Lua.tointeger 1
@@ -264,13 +271,13 @@ unitMoveToFn env = do
                             _                   → 2.0
                 mHazard = case hazardArg of
                     Nothing  → Just defaultMoveHazardPolicy
-                    Just raw → parseMoveHazardPolicy (TE.decodeUtf8 raw)
+                    Just raw → parseMoveHazardPolicy (TE.decodeUtf8Lenient raw)
             case mHazard of
                 Nothing → do
                     logger ← Lua.liftIO $ readIORef (loggerRef env)
                     Lua.liftIO $ logWarn logger CatAsset $
                         "unit.moveTo: unrecognized hazard policy '"
-                        <> maybe "" TE.decodeUtf8 hazardArg
+                        <> maybe "" TE.decodeUtf8Lenient hazardArg
                         <> "' (expected 'allow_falls' or 'avoid_falls')"
                         <> " — move refused"
                     Lua.pushboolean False

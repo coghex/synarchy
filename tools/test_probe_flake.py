@@ -36,6 +36,7 @@ import argparse
 import json
 import os
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -907,6 +908,157 @@ def test_ports() -> None:
         expect(leftover.exists(),
                "releasing a lease leaves its diagnostic file in place — "
                "unlinking it is what would reintroduce the recovery race")
+
+
+def _held_ports(base: int, width: int) -> list[int]:
+    """Which of `base .. base + width - 1` cannot be leased right now.
+
+    `flock` conflicts between open file DESCRIPTIONS, not processes, so
+    this answers correctly about a lease this same process is holding —
+    which is what makes it a usable probe for "the span is held".
+    Anything it could take is given straight back.
+    """
+    held: list[int] = []
+    for port in range(base, base + width):
+        lease = probe_flake.PortLease.try_acquire(port)
+        if lease is None:
+            held.append(port)
+        else:
+            lease.release()
+    return held
+
+
+def test_port_spans() -> None:
+    print("\n-- multi-port spans (#1571) --")
+    with SyntheticTree() as tree:
+        saved = (probe_flake.PORT_MIN, probe_flake.PORT_MAX)
+        try:
+            # A five-port range makes every boundary directly observable.
+            probe_flake.PORT_MIN, probe_flake.PORT_MAX = 8009, 8013
+
+            expect_raises(probe_flake.Rejection,
+                          lambda: probe_flake.acquire_span(8009, 0),
+                          "a zero-width span is rejected", "positive")
+            expect_raises(probe_flake.PortExhausted,
+                          lambda: probe_flake.acquire_span(8009, 6),
+                          "a span wider than the whole range is exhaustion, "
+                          "not a partial lease", "does not fit")
+
+            # -- the complete span is leased, and the cursor advances by it.
+            leases, cursor = probe_flake.acquire_span(8009, 2)
+            expect([lease.port for lease in leases] == [8009, 8010],
+                   f"a two-port span leases BOTH ports, contiguously "
+                   f"(got {[lease.port for lease in leases]})")
+            expect(cursor == 8011,
+                   f"and the cursor advances by the full span (got {cursor})")
+            expect(_held_ports(8009, 2) == [8009, 8010],
+                   "both members are really held while the span is out")
+
+            # -- a span overlapping a held one is refused, base or member.
+            #    8009 is held (a base clash) and 8010 is held (a SECONDARY
+            #    clash for base 8009), so the next two-port span must start
+            #    at 8011.
+            second, cursor2 = probe_flake.acquire_span(8009, 2)
+            expect([lease.port for lease in second] == [8011, 8012],
+                   f"the next span skips every base whose span overlaps a "
+                   f"held one (got {[lease.port for lease in second]})")
+            for lease in second:
+                lease.release()
+
+            # -- partial acquisition is released, not kept. Base 8011 is
+            #    free but 8012 is not, so the attempt at 8011 must give
+            #    8011 back before moving on -- otherwise the free port
+            #    would be stranded by a span that never started.
+            blocker = probe_flake.PortLease.try_acquire(8012)
+            expect(blocker is not None, "the fixture can hold 8012")
+            expect_raises(probe_flake.PortExhausted,
+                          lambda: probe_flake.acquire_span(8011, 2),
+                          "no two-port span survives 8009/8010/8012 being held",
+                          "complete scan")
+            expect(_held_ports(8011, 1) == [],
+                   "and the partially acquired 8011 was given back")
+            if blocker:
+                blocker.release()
+
+            # -- an OCCUPIED secondary is refused the same way a leased one
+            #    is: the lease is available but something outside this
+            #    harness is listening there.
+            for lease in leases:
+                lease.release()
+            occupied = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            occupied.bind(("127.0.0.1", 8010))
+            occupied.listen(4)
+            try:
+                got, _ = probe_flake.acquire_span(8009, 2)
+                expect([lease.port for lease in got] == [8011, 8012],
+                       f"a span whose SECOND port is occupied is skipped "
+                       f"(got {[lease.port for lease in got]})")
+                expect(_held_ports(8009, 1) == [],
+                       "and the base it partially acquired was released")
+                for lease in got:
+                    lease.release()
+            finally:
+                occupied.close()
+
+            # -- a span never wraps the range end. 8013 is PORT_MAX, so a
+            #    two-port span cannot start there; it wraps the SCAN to
+            #    8009 instead of leasing 8013+8014.
+            wrapped, _ = probe_flake.acquire_span(8013, 2)
+            expect([lease.port for lease in wrapped] == [8009, 8010],
+                   f"a base whose span would pass PORT_MAX is skipped, and "
+                   f"the scan wraps to a base that fits "
+                   f"(got {[lease.port for lease in wrapped]})")
+            for lease in wrapped:
+                lease.release()
+
+            # -- span 1 is exactly the old single-port behaviour.
+            one, cursor3 = probe_flake.acquire_span(8009, 1)
+            expect([lease.port for lease in one] == [8009] and cursor3 == 8010,
+                   f"span 1 leases one port and advances by one "
+                   f"(got {[lease.port for lease in one]}, cursor {cursor3})")
+            for lease in one:
+                lease.release()
+        finally:
+            probe_flake.PORT_MIN, probe_flake.PORT_MAX = saved
+
+
+def test_measure_leases_the_probes_whole_declared_span() -> None:
+    print("\n-- measure leases the DECLARED span, and only lets go after the "
+          "reap --")
+    with SyntheticTree() as tree:
+        saved_spans = run_probes.PROBE_PORT_SPANS
+        real_run_one = run_probes.run_one
+        seen: dict[str, object] = {}
+
+        def spy(script, port, timeout, groups, **kwargs):
+            # Inside `run_one` the probe is live, so this is the window
+            # the span has to cover. `run_one` reaps the probe's whole
+            # process group before it returns, so a lease still held
+            # here and released after cannot hand a port to anyone while
+            # an engine still owns it.
+            seen["base"] = port
+            seen["held"] = _held_ports(port, 3)
+            return real_run_one(script, port, timeout, groups, **kwargs)
+
+        run_probes.PROBE_PORT_SPANS = {"synthetic": 2}
+        run_probes.run_one = spy
+        try:
+            measurement = run_synthetic(tree, "pass", runs=1)
+        finally:
+            run_probes.run_one = real_run_one
+            run_probes.PROBE_PORT_SPANS = saved_spans
+
+        base = seen.get("base")
+        expect(isinstance(base, int) and base is not None,
+               f"the probe was launched with a base port (got {base!r})")
+        expect(seen.get("held") == [base, base + 1],
+               f"its declared TWO-port span was held for the whole run, and "
+               f"nothing beyond it (got {seen.get('held')}, base {base})")
+        expect(measurement.runs and measurement.runs[0].port == base,
+               f"the run records the BASE of the span it was given "
+               f"(got {[r.port for r in measurement.runs]}, base {base})")
+        expect(_held_ports(base, 2) == [],
+               "and every member is released once the measurement is over")
 
 
 def test_concurrent_leasing() -> None:
@@ -2223,6 +2375,8 @@ def main() -> int:
                  test_forbidden_markers,
                  test_eligibility, test_descriptor_mismatch_rejection,
                  test_reconciliation, test_harness_errors, test_ports,
+                 test_port_spans,
+                 test_measure_leases_the_probes_whole_declared_span,
                  test_concurrent_leasing,
                  test_lease_root_is_tmpdir_independent,
                  test_concurrency_accounting, test_artifacts,

@@ -27,9 +27,19 @@ import World.Fluid.Types (FluidType(..), FluidCell(..))
 
 -- | One chunk's simulated fluid result, produced by the sim thread and
 --   applied to 'wsTilesRef' by the WORLD thread (the sole writer). The
---   sim derives all four fields so the world handler is a dumb inserter.
+--   sim derives all four payload fields so the world handler is a dumb
+--   inserter — the one thing it does decide is FRESHNESS, from
+--   'fwEditGen'.
 data FluidWriteback = FluidWriteback
     { fwCoord    ∷ !ChunkCoord
+    , fwEditGen  ∷ !Word64
+      -- ^ The chunk's live-edit generation this result was derived from
+      --   ('Sim.State.Types.scsEditGen'). The world applies the writeback
+      --   only when it EQUALS the page's own current generation for this
+      --   chunk ('World.State.Types.wsChunkEditGenRef'), which is what
+      --   stops a batch computed before a live edit from overwriting it
+      --   (#1596). Per chunk, so an edit to one chunk never drops a
+      --   writeback for another in the same batch.
     , fwFluid    ∷ !(V.Vector (Maybe FluidCell))
     , fwTerrain  ∷ !(VU.Vector Int)
     , fwSurf     ∷ !(VU.Vector Int)

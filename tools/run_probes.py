@@ -10,11 +10,14 @@ single PASS/FAIL summary.
 
 Probes each own their engine (boot + teardown). By default they run one at
 a time; `--jobs N` runs up to N CONCURRENTLY, each an independent engine on
-a unique port (#531). Probes canNOT share a single engine — 8 neutralise
-the global `unit_ai.update`, 37 load defs engine-wide, many reuse the same
-world/page names, and 16 restart the engine, so there is no clean per-
-scenario isolation on one long-lived engine; running independent engines in
-parallel gets the speed without that problem. Separate processes and
+its own RESERVED PORT SPAN (#531, #1571) — a probe that binds more than one
+port declares how many in `PROBE_PORT_SPANS` below, and the allocator lays
+the spans end to end so no two concurrent probes overlap. Probes canNOT
+share a single engine — 8 neutralise the global `unit_ai.update`, 37 load
+defs engine-wide, many reuse the same world/page names, and 16 restart the
+engine, so there is no clean per-scenario isolation on one long-lived
+engine; running independent engines in parallel gets the speed without that
+problem. Separate processes and
 separate ports are ALL that isolates — every probe still drives the same
 checkout — so shared repository-relative resources are scheduled
 reader/writer (#1322, #1444): every probe holds the resources named in
@@ -35,6 +38,7 @@ Usage:
   python3 tools/run_probes.py --only combat,movement
   python3 tools/run_probes.py --list
   python3 tools/run_probes.py --port 9500       # override every probe's --port
+  python3 tools/run_probes.py --jobs 4 --port 9500   # ... and base the spans there
   python3 tools/run_probes.py --timeout 300
 
 Probes are launched into their own session, and this runner reaps that
@@ -64,11 +68,17 @@ import probe_resource_lock  # noqa: E402
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Base for the unique per-probe ports handed out in parallel mode (--jobs).
-# Clear of the GUI port 8008. Each probe in a concurrent batch is launched
-# with an explicit --port = PARALLEL_PORT_BASE + index override, so this
-# range never needs to be clear of any probe's own default port — the
-# override always wins over it.
+# The user's own graphical instance. No probe may ever be pointed at it,
+# and since #1571 that refusal covers every port a probe RESERVES, not
+# just the base it is handed (see `PROBE_PORT_SPANS` below).
+GUI_PORT = 8008
+
+# Default origin for the per-probe port SPANS handed out in parallel mode
+# (--jobs) when `--port` does not supply one. Clear of the GUI port. Each
+# probe in a concurrent batch is launched with an explicit --port
+# override naming the base of its own span, so this range never needs to
+# be clear of any probe's own default port — the override always wins
+# over it.
 PARALLEL_PORT_BASE = 9400
 
 # (key, script filename, one-line purpose for --list). Every registered
@@ -282,6 +292,11 @@ PROBES = [
      "refusal, ordered rotation, and depth-reduction/disable retention"),
     ("save_pause", "save_pause_probe.py",
      "save/load pause-semantics regression (#42)"),
+    ("pause_speed", "pause_speed_probe.py",
+     "the player's chosen world speed survives a pause imposed by a "
+     "pause: true notification, a whole manual engine.saveWorld driven to a "
+     "terminal outcome, and a save taken from an already-paused session; "
+     "load policy still resumes at the default speed (#1599)"),
     ("save_barrier", "save_barrier_probe.py",
      "coordinated save owner acknowledgement and paused reload smoke test (#757)"),
     ("save_storage", "save_storage_probe.py",
@@ -418,6 +433,99 @@ def shared_resources(key: str) -> set[str]:
     one cannot leave the other behind.
     """
     return set(IMPLICIT_SHARED_RESOURCES) - exclusive_resources(key)
+
+
+# ---------------------------------------------------------------------------
+# Reserved port spans: how many ports a probe may bind (#1571)
+#
+# A probe is handed ONE `--port`, but two registered probes derive a
+# second listener from it and keep both alive at once:
+# `debug_console_boot_probe.py` boots its successful-bind and
+# widget-module checks on `--port + 1`, and `offscreen_probe.py` starts a
+# second offscreen engine on `--port + 1` while the first is still up.
+# Stride-1 parallel allocation therefore handed a two-port probe its
+# NEIGHBOUR's base: selecting `debug_console_boot` immediately before
+# `transactional_load` under `--jobs 2` put both on 9401, and the
+# resulting `Address already in use` read as a regression in probes that
+# each pass alone.
+#
+# The fix is to make the port count DATA rather than something the
+# allocator infers. A declared count N reserves the CONTIGUOUS span
+# `base .. base + N - 1`; an undeclared probe reserves its base alone.
+# Adding a future multi-port probe is one row here — nothing in the
+# allocator, the GUI-port refusal, or `tools/probe_flake.py`'s lease
+# scanner knows any probe by name. `tools/test_run_probes.py` validates
+# every row against the live registry, the way it already does for
+# `EXCLUSIVE_RESOURCES`, so a renamed or retired probe cannot leave a
+# stale declaration behind.
+DEFAULT_PORT_SPAN = 1
+
+PROBE_PORT_SPANS: dict[str, int] = {
+    "debug_console_boot": 2,
+    "offscreen": 2,
+}
+
+
+def port_span(key: str) -> int:
+    """How many contiguous ports probe `key` may bind from its base."""
+    return PROBE_PORT_SPANS.get(key, DEFAULT_PORT_SPAN)
+
+
+def reserved_ports(key: str, base: int) -> range:
+    """Every port probe `key` may bind when launched with `--port base`."""
+    return range(base, base + port_span(key))
+
+
+def allocate_parallel_ports(probes, base: int = PARALLEL_PORT_BASE) -> list[int]:
+    """One base port per probe, spans laid end to end so none overlap.
+
+    `probes` is a slice of `PROBES` (or anything whose items start with
+    the probe key). The result is positional: index i is the `--port`
+    probe i is launched with, and probe i's whole reserved span sits
+    strictly below probe i+1's base. Pure arithmetic over the declared
+    counts — it starts nothing, so a caller can validate the entire plan
+    before the first subprocess exists.
+    """
+    ports: list[int] = []
+    nxt = base
+    for probe in probes:
+        ports.append(nxt)
+        nxt += port_span(probe[0])
+    return ports
+
+
+def gui_port_conflicts(allocations) -> list[tuple[str, int]]:
+    """The `(key, base)` allocations whose reserved span covers the GUI port.
+
+    `allocations` is an iterable of `(key, base)`. Checking the SPAN
+    rather than the base is the point: `--port 8007` never equals 8008,
+    but it puts `debug_console_boot`'s second engine straight onto the
+    user's running game.
+
+    A repeated `(key, base)` is reported once. A parallel plan lists a
+    probe twice — its own allocation and the solo-retry origin — and the
+    same pair twice over is one mistake, not two.
+    """
+    seen: set[tuple[str, int]] = set()
+    conflicts: list[tuple[str, int]] = []
+    for key, base in allocations:
+        if (key, base) in seen or GUI_PORT not in reserved_ports(key, base):
+            continue
+        seen.add((key, base))
+        conflicts.append((key, base))
+    return conflicts
+
+
+def describe_gui_conflicts(conflicts) -> str:
+    """A refusal naming each probe and the span that made it one."""
+    parts = []
+    for key, base in conflicts:
+        span = reserved_ports(key, base)
+        where = (f"port {base}" if len(span) == 1
+                 else f"ports {span.start}-{span.stop - 1}")
+        parts.append(f"{key} would reserve {where}")
+    return (f"refusing to use port {GUI_PORT} (the user's GUI port, see "
+            f"CLAUDE.md): " + "; ".join(parts))
 
 
 class ResourceLedger:
@@ -627,7 +735,7 @@ def reap_group(pgid: int, grace: float | None = None) -> None:
     timeout, because a probe that dies of an unexpected exception after
     booting its engine never reaches its own ``quit_engine``. The engine
     then outlives it holding the probe's port, and `--retries` (and the
-    parallel solo-retry, which reuses PARALLEL_PORT_BASE) re-runs onto that
+    parallel solo-retry, which reuses the allocation origin) re-runs onto that
     held port, where #1190 aborts the boot and reports the leak as an
     unrelated "exited before READY".
 
@@ -980,8 +1088,13 @@ def main() -> int:
                           "uses this so e.g. 'craft' can't also select 'craft_bill')")
     ap.add_argument("--list", action="store_true", help="list known probes and exit")
     ap.add_argument("--port", type=int, default=None,
-                     help="override every probe's --port (default: avoids 8008; "
-                          "each probe keeps its own default if unset)")
+                     help="base port. Sequentially it overrides every probe's "
+                          "--port; with --jobs it is the ORIGIN the "
+                          "non-overlapping per-probe spans are laid out from, "
+                          "instead of the default 9400 (#1571). Unset, each "
+                          "probe keeps its own default sequentially and the "
+                          "parallel allocation starts at 9400. Never 8008, and "
+                          "never a base whose span reaches it.")
     ap.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT,
                      help=f"per-probe wall-clock timeout in seconds (default {DEFAULT_TIMEOUT:.0f})")
     ap.add_argument("--tail", type=int, default=25,
@@ -992,15 +1105,21 @@ def main() -> int:
                           "flakes seen in a back-to-back run (#530); a probe that passes "
                           "on any attempt counts as PASS")
     ap.add_argument("--jobs", type=int, default=1, metavar="N",
-                     help="run up to N probes CONCURRENTLY, each its own engine on a "
-                          "unique port (#531). Cuts wall-time to ~total/N. Default 1 = the "
+                     help="run up to N probes CONCURRENTLY, each its own engine on its "
+                          "own reserved port span (#531, #1571). Cuts wall-time to "
+                          "~total/N. Default 1 = the "
                           "sequential behavior CI relies on. Since concurrency raises "
                           "contention, --retries re-runs failures SOLO after the parallel "
                           "batch. Cap N to (cores - 1) or so — each probe is a full engine.")
     args = ap.parse_args()
 
-    if args.port == 8008:
-        sys.exit("refusing --port 8008: that's the user's GUI port, see CLAUDE.md")
+    if args.port == GUI_PORT:
+        # The base itself. Refused here, before `--list` and before any
+        # selection, so the obvious mistake never depends on which probes
+        # were chosen. The SPAN-aware refusal below needs the selection
+        # and therefore runs after it.
+        sys.exit(f"refusing --port {GUI_PORT}: that's the user's GUI port, "
+                 f"see CLAUDE.md")
 
     chosen = select(args.only, exact=args.exact)
     if args.exact:
@@ -1021,6 +1140,30 @@ def main() -> int:
         for key, script, purpose in chosen:
             print(f"{key:28s} {script:32s} {purpose}")
         return 0
+
+    # The WHOLE port plan is computed and validated here, before a single
+    # subprocess exists (#1571): every port any selected probe may bind,
+    # in the mode it is about to run in. A probe that would reach the GUI
+    # port is a refusal, not a boot against the user's running game.
+    parallel_base = PARALLEL_PORT_BASE if args.port is None else args.port
+    parallel_ports = allocate_parallel_ports(chosen, parallel_base)
+    if args.jobs <= 1:
+        # Sequential hands every probe the same base, one at a time, so
+        # there is nothing to lay out — but `--port 8007` still reaches
+        # 8008 through a two-port probe's span.
+        planned = ([] if args.port is None
+                   else [(key, args.port) for key, _, _ in chosen])
+    else:
+        planned = [(key, port)
+                   for (key, _, _), port in zip(chosen, parallel_ports)]
+        if args.retries > 0:
+            # A parallel failure is re-run SOLO from the allocation
+            # origin, so that span is part of the plan too.
+            planned += [(key, parallel_base) for key, _, _ in chosen]
+    conflicts = gui_port_conflicts(planned)
+    if conflicts:
+        print(describe_gui_conflicts(conflicts), file=sys.stderr)
+        return 2
 
     n = len(chosen)
     results: dict[str, tuple[str, str, float, str]] = {}  # key -> (script, status, elapsed, out)
@@ -1083,8 +1226,12 @@ def main() -> int:
 
             def work(idx, probe):
                 key, script, _ = probe
+                # `parallel_ports[idx]` is the BASE of this probe's own
+                # reserved span, which the allocation above laid clear of
+                # every other selected probe's (#1571). Never `base + idx`:
+                # a two-port probe binds its neighbour's base under that.
                 ok, timed_out, elapsed, out = run_one(
-                    script, PARALLEL_PORT_BASE + idx, args.timeout, groups)
+                    script, parallel_ports[idx], args.timeout, groups)
                 status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
                 return key, script, status, elapsed, out
 
@@ -1218,7 +1365,7 @@ def main() -> int:
                         # takes the cross-process hold like any other (#1436).
                         with resource_hold(key, namespace, announce=waiting):
                             ok, timed_out, elapsed, out = run_one(
-                                script, PARALLEL_PORT_BASE, args.timeout, groups)
+                                script, parallel_base, args.timeout, groups)
                         status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
                         print(f"  {script} solo retry {r}/{args.retries} ... "
                               f"{status} ({elapsed:.1f}s)")

@@ -31,8 +31,7 @@ import World.Render.Zoom.Cursor (pixelToChunkOrigin)
 import World.Generate (viewDepth)
 import World.Generate.Coordinates (localizeTileToAnchor)
 import World.Plate.Wrap (worldWidthTiles)
-import Engine.Scripting.Lua.API.WorldQuery.Lookup
-    (mVisibleWorldState, mVisiblePageState, worldStateByPage)
+import Engine.Scripting.Lua.API.WorldQuery.Lookup (worldStateByPage)
 
 -- | world.getHoverTile() → gx, gy or nil
 --   Returns the tile coordinates currently under the mouse cursor in
@@ -126,7 +125,7 @@ worldPickTileFn env = do
             -- operate on wmVisible, and a hidden page (e.g. test_arena) can
             -- sit at the wmWorlds head while main_world is shown. Picking
             -- against the wrong world would silently desync ghost/placement.
-            case mVisiblePageState manager of
+            case visiblePage manager of
                 Just (pageId, ws) → do
                     let rv = toRenderViewCapability env
                     camera   ← Lua.liftIO $ readIORef (rvCameraRef rv)
@@ -247,7 +246,7 @@ worldLocalizeTileFn env = do
         (Just ax, Just ay, Just gx, Just gy) → do
             manager ← Lua.liftIO $ readIORef
                 (wsWorldManagerRef (toWorldSimCapability env))
-            worldSize ← case mVisibleWorldState manager of
+            worldSize ← case visiblePageState manager of
                 Just ws → Lua.liftIO $ pageWrapWorldSize ws
                 Nothing → pure 0
             let (lx, ly) = localizeTileToAnchor worldSize
@@ -314,7 +313,7 @@ worldPickPosFn env = do
             let px = round px'
                 py = round py'
             manager ← Lua.liftIO $ readIORef (wsWorldManagerRef (toWorldSimCapability env))
-            case mVisibleWorldState manager of
+            case visiblePageState manager of
                 Just ws → do
                     let rv = toRenderViewCapability env
                     camera   ← Lua.liftIO $ readIORef (rvCameraRef rv)

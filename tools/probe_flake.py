@@ -36,7 +36,8 @@ Exit codes:
   2  rejected before execution (unknown probe, CI-eligible probe,
      legacy probe, descriptor mismatch, bad run/capability count,
      port 8008, unusable artifact root)
-  3  no clear, leasable port in the whole range
+  3  no clear, leasable span of the probe's declared port width
+     (`run_probes.PROBE_PORT_SPANS`, #1571) anywhere in the range
   4  harness error: the protocol stream was malformed, truncated,
      duplicated, out of order, or otherwise unclassifiable, so no
      trustworthy rate exists
@@ -426,32 +427,84 @@ class PortLease:
             os.close(self._fd)
 
 
-def acquire_port(cursor: int) -> tuple[PortLease, int]:
-    """Lease the first clear port at or after `cursor`, wrapping once.
+def _try_acquire_span(base: int, span: int) -> list[PortLease] | None:
+    """Lease `base .. base + span - 1` in full, or nothing at all.
 
-    Returns `(lease, next_cursor)`. Raises `PortExhausted` after one
-    complete scan of the range, without ever having started a probe —
-    the alternative is launching an engine onto a port another harness's
-    engine already holds.
+    Returns the leases in ascending port order, or None when ANY member
+    of the span is unavailable — outside the range, the forbidden GUI
+    port, already leased, or leased but occupied by something outside
+    this harness. A partial acquisition is released before returning:
+    holding half a span would deny those ports to a harness that could
+    have used them while starting nothing here.
     """
-    span = PORT_MAX - PORT_MIN + 1
-    start = PORT_MIN + ((cursor - PORT_MIN) % span)
-    for step in range(span):
-        port = PORT_MIN + ((start - PORT_MIN + step) % span)
-        if port == FORBIDDEN_PORT:
-            continue
-        lease = PortLease.try_acquire(port)
-        if lease is None:
-            continue
-        if not port_is_clear(port):
-            # Leased but occupied: something outside this harness holds
-            # it. Give the lease back rather than sitting on it.
+    leases: list[PortLease] = []
+    try:
+        for port in range(base, base + span):
+            if port == FORBIDDEN_PORT or not (PORT_MIN <= port <= PORT_MAX):
+                break
+            lease = PortLease.try_acquire(port)
+            if lease is None:
+                break
+            leases.append(lease)
+            if not port_is_clear(port):
+                # Leased but occupied: something outside this harness
+                # holds it. The lease is in `leases` already, so the
+                # release below gives it back with the rest.
+                break
+        else:
+            return leases
+    except BaseException:
+        for lease in leases:
             lease.release()
+        raise
+    for lease in leases:
+        lease.release()
+    return None
+
+
+def acquire_span(cursor: int, span: int = 1) -> tuple[list[PortLease], int]:
+    """Lease the first clear CONTIGUOUS run of `span` ports at or after `cursor`.
+
+    Returns `(leases, next_cursor)` with the leases in ascending order;
+    `leases[0].port` is the base a probe is launched with, and the whole
+    span is held for as long as they are. Raises `PortExhausted` after
+    one complete scan of the range, without ever having started a probe —
+    the alternative is launching an engine onto a port another harness's
+    engine already holds (#1571: a probe that derives a second listener
+    from its base needs the whole span, not just the base).
+
+    A span never wraps the range: a base whose span would run past
+    `PORT_MAX` is skipped rather than continued at `PORT_MIN`, because a
+    probe derives its extra listeners by ARITHMETIC on the base and a
+    wrapped span would not be the ports it actually binds. The cursor
+    advances by the full span, so the next run starts past everything
+    this one reserved.
+    """
+    if span < 1:
+        raise Rejection(f"a port span must be a positive count, got {span}")
+    width = PORT_MAX - PORT_MIN + 1
+    if span > width:
+        raise PortExhausted(
+            f"a {span}-port span does not fit in {PORT_MIN}-{PORT_MAX}; "
+            f"nothing was started")
+    start = PORT_MIN + ((cursor - PORT_MIN) % width)
+    for step in range(width):
+        base = PORT_MIN + ((start - PORT_MIN + step) % width)
+        if base + span - 1 > PORT_MAX:
             continue
-        return lease, PORT_MIN + ((port - PORT_MIN + 1) % span)
+        leases = _try_acquire_span(base, span)
+        if leases is None:
+            continue
+        return leases, PORT_MIN + ((base + span - PORT_MIN) % width)
     raise PortExhausted(
-        f"no clear, leasable port in {PORT_MIN}-{PORT_MAX} after a complete "
-        f"scan; nothing was started")
+        f"no clear, leasable {span}-port span in {PORT_MIN}-{PORT_MAX} after "
+        f"a complete scan; nothing was started")
+
+
+def acquire_port(cursor: int) -> tuple[PortLease, int]:
+    """Lease one clear port at or after `cursor`: `acquire_span` with span 1."""
+    leases, cursor = acquire_span(cursor, 1)
+    return leases[0], cursor
 
 
 # --------------------------------------------------------------------------
@@ -887,22 +940,30 @@ def measure(probe: str, runs: int, *, artifact_root: Path | None = None,
             # than an absent one.
             events_path.touch()
 
-            lease, cursor = acquire_port(cursor)
+            # The probe's WHOLE declared span, not just one port (#1571):
+            # `debug_console_boot` and `offscreen` derive a second live
+            # listener from the base they are handed, and leasing one port
+            # would leave that second engine on a port another harness is
+            # free to take. `run_probes.port_span` is the single
+            # declaration; nothing here knows any probe by name.
+            leases, cursor = acquire_span(cursor, run_probes.port_span(probe))
+            base_port = leases[0].port
             try:
                 if announce:
-                    announce(index, runs, lease.port)
+                    announce(index, runs, base_port)
                 ok, timed_out, elapsed, out = run_probes.run_one(
-                    script, lease.port, timeout, None,
+                    script, base_port, timeout, None,
                     event_path=str(events_path),
                     artifact_dir=str(run_dir),
                     engine_log_dir=str(engine_dir),
                     rts_caps=rts_caps)
             finally:
                 # Held until run_one has returned, which is after it has
-                # reaped the probe's whole process group — so the engine
-                # has really let the port go before anyone else can
-                # lease it.
-                lease.release()
+                # reaped the probe's whole process group — so every engine
+                # the probe booted has really let its port go before
+                # anyone else can lease it.
+                for lease in leases:
+                    lease.release()
 
             stdout_path.write_text(out or "", encoding="utf-8")
 
@@ -918,7 +979,7 @@ def measure(probe: str, runs: int, *, artifact_root: Path | None = None,
                 measurement.status = "harness-error"
                 measurement.error = f"run {index}: {detail}"
                 measurement.error_run = RunRecord(
-                    index, lease.port, RUN_HARNESS_ERROR, elapsed,
+                    index, base_port, RUN_HARNESS_ERROR, elapsed,
                     salvage_checks(descriptor, events_text), run_dir)
                 registry.sample()
                 measurement.peak_concurrency = registry.peak
@@ -947,7 +1008,7 @@ def measure(probe: str, runs: int, *, artifact_root: Path | None = None,
             if not keep:
                 _remove_tree(run_dir)
             measurement.runs.append(RunRecord(
-                index, lease.port, outcome, elapsed, outcomes,
+                index, base_port, outcome, elapsed, outcomes,
                 run_dir if keep else None))
             registry.sample()
         measurement.peak_concurrency = registry.peak

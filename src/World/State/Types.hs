@@ -15,6 +15,8 @@ module World.State.Types
     , selectionMovedSince
     , selectionChangeInFlight
     , projectedVisible
+    , visiblePage
+    , visiblePageState
     , pageLanguageProvenance
     , CursorSnapshot(..)
     , LoadPhase(..)
@@ -72,6 +74,25 @@ data WorldState = WorldState
     , wsTimeRef      ∷ IORef WorldTime
     , wsDateRef      ∷ IORef WorldDate
     , wsTimeScaleRef ∷ IORef Float    -- ^ Game-minutes per real-second
+    , wsResumeScaleRef ∷ IORef (Maybe Float)
+      -- ^ #1599: the 'wsTimeScaleRef' value to reinstate on this page
+      --   when the CURRENT pause epoch ends, or 'Nothing' when this page
+      --   is not carrying one.
+      --
+      --   "World.Pause" is the only writer. It captures this page's
+      --   chosen speed here immediately before zeroing the clock on the
+      --   unpaused→paused transition — whatever imposed that pause,
+      --   including the engine-side writers that never run a line of Lua
+      --   ('Engine.PlayerEvent.Emit''s @pause: true@ category,
+      --   @engine.saveWorld@'s acceptance) — and writes it back, clearing
+      --   this slot, on the paused→unpaused transition. Holding it PER
+      --   PAGE is what makes a resume restore only the page whose clock
+      --   the pause actually zeroed: a page that disappears mid-pause
+      --   takes its slot with it, so no other page can inherit its speed.
+      --
+      --   Runtime-only, never persisted: a load comes up paused at the
+      --   default speed, so a saved epoch could never be meaningful (see
+      --   @docs\/persistence_state_inventory.md@ §3).
     , wsZoomCacheRef ∷ IORef (V.Vector ZoomChunkEntry)  -- ^ Pre-computed zoom map cache for current world state
     , wsQuadCacheRef  ∷ IORef (Maybe WorldQuadCache)  -- ^ Cached quads for current camera state
     , wsQuadCacheGenRef ∷ IORef Int
@@ -97,6 +118,41 @@ data WorldState = WorldState
       --   doesn't lose them — chunks regenerate, edits replay onto the
       --   fresh chunk. Saved verbatim; restored before any chunk
       --   regeneration on load.
+    , wsChunkEditGenRef ∷ IORef (HM.HashMap ChunkCoord Word64)
+      -- ^ Per-chunk LIVE-EDIT generation for this page: the number of
+      --   live terrain/fluid edits the world thread has committed to
+      --   that chunk (absent = 0). It is the causal fence that lets the
+      --   world thread reject a sim fluid writeback computed BEFORE an
+      --   edit it would otherwise overwrite (#1596).
+      --
+      --   Why a fence is needed at all: 'World.Command.Types.WorldApplyFluids'
+      --   and every edit command share the WORLD queue, but the re-seed
+      --   an edit sends the sim ('World.Thread.Command.Edit.Sync.syncEditToSim')
+      --   goes down the INDEPENDENT sim queue with no acknowledgement.
+      --   Nothing orders the two, so a batch the sim computed from the
+      --   pre-edit chunk can land behind the edit and
+      --   'World.Thread.Command.applyOneWriteback' would replace the
+      --   chunk's whole fluid/terrain-surface/rendered-surface/side-deco
+      --   set with the state the player just changed.
+      --
+      --   The protocol is one number travelling a full round trip:
+      --   'syncEditToSim' bumps this entry and stamps the new value into
+      --   'Sim.Command.Types.SimChunkEdited'; the sim stores it as
+      --   'Sim.State.Types.scsEditGen' when it re-seeds and stamps every
+      --   writeback it later produces for that chunk with
+      --   'World.Command.Types.fwEditGen'; the world applies a writeback
+      --   only when the stamp EQUALS this entry. Equality (not @>=@) is
+      --   deliberate — it also rejects a writeback claiming a generation
+      --   this page never issued, which is what a batch in flight across
+      --   a chunk eviction looks like.
+      --
+      --   Scoped per chunk, so an edit to one chunk never drops a
+      --   writeback for another. Entries are DELETED when the chunk is
+      --   evicted ("World.Thread.ChunkLoading"), matching the fresh
+      --   'SimChunkLoaded' the sim gets for the reloaded chunk, which
+      --   re-seeds 'scsEditGen' to 0. Transient session bookkeeping:
+      --   never saved, never loaded, and a fresh page starts empty (see
+      --   docs/persistence_state_inventory.md).
     , wsOreSurveyRef ∷ IORef (HM.HashMap ChunkCoord ([WorldEdit], Text))
       -- ^ Memo for the zoom-map Resources survey of UNLOADED chunks
       --   (transient generation is ~10–300 ms; reselecting shouldn't
@@ -271,6 +327,7 @@ emptyWorldState = do
     timeRef      ← newIORef defaultWorldTime
     dateRef      ← newIORef defaultWorldDate
     timeScaleRef ← newIORef 1.0   -- 1 game-minute per real-second
+    resumeScaleRef ← newIORef Nothing
     zoomCacheRef ← newIORef V.empty
     quadCacheRef  ← newIORef Nothing
     quadCacheGenRef ← newIORef 0
@@ -286,6 +343,7 @@ emptyWorldState = do
     wsLoadPhaseRef ← newIORef LoadIdle
     wsZoomAtlasRef ← newIORef Nothing
     wsEditsRef     ← newIORef emptyWorldEdits
+    wsChunkEditGenRef ← newIORef HM.empty
     wsOreSurveyRef ← newIORef HM.empty
     wsMineDesignationsRef ← newIORef HM.empty
     wsGroundItemsRef ← newIORef emptyGroundItems
@@ -306,12 +364,14 @@ emptyWorldState = do
     wsBloodTextureHandlesRef ← newIORef HM.empty
     wsIdentityRef ← newIORef Nothing
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
-                        timeRef dateRef timeScaleRef zoomCacheRef
+                        timeRef dateRef timeScaleRef resumeScaleRef
+                        zoomCacheRef
                         quadCacheRef quadCacheGenRef zoomQCRef bgQCRef
                         bakedZoomRef bakedBgRef wsInitQueueRef
                         wsMapModeRef
                         wsCursorRef wsToolModeRef wsCursorSnapshotRef
                         wsLoadPhaseRef wsZoomAtlasRef wsEditsRef
+                        wsChunkEditGenRef
                         wsOreSurveyRef wsMineDesignationsRef
                         wsGroundItemsRef wsSpoilRef wsStructureStageRef
                         wsConstructDesignationsRef wsFloraHarvestsRef
@@ -526,6 +586,34 @@ projectedVisible ∷ WorldManager → [WorldPageId]
 projectedVisible mgr
     | wmSelectionPending mgr ≡ 0 = wmVisible mgr
     | otherwise                  = wmProjectedVisible mgr
+-- | The page whose clock is "the world clock" for pause and save
+--   purposes: the head of @wmVisible@ that is still a live page.
+--
+--   'Nothing' when there is no visible page at all — a main menu, a
+--   mid-transition session, or (defensively) an autosave scheduler that
+--   somehow fired outside a gameplay view.
+--
+--   ONE resolver, because its callers have to agree about which page
+--   they are talking about or the pause\/clock pair they maintain drifts
+--   apart: "World.Pause" captures and zeroes this page's clock at the
+--   start of a pause epoch, and @engine.saveWorld@'s acceptance
+--   ('Engine.Scripting.Lua.API.Save.acceptSaveRequest') reads the same
+--   page's scale into its 'World.Save.Types.AutosaveRequest'.
+--   "World.Thread.Command.Save.WriteWorld" spells the same rule out on
+--   @wmVisible@ directly for its snapshot's own camera\/clock
+--   attribution; that is the one copy.
+--
+--   It lives here, on the record it projects, so nothing has to reach
+--   through an @EngineEnv@ to ask (issue #985's reason for the module
+--   this moved out of).
+visiblePage ∷ WorldManager → Maybe (WorldPageId, WorldState)
+visiblePage mgr = case wmVisible mgr of
+    (vid:_) → (\ws → (vid, ws)) <$> lookup vid (wmWorlds mgr)
+    _       → Nothing
+
+-- | 'visiblePage' for a caller that needs only the state.
+visiblePageState ∷ WorldManager → Maybe WorldState
+visiblePageState = fmap snd ∘ visiblePage
 
 -- | The page-scoped language-provenance query (#1092 requirement 5):
 --   which generated language named this page, and under which

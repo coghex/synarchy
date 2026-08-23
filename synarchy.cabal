@@ -297,7 +297,6 @@ library
                      Engine.Scripting.Lua.API.Save.Bridge
                      Engine.Scripting.Lua.API.Save.Config
                      Engine.Scripting.Lua.API.Save.Integrity
-                     Engine.Scripting.Lua.API.Save.Page
                      Engine.Scripting.Lua.API.PlayerEvent
                      Engine.Scripting.Lua.API.Graphics
                      Engine.Scripting.Lua.API.Input
@@ -622,6 +621,7 @@ library
                      World.Edit.Types
                      World.Edit.Apply
                      World.Types
+                     World.Pause
                      World.Thread
                      World.Thread.Helpers
                      World.Thread.Cursor
@@ -1088,6 +1088,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.FluidSurfaceFold
                    Test.Headless.Unit.Pathing.Cost
                    Test.Headless.Unit.Pathing.Hazard
+                   Test.Headless.Unit.Pathing.MoveToApi
                    Test.Headless.Unit.SimPageOwnership
                    Test.Headless.Unit.Pathing.AStar
                    Test.Headless.Unit.Pathing.Config
@@ -1111,6 +1112,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Item.Temperature
                    Test.Headless.Item.BuffYaml
                    Test.Headless.Item.QualityTier
+                   Test.Headless.Item.ContentsSignature
                    Test.Headless.Item.Condition
         Test.Headless.Item.BulkStorage
                    Test.Headless.Item.Discovery
@@ -1126,6 +1128,8 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Envelope
                    Test.Headless.World.Save.Components
                    Test.Headless.World.TransferOrders
+                   Test.Headless.World.FluidWritebackStaleness
+                   Test.Headless.World.PauseSpeed
                    Test.Headless.World.Save.Compat
                    Test.Headless.World.Save.Integrity
                    Test.Headless.World.Save.Storage

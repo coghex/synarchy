@@ -21,6 +21,7 @@ import qualified Test.Headless.WorldGen.BedDepth as BedDepth
 import qualified Test.Headless.WorldGen.FluidSurfaceFold as FluidSurfaceFold
 import qualified Test.Headless.Unit.Pathing.Cost as PathingCost
 import qualified Test.Headless.Unit.Pathing.Hazard as PathingHazard
+import qualified Test.Headless.Unit.Pathing.MoveToApi as PathingMoveToApi
 import qualified Test.Headless.Unit.SimPageOwnership as SimPageOwnership
 import qualified Test.Headless.Unit.Pathing.AStar as PathingAStar
 import qualified Test.Headless.Unit.Pathing.Config as PathingConfig
@@ -43,6 +44,7 @@ import qualified Test.Headless.Item.GroundPageOwnership as GroundPageOwnership
 import qualified Test.Headless.Item.Temperature as ItemTemp
 import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Item.QualityTier as ItemQualityTier
+import qualified Test.Headless.Item.ContentsSignature as ItemContentsSig
 import qualified Test.Headless.Item.Condition as ItemCondition
 import qualified Test.Headless.Item.Materialize as ItemMaterialize
 import qualified Test.Headless.Item.BulkStorage as ItemBulkStorage
@@ -66,6 +68,7 @@ import qualified Test.Headless.World.Save.Storage as SaveStorage
 import qualified Test.Headless.World.Save.Contract as SaveContract
 import qualified Test.Headless.World.Identity as WorldIdentity
 import qualified Test.Headless.World.TransferOrders as WorldTransferOrders
+import qualified Test.Headless.World.FluidWritebackStaleness as FluidWritebackStaleness
 import qualified Test.Headless.World.CursorInfo as CursorInfo
 import qualified Test.Headless.World.CursorTextureDispatch as CursorTextureDispatch
 import qualified Test.Headless.World.SelectTileZ as SelectTileZ
@@ -91,6 +94,7 @@ import qualified Test.Headless.Lua.DebugQueue as LuaDebugQueue
 import qualified Test.Headless.Lua.RenderQueue as LuaRenderQueue
 import qualified Test.Headless.Lua.PreviewGeneration as LuaPreviewGeneration
 import qualified Test.Headless.Lua.PauseGate as LuaPauseGate
+import qualified Test.Headless.World.PauseSpeed as PauseSpeed
 import qualified Test.Headless.Lua.ScriptState as LuaScriptState
 import qualified Test.Headless.Input.LayerA as InputLayerA
 import qualified Test.Headless.Input.WheelPolicy as InputWheelPolicy
@@ -293,6 +297,16 @@ main = hspec $ do
     -- both halves -- the codec round trip and the live capture/restore.
     aroundAll withHeadlessEngine $
         describe "persistence contract" WorldTransferOrders.spec
+    -- Own engine (#1596): both halves EDIT their own private w8 pages
+    -- and hand-deliver WorldApplyFluids batches to the live world
+    -- thread, which the shared-worlds engine above must not see. The
+    -- save half is registered under the SAME "persistence contract"
+    -- describe as the transfer-order gate above, and for the same
+    -- reason -- it is the live capture/replay half of that contract,
+    -- which no pure codec test can reach.
+    aroundAll withHeadlessEngine $ do
+        FluidWritebackStaleness.spec
+        describe "persistence contract" FluidWritebackStaleness.saveSpec
     -- Own engine: #913's failure-report cases queue a WorldSave for a
     -- page that does not exist, and assert on the shared event log --
     -- both of which would be noise (and, for the log, a source of
@@ -304,6 +318,10 @@ main = hspec $ do
     -- mutation paths, which would corrupt the shared-worlds engine
     -- above (same precedent as World identity / autosave guards).
     aroundAll withHeadlessEngine UnitTransferApi.spec
+    -- Own engine (#1605): the live unit.moveTo boundary swaps the
+    -- engine's logger to capture the warning it emits and drains the
+    -- unit command queue, so it cannot share the worldgen engine.
+    aroundAll withHeadlessEngine PathingMoveToApi.spec
     -- Own engine for the same reason (#1247): the order executor writes
     -- the unit/building manager refs AND installs its own two-page world
     -- manager so each page brings its own live wsTransferOrdersRef.
@@ -327,6 +345,13 @@ main = hspec $ do
     -- installs TWO live pages and rewrites the unit/world manager refs
     -- to put a unit on the non-active one.
     aroundAll withHeadlessEngine GroundPageOwnership.spec
+    -- Own engine for the same reason (#1599): the pause-speed gate
+    -- installs its own two-page world manager, rewrites wmVisible
+    -- mid-example, and drives the real scripts/pause.lua against the
+    -- live engine. Its pages carry NO gen params, so the real world
+    -- worker skips them -- but the worker has to be RUNNING, because one
+    -- example needs the queued world.setTimeScale drained.
+    aroundAll withHeadlessEngine PauseSpeed.spec
     -- Own engine for the same reason (#1593): the unit-simulation
     -- page-ownership gate installs its own three-page world manager and
     -- rewrites the unit manager to put a unit on each. WORLD-THREAD-FREE
@@ -393,6 +418,7 @@ main = hspec $ do
     describe "Item.Temperature" ItemTemp.spec
     describe "Item.BuffYaml" ItemBuffYaml.spec
     describe "Item.QualityTier" ItemQualityTier.spec
+    describe "Item.ContentsSignature" ItemContentsSig.spec
     describe "Item.BulkStorage" ItemBulkStorage.spec
     describe "Item.Materialize" ItemMaterialize.spec
     describe "World.Save.Sanitize" SaveSanitize.spec

@@ -472,6 +472,7 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `save_compat_migration_probe.py` | #766, #1485 | none (a tracked fixture is placed directly on disk, isolated resource root) | Fresh-process save-compatibility migration, for EVERY `complete-session` fixture `docs/save_compat/manifest.json` declares (the pre-#760 B1 envelope through every later baseline's own session): each loads and publishes through the normal whole-session transaction, the migrated session begins paused and a dwell advances no gameplay date, re-saving under a new slot produces a genuine current-format re-encode (not a copy of the input bytes), and a FRESH engine process loads that re-saved file and reaches the same active page — proving the migration survives a real restart, not merely an in-memory decode. Each engine is provisioned with the SAME registry families (and order) `scripts/startup_loader.lua`'s `queueNormalProfile` loads, which a headless boot never runs (#1485); `--self-test` verifies that plan and its startup-loader parser with no engine at all. A fixture whose load is not accepted, or does not publish, stops there (#1486): that failure is the last check reported for it, the stages it made unreachable are listed as `[SKIP]` diagnostics (never a pass, never a failure), its cleanup and the rest of the sweep are unaffected, and `--self-test` drives both prerequisite branches through injected doubles. |
 | `autosave_probe.py` | #913 | worldgen (size 32, isolated resource root with a COPIED `config/`) | Interval autosave end to end in one boot: the shipped default-off config produces neither a request nor a slot across a dwell longer than one configured interval; enabled, a REAL one-minute interval fires and hands an unpaused world back at its exact prior fast-forward time scale, while one that began paused stays paused and zero-scaled; a player pause/resume during the request window suppresses restoration even though the final pause boolean is unchanged (the time scale is the discriminator); an accepted autosave whose storage write fails stays paused and zero-scaled with `engine.getSaveStatus()` carrying the rendered `StoragePhase`; a deadline outside `uiManager.isGameplayView()` skips silently (no request, no failure event, cadence uninterrupted); a `save_load` category configured to pause wins over the restoration; a pre-existing MANUAL save on an `autosave-<n>` name — as a slot directory OR a pre-#762 legacy flat file a published directory would shadow — fails the attempt through `save_load` with nothing overwritten or partially rotated; rotation keeps `autosave-1` newest across generations that all stay classified autosave, a failed write against a FULL family discards and renumbers nothing (publish-then-rotate), a rotation that fails part-way leaves every generation on disk and retries cleanly (retire-by-rename, delete last), and one interrupted AFTER a partial shift resumes without ageing out a second generation; and reducing `rotation_depth` or disabling autosave retains every excess generation untouched. |
 | `save_pause_probe.py` | #42 | worldgen | Save/load pause-semantics regression. |
+| `pause_speed_probe.py` | #1599 | worldgen | The chosen world speed survives every pause source: a `pause: true` notification, a whole manual `engine.saveWorld` driven to its terminal outcome, and a save taken from an already-paused session; load still resumes at the default speed. The hspec suite cannot drive `engine.saveWorld` (its barrier waits on owner threads the headless harness never starts), so the whole-verb proof lives here. |
 | `save_barrier_probe.py` | #757 | worldgen (isolated resource root) | Coordinated save-owner acknowledgement and paused reload smoke test. |
 | `save_storage_probe.py` | #762 | worldgen (size 64, isolated resource root) | Atomic save-storage transaction: a first save publishes with no previous generation, a second save to the same slot retains the first as the previous generation; restart-and-select across constructed on-disk states (missing/truncated/bad-framing/checksum-corrupt authoritative, a stray leftover temp file) always recovers the correct complete generation via the live camera position, never a hybrid; neither generation valid rejects the load outright; `engine.listSaves()` reports a recovered slot's machine-readable status; a real disk-level write failure (directory path pre-occupied) names its storage phase via `engine.getSaveStatus()` and the barrier recovers for a follow-up save. |
 | `sleep_probe.py` | #612 | arena | The "go to sleep" AI goal + Sleeping pose end to end: multi-hop lie-down/wake pose chain, `go_to_sleep` goal selection, sleep-pressure regen while asleep, and all three wake conditions. |
@@ -506,7 +507,8 @@ track the exact number.
 # Run everything, sequentially (slow — low tens of minutes)
 python3 tools/run_probes.py
 
-# Run up to 4 probes concurrently, each its own engine on its own port (#531)
+# Run up to 4 probes concurrently, each its own engine on its own reserved
+# port span (#531, #1571)
 python3 tools/run_probes.py --jobs 4
 
 # Run a subset, matched by substring against the probe key/filename
@@ -521,6 +523,9 @@ python3 tools/run_probes.py --list
 
 # Override --port uniformly across every registered probe
 python3 tools/run_probes.py --port 9500
+
+# ... and with --jobs, base the per-probe spans there instead of at 9400
+python3 tools/run_probes.py --jobs 4 --port 9500
 ```
 
 Each selected probe still shells out to its own subprocess and boots its
@@ -535,8 +540,8 @@ once:
   roughly the sum of each probe's own boot + scenario time. This is the
   mode CI's selective gate (`tools/ci_probes.py`, #530) relies on.
 - **`--jobs N`, concurrent:** up to `N` probes run at once, each its own
-  engine on a unique port (#531), cutting wall-time to roughly
-  `total / N`, bounded by the slowest single probe. Concurrency raises
+  engine on its own reserved port span (#531, #1571), cutting wall-time to
+  roughly `total / N`, bounded by the slowest single probe. Concurrency raises
   engine-boot and port contention, so failures are more likely to be
   flakes than with `--jobs 1`. Cap `N` at (cores − 1) or so — each probe
   is a full engine process.
@@ -552,6 +557,34 @@ over a probe that's genuinely broken. `--tail N` prints the last `N` lines
 of a failing probe's captured output for a quicker look without re-running
 it by hand.
 
+**Reserved port spans (#1571).** A probe is handed one `--port`, but two
+registered probes derive a second, concurrently live listener from it:
+`debug_console_boot_probe.py` boots its successful-bind and
+widget-module checks on `--port + 1`, and `offscreen_probe.py` starts a
+second offscreen engine on `--port + 1` while the first is still up. So a
+probe's port count is DATA — `run_probes.PROBE_PORT_SPANS` declares 2 for
+each of those two, and every other probe reserves its base alone. A
+declared count `N` reserves the contiguous span `base … base + N - 1`, and
+`--jobs` lays the selected probes' spans end to end so no two concurrent
+probes overlap. Before #1571 the allocator used stride 1, so selecting
+`debug_console_boot` immediately before `transactional_load` under
+`--jobs 2` put both on 9401 and the resulting `Address already in use`
+read as a regression in two probes that each pass alone. Adding a future
+multi-port probe is one row in that table: nothing in the allocator, the
+GUI-port refusal, or `tools/probe_flake.py`'s lease scanner knows any
+probe by name, and `tools/test_run_probes.py` validates every row against
+the live registry.
+
+`--port` is the allocation ORIGIN, not just a sequential override: with
+`--jobs > 1` the spans are laid out from it instead of from the default
+`9400`, so the flag is honoured in both modes. The whole plan — every port
+every selected probe may bind, in the mode it is about to run in — is
+computed and checked before the first subprocess exists, and a span that
+covers the user's GUI port 8008 is refused there (exit 2), not discovered
+by an engine booting against the running game. `tools/probe_flake.py`
+leases the same declared span in full before it launches a probe, and
+releases nothing until `run_one` has reaped the process group.
+
 `--list` shows the full probe registry but not CI status. For that, see
 `tools/ci_probes.py --status` below.
 
@@ -564,7 +597,7 @@ engine never reaches its own teardown, and `communicate()` cannot notice:
 `probelib.boot` redirects the engine's output to a log file rather than
 the runner's inherited pipe, so the pipe reaches EOF the moment the probe
 exits. The stranded engine keeps its port, and the next `--retries`
-attempt (or a parallel solo retry, which reuses `PARALLEL_PORT_BASE`) then
+attempt (or a parallel solo retry, which reuses the allocation origin) then
 fails its boot under #1190 — reporting a leak as an unrelated "exited
 before READY". Reaping a group that already exited is a silent no-op and
 never alters a probe's status, elapsed time, or output tail. Ctrl-C exits

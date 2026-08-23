@@ -772,6 +772,9 @@ def _run(args, w: int, h: int, shots: str, engines: Engines) -> int:
               png_differs(shot_menu, shot_create))
 
     # -- 4. parallel instances: a second engine while the first runs.
+    # Both engines are up at once, so `--port` is a BASE reserving two
+    # ports — which is why `run_probes.PROBE_PORT_SPANS` declares 2 for
+    # this probe (#1571).
     port2 = args.port + 1
     print(f"== parallel second instance (port {port2}) ==")
     engines.start(port2, mode=("--offscreen",),

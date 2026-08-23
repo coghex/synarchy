@@ -435,6 +435,30 @@ data ItemInstance = ItemInstance
 --   single representative instance. Empty for ordinary items (no nested
 --   contents), so non-containers and fluid containers stack exactly as
 --   before. Recurses so a kit-in-a-kit is captured too.
+--
+--   Each child is REPRESENTED by exactly these fields: definition name,
+--   current fill, quality, condition, realized weight, sharpness, and
+--   its own recursive contents signature. That is the same identity set
+--   @scripts/ui/item_list.lua@'s @stackKey@ uses one level UP, which is
+--   the point (#1597): a bandage's quality and realized weight are
+--   identity while it sits in a unit's inventory, so they must stay
+--   identity when the same bandage sits inside a kit. Two kits whose
+--   bandages differ only in quality (or only in rolled weight) are NOT
+--   interchangeable and must not collapse onto one representative.
+--
+--   Two fields are deliberately EXCLUDED, and both exclusions are
+--   load-bearing:
+--
+--   * 'iiInstanceId' — physical identity, never represented state. Two
+--     distinct instances holding identical children ARE stack-compatible;
+--     keying on the id would split every container from every other one
+--     and defeat grouping entirely (#67).
+--   * 'iiTemp' — tracked temperature, matching the row-level policy
+--     #1268 settled in @item_list.lua@: it cools continuously, so keying
+--     on it would split and re-merge a row forever. The group's
+--     temperature is presented honestly through @tempSummary@ instead,
+--     and a future temperature-SENSITIVE action defines its own instance
+--     selection rather than inheriting the representative from here.
 itemContentsSig ∷ ItemInstance → Text
 itemContentsSig inst
     | null (iiContents inst) = T.empty
@@ -442,7 +466,9 @@ itemContentsSig inst
         [ T.intercalate ":"
             [ iiDefName c
             , tshow (iiCurrentFill c)
+            , tshow (iiQuality c)
             , tshow (iiCondition c)
+            , tshow (iiWeight c)
             , tshow (iiSharpness c)
             , itemContentsSig c ]
         | c ← iiContents inst ]
