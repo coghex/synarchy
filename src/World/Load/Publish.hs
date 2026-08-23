@@ -37,6 +37,7 @@ import UI.Manager (clearElementFocus, clearControlFocus)
 import UI.Types (UIPageManager(upmHovered))
 import World.Types
 import World.Load.Types (StagedPage(..), StagedSession(..))
+import World.Pause (beginPauseEpoch)
 import World.Blood.Teardown (enqueueBloodDisposalAll)
 import World.Thread.Command.UI (handleWorldShowCommand)
 import World.Thread.Helpers (sendSaveLoaded, sendGenLog)
@@ -175,6 +176,19 @@ publishStagedSession env logger requestId staged = do
     let wantVisible = dedupPageIds (ssActivePage staged : ssVisiblePages staged)
     forM_ (reverse wantVisible) $ \pid →
         handleWorldShowCommand (toWorldSimCapability env) logger pid
+
+    -- #1599: give the PUBLISHED session its own pause epoch, now that it
+    -- has an active page to own one. Deliberately 'beginPauseEpoch' and
+    -- not 'imposePause': the flag has been set since the load was
+    -- accepted (on the OUTGOING session), so the transition-guarded
+    -- version would preserve an epoch belonging to pages this publish
+    -- just discarded and hand their speed to a page of the new session.
+    -- Starting fresh here zeroes the new active page's clock and records
+    -- the default 1.0 every loaded page comes up at (time scale is never
+    -- persisted), which is exactly the load policy scripts/pause.lua's
+    -- onSaveLoaded states: a load resumes at default speed, never at a
+    -- pre-save one.
+    beginPauseEpoch (toWorldSimCapability env)
 
     -- Fire every deferred sim-seed / location-stamp collected during
     -- staging now that each page is genuinely live (requirement 6: this

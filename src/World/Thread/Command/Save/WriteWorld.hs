@@ -12,6 +12,7 @@
 --   (issue #561).
 module World.Thread.Command.Save.WriteWorld
     ( handleWorldSaveCommand
+    , restoreAfterAutosave
     ) where
 
 import UPrelude
@@ -21,13 +22,14 @@ import qualified Data.List as L
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Control.Exception (SomeException, evaluate, finally, try)
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Capability.WorldSim
     (toWorldSimCapability, restoreIfPlayerIdle)
 import Engine.Core.Log (logInfo, logError, logWarn, LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
+import World.Pause (imposePause, releasePauseHeld, setPauseResumeScale)
 import World.Save.Serialize (encodeSessionSnapshot, writeSaveFiles)
 import World.Save.Snapshot
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
@@ -65,10 +67,15 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
     let isAutosave = isJust mAutosave
     mgr ← readIORef (worldManagerRef env)
     -- The page whose live camera IS the global Camera2D, and whose clock
-    -- scripts/pause.lua retimes via its single prevTimeScale on resume, is the
-    -- actually-VISIBLE world (head of wmVisible, if registered). NOT the raw
-    -- wmWorlds head (resolveActiveWorld's fallback) — a hidden page can sit
-    -- there. 'Nothing' when nothing is visible.
+    -- a pause epoch takes hold of ('World.Pause'), is the actually-VISIBLE
+    -- world (head of wmVisible, if registered). NOT the raw wmWorlds head
+    -- (resolveActiveWorld's fallback) — a hidden page can sit there.
+    -- 'Nothing' when nothing is visible. Same rule as
+    -- 'World.State.Types.visiblePageState', which is what the pause path
+    -- resolves through — spelled out here only because this side needs
+    -- the page's ID rather than its state. Keeping the two in step is
+    -- what makes the page this save restores after an autosave the page
+    -- whose clock the save's own pause zeroed.
     let visibleId = case wmVisible mgr of
             (vid:_) | isJust (lookup vid (wmWorlds mgr)) → Just vid
             _                                            → Nothing
@@ -88,7 +95,16 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
             -- Auto-pause BEFORE reading state so the snapshot
             -- captures pause = True (DF convention — saved worlds
             -- load paused so the player can plan the next move).
-            writeIORef (enginePausedRef env) True
+            --
+            -- Almost always a RE-assertion: the Lua acceptance
+            -- ('Engine.Scripting.Lua.API.Save.acceptSaveRequest')
+            -- already opened this save's pause epoch, so 'imposePause'
+            -- finds the session paused and deliberately changes nothing
+            -- — in particular it does not re-capture the clock it
+            -- already zeroed, which would replace the player's speed
+            -- with 0 (#1599). For a 'WorldSave' that reached this
+            -- thread another way it is the epoch's real start.
+            imposePause (toWorldSimCapability env)
             -- Globals: read once, shared across every page (we're on the
             -- world thread, so no races with worldTick writes).
             cam        ← readIORef (cameraRef env)
@@ -124,21 +140,23 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                             Just params → do
                                 WorldTime h m    ← readIORef (wsTimeRef ws)
                                 WorldDate y mo d ← readIORef (wsDateRef ws)
-                                -- Freeze ONLY the VISIBLE page's clock here, to
-                                -- match scripts/pause.lua: its prevTimeScale /
-                                -- resume dance retimes just world.getActiveWorldId(),
-                                -- so zeroing any other page's wsTimeScaleRef
-                                -- would leave it stuck at 0 once shown (nothing
-                                -- restores it). Drift while paused is already
-                                -- prevented for every page by tickWorldTime,
-                                -- which gates advancement on enginePausedRef and
-                                -- only ticks wmVisible worlds (#42) — so a
-                                -- hidden page can't advance regardless. Time
-                                -- scale itself is never captured in the
-                                -- snapshot at all (#758: load policy, not
-                                -- gameplay state — see World.Save.Snapshot).
-                                when (Just pid ≡ visibleId) $
-                                    writeIORef (wsTimeScaleRef ws) 0
+                                -- No clock write here: 'imposePause' above
+                                -- owns the (flag, visible page's clock) pair
+                                -- for the whole epoch and has already zeroed
+                                -- exactly this page — it resolves the
+                                -- visible page by the same rule
+                                -- 'visibleId' above does. A second
+                                -- zeroing here was redundant on
+                                -- the paired path and actively wrong on its
+                                -- own: it discarded the speed it overwrote,
+                                -- which is the #1599 defect. Drift while
+                                -- paused is prevented for every page by
+                                -- tickWorldTime, which gates advancement on
+                                -- enginePausedRef and only ticks wmVisible
+                                -- worlds (#42). Time scale itself is never
+                                -- captured in the snapshot at all (#758: load
+                                -- policy, not gameplay state — see
+                                -- World.Save.Snapshot).
                                 mapMode   ← readIORef (wsMapModeRef ws)
                                 edits     ← readIORef (wsEditsRef ws)
                                 tiles     ← readIORef (wsTilesRef ws)
@@ -392,18 +410,21 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                             -- success event, which a
                                             -- pause-configured notification
                                             -- category may itself pause on
-                                            -- (Engine.PlayerEvent.Emit writes
-                                            -- enginePausedRef directly). That
+                                            -- (Engine.PlayerEvent.Emit imposes
+                                            -- a pause of its own). That
                                             -- ordering is what makes the
                                             -- event's own result authoritative
                                             -- rather than something this
-                                            -- restore could undo.
-                                            restored ← restoreAfterAutosave
-                                                env logger visibleId mAutosave
+                                            -- restore could undo — and since
+                                            -- #1599 that event opens a fresh
+                                            -- pause epoch over the speed this
+                                            -- restore just handed back, so a
+                                            -- later resume returns to it
+                                            -- rather than to 1x.
+                                            void $ restoreAfterAutosave
+                                                env logger mAutosave
                                             emitEvent env "save_load" "World.Save" $
-                                                "Game saved: " <> saveName
-                                            when restored $
-                                                healEventImposedPause env visibleId)
+                                                "Game saved: " <> saveName)
                                           `finally` completeTransaction env
                                       Left err →
                                         do
@@ -414,6 +435,9 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
 -- | #913: hand an AUTOSAVE's pre-request pause state and visible-world
 --   time scale back to the player, once the transaction has actually
 --   succeeded. Returns whether anything was restored.
+--
+--   Restores onto 'World.Save.Types.arPausedPage', the page the request
+--   recorded at acceptance, rather than whatever is visible by now.
 --
 --   Three ways this deliberately does nothing:
 --
@@ -433,10 +457,9 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
 --   one-way "a failed save leaves you paused" safety ratchet is
 --   preserved untouched.
 restoreAfterAutosave
-    ∷ EngineEnv → LoggerState → Maybe WorldPageId → Maybe AutosaveRequest
-    → IO Bool
-restoreAfterAutosave _ _ _ Nothing = pure False
-restoreAfterAutosave env logger visibleId (Just ar)
+    ∷ EngineEnv → LoggerState → Maybe AutosaveRequest → IO Bool
+restoreAfterAutosave _ _ Nothing = pure False
+restoreAfterAutosave env logger (Just ar)
     | arPrePaused ar = pure False
     | otherwise = do
         -- The comparison and the writes are ONE critical section, under
@@ -444,36 +467,35 @@ restoreAfterAutosave env logger visibleId (Just ar)
         -- Read-then-write would leave a window in which the Lua thread
         -- applies a pause, sees a bump land, and has it overwritten here
         -- anyway by a value that was already stale when it was read.
+        -- 'restoreIfPlayerIdle' holds that lock across the action, which
+        -- is also the epoch mutex — hence the @…Held@ variants below.
         restored ← restoreIfPlayerIdle (toWorldSimCapability env)
                                        (arIntentGen ar) $ do
-            -- Scale first, then the flag: writing the flag last means
-            -- there is never even a momentary "unpaused at scale 0"
-            -- reading of the pair.
-            forM_ visibleId $ \vid → do
+            -- The pre-request scale is handed to the pause epoch this
+            -- save opened rather than written straight onto the page, so
+            -- 'releasePauseHeld' installs it in the same scale-then-flag
+            -- order every other resume uses — there is never even a
+            -- momentary "unpaused at scale 0" reading of the pair, and
+            -- the epoch is closed rather than left behind for the next
+            -- resume to re-apply.
+            --
+            -- The target is 'arPausedPage' — the page this save's own
+            -- pause zeroed — and deliberately NOT the currently visible
+            -- one: the player can bring a different page to the front
+            -- while an autosave runs, and writing the speed there would
+            -- retime a page the save never paused (#1599 requirement 8).
+            -- A page that is gone by now simply gets nothing, which is
+            -- also what its vanished epoch does.
+            forM_ (arPausedPage ar) $ \vid → do
                 mgr ← readIORef (worldManagerRef env)
                 forM_ (lookup vid (wmWorlds mgr)) $ \ws →
-                    writeIORef (wsTimeScaleRef ws) (arPreTimeScale ar)
-            writeIORef (enginePausedRef env) False
+                    setPauseResumeScale ws (arPreTimeScale ar)
+            releasePauseHeld (toWorldSimCapability env)
         unless restored $
             logInfo logger CatWorld
                 "Autosave finished, but the player changed pause or time \
                 \scale while it ran -- leaving their choice in place"
         pure restored
-
--- | The @save_load@ success event may be configured to pause the game
---   ('Engine.PlayerEvent.Emit' writes 'enginePausedRef' directly). That
---   result is authoritative over the restore that just ran — but the
---   event never zeroes the world clock, which would leave exactly the
---   "ticks frozen, world time still advancing" split @scripts\/pause.lua@
---   documents and heals elsewhere. Re-zero the visible page's scale so a
---   paused world stays a coherently paused world.
-healEventImposedPause ∷ EngineEnv → Maybe WorldPageId → IO ()
-healEventImposedPause env visibleId = do
-    paused ← readIORef (enginePausedRef env)
-    when paused $ forM_ visibleId $ \vid → do
-        mgr ← readIORef (worldManagerRef env)
-        forM_ (lookup vid (wmWorlds mgr)) $ \ws →
-            writeIORef (wsTimeScaleRef ws) 0
 
 -- | #758: release the barrier so state owners resume WITHOUT declaring
 --   the transaction terminally complete yet — see 'releaseCaptureLock'.

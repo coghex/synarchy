@@ -198,6 +198,16 @@ data AutosaveRequest = AutosaveRequest
         -- ^ The VISIBLE page's exact time scale at acceptance, restored
         --   verbatim on success — fast-forward values included. 0 when
         --   no page is visible (nothing to restore).
+    , arPausedPage   ∷ !(Maybe WorldPageId)
+        -- ^ #1599: the page 'arPreTimeScale' was read from, i.e. the one
+        --   whose clock this save's pause epoch ("World.Pause") took hold
+        --   of. Restoring by page IDENTITY rather than by \"whichever page
+        --   is visible when the transaction finishes\" is what keeps the
+        --   restore off a bystander: the visible page can change while an
+        --   autosave runs, and writing this speed onto whatever is
+        --   on-screen by then would retime a page the save never paused.
+        --   'Nothing' when no page was visible at acceptance — the same
+        --   case that makes 'arPreTimeScale' 0.
     , arIntentGen    ∷ !Word64
         -- ^ 'Engine.Core.State.playerIntentGenRef' at acceptance. On
         --   success the restore happens only if the live generation

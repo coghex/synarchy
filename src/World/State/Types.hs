@@ -7,6 +7,8 @@ module World.State.Types
     , bumpQuadCacheGen
     , WorldManager(..)
     , emptyWorldManager
+    , visiblePage
+    , visiblePageState
     , pageLanguageProvenance
     , CursorSnapshot(..)
     , LoadPhase(..)
@@ -64,6 +66,25 @@ data WorldState = WorldState
     , wsTimeRef      ∷ IORef WorldTime
     , wsDateRef      ∷ IORef WorldDate
     , wsTimeScaleRef ∷ IORef Float    -- ^ Game-minutes per real-second
+    , wsResumeScaleRef ∷ IORef (Maybe Float)
+      -- ^ #1599: the 'wsTimeScaleRef' value to reinstate on this page
+      --   when the CURRENT pause epoch ends, or 'Nothing' when this page
+      --   is not carrying one.
+      --
+      --   "World.Pause" is the only writer. It captures this page's
+      --   chosen speed here immediately before zeroing the clock on the
+      --   unpaused→paused transition — whatever imposed that pause,
+      --   including the engine-side writers that never run a line of Lua
+      --   ('Engine.PlayerEvent.Emit''s @pause: true@ category,
+      --   @engine.saveWorld@'s acceptance) — and writes it back, clearing
+      --   this slot, on the paused→unpaused transition. Holding it PER
+      --   PAGE is what makes a resume restore only the page whose clock
+      --   the pause actually zeroed: a page that disappears mid-pause
+      --   takes its slot with it, so no other page can inherit its speed.
+      --
+      --   Runtime-only, never persisted: a load comes up paused at the
+      --   default speed, so a saved epoch could never be meaningful (see
+      --   @docs\/persistence_state_inventory.md@ §3).
     , wsZoomCacheRef ∷ IORef (V.Vector ZoomChunkEntry)  -- ^ Pre-computed zoom map cache for current world state
     , wsQuadCacheRef  ∷ IORef (Maybe WorldQuadCache)  -- ^ Cached quads for current camera state
     , wsQuadCacheGenRef ∷ IORef Int
@@ -298,6 +319,7 @@ emptyWorldState = do
     timeRef      ← newIORef defaultWorldTime
     dateRef      ← newIORef defaultWorldDate
     timeScaleRef ← newIORef 1.0   -- 1 game-minute per real-second
+    resumeScaleRef ← newIORef Nothing
     zoomCacheRef ← newIORef V.empty
     quadCacheRef  ← newIORef Nothing
     quadCacheGenRef ← newIORef 0
@@ -334,7 +356,8 @@ emptyWorldState = do
     wsBloodTextureHandlesRef ← newIORef HM.empty
     wsIdentityRef ← newIORef Nothing
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
-                        timeRef dateRef timeScaleRef zoomCacheRef
+                        timeRef dateRef timeScaleRef resumeScaleRef
+                        zoomCacheRef
                         quadCacheRef quadCacheGenRef zoomQCRef bgQCRef
                         bakedZoomRef bakedBgRef wsInitQueueRef
                         wsMapModeRef
@@ -385,6 +408,35 @@ emptyWorldManager = WorldManager
     { wmWorlds  = []
     , wmVisible = []
     }
+
+-- | The page whose clock is "the world clock" for pause and save
+--   purposes: the head of @wmVisible@ that is still a live page.
+--
+--   'Nothing' when there is no visible page at all — a main menu, a
+--   mid-transition session, or (defensively) an autosave scheduler that
+--   somehow fired outside a gameplay view.
+--
+--   ONE resolver, because its callers have to agree about which page
+--   they are talking about or the pause\/clock pair they maintain drifts
+--   apart: "World.Pause" captures and zeroes this page's clock at the
+--   start of a pause epoch, and @engine.saveWorld@'s acceptance
+--   ('Engine.Scripting.Lua.API.Save.acceptSaveRequest') reads the same
+--   page's scale into its 'World.Save.Types.AutosaveRequest'.
+--   "World.Thread.Command.Save.WriteWorld" spells the same rule out on
+--   @wmVisible@ directly for its snapshot's own camera\/clock
+--   attribution; that is the one copy.
+--
+--   It lives here, on the record it projects, so nothing has to reach
+--   through an @EngineEnv@ to ask (issue #985's reason for the module
+--   this moved out of).
+visiblePage ∷ WorldManager → Maybe (WorldPageId, WorldState)
+visiblePage mgr = case wmVisible mgr of
+    (vid:_) → (\ws → (vid, ws)) <$> lookup vid (wmWorlds mgr)
+    _       → Nothing
+
+-- | 'visiblePage' for a caller that needs only the state.
+visiblePageState ∷ WorldManager → Maybe WorldState
+visiblePageState = fmap snd ∘ visiblePage
 
 -- | The page-scoped language-provenance query (#1092 requirement 5):
 --   which generated language named this page, and under which

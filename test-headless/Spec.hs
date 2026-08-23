@@ -94,6 +94,7 @@ import qualified Test.Headless.Lua.DebugQueue as LuaDebugQueue
 import qualified Test.Headless.Lua.RenderQueue as LuaRenderQueue
 import qualified Test.Headless.Lua.PreviewGeneration as LuaPreviewGeneration
 import qualified Test.Headless.Lua.PauseGate as LuaPauseGate
+import qualified Test.Headless.World.PauseSpeed as PauseSpeed
 import qualified Test.Headless.Lua.ScriptState as LuaScriptState
 import qualified Test.Headless.Input.LayerA as InputLayerA
 import qualified Test.Headless.Input.WheelPolicy as InputWheelPolicy
@@ -137,6 +138,7 @@ import qualified Test.Headless.UI.Clipping as UIClipping
 import qualified Test.Headless.UI.InteractiveBounds as UIInteractiveBounds
 import qualified Test.Headless.UI.PopupPlacement as UIPopupPlacement
 import qualified Test.Headless.Event.PopupCoordPage as PopupCoordPage
+import qualified Test.Headless.UI.PopupQueueTeardown as UIPopupQueueTeardown
 import qualified Test.Headless.UI.ResponsiveMenus as UIResponsiveMenus
 import qualified Test.Headless.UI.ResponsiveGameplay as UIResponsiveGameplay
 import qualified Test.Headless.UI.SettingsDefaultsKeybinds
@@ -344,6 +346,13 @@ main = hspec $ do
     -- installs TWO live pages and rewrites the unit/world manager refs
     -- to put a unit on the non-active one.
     aroundAll withHeadlessEngine GroundPageOwnership.spec
+    -- Own engine for the same reason (#1599): the pause-speed gate
+    -- installs its own two-page world manager, rewrites wmVisible
+    -- mid-example, and drives the real scripts/pause.lua against the
+    -- live engine. Its pages carry NO gen params, so the real world
+    -- worker skips them -- but the worker has to be RUNNING, because one
+    -- example needs the queued world.setTimeScale drained.
+    aroundAll withHeadlessEngine PauseSpeed.spec
     -- Own engine for the same reason (#1593): the unit-simulation
     -- page-ownership gate installs its own three-page world manager and
     -- rewrites the unit manager to put a unit on each. WORLD-THREAD-FREE
@@ -505,6 +514,10 @@ main = hspec $ do
     -- WorldManager and asserts on the event ring), so it registers
     -- here rather than under the shared-worlds aroundAll above.
     PopupCoordPage.spec
+    -- #1592: its own engine AND Lua VM per example — the pre-bootstrap
+    -- popup state it exercises is a once-per-process condition, so a
+    -- shared module table would destroy it.
+    UIPopupQueueTeardown.spec
     describe "UI.ResponsiveMenus" UIResponsiveMenus.spec
     describe "UI.ResponsiveGameplay" UIResponsiveGameplay.spec
     UISettingsDefaultsKeybinds.spec

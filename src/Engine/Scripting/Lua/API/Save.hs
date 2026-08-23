@@ -9,6 +9,7 @@ module Engine.Scripting.Lua.API.Save
     , prepareAutosaveCycleFn
     , finalizeAutosaveRotationFn
     , loadSaveFn
+    , acceptSaveRequest
     , loadStatusFn
     , applyLuaLoad
     , abortLuaLoad
@@ -31,7 +32,6 @@ import Engine.Scripting.Lua.API.Save.Bridge
 import Engine.Scripting.Lua.API.Save.Config
     ( pushSaveConfig, optBooleanField, optIntegerField )
 import Engine.Scripting.Lua.API.Save.Integrity (knownEntitiesFromSaveData)
-import Engine.Scripting.Lua.API.Save.Page (visiblePageState)
 import Engine.PlayerEvent.Emit (emitEvent)
 import Engine.Asset.YamlMaterials (loadPopulatedMaterialRegistry)
 import World.Material (mergeMaterialRegistry)
@@ -72,9 +72,10 @@ import World.Save.Integrity
     , capIntegrityErrors, renderIntegrityReport )
 import World.Types
     ( WorldCommand(..), WorldManager(wmWorlds)
-    , WorldState(wsGenParamsRef, wsTimeScaleRef) )
+    , WorldState(wsGenParamsRef, wsTimeScaleRef), visiblePage )
 import World.Page.Types (WorldPageId(..))
-import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import World.Pause (imposePause, imposePauseHeld)
+import Data.IORef (readIORef, atomicModifyIORef')
 import qualified Data.Set as Set
 import Engine.Save.Barrier
 import Engine.Load.Status
@@ -422,17 +423,22 @@ saveWorldFn env = do
 --
 --   Two things are settled here:
 --
---     * The acceptance PAUSE is a pair, not a flag. It sets
---       'enginePausedRef' AND zeroes the VISIBLE page's clock, because a
---       paused world whose time-of-day keeps advancing is the
---       "half-paused world" @scripts\/pause.lua@ documents and heals
---       elsewhere. "World.Thread.Command.Save.WriteWorld" also zeroes it
---       during capture, but every failure path BETWEEN acceptance and
---       that point (an owner-acknowledgement timeout, a required Lua
---       component failing to snapshot) is terminal and never reaches it —
---       which left an accepted autosave paused with a live clock, in
---       violation of its own "a failed autosave stays paused and
---       zero-scaled" ratchet.
+--     * The acceptance PAUSE is a pair, not a flag, and since #1599
+--       'World.Pause.imposePause' is what maintains that pair: it sets
+--       'enginePausedRef' AND, on the transition into a pause, captures
+--       the VISIBLE page's chosen speed before zeroing its clock,
+--       because a paused world whose time-of-day keeps advancing is the
+--       "half-paused world" "World.Pause" exists to make unrepresentable
+--       — and because a clock zeroed with the speed captured NOWHERE is
+--       how a manual save at 10x used to drop the player back to 1x on
+--       resume. Every
+--       failure path BETWEEN acceptance and the world thread's own
+--       re-assertion (an owner-acknowledgement timeout, a required Lua
+--       component failing to snapshot) is terminal and never reaches
+--       it, which is why the pair has to be complete HERE — otherwise an
+--       accepted autosave is left paused with a live clock, in violation
+--       of its own "a failed autosave stays paused and zero-scaled"
+--       ratchet.
 --     * For an autosave, the pre-request pause\/scale\/generation triple
 --       it restores on success. It has to be read HERE rather than on the
 --       Lua scheduler's side: between a scheduler-side read and this
@@ -444,28 +450,33 @@ saveWorldFn env = do
 --   longer be captured as "the pre-save state" and handed straight back
 --   on success.
 --
---   The visible page is resolved exactly the way
---   "World.Thread.Command.Save.WriteWorld" resolves it — the head of
---   @wmVisible@ that is still a live page — so the scale captured here,
---   the one zeroed here, and the one the world thread zeroes are always
---   the same page's. With no visible page there is no clock at all; that
---   case is unreachable through the scheduler (which only fires in a
---   gameplay view) and is defensive only.
+--   The visible page is resolved by 'World.State.Types.visiblePage', the
+--   same rule "World.Pause" uses — the head of @wmVisible@ that is still
+--   a live page — so the scale captured here, the page zeroed here, and
+--   the page an eventual restore writes back to are always the same one.
+--   With no visible page there is no clock at all; that case is
+--   unreachable through the scheduler (which only fires in a gameplay
+--   view) and is defensive only.
 acceptSaveRequest
     ∷ EngineEnv → WorldManager → Bool → IO (Maybe AutosaveRequest)
 acceptSaveRequest env mgr wantAutosave =
     withPlayerIntentHeld (toWorldSimCapability env) $ \gen → do
         prePaused ← readIORef (enginePausedRef env)
-        scale ← case visiblePageState mgr of
-            Just ws → readIORef (wsTimeScaleRef ws)
-            Nothing → pure 0
+        -- Read BEFORE 'imposePauseHeld' zeroes it, and record WHICH page
+        -- it came from: that page, not whatever is visible when the
+        -- transaction finishes, is the one an autosave restore may write.
+        let mVisible = visiblePage mgr
+        scale ← case mVisible of
+            Just (_, ws) → readIORef (wsTimeScaleRef ws)
+            Nothing      → pure 0
         -- The pause is authoritative and remains set even if the barrier
-        -- times out or serialization fails.
-        writeIORef (enginePausedRef env) True
-        forM_ (visiblePageState mgr) $ \ws → writeIORef (wsTimeScaleRef ws) 0
+        -- times out or serialization fails. 'imposePauseHeld' because
+        -- this whole function already holds the epoch mutex.
+        imposePauseHeld (toWorldSimCapability env)
         pure $ if not wantAutosave then Nothing else Just AutosaveRequest
             { arPrePaused    = prePaused
             , arPreTimeScale = scale
+            , arPausedPage   = fst <$> mVisible
             , arIntentGen    = gen
             }
 
@@ -641,7 +652,7 @@ loadSaveFn env = do
                     -- below. A failed load leaves this pause in place —
                     -- deliberately not restored on any failure path.
                     Lua.liftIO $ do
-                        writeIORef (enginePausedRef env) True
+                        imposePause (toWorldSimCapability env)
                         advanceLoad (loadStatusRef env) requestId LoadPaused
                     descriptorsOrErr ← describeLuaComponents logger
                     case descriptorsOrErr of
