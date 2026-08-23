@@ -62,6 +62,7 @@ module World.Save.Integrity
     , danglingOrderRefErrors
     , KnownEntities(..)
     , buildKnownEntities
+    , loadReconcileContextFrom
     , LuaRefEdge(..)
     , luaReferenceErrors
     , refEdgeError
@@ -88,7 +89,8 @@ import World.Save.Component.Types
     ( craftBillsComponentId, powerNodesComponentId
     , buildingsComponentId, unitsComponentId
     , transferOrdersComponentId )
-import World.Save.Payload (LuaRefEdge(..))
+import World.Save.Payload
+    (LuaRefEdge(..), LoadReconcileContext(..))
 import World.Save.Reference (RefKind(..), RefScope(..), refKindText)
 import World.Save.Snapshot
     ( SessionSnapshot(..), PageSnapshot(..), allItemInstanceIds )
@@ -579,6 +581,31 @@ buildKnownEntities snap = KnownEntities
     , keNextItemId     = fromIntegral (snapNextItemId snap)
     }
   where pages = HM.elems (snapPages snap)
+
+-- | Project the three identity scopes Lua's post-load reconciliation
+--   needs out of the same 'KnownEntities' the reference-edge
+--   cross-validator already resolves against (issue #1589).
+--
+--   Deriving the Lua-facing context from 'KnownEntities' rather than
+--   rebuilding it from a session is the point: 'luaEdgeResolves' above
+--   decides at LOAD time whether an edge resolves, and
+--   @scripts/unit_ai_reconcile.lua@ decides at RECONCILE time whether
+--   the very same edge should be cleared. Two derivations of "which
+--   entities exist, and on which page" could disagree; one cannot.
+--
+--   Units and buildings are deliberately omitted — 'onSaveLoaded'
+--   already receives both survivor arrays positionally.
+loadReconcileContextFrom ∷ KnownEntities → LoadReconcileContext
+loadReconcileContextFrom ke = LoadReconcileContext
+    { lrcItemInstances     = HS.toList (keItemInstances ke)
+    , lrcUnitPages         = [ (uid, pid)
+                             | (uid, WorldPageId pid) ← HM.toList (keUnitPage ke) ]
+    , lrcBillsByPage       = byPage (keBillsByPage ke)
+    , lrcGroundItemsByPage = byPage (keGroundItemsByPage ke)
+    }
+  where
+    byPage m = [ (pid, HS.toList ids)
+               | (WorldPageId pid, ids) ← HM.toList m ]
 
 -- 'LuaRefEdge' — the edge record this module's checks consume — is
 -- defined in the leaf module "World.Save.Payload" and re-exported here,

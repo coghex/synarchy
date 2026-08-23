@@ -258,8 +258,8 @@ def populate_world(port: int, page: str, seed: int, size: int, plates: int,
         if gloss is not None:
             init_args += f", '{gloss}'"
     send(port, f"world.init({init_args}); return 'ok'")
-    # Must SHOW (not just init): building.spawn/canPlaceAt read
-    # snapshotVisibleWorldTiles, which needs the page in wmVisible.
+    # Must SHOW (not just init): building.canPlaceAt answers only for the
+    # VISIBLE page, so it needs the page in wmVisible.
     # getActiveWorldId() falls back to the wmWorlds head, so it can report a
     # page "active" before any page is actually visible.
     send(port, f"world.show('{page}'); return 'ok'")

@@ -102,6 +102,8 @@ import os
 import subprocess
 import sys
 
+import probe_engine
+
 LOG = "/tmp/preview_cli_probe_engine.log"
 
 UNEXPOSED_CATEGORIES = ["equipment", "hud", "facemap", "utility", "vegetation"]
@@ -116,7 +118,11 @@ def check(name: str, ok: bool, detail: str = "") -> bool:
 
 
 def run_cli(*extra_args: str, timeout: float = 30.0) -> subprocess.CompletedProcess:
-    cmd = ["cabal", "run", "-v0", "exe:synarchy", "--", *extra_args]
+    # The aggregate runner resolves ONE executable up front and hands it
+    # over through the environment (#1570), so this probe never adds a
+    # `cabal run` to a parallel sweep; run by hand it keeps the same
+    # `cabal run` fallback, with the same arguments and the same cwd.
+    cmd = probe_engine.engine_command(extra_args)
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
 

@@ -39,7 +39,8 @@ import World.Generate (viewDepth)
 import World.Generate.Coordinates (chunkToGlobal)
 import World.Chunk.Types (LoadedChunk(..), columnIndex)
 import World.Tile.Types (WorldTileData(..))
-import World.State.Types (WorldState(..), emptyWorldState, WorldManager(..))
+import World.State.Types
+    ( WorldState(..), emptyWorldState, WorldManager(..), emptyWorldManager )
 import World.Page.Types (WorldPageId(..))
 import World.Command.Types (WorldCommand(..))
 import World.Thread.Command.Cursor
@@ -80,7 +81,9 @@ initEnv = do
 --   engine a concrete, non-degenerate viewport + camera to pick against.
 setSinglePage ∷ EngineEnv → WorldPageId → WorldState → IO ()
 setSinglePage env pid ws = do
-    writeIORef (worldManagerRef env) (WorldManager [(pid, ws)] [pid])
+    writeIORef (worldManagerRef env) (emptyWorldManager
+        { wmWorlds = [(pid, ws)]
+        , wmVisible = [pid] })
     writeIORef (cameraRef env) defaultCamera
     writeIORef (windowSizeRef env) (800, 600)
     writeIORef (framebufferSizeRef env) (800, 600)
@@ -317,7 +320,9 @@ spec = beforeAll initEnv $ describe "zoom cursor selection (#813)" $ do
             , worldSelectedTile = Just (7, 7, 7)
             }
         writeIORef (worldManagerRef env)
-            (WorldManager [(pidA, wsA), (pidB, wsB)] [pidA, pidB])
+            (emptyWorldManager
+                { wmWorlds = [(pidA, wsA), (pidB, wsB)]
+                , wmVisible = [pidA, pidB] })
         writeIORef (cameraRef env) defaultCamera
         writeIORef (windowSizeRef env) (800, 600)
         writeIORef (framebufferSizeRef env) (800, 600)

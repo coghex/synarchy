@@ -52,7 +52,8 @@ import Unit.Types
     , UnitManager(..), defaultNaturalResistance, emptyUnitManager )
 import World.Cursor.Types (CursorState(..))
 import World.Page.Types (WorldPageId(..))
-import World.State.Types (WorldManager(..), WorldState(..), emptyWorldState)
+import World.State.Types
+    ( WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager )
 
 -- * Fixture identities
 
@@ -171,7 +172,7 @@ resetScene env activeGround ownedGround travellerInv travellerEquip = do
     forM_ ownedGround $ \it →
         atomicModifyIORef' (wsGroundItemsRef wsO) $
             spawnGroundItem it (fst travellerAt) (snd travellerAt)
-    writeIORef (worldManagerRef env) WorldManager
+    writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds  = [(pageActive, wsA), (pageOwned, wsO)]
         , wmVisible = [pageActive] }
     writeIORef (itemManagerRef env) emptyItemManager

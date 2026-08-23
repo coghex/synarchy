@@ -59,10 +59,19 @@ handleWorldDestroyCommand env logger pageId = do
     enqueueBloodDisposalForPage (rhBloodDisposeQueue handoff) mgr pageId
 
     -- Remove from visible list
-    atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr' →
-        (mgr' { wmVisible = filter (≢ pageId) (wmVisible mgr')
-              , wmWorlds  = filter ((≢ pageId) . fst) (wmWorlds mgr')
-              }, ())
+    atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr'' →
+        -- #1602: destroying the visible HEAD changes what
+        -- resolveActiveWorld answers with, so it invalidates live
+        -- placement bindings. Destroying a hidden, absent, or
+        -- visible-but-not-head page does not: a binding only ever names
+        -- the head, so nothing it depends on moved. The pending request
+        -- is discharged either way.
+        let mgr' = completeSelectionChange mgr''
+            wasHead = selectionHead (wmVisible mgr') ≡ Just pageId
+        in ((if wasHead then bumpSelectionGen else id)
+            (mgr' { wmVisible = filter (≢ pageId) (wmVisible mgr')
+                  , wmWorlds  = filter ((≢ pageId) . fst) (wmWorlds mgr')
+                  }), ())
 
     -- Clear world quads so renderer stops drawing the old world
     writeIORef (rhWorldQuadsRef handoff) emptyLayeredQuads
@@ -90,7 +99,13 @@ handleWorldDestroyAllCommand env logger = do
     -- wmWorlds is cleared out from under uploadBloodTextures.
     enqueueBloodDisposalAll (rhBloodDisposeQueue handoff) mgr
     atomicModifyIORef' (wsWorldManagerRef worldSim) $ \m →
-        (m { wmWorlds = [], wmVisible = [] }, ())
+        -- #1602: every page is gone, so no binding captured before this
+        -- may validate or commit afterwards — unless nothing was visible
+        -- to begin with, in which case no binding existed to invalidate.
+        let m' = completeSelectionChange m
+        in ((if isJust (selectionHead (wmVisible m'))
+               then bumpSelectionGen else id)
+            m' { wmWorlds = [], wmVisible = [] }, ())
     writeIORef (rhWorldQuadsRef handoff) emptyLayeredQuads
     -- Reset the entity managers via the UNIT/BUILDING queues, not directly:
     -- those threads keep draining their queues through the teardown, so

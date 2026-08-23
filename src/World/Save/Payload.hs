@@ -24,10 +24,63 @@
 module World.Save.Payload
     ( LuaComponentSpec(..)
     , LuaRefEdge(..)
+    , LoadReconcileContext(..)
+    , emptyLoadReconcileContext
     ) where
 
 import UPrelude
 import qualified Data.ByteString as BS
+
+-- | The restored session's entity context, handed to Lua's post-load
+--   reconciliation broadcast (@onSaveLoaded@) so a component can decide
+--   whether each typed reference its rows carry still names a real
+--   entity (issue #1589).
+--
+--   Only the three identity scopes the survivor arrays cannot answer
+--   are carried. @onSaveLoaded@ already receives every surviving
+--   unit/building id positionally, so re-sending those would be a
+--   second, divergeable copy of the same fact:
+--
+--     * @lrcItemInstances@ — every item-instance id in the whole
+--       restored session. SESSION-GLOBAL (one allocator), exactly like
+--       'World.Save.Integrity.luaEdgeResolves' treats the
+--       @item_instance@ kind.
+--     * @lrcUnitPages@ — which page each surviving unit lives on. This
+--       is what makes the two PER-PAGE kinds below resolvable at all:
+--       a @craft_bill@ or @ground_item@ id is meaningful only relative
+--       to its owning unit's page.
+--     * @lrcBillsByPage@ / @lrcGroundItemsByPage@ — per-page craft-bill
+--       and ground-item id sets, keyed by page id.
+--
+--   Association lists rather than hash maps: this record exists to be
+--   marshalled into one Lua table and is never looked up on the Haskell
+--   side, and a leaf module (see the module haddock) cannot name
+--   'World.Page.Types.WorldPageId' either — so page ids travel as the
+--   plain 'Text' they are on the wire.
+--
+--   An EMPTY context is a real, meaningful value (a session with no
+--   items, bills or ground items), which is why the Lua side
+--   distinguishes "context absent" from "context present and empty"
+--   rather than treating both as "nothing to check" — see
+--   @scripts/unit_ai_reconcile.lua@.
+data LoadReconcileContext = LoadReconcileContext
+    { lrcItemInstances     ∷ ![Int]
+    , lrcUnitPages         ∷ ![(Int, Text)]
+    , lrcBillsByPage       ∷ ![(Text, [Int])]
+    , lrcGroundItemsByPage ∷ ![(Text, [Int])]
+    } deriving (Show, Eq)
+
+-- | The context of a session with nothing in any of the three scopes.
+--   Deliberately NOT a stand-in for "no context supplied": it states
+--   that the restored session really does hold no item instances, no
+--   craft bills and no ground items.
+emptyLoadReconcileContext ∷ LoadReconcileContext
+emptyLoadReconcileContext = LoadReconcileContext
+    { lrcItemInstances     = []
+    , lrcUnitPages         = []
+    , lrcBillsByPage       = []
+    , lrcGroundItemsByPage = []
+    }
 
 -- | One Lua-owned component: its bare (unprefixed) registry id, schema
 --   version, the writer's own required/optional declaration, and its

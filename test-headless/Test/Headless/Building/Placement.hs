@@ -23,18 +23,23 @@
 --       THAT page, even a hidden one (#90's location content-spawning
 --       passes it deliberately); building.canPlaceAt has no page
 --       parameter and only ever answers for the active page.
---     * spawn reads tile data as `readIORef (wsTilesRef ws)` on its
---       resolved page, while the preview goes through
---       snapshotVisibleWorldTiles, which reads the FIRST VISIBLE page
---       and returns Nothing — "no world loaded", with canPlaceAt never
---       called — when wmVisible is empty. Active-world resolution has
---       its own fallback to the first registered world, so the two can
---       land on different pages.
+--     * both read tile data from the page they resolved, and since
+--       #1602 each resolves that page from a SINGLE world-manager read:
+--       building.canPlaceAt no longer resolves the active page for its
+--       metadata and then separately resolves the visible page for its
+--       terrain, so it can no longer combine one page's occupancy,
+--       locations or world size with another page's tiles. Its
+--       empty-visible answers are unchanged — "no active world" with no
+--       page registered at all, "no world loaded" with one registered
+--       but none visible, and never a registered-but-hidden page.
 --
---   That divergence is by design; this module records it rather than
---   asserting it away. A test that fed the same arguments to canPlaceAt
---   twice would only restate the function's purity, so none is kept
---   here.
+--   The remaining divergence (the explicit pageId above) is by design;
+--   this module records it rather than asserting it away. A test that
+--   fed the same arguments to canPlaceAt twice would only restate the
+--   function's purity, so none is kept here. The page-coherence and
+--   binding contracts themselves are exercised against the live engine
+--   in Test.Headless.Building.PageBinding ("Build placement page
+--   binding"), not here.
 --
 --   Every fixture chunk below carries NO structure data
 --   (lcStructures = emptyChunkStructures, same as Pathing.Cost's

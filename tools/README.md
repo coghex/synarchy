@@ -441,7 +441,7 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `location_content_probe.py` | #90, #91, #915, #1101, #1230 | worldgen + arena | Location content spawning + ruin probe; also the player-wide discovery layer (sight-based since #1230 — a location is revealed when a player-owned unit's night-aware visible tiles touch its stored bounds, so the negative cases are derived from the sight radius rather than a discovery halo, which no longer exists), the per-unit location-knowledge layer beside it, and (#1101) each placed location's name rendered in its world's own generated language — generated name + English gloss on a provenance-bearing world, the `ldLabel` fallback with no gloss on the same seed without one, both surviving save/load and reproduced by regenerating the same seed + language in a fresh process. |
 | `location_overlay_probe.py` | #89 | worldgen + arena | World-gen location-overlay placement. |
 | `location_stamp_idempotent_probe.py` | #424 | worldgen | Geometry-stamp idempotency survives clearing the anchor floor + save/restart/reload; a never-visited location still stamps on first load. |
-| `lua_orphan_prune_probe.py` | #195 | worldgen | Lua per-id AI state is pruned (not inherited by id reuse) after a save load. |
+| `lua_orphan_prune_probe.py` | #195, #1589 | worldgen | Lua per-id AI state is pruned (not inherited by id reuse) after a save load, and a stale reference from EVERY declared `unit_ai` family — planted before the save — is cleared by the automatic post-load reconcile. |
 | `lua_strict_msg_probe.py` | #622 | none (no world/scripts needed) | A Haskell exception embedded, unevaluated, in a `LuaToEngineMsg`/`LuaMsg` field must not escape to the consuming thread and crash the whole engine — `engine.setText` with malformed UTF-8 must degrade to a caught Lua error instead. |
 | `machine_shop_probe.py` | #591 | arena | Electric furnace `smelt_steel_electric` recipe + the new `machine_shop` building's `machine_wiring`/`machine_electric_motor` recipes, real shipped content built on #590's power-draw mechanism. |
 | `meal_waste_probe.py` | #1219 | arena | Stop-before-waste meal policy: a hungry acolyte withholds the ration its stomach can no longer hold most of (zero `unit.feed`/`mealSalt` side effects for the withheld item), a part-full quinoa sack still finishes that same meal, the first item of a meal stays exempt, a near-starving unit still eats, and the 10-feed bound plus the eat/forage entry gates are unchanged. |
@@ -557,6 +557,70 @@ over a probe that's genuinely broken. `--tail N` prints the last `N` lines
 of a failing probe's captured output for a quicker look without re-running
 it by hand.
 
+**Prebuilt execution: one Cabal contact per run (#1570).** Probes used to
+launch their engine as `cabal run -v0 exe:synarchy --`, so a `--jobs N`
+sweep put N concurrent Cabal processes on the one `dist-newstyle` and an
+otherwise healthy probe died on the shared inplace package database
+before its engine started (`package.conf.inplace already exists`,
+`package.cache: removeDirectoryRecursive: does not exist`). Retries only
+re-ran the loser.
+
+The runner now resolves the executable ONCE. After selection is validated
+and every port refusal has had its chance — so `--list`, an unknown
+`--exact` key and a `--port` that reaches 8008 all stay build-free — and
+before a single probe process exists, it runs one freshness `cabal build
+exe:synarchy` plus one read-only `cabal list-bin exe:synarchy`, prints the
+resolved path, and hands it to every probe it launches through
+`SYNARCHY_PROBE_ENGINE_EXE`. A preflight that fails is the runner's own
+exit 2 with Cabal's reason — never a retry, never a probe's assertion
+failure. **The build itself runs inside an EXCLUSIVE `cabal-build` hold**:
+a preflight is a Cabal writer like any other, so two aggregate runs cannot
+build at once, and a build cannot land inside another runner's `cabal
+repl` probe. The hold covers the build alone and is released before any
+probe is dispatched, so a sweep never queues its own probes behind it. That applies to `--jobs 1` as much as to `--jobs N`, and it
+reaches the initial attempt, every parallel worker, every solo retry and
+a nested `run_probes.py` (which adopts the inherited path rather than
+building again).
+
+`tools/probe_engine.py` is the single funnel every launch goes through —
+`probelib.boot` and the four probes with their own private launchers
+(`debug_console_boot`, `preview_cli`, `resource_root`, `thermo_altitude`)
+alike. Handed an executable it execs that absolute path; handed none it
+falls back to the historical `cabal run` invocation, with the engine's own
+arguments in the same order either way. **That fallback is why running a
+probe by hand still needs no prior build step**: `python3
+tools/chop_probe.py` from the repository root behaves exactly as it always
+has. A supplied path that is relative, missing or not executable is a
+refusal rather than a quiet fallback — falling back would put a `cabal
+run` straight back inside a parallel sweep.
+
+Three registered probes legitimately still drive Cabal themselves, and
+they are not engine boots: `persistence_contract`,
+`persistence_contract_sweep` and `save_compat_migration` each shell out to
+`cabal repl test:synarchy-test-headless` (through
+`persistence_snapshot.compare_session_files` /
+`save_compat_audit.dump_canonical_summary`). A `cabal repl` recompiles
+into the same package database, so each of them declares the
+`cabal-build` resource EXCLUSIVELY in the reader/writer tables below,
+while every other probe holds it SHARED. They therefore cannot overlap
+each other, nor a probe reading the binary they may be relinking — the
+same scheduling mechanism `repo-config` already used, with no new one
+invented.
+
+**Shared repository resources (#1322, #1444, #1570).** `run_probes`
+declares two tables: `IMPLICIT_SHARED_RESOURCES`, which EVERY registered
+probe holds in a shared interest (`repo-config`, the checkout's tracked
+`config/` tree, and `cabal-build`, its `dist-newstyle`), and
+`EXCLUSIVE_RESOURCES`, which names the few probes that need one to
+themselves. Shared holders coexist; an exclusive holder runs alone.
+`tools/probe_resource_lock.py` (#1436) enforces the same two tables
+BETWEEN processes, so a second sweep or a `/deflake` measurement cannot
+overlap what this one holds either. A runner tells each probe what it
+holds exclusively on that probe's behalf (`SYNARCHY_PROBE_HELD_EXCLUSIVE`),
+which is what lets `persistence_contract_sweep`'s own nested
+`run_probes.py` run inside its ancestor's `cabal-build` hold instead of
+deadlocking against it.
+
 **Reserved port spans (#1571).** A probe is handed one `--port`, but two
 registered probes derive a second, concurrently live listener from it:
 `debug_console_boot_probe.py` boots its successful-bind and
@@ -615,8 +679,13 @@ whole grace on an engine that was long gone.
 
 `python3 tools/test_run_probes.py` is that behavior's gate: deterministic,
 GPU-free, synthetic probes and synthetic engine descendants in a throwaway
-tree, no registered probe ever run. It is a blocking CI step alongside
-`ci_probes.py --self-test`.
+tree, no registered probe ever run. It covers the executable preflight
+(#1570) the same way — with the preflight's subprocess entry point
+doubled, so one Cabal contact per run, its ordering ahead of every probe
+spawn, its failure starting nothing, the resolved path reaching every
+attempt including solo retries, and the build-free `--list`/refusal paths
+are all the shipped `main`'s behaviour rather than a restatement of it.
+It is a blocking CI step alongside `ci_probes.py --self-test`.
 
 ### `test_action_outcome_probe.py` — chop-fixture classification (#1398)
 
@@ -655,7 +724,13 @@ different things in different files. #1160 deleted every copy.
 `python3 tools/test_probelib.py` keeps that consolidated, and is
 ENGINE-FREE: it stands up a real socket that speaks the console's reply
 protocol, so the transport (`send`) runs for real without a world, a GPU
-or a subprocess. It pins the three result cases — empty is `None`, valid
+or a subprocess. It also owns `tools/probe_engine.py`'s contract (#1570):
+runner mode execs the resolved binary with no Cabal anywhere in the argv,
+direct mode keeps the historical `cabal run` fallback with identical
+argument ordering, an unusable supplied path raises instead of falling
+back, `probelib.boot` really launches the supplied binary with its logging
+unchanged, and `resolve_executable` builds before it locates. It pins the
+three result cases — empty is `None`, valid
 JSON is the decoded value, non-JSON is returned AS TEXT (which is why a
 Lua `nil`, arriving as the JSON literal `null`, still reads as `None`) —
 plus `idle` being reachable, the knob the copies hid.

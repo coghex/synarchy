@@ -17,53 +17,79 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
-import Engine.Core.State (EngineEnv, activeWorldPageFrom)
+import Engine.Core.State (EngineEnv, activeWorldPageFrom, resolveActiveWorld)
 import World.Page.Types (WorldPageId(..))
 import qualified Engine.Core.Queue as Q
 import Building.Types
 import Building.Command.Types (BuildingCommand(..))
+import World.Command.Types (WorldCommand(..))
 import Building.Placement
     ( canPlaceAt, PlacementResult(..), RemoteCheck(..), remoteCheck, isRemote
     )
 import Location.Bounds (remotePortalThresholdTiles)
 import Unit.Pathing.Cost (lookupTerrainZ)
-import World.Types (WorldManager(..), WorldState(..), WorldGenParams(..))
+import World.Types
+    ( WorldManager(..), WorldState(..), WorldGenParams(..)
+    , selectionMovedSince )
 import World.Generate.Coordinates (canonicalTile)
 import World.Tile.Types (WorldTileData)
 import Location.Instance (emptyLocationInstances)
 
 -- * Spawn / destroy
 
--- | building.spawn(defName, gx, gy [, pageId]) — returns the new
---   building id on success, nil otherwise (unknown def, placement
---   invalid). Placement is validated server-side too so Lua scripts
---   can't accidentally place into water etc. An explicit pageId (slot
---   4) pins the spawn — AND the occupancy/terrain-Z check — to that
---   live page (even hidden) instead of the active world: location
---   content-spawning (#90) passes its own page so a building lands (and
---   validates) on the page its location is on, not whichever happens to
---   be visible. Omitted → the active world, as before (#76).
+-- | building.spawn(defName, gx, gy [, pageId [, bindGen]]) — returns the
+--   new building id on success, or @(nil, reason)@ otherwise (unknown
+--   def, placement invalid, stale page binding). Placement is validated
+--   server-side too so Lua scripts can't accidentally place into water
+--   etc. An explicit pageId (slot 4) pins the spawn — AND the
+--   occupancy/terrain-Z check — to that live page (even hidden) instead
+--   of the active world: location content-spawning (#90) passes its own
+--   page so a building lands (and validates) on the page its location is
+--   on, not whichever happens to be visible. Omitted → the active world,
+--   as before (#76).
+--
+--   @bindGen@ (slot 5, #1602) is the page-selection generation
+--   @world.pickTile@ reported for the click this spawn is committing.
+--   When present it is compared against 'wmSelectionGen' inside the SAME
+--   manager read that resolves the target page, so page selection cannot
+--   move between the check and the resolution: a mismatch spawns
+--   nothing and answers @(nil, "page binding stale")@, distinct from
+--   every ordinary placement refusal.
+--
+--   That is the SYNCHRONOUS half, and it is what this call owes its
+--   caller — but it is not the commit, and this thread cannot make it
+--   one: 'wmSelectionGen' belongs to the world thread. A bound spawn is
+--   therefore routed to that thread as 'WorldSpawnBoundBuilding', which
+--   re-checks the binding and performs the insertion itself, in the one
+--   place a selection change cannot be interleaved between the two.
+--   Omitted → the command goes straight to the building queue, exactly
+--   as before.
 buildingSpawnFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingSpawnFn env = do
     nameArg ← Lua.tostring 1
     xArg    ← Lua.tointeger 2
     yArg    ← Lua.tointeger 3
     pageArg ← Lua.tostring 4
+    bindArg ← Lua.tointeger 5
     case (nameArg, xArg, yArg) of
         (Just nameBS, Just x, Just y) → do
             let defName = TE.decodeUtf8Lenient nameBS
                 gx      = fromIntegral x
                 gy      = fromIntegral y
-            mBid ← Lua.liftIO $ do
+            result ← Lua.liftIO $ do
                 bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
-                mTarget ← case pageArg of
-                    Just pidBS → do
-                        let pid = WorldPageId (TE.decodeUtf8Lenient pidBS)
-                        wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
-                        pure $ (\ws → (pid, ws)) <$> lookup pid (wmWorlds wm)
-                    Nothing → activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
-                case (HM.lookup defName (bmDefs bm), mTarget) of
-                    (Just def, Just (pid, ws)) → do
+                -- ONE manager read serves both the binding check and the
+                -- target resolution (#1602): re-reading for the second
+                -- would reopen the very window the binding closes.
+                wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+                let mTarget = case pageArg of
+                        Just pidBS →
+                            let pid = WorldPageId (TE.decodeUtf8Lenient pidBS)
+                            in (\ws → (pid, ws)) <$> lookup pid (wmWorlds wm)
+                        Nothing → resolveActiveWorld wm
+                case (bindingStale bindArg wm, HM.lookup defName (bmDefs bm), mTarget) of
+                    (True, _, _) → pure (Left pageBindingStaleReason)
+                    (_, Just def, Just (pid, ws)) → do
                         wtd ← readIORef (wsTilesRef ws)
                         mParams ← readIORef (wsGenParamsRef ws)
                         let locInstances = maybe emptyLocationInstances
@@ -82,27 +108,30 @@ buildingSpawnFn env = do
                                 (bm { bmInstances =
                                         buildingsOnPage pid (bmInstances bm) })
                                 wtd locInstances worldSizeChunks def cgx cgy of
-                            NotPlaceable _ → pure Nothing
+                            NotPlaceable reason → pure (Left reason)
                             Placeable → do
                                 let gz = floorZAt worldSizeChunks wtd cgx cgy
                                 bid ← atomicModifyIORef'
                                         (bcBuildingManagerRef (toBuildingCapability env)) $ \bm' →
                                             let (bid', bm'') = nextBuildingId bm'
                                             in (bm'', bid')
-                                Q.writeQueue (bcBuildingQueue (toBuildingCapability env)) $
-                                    BuildingSpawn bid defName cgx cgy gz pid
-                                pure (Just bid)
-                    _ → pure Nothing
-            case mBid of
-                Just (BuildingId n) → do
+                                enqueueSpawn env bindArg
+                                    bid defName cgx cgy gz pid
+                                pure (Right bid)
+                    (_, Nothing, _) → pure (Left "unknown building")
+                    (_, _, Nothing)  → pure (Left "no active world")
+            case result of
+                Right (BuildingId n) → do
                     Lua.pushinteger (fromIntegral n)
                     return 1
-                Nothing → do
+                Left reason → do
                     Lua.pushnil
-                    return 1
+                    Lua.pushstring (TE.encodeUtf8 reason)
+                    return 2
         _ → do
             Lua.pushnil
-            return 1
+            Lua.pushstring "bad arguments"
+            return 2
 
 buildingDestroyFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingDestroyFn env = do
@@ -119,59 +148,99 @@ buildingDestroyFn env = do
 
 -- * Placement check
 
--- | building.canPlaceAt(defName, gx, gy) — returns @(true, nil)@ on
---   success or @(false, reason)@ on rejection. Cheap to call every
---   frame from the build tool's ghost preview update.
+-- | building.canPlaceAt(defName, gx, gy [, bindPage, bindGen]) — returns
+--   @(true, nil, false)@ on success or @(false, reason, stale)@ on
+--   rejection. Cheap to call every frame from the build tool's ghost
+--   preview update.
+--
+--   #1602: ONE 'wsWorldManagerRef' read now answers the whole call. The
+--   page identity, the page-scoped occupancy filter, the location
+--   instances, the u-wrap world size, the canonical coordinates and the
+--   terrain all come from that single resolution, so the check can no
+--   longer combine one page's metadata with another page's terrain (it
+--   previously resolved the active page and then re-read the manager for
+--   the visible page's tiles).
+--
+--   The optional binding (slots 4-5) is @world.pickTile@'s page id and
+--   page-selection generation for the click being validated. The call
+--   answers @(false, "page binding stale", true)@ WITHOUT consulting any
+--   page when either half no longer holds — the generation has moved, or
+--   the visible page is no longer the one named. The generation alone
+--   already implies the page (it moves on every visible-list change),
+--   but checking the id too means a caller that supplies one is never
+--   silently answered about a different page. The third result is what
+--   lets a caller tell a moved page apart from an ordinary refusal
+--   without matching on the reason text; existing three-argument callers
+--   see their previous two-result behaviour unchanged.
+--
+--   Empty-visible behaviour is deliberately preserved exactly (#1602
+--   requirement 10), including its two DISTINCT reasons: @"no active
+--   world"@ when no page is registered at all, and @"no world loaded"@
+--   when a page is registered but none is visible. A registered-but-
+--   hidden page is never silently used.
 buildingCanPlaceAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingCanPlaceAtFn env = do
     nameArg ← Lua.tostring 1
     xArg    ← Lua.tointeger 2
     yArg    ← Lua.tointeger 3
+    pageArg ← Lua.tostring 4
+    bindArg ← Lua.tointeger 5
     case (nameArg, xArg, yArg) of
         (Just nameBS, Just x, Just y) → do
-            let defName = TE.decodeUtf8Lenient nameBS
-                gx      = fromIntegral x
-                gy      = fromIntegral y
-            result ← Lua.liftIO $ do
+            let defName  = TE.decodeUtf8Lenient nameBS
+                gx       = fromIntegral x
+                gy       = fromIntegral y
+                bindPage = WorldPageId . TE.decodeUtf8Lenient <$> pageArg
+            (result, stale) ← Lua.liftIO $ do
                 bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
-                mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
+                wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
                 -- Occupancy is checked only against the ACTIVE world's
                 -- buildings — a building in another world must not block
                 -- placement here (#76).
-                case (HM.lookup defName (bmDefs bm), mActive) of
+                if bindingStale bindArg wm ∨ boundPageMoved bindPage wm
+                then pure (NotPlaceable pageBindingStaleReason, True)
+                else fmap (\r → (r, False)) $
+                  case (HM.lookup defName (bmDefs bm), resolveActiveWorld wm) of
                     (Nothing, _) → pure (NotPlaceable "unknown building")
                     (_, Nothing) → pure (NotPlaceable "no active world")
-                    (Just def, Just (pid, ws)) → do
-                        mWtd ← snapshotVisibleWorldTiles env
-                        case mWtd of
-                            Nothing  → pure (NotPlaceable "no world loaded")
-                            Just wtd → do
-                                mParams ← readIORef (wsGenParamsRef ws)
-                                let locInstances = maybe emptyLocationInstances
-                                                         wgpLocationInstances mParams
-                                    worldSizeChunks = maybe 0 wgpWorldSize mParams
-                                    -- #1175: the ghost preview must answer
-                                    -- for the tile building.spawn will
-                                    -- actually use, or the tool says
-                                    -- "placeable" and the spawn refuses.
-                                    (cgx, cgy) = canonicalTile worldSizeChunks gx gy
-                                pure (canPlaceAt
-                                    (bm { bmInstances =
-                                            buildingsOnPage pid (bmInstances bm) })
-                                    wtd locInstances worldSizeChunks def cgx cgy)
+                    (Just def, Just (pid, ws))
+                        -- resolveActiveWorld falls back to the wmWorlds
+                        -- head when nothing is visible; placement must
+                        -- never answer for a hidden page, so that case
+                        -- keeps rejecting exactly as the separate
+                        -- visible-page terrain read used to.
+                        | null (wmVisible wm) → pure (NotPlaceable "no world loaded")
+                        | otherwise → do
+                            wtd ← readIORef (wsTilesRef ws)
+                            mParams ← readIORef (wsGenParamsRef ws)
+                            let locInstances = maybe emptyLocationInstances
+                                                     wgpLocationInstances mParams
+                                worldSizeChunks = maybe 0 wgpWorldSize mParams
+                                -- #1175: the ghost preview must answer
+                                -- for the tile building.spawn will
+                                -- actually use, or the tool says
+                                -- "placeable" and the spawn refuses.
+                                (cgx, cgy) = canonicalTile worldSizeChunks gx gy
+                            pure (canPlaceAt
+                                (bm { bmInstances =
+                                        buildingsOnPage pid (bmInstances bm) })
+                                wtd locInstances worldSizeChunks def cgx cgy)
             case result of
                 Placeable → do
                     Lua.pushboolean True
                     Lua.pushnil
-                    return 2
+                    Lua.pushboolean stale
+                    return 3
                 NotPlaceable reason → do
                     Lua.pushboolean False
                     Lua.pushstring (TE.encodeUtf8 reason)
-                    return 2
+                    Lua.pushboolean stale
+                    return 3
         _ → do
             Lua.pushboolean False
             Lua.pushstring "bad arguments"
-            return 2
+            Lua.pushboolean False
+            return 3
 
 -- * Remote-settlement check (#779)
 
@@ -243,13 +312,25 @@ buildingSetGhostFn env = do
                 -- #1175: the ghost is drawn at the CANONICAL tile the
                 -- spawn will use, so the preview and the building that
                 -- follows it never sit a world apart at the seam.
-                worldSize ← visibleWorldSize env
+                --
+                -- #1602: ONE manager read supplies BOTH the u-wrap world
+                -- size that canonicalizes the tile and the terrain the
+                -- elevation is sampled from. The pair of independent
+                -- reads this replaced could size the ghost by one page
+                -- and elevate it by another. Empty wmVisible keeps its
+                -- documented fallback: unwrapped input coordinates
+                -- (world size 0) and elevation 0.
+                mVisible ← visiblePageStateFrom env
+                (worldSize, mWtd) ← case mVisible of
+                    Nothing → pure (0, Nothing)
+                    Just ws → do
+                        sz ← maybe 0 wgpWorldSize <$> readIORef (wsGenParamsRef ws)
+                        wtd ← readIORef (wsTilesRef ws)
+                        pure (sz, Just wtd)
                 let (cgx, cgy) = canonicalTile worldSize gx gy
-                gz ← do
-                    mWtd ← snapshotVisibleWorldTiles env
-                    case mWtd of
-                        Just wtd → pure (floorZAt worldSize wtd cgx cgy)
-                        Nothing  → pure 0
+                    gz = case mWtd of
+                        Just wtd → floorZAt worldSize wtd cgx cgy
+                        Nothing  → 0
                 writeIORef (bcBuildingGhostRef (toBuildingCapability env)) $ Just BuildingGhost
                     { bgDefName = name
                     , bgGridX   = cgx
@@ -271,27 +352,69 @@ buildingClearGhostFn env = do
 
 -- * Helpers
 
-snapshotVisibleWorldTiles ∷ EngineEnv → IO (Maybe WorldTileData)
-snapshotVisibleWorldTiles env = do
+-- | The VISIBLE page's state (head of wmVisible) from ONE manager read
+--   (#1602) — the single resolution the ghost preview derives BOTH its
+--   u-wrap world size (#1175) and its terrain elevation from. 'Nothing'
+--   when nothing is visible, which is the documented fallback to
+--   unwrapped coordinates and elevation 0; a registered-but-hidden page
+--   is never substituted.
+visiblePageStateFrom ∷ EngineEnv → IO (Maybe WorldState)
+visiblePageStateFrom env = do
     wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
-    case wmVisible wm of
-        []          → pure Nothing
-        (pageId:_)  → case lookup pageId (wmWorlds wm) of
-            Nothing → pure Nothing
-            Just ws → Just <$> readIORef (wsTilesRef ws)
+    pure $ case wmVisible wm of
+        []         → Nothing
+        (pageId:_) → lookup pageId (wmWorlds wm)
 
--- | The VISIBLE page's u-wrap world size (#1175), for the ghost preview:
---   it has no page argument of its own, and must resolve its tile the
---   same way the spawn it previews will. 0 (no wrapping) when no page is
---   visible or it has no gen params, matching 'buildingSpawnFn'.
-visibleWorldSize ∷ EngineEnv → IO Int
-visibleWorldSize env = do
-    wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
-    case wmVisible wm of
-        []         → pure 0
-        (pageId:_) → case lookup pageId (wmWorlds wm) of
-            Nothing → pure 0
-            Just ws → maybe 0 wgpWorldSize <$> readIORef (wsGenParamsRef ws)
+-- | The rejection reason a stale page binding produces (#1602). One
+--   spelling shared by 'buildingCanPlaceAtFn' and 'buildingSpawnFn' so
+--   the validation and commit halves of a placement cannot drift apart.
+pageBindingStaleReason ∷ Text
+pageBindingStaleReason = "page binding stale"
+
+-- | Has page selection moved since the binding was captured, or is a
+--   change already on its way (#1602)? 'Nothing' (no binding supplied)
+--   is never stale — every pre-#1602 caller keeps its exact behaviour.
+--
+--   'selectionMovedSince' reads both halves from the manager snapshot the
+--   CALLER already took, so the check and the page resolution it guards
+--   share one read. Its projected half is what makes this answer honest
+--   rather than merely optimistic: a @world.hide@ enqueued before this
+--   call has not moved the applied generation yet, so comparing that
+--   alone would report "fresh" for a placement the world thread is about
+--   to reject — and the caller would have recorded an acceptance for
+--   something that never landed. An INEFFECTIVE request (a redundant
+--   @world.show@) moves neither, so ordinary traffic never costs a
+--   click.
+bindingStale ∷ Maybe Lua.Integer → WorldManager → Bool
+bindingStale Nothing     _  = False
+bindingStale (Just want) wm = selectionMovedSince (fromIntegral want) wm
+
+-- | Route a validated spawn to the queue that can actually commit it
+--   (#1602). An UNBOUND spawn — location content-spawning, the AI's
+--   blueprint staking, anything with no click behind it — goes straight
+--   to the building queue exactly as it always has. A BOUND one goes to
+--   the world thread instead, because that is the only thread page
+--   selection cannot move underneath: it discharges the binding and
+--   forwards the same 'BuildingSpawn' from there
+--   ("World.Thread.Command.BoundSpawn").
+enqueueSpawn ∷ EngineEnv → Maybe Lua.Integer
+             → BuildingId → Text → Int → Int → Int → WorldPageId → IO ()
+enqueueSpawn env mBind bid defName gx gy gz pid = case mBind of
+    Nothing   → Q.writeQueue (bcBuildingQueue (toBuildingCapability env)) $
+        BuildingSpawn bid defName gx gy gz pid
+    Just want → Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) $
+        WorldSpawnBoundBuilding bid defName gx gy gz pid (fromIntegral want)
+
+-- | Is the page a binding names no longer the visible one (#1602)? The
+--   generation check above already covers this — it moves on every
+--   change to 'wmVisible' — so this is the redundant half that keeps a
+--   supplied page id from being accepted and then quietly ignored.
+--   'Nothing' (no page supplied) never rejects.
+boundPageMoved ∷ Maybe WorldPageId → WorldManager → Bool
+boundPageMoved Nothing    _  = False
+boundPageMoved (Just pid) wm = case wmVisible wm of
+    (visible:_) → visible ≢ pid
+    []          → True
 
 -- | Terrain Z at the anchor tile. Falls back to 0 if the chunk isn't
 --   loaded — shouldn't happen since canPlaceAt already verified, but

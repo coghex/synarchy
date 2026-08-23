@@ -110,6 +110,7 @@ import qualified Test.Headless.Graphics.FontFallback as GraphicsFontFallback
 import qualified Test.Headless.Graphics.FontRepertoire as GraphicsFontRepertoire
 import qualified Test.Headless.Construct.Corners as ConstructCorners
 import qualified Test.Headless.Construct.Footprint as ConstructFootprint
+import qualified Test.Headless.Construct.PendingRefusal as ConstructPendingRefusal
 import qualified Test.Headless.Craft.Execute as CraftExecute
 import qualified Test.Headless.Craft.Bills as CraftBills
 import qualified Test.Headless.Power.Types as PowerTypes
@@ -188,6 +189,7 @@ import qualified Test.Headless.Camera.ZoomScroll as ZoomScroll
 import qualified Test.Headless.Scene.BatchMerge as BatchMerge
 import qualified Test.Headless.Render.PanMargin as PanMargin
 import qualified Test.Headless.Location.Bounds as LocationBounds
+import qualified Test.Headless.Building.PageBinding as BuildingPageBinding
 import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
 import qualified Test.Headless.Save.AutosaveGuards as AutosaveGuards
@@ -215,6 +217,7 @@ import qualified Test.Headless.Lua.UnitAiHold as LuaUnitAiHold
 import qualified Test.Headless.Lua.UnitAiStall as LuaUnitAiStall
 import qualified Test.Headless.Lua.UnitAiLogisticsTargets as LuaUnitAiLogisticsTargets
 import qualified Test.Headless.Lua.UnitAiLoadReset as LuaUnitAiLoadReset
+import qualified Test.Headless.Lua.UnitAiReconcile as LuaUnitAiReconcile
 import qualified Test.Headless.Lua.SessionTeardown as LuaSessionTeardown
 import qualified Test.Headless.Lua.WorkClaimCapacity as LuaWorkClaimCapacity
 import qualified Test.Headless.Lua.Faction as LuaFaction
@@ -259,6 +262,7 @@ main = hspec $ do
         -- at all, just the live EngineEnv's queues/refs to construct a
         -- real Lua backend and drive processLuaMsg directly.
         describe "Lua.DebugQueue" LuaDebugQueue.spec
+        LuaUnitAiReconcile.envSpec
         describe "Lua.RenderQueue" LuaRenderQueue.spec
         describe "Lua.PreviewGeneration" LuaPreviewGeneration.spec
         describe "Lua.PauseGate" LuaPauseGate.spec
@@ -444,6 +448,7 @@ main = hspec $ do
     LuaUnitAiStall.spec
     LuaUnitAiLogisticsTargets.spec
     LuaUnitAiLoadReset.spec
+    LuaUnitAiReconcile.spec
     LuaSessionTeardown.spec
     LuaWorkClaimCapacity.spec
     LuaFaction.spec
@@ -488,6 +493,7 @@ main = hspec $ do
     describe "Font SDF atlas repertoire" GraphicsFontRepertoire.spec
     describe "Construct.Corners" ConstructCorners.spec
     describe "Construct.Footprint" ConstructFootprint.spec
+    describe "Construct.PendingRefusal" ConstructPendingRefusal.spec
     describe "Craft.Execute" CraftExecute.spec
     describe "Craft.Bills" CraftBills.spec
     describe "Power.Types" PowerTypes.spec
@@ -543,6 +549,11 @@ main = hspec $ do
     describe "World.Render.PickSeam" PickSeam.spec
     describe "World.DesignationSeam" DesignationSeam.spec
     describe "World.DesignationSeam (engine)" DesignationSeam.engineSpec
+
+    -- #1602: its own headless engine (no worker threads), so a queued
+    -- BuildingSpawn / WorldDesignateConstruct stays in its queue and
+    -- "nothing was committed" is asserted on the queue itself.
+    BuildingPageBinding.spec
     describe "World.Render.ZTrackSeam" ZTrackSeam.spec
     describe "World.Render.SideFace" RenderSideFace.spec
     describe "World.Slope.slopeBit" RenderSlopeBit.spec

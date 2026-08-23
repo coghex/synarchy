@@ -156,9 +156,29 @@ publishStagedSession env logger requestId staged = do
     -- no remap, no collision suffix — a load replaces the complete
     -- session, so nothing survives to collide with). wmVisible starts
     -- empty so handleWorldShowCommand below starts from a clean slate.
+    --
+    -- #1602: the replacement manager's page-SELECTION generation is
+    -- seeded from the outgoing one rather than restarting at 0. A load
+    -- replaces the whole page set, so every placement binding captured
+    -- before it must read as stale afterwards — a fresh counter would
+    -- hand the new session the same low numbers the old one had already
+    -- issued, which is exactly the ABA hazard the generation exists to
+    -- close. (The handleWorldShowCommand calls below bump it further.)
+    outgoingSelectionGen ← wmSelectionGen <$> readIORef (worldManagerRef env)
     writeIORef (worldManagerRef env) WorldManager
         { wmWorlds  = [ (spPageId p, spWorldState p) | p ← ssPages staged ]
         , wmVisible = []
+        , wmSelectionGen = outgoingSelectionGen + 1
+        -- Reset rather than carried: a load replaces the whole session,
+        -- and 'World.Thread.processAuthorizedSave' DISCARDS whatever
+        -- selection-changing commands were still queued against the old
+        -- one, so their requests will never be discharged by a handler.
+        , wmSelectionPending = 0
+        -- Settled by construction: nothing is outstanding against the
+        -- replacement session, so the projection is the applied state.
+        , wmProjectedGen = outgoingSelectionGen + 1
+        , wmProjectedWorlds = [ spPageId p | p ← ssPages staged ]
+        , wmProjectedVisible = []
         }
 
     -- Restore visibility through the real handler so its side effects
@@ -210,7 +230,7 @@ publishStagedSession env logger requestId staged = do
     -- new session is a survivor.
     let bIds = map (fromIntegral . unBuildingId) (HM.keys (bmInstances (ssBuildings staged)))
         uIds = map (fromIntegral . unUnitId) (HM.keys (umInstances (ssUnits staged)))
-    sendSaveLoaded env requestId uIds bIds
+    sendSaveLoaded env requestId uIds bIds (ssReconcile staged)
     -- The one user-facing "done" toast for the whole transaction —
     -- staging deliberately never sends one (requirement 6: no live-queue
     -- work while staging), so this is the sole place a load reports

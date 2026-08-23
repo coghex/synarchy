@@ -114,8 +114,20 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
         -- Dedup by page id: re-initialising an existing page (the common
         -- "main_world" reuse after Exit to Menu) must REPLACE its entry,
         -- not stack a second one in wmWorlds (#58).
-        (mgr { wmWorlds = (pageId, worldState)
-                        : filter ((≢ pageId) . fst) (wmWorlds mgr) }, ())
+        --
+        -- #1602: replacing the visible HEAD's WorldState under the SAME
+        -- id is a selection change even though wmVisible is untouched —
+        -- a binding captured against the old page would otherwise keep
+        -- matching, and a placement validated against the old terrain
+        -- would commit into the replacement. Replacing a hidden page, a
+        -- visible-but-not-head one, or registering a new id invalidates
+        -- nothing: a binding only ever names the head. The request is
+        -- discharged either way.
+        ((if selectionHead (wmVisible mgr) ≡ Just pageId
+            then bumpSelectionGen else id)
+            (completeSelectionChange mgr)
+            { wmWorlds = (pageId, worldState)
+                       : filter ((≢ pageId) . fst) (wmWorlds mgr) }, ())
 
     -- Step 0.5: Populate the material registry from data/materials/*.yaml.
     -- The registry was initialized empty at engine startup; without this
@@ -426,8 +438,14 @@ handleWorldInitArenaCommand env logger pageId = do
         -- Dedup by page id: re-initialising an existing page (the common
         -- "main_world" reuse after Exit to Menu) must REPLACE its entry,
         -- not stack a second one in wmWorlds (#58).
-        (mgr { wmWorlds = (pageId, worldState)
-                        : filter ((≢ pageId) . fst) (wmWorlds mgr) }, ())
+        -- #1602: as in handleWorldInitCommand — replacing the visible
+        -- HEAD is a selection change; the request is discharged either
+        -- way.
+        ((if selectionHead (wmVisible mgr) ≡ Just pageId
+            then bumpSelectionGen else id)
+            (completeSelectionChange mgr)
+            { wmWorlds = (pageId, worldState)
+                       : filter ((≢ pageId) . fst) (wmWorlds mgr) }, ())
 
     -- Arena chunk set: shared with the save-load restore path (#365) so a
     -- loaded arena page is rebuilt exactly like a fresh one.
@@ -471,10 +489,15 @@ handleWorldInitArenaDoneCommand env logger pageId = do
     logInfo logger CatWorld $ "Arena textures ready, showing: " <> unWorldPageId pageId
     
     -- Now safe to make visible — all texture commands have been processed
-    atomicModifyIORef' (wsWorldManagerRef (toWorldSimCapability env)) $ \mgr →
+    atomicModifyIORef' (wsWorldManagerRef (toWorldSimCapability env)) $ \mgr' →
+      -- #1602: the request is discharged either way — it tracks
+      -- requests, not effects — while the GENERATION moves only when the
+      -- visible list actually changes, exactly as in
+      -- handleWorldShowCommand.
+      let mgr = completeSelectionChange mgr' in
         if pageId `elem` wmVisible mgr
         then (mgr, ())
-        else (mgr { wmVisible = pageId : wmVisible mgr }, ())
+        else (bumpSelectionGen (mgr { wmVisible = pageId : wmVisible mgr }), ())
     
     -- Broadcast to Lua that the arena is ready to display
     let lteq = ivLuaQueue (toInputViewCapability env)

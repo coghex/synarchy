@@ -31,7 +31,8 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
 import Engine.Core.State (activeWorldPageFrom, activeWorldStateFrom)
 import Engine.Asset.Handle (TextureHandle(..))
-import World.Types (WorldManager(..), WorldState(..), pageWrapWorldSize)
+import World.Types
+    (WorldManager(..), WorldState(..), pageWrapWorldSize, selectionMovedSince)
 import World.Page.Types (WorldPageId(..))
 import World.Chunk.Types (chunkSize)
 import World.Generate.Coordinates
@@ -66,12 +67,34 @@ constructClearAnchorFn wsc = do
         _ → pure ()
     return 0
 
--- | construction.designate(pageId, x1, y1, x2, y2, category, a, b, c)
---   commits the rectangle for a build target:
+-- | construction.designate(pageId, x1, y1, x2, y2, category, a, b, c
+--   [, bindGen]) — commits the rectangle for a build target:
 --     * category "structure": a=pack, b=kind ("wall"/"floor"/"ceiling"/
 --       "post"), c=wall edge ("ne"/"nw"/"se"/"sw"; nil for non-walls)
 --     * category "building":  a=building def name (rest ignored)
 --   Unknown categories are ignored. A building only marks the anchor.
+--
+--   Returns whether the designation was ACCEPTED. #1602: @bindGen@
+--   (slot 10) is the page-selection generation @world.pickTile@ reported
+--   for the click this designation commits. When present it is compared
+--   against 'wmSelectionGen' in ONE manager read taken immediately
+--   before the command is enqueued; a mismatch — the selection moved, or
+--   an effective change is enqueued and not yet applied — enqueues
+--   nothing at all and returns false, which is the synchronous answer
+--   the build tool turns into its rejected outcome.
+--
+--   The generation ALSO travels on the command, and the world thread
+--   re-checks it before writing anything. That second check is the
+--   authoritative one and it is exact rather than best-effort: the world
+--   thread is where world.show / world.hide are applied too, so a
+--   selection change enqueued before this designation is already applied
+--   when the check runs, and one enqueued after is genuinely after the
+--   commit. A stale click therefore creates no designation on the
+--   captured page NOR on the newly selected one, even if selection moved
+--   while the command sat in the queue.
+--
+--   Omitted (every AI and structure caller) → no check at either point,
+--   enqueue as before.
 constructDesignateFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 constructDesignateFn wsc = do
     pageIdArg ← Lua.tostring 1
@@ -83,17 +106,39 @@ constructDesignateFn wsc = do
     aArg ← Lua.tostring 7
     bArg ← Lua.tostring 8
     cArg ← Lua.tostring 9
-    case (pageIdArg, x1Arg, y1Arg, x2Arg, y2Arg, catArg) of
+    bindArg ← Lua.tointeger 10
+    committed ← case (pageIdArg, x1Arg, y1Arg, x2Arg, y2Arg, catArg) of
         (Just pageIdBS, Just x1, Just y1, Just x2, Just y2, Just catBS) →
             case mkTarget (TE.decodeUtf8Lenient catBS) aArg bArg cArg of
-                Nothing → pure ()
+                Nothing → pure False
                 Just tgt → Lua.liftIO $ do
                     let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                    Q.writeQueue (wsWorldQueue wsc) $
-                        WorldDesignateConstruct pageId
-                            (round x1) (round y1) (round x2) (round y2) tgt
-        _ → pure ()
-    return 0
+                    stale ← case bindArg of
+                        Nothing   → pure False
+                        Just want → do
+                            wm ← readIORef (wsWorldManagerRef wsc)
+                            -- The same predicate building.canPlaceAt
+                            -- uses: the selection has moved, or an
+                            -- EFFECTIVE change is enqueued and simply
+                            -- not applied yet.
+                            pure (selectionMovedSince
+                                      (fromIntegral want) wm)
+                    if stale then pure False else do
+                        -- The binding travels WITH the command. The check
+                        -- above is the SYNCHRONOUS answer this call owes
+                        -- its caller (the build tool records its rejection
+                        -- from it and stays armed); the copy carried here
+                        -- is what the world thread re-checks at the actual
+                        -- commit, where it is exactly serialized against
+                        -- world.show / world.hide.
+                        Q.writeQueue (wsWorldQueue wsc) $
+                            WorldDesignateConstruct pageId
+                                (round x1) (round y1) (round x2) (round y2) tgt
+                                (fromIntegral <$> bindArg)
+                        pure True
+        _ → pure False
+    Lua.pushboolean committed
+    return 1
   where
     mkTarget "structure" (Just packBS) (Just kindBS) edge =
         Just $ CtStructure $ StructurePiece
@@ -218,9 +263,11 @@ constructGetDesignationAtFn wsc = do
 --   thread), this removes the designation and returns its final state
 --   in ONE atomic step, so a caller computing a materials refund from
 --   the returned job's 'paid' field never races a second caller over
---   the SAME entry — whether that's a rapid double right-click on one
---   designation, or a genuinely new designation quickly replacing it
---   at the same tile. See 'World.Thread.Command.Cursor.Construct.popConstructDesignation'.
+--   the SAME entry — a rapid double right-click on one designation, or
+--   a cancel racing the build AI's own completion removal. (A new
+--   designation is no longer such a racer: since #1595 admission
+--   refuses a tile that already carries a job instead of replacing it.)
+--   See 'World.Thread.Command.Cursor.Construct.popConstructDesignation'.
 constructCancelDesignationForRefundFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 constructCancelDesignationForRefundFn wsc = do
     pageIdArg ← Lua.tostring 1

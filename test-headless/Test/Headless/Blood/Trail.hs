@@ -34,7 +34,8 @@ import Unit.Sim.Types (emptyUnitThreadState)
 import Unit.Thread.Command.Lifecycle (handleUnitDestroyCommand)
 import Unit.Types
 import World.Page.Types (WorldPageId(..))
-import World.State.Types (WorldManager(..), WorldState(..), emptyWorldState)
+import World.State.Types
+    ( WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager )
 import World.Save.Types (toUnitSnapshot, fromUnitSnapshot)
 import World.Save.Serialize (loadWorld)
 import World.Load.Stage (stageSession, renderStageError)
@@ -330,7 +331,9 @@ pageTargetingSpec =
         wsB ← emptyWorldState
         -- pageA is wmWorlds' head / wmVisible's only entry — the kind of
         -- "active" page a page-blind implementation would wrongly use.
-        writeIORef (worldManagerRef env) (WorldManager [(pageA, wsA), (pageB, wsB)] [pageA])
+        writeIORef (worldManagerRef env) (emptyWorldManager
+            { wmWorlds = [(pageA, wsA), (pageB, wsB)]
+            , wmVisible = [pageA] })
         now ← readIORef (gameTimeRef env)
         spawnTrailMark (toWorldSimCapability env) pageB 5 5 0 "slash" 0.1 0 0 Nothing now
         storeA ← readIORef (wsBloodStoreRef wsA)
@@ -452,7 +455,9 @@ lifecycleSpec = describe "Bleeding-trail lifecycle: destroy and save/load (#882)
         -- queryable — marks outlive their source (requirement 6).
         env ← initEnv
         ws ← emptyWorldState
-        writeIORef (worldManagerRef env) (WorldManager [(pageA, ws)] [pageA])
+        writeIORef (worldManagerRef env) (emptyWorldManager
+            { wmWorlds = [(pageA, ws)]
+            , wmVisible = [pageA] })
         now ← readIORef (gameTimeRef env)
         spawnPoolLayer (toWorldSimCapability env) pageA 12.5 7.25 0 "slash"
             0.06 0 0 (Just uid) now
@@ -913,7 +918,9 @@ poolImmutabilitySpec =
        \compare EQUAL field-for-field afterwards, only new ids appear" $ do
         env ← initEnv
         ws  ← emptyWorldState
-        writeIORef (worldManagerRef env) (WorldManager [(pageA, ws)] [pageA])
+        writeIORef (worldManagerRef env) (emptyWorldManager
+            { wmWorlds = [(pageA, ws)]
+            , wmVisible = [pageA] })
         now ← readIORef (gameTimeRef env)
         let wsc = toWorldSimCapability env
             pt  = defaultPoolThresholds

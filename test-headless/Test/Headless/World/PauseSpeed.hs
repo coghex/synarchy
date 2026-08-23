@@ -89,7 +89,7 @@ installSession env activeScale = do
     wsB ← emptyWorldState
     writeIORef (wsTimeScaleRef wsA) activeScale
     writeIORef (wsTimeScaleRef wsB) bystanderScale
-    writeIORef (worldManagerRef env) WorldManager
+    writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds  = [(pageA, wsA), (pageB, wsB)]
         , wmVisible = [pageA] }
     writeIORef (enginePausedRef env) False
@@ -266,7 +266,7 @@ spec = describe "pause preserves the chosen world speed (#1599)" $ do
         -- epoch over the new active page, whose clock is the 1.0 every
         -- loaded page comes up at (time scale is never persisted).
         wsNew ← emptyWorldState
-        writeIORef (worldManagerRef env) WorldManager
+        writeIORef (worldManagerRef env) emptyWorldManager
             { wmWorlds = [(pageA, wsNew)], wmVisible = [pageA] }
         beginPauseEpoch (toWorldSimCapability env)
         readIORef (wsTimeScaleRef wsNew) `shouldReturn` 0

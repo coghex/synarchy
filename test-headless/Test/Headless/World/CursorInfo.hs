@@ -39,7 +39,8 @@ import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Thread.Cursor (pollCursorInfo)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.State.Types ( WorldState(..), emptyWorldState
-                         , WorldManager(..), CursorSnapshot(..) )
+                         , WorldManager(..), CursorSnapshot(..)
+                         , emptyWorldManager )
 import World.Cursor.Types (CursorState(..), emptyCursorState)
 import World.Page.Types (WorldPageId(..))
 
@@ -87,7 +88,9 @@ freshVisibleWorld ∷ EngineEnv → IO WorldState
 freshVisibleWorld env = do
     ws ← emptyWorldState
     writeIORef (wsGenParamsRef ws) (Just testParams)
-    writeIORef (worldManagerRef env) (WorldManager [(pid, ws)] [pid])
+    writeIORef (worldManagerRef env) (emptyWorldManager
+        { wmWorlds = [(pid, ws)]
+        , wmVisible = [pid] })
     _ ← drainLua env
     pure ws
 

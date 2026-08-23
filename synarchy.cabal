@@ -632,6 +632,7 @@ library
                      World.Thread.ChunkLoading
                      World.Thread.Command
                      World.Thread.Command.Basic
+                     World.Thread.Command.BoundSpawn
                      World.Thread.Command.Init
                      World.Thread.Command.Save
                      World.Thread.Command.Save.WriteWorld
@@ -1176,6 +1177,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Graphics.FontRepertoire
                    Test.Headless.Construct.Corners
                    Test.Headless.Construct.Footprint
+                   Test.Headless.Construct.PendingRefusal
                    Test.Headless.Craft.Execute
                    Test.Headless.Craft.Bills
                    Test.Headless.Power.Types
@@ -1256,6 +1258,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Tutorial.Definitions
                    Test.Headless.Building.Knowledge
                    Test.Headless.Item.NestedContents
+                   Test.Headless.Building.PageBinding
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning
                    Test.Headless.Lua.SaveModules
@@ -1268,6 +1271,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.UnitAiStall
                    Test.Headless.Lua.UnitAiLogisticsTargets
                    Test.Headless.Lua.UnitAiLoadReset
+                   Test.Headless.Lua.UnitAiReconcile
                    Test.Headless.Lua.SessionTeardown
                    Test.Headless.Lua.WorkClaimCapacity
                    Test.Headless.Capability.Building

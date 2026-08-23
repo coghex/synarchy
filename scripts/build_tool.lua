@@ -917,8 +917,26 @@ end
 -- exactly once regardless of which path reached it, so a successful
 -- confirmation follows the ordinary successful-placement path exactly
 -- once, per the issue's own requirement.
-function buildTool.commitStartingPlacement(defName, gx, gy)
-    local id = building.spawn(defName, gx, gy)
+--
+-- #1602: bindPage/bindGen are the click's page binding from
+-- world.pickTile. building.spawn re-checks them against the page it is
+-- about to spawn on and answers "page binding stale" when they no longer
+-- hold, so page selection moving between validation and this commit
+-- rejects the attempt instead of spawning on the newly selected page.
+-- (That answer is the synchronous half; the engine additionally routes a
+-- bound spawn through the world thread, which owns page selection, so
+-- nothing stale can land even if selection moves while the command is
+-- still queued.) Returns "accepted" / "rejected" / "stale".
+-- "stale" is deliberately quiet here: it records nothing and does NOT
+-- exit placement, because the two callers record their OWN branch's
+-- outcome kind (buildTool.commitPlacement for a direct click,
+-- buildTool.remoteWarning for a confirmation) and both keep the tool
+-- armed, matching every other pre-commit refusal.
+function buildTool.commitStartingPlacement(defName, gx, gy, bindPage, bindGen)
+    local id, spawnErr = building.spawn(defName, gx, gy, bindPage, bindGen)
+    if not id and spawnErr == "page binding stale" then
+        return "stale"
+    end
     if id then
         engine.logInfo("BuildTool: placed " .. defName ..
             " (id=" .. tostring(id) ..
@@ -940,6 +958,7 @@ function buildTool.commitStartingPlacement(defName, gx, gy)
     if buildTool.hud and buildTool.hud.selectDefaultTool then
         buildTool.hud.selectDefaultTool()
     end
+    return id and "accepted" or "rejected"
 end
 
 -----------------------------------------------------------
@@ -966,7 +985,15 @@ function buildTool.handleMouseDown(button, x, y)
         -- so a click that arrives after a fast cursor move off-world would
         -- otherwise place on a stale on-world tile (issue #66). pickTile
         -- runs the hit-test now against live camera/window/tile state.
-        local gx, gy = world.pickTile(x, y)
+        -- #1602: the pick also reports WHICH page it hit-tested and the
+        -- page-selection generation it resolved under, both from the one
+        -- world-manager read the hit-test itself used. That pair is the
+        -- placement binding: it travels through validation and commit so
+        -- a page change mid-click rejects the attempt rather than
+        -- retargeting it. Never re-derive it from world.getActiveWorldId
+        -- — that is a second, independent resolution, and it cannot see
+        -- an A→B→A switch back to the same page id at all.
+        local gx, gy, _pickZ, bindPage, bindGen = world.pickTile(x, y)
         if not gx or not gy then
             buildTool.state.lastHoverTile = nil
             -- F4 (#646): the routing chain (init_mouse.lua) already
@@ -984,7 +1011,20 @@ function buildTool.handleMouseDown(button, x, y)
         buildTool.state.lastHoverTile = { igx, igy }
 
         if target.kind == "building" then
-            local valid, invalidReason = building.canPlaceAt(target.def, igx, igy)
+            local valid, invalidReason, stale =
+                building.canPlaceAt(target.def, igx, igy, bindPage, bindGen)
+            if stale then
+                -- Page selection moved between the pick and this
+                -- validation. Nothing is committed on either page, and
+                -- placement stays armed exactly as it does for an
+                -- ordinary invalid-tile refusal.
+                debug.recordOutcome{
+                    kind = "buildTool.commitPlacement", outcome = "rejected",
+                    where = { x = igx, y = igy },
+                    reason = "page binding changed",
+                }
+                return true
+            end
             if valid then
                 if power.isPlaceable(target.def) then
                     local id, err = buildTool.commitPlacement(target.def, igx, igy)
@@ -1016,26 +1056,54 @@ function buildTool.handleMouseDown(button, x, y)
                     local remote, distance, thresholdTiles =
                         building.remoteCheck(target.def, igx, igy)
                     if remote then
+                        -- #1602: the modal carries the ORIGINAL click
+                        -- binding into its pending state; it never
+                        -- samples an active page of its own when it
+                        -- opens.
                         require("scripts.build_tool_remote_warning").open(
-                            target.def, igx, igy, distance, thresholdTiles)
+                            target.def, igx, igy, distance, thresholdTiles,
+                            bindPage, bindGen)
                     else
-                        buildTool.commitStartingPlacement(
-                            target.def, igx, igy)
+                        local status = buildTool.commitStartingPlacement(
+                            target.def, igx, igy, bindPage, bindGen)
+                        if status == "stale" then
+                            debug.recordOutcome{
+                                kind = "buildTool.commitPlacement",
+                                outcome = "rejected",
+                                where = { x = igx, y = igy },
+                                reason = "page binding changed",
+                            }
+                        end
                     end
                 else
                     -- Everything else designates a job for the build AI
                     -- (#96) rather than placing instantly. Stays armed so
                     -- the player can place more without reopening the
                     -- picker (matches the old construct_tool).
-                    local wid = buildTool.hud and buildTool.hud.worldId
+                    -- #1602: designate onto the page the CLICK hit-tested
+                    -- (with its binding re-checked engine-side as the
+                    -- command is enqueued), not onto whatever the HUD's
+                    -- cached worldId happens to name now. The hud fallback
+                    -- only covers a caller with no binding at all.
+                    local wid = bindPage
+                        or (buildTool.hud and buildTool.hud.worldId)
                     if wid then
-                        construction.designate(wid, igx, igy, igx, igy,
-                            "building", target.def)
-                        debug.recordOutcome{
-                            kind = "buildTool.commitPlacement",
-                            outcome = "accepted", where = { x = igx, y = igy },
-                            reason = "routed to construction.designate",
-                        }
+                        local designated = construction.designate(
+                            wid, igx, igy, igx, igy,
+                            "building", target.def, nil, nil, bindGen)
+                        if designated then
+                            debug.recordOutcome{
+                                kind = "buildTool.commitPlacement",
+                                outcome = "accepted", where = { x = igx, y = igy },
+                                reason = "routed to construction.designate",
+                            }
+                        else
+                            debug.recordOutcome{
+                                kind = "buildTool.commitPlacement",
+                                outcome = "rejected", where = { x = igx, y = igy },
+                                reason = "page binding changed",
+                            }
+                        end
                     else
                         debug.recordOutcome{
                             kind = "buildTool.commitPlacement",
@@ -1131,9 +1199,11 @@ function buildTool.handleMouseDown(button, x, y)
                     -- cancelDesignation pair (and the Lua-side debounce
                     -- table it needed) — the ATOMIC delete is what
                     -- actually serializes competing cancellations (a
-                    -- rapid double right-click, or a new designation
-                    -- quickly replacing the old one at the same tile),
-                    -- which no Lua-side timing heuristic could replicate.
+                    -- rapid double right-click, or a cancel racing the
+                    -- build AI's own completion removal), which no
+                    -- Lua-side timing heuristic could replicate. A new
+                    -- designation cannot race here at all since #1595:
+                    -- admission refuses an already-designated tile.
                     local removed = construction.cancelDesignationForRefund(wid, gx, gy)
                     -- No-silent-loss policy: a structure designation
                     -- whose materials were already paid must not just

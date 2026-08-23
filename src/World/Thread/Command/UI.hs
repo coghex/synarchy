@@ -26,13 +26,20 @@ handleWorldShowCommand wsc logger pageId = do
     -- atomicModifyIORef' returns whether the world was found so the
     -- existence check and the visible-list mutation share one consistent
     -- snapshot of the manager.
-    found ← atomicModifyIORef' (wsWorldManagerRef wsc) $ \mgr →
+    found ← atomicModifyIORef' (wsWorldManagerRef wsc) $ \mgr' →
+      let mgr = completeSelectionChange mgr' in
         case lookup pageId (wmWorlds mgr) of
             Nothing → (mgr, False)
             Just _
                 | pageId `elem` wmVisible mgr → (mgr, True)
                 | otherwise →
-                    (mgr { wmVisible = pageId : wmVisible mgr }, True)
+                    -- #1602: the selection generation moves in the SAME
+                    -- atomic update as the list it describes, and only on
+                    -- the branch that actually changes it — a re-show of an
+                    -- already-visible page must not invalidate a live
+                    -- placement binding.
+                    (bumpSelectionGen
+                        (mgr { wmVisible = pageId : wmVisible mgr }), True)
 
     if not found
     then logWarn logger CatWorld $
@@ -62,8 +69,17 @@ handleWorldHideCommand wsc logger pageId = do
     -- Only deactivate sim for a world that was actually visible. Hiding an
     -- invalid / already-hidden page is a no-op for sim state, and hiding one
     -- world never tears down the others' sim (per-world deactivate, #55).
-    wasVisible ← atomicModifyIORef' (wsWorldManagerRef wsc) $ \mgr →
-        ( mgr { wmVisible = filter (≢ pageId) (wmVisible mgr) }
+    wasVisible ← atomicModifyIORef' (wsWorldManagerRef wsc) $ \mgr' →
+      let mgr = completeSelectionChange mgr' in
+        -- #1602: as in show above — the GENERATION moves only when the
+        -- visible HEAD changes, which is the only page a placement
+        -- binding can name. Hiding an already-hidden page, or a visible
+        -- one that is not the head, is a true no-op for live bindings.
+        -- The PENDING count is discharged either way: it tracks
+        -- requests, not effects.
+        ( (if selectionHead (wmVisible mgr) ≡ Just pageId
+             then bumpSelectionGen else id)
+            (mgr { wmVisible = filter (≢ pageId) (wmVisible mgr) })
         , pageId `elem` wmVisible mgr )
 
     -- Clear this page's cursor selection on hide: the ground-item

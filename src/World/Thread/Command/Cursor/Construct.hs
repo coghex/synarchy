@@ -97,16 +97,35 @@ structureOccupiedAt worldSize tileData gx gy slot =
 --   whole rectangle (paint a floor / wall run), skipping any tile whose
 --   requested slot is already occupied by a placed piece (#805 — a
 --   structure designation must never spawn a job that would overwrite an
---   existing floor/ceiling/wall edge/post corner/wire, though compatible
---   slots on the same tile, e.g. a floor and a wall, still coexist);
+--   existing floor/ceiling/wall edge/post corner/wire; compatible slots
+--   on the same tile, e.g. a floor and a wall, coexist once PLACED, but
+--   only one designation at a time may be OUTSTANDING on a tile, because
+--   'ConstructDesignations' is keyed by tile coordinate alone — #1595);
 --   BUILDING targets mark only the anchor tile (one footprint, not a
---   grid of buildings) and are unaffected by the occupancy check.
+--   grid of buildings) and are unaffected by the placed-slot check,
+--   though not by the outstanding-designation one.
 --   Unloaded-chunk tiles are skipped. Clears the anchor afterwards.
 handleWorldDesignateConstructCommand ∷ EngineEnv → LoggerState → WorldPageId
-    → Int → Int → Int → Int → ConstructTarget → IO ()
-handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt = do
+    → Int → Int → Int → Int → ConstructTarget → Maybe Word64 → IO ()
+handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt
+                                     mBindGen = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
-    case lookup pageId (wmWorlds mgr) of
+    -- #1602: the page BINDING is re-checked here, not merely where the
+    -- command was enqueued. This is the exact commit point for a
+    -- designation, and it is EXACTLY serialized against page selection:
+    -- world.show / world.hide are world-thread commands drained from the
+    -- same queue, so a selection change enqueued before this designation
+    -- has already been applied to the snapshot above, and one enqueued
+    -- after is genuinely after the commit. A stale binding writes
+    -- nothing at all — not on the captured page, not on the newly
+    -- selected one. An unbound designation (every AI caller, and the
+    -- two-click structure rectangle) is unaffected.
+    let bindingMoved = maybe False (≢ wmSelectionGen mgr) mBindGen
+    case (if bindingMoved then Nothing else lookup pageId (wmWorlds mgr)) of
+        Nothing | bindingMoved →
+            logDebug logger CatWorld $
+                "Construct designation dropped: page binding stale on "
+                <> unWorldPageId pageId
         Nothing → recordMissingWorldOutcome env "construction.designate"
             pageId gx1 gy1
         Just worldState → do
@@ -126,7 +145,7 @@ handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt = do
                 requested = case tgt of
                     CtBuilding _  → 1
                     CtStructure _ → (xHi - xLo + 1) * (yHi - yLo + 1)
-                entries = case surfaceZAt gx1 gy1 of
+                candidates = case surfaceZAt gx1 gy1 of
                     Nothing → []   -- anchor chunk unloaded: nothing
                     Just anchorZ → case tgt of
                         -- A building is a single footprint: only the
@@ -147,16 +166,43 @@ handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt = do
                                 (not . structureOccupiedAt worldSize tileData gx gy)
                                 (structurePieceSlot piece)
                             ]
-            atomicModifyIORef' (wsConstructDesignationsRef worldState) $ \m →
-                (foldl' (\acc (k, v) → HM.insert k v acc) m entries, ())
+                -- #1595: the map is keyed by tile coordinate alone, so a
+                -- plain 'HM.insert' would REPLACE whatever job the tile
+                -- already carries — silently discarding a claimed and
+                -- possibly already-paid designation without the refund and
+                -- 'constructAi.abandonClaim' the cancel path
+                -- (scripts/build_tool.lua) performs for exactly that
+                -- state. Admission therefore treats ANY existing entry as
+                -- occupying the tile, whatever its status, progress,
+                -- payment marker or target category, and both target
+                -- categories go through it.
+                addOne (m, n) (k, v)
+                    | HM.member k m = (m, n)
+                    | otherwise     = (HM.insert k v m, n + 1)
+            -- The test-and-insert runs INSIDE the atomicModifyIORef' that
+            -- publishes it: 'popConstructDesignation' and the synchronous
+            -- Lua verbs mutate this same ref off the world thread, so a
+            -- read-then-insert pair would be exactly the race the atomic
+            -- delete exists to close.
+            applied ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $
+                \m → foldl' addOne (m, 0 ∷ Int) candidates
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                 (cs { constructAnchor = Nothing }, ())
             logDebug logger CatWorld $
-                "Construct designation: +" <> tshow (length entries)
+                "Construct designation: +" <> tshow applied
                 <> " tiles (" <> constructTargetCategory tgt <> ")"
+            -- Nothing landed and something was excluded post-filter ⇒ every
+            -- otherwise-eligible tile was blocked by an existing job, so
+            -- say that rather than blaming the placed-slot check (which
+            -- for a still-empty tile would be false).
+            let blocked = length candidates - applied
             recordDesignationOutcome env "construction.designate"
-                "anchor tile ineligible, unloaded, or requested slot already occupied"
-                xLo yLo requested (length entries)
+                (if blocked > 0
+                    then "tile already carries an outstanding construction \
+                         \designation"
+                    else "anchor tile ineligible, unloaded, or requested \
+                         \slot already occupied")
+                xLo yLo requested applied
 
 handleWorldCancelConstructCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
@@ -173,11 +219,15 @@ handleWorldCancelConstructCommand env _logger pageId gx gy = do
 --   #799) gets the SAME atomic pop-and-return the
 --   queued command does — the atomicModifyIORef' delete is what
 --   actually serializes competing cancellations (a rapid double
---   right-click, or a new designation quickly replacing the old one at
---   the same tile): whichever caller's delete runs first sees Just the
+--   right-click, or a cancel racing the build AI's own CsComplete
+--   removal): whichever caller's delete runs first sees Just the
 --   removed designation; every other caller (this tick or later) sees
 --   Nothing, since there is nothing left to remove. No Lua-side timing
---   heuristic can replicate that guarantee.
+--   heuristic can replicate that guarantee. Since #1595 a NEW
+--   designation is not one of those racers — admission refuses a tile
+--   that already carries a job rather than replacing it — but the
+--   atomicity is what lets the refusal itself be a safe
+--   test-and-insert against these same off-thread callers.
 --
 --   #1175: the tile is canonicalised HERE, once, so both callers — the
 --   queued cancel command and the synchronous refund verb — accept any

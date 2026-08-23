@@ -796,7 +796,8 @@ what the declared field list already says, so there is nothing to
 guess). This wrap/unwrap happens ONLY at the save-component boundary in
 `unit_ai_save_refs.lua`/`building_spawn.lua`: `aiState`'s LIVE
 in-memory shape never changes, so no other module (`unit_ai_combat.lua`,
-`unit_ai_deliver.lua`, `scrubStaleRefs`, ...) needed any change.
+`unit_ai_deliver.lua`, the post-load `scrubStaleRefs` — since #1589 in
+`scripts/unit_ai_reconcile.lua` — ...) needed any change.
 
 **Deliberately NOT rewritten onto this vocabulary**: the nine existing
 `missingXReferences` content-definition checks

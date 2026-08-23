@@ -48,14 +48,24 @@ import sys
 import tempfile
 import time
 
-from probelib import boot, poll_until, quit_engine, send, send_json
-from location_content_probe import load_defs, gen_world, placed_ready, wait_floor
+from probelib import (boot, capture_request_id, poll_until, quit_engine, send,
+                      send_json, wait_load_published)
+from location_content_probe import (load_defs, gen_world, placed_ready,
+                                    wait_floor, make_isolated_root,
+                                    remove_isolated_root, save_and_wait)
 from offscreen_probe import screenshot, png_stats, png_differs
 
 LOG_PREP = "/tmp/portal_ghost_prep_engine.log"
 LOG_GPU = "/tmp/portal_ghost_gpu_engine.log"
-SAVE_NAME = "portal_ghost_probe"
+#: Base of the per-invocation save slot. The run's own random token is
+#: appended so two runs cannot collide and no slot a normal `cabal run`
+#: could reach is ever created (#1620 requirement 5).
+SAVE_BASE = "portal_ghost_probe"
 PORTAL = "acolyte_portal"
+#: Prefix of this invocation's throwaway resource root. The random
+#: suffix mkdtemp appends to it is also the per-invocation save-slot
+#: token, so the root and the slots it holds share one identity.
+ROOT_PREFIX = "portal_ghost_probe_root_"
 
 failures: list[str] = []
 
@@ -71,8 +81,16 @@ def check(name: str, ok: bool, detail: str = "") -> bool:
 # --------------------------------------------------------------------------
 # Phase 1: headless prep — a real ruin_small, saved to disk.
 # --------------------------------------------------------------------------
-def prepare_save(seed: int, size: int, port: int) -> dict:
-    proc = boot(port, log=LOG_PREP)
+def prepare_save(seed: int, size: int, port: int, root: str,
+                 slot: str) -> dict:
+    """Build the fixture the GPU phase reads, in THIS invocation's own
+    resource root, and return only once the save reached its OWN
+    request's terminal successful status. The GPU process below is a
+    DIFFERENT process reading this slot; before #1620 a one-second sleep
+    stood in for that, so a save still writing (or refused outright) left
+    the reader loading whatever generation of a fixed slot happened to be
+    on disk."""
+    proc = boot(port, log=LOG_PREP, args=["--resource-root", root])
     try:
         load_defs(port)
         gen_world(port, "pw", seed, size)
@@ -85,8 +103,11 @@ def prepare_save(seed: int, size: int, port: int) -> dict:
         send(port, f"return world.loadChunksInRegion({cx-1},{cy-1},{cx+1},{cy+1})")
         send(port, "return world.waitForChunks(60)", timeout=65)
         wait_floor(port, ruin["gx"], ruin["gy"])
-        send(port, f"engine.saveWorld('pw', '{SAVE_NAME}'); return 'saved'")
-        time.sleep(1.0)
+        save_failures: list[str] = []
+        if not save_and_wait(port, "pw", slot, save_failures, log=LOG_PREP):
+            check("phase 1 fixture save reached its own terminal success",
+                  False, "; ".join(save_failures))
+            return {}
         return ruin
     finally:
         quit_engine(port, proc)
@@ -184,28 +205,79 @@ def main() -> int:
     ap.add_argument("--win-size", default="1024x576")
     args = ap.parse_args()
 
+    # Screenshots are kept for inspection (they are not save artifacts);
+    # the resource root holding this run's save IS one, so it lives in
+    # its own tree and is removed unconditionally below (#1620
+    # requirement 6). BOTH engines of this invocation — the headless prep
+    # and the offscreen reader — get that same root.
+    shots = tempfile.mkdtemp(prefix="portal_ghost_probe_")
+    base = tempfile.mkdtemp(prefix=ROOT_PREFIX)
+    # The WHOLE random suffix, not the text after the last underscore:
+    # mkdtemp's alphabet includes '_', so splitting on it can throw most
+    # of the entropy away (and can leave nothing at all).
+    token = os.path.basename(base)[len(ROOT_PREFIX):]
+    try:
+        rc = run(args, make_isolated_root(base), f"{SAVE_BASE}_{token}", shots)
+    finally:
+        # Reported, never swallowed, and reported even when `run` is
+        # leaving by an exception (boot() exits the process on a dead
+        # engine) — a root that survived is exactly the artifact #1620
+        # requirement 6 forbids.
+        leftover = remove_isolated_root(base)
+        if leftover:
+            print(f"FAIL: {leftover}", file=sys.stderr)
+    return 1 if leftover else rc
+
+
+def run(args, root: str, slot: str, shots: str) -> int:
     win_w, win_h = (int(v) for v in args.win_size.lower().split("x"))
     cx0, cy0 = win_w // 2, win_h // 2
-    shots = tempfile.mkdtemp(prefix="portal_ghost_probe_")
 
     print(f"== phase 1: headless prep (seed {args.seed}, size {args.size}) ==")
-    ruin = prepare_save(args.seed, args.size, args.port)
+    ruin = prepare_save(args.seed, args.size, args.port, root, slot)
     if not ruin:
+        if failures:
+            # The save was refused or never completed; prepare_save already
+            # recorded it, and the GPU reader deliberately never boots.
+            return report(shots)
         print("FAIL (setup): no ruin_small with resolvable bounds placed",
               file=sys.stderr)
         return 1
     gx, gy = ruin["gx"], ruin["gy"]
     bounds = ruin["bounds"]
-    print(f"  ruin at ({gx},{gy}), bounds {bounds}, saved as '{SAVE_NAME}'")
+    print(f"  ruin at ({gx},{gy}), bounds {bounds}, saved as '{slot}'")
 
     print(f"== phase 2: offscreen GPU visual check (port {args.port}) ==")
     proc = boot(args.port, mode=("--offscreen",),
-                args=["--size", args.win_size], log=LOG_GPU,
-                label="offscreen engine")
+                args=["--size", args.win_size, "--resource-root", root],
+                log=LOG_GPU, label="offscreen engine")
     try:
         load_defs(args.port)
-        send(args.port, f"require('scripts.main_menu')"
-                        f".loadAndShowSave('{SAVE_NAME}'); return 'ok'")
+        # The PRODUCTION load path is kept exactly as the "Load Game"
+        # menu button uses it. It calls engine.loadSave internally and
+        # returns nothing, so acceptance is read back off
+        # mainMenu.lastError, and completion is tied to THAT load's own
+        # request id — the loading screen's own poll correlates with no
+        # particular transaction (#1620 requirement 4).
+        err = send(args.port,
+                   "local mm = require('scripts.main_menu'); "
+                   f"mm.loadAndShowSave('{slot}'); "
+                   "return mm.lastError or 'accepted'").strip().strip('"')
+        if not check("main_menu.loadAndShowSave accepted the load",
+                     err == "accepted", err):
+            quit_engine(args.port, proc)
+            return report(shots)
+        load_id = capture_request_id(args.port, "return engine.getLoadStatus()")
+        if not check("engine.getLoadStatus() reports this load's request id",
+                     load_id is not None):
+            quit_engine(args.port, proc)
+            return report(shots)
+        published, load_status = wait_load_published(args.port, 120.0,
+                                                     request_id=load_id)
+        if not check(f"load request {load_id} reached LoadPublished",
+                     published, f"{load_status}"):
+            quit_engine(args.port, proc)
+            return report(shots)
         reached = poll_until(90.0, lambda: in_world_view(args.port))
         if not check("reached world_view after loading the save", bool(reached)):
             quit_engine(args.port, proc)

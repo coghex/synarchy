@@ -239,6 +239,14 @@ COMMIT_PLACEMENT_REQUIRED = [
 HANDLE_MOUSE_DOWN_REQUIRED = [
     _ROC + r'reason\s*=[^\n]*"off-world click during placement"',
     _ROC + r'reason\s*=[^\n]*"invalid placement tile"',
+]
+# #1602 moved the portal's spawn — and therefore its accepted/rejected
+# hooks — out of handleMouseDown's own scope into
+# buildTool.commitStartingPlacement, which #779 had already extracted;
+# these two patterns had been reading against handleMouseDown, where
+# neither has existed since #779, so the verb read `gap` on master.
+# They are re-anchored to the function that really owns them.
+COMMIT_STARTING_REQUIRED = [
     _ROC + r'reason\s*=[^\n]*"building\.spawn failed"',
 ]
 
@@ -289,7 +297,12 @@ _PAO = r"pushActionOutcome(?:(?!\})[\s\S])*?"
 #   EXCEPT a run starting with the literal "else", so the search is
 #   structurally confined to the `if id then` branch itself, regardless
 #   of how much (or how little) sits in between.
-_PORTAL_ACCEPTED_ANCHOR = r"building\.spawn\(target\.def, igx, igy\)"
+#   #1602: anchored to commitStartingPlacement's REAL call site — the
+#   binding-carrying five-argument spawn — not the three-argument
+#   `building.spawn(target.def, igx, igy)` shape that has not existed
+#   since #779 moved the call out of handleMouseDown.
+_PORTAL_ACCEPTED_ANCHOR = \
+    r"building\.spawn\(defName, gx, gy, bindPage, bindGen\)"
 
 
 def _portal_accepted_body(text: str) -> str | None:
@@ -344,16 +357,29 @@ def _build_tool_check(text: str) -> bool:
         text, r"^function buildTool\.commitPlacement", LUA_FUNCTION_BOUNDARY)
     handle_scope = _function_scope(
         text, r"^function buildTool\.handleMouseDown", LUA_FUNCTION_BOUNDARY)
-    if commit_scope is None or handle_scope is None:
+    starting_scope = _function_scope(
+        text, r"^function buildTool\.commitStartingPlacement",
+        LUA_FUNCTION_BOUNDARY)
+    if commit_scope is None or handle_scope is None or starting_scope is None:
         return False
     return (_all_present(commit_scope, COMMIT_PLACEMENT_REQUIRED)
             and _all_present(handle_scope, HANDLE_MOUSE_DOWN_REQUIRED)
-            and _portal_accepted_present(handle_scope)
-            and _portal_accepted_omits_reason(handle_scope)
+            and _all_present(starting_scope, COMMIT_STARTING_REQUIRED)
+            and _portal_accepted_present(starting_scope)
+            and _portal_accepted_omits_reason(starting_scope)
             and _count_at_least(
                 handle_scope, _ROC + r'reason\s*=[^\n]*"routed to construction\.designate"', 2)
             and _count_at_least(
-                handle_scope, _ROC + r'reason\s*=[^\n]*"no active world id"', 2))
+                handle_scope, _ROC + r'reason\s*=[^\n]*"no active world id"', 2)
+            # #1602's page-binding rejection: three distinct exits in
+            # handleMouseDown (a pick-to-validation switch caught by
+            # canPlaceAt, a validation-to-commit switch caught by the
+            # starting-building spawn, and the same for the
+            # construction.designate branch). Counting all three keeps
+            # any one of them from being deleted while the other two
+            # still satisfy a bare presence check.
+            and _count_at_least(
+                handle_scope, _ROC + r'reason\s*=[^\n]*"page binding changed"', 3))
 
 
 # Each entry: (tier, verb, check) where check() -> bool. Built below so
@@ -732,18 +758,19 @@ def _self_test() -> list[str]:
         lines.append("end")
         return "\n".join(lines)
 
-    def handle_mouse_down_fn(include: set[str], designate_sites: int,
-                             no_world_sites: int,
-                             portal_accepted_reason: str | None = None,
-                             portal_accepted_reason_first: bool = False,
-                             portal_accepted_call: str = "debug.recordOutcome") -> str:
-        lines = ["function buildTool.handleMouseDown(button, x, y)"]
-        if "offworld" in include:
-            lines.append('    debug.recordOutcome{outcome = "rejected", '
-                          'reason = "off-world click during placement"}')
-        if "invalid" in include:
-            lines.append('    debug.recordOutcome{outcome = "rejected", '
-                          'reason = "invalid placement tile"}')
+    # #1602: the portal's spawn hooks live in commitStartingPlacement,
+    # a separate top-level function, so they get their own fixture — the
+    # same realistic if/else/end shape the anchor's negative-lookahead
+    # bound needs to mean anything.
+    def commit_starting_fn(include: set[str],
+                           portal_accepted_reason: str | None = None,
+                           portal_accepted_reason_first: bool = False,
+                           portal_accepted_call: str = "debug.recordOutcome",
+                           spawn_call: str =
+                               "building.spawn(defName, gx, gy, bindPage, bindGen)"
+                           ) -> str:
+        lines = ["function buildTool.commitStartingPlacement(defName, gx, gy, "
+                 "bindPage, bindGen)"]
         if "spawn" in include or "portal_accepted" in include:
             # Real if/else/end shape (not a flat sequence) — the
             # portal-accepted anchor pattern is bounded by a negative
@@ -752,7 +779,7 @@ def _self_test() -> list[str]:
             # anything (review round 8's window-based predecessor
             # bridged past "building.spawn failed" into the NEXT
             # unrelated accepted call in a flatter fixture).
-            lines.append('    local id = building.spawn(target.def, igx, igy)')
+            lines.append(f'    local id, spawnErr = {spawn_call}')
             lines.append('    if id then')
             if "portal_accepted" in include:
                 if portal_accepted_reason is None:
@@ -775,6 +802,22 @@ def _self_test() -> list[str]:
                 lines.append('        debug.recordOutcome{outcome = "rejected", '
                               'reason = "building.spawn failed"}')
             lines.append('    end')
+        lines.append("end")
+        return "\n".join(lines)
+
+    def handle_mouse_down_fn(include: set[str], designate_sites: int,
+                             no_world_sites: int,
+                             binding_sites: int = 3) -> str:
+        lines = ["function buildTool.handleMouseDown(button, x, y)"]
+        if "offworld" in include:
+            lines.append('    debug.recordOutcome{outcome = "rejected", '
+                          'reason = "off-world click during placement"}')
+        if "invalid" in include:
+            lines.append('    debug.recordOutcome{outcome = "rejected", '
+                          'reason = "invalid placement tile"}')
+        for _ in range(binding_sites):
+            lines.append('    debug.recordOutcome{outcome = "rejected", '
+                          'reason = "page binding changed"}')
         for _ in range(designate_sites):
             lines.append('    debug.recordOutcome{outcome = "accepted", '
                           'reason = "routed to construction.designate"}')
@@ -785,44 +828,81 @@ def _self_test() -> list[str]:
         return "\n".join(lines)
 
     all_commit_parts = {"power", "carrier", "node", "accepted"}
-    all_handle_parts = {"offworld", "invalid", "spawn", "portal_accepted"}
-    full_fixture = (commit_placement_fn(all_commit_parts) + "\n"
-                    + handle_mouse_down_fn(all_handle_parts, 2, 2))
+    all_handle_parts = {"offworld", "invalid"}
+    all_starting_parts = {"spawn", "portal_accepted"}
+
+    def build_tool_fixture(commit_parts=None, handle_parts=None,
+                           starting_parts=None, designate_sites: int = 2,
+                           no_world_sites: int = 2, binding_sites: int = 3,
+                           **starting_kwargs) -> str:
+        return (commit_placement_fn(
+                    all_commit_parts if commit_parts is None else commit_parts)
+                + "\n" + commit_starting_fn(
+                    all_starting_parts if starting_parts is None
+                    else starting_parts, **starting_kwargs)
+                + "\n" + handle_mouse_down_fn(
+                    all_handle_parts if handle_parts is None else handle_parts,
+                    designate_sites, no_world_sites, binding_sites))
+
+    full_fixture = build_tool_fixture()
     expect("buildTool.commitPlacement: all hooks present reads DONE",
            _build_tool_check(full_fixture), True)
-    missing_portal_accepted = (
-        commit_placement_fn(all_commit_parts) + "\n"
-        + handle_mouse_down_fn(all_handle_parts - {"portal_accepted"}, 2, 2))
+    missing_portal_accepted = build_tool_fixture(
+        starting_parts=all_starting_parts - {"portal_accepted"})
     expect("buildTool.commitPlacement: missing the portal-accepted hook "
            "reads gap (review round 8)",
            _build_tool_check(missing_portal_accepted), False)
-    portal_accepted_with_reason = (
-        commit_placement_fn(all_commit_parts) + "\n"
-        + handle_mouse_down_fn(all_handle_parts, 2, 2,
-                               portal_accepted_reason="building.spawn failed"))
+    portal_accepted_with_reason = build_tool_fixture(
+        portal_accepted_reason="building.spawn failed")
     expect("buildTool.commitPlacement: a reason reintroduced on the "
            "portal-accepted record reads gap (review round 9 — the "
            "exact `ok and nil or ...` bug class)",
            _build_tool_check(portal_accepted_with_reason), False)
-    portal_accepted_reason_before = (
-        commit_placement_fn(all_commit_parts) + "\n"
-        + handle_mouse_down_fn(all_handle_parts, 2, 2,
-                               portal_accepted_reason="building.spawn failed",
-                               portal_accepted_reason_first=True))
+    portal_accepted_reason_before = build_tool_fixture(
+        portal_accepted_reason="building.spawn failed",
+        portal_accepted_reason_first=True)
     expect("buildTool.commitPlacement: a reason reintroduced BEFORE "
            "outcome=\"accepted\" in the same record reads gap (review "
            "round 10 — field order previously evaded a check that only "
            "looked forward from the outcome match)",
            _build_tool_check(portal_accepted_reason_before), False)
-    portal_accepted_call_renamed = (
-        commit_placement_fn(all_commit_parts) + "\n"
-        + handle_mouse_down_fn(all_handle_parts, 2, 2,
-                                portal_accepted_call="someOtherTableCtor"))
+    portal_accepted_call_renamed = build_tool_fixture(
+        portal_accepted_call="someOtherTableCtor")
     expect("buildTool.commitPlacement: ONLY the portal-success call "
            "renamed away (fields kept) reads gap (review round 11 — "
            "outcome=\"accepted\" alone, with no debug.recordOutcome "
            "anchor, previously still read DONE)",
            _build_tool_check(portal_accepted_call_renamed), False)
+    # #1602: the anchor must name the binding-carrying spawn. Reverting
+    # commitStartingPlacement to a spawn that drops the page binding
+    # leaves every outcome hook intact yet removes the very call the
+    # portal-accepted hook is anchored to — the binding regression this
+    # re-anchoring exists to catch.
+    spawn_binding_dropped = build_tool_fixture(
+        spawn_call="building.spawn(defName, gx, gy)")
+    expect("buildTool.commitPlacement: commitStartingPlacement spawning "
+           "WITHOUT the page binding reads gap (#1602)",
+           _build_tool_check(spawn_binding_dropped), False)
+    # #1602: each of the three page-binding rejection exits must be
+    # individually load-bearing — two surviving siblings must not cover
+    # for a deleted third.
+    for present in (0, 1, 2):
+        expect(f"buildTool.commitPlacement: only {present} of three "
+               "'page binding changed' hooks reads gap (#1602)",
+               _build_tool_check(build_tool_fixture(binding_sites=present)),
+               False)
+    # The portal hooks must be found in commitStartingPlacement's OWN
+    # scope, not wherever they happen to sit: dropping that function
+    # entirely (its hooks pasted into handleMouseDown, as they were
+    # before #779) reads as a gap rather than silently passing.
+    starting_absent = (commit_placement_fn(all_commit_parts) + "\n"
+                       + commit_starting_fn(all_starting_parts).replace(
+                           "function buildTool.commitStartingPlacement",
+                           "function buildTool.handleMouseDown")
+                       + "\n" + handle_mouse_down_fn(all_handle_parts, 2, 2))
+    expect("buildTool.commitPlacement: portal hooks outside "
+           "commitStartingPlacement's own scope reads gap (#1602)",
+           _build_tool_check(starting_absent), False)
 
     # plant.designate: both branches share the same aoKind literal, so
     # anchor each aoOutcome to its own pushActionOutcome call (review
@@ -906,25 +986,23 @@ def _self_test() -> list[str]:
            _build_tool_check(call_renamed_fixture), False)
 
     for missing in all_commit_parts:
-        variant = (commit_placement_fn(all_commit_parts - {missing}) + "\n"
-                   + handle_mouse_down_fn(all_handle_parts, 2, 2))
         expect(f"buildTool.commitPlacement: missing the {missing!r} hook reads gap",
-               _build_tool_check(variant), False)
+               _build_tool_check(build_tool_fixture(
+                   commit_parts=all_commit_parts - {missing})), False)
     for missing in all_handle_parts:
-        variant = (commit_placement_fn(all_commit_parts) + "\n"
-                   + handle_mouse_down_fn(all_handle_parts - {missing}, 2, 2))
         expect(f"buildTool.commitPlacement: missing the {missing!r} hook reads gap",
-               _build_tool_check(variant), False)
-    only_one_designate = (commit_placement_fn(all_commit_parts) + "\n"
-                           + handle_mouse_down_fn(all_handle_parts, 1, 2))
+               _build_tool_check(build_tool_fixture(
+                   handle_parts=all_handle_parts - {missing})), False)
+    for missing in all_starting_parts:
+        expect(f"buildTool.commitPlacement: missing the {missing!r} hook reads gap",
+               _build_tool_check(build_tool_fixture(
+                   starting_parts=all_starting_parts - {missing})), False)
     expect("buildTool.commitPlacement: only ONE construction.designate "
            "hook (of two call sites) reads gap",
-           _build_tool_check(only_one_designate), False)
-    only_one_no_world = (commit_placement_fn(all_commit_parts) + "\n"
-                          + handle_mouse_down_fn(all_handle_parts, 2, 1))
+           _build_tool_check(build_tool_fixture(designate_sites=1)), False)
     expect("buildTool.commitPlacement: only ONE 'no active world id' hook "
            "(of two call sites) reads gap",
-           _build_tool_check(only_one_no_world), False)
+           _build_tool_check(build_tool_fixture(no_world_sites=1)), False)
 
     # #730: the non-click Layer A families (keyboard, char/type
     # aggregation, scroll/z-slice, drag) — same removal-mutation shape
