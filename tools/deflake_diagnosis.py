@@ -103,11 +103,21 @@ run count, RTS capabilities, retry policy — while `--result`,
 differ.
 
 A command is first checked against the REAL harness interface. Every
-option must be one `probe_flake.main` actually accepts and the argv must
-be an interpreter and a path ending in `probe_flake.py`, because an
-option the CLI does not have — `--timeout`, say — would compare equal
-across two batches while describing a measurement neither could have
-run.
+option must be one `probe_flake.main` actually accepts, and the argv must
+be a PYTHON INTERPRETER running a path ending in `probe_flake.py`,
+because an option the CLI does not have — `--timeout`, say — would
+compare equal across two batches while describing a measurement neither
+could have run, and `/bin/echo .../probe_flake.py --probe role --runs 10`
+has the right shape and measures nothing.
+
+Each command is then bound to ITS OWN result document: the probe, run
+count and capability count it passed must be the ones that document
+reports. Comparing the two invocations to each other is not enough —
+two commands that agreed on another probe at twenty runs would compare
+equal while their documents both claimed the handoff's contract. What
+the agreed value has to BE stays where it already lives, so one fact is
+not scored twice: the probe against the handoff, and the run and
+capability counts in `controlled_problems`, which routes them.
 
 Destinations must sit outside every worktree, registered or DECLARED:
 the artifact root is guarded by `probe_flake.check_artifact_root`, but
@@ -124,7 +134,20 @@ canonicalised, neither may contain the other, and each invocation must
 have run inside the worktree its section names. Deliberately NOT "must
 be a registered `git worktree`" — the workflow is required to remove or
 hand off both comparison worktrees when it finishes, so by the time its
-document is evaluated the paths it correctly names may be gone.
+document is evaluated the paths it correctly names may be gone. BOTH
+declarations are collected before either batch is validated, so every
+path is checked against both comparison states; after cleanup neither
+is registered anywhere, and a batch checked only against its own
+declaration could name an artifact root inside the other one.
+
+Both worktrees are also attested SOURCE-CLEAN at measurement time. The
+recorded SHA cannot reveal an uncommitted change, and "the clean
+comparison worktree must remain unmodified" is a contract about its
+source — the gitignored configuration state it must ALSO reproduce is
+recorded separately in its own manifest, whose entries must be members
+of the `config/*.local.yaml` family and nothing else. Two manifests that
+agree perfectly about `../outside.local.yaml` establish nothing about
+the state the probes actually read.
 
 Artifacts are paired with outcomes, and handed on
 -------------------------------------------------
@@ -197,12 +220,13 @@ invent their contracts, and filing an issue is not its job.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import os
 import re
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe_census  # noqa: E402
@@ -233,9 +257,13 @@ CONFIG_GLOB = "config/*.local.yaml"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 
-# The measuring script. A recorded command that does not run THIS is not
-# a record of a measurement this lab can reason about.
+# The measuring script, and the only kind of program that runs it. A
+# recorded command that does not run THIS, with a Python interpreter, is
+# not a record of a measurement this lab can reason about — `/bin/echo
+# .../probe_flake.py --probe role --runs 10` has the right SHAPE and
+# measures nothing.
 HARNESS_SCRIPT = "probe_flake.py"
+INTERPRETER_RE = re.compile(r"^python(\d+(\.\d+)*)?$")
 
 # `probe_flake.main`'s ENTIRE option surface, split by what each one is.
 # Hard-coded rather than introspected because argparse builds its parser
@@ -385,6 +413,16 @@ def require_manifest(document, what: str) -> dict:
         if relative in seen:
             raise HandoffError(f"{where} repeats the path {relative!r}")
         seen.add(relative)
+        parts = PurePosixPath(relative).parts
+        if (len(parts) != 2 or parts[0] != "config"
+                or not fnmatch.fnmatch(parts[1], "*.local.yaml")):
+            raise HandoffError(
+                f"{where} names {relative!r}, which is not a member of the "
+                f"gitignored {CONFIG_GLOB} family; a manifest whose entries "
+                f"can point anywhere — `../outside.local.yaml`, an absolute "
+                f"path, a nested directory — establishes equality of "
+                f"something other than the per-worktree configuration state "
+                f"the probes actually read")
         digest = entry.get("sha256")
         if not isinstance(digest, str) or not SHA256_RE.match(digest):
             raise HandoffError(
@@ -459,12 +497,14 @@ def parse_command(command, what: str) -> dict:
         else:
             positional.append(token)
         index += 1
-    if len(positional) != 2 or Path(positional[1]).name != HARNESS_SCRIPT:
+    if (len(positional) != 2
+            or not INTERPRETER_RE.match(Path(positional[0]).name)
+            or Path(positional[1]).name != HARNESS_SCRIPT):
         raise HandoffError(
-            f"{what} is {positional}, where a harness invocation is an "
+            f"{what} is {positional}, where a harness invocation is a Python "
             f"interpreter and a path ending in {HARNESS_SCRIPT}; a command "
-            f"with extra positional tokens ran something else, or ran this "
-            f"with arguments the comparison cannot see")
+            f"with extra positional tokens ran something else, and one whose "
+            f"program is not an interpreter did not run the harness at all")
     for option in REQUIRED_OPTIONS:
         if option not in options:
             raise HandoffError(f"{what} names no {option}")
@@ -1133,6 +1173,25 @@ def result_paths(document) -> list:
     return paths
 
 
+def declared_worktrees(document) -> list:
+    """Every worktree the document's own sections declare.
+
+    Collected BEFORE either batch is validated, so each batch's paths are
+    checked against both comparison states rather than only its own. That
+    is what still holds once the worktrees have been removed — which the
+    workflow requires — and they are no longer registered anywhere.
+    """
+    declared = []
+    for key in ("baseline", "verification"):
+        section = document.get(key)
+        if not isinstance(section, dict):
+            continue
+        value = section.get("worktree")
+        if isinstance(value, str) and value:
+            declared.append(value)
+    return declared
+
+
 def _require_worktree(section, *, what: str) -> Path:
     """The section's declared worktree, canonical and really measured in.
 
@@ -1187,6 +1246,45 @@ def _require_batch(section, *, what: str, handoff: Handoff,
     invocation = require_invocation(section.get("invocation"),
                                    f"{what}.invocation")
     require_manifest(section.get("configuration"), f"{what}.configuration")
+
+    # A command and the document it produced have to be one measurement.
+    # Comparing the two invocations to EACH OTHER is not enough: two
+    # commands that agreed on another probe, twenty runs and eight
+    # capabilities would compare equal while their result documents both
+    # claimed the handoff's contract.
+    settings = effective_settings(invocation, f"{what}.invocation")
+    for label, recorded, reported in (
+            ("--probe", settings["probe"], result["probe"]),
+            ("--runs", settings["runs"], result["requested_runs"]),
+            ("--rts-caps", settings["rts_caps"], result["rts_capabilities"])):
+        if recorded != reported:
+            raise HandoffError(
+                f"{what}.invocation passed {label} {recorded!r} where its "
+                f"own result document reports {reported!r}; the command and "
+                f"the document it produced describe one measurement or "
+                f"neither constrains the other")
+    # Only the AGREEMENT is enforced here. What the agreed value has to
+    # BE is already owned elsewhere and stays there, so one fact is not
+    # scored twice: the probe by the handoff check just below, and the
+    # run count and capability count by `controlled_problems`, which
+    # routes them to #1439 rather than rejecting them. Two commands that
+    # agreed with EACH OTHER on twenty runs would therefore need result
+    # documents saying twenty as well — and those are not measurements.
+
+    # Both comparison worktrees are source-clean AT MEASUREMENT TIME. The
+    # recorded SHA cannot reveal an uncommitted change, so the clean side
+    # needs the same attestation the repair side does — "the clean
+    # comparison worktree must remain unmodified" is a contract about its
+    # SOURCE, and the gitignored configuration state it must ALSO
+    # reproduce is recorded separately in its own manifest.
+    if section.get("source_clean") is not True:
+        raise HandoffError(
+            f"{what} was not recorded as source-clean at measurement time "
+            f"(got {section.get('source_clean')!r}); an uncommitted change "
+            f"is invisible to the commit the result document names, so a "
+            f"batch measured over one measures something no commit "
+            f"contains")
+
     if what == "baseline" and result["commit_sha"] != handoff.commit_sha:
         raise HandoffError(
             f"the controlled baseline measured commit "
@@ -1198,6 +1296,11 @@ def _require_batch(section, *, what: str, handoff: Handoff,
             f"intended base moved, recreate BOTH states on one new common "
             f"SHA and repeat the baseline")
     trees = list(worktrees) + [_require_worktree(section, what=what)]
+    # `worktrees` already carries BOTH declared comparison worktrees (see
+    # `declared_worktrees`), which matters once they have been removed:
+    # after cleanup neither appears in `worktree_paths()`, and a batch
+    # checked only against its own declaration could name an artifact
+    # root inside the OTHER comparison state and pass.
 
     options = parse_command(invocation["command"], f"{what}.invocation.command")
     declared_root = options.get("--artifact-root")
@@ -1309,8 +1412,9 @@ def evaluate(document, *, worktrees=()) -> Outcome:
             "diagnosis carries no controlled pre-fix baseline; the #1436 "
             "census result triggers diagnosis but is not itself the "
             "controlled base-versus-branch comparison")
+    trees = list(worktrees) + declared_worktrees(document)
     baseline_invalid = _require_batch(baseline_section, what="baseline",
-                                      handoff=handoff, worktrees=worktrees)
+                                      handoff=handoff, worktrees=trees)
     baseline = baseline_section["result"]
     baseline_failures = failure_count(baseline)
     common["baseline_failures"] = baseline_failures
@@ -1392,7 +1496,7 @@ def evaluate(document, *, worktrees=()) -> Outcome:
             f"measurement in the repair worktree")
     verification_invalid = _require_batch(
         verification_section, what="verification", handoff=handoff,
-        worktrees=worktrees)
+        worktrees=trees)
     verification = verification_section["result"]
     verification_failures = failure_count(verification)
     common["verification_failures"] = verification_failures
@@ -1408,21 +1512,20 @@ def evaluate(document, *, worktrees=()) -> Outcome:
             f"not two separate states; the clean comparison worktree stays "
             f"at the baseline commit and unmodified, and the repair lives "
             f"in its own")
-    differences = invocation_differences(baseline_section["invocation"],
-                                         verification_section["invocation"])
-    if differences:
-        raise RouteRefused(
-            "the verification batch did not run under the baseline's "
-            "conditions, so the two are not comparable: "
-            + "; ".join(differences))
-    config_problems = manifest_differences(
-        baseline_section["configuration"], verification_section["configuration"],
-        left_name="the clean comparison worktree",
-        right_name="the repair worktree")
-    if config_problems:
-        raise RouteRefused(
-            "the two comparison worktrees do not hold the same "
-            "configuration state: " + "; ".join(config_problems))
+    comparability = [
+        f"the verification batch did not run under the baseline's "
+        f"conditions, so the two are not comparable: {difference}"
+        for difference in invocation_differences(
+            baseline_section["invocation"], verification_section["invocation"])
+    ] + [
+        f"the two comparison worktrees do not hold the same configuration "
+        f"state: {difference}"
+        for difference in manifest_differences(
+            baseline_section["configuration"],
+            verification_section["configuration"],
+            left_name="the clean comparison worktree",
+            right_name="the repair worktree")
+    ]
     verification_destinations = set()
     for path in destinations(verification_section["invocation"]):
         verification_destinations |= _path_forms(
@@ -1440,7 +1543,7 @@ def evaluate(document, *, worktrees=()) -> Outcome:
     # above X, contains any MISSING result, becomes invalid, or only
     # partially improves the rate" is ONE list, and every entry on it
     # goes to #1439 rather than to a pull request.
-    problems = verification_invalid + missing_problems(
+    problems = verification_invalid + comparability + missing_problems(
         verification, targets=set(handoff.targets),
         acceptable_failures=handoff.acceptable_failures,
         what="the verification batch")
@@ -1582,11 +1685,6 @@ def _require_repair(document, verification_section, *,
             f"`git rev-parse HEAD` and cannot see uncommitted source, so a "
             f"verification against another commit measures something this "
             f"pull request does not contain")
-    if verification_section.get("source_clean") is not True:
-        raise HandoffError(
-            "the repair worktree was not recorded as source-clean at "
-            "verification time; an uncommitted change there is invisible to "
-            "the recorded commit and invalidates the measurement")
     changed = repair.get("changed_paths")
     if (not isinstance(changed, list) or not changed
             or not all(isinstance(path, str) and path for path in changed)):

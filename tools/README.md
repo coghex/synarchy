@@ -1722,15 +1722,26 @@ two batches necessarily differ in worktree and destination, and ports are
 leased dynamically, so they are compared on behavior-affecting settings with
 effective defaults filled in. A command is first checked against the REAL
 harness interface — every option one `probe_flake.main` accepts, and an argv
-that is an interpreter plus a path ending in `probe_flake.py` — because an
-option the CLI does not have would compare equal across both batches while
-describing a measurement neither could have run.
+that is a PYTHON INTERPRETER plus a path ending in `probe_flake.py` — because
+an option the CLI does not have would compare equal across both batches while
+describing a measurement neither could have run, and `/bin/echo
+.../probe_flake.py …` has the right shape and measures nothing. Each command is
+then bound to its own result document, so two commands agreeing with each other
+cannot stand in for the contract.
 
 Two labels are not two worktrees, either: the declared paths are canonicalised,
 neither may contain the other, and each invocation must have run inside the
 worktree its section names. Deliberately not "must be a registered `git
 worktree`" — the workflow removes or hands off both comparison worktrees when
 it finishes, so by evaluation time the paths it correctly names may be gone.
+Both declarations are collected before either batch is validated, so every path
+is checked against both comparison states even once neither is registered.
+
+Both worktrees are attested source-clean at measurement time — the recorded SHA
+cannot reveal an uncommitted change — and a configuration manifest's entries
+must be members of the `config/*.local.yaml` family, since two manifests that
+agree perfectly about `../outside.local.yaml` establish nothing about the state
+the probes actually read.
 
 Destinations must sit outside every worktree, registered or declared:
 `check_artifact_root` guards the artifact root, but `--result` is written

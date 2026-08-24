@@ -119,7 +119,7 @@ def expect_refused(thunk, fragment: str, msg: str) -> None:
 def result_document(*, probe: str = PROBE, commit: str = BASE_COMMIT,
                     checks=None, runs=None, rts_caps=None,
                     requested=None, harness_error: bool = False,
-                    artifact_root=None) -> dict:
+                    artifact_root=None, command_runs=None) -> dict:
     """A REAL `probe-flake-result/v1` document.
 
     `runs` is a list of per-run check maps; the run outcome is derived
@@ -129,7 +129,12 @@ def result_document(*, probe: str = PROBE, commit: str = BASE_COMMIT,
     """
     declared = CHECKS if checks is None else checks
     descriptor = probe_protocol.build_descriptor(probe, declared)
+    # `command_runs` exists only to make a fixture's intent explicit at
+    # the call site: a result document is bound to the command that
+    # produced it, so a batch of another size needs both to say so.
     requested = dd.RUN_COUNT if requested is None else requested
+    if command_runs is not None and command_runs != requested:
+        raise AssertionError("a fixture's command and result must agree")
     caps = dd.RTS_CAPABILITIES if rts_caps is None else rts_caps
     root = Path(artifact_root if artifact_root is not None
                 else f"{OUTSIDE}/artifacts")
@@ -283,6 +288,7 @@ def diagnosis_document(*, route: str = dd.ROUTE_REPAIR, handoff=None,
     else:
         document["baseline"] = {
             "worktree": CLEAN_WT,
+            "source_clean": True,
             "result": result_document(runs=failing_runs(4)),
             "invocation": invocation(),
             "configuration": manifest(),
@@ -662,6 +668,96 @@ def test_a_manifest_records_a_digest_per_file() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_a_manifest_entry_must_name_the_gitignored_family() -> None:
+    """Otherwise "identical manifests" can be identical about anything.
+
+    Two documents both listing `../outside-config.local.yaml` agree
+    perfectly and establish nothing about the `config/*.local.yaml` state
+    the probes actually symlink into their isolated resource roots.
+    """
+    for relative in ("../outside-config.local.yaml",
+                     "/etc/config/save.local.yaml",
+                     "config/nested/save.local.yaml",
+                     "config/save.yaml",
+                     "save.local.yaml",
+                     "config/../config/save.local.yaml"):
+        expect_rejected(lambda r=relative: dd.require_manifest(
+            manifest([(r, "c" * 64)]), "manifest"),
+            "gitignored", f"a manifest entry naming {relative!r}")
+
+    for relative in ("config/save.local.yaml", "config/video.local.yaml",
+                     "config/keybinds.local.yaml",
+                     "config/notifications.local.yaml"):
+        dd.require_manifest(manifest([(relative, "c" * 64)]), "manifest")
+
+    # The real generator only ever produces members of the family.
+    root = Path(tempfile.mkdtemp(prefix="test_deflake_diagnosis_"))
+    try:
+        (root / "config").mkdir()
+        (root / "config" / "save.local.yaml").write_text("autosave: true\n")
+        dd.require_manifest(dd.config_manifest(root), "generated manifest")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_both_comparison_worktrees_are_source_clean() -> None:
+    """The clean side needs the attestation as much as the repair side.
+
+    Its recorded SHA cannot reveal an uncommitted change, and "the clean
+    comparison worktree must remain unmodified" is a contract about its
+    SOURCE — the gitignored configuration state it must also reproduce is
+    recorded separately in its own manifest.
+    """
+    for section in ("baseline", "verification"):
+        for value in (None, False, "yes"):
+            document = diagnosis_document()
+            if value is None:
+                del document[section]["source_clean"]
+            else:
+                document[section]["source_clean"] = value
+            expect_rejected(lambda d=document: evaluate(d),
+                            "not recorded as source-clean",
+                            f"a {section} recorded as {value!r}")
+
+
+def test_a_batch_may_not_write_into_the_other_declared_worktree() -> None:
+    """Both declarations are collected BEFORE either batch is validated.
+
+    That is what still holds once the comparison worktrees have been
+    removed — which the workflow requires — and neither appears in
+    `worktree_paths()` any more. Checked here with NO registered
+    worktrees at all, which is exactly the post-cleanup state.
+    """
+    document = diagnosis_document()
+    document["baseline"]["invocation"] = invocation(
+        cmd=command(result=f"{REPAIR_WT}/baseline.json",
+                    artifacts=f"{OUTSIDE}/artifacts", worktree=CLEAN_WT))
+    expect_rejected(lambda: evaluate(document, worktrees=()),
+                    "inside the working tree",
+                    "a baseline writing into the repair worktree")
+
+    other = diagnosis_document(handoff=handoff_document(acceptable=1))
+    other["verification"]["result"] = verification_result(
+        runs=failing_runs(1))
+    failing = next(run for run in other["verification"]["result"]["runs"]
+                   if run["outcome"] != probe_flake.RUN_PASS)
+    moved = f"{CLEAN_WT}/artifacts/run-001"
+    other["verification"]["result"]["retained_artifacts"] = [moved]
+    failing["artifact_dir"] = moved
+    expect_rejected(lambda: evaluate(other, worktrees=()),
+                    "inside the working tree",
+                    "a verification retaining logs in the clean worktree")
+
+
+def test_a_command_must_agree_with_the_result_it_produced() -> None:
+    document = diagnosis_document()
+    document["baseline"]["invocation"] = invocation(
+        cmd=command(probe=OTHER))
+    expect_rejected(lambda: evaluate(document),
+                    "describe one measurement",
+                    "a command naming a probe its result did not measure")
+
+
 def test_a_manifest_with_no_entries_key_is_refused() -> None:
     """Absence has to be ASSERTED, not inferred from an omitted key."""
     expect_rejected(lambda: dd.require_manifest(
@@ -891,11 +987,14 @@ def test_destinations_and_ports_may_differ_and_nothing_else() -> None:
     expect(outcome.route == dd.ROUTE_REPAIR,
            f"different destinations and ports are fine; got {outcome.route}")
 
-    for label, fragment, cmd in (
-            ("run count", "runs", command(runs=20, result=f"{OUTSIDE}/verify.json",
+    # Changing only the COMMAND makes the record incoherent — the batch
+    # says one thing and the document it produced says another — so it is
+    # rejected before comparability is even asked about.
+    for label, cmd in (
+            ("run count", command(runs=20, result=f"{OUTSIDE}/verify.json",
                                   artifacts=VERIFY_ARTIFACTS,
                                   worktree=REPAIR_WT)),
-            ("capabilities", "rts_caps", command(rts_caps=8,
+            ("capabilities", command(rts_caps=8,
                                      result=f"{OUTSIDE}/verify.json",
                                      artifacts=VERIFY_ARTIFACTS,
                                      worktree=REPAIR_WT)),
@@ -903,8 +1002,47 @@ def test_destinations_and_ports_may_differ_and_nothing_else() -> None:
         document = diagnosis_document()
         document["verification"]["invocation"] = invocation(
             cmd=cmd, directory=REPAIR_WT, ports=[9201])
-        expect_refused(lambda d=document: evaluate(d), fragment,
-                       f"a verification that changed the {label}")
+        expect_rejected(lambda d=document: evaluate(d),
+                        "describe one measurement",
+                        f"a verification whose command changed the {label}")
+
+
+def test_two_commands_that_agree_with_each_other_are_not_the_contract() -> None:
+    """The comparison is to the contract, not only to the other batch.
+
+    Both commands claiming twenty runs at eight capabilities compare
+    EQUAL to each other. Each is bound to its own result document, so
+    matching them needs result documents saying twenty and eight too —
+    and those are not measurements this lab's policy is stated on, which
+    routes them to #1439 instead of a pull request.
+    """
+    document = diagnosis_document(route=dd.ROUTE_PARTIAL_IMPROVEMENT)
+    document["route"] = dd.ROUTE_CANNOT_REPRODUCE
+    for key, dest, tree in (("baseline", f"{OUTSIDE}/baseline.json", CLEAN_WT),
+                            ("verification", f"{OUTSIDE}/verify.json",
+                             REPAIR_WT)):
+        artifacts = (f"{OUTSIDE}/artifacts" if key == "baseline"
+                     else VERIFY_ARTIFACTS)
+        document[key]["invocation"] = invocation(
+            cmd=command(runs=20, rts_caps=8, result=dest,
+                        artifacts=artifacts, worktree=tree),
+            directory=tree, ports=[9101])
+    document["baseline"]["result"] = result_document(
+        runs=failing_runs(4), requested=20, rts_caps=8, command_runs=20)
+    document["verification"]["result"] = verification_result(
+        requested=20, rts_caps=8, command_runs=20)
+    expect(dd.invocation_differences(document["baseline"]["invocation"],
+                                     document["verification"]["invocation"])
+           == [], "the two commands really do compare equal to each other")
+    outcome = evaluate(document)
+    expect(outcome.route == dd.ROUTE_CANNOT_REPRODUCE,
+           f"and neither is a measurement; got {outcome.route}")
+
+    repair = copy.deepcopy(document)
+    repair["route"] = dd.ROUTE_REPAIR
+    expect_refused(lambda: evaluate(repair),
+                   "established nothing to repair from",
+                   "a repair declared over two agreeing non-measurements")
 
 
 def test_only_the_real_harness_options_are_accepted() -> None:
@@ -936,6 +1074,12 @@ def test_a_fabricated_argv_is_not_a_harness_invocation() -> None:
                                      "extra", "--probe", PROBE,
                                      "--runs", "10"]),
             ("no script at all", ["--probe", PROBE, "--runs", "10"]),
+            # The right SHAPE, running something that measures nothing.
+            ("a program that is not an interpreter",
+             ["/bin/echo", f"{CLEAN_WT}/tools/probe_flake.py",
+              "--probe", PROBE, "--runs", "10"]),
+            ("a shell", ["sh", f"{CLEAN_WT}/tools/probe_flake.py",
+                         "--probe", PROBE, "--runs", "10"]),
     ):
         document = diagnosis_document()
         document["baseline"]["invocation"] = invocation(cmd=cmd)
@@ -1262,18 +1406,25 @@ def test_an_invalid_verification_batch_is_1439_not_a_rejection() -> None:
     reporting it as a rejected handoff would lose the retained artifacts
     and describe an invocation that never got past the gate.
     """
-    for label, result in (
+    for label, result, runs in (
             ("a harness error", verification_result(
-                runs=failing_runs(1), harness_error=True)),
+                runs=failing_runs(1), harness_error=True), None),
             ("a short batch", verification_result(
-                runs=failing_runs(1)[:5], requested=5)),
-            ("a contended machine", None),
+                runs=failing_runs(1)[:5], requested=5, command_runs=5), 5),
+            ("a contended machine", None, None),
     ):
         document = diagnosis_document(route=dd.ROUTE_PARTIAL_IMPROVEMENT)
         if result is None:
             document["verification"]["result"]["peak_concurrency"] = 2
         else:
             document["verification"]["result"] = result
+        if runs is not None:
+            # The command is bound to its own result, so a batch of
+            # another size has to have ASKED for that size.
+            document["verification"]["invocation"] = invocation(
+                cmd=command(runs=runs, result=f"{OUTSIDE}/verify.json",
+                            artifacts=VERIFY_ARTIFACTS, worktree=REPAIR_WT),
+                directory=REPAIR_WT, ports=[9201])
         outcome = evaluate(document)
         expect(outcome.route == dd.ROUTE_PARTIAL_IMPROVEMENT,
                f"{label} routes to #1439; got {outcome.route}")
