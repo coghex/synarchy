@@ -198,7 +198,7 @@ echo "==> [18/21] world_check --quick"
 python3 tools/world_check.py --quick
 
 # Validate the probe-runner harness itself (cheap, no engine, no GPU) --
-# the same nine checks, in the same order, as ci.yml's "probe runner
+# the same checks, in the same order, as ci.yml's "probe runner
 # self-tests" step. ci_probes/ci_expensive_gates cover the path->probe
 # and path->gate mappings, which would otherwise only surface after a
 # push as a PR mis-selecting its own gates; test_run_probes covers
@@ -230,6 +230,14 @@ python3 tools/world_check.py --quick
 # throwaway censuses. No probe is ever executed by any of them, and the
 # real engine-booting ten-run measurement is deliberately NOT wired into
 # this gate or CI (tools/README.md states why).
+# test_location_embark_probe is #1569's: the artifact ownership of
+# tools/location_embark_probe.py -- one invocation-owned directory,
+# --resource-root on every boot, release on a pass, a phase-0 return, an
+# exception and a boot abort, residue as a failing check, a pre-existing
+# same-named save slot left byte-identical, and a read-only checkout
+# still yielding a removable tree. That probe is manual-only needs-gpu,
+# so without this companion the contract is only ever observed by a GPU
+# run neither gate can make; the companion boots nothing.
 echo "==> [19/21] probe runner self-tests"
 python3 tools/ci_probes.py --self-test
 python3 tools/ci_expensive_gates.py --self-test
@@ -243,6 +251,7 @@ python3 tools/test_probe_census.py
 python3 tools/test_probe_claim.py
 python3 tools/test_probe_resource_lock.py
 python3 tools/test_deflake.py
+python3 tools/test_location_embark_probe.py
 
 # Cheap, no-engine self-test of CI's cache-outcome report (#1358). The
 # report itself runs only in CI -- `make ci` restores no GitHub Actions
