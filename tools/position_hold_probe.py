@@ -14,8 +14,8 @@ every window spans many ordinary thought cadences (`thought_interval`
 1.0 s ± 0.5 jitter), because a single post-arrival sample cannot tell a
 hold from a unit that simply has not re-decided yet.
 
-Four units share the page, and three of them are the controls that
-make the fourth's stillness mean something:
+Three units share the page: the one whose stillness the probe is
+about, and the two controls that make that stillness mean something:
 
   * `held`     — commanded, so it holds.
   * `control`  — never commanded, so it must visibly wander and take
