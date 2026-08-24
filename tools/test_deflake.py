@@ -40,6 +40,7 @@ from __future__ import annotations
 import copy
 import datetime
 import errno
+import hashlib
 import json
 import os
 import shutil
@@ -223,13 +224,32 @@ class Recorder:
         self.calls: list = []
 
     def __call__(self, probe, runs, *, artifact_root=None, rts_caps=None,
-                 announce=None):
+                 timeout=None, start_port=None, announce=None):
         self.calls.append({"probe": probe, "runs": runs,
                            "artifact_root": artifact_root,
-                           "rts_caps": rts_caps})
+                           "rts_caps": rts_caps, "timeout": timeout,
+                           "start_port": start_port})
         if self.raises is not None:
             raise self.raises
         return self.result
+
+
+ARGV = ["python3", "tools/deflake.py", "--json"]
+CWD = "/private/tmp/synarchy-selftest-checkout"
+
+
+def installed_census(*, probe: str = PROBE, acceptable: int = 0) -> dict:
+    """A census document shaped like the one `update` installs.
+
+    Only the fields the handoff reads: the row for the probe and its
+    acceptable-failure count. `record_result_installed` hands the whole
+    installed candidate back, and this is the part of it that matters
+    here.
+    """
+    return {"schema": probe_census.CENSUS_SCHEMA,
+            "probes": [{"key": probe, "classification": "manual-only",
+                        "script": f"{probe}_probe.py", "protocol": "legacy",
+                        "census": {"acceptable_failures": acceptable}}]}
 
 
 def held_resources(probe, *, namespace=None, repo_root=None):
@@ -250,8 +270,15 @@ def run(scratch: Scratch, **overrides):
         "acquire_resources": held_resources,
         "measure": Recorder(),
         "record_claim": lambda *a, **kw: PROBE,
-        "record_result": lambda *a, **kw: PROBE,
+        # The recording seam now answers with the census row the
+        # transaction INSTALLED as well as the probe (#1659), because
+        # the handoff's acceptable-failure count has to come from that
+        # document rather than from a reread after the lock is gone.
+        "record_result": lambda *a, **kw: (PROBE, installed_census()),
         "head_commit": lambda: COMMIT,
+        "argv": ARGV,
+        "cwd": CWD,
+        "read_configuration": lambda root: [],
     }
     settings.update(overrides)
     return deflake.measure_next_probe(**settings)
@@ -276,7 +303,7 @@ def test_the_harness_is_told_ten_runs_and_four_capabilities() -> None:
                f"(got {deflake.RTS_CAPABILITIES})")
         measure = Recorder(measurement(scratch))
         result = run(scratch, measure=measure,
-                     record_result=probe_census.record_result)
+                     record_result=probe_census.record_result_installed)
         expect(result.outcome == deflake.OUTCOME_RECORDED,
                f"the measurement is recorded ({result.outcome}: {result.detail})")
         expect(len(measure.calls) == 1,
@@ -308,7 +335,7 @@ def test_pass_fail_and_timeout_are_all_valid_observations() -> None:
                     + [probe_flake.RUN_TIMEOUT])
         result = run(scratch, measure=Recorder(measurement(
                         scratch, outcomes=outcomes)),
-                     record_result=probe_census.record_result)
+                     record_result=probe_census.record_result_installed)
         expect(result.outcome == deflake.OUTCOME_RECORDED,
                f"a cohort holding failures and a timeout is still a valid "
                f"measurement ({result.outcome}: {result.detail})")
@@ -373,7 +400,7 @@ def test_a_malformed_census_fails_before_anything_is_claimed() -> None:
             return FakeClaim(probe)
 
         result = run(scratch, acquire_claim=claim_it, measure=measure,
-                     record_result=probe_census.record_result)
+                     record_result=probe_census.record_result_installed)
         expect(result.outcome == deflake.OUTCOME_SELECTOR_ERROR,
                f"the outcome is selector-error ({result.outcome}: "
                f"{result.detail})")
@@ -422,7 +449,7 @@ def test_exactly_one_probe_is_selected_per_invocation() -> None:
             return FakeClaim(probe)
 
         result = run(scratch, acquire_claim=claim_it, measure=measure,
-                     record_result=probe_census.record_result)
+                     record_result=probe_census.record_result_installed)
         expect(result.outcome == deflake.OUTCOME_RECORDED,
                f"the invocation records one measurement ({result.outcome})")
         expect(len(claimed_keys) == 1,
@@ -458,7 +485,7 @@ def test_a_lost_selection_to_claim_race_does_nothing_at_all() -> None:
         result = run(scratch, acquire_claim=denied, measure=measure,
                      acquire_resources=take,
                      record_claim=probe_census.record_claim,
-                     record_result=probe_census.record_result)
+                     record_result=probe_census.record_result_installed)
         expect(result.outcome == deflake.OUTCOME_CLAIM_BUSY,
                f"the outcome is claim-busy ({result.outcome})")
         expect(result.exit_code == 0,
@@ -510,7 +537,7 @@ def test_the_acquisition_token_is_retained_and_reported() -> None:
         claim = FakeClaim(token="token-retained")
         result = run(scratch, acquire_claim=lambda probe, **kw: claim,
                      measure=Recorder(measurement(scratch)),
-                     record_result=probe_census.record_result)
+                     record_result=probe_census.record_result_installed)
         expect(result.token == "token-retained",
                f"the result carries the acquisition token ({result.token})")
         expect(claim.commits == ["audit", "record"],
@@ -598,7 +625,7 @@ def test_resource_busy_releases_only_the_owned_claim() -> None:
 
         result = run(scratch, acquire_claim=lambda probe, **kw: claim,
                      acquire_resources=busy, measure=measure,
-                     record_result=probe_census.record_result)
+                     record_result=probe_census.record_result_installed)
         expect(result.outcome == deflake.OUTCOME_RESOURCE_BUSY,
                f"the outcome is resource-busy ({result.outcome})")
         expect(result.exit_code == 0,
@@ -674,7 +701,7 @@ def test_a_no_work_outcome_never_reports_retained_ownership() -> None:
                 (deflake.OUTCOME_NO_QUALIFYING_PROBE,
                  dict(claimed={PROBE, OTHER})),
                 (deflake.OUTCOME_RECORDED,
-                 dict(record_result=probe_census.record_result))):
+                 dict(record_result=probe_census.record_result_installed))):
             got = run(scratch, measure=Recorder(measurement(scratch)),
                       **releasing)
             expect(got.outcome == outcome
@@ -727,7 +754,7 @@ def test_a_real_foreign_holder_makes_deflake_report_resource_busy() -> None:
         result = run(scratch, acquire_claim=lambda probe, **kw: claim,
                      acquire_resources=deflake._acquire_probe_resources,
                      namespace=namespace, measure=measure,
-                     record_result=probe_census.record_result)
+                     record_result=probe_census.record_result_installed)
         expect(result.outcome == deflake.OUTCOME_RESOURCE_BUSY,
                f"/deflake reports resource-busy ({result.outcome}: "
                f"{result.detail})")
@@ -742,7 +769,7 @@ def test_a_real_foreign_holder_makes_deflake_report_resource_busy() -> None:
                      acquire_resources=deflake._acquire_probe_resources,
                      namespace=namespace,
                      measure=Recorder(measurement(scratch)),
-                     record_result=probe_census.record_result)
+                     record_result=probe_census.record_result_installed)
         expect(result.outcome == deflake.OUTCOME_RECORDED,
                f"and the measurement runs once the holder is gone "
                f"({result.outcome}: {result.detail})")
@@ -774,7 +801,7 @@ def test_a_checkout_that_moved_refuses_to_record() -> None:
         result = run(scratch, acquire_claim=lambda probe, **kw: claim,
                      head_commit=lambda: next(heads),
                      measure=Recorder(measurement(scratch)),
-                     record_result=probe_census.record_result,
+                     record_result=probe_census.record_result_installed,
                      record_claim=lambda *a, **kw: PROBE)
         expect(result.outcome == deflake.OUTCOME_COMMIT_CHANGED,
                f"the outcome is commit-changed ({result.outcome})")
@@ -801,7 +828,7 @@ def test_a_result_document_naming_another_commit_refuses_the_cohort() -> None:
         result = run(scratch, head_commit=lambda: COMMIT,
                      measure=Recorder(measurement(scratch,
                                                   commit=OTHER_COMMIT)),
-                     record_result=probe_census.record_result,
+                     record_result=probe_census.record_result_installed,
                      record_claim=lambda *a, **kw: PROBE)
         expect(result.outcome == deflake.OUTCOME_COMMIT_CHANGED,
                f"the outcome is commit-changed ({result.outcome}: "
@@ -840,8 +867,9 @@ def test_the_cohort_commit_is_captured_once_before_the_runs() -> None:
         ingested: list = []
         result = run(scratch, acquire_claim=lambda probe, **kw: claim,
                      measure=Recorder(measurement(scratch)),
-                     record_result=lambda path, document: ingested.append(
-                         document) or PROBE)
+                     record_result=lambda path, document: (
+                         ingested.append(document),
+                         (PROBE, installed_census()))[1])
         expect(result.commit == COMMIT,
                f"the captured reference is reported ({result.commit})")
         expect(claim.audits == [(COMMIT, 10)],
@@ -865,7 +893,7 @@ def test_a_harness_error_appends_one_attempt_and_changes_nothing_else() -> None:
     scratch = Scratch()
     try:
         first = run(scratch, measure=Recorder(measurement(scratch)),
-                    record_result=probe_census.record_result)
+                    record_result=probe_census.record_result_installed)
         expect(first.outcome == deflake.OUTCOME_RECORDED,
                f"a good measurement lands first ({first.outcome})")
         cohort_before = copy.deepcopy(scratch.census_of().get("current"))
@@ -874,7 +902,7 @@ def test_a_harness_error_appends_one_attempt_and_changes_nothing_else() -> None:
 
         result = run(scratch, measure=Recorder(measurement(
                         scratch, harness_error=True)),
-                     record_result=probe_census.record_result)
+                     record_result=probe_census.record_result_installed)
         expect(result.outcome == deflake.OUTCOME_HARNESS_ERROR,
                f"the outcome is harness-error ({result.outcome})")
         expect(result.exit_code != 0,
@@ -908,7 +936,7 @@ def test_a_pre_replacement_failure_leaves_the_census_bytes_unchanged() -> None:
         probe_census.tempfile.mkstemp = refuse
         result = run(scratch, acquire_claim=lambda probe, **kw: claim,
                      measure=Recorder(measurement(scratch)),
-                     record_result=probe_census.record_result)
+                     record_result=probe_census.record_result_installed)
         probe_census.tempfile.mkstemp = saved
         expect(result.outcome == deflake.OUTCOME_RECORD_FAILED,
                f"the outcome is record-failed ({result.outcome}: "
@@ -952,7 +980,7 @@ def test_a_post_replacement_failure_is_indeterminate_and_keeps_the_claim() -> No
         probe_census.os.fsync = files_only
         result = run(scratch, acquire_claim=lambda probe, **kw: claim,
                      measure=Recorder(measurement(scratch)),
-                     record_result=probe_census.record_result)
+                     record_result=probe_census.record_result_installed)
         probe_census.os.fsync = saved
         expect(result.outcome == deflake.OUTCOME_RECORD_INDETERMINATE,
                f"the outcome is record-indeterminate ({result.outcome}: "
@@ -990,7 +1018,7 @@ def test_a_release_failure_after_a_commit_reports_both_facts() -> None:
         claim = FakeClaim(release_error="the claim file is unwritable")
         result = run(scratch, acquire_claim=lambda probe, **kw: claim,
                      measure=Recorder(measurement(scratch)),
-                     record_result=probe_census.record_result)
+                     record_result=probe_census.record_result_installed)
         expect(result.outcome == deflake.OUTCOME_RECORDED_RELEASE_FAILED,
                f"the outcome is recorded-release-failed ({result.outcome})")
         expect(result.exit_code != 0,
@@ -1017,7 +1045,7 @@ def test_only_a_valid_measurement_reaches_an_accepted_ingestion() -> None:
     scratch = Scratch()
     try:
         run(scratch, measure=Recorder(measurement(scratch, harness_error=True)),
-            record_result=probe_census.record_result)
+            record_result=probe_census.record_result_installed)
         cohort = scratch.census_of().get("current")
         expect(cohort is None,
                f"a harness error creates no cohort at all ({cohort})")
@@ -1025,7 +1053,7 @@ def test_only_a_valid_measurement_reaches_an_accepted_ingestion() -> None:
         expect(len(attempts) == 1 and attempts[-1].get("accepted") is False,
                f"only a non-accepted attempt ({attempts})")
         run(scratch, measure=Recorder(measurement(scratch)),
-            record_result=probe_census.record_result)
+            record_result=probe_census.record_result_installed)
         cohort = scratch.census_of().get("current") or {}
         expect(len(cohort.get("samples") or []) == 1,
                f"and the valid measurement is the only accepted sample "
@@ -1050,7 +1078,7 @@ def test_the_orchestrator_never_manipulates_raw_artifacts() -> None:
         stamps = {directory: sorted(p.name for p in directory.iterdir())
                   for directory in directories}
         result = run(scratch, measure=Recorder(result_measurement),
-                     record_result=probe_census.record_result)
+                     record_result=probe_census.record_result_installed)
         expect(result.outcome == deflake.OUTCOME_RECORDED,
                f"the measurement is recorded ({result.outcome})")
         expect(all(directory.is_dir() for directory in directories),
@@ -1131,7 +1159,7 @@ def test_an_interrupt_is_its_own_outcome() -> None:
         claim = FakeClaim()
         result = run(scratch, acquire_claim=lambda probe, **kw: claim,
                      measure=Recorder(raises=KeyboardInterrupt()),
-                     record_result=probe_census.record_result)
+                     record_result=probe_census.record_result_installed)
         expect(result.outcome == deflake.OUTCOME_INTERRUPTED,
                f"the outcome is interrupted ({result.outcome})")
         expect(result.exit_code == 130, f"exit 130 ({result.exit_code})")
@@ -1219,6 +1247,394 @@ def test_the_cli_takes_no_probe_or_run_overrides() -> None:
            f"({sorted(options)})")
 
 
+# --------------------------------------------------------------------------
+# The handoff (#1659)
+# --------------------------------------------------------------------------
+class Raiser:
+    """A recording seam that fails the way one real failure fails."""
+
+    def __init__(self, error) -> None:
+        self.error = error
+
+    def __call__(self, *args, **kwargs):
+        raise self.error
+
+
+def written_handoff(scratch: Scratch, **overrides):
+    """Run to `recorded` and return `(result, handoff_document_or_None)`."""
+    kept: dict = {}
+
+    def save(path, document):
+        kept[str(path)] = document
+        return None
+
+    settings = {"measure": Recorder(measurement(scratch)),
+                "save_handoff": save}
+    settings.update(overrides)
+    result = run(scratch, **settings)
+    if result.handoff_path is None:
+        return result, None
+    return result, kept.get(str(result.handoff_path))
+
+
+def test_a_recorded_measurement_writes_its_handoff_beside_the_result() -> None:
+    print("\n-- a recorded measurement writes a handoff beside its result")
+    scratch = Scratch()
+    try:
+        result, document = written_handoff(scratch)
+        expect(result.outcome == deflake.OUTCOME_RECORDED,
+               f"({result.outcome})")
+        expect(document is not None, "a handoff was written")
+        expect(result.handoff_path is not None
+               and Path(result.handoff_path).parent
+               == Path(result.result_path).parent,
+               f"beside the retained result ({result.handoff_path})")
+        expect(str(result.handoff_path).endswith("-handoff.json"),
+               f"named after it, so two results in one directory cannot "
+               f"collide ({result.handoff_path})")
+        expect(result.to_document()["handoff_document"]
+               == str(result.handoff_path),
+               "and the machine-readable outcome reports the path")
+        expect(set(document) == {"schema", "probe", "acceptable_failures",
+                                 "targets", "result", "invocation",
+                                 "configuration", "artifacts"},
+               f"the document has exactly the declared keys ({sorted(document)})")
+        expect(document["schema"] == deflake.HANDOFF_SCHEMA,
+               f"({document['schema']})")
+    finally:
+        scratch.cleanup()
+
+
+def test_the_embedded_result_is_the_measurements_own_document() -> None:
+    print("\n-- the result is embedded unchanged, not summarised")
+    scratch = Scratch()
+    try:
+        real = measurement(scratch)
+        result, document = written_handoff(scratch, measure=Recorder(real))
+        expect(document["result"] == real.to_document(),
+               "the embedded result is byte-for-byte the harness's own")
+        expect(set(document["result"]) == set(real.to_document()),
+               "and gains no field, because `probe-flake-result/v1` "
+               "rejects additional properties")
+        expect(document["probe"] == PROBE, f"({document['probe']})")
+        expect(document["artifacts"] == real.retained_artifacts(),
+               f"every retained path is named ({document['artifacts']})")
+    finally:
+        scratch.cleanup()
+
+
+def test_the_invocation_records_what_the_process_observed() -> None:
+    print("\n-- the invocation records argv, cwd, ports and both defaults")
+    scratch = Scratch()
+    try:
+        real = measurement(scratch)
+        result, document = written_handoff(scratch, measure=Recorder(real))
+        invocation = document["invocation"]
+        expect(set(invocation) == {"argv", "cwd", "retries", "ports",
+                                   "timeout", "start_port"},
+               f"exactly the declared keys ({sorted(invocation)})")
+        expect(invocation["argv"] == ARGV,
+               f"the observed argv, argv[0] included ({invocation['argv']})")
+        expect(invocation["cwd"] == CWD, f"({invocation['cwd']})")
+        expect(invocation["retries"] == 0,
+               "the retry policy is 0 and this lab has no other")
+        expect(invocation["ports"]
+               == [run["port"] for run in real.to_document()["runs"]],
+               f"the ordered BASE port of each completed run "
+               f"({invocation['ports']})")
+        expect(invocation["timeout"] == deflake.TIMEOUT
+               and invocation["start_port"] == deflake.START_PORT,
+               f"and the two settings passed to the adapter "
+               f"({invocation['timeout']}, {invocation['start_port']})")
+    finally:
+        scratch.cleanup()
+
+
+def test_the_adapter_is_told_the_timeout_and_starting_port() -> None:
+    print("\n-- both are passed EXPLICITLY, like the run and capability counts")
+    scratch = Scratch()
+    try:
+        recorder = Recorder(measurement(scratch))
+        run(scratch, measure=recorder, save_handoff=lambda p, d: None)
+        expect(len(recorder.calls) == 1, f"({recorder.calls})")
+        call = recorder.calls[0]
+        expect(call["timeout"] == deflake.TIMEOUT,
+               f"the timeout is supplied, not defaulted ({call['timeout']})")
+        expect(call["start_port"] == deflake.START_PORT,
+               f"and so is the starting port ({call['start_port']})")
+        expect(deflake.TIMEOUT == probe_flake.DEFAULT_TIMEOUT
+               and deflake.START_PORT == probe_flake.PORT_MIN,
+               "each equal to the harness's own value, supplied rather "
+               "than relied on")
+    finally:
+        scratch.cleanup()
+
+
+def test_the_targets_are_the_non_pass_identifiers_in_descriptor_order() -> None:
+    print("\n-- targets: once each, FAIL or MISSING, in the declared order")
+    scratch = Scratch()
+    try:
+        # Declared gamma, alpha, beta — deliberately not alphabetical, so
+        # sorting the identifiers and reading the descriptor give
+        # DIFFERENT answers and only one of them is the contract.
+        descriptor = probe_protocol.build_descriptor(
+            PROBE, [("gamma", "first"), ("alpha", "second"),
+                    ("beta", "third")])
+        invocation = scratch.artifacts / "multi"
+        invocation.mkdir(parents=True, exist_ok=True)
+        real = probe_flake.Measurement(
+            PROBE, descriptor, deflake.CENSUS_RUN_COUNT,
+            deflake.RTS_CAPABILITIES, scratch.artifacts, invocation)
+        real.commit_sha = COMMIT
+        real.timestamp = "2026-08-21T12:00:00Z"
+        # gamma fails twice and beta goes MISSING once; alpha never
+        # fails. Declared order gives [gamma, beta]; sorting would give
+        # [beta, gamma], and repeating per run would give gamma twice.
+        maps = [{"gamma": probe_protocol.FAIL, "alpha": probe_protocol.PASS,
+                 "beta": probe_protocol.PASS},
+                {"gamma": probe_protocol.MISSING, "alpha": probe_protocol.PASS,
+                 "beta": probe_protocol.MISSING},
+                {"gamma": probe_protocol.FAIL, "alpha": probe_protocol.PASS,
+                 "beta": probe_protocol.PASS}]
+        maps += [{"gamma": probe_protocol.PASS, "alpha": probe_protocol.PASS,
+                  "beta": probe_protocol.PASS}] * 7
+        for index, checks in enumerate(maps, 1):
+            outcome = (probe_flake.RUN_PASS
+                       if all(v == probe_protocol.PASS for v in checks.values())
+                       else probe_flake.RUN_FAIL)
+            run_dir = invocation / f"run-{index:03d}"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            real.runs.append(probe_flake.RunRecord(
+                index, 9100 + index, outcome, 1.5, checks,
+                run_dir if outcome != probe_flake.RUN_PASS else None))
+        _result, document = written_handoff(scratch, measure=Recorder(real))
+        expect(document["targets"] == ["gamma", "beta"],
+               f"once each, in the DECLARED order — sorting would answer "
+               f"['beta', 'gamma'] ({document['targets']})")
+        expect(deflake.handoff_targets(real.to_document()) == ["gamma", "beta"],
+               "and the helper answers the same alone")
+        expect(deflake.handoff_targets(measurement(scratch).to_document()) == [],
+               "a batch that passed everywhere targets nothing")
+    finally:
+        scratch.cleanup()
+
+
+def test_the_configuration_manifest_records_contents_and_absence() -> None:
+    print("\n-- the config manifest: every family member, or an empty list")
+    root = Path(tempfile.mkdtemp(prefix="test_deflake_config_"))
+    try:
+        (root / "config").mkdir()
+        expect(deflake.configuration_manifest(root) == [],
+               "an absent family is an EMPTY LIST, stated positively")
+
+        # Created in reverse-alphabetical order, so directory order and
+        # sorted order are different answers.
+        for name in ("video.local.yaml", "save.local.yaml",
+                     "notifications.local.yaml", "keybinds.local.yaml"):
+            (root / "config" / name).write_text(f"{name}: true\n")
+        (root / "config" / "ignored.yaml").write_text("not in the family\n")
+        (root / "config" / "nested").mkdir()
+        entries = deflake.configuration_manifest(root)
+        paths = [entry["path"] for entry in entries]
+        expect(paths == ["config/keybinds.local.yaml",
+                         "config/notifications.local.yaml",
+                         "config/save.local.yaml",
+                         "config/video.local.yaml"],
+               f"only the gitignored family, SORTED by path ({paths})")
+        expect(paths == sorted(paths), f"explicitly ({paths})")
+        expect(all(set(entry) == {"path", "sha256"} for entry in entries),
+               f"exactly two keys per entry ({entries})")
+        digest = hashlib.sha256(
+            (root / "config" / "keybinds.local.yaml").read_bytes()).hexdigest()
+        expect(entries[0]["sha256"] == digest and digest == digest.lower(),
+               "the lowercase SHA-256 of the bytes actually read")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_the_configuration_is_read_under_the_hold_before_the_runs() -> None:
+    print("\n-- the manifest describes what the runs read, not what followed")
+    scratch = Scratch()
+    try:
+        order: list = []
+        recorder = Recorder(measurement(scratch))
+
+        def measure(*args, **kwargs):
+            order.append("measure")
+            return recorder(*args, **kwargs)
+
+        def read_configuration(root):
+            order.append("configuration")
+            return [{"path": "config/save.local.yaml", "sha256": "a" * 64}]
+
+        _result, document = written_handoff(
+            scratch, measure=measure, read_configuration=read_configuration)
+        expect(order == ["configuration", "measure"],
+               f"captured before the first engine ({order})")
+        expect(document["configuration"]
+               == [{"path": "config/save.local.yaml", "sha256": "a" * 64}],
+               f"and carried verbatim ({document['configuration']})")
+    finally:
+        scratch.cleanup()
+
+
+def test_the_acceptable_failure_count_comes_from_the_installed_row() -> None:
+    print("\n-- X comes from the row the transaction wrote, not a reread")
+    scratch = Scratch()
+    try:
+        _result, document = written_handoff(
+            scratch,
+            record_result=lambda *a, **kw: (PROBE,
+                                            installed_census(acceptable=3)))
+        expect(document["acceptable_failures"] == 3,
+               f"({document['acceptable_failures']})")
+
+        # The lock is released when the recorder returns, so a row that
+        # names no X is a refusal rather than a reread.
+        result = run(scratch, measure=Recorder(measurement(scratch)),
+                     record_result=lambda *a, **kw: (PROBE, {"probes": []}))
+        expect(result.outcome == deflake.OUTCOME_MANAGED_ERROR,
+               f"a row with no acceptable-failure count refuses "
+               f"({result.outcome})")
+        expect(result.handoff_path is None
+               and result.to_document()["handoff_document"] is None,
+               "and writes no handoff")
+    finally:
+        scratch.cleanup()
+
+
+def test_a_recorder_that_answers_the_wrong_shape_is_refused() -> None:
+    print("\n-- the recording seam answers (probe, installed census)")
+    scratch = Scratch()
+    try:
+        for label, answer in (("only the probe key", PROBE),
+                              ("a one-element tuple", (PROBE,)),
+                              ("a probe and a string", (PROBE, "census")),
+                              ("nothing at all", None)):
+            result = run(scratch, measure=Recorder(measurement(scratch)),
+                         record_result=lambda *a, _v=answer, **kw: _v)
+            expect(result.outcome == deflake.OUTCOME_MANAGED_ERROR,
+                   f"a seam answering {label} is refused ({result.outcome})")
+            expect("not the probe and the census document"
+                   in (result.detail or ""),
+                   f"by name, rather than raising from inside a committed "
+                   f"transaction ({result.detail})")
+            expect(result.handoff_path is None, "and no handoff is written")
+    finally:
+        scratch.cleanup()
+
+
+def test_only_the_recorded_outcome_has_a_handoff() -> None:
+    print("\n-- every other post-measurement outcome writes none")
+    scratch = Scratch()
+    try:
+        attempts: list = []
+
+        def save(path, document):
+            attempts.append(str(path))
+            return None
+
+        cases = {
+            deflake.OUTCOME_HARNESS_ERROR: dict(
+                measure=Recorder(measurement(scratch, harness_error=True))),
+            deflake.OUTCOME_COMMIT_CHANGED: dict(
+                measure=Recorder(measurement(scratch)),
+                head_commit=lambda: OTHER_COMMIT),
+            deflake.OUTCOME_RECORD_FAILED: dict(
+                measure=Recorder(measurement(scratch)),
+                record_result=Raiser(probe_census.CensusError("no"))),
+            deflake.OUTCOME_RECORD_INDETERMINATE: dict(
+                measure=Recorder(measurement(scratch)),
+                record_result=Raiser(
+                    probe_census.CensusDurabilityUnconfirmed(
+                    "the directory fsync failed", target="census",
+                    error=OSError("fsync")))),
+            deflake.OUTCOME_RECORDED_RELEASE_FAILED: dict(
+                measure=Recorder(measurement(scratch)),
+                acquire_claim=lambda probe, **kw: FakeClaim(
+                    probe, release_error="the claim file is unwritable")),
+        }
+        for expected, overrides in cases.items():
+            attempts.clear()
+            result = run(scratch, save_handoff=save, **overrides)
+            expect(result.outcome == expected,
+                   f"{expected} reached ({result.outcome})")
+            expect(result.handoff_path is None,
+                   f"{expected} reports no handoff ({result.handoff_path})")
+            expect(result.to_document()["handoff_document"] is None,
+                   f"{expected} nulls the field rather than omitting it")
+            expect(attempts == [],
+                   f"{expected} did not even attempt a write ({attempts})")
+    finally:
+        scratch.cleanup()
+
+
+def test_a_recorded_measurement_with_nothing_retained_cannot_hand_off() -> None:
+    print("\n-- `recorded` does not guarantee a retained result to sit beside")
+    scratch = Scratch()
+    try:
+        real = measurement(scratch)
+        real.invocation_dir = None
+        result = run(scratch, measure=Recorder(real),
+                     result_path="/nonexistent/dir/that/cannot/be/made/r.json")
+        expect(result.outcome == deflake.OUTCOME_MANAGED_ERROR,
+               f"({result.outcome})")
+        expect(result.result_path is None,
+               f"nothing was retained ({result.result_path})")
+        expect(result.handoff_path is None
+               and result.to_document()["handoff_document"] is None,
+               "so there is no handoff")
+        expect("WAS recorded in the census" in (result.detail or ""),
+               f"and the detail says the census update stands ({result.detail})")
+        expect(result.ownership == deflake.OWNERSHIP_NONE,
+               f"the claim was already released ({result.ownership})")
+    finally:
+        scratch.cleanup()
+
+
+def test_a_handoff_that_cannot_be_written_is_a_managed_error() -> None:
+    print("\n-- the census update stands, and is neither retried nor rolled back")
+    scratch = Scratch()
+    try:
+        result = run(scratch, measure=Recorder(measurement(scratch)),
+                     record_result=probe_census.record_result_installed,
+                     save_handoff=lambda path, document: "the disk is full")
+        expect(result.outcome == deflake.OUTCOME_MANAGED_ERROR,
+               f"({result.outcome})")
+        expect(result.exit_code != 0, f"and nonzero ({result.exit_code})")
+        expect(result.handoff_path is None
+               and result.to_document()["handoff_document"] is None,
+               "the handoff field is null")
+        expect("the disk is full" in (result.detail or "")
+               and "WAS recorded in the census" in (result.detail or ""),
+               f"both facts are reported ({result.detail})")
+        expect(result.ownership == deflake.OWNERSHIP_NONE,
+               f"and nothing is still owned ({result.ownership})")
+        cohort = scratch.census_of()
+        expect(cohort.get("current") is not None,
+               "the committed census update was left exactly as it was")
+    finally:
+        scratch.cleanup()
+
+
+def test_the_real_writer_produces_a_readable_document() -> None:
+    print("\n-- the shipped writer, against a real directory")
+    scratch = Scratch()
+    try:
+        target = scratch.root / "beside" / "result-handoff.json"
+        document = {"schema": deflake.HANDOFF_SCHEMA, "probe": PROBE}
+        expect(deflake.write_handoff(target, document) is None,
+               "it writes, creating the directory")
+        expect(json.loads(target.read_text(encoding="utf-8")) == document,
+               "and the bytes read back as the document")
+        problem = deflake.write_handoff(scratch.root / "beside", document)
+        expect(problem is not None and "could not write" in problem,
+               f"an unwritable target is a reported problem, not a "
+               f"traceback ({problem})")
+    finally:
+        scratch.cleanup()
+
+
 def main() -> int:
     test_the_harness_is_told_ten_runs_and_four_capabilities()
     test_pass_fail_and_timeout_are_all_valid_observations()
@@ -1250,6 +1666,21 @@ def main() -> int:
     test_an_unexpected_failure_still_gives_the_claim_back()
     test_an_interrupt_after_the_claim_reports_what_it_gave_back()
     test_the_cli_takes_no_probe_or_run_overrides()
+    # The handoff (#1659)
+    test_a_recorded_measurement_writes_its_handoff_beside_the_result()
+    test_the_embedded_result_is_the_measurements_own_document()
+    test_the_invocation_records_what_the_process_observed()
+    test_the_adapter_is_told_the_timeout_and_starting_port()
+    test_the_targets_are_the_non_pass_identifiers_in_descriptor_order()
+    test_the_configuration_manifest_records_contents_and_absence()
+    test_the_configuration_is_read_under_the_hold_before_the_runs()
+    test_the_acceptable_failure_count_comes_from_the_installed_row()
+    test_a_recorder_that_answers_the_wrong_shape_is_refused()
+    test_only_the_recorded_outcome_has_a_handoff()
+    test_a_recorded_measurement_with_nothing_retained_cannot_hand_off()
+    test_a_handoff_that_cannot_be_written_is_a_managed_error()
+    test_the_real_writer_produces_a_readable_document()
+
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
