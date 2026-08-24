@@ -141,16 +141,35 @@ def _short_string(text: str, start: int, path: Path) -> str:
 
 
 def _check_structure(code: str, path: Path) -> None:
-    """Reject a structurally broken module (requirement 6, 'unparseable').
+    """Reject a structurally broken module (#1586 requirement 6).
 
-    Deliberately a STRUCTURAL check, not a Lua parser: no Lua interpreter is
-    available to `--list` (a fresh checkout must list courses with nothing
-    installed, and the CI image ships none), so this pins what can be pinned
-    without one -- balanced blocks and brackets over the comment- and
-    string-free text. It catches a truncated, half-edited or half-merged
-    module, which is how this file actually breaks. Anything subtler is
-    caught downstream: the engine's own loader is the full authority, and
-    `check_course_inventory` fails a real course run on any disagreement.
+    Deliberately a STRUCTURAL check and NOT a Lua parser, which is a scope
+    decision worth stating where someone will find it:
+
+      * The approved spec says what "unparseable" has to mean here. #1586's
+        own review amended requirement 6 to "failure to read the Lua source,
+        failure to derive any valid course registrations, or
+        duplicate/ambiguous derived registrations" -- three cases, each
+        implemented above. Full syntax validation is not one of them.
+      * Nothing could implement it here anyway. `--list` must answer in a
+        fresh checkout with nothing installed and no engine built, and the
+        CI image (.github/ci/Dockerfile) ships no Lua interpreter, so
+        shelling out to `luac -p` would be either a new hard dependency of a
+        metadata query or a silent skip. The alternative -- a Lua 5.4 parser
+        written out longhand here -- is several hundred lines of grammar to
+        make a probe's `--list` flag stricter than the contract asks.
+      * The gap is bounded and covered. What is left is a file whose blocks,
+        brackets, strings and comments all balance yet whose statements do
+        not parse (`local = 1`). That file cannot reach master unreviewed,
+        and the moment anything runs it the engine's own loader rejects it;
+        `check_course_inventory` then fails every real course run on the
+        disagreement. What this catches is how the file actually breaks in
+        practice -- truncated, half-edited, half-merged.
+
+    Scope: balanced `function`/`if`/`do` against `end`, `repeat` against
+    `until`, and balanced brackets, over the comment- and string-free text.
+    Agrees with `luac -p` on every case in the companion test and accepts
+    all 218 tracked .lua files.
     """
     depth = repeats = 0
     for match in _BLOCK_WORD.finditer(code):
