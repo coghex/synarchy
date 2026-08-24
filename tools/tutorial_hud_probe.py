@@ -36,16 +36,31 @@ in-game HUD, then:
      first_session tree so a composite branch exists to latch early.
   7. (#1419) The toggle caption's RENDERED GLYPH PIXELS fall inside the
      toggle box and inside the framebuffer, measured separately for the
-     collapsed "> Objectives" and the open "v Objectives". This is the
-     only check here that looks at the glyphs themselves: the dump can
-     say a label handle exists and the toggle rect is in frame while the
-     text paints straight off the right edge, which is exactly what
-     #1419 was. Nothing in the module is trusted for the measurement —
-     the caption element is hidden and re-shown, and the pixels that
-     change ARE the glyphs.
+     collapsed "> Objectives" and the open "v Objectives". Nothing in
+     the module is trusted for the measurement — the caption element is
+     hidden and re-shown, and the pixels that change ARE the glyphs.
+  8. (#1581) The same rendered-glyph measurement applied to the
+     OBJECTIVE ROWS, over the shipped `data/tutorials/first_session.yaml`
+     tree restored from the live engine registry — so the strings
+     measured are the authored ones ("Place portal", "Secure water
+     source", "Prepare an expedition", "Prepare water", "Prepare food")
+     rather than a synthetic stand-in. Every one of the five shipped
+     rows is measured, covering all four depths the tree uses, and each
+     row's ink must fall inside both the checklist panel and the
+     framebuffer. Row text is placed with no width budget, no
+     truncation, no wrapping and no clip (scripts/tutorial_hud.lua's
+     `fitToggle` covers the caption alone), so nothing but this oracle
+     stands between a too-long label and ink off the right edge.
 
 Needs a GPU (Vulkan device) — manual-only, never CI-gated, same as
 tools/offscreen_probe.py.
+
+The row bound proves containment for the LAYOUT ACTUALLY EXERCISED. A
+run at one size says nothing about a different one: `panelW` is capped
+by the framebuffer (scripts/tutorial_hud.lua) while the row font grows
+with UI scale, and `_differing_columns` can only see pixels the
+framebuffer kept, so ink discarded outside it is unobservable here. Run
+the sizes you care about.
 
 Usage:
   python3 tools/tutorial_hud_probe.py
@@ -67,6 +82,19 @@ LOG = "/tmp/tutorial_hud_engine.log"
 TOGGLE_CALLBACK = "onTutorialHudToggle"
 # A tree big enough to overflow the viewport at any supported size.
 PROBE_ROWS = 40
+
+# data/tutorials/first_session.yaml, in its authored pre-order: the
+# shipped ids, their authored labels, and the depth each sits at. This
+# is the EXPECTATION checked against what the engine registry hands
+# back, never a substitute for it -- the strings the oracle measures
+# always arrive through `engine.getTutorialTree()`.
+SHIPPED_ROWS = [
+    ("first_session_place_portal",       ("Place portal",         0)),
+    ("first_session_secure_water",       ("Secure water source",  1)),
+    ("first_session_prepare_expedition", ("Prepare an expedition", 2)),
+    ("first_session_prepare_water",      ("Prepare water",        3)),
+    ("first_session_prepare_food",       ("Prepare food",         3)),
+]
 
 failures: list[str] = []
 
@@ -360,6 +388,126 @@ def caption_bounds_phase(port: int, w: int, h: int, shots: str,
         return
 
 
+# --------------------------------------------------------------------------
+# Rendered-row oracle (#1581)
+#
+# The caption oracle above bounds the toggle caption and nothing else --
+# #1419 declared row rendering out of scope, so this is the half it left.
+# Objective rows are placed by scripts/tutorial_hud.lua with no width
+# budget, no truncation, no wrapping and no clip, anchored at
+# `panelX + indent` inside a RIGHT-ANCHORED panel, so a row wider than
+# its remaining budget paints toward and past the right framebuffer edge
+# with nothing in the module to stop it.
+#
+# Measurement is the caption's technique, per row: hide that one row's
+# text element, capture, re-show, and the columns that changed ARE its
+# glyphs. An advance-width query would not do -- engine.getTextWidth
+# sums advances while the renderer places quads by bearing and bitmap
+# size, so only the frame says where the ink landed.
+# --------------------------------------------------------------------------
+def _row_band(row: dict, w: int, h: int) -> dict:
+    """The row's own slice of the frame, at FULL framebuffer width so ink
+    painting past either edge of the panel is measured rather than
+    cropped away, and padded vertically by a whole row so an ascender or
+    descender leaving the row rect is still seen. Only this row's text is
+    hidden for the capture, so a neighbour's glyphs inside the padding
+    cannot be mistaken for this row's."""
+    pad = max(1, int(row.get("h") or 1))
+    y0 = max(0, int(row["y"]) - pad)
+    y1 = min(h, int(row["y"]) + int(row["h"]) + pad)
+    return {"x": 0, "y": y0, "w": max(1, w), "h": max(1, y1 - y0)}
+
+
+def _row_label(row: dict) -> str:
+    """How a failing row is NAMED: its shipped id and authored label."""
+    return f"row {row.get('id')!r} ({row.get('label')!r})"
+
+
+def measure_row_bounds(port: int, w: int, h: int, shots: str, tag: str,
+                       index: int) -> None:
+    """Bound one rendered row's glyph columns, by its position in the
+    live dump. Re-reads the dump on every attempt so a rebuild between
+    attempts is picked up rather than measured against a dead handle."""
+    for attempt in range(3):
+        before = dump(port)
+        rows = before.get("rows") or []
+        if index >= len(rows):
+            check(f"[{tag}] row {index} is still rendered to measure", False,
+                  f"only {len(rows)} row(s) in the dump")
+            return
+        row = rows[index]
+        handle = row.get("textHandle")
+        # A row with no live text element has no ink to bound, and the
+        # module would have to be TRUSTED to say so -- fail instead.
+        if not check(f"[{tag}] {_row_label(row)} has a live text element "
+                     "to measure", bool(handle), str(row)):
+            return
+        band = _row_band(row, w, h)
+        stem = f"row_{tag}_{index}_{attempt}"
+        with_a = os.path.join(shots, f"{stem}_with.png")
+        without = os.path.join(shots, f"{stem}_without.png")
+        with_b = os.path.join(shots, f"{stem}_again.png")
+        shot_a = screenshot(port, with_a)
+        send(port, f"UI.setVisible({handle}, false); return 'ok'", timeout=10.0)
+        time.sleep(0.4)
+        shot_b = screenshot(port, without)
+        # Re-shown before anything can return, so a failed capture or a
+        # drifting frame never leaves the list missing a row.
+        send(port, f"UI.setVisible({handle}, true); return 'ok'", timeout=10.0)
+        time.sleep(0.4)
+        shot_c = screenshot(port, with_b)
+        if not (shot_a and shot_b and shot_c):
+            if attempt < 2:
+                continue
+            check(f"[{tag}] {_row_label(row)} screenshots answer", False,
+                  f"with={shot_a} without={shot_b} again={shot_c}")
+            return
+        after = dump(port)
+        after_rows = after.get("rows") or []
+        # A rebuild mid-measurement would have replaced the very element
+        # being hidden, so the three frames would not be comparable.
+        rebuilt = (after.get("rebuildCount") != before.get("rebuildCount")
+                   or index >= len(after_rows)
+                   or after_rows[index].get("textHandle") != handle
+                   or after_rows[index].get("id") != row.get("id"))
+        # Anything OTHER than this row that moved between the first and
+        # last capture is background drift; retry rather than fold it in.
+        drift = _differing_columns(with_a, with_b, band)
+        if rebuilt or drift:
+            if attempt < 2:
+                print(f"       [{tag}] retrying {_row_label(row)}: "
+                      f"rebuilt={rebuilt}, {len(drift)} column(s) drifted "
+                      "between the two rendered frames")
+                continue
+            check(f"[{tag}] the frame held still long enough to measure "
+                  f"{_row_label(row)}", False,
+                  f"rebuilt={rebuilt} drifting columns={len(drift)}")
+            return
+        cols = _differing_columns(with_a, without, band)
+        px, pw = int(before["panelX"]), int(before["panelW"])
+        if not check(f"[{tag}] {_row_label(row)} renders at all "
+                     "(a non-empty glyph set)", bool(cols),
+                     f"no pixels changed when its text was hidden, "
+                     f"band {band}"):
+            return
+        lo, hi = min(cols), max(cols)
+        print(f"       [{tag}] depth {row.get('depth')} {_row_label(row)} "
+              f"glyph columns x={lo} -> x={hi}; panel x={px} w={pw} "
+              f"(exclusive right edge {px + pw}); framebuffer width {w}")
+        # Half-open, exactly like the caption checks: the panel owns
+        # columns [panelX, panelX + panelW) and the frame owns [0, w).
+        check(f"[{tag}] every glyph column of {_row_label(row)} starts at "
+              "or after the checklist panel's left edge", lo >= px,
+              f"leftmost glyph x={lo} < panel x={px}")
+        check(f"[{tag}] every glyph column of {_row_label(row)} falls "
+              "inside the checklist panel", hi < px + pw,
+              f"rightmost glyph x={hi} >= panel right edge {px + pw}")
+        check(f"[{tag}] every glyph column of {_row_label(row)} falls "
+              "inside the framebuffer", hi < w,
+              f"rightmost glyph x={hi} >= width {w}")
+        return
+
+
 def inject_wide_tree(port: int) -> None:
     """Replace the session tree through #958's own injection point."""
     send(port,
@@ -497,6 +645,77 @@ def already_latched_phase(port: int, shots: str) -> None:
           screenshot(port, shot))
 
 
+def restore_shipped_tree(port: int) -> str:
+    """Put the LIVE ENGINE REGISTRY tree back in front of the HUD and
+    reveal all five of its rows at once.
+
+    The labels measured have to be the authored ones, so the tree comes
+    from `engine.getTutorialTree()` -- #957 writes that registry once at
+    boot from data/tutorials/first_session.yaml and nothing in this
+    probe touches it, so it survives the synthetic injections above.
+    Copying the strings into Python or Lua would measure this file's
+    idea of the labels instead of the shipped file's.
+
+    Revealing all five at once is #996's own mechanism, not a new one:
+    `setTree` rebuilds the reveal history from the durable completed set
+    AS IT STANDS, so completing the three full/composite objectives
+    FIRST and re-adopting the same registry tree afterwards latches each
+    of them sticky-active. Without that second adoption a completed
+    parent hides the moment its child is revealed and only the deepest
+    branch would be on screen."""
+    got = send(port,
+               "local tp = require('scripts.tutorial_progress'); "
+               "local hud = require('scripts.tutorial_hud'); "
+               "local tree = engine.getTutorialTree(); "
+               "if tree == nil then return 'no-tree' end; "
+               "tp.reset(); tp.setTree(tree); "
+               "tp.completeObjective('first_session_place_portal'); "
+               "tp.completeObjective('first_session_secure_water'); "
+               "tp.completeObjective('first_session_prepare_expedition'); "
+               "tp.setSubobjectiveChecked('first_session_prepare_water', true); "
+               "tp.setSubobjectiveChecked('first_session_prepare_food', true); "
+               "tp.setTree(engine.getTutorialTree()); "
+               "hud.setOpen(true); hud.rebuild(); "
+               "return tree.id or 'unnamed'",
+               timeout=15.0).strip()
+    return got
+
+
+def shipped_rows_phase(port: int, w: int, h: int, shots: str) -> None:
+    """#1581: bound the RENDERED GLYPHS of the shipped tree's rows."""
+    tree_id = restore_shipped_tree(port)
+    if not check("the live engine registry still holds the shipped "
+                 "first_session tree", tree_id == "first_session", tree_id):
+        return
+    d = poll_dump(port, lambda x: len(x.get("rows") or []) == len(SHIPPED_ROWS)) \
+        or dump(port)
+    check("the whole shipped tree renders at once, in authored order",
+          d.get("rowIds") == [rid for rid, _ in SHIPPED_ROWS],
+          str(d.get("rowIds")))
+    rows = d.get("rows") or []
+    if len(rows) != len(SHIPPED_ROWS):
+        check("every shipped row is on screen to be measured", False,
+              f"{len(rows)} row(s) rendered, capacity {d.get('capacity')}, "
+              f"scrollOffset {d.get('scrollOffset')}")
+        return
+    # The labels are the AUTHORED strings, not this file's copy of them:
+    # they arrived through the registry, and the expectation is what is
+    # checked against them. Depth is asserted too because indent eats
+    # the row's horizontal budget, so a wrong depth would measure a
+    # different layout than the shipped one.
+    rendered = [(r.get("id"), r.get("label"), r.get("depth")) for r in rows]
+    expected = [(rid, label, depth) for rid, (label, depth) in SHIPPED_ROWS]
+    check("the rendered rows carry the authored labels and depths",
+          rendered == expected, f"{rendered} != {expected}")
+    check("the shipped tree exercises every depth it authors",
+          sorted({r.get("depth") for r in rows}) == [0, 1, 2, 3],
+          str(sorted({r.get("depth") for r in rows})))
+    for i in range(len(rows)):
+        measure_row_bounds(port, w, h, shots, "shipped", i)
+    shot = os.path.join(shots, "shipped_rows.png")
+    check("the shipped-row screenshot answers", screenshot(port, shot))
+
+
 def reclose_phase(port: int, closed_shot: str, shots: str) -> None:
     d = dump(port)
     tx, ty = center_of(d["toggle"])
@@ -567,6 +786,9 @@ def main() -> int:
         print("== 7. a branch already latched before its first reveal "
               "renders instead of an empty checklist (#996) ==")
         already_latched_phase(args.port, shots)
+
+        print("== 8. the SHIPPED rows' rendered glyph bounds (#1581) ==")
+        shipped_rows_phase(args.port, w, h, shots)
     finally:
         quit_engine(args.port, proc)
 
