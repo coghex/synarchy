@@ -55,37 +55,142 @@ COURSE_SOURCE = REPO / "scripts" / "movement_arena.lua"
 # fails a real course run when the derived view and M.listCourses() disagree.
 _COURSE_DECL = re.compile(
     r"^\s*M\.courses\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*function\s*\(")
-# Lua long-bracket comments (--[[ ... ]], --[==[ ... ]==]) span lines, so the
-# line-anchored pattern above cannot see that it is inside one.
-_LONG_COMMENT_OPEN = re.compile(r"--\[(=*)\[")
+# Lua comments and string literals can both span lines and can both contain
+# text that looks like a registration, so the file is lexed before the
+# line-anchored pattern above is applied to it.
+_LONG_BRACKET = re.compile(r"\[(=*)\[")
+# Block keywords, for the structural check below. `for`/`while` are absent on
+# purpose: each is terminated by the `do` that follows it, so counting `do`
+# alone already accounts for them. `elseif`/`else` open no block, and `\b`
+# keeps the `if` inside `elseif` from matching.
+_BLOCK_WORD = re.compile(r"\b(function|if|do|end|repeat|until)\b")
+_BRACKET_PAIRS = {")": "(", "]": "[", "}": "{"}
 
 
-def _blank_long_comments(text: str) -> str:
-    """Blank out Lua long-bracket comments, preserving line structure.
+def _blank(run: str) -> str:
+    """Replace a lexed run with spaces, keeping its newlines."""
+    return "".join(c if c == "\n" else " " for c in run)
 
-    A commented-OUT registration is not a registration (requirement 2), and
-    the line-anchored pattern alone would derive one. Newlines survive so
-    reported line numbers still name the real file. A `--[[` inside a string
-    literal would be misread as an opener; that can only LOSE a course, which
-    is exactly what `check_course_inventory` fails a real course run for.
+
+def _line_of(text: str, offset: int) -> int:
+    return text.count("\n", 0, offset) + 1
+
+
+def _blank_lua_noise(text: str, path: Path) -> str:
+    """Blank every comment and string literal, preserving line structure.
+
+    Registrations are code, so blanking leaves them untouched while a
+    commented-out or quoted one stops looking like a declaration. Line
+    structure survives so reported line numbers name the real file.
+
+    An unterminated comment or string is raised rather than tolerated: it
+    means the module cannot be the one the engine loads, which is exactly
+    what requirement 6 asks `--list` to refuse.
     """
     pieces: list[str] = []
-    cursor = 0
-    while cursor < len(text):
-        opener = _LONG_COMMENT_OPEN.search(text, cursor)
-        if opener is None:
-            pieces.append(text[cursor:])
-            break
-        pieces.append(text[cursor:opener.start()])
-        closer = "]" + "=" * len(opener.group(1)) + "]"
-        end = text.find(closer, opener.end())
-        if end == -1:                       # unterminated: the rest is comment
-            body, cursor = text[opener.start():], len(text)
+    cursor, size = 0, len(text)
+    while cursor < size:
+        char = text[cursor]
+        if char == "-" and text.startswith("--", cursor):
+            opener = _LONG_BRACKET.match(text, cursor + 2)
+            if opener is None:                      # `--` to end of line
+                stop = text.find("\n", cursor)
+                stop = size if stop < 0 else stop
+                pieces.append(_blank(text[cursor:stop]))
+                cursor = stop
+                continue
+            kind, start = "long comment", cursor
+        elif char == "[" and (opener := _LONG_BRACKET.match(text, cursor)):
+            kind, start = "long string", cursor
+        elif char in "\"'":
+            literal = _short_string(text, cursor, path)
+            pieces.append(_blank(literal))
+            cursor += len(literal)
+            continue
         else:
-            body = text[opener.start():end + len(closer)]
-            cursor = end + len(closer)
-        pieces.append("".join(c if c == "\n" else " " for c in body))
+            pieces.append(char)
+            cursor += 1
+            continue
+        closer = "]" + "=" * len(opener.group(1)) + "]"
+        stop = text.find(closer, opener.end())
+        if stop < 0:
+            raise CourseSourceError(
+                f"{path}: unterminated {kind} opened at line "
+                f"{_line_of(text, start)}")
+        pieces.append(_blank(text[start:stop + len(closer)]))
+        cursor = stop + len(closer)
     return "".join(pieces)
+
+
+def _short_string(text: str, start: int, path: Path) -> str:
+    """The full `'...'` / `"..."` literal beginning at `start`."""
+    quote = text[start]
+    cursor = start + 1
+    while cursor < len(text):
+        char = text[cursor]
+        if char == "\\":                             # escape: skip the pair
+            cursor += 2
+            continue
+        if char == quote:
+            return text[start:cursor + 1]
+        if char == "\n":
+            break                                   # Lua strings end at EOL
+        cursor += 1
+    raise CourseSourceError(
+        f"{path}: unterminated string opened at line {_line_of(text, start)}")
+
+
+def _check_structure(code: str, path: Path) -> None:
+    """Reject a structurally broken module (requirement 6, 'unparseable').
+
+    Deliberately a STRUCTURAL check, not a Lua parser: no Lua interpreter is
+    available to `--list` (a fresh checkout must list courses with nothing
+    installed, and the CI image ships none), so this pins what can be pinned
+    without one -- balanced blocks and brackets over the comment- and
+    string-free text. It catches a truncated, half-edited or half-merged
+    module, which is how this file actually breaks. Anything subtler is
+    caught downstream: the engine's own loader is the full authority, and
+    `check_course_inventory` fails a real course run on any disagreement.
+    """
+    depth = repeats = 0
+    for match in _BLOCK_WORD.finditer(code):
+        word = match.group(1)
+        if word in ("function", "if", "do"):
+            depth += 1
+        elif word == "end":
+            depth -= 1
+            if depth < 0:
+                raise CourseSourceError(
+                    f"{path}: 'end' with no open block at line "
+                    f"{_line_of(code, match.start())}")
+        elif word == "repeat":
+            repeats += 1
+        else:
+            repeats -= 1
+            if repeats < 0:
+                raise CourseSourceError(
+                    f"{path}: 'until' with no open 'repeat' at line "
+                    f"{_line_of(code, match.start())}")
+    if depth > 0:
+        raise CourseSourceError(
+            f"{path}: {depth} unterminated block(s) -- a 'function', 'if' or "
+            "'do' has no matching 'end'")
+    if repeats > 0:
+        raise CourseSourceError(f"{path}: 'repeat' with no matching 'until'")
+    stack: list[tuple[str, int]] = []
+    for offset, char in enumerate(code):
+        if char in "([{":
+            stack.append((char, offset))
+        elif char in ")]}":
+            if not stack or stack[-1][0] != _BRACKET_PAIRS[char]:
+                raise CourseSourceError(
+                    f"{path}: unbalanced '{char}' at line "
+                    f"{_line_of(code, offset)}")
+            stack.pop()
+    if stack:
+        char, offset = stack[-1]
+        raise CourseSourceError(
+            f"{path}: unclosed '{char}' opened at line {_line_of(code, offset)}")
 
 
 class CourseSourceError(RuntimeError):
@@ -105,15 +210,21 @@ def derive_courses(path: Path | None = None) -> list[str]:
     the same source so `--list` costs nothing. Returned sorted, matching
     that function's own `table.sort(names)`, so every `--list` invocation
     prints identical output.
+
+    Raises `CourseSourceError` for a source that cannot honestly be read:
+    unreadable or not UTF-8, structurally broken, declaring nothing, or
+    declaring one name twice.
     """
     path = COURSE_SOURCE if path is None else path
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise CourseSourceError(f"cannot read {path}: {exc}") from exc
+    code = _blank_lua_noise(text, path)
+    _check_structure(code, path)
     first_seen: dict[str, int] = {}
     duplicates: list[str] = []
-    for lineno, line in enumerate(_blank_long_comments(text).splitlines(), 1):
+    for lineno, line in enumerate(code.splitlines(), 1):
         match = _COURSE_DECL.match(line)
         if match is None:
             continue

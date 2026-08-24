@@ -19,8 +19,9 @@ would drift again:
     table. `wander_ledge` is runnable and appears in neither `VALIDATORS`
     nor `GOAL_Z`, so it is asserted by name: it is exactly the course a
     hand-kept list loses.
-  * An unreadable, empty or ambiguous source is a non-zero exit naming
-    the file, never a silently empty list.
+  * An unreadable, non-UTF-8, structurally broken, empty or ambiguous
+    source is a non-zero exit naming the file, never a silently empty
+    list and never an uncaught traceback.
   * The drift guard reports the two directions of difference separately,
     so its message never depends on set iteration order.
 
@@ -199,9 +200,9 @@ def test_a_commented_or_quoted_mention_is_not_a_registration() -> None:
         with lua_source(blocked + STUB):
             expect(probe.derive_courses() == ["alpha", "beta"],
                    f"a {opener} comment does not swallow later registrations")
-    with lua_source(STUB + "\nM.courses.gamma = function() return {} end  --[[ x\n"):
-        expect(probe.derive_courses() == ["alpha", "beta", "gamma"],
-               "an unterminated long comment ends the file, not the module")
+    with lua_source(STUB + "\nlocal s = [[ M.courses.long = function( ]]\n"):
+        expect(probe.derive_courses() == ["alpha", "beta"],
+               "a declaration inside a long string is not counted")
 
 
 # --------------------------------------------------------------------------
@@ -223,6 +224,74 @@ def _list_failure(source_text: str | None) -> tuple[int, str]:
         with no_engine():
             code, _, err = run_main(["--list"])
     return code, err
+
+
+# Every case below is one `luac -p` also rejects, and the shipped module plus
+# all 218 tracked .lua files are ones it also accepts; `luac` is NOT a runtime
+# dependency of the probe, which is why the check is structural.
+BROKEN = {
+    "a truncated function":
+        "M.courses.a = function()\n    return { name = 'a' }\n",
+    "a stray 'end'":
+        "M.courses.a = function() return {} end\nend\n",
+    "an unterminated string":
+        'M.courses.a = function() return { name = "a }\nend\n',
+    "an unterminated long comment":
+        "--[[ oops\nM.courses.a = function() return {} end\n",
+    "an unclosed brace":
+        "M.courses.a = function() return { name = 'a' end\n",
+    "a 'repeat' with no 'until'":
+        "M.courses.a = function() repeat x = 1 end\n",
+}
+
+INTACT = {
+    "a numeric for loop":
+        "M.courses.a = function() for i=1,3 do x=i end return {} end\n",
+    "an if/elseif/else chain":
+        "M.courses.a = function() if x then y=1 elseif z then y=2 "
+        "else y=3 end return {} end\n",
+    "a repeat/until loop":
+        "M.courses.a = function() repeat x=1 until x>0 return {} end\n",
+    "an escaped quote in a string":
+        'M.courses.a = function() return { note = "a \\" b" } end\n',
+}
+
+
+def test_a_structurally_broken_source_is_a_named_non_zero_exit() -> None:
+    print("\na structurally broken source")
+    for label, source in BROKEN.items():
+        code, err = _list_failure(source)
+        expect(code != 0, f"{label}: --list exits non-zero (got {code})")
+        expect("movement_arena.lua" in err, f"{label}: the file is named ({err!r})")
+        expect("courses: " not in err, f"{label}: no inventory is printed")
+
+
+def test_an_intact_source_is_still_accepted() -> None:
+    print("\nan intact source using every block form")
+    for label, source in INTACT.items():
+        with lua_source(source):
+            try:
+                names = probe.derive_courses()
+            except probe.CourseSourceError as exc:
+                names = f"rejected: {exc}"
+        expect(names == ["a"], f"{label} is accepted ({names})")
+
+
+def test_a_non_utf8_source_is_a_named_non_zero_exit() -> None:
+    print("\na source that is not UTF-8")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "movement_arena.lua"
+        path.write_bytes(b"M.courses.a = function() return { n = '\xff\xfe' } end\n")
+        original = probe.COURSE_SOURCE
+        probe.COURSE_SOURCE = path
+        try:
+            with no_engine():
+                code, out, err = run_main(["--list"])
+        finally:
+            probe.COURSE_SOURCE = original
+    expect(code != 0, f"--list exits non-zero rather than raising (got {code})")
+    expect("movement_arena.lua" in err, f"the file is named ({err!r})")
+    expect(out == "", f"no inventory is printed ({out!r})")
 
 
 def test_an_unreadable_source_is_a_named_non_zero_exit() -> None:
@@ -318,6 +387,9 @@ def main() -> int:
     test_list_is_honoured_for_every_mode()
     test_a_new_course_appears_without_any_python_edit()
     test_a_commented_or_quoted_mention_is_not_a_registration()
+    test_a_structurally_broken_source_is_a_named_non_zero_exit()
+    test_an_intact_source_is_still_accepted()
+    test_a_non_utf8_source_is_a_named_non_zero_exit()
     test_an_unreadable_source_is_a_named_non_zero_exit()
     test_a_source_declaring_nothing_is_a_named_non_zero_exit()
     test_a_duplicate_registration_is_a_named_non_zero_exit()
