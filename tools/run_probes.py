@@ -190,7 +190,8 @@ PROBES = [
     ("infection", "infection_probe.py",
      "infection growth/prevention/cure/sepsis loop end-to-end"),
     ("injury_log", "injury_log_probe.py",
-     "injury-log stream roundtrip: emit/drain, unit.injure, emitEventForUnit"),
+     "injury-log stream roundtrip: emit/drain, unit.injure, "
+     "emitEventForUnit, a real fall's event"),
     ("item_instance", "item_instance_probe.py",
      "per-instance item identity (#67)"),
     ("item_temp", "item_temp_probe.py",
