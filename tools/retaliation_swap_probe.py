@@ -33,17 +33,19 @@ branch's preconditions and then drives a single `unitAi.update(dt)` under
      never a fixture gate: a missing export IS the pre-#1483 state, and
      stopping on it would leave every behavioural case below unrun against
      the code they exist to fail on.
-  2. setup — a REAL hit from a third live unit makes it the subject's
-     recorded recent attacker (`unit.getLastAttacker`).
+  2. setup, ONCE PER WINDOW — a REAL hit from that window's own third live
+     unit makes it that window's subject's recorded recent attacker
+     (`unit.getLastAttacker`).
 
   Then, per case, the preconditions captured inside the graded chunk: the
   subject targets the ORIGINAL target on an `attack` goal, the recent
   attacker is the third unit at the age this case staged, both units are
-  live and non-collapsed, the attacker is not a technomule, and its
-  CURRENT Chebyshev distance is within `unit.getAttackRange(subject) +
-  0.5`. Anything else is a FIXTURE FAILURE (exit 2), not a behavioural
-  result — which is precisely how the existing collapsed-attacker case
-  passes today without reaching the comparison.
+  live and non-collapsed, the subject's blood is above the rise threshold,
+  the attacker is not a technomule, and its CURRENT Chebyshev distance is
+  within `unit.getAttackRange(subject) + 0.5`. Anything else is a FIXTURE
+  FAILURE (exit 2), not a behavioural result — which is precisely how the
+  existing collapsed-attacker case passes today without reaching the
+  comparison.
 
   3. fresh window — no `Lua error in update()` entry appears in the
      captured engine log across a window of NATURAL engine ticks with
@@ -71,15 +73,36 @@ duration. That is what lets them run — and fail — against code that does
 not export the constant at all; only check 1 reads the value, as an
 expectation of the module's one definition.
 
+ONE FIXTURE PER WINDOW (#1578). Each window owns a WHOLE quartet —
+subject, original target, recent attacker, sentinel — and stages its own
+real hit immediately before it is graded. Sharing one subject made the
+stale window's preconditions depend on what the fresh window's real
+combat had already cost it, and a subject driven under the collapse
+threshold made `check_preconditions` raise BEFORE either stale result was
+recorded: a run that reported a fixture failure and every fresh check
+passing, with the two declared stale results simply absent. Nothing could
+undo that damage either — blood does not passively regenerate
+(`scripts/unit_resource_tick.lua`), the engine exposes no verb to restore
+it, and `unit.revive` only transitions a unit that is ALREADY collapsed.
+
 HOW THE FIXTURE IS HELD STILL. The staged hit is real, so the staging leg
 is real combat; everything after it is arranged so that combat cannot
 disqualify the recent attacker through a DIFFERENT term of the branch's
 `and` chain than the comparison under test:
 
-* `combat.attack` stops swinging as soon as one swing WOUNDS (a miss
-  simply swings again), so the subject collects one hit's wounds rather
-  than however many land before the probe notices — then it is a plain
-  no-op for the whole graded section.
+* the staging leg's damage is bounded on BOTH axes, because neither
+  bounds it alone. Per swing, `neuter` writes the one strength input
+  nothing re-derives (`strength_base`), so a landed hit is a scratch
+  rather than the kill or concussion a full-strength acolyte deals. Across
+  swings, `patch_bounded_attack` stops the leg at the FIRST swing that
+  lands: a miss simply swings again, but the swing that stamps
+  `uiLastAttackerUid` (`Combat.Resolution`, the same write that appends
+  the wounds) makes every later call a no-op. Unbounded, the leg swings
+  for as long as the poll below runs — and none of it can be undone
+  afterwards, because blood does not come back.
+* for the graded section `combat.attack` is a plain no-op
+  (`patch_no_damage`), which is installed only once each window's own real
+  hit has been observed.
 * `unit.getAllIds` is narrowed to the units a leg actually needs, which
   also holds every other fixture unit off both the AI tick and
   `unit_resources`' injury tick.
@@ -87,17 +110,32 @@ disqualify the recent attacker through a DIFFERENT term of the branch's
   SUBJECT ONLY, delegating for every other unit — the same
   wrap-and-delegate technique `tools/mental_state_probe.py` uses on this
   very API. Without it the hit ages out of the window between console
-  round trips.
-* Before each case every fixture unit is revived, its bleeding dressed
-  and its survival needs topped up, and the flanking geometry is
-  re-established against the subject's current tile and VERIFIED.
+  round trips. It goes in only AFTER that window's real hit has been
+  observed, so the wrap fixes the age of a genuine record rather than
+  inventing one.
+* Before each case every fixture unit has its bleeding dressed FROM A
+  STOCKED KIT (an improvised tourniquet only halves a seep, however many
+  times it is applied) and its survival needs topped up, is WATCHED back
+  onto its feet rather than merely sent a revive (`wait_upright` — the
+  verb only queues, and a knockdown gets up on its own clock), and the
+  flanking geometry is re-established against the subject's current tile
+  and VERIFIED.
+
+FAILURE ACCOUNTING (#1578). Every check the probe declares is listed up
+front (`DECLARED_CHECKS`), and the closing report names all of them — a
+check the run never reached prints `NOT RUN` rather than vanishing, so a
+suppressed result can never be mistaken for an absent one. `--self-test`
+drives that accounting with no engine at all.
 
 Usage: python3 tools/retaliation_swap_probe.py [--port 9483]
+       python3 tools/retaliation_swap_probe.py --self-test
 Exit 0 = pass, 1 = a check failed, 2 = the fixture was never established.
 """
 from __future__ import annotations
 import argparse
+import contextlib
 import glob
+import io
 import os
 import sys
 import time
@@ -132,16 +170,226 @@ FLANK_OFFSET = 0.6
 FRESH_AGE_SEC = 0.0
 STALE_AGE_SEC = 60.0
 
-# Requirement 4: the duration itself stays three seconds. This is the
+# #1483's requirement 4: the duration itself stays three seconds. This is the
 # probe's EXPECTATION of the module's one definition, asserted against the
 # live export — not a second definition of the window, which lives (once)
 # in `scripts/unit_ai_combat.lua`.
 EXPECTED_WINDOW_SEC = 3.0
 
+# The blood fraction a graded window's subject must still hold. This is
+# `scripts/unit_resource_tick.lua`'s RISE threshold, the upper half of the
+# product's own collapse hysteresis (collapse at 30 %, rise at 50 %): a
+# subject below it is one that could not stand back up even after every
+# repair this harness can apply, so grading it would measure blood loss
+# rather than the retaliation branch.
+MIN_BLOOD_FRACTION = 0.5
+
+# What `neuter` writes into `strength_base`, from which the combat
+# resolver's `strength` is derived (baseline 1.0). Both ends of this were
+# measured, and both ends fail:
+#
+#   * too high and one swing kills or concusses the subject outright — a
+#     full-strength acolyte did exactly that, and nothing afterwards can
+#     undo it;
+#   * too low and the swing never lands at all. At 0.005 a staging leg
+#     went the whole 90 s poll without the resolver ever stamping a
+#     recent attacker, and stripping the attacker's kit (softer still)
+#     never landed one either.
+#
+# This value landed every staged hit measured, most of them leaving the
+# subject at a full blood meter, and the few that did open a bleeding
+# wound are dressable — which is only true because `provision_medical`
+# supplies real bandages.
+NEUTERED_STRENGTH_BASE = 0.02
+
+# The runaway bound on `stanch`'s dressing loop — NOT its termination
+# condition. It stops on the two real signals below: the subject's
+# `bleedRate` settling, or treatments that stop lowering it.
+# `unit.treatBleeding` reports `ok` for a dressing it APPLIED, never for a
+# subject it FINISHED, so a fixed count never terminated anything — and
+# the old bound of 12 was reached on every observed run, which is what
+# left wounds seeping through the window that followed.
+STANCH_ATTEMPTS = 64
+
+# How many treatments in a row may fail to lower the bleed rate before
+# `stanch` gives up. The improvised path ALWAYS reports success and always
+# sets the same seep, so "it said ok" is not progress — this is what stops
+# a fallback from spinning the loop to its bound while nothing improves.
+STANCH_STALLED_PASSES = 3
+
+# The bleed rate `stanch` treats as "no longer bleeding". A dressed wound
+# settles to a residual seep of order 1e-4 L/s rather than exactly zero,
+# which as a termination condition is no termination at all.
+STANCH_SETTLED_RATE = 1e-3
+
+# Stocked first-aid kits handed to every fixture unit. `unit.addItem`
+# mints a container def's authored `contents:` (#1418), so each one
+# arrives with real bandages — which is the difference between dressing a
+# wound and improvising at it; see `stanch`. Enough of them that a whole
+# wound distribution cannot run the supply out and drop the medic back
+# onto the improvised path, which was measured leaving a subject seeping
+# at 0.66 L/s after four hundred "successful" treatments.
+MEDICAL_KITS = 8
+
+# How long the staging leg waits for its real hit. Generous because it is
+# waiting on the product's own hit/miss rolls, not on anything the harness
+# controls: landing times of 5 s and 38 s were both observed from the same
+# fixture, and a leg that times out costs the whole run.
+STAGED_HIT_TIMEOUT_SEC = 90
+
+# Poses a graded window cannot start from. Everything else — standing,
+# crouching, climbing, sleeping — is a unit on its feet as far as the
+# branch's `attPose ~= "collapsed"` term is concerned.
+DOWN_POSES = ("collapsed", "crawling", "falling", "dead")
+
+# Each fixture's quartet is laid out along one row, and the two rows are
+# far enough apart that neither window's combat can reach into the other's
+# — the id-list wrap holds the idle row off every tick, and this holds it
+# out of reach even so.
+ROW_SPACING = 12
+
 
 class FixtureFailure(RuntimeError):
     """The scenario the probe needs was never established. Nothing
     downstream can be a behavioural result, so the run stops here."""
+
+
+# Every check this probe declares, in report order. The run records each
+# one by KEY, so the closing report can name the ones a fixture failure
+# left unreached instead of silently omitting them (#1578).
+DECLARED_CHECKS: tuple[tuple[str, str], ...] = (
+    ("export",
+     "the consumer's module can see one exported retaliation window of "
+     f"{EXPECTED_WINDOW_SEC:g}s"),
+    ("fresh:staged-hit",
+     "fresh window: a real hit makes the third unit the recorded recent "
+     "attacker"),
+    ("fresh:log",
+     "fresh window: no Lua error is logged across a window of natural ticks"),
+    ("fresh:swap",
+     "the retaliation swap retargets the subject onto the recent attacker"),
+    ("fresh:complete",
+     "the subject's tick reaches its post-execute completion point"),
+    ("fresh:sentinel",
+     "a unit ordered after the subject is reached by the SAME update "
+     "invocation"),
+    ("stale:staged-hit",
+     "stale window: a real hit makes the third unit the recorded recent "
+     "attacker"),
+    ("stale:log",
+     "stale window: no Lua error is logged across a window of natural ticks"),
+    ("stale:no-swap",
+     "a hit older than the window triggers no swap"),
+    ("stale:complete",
+     "the stale-window tick completes without raising"),
+)
+
+
+class Ledger:
+    """Which of the declared checks this run reached, and what they said.
+
+    The probe used to append results to a bare list, so a check the run
+    never reached left no trace at all — and every stale result sat after
+    a `check_preconditions` that could raise, which is exactly how a run
+    came to report a fixture failure while looking like it had merely
+    stopped a little early (#1578). Declaring the checks up front makes an
+    unreached one reportable.
+    """
+
+    def __init__(self, declared: tuple[tuple[str, str], ...] = DECLARED_CHECKS):
+        self._names = dict(declared)
+        self._order = [key for key, _ in declared]
+        self._results: dict[str, tuple[bool, str]] = {}
+
+    def record(self, key: str, passed: bool, detail: str = "") -> None:
+        if key not in self._names:
+            raise KeyError(f"{key!r} is not a declared check")
+        if key in self._results:
+            raise KeyError(f"{key!r} was already recorded")
+        self._results[key] = (bool(passed), detail)
+        print(f"  [{'PASS' if passed else 'FAIL'}] {self._names[key]}"
+              + (f" — {detail}" if detail else ""))
+
+    def order(self) -> list[str]:
+        return list(self._order)
+
+    def name(self, key: str) -> str:
+        return self._names[key]
+
+    def outcome(self, key: str) -> str:
+        if key not in self._results:
+            return "NOT RUN"
+        return "PASS" if self._results[key][0] else "FAIL"
+
+    def unrun(self) -> list[str]:
+        return [k for k in self._order if k not in self._results]
+
+    def failed(self) -> list[str]:
+        return [k for k in self._order
+                if k in self._results and not self._results[k][0]]
+
+
+def outcome_line(outcome: str, name: str) -> str:
+    """One report row. Shared with `--self-test`, so the accounting it
+    reads back is the exact text a real run prints."""
+    return f"{outcome:<7}  {name}"
+
+
+def finish(ledger: Ledger, failure: FixtureFailure | None = None) -> int:
+    """Print every declared check's outcome and return the exit status.
+
+    The one place a run's verdict is decided, so a fixture failure and a
+    clean finish report the same ledger in the same shape — a check that
+    never ran is named `NOT RUN`, never dropped.
+    """
+    print("\n--- result ---")
+    for key in ledger.order():
+        print("  " + outcome_line(ledger.outcome(key), ledger.name(key)))
+    unrun, failed = ledger.unrun(), ledger.failed()
+    total = len(ledger.order())
+    if unrun:
+        print(f"\n{len(unrun)} of {total} declared checks never ran:")
+        for key in unrun:
+            print("  " + outcome_line("NOT RUN", ledger.name(key)))
+    if failure is not None:
+        print(f"\nFIXTURE FAILURE: {failure}")
+        return 2
+    if unrun:
+        # No fixture failure and a check still missing is a defect in the
+        # probe itself, not a result — report it as a fixture failure
+        # rather than letting the run read as a pass.
+        print("\nthe run ended without a fixture failure yet left declared "
+              "checks unreached")
+        return 2
+    if failed:
+        print(f"\n{len(failed)} of {total} checks failed (#1483)")
+        return 1
+    print(f"\nall {total} checks passed (#1483)")
+    return 0
+
+
+class Fixture:
+    """One window's own four units, and where its row sits."""
+
+    def __init__(self, label: str, row: int):
+        self.label = label
+        self.row = row
+        self.subject = 0
+        self.attacker = 0
+        self.target = 0
+        self.sentinel = 0
+
+    def spawn(self, port: int) -> None:
+        y = self.row
+        self.subject = spawn_acolyte(port, 0, y)
+        self.attacker = spawn_acolyte(port, 1, y)
+        self.target = spawn_acolyte(port, -1, y)
+        self.sentinel = spawn_acolyte(port, -8, y)
+        print(f"{self.label}: subject={self.subject} attacker={self.attacker} "
+              f"target={self.target} sentinel={self.sentinel}")
+
+    def units(self) -> tuple[int, int, int, int]:
+        return (self.subject, self.attacker, self.target, self.sentinel)
 
 
 def lua(*statements: str) -> str:
@@ -202,21 +450,37 @@ def calm(port: int, uid: int) -> None:
 
 
 def neuter(port: int, uid: int) -> None:
-    """Make this unit's swings survivable, for the one real hit staged
-    below.
+    """Soften this unit's swings, and harden it against the ones it takes.
 
     A full-strength acolyte can one-shot another, and a kill or a collapse
     disqualifies the recent attacker through a DIFFERENT branch term than
-    the one under test. Strength is never 0 — that is the universal death
-    rule — so this bounds the staged hit rather than removing it; the
-    graded section suppresses swings outright instead (`patch_no_damage`).
+    the one under test — observed live as a subject read `dead` with 0 %
+    blood, and as one read `collapsed` at 73 % blood from the concussion a
+    single full-strength swing left (#1578).
+
+    `strength` is the stat the combat resolver reads
+    (`Combat.Resolution.Damage`), but writing it does nothing that lasts:
+    `Unit.Thread.Command.Body.recomputeBodyDerivedStats` re-derives it from
+    body composition on every composition change, and every physiology pass
+    then calls `starvation.refreshStrength`, which re-derives it AGAIN from
+    the `strength_body` mirror that recompute wrote. Both derive from
+    `strength_base`, which is the one input NEITHER of them overwrites —
+    so that is what this writes, and `unit.recomputeBody` is what makes the
+    new base take effect now rather than whenever body mass next drifts.
+
+    Deliberately small rather than zero: a swing that cannot land would
+    never stamp `uiLastAttackerUid`, and the staged hit has to be real.
+    `toughness` is the other half and caps out early — the resolver clamps
+    its contribution to a 50 % cut — so it hardens the subject a little but
+    could never bound the hit on its own.
     """
-    send(port, lua(f"unit.setStat({uid},'strength',0.05);",
+    send(port, lua(f"unit.setStat({uid},'strength_base',{NEUTERED_STRENGTH_BASE});",
                    f"unit.setStat({uid},'toughness',100);",
+                   f"unit.recomputeBody({uid});",
                    "return 'ok'"))
 
 
-def stanch(port: int, uid: int) -> str:
+def stanch(port: int, uid: int) -> dict:
     """Dress every bleeding wound the staged hit left on `uid`.
 
     The staging leg is REAL combat, and a real wound keeps seeping long
@@ -225,35 +489,123 @@ def stanch(port: int, uid: int) -> str:
     runs — which disqualifies it through `tickOne`'s pose short-circuit
     rather than through anything this probe is testing.
 
-    Self-treatment, so no kit, no second unit and no items are involved:
-    `unit.treatBleeding` needs only `bleed_control` knowledge on the medic
-    and improvises a tourniquet when the kit owner has no supplies
+    Self-treatment, so no second unit is involved: `unit.treatBleeding`
+    needs only `bleed_control` knowledge on the medic
     (`Engine.Scripting.Lua.API.Units.Medical`). The knowledge goes back to
     zero afterwards, because `calm` deliberately took this unit out of the
     medic squad — `treat_ally` scores 8.0 and would tie with the action
     under test.
+
+    It DOES need supplies, though, and that is not a detail (#1578). With
+    an empty inventory the medic improvises a tourniquet, and that path is
+    explicitly only "somewhat" effective: it clamps the dressed seep to
+    0.4–0.58 and always reports success, so re-treating the same wound
+    hundreds of times changes nothing — measured live, four hundred
+    tourniquets left a torso wound seeping at 0.14 L/s and the subject
+    bled out through the window that followed. Drawing from the kit
+    `provision_medical` hands out instead dresses it in ONE attempt, to a
+    seep of order 1e-4.
+
+    NB this stops the seeping; it cannot put blood back. Blood does not
+    passively regenerate and no verb sets it, which is why the staging
+    leg's damage has to be bounded BEFORE it is inflicted.
     """
-    return send(port, lua(
+    got = send_json(port, lua(
         f"local u = {uid};",
         "unit.setKnowledge(u, 'bleed_control', 100);",
-        "local n = 0;",
-        "for _ = 1, 12 do",
+        "local n = 0; local stalled = 0;",
+        "local function rate() local b = unit.getBlood(u);",
+        " return b and b.bleedRate or 0 end;",
+        "local last = rate();",
+        f"for _ = 1, {STANCH_ATTEMPTS} do",
+        f" if rate() <= {STANCH_SETTLED_RATE} then break end;",
         " local r = unit.treatBleeding(u, u);",
         " if not r or not r.ok then break end;",
-        " n = n + 1 end;",
+        " n = n + 1;",
+        " local now = rate();",
+        " if now < last - 1e-6 then stalled = 0 else stalled = stalled + 1 end;",
+        " last = now;",
+        f" if stalled >= {STANCH_STALLED_PASSES} then break end end;",
         "unit.setKnowledge(u, 'bleed_control', 0);",
-        "return n"))
+        "return { dressed = n, bleedRate = rate() }"),
+        timeout=30.0)
+    if not isinstance(got, dict):
+        raise FixtureFailure(f"dressing {uid}'s wounds returned {got!r}")
+    return got
 
 
-def restore(port: int, uid: int) -> None:
-    """Undo what the previous window's real combat cost this unit.
+def provision_medical(port: int, uid: int) -> None:
+    """Give `uid` its own stocked first-aid kits.
 
-    Applied before EACH graded window rather than once, so the second one
-    starts from the same fixture the first did.
+    `stanch` treats the unit as its own medic AND its own kit owner, so
+    the supplies have to sit in this unit's own inventory. Handed out at
+    fixture setup rather than at treatment time, because the wound being
+    dressed is already seeping by then and every console round trip costs
+    blood that never comes back.
     """
-    send(port, f"unit.revive({uid}); return 'ok'")
+    for _ in range(MEDICAL_KITS):
+        send(port, f"unit.addItem({uid}, 'first_aid_kit'); return 'ok'")
+
+
+def restore(port: int, uid: int, label: str) -> None:
+    """Undo what real combat cost this unit, as far as anything can, and
+    do not return until it is actually back on its feet.
+
+    Applied before the graded window rather than only at spawn, so the
+    window starts from a unit that is standing, dressed and fed.
+    """
     stanch(port, uid)
     sustain(port, uid)
+    wait_upright(port, uid, label)
+
+
+def wait_upright(port: int, uid: int, label: str,
+                 timeout: float = 25.0) -> str:
+    """Poll until `uid` is on its feet, asking it to get up as it goes.
+
+    Firing `unit.revive` once and reading the pose on the next round trip
+    grades whatever the unit happened to be doing: the verb only QUEUES a
+    `UnitRevive`, and it is a plain no-op unless the unit is ALREADY
+    Collapsed (`Engine.Scripting.Lua.API.Units.Spawn`). A knockdown has
+    its own self-timed getup clock on top of that
+    (`Unit.Thread.Movement.Timers` — the physics injury model turns every
+    landing into one), so the only reliable way to start a window from a
+    standing subject is to watch it stand.
+
+    Failing here is honest and load-bearing: a unit that cannot rise
+    inside the timeout is one the product's own rules are holding down —
+    below the blood rise threshold, concussed, or dead — and grading it
+    would measure that instead of the retaliation branch.
+    """
+    deadline = time.time() + timeout
+    pose = ""
+    while time.time() < deadline:
+        pose = send(port, f"return unit.getPose({uid})")
+        if pose not in DOWN_POSES:
+            return pose
+        if pose == "dead":
+            break
+        send(port, f"unit.revive({uid}); return 'ok'")
+        time.sleep(0.25)
+    frac = blood_fraction(port, uid)
+    raise FixtureFailure(
+        f"{label}: unit {uid} never came back to its feet within "
+        f"{timeout:g}s (pose {pose!r}, blood "
+        + ("unreadable" if frac is None else f"{100.0 * frac:.1f}% of max")
+        + ")")
+
+
+def blood_fraction(port: int, uid: int) -> float | None:
+    """`uid`'s blood as a fraction of its own maximum, or `None`."""
+    got = send_json(port, f"local b = unit.getBlood({uid}); "
+                          "if not b then return { ok = 0 } end; "
+                          "return { ok = 1, current = b.current, max = b.max }")
+    if not isinstance(got, dict) or got.get("ok") != 1:
+        return None
+    mx = got.get("max", 0)
+    if not mx or mx <= 0:
+        return None
+    return got.get("current", 0) / mx
 
 
 def window_seconds(port: int) -> float | None:
@@ -327,6 +679,10 @@ def patch_last_attacker(port: int, subject: int, attacker: int,
     the staged hit ages out of the window between console round trips and
     the case decays into a short-circuiting fixture failure rather than a
     result. `tools/mental_state_probe.py` wraps this same API the same way.
+
+    Installed only AFTER this window's own real hit has been observed, so
+    what it fixes is the age of a genuine record — never a substitute for
+    one.
     """
     send(port, lua(
         "if not _G.__ret_gla then _G.__ret_gla = unit.getLastAttacker end;",
@@ -334,6 +690,38 @@ def patch_last_attacker(port: int, subject: int, attacker: int,
         f" if u == {subject} then",
         f"  return {{ uid = {attacker}, at = engine.gameTime() - {age} }} end;",
         " return _G.__ret_gla(u) end;",
+        "return 'ok'"))
+
+
+def patch_bounded_attack(port: int, subject: int, attacker: int) -> None:
+    """Let the staging leg swing until ONE swing WOUNDS, then stop.
+
+    `Combat.Resolution` stamps `uiLastAttackerUid` in the very same write
+    that appends the wounds, so "the subject's recorded recent attacker is
+    now `attacker`" IS "a swing has landed and wounded". Swinging past
+    that point buys the fixture nothing and costs it everything: the
+    staging poll below runs for up to 45 s, every landed swing opens more
+    bleeding wounds, and blood never comes back — a subject driven under
+    the 30 % collapse threshold can no longer be stood back up, which
+    disqualifies it through `tickOne`'s pose short-circuit rather than
+    through anything under test (#1578).
+
+    A miss simply swings again, so this bounds the DAMAGE without making
+    the staged hit any less real: the hit that lands is a genuine one,
+    resolved by the product's own combat path against the product's own
+    injury rules. Nothing here patches or bypasses those rules — the
+    harness stops asking for more swings, and that is all. `neuter` bounds
+    the other axis, what a single swing costs; this one bounds how many
+    there are.
+    """
+    send(port, lua(
+        "if not _G.__ret_atk then _G.__ret_atk = combat.attack end;",
+        f"local subject, attacker = {subject}, {attacker};",
+        "combat.attack = function(...)",
+        " local raw = _G.__ret_gla or unit.getLastAttacker;",
+        " local rec = raw(subject);",
+        " if rec and rec.uid == attacker then return false end;",
+        " return _G.__ret_atk(...) end;",
         "return 'ok'"))
 
 
@@ -347,8 +735,7 @@ def patch_no_damage(port: int) -> None:
     couple of seconds of ticks — both of which disqualify it through a
     DIFFERENT term of the branch's `and` chain than the comparison this
     probe exists to reach, turning every later case into a fixture
-    failure. Neutered strength alone is not enough; repeated hits
-    accumulate.
+    failure.
 
     The branch under test runs BEFORE any swing in `attackTargetExecute`,
     so suppressing the swing's effect changes nothing it reads.
@@ -376,7 +763,10 @@ def graded_update(port: int, subject: int, target: int, attacker: int,
 
     Everything from `commandAttack` to the post-state read happens inside a
     single Lua chunk, so no engine-driven tick can interleave between the
-    precondition capture and the invocation being graded.
+    precondition capture and the invocation being graded. The subject's
+    BLOOD is captured in that same chunk for the same reason: read
+    separately it could drift across a console round trip and describe a
+    subject other than the one the tick below graded.
 
     `commandAttack` is what puts the subject back on the ORIGINAL target
     (and zeroes its `nextActionAt`), so a swap observed afterwards can only
@@ -393,6 +783,7 @@ def graded_update(port: int, subject: int, target: int, attacker: int,
         f"local at = unit.getInfo({attacker});",
         "if not me or not at then return { fixture = 'missing-unit-info' } end;",
         f"local rec = unit.getLastAttacker({subject});",
+        f"local bl = unit.getBlood({subject});",
         "local pre = { target = s.attackTargetUid,",
         " recent = rec and rec.uid or -1,",
         " age = rec and (engine.gameTime() - (rec.at or 0)) or -1,",
@@ -401,6 +792,8 @@ def graded_update(port: int, subject: int, target: int, attacker: int,
         f" reach = (unit.getAttackRange({subject}) or 1.0) + 0.5,",
         f" subjectPose = unit.getPose({subject}),",
         f" attackerPose = unit.getPose({attacker}),",
+        " bloodCurrent = bl and bl.current or -1,",
+        " bloodMax = bl and bl.max or -1,",
         " attackerDef = at.defName,",
         f" attackerExists = unit.exists({attacker}) and 1 or 0,",
         " goal = s.activeGoal };",
@@ -461,8 +854,80 @@ def stage_geometry(port: int, subject: int, target: int,
         f"attacker inside melee reach (last read {d})")
 
 
-def run_case(port, record, label: str, subject: int, target: int,
-             attacker: int, sentinel: int, age: float) -> dict:
+def stage_hit(port, ledger: Ledger, key: str, fx: Fixture) -> None:
+    """Land this window's OWN real hit, bounded to a single wounding swing.
+
+    Only the ATTACKER is AI-ticked for this leg: a subject that fought
+    back would wound the attacker, and the resulting bleed-out disqualifies
+    it later through a DIFFERENT branch term than the one under test.
+    """
+    patch_ids(port, [fx.attacker])
+    patch_bounded_attack(port, fx.subject, fx.attacker)
+    send(port, f"require('scripts.unit_ai').commandAttack({fx.attacker}, "
+               f"{fx.subject}); return 'ok'")
+    landed = poll_until(STAGED_HIT_TIMEOUT_SEC, lambda: send(
+        port, lua("local raw = _G.__ret_gla or unit.getLastAttacker;",
+                  f"local a = raw({fx.subject});",
+                  "return a and a.uid or 'nil'")) == str(fx.attacker))
+    ledger.record(key, bool(landed),
+                  f"unit.getLastAttacker({fx.subject}).uid == {fx.attacker}"
+                  if landed else "no hit ever landed")
+    if not landed:
+        raise FixtureFailure(
+            f"{fx.attacker} never landed a hit on {fx.subject}; the branch's "
+            "recent-attacker precondition cannot be established")
+
+    # Retire the staging order. The recorded hit stays; only the standing
+    # orders go, and dressing both units' wounds immediately is what keeps
+    # the single staged hit from seeping the subject's blood away while the
+    # window is set up.
+    send(port, lua(
+        "local ai = require('scripts.unit_ai');",
+        f"local s = ai.getState({fx.attacker});",
+        "if s then ai.markGoalAccomplished(s, 'attack');",
+        " s.attackTargetUid = nil end;",
+        f"unit.revive({fx.attacker}); unit.stop({fx.attacker});",
+        f"unit.revive({fx.subject}); unit.stop({fx.subject});",
+        "return 'ok'"))
+    for who, uid in (("subject", fx.subject), ("attacker", fx.attacker)):
+        dressed = stanch(port, uid)
+        print(f"  {who} {uid} dressed {dressed.get('dressed')} wound(s), "
+              f"bleed rate now {dressed.get('bleedRate')}")
+    cost = staging_cost(port, fx)
+    print(f"  staged hit cost: attacker strength "
+          f"{cost.get('attackerStrength', float('nan')):.3f}, subject left "
+          f"{100.0 * cost.get('subjectBlood', 0.0):.1f}% blood with "
+          f"{cost.get('subjectWounds')} wound(s), pose "
+          f"{cost.get('subjectPose')!r}")
+    for uid in (fx.subject, fx.attacker):
+        wait_upright(port, uid, f"{fx.label} staging")
+
+
+def staging_cost(port: int, fx: Fixture) -> dict:
+    """What the staged hit actually cost, and what the swing that dealt it
+    was worth.
+
+    Reported rather than merely bounded: `strength` is the input the
+    resolver scales its swing energy by, and the subject's blood and wound
+    count are the outputs — printing all three is what makes a run's own
+    log say whether the bound held, instead of leaving it to be inferred
+    from whichever precondition failed afterwards.
+    """
+    got = send_json(port, lua(
+        f"local b = unit.getBlood({fx.subject});",
+        f"return {{ attackerStrength = unit.getStat({fx.attacker}, 'strength'),",
+        f" subjectBlood = b and (b.current / b.max) or -1,",
+        f" subjectWounds = #(unit.getWounds({fx.subject}) or {{}}),",
+        f" subjectPose = unit.getPose({fx.subject}) }}"))
+    if not isinstance(got, dict) or "subjectBlood" not in got:
+        raise FixtureFailure(
+            f"{fx.label}: reading what the staged hit cost {fx.subject} "
+            f"returned {got!r}")
+    return got
+
+
+def run_case(port, ledger: Ledger, log_key: str, fx: Fixture,
+             age: float) -> dict:
     """Stage one window, let NATURAL ticks run through it, then grade.
 
     The natural-tick leg is what produces the log evidence: the subject is
@@ -472,32 +937,58 @@ def run_case(port, record, label: str, subject: int, target: int,
     one of those ticks raises and
     `Engine.Scripting.Lua.Script.callModuleFunctionReportingError` logs it.
     """
-    print(f"\n--- {label} (staged hit age {age:g}s) ---")
-    patch_last_attacker(port, subject, attacker, age)
-    for uid in (subject, attacker, target):
-        restore(port, uid)
-    stage_geometry(port, subject, target, attacker)
-    send(port, f"require('scripts.unit_ai').commandAttack({subject}, "
-               f"{target}); return 'ok'")
+    print(f"\n--- {fx.label} (staged hit age {age:g}s) ---")
+    patch_last_attacker(port, fx.subject, fx.attacker, age)
+    patch_ids(port, [fx.subject, fx.sentinel])
+    patch_no_damage(port)
+    for uid in (fx.subject, fx.attacker, fx.target):
+        restore(port, uid, f"{fx.label} setup")
+    stage_geometry(port, fx.subject, fx.target, fx.attacker)
+    send(port, f"require('scripts.unit_ai').commandAttack({fx.subject}, "
+               f"{fx.target}); return 'ok'")
 
     mark = log_size()
     time.sleep(NATURAL_TICK_WINDOW_SEC)
     errors = log_errors_since(mark)
+
+    # Stand both units back up BEFORE re-pinning, so the geometry is
+    # settled against a subject that is already on its feet. A window of
+    # live ticks can put one down for reasons this fixture does not
+    # control, and a pose is a precondition the graded chunk reads — so
+    # the fixture waits it out here rather than grading a unit that was
+    # about to stand anyway. The chunk still captures the pose itself, so
+    # nothing here can pass a subject that stayed down.
+    for uid in (fx.subject, fx.attacker):
+        wait_upright(port, uid, f"{fx.label} pre-grade")
 
     # Re-pin before grading. The window that just ran is real combat: the
     # subject closes on whatever it is targeting and its swings knock the
     # other two around, so the flanking geometry has to be re-established
     # against the subject's CURRENT tile — the branch reads the distance
     # as it stands when the graded invocation starts.
-    stage_geometry(port, subject, target, attacker)
-    graded = graded_update(port, subject, target, attacker, sentinel)
-    check_preconditions(graded["pre"], age, f"{label} case")
+    stage_geometry(port, fx.subject, fx.target, fx.attacker)
+    graded = graded_update(port, fx.subject, fx.target, fx.attacker,
+                           fx.sentinel)
+    # Reported BEFORE the gate, so the observation is on the record even on
+    # the run where it is the thing that fails.
+    print(f"  {fx.label} subject observed: pose "
+          f"{graded['pre'].get('subjectPose')!r}, blood "
+          f"{describe_blood(graded['pre'])}")
+    check_preconditions(graded["pre"], age, f"{fx.label} case")
     print(f"  preconditions: {graded['pre']}")
-    record(f"{label}: no Lua error is logged across a window of natural ticks",
-           not errors,
-           f"{len(errors)} entr{'y' if len(errors) == 1 else 'ies'}"
-           + (f": {errors[0]}" if errors else ""))
+    ledger.record(log_key, not errors,
+                  f"{len(errors)} entr{'y' if len(errors) == 1 else 'ies'}"
+                  + (f": {errors[0]}" if errors else ""))
     return graded
+
+
+def describe_blood(pre: dict) -> str:
+    """The captured blood reading as a percentage of the subject's own
+    maximum, or why there is no fraction to state."""
+    cur, mx = pre.get("bloodCurrent", -1), pre.get("bloodMax", -1)
+    if mx is None or mx <= 0:
+        return f"unreadable (current={cur!r}, max={mx!r})"
+    return f"{100.0 * cur / mx:.1f}% of max ({cur:.2f}/{mx:.2f})"
 
 
 def check_preconditions(pre: dict, staged_age: float, label: str) -> None:
@@ -515,6 +1006,17 @@ def check_preconditions(pre: dict, staged_age: float, label: str) -> None:
     for who in ("subjectPose", "attackerPose"):
         if pre.get(who) in ("dead", "collapsed"):
             problems.append(f"{who} is {pre.get(who)!r}")
+    # The subject must be one that could stand back up, not merely one that
+    # happens to be standing this instant: below the rise threshold the
+    # next wound tick puts it down for good and nothing this harness can do
+    # brings it back (#1578).
+    blood_max = pre.get("bloodMax", -1)
+    if blood_max is None or blood_max <= 0:
+        problems.append(f"the subject's blood is unreadable ({describe_blood(pre)})")
+    elif pre.get("bloodCurrent", -1) / blood_max <= MIN_BLOOD_FRACTION:
+        problems.append(
+            f"the subject's blood is {describe_blood(pre)}, at or below the "
+            f"{100.0 * MIN_BLOOD_FRACTION:.0f}% rise threshold")
     if pre.get("attackerDef") == "technomule":
         problems.append("the recent attacker is a technomule")
     if pre.get("dist", 1e9) > pre.get("reach", 0):
@@ -556,135 +1058,200 @@ def main() -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=9483)
+    ap.add_argument("--self-test", action="store_true",
+                    help="check the declared-check accounting with no engine")
     args = ap.parse_args()
+    if args.self_test:
+        return self_test()
     port = args.port
 
     proc = boot(port, log=LOG)
-    results: list[tuple[str, bool, str]] = []
-
-    def record(name: str, passed: bool, detail: str = "") -> None:
-        results.append((name, passed, detail))
-        print(f"  [{'PASS' if passed else 'FAIL'}] {name}"
-              + (f" — {detail}" if detail else ""))
+    ledger = Ledger()
 
     try:
-        bootstrap(port)
-        window = window_seconds(port)
-        record("the consumer's module can see one exported retaliation "
-               f"window of {EXPECTED_WINDOW_SEC:g}s",
-               window == EXPECTED_WINDOW_SEC,
-               "scripts.unit_ai_combat.RETALIATE_WINDOW_SEC = "
-               + ("absent — the attack module reads an unassigned global"
-                  if window is None else f"{window:g}"))
-
-        # The fixture. `target` and `attacker` flank the subject, both
-        # inside melee reach: with the original target already in range
-        # the subject stands and swings instead of walking off, so the
-        # attacker stays within `getAttackRange + 0.5` across a whole
-        # window of natural ticks without being re-pinned mid-flight.
-        subject = spawn_acolyte(port, 0, 0)
-        attacker = spawn_acolyte(port, 1, 0)
-        target = spawn_acolyte(port, -1, 0)
-        sentinel = spawn_acolyte(port, -8, 0)
-        print(f"subject={subject} attacker={attacker} "
-              f"target={target} sentinel={sentinel}")
-        for uid in (subject, attacker, target, sentinel):
-            neuter(port, uid)
-            calm(port, uid)
-
-        # A REAL hit, so the third unit genuinely becomes the recorded
-        # recent attacker before anything is wrapped. Only the ATTACKER is
-        # AI-ticked for this leg: a subject that fought back would wound
-        # the attacker, and the resulting bleed-out disqualifies it later
-        # through a DIFFERENT branch term than the one under test.
-        patch_ids(port, [attacker])
         try:
-            stage_and_grade(port, record, subject, target, attacker, sentinel)
-        finally:
-            remove_patches(port)
+            bootstrap(port)
+            window = window_seconds(port)
+            ledger.record(
+                "export", window == EXPECTED_WINDOW_SEC,
+                "scripts.unit_ai_combat.RETALIATE_WINDOW_SEC = "
+                + ("absent — the attack module reads an unassigned global"
+                   if window is None else f"{window:g}"))
 
-        print("\n--- result ---")
-        failed = [n for n, ok, _ in results if not ok]
-        for name, ok, _ in results:
-            print(f"  {'PASS' if ok else 'FAIL'}  {name}")
-        if failed:
-            print(f"\n{len(failed)} of {len(results)} checks failed (#1483)")
-            return 1
-        print(f"\nall {len(results)} checks passed (#1483)")
-        return 0
+            # ONE fixture per window. `target` and `attacker` flank the
+            # subject, both inside melee reach: with the original target
+            # already in range the subject stands and swings instead of
+            # walking off, so the attacker stays within
+            # `getAttackRange + 0.5` across a whole window of natural ticks
+            # without being re-pinned mid-flight.
+            fresh_fx = Fixture("fresh window", 0)
+            stale_fx = Fixture("stale window", ROW_SPACING)
+            for fx in (fresh_fx, stale_fx):
+                fx.spawn(port)
+                for uid in fx.units():
+                    neuter(port, uid)
+                    calm(port, uid)
+                    provision_medical(port, uid)
+
+            try:
+                grade_windows(port, ledger, fresh_fx, stale_fx)
+            finally:
+                remove_patches(port)
+        except FixtureFailure as exc:
+            return finish(ledger, exc)
+        return finish(ledger)
     finally:
         quit_engine(port, proc)
 
 
-def stage_and_grade(port, record, subject: int, target: int,
-                    attacker: int, sentinel: int) -> None:
-    """Land the real hit, then grade both windows.
+def grade_windows(port, ledger: Ledger, fresh_fx: Fixture,
+                  stale_fx: Fixture) -> None:
+    """Stage and grade both windows, each from its own untouched fixture.
 
-    Split out of `main` only so the id-list wrap installed for the staging
-    leg is released by ONE `finally` covering every path out of it,
-    including a fixture failure raised mid-staging.
+    Split out of `main` only so the wraps each leg installs are released
+    by ONE `finally` covering every path out of them, including a fixture
+    failure raised mid-staging.
     """
-    send(port, f"require('scripts.unit_ai').commandAttack({attacker}, "
-               f"{subject}); return 'ok'")
-    landed = poll_until(45, lambda: send(
-        port, f"local a = unit.getLastAttacker({subject}); "
-              "return a and a.uid or 'nil'") == str(attacker))
-    record("a real hit makes the third unit the recorded recent attacker",
-           bool(landed),
-           f"unit.getLastAttacker({subject}).uid == {attacker}"
-           if landed else "no hit ever landed")
-    if not landed:
-        raise FixtureFailure(
-            f"{attacker} never landed a hit on {subject}; the branch's "
-            "recent-attacker precondition cannot be established")
+    stage_hit(port, ledger, "fresh:staged-hit", fresh_fx)
+    fresh = run_case(port, ledger, "fresh:log", fresh_fx, FRESH_AGE_SEC)
+    ledger.record("fresh:swap", fresh["postTarget"] == fresh_fx.attacker,
+                  f"attackTargetUid {fresh['pre']['target']} -> "
+                  f"{fresh['postTarget']} (wanted {fresh_fx.attacker})")
+    ledger.record("fresh:complete",
+                  fresh["ok"] == 1 and fresh["subjectNext"] > fresh["t0"],
+                  f"nextActionAt {fresh['subjectNext']} vs t0 {fresh['t0']}"
+                  + (f"; update raised {fresh['err']}"
+                     if fresh["ok"] != 1 else ""))
+    ledger.record("fresh:sentinel", fresh["sentinelNext"] > fresh["t0"],
+                  f"sentinel nextActionAt {fresh['sentinelNext']} vs t0 "
+                  f"{fresh['t0']} (0 = never ticked)")
 
-    # Retire the staging order. The recorded hit stays; only the
-    # standing orders go, and from here the id list holds the attacker
-    # off every tick so it cannot move, heal, or bleed.
-    send(port, lua(
-        "local ai = require('scripts.unit_ai');",
-        f"local s = ai.getState({attacker});",
-        "if s then ai.markGoalAccomplished(s, 'attack');",
-        " s.attackTargetUid = nil end;",
-        f"unit.revive({attacker}); unit.stop({attacker});",
-        f"unit.revive({subject}); unit.stop({subject});",
-        "return 'ok'"))
-    print(f"  staged wounds dressed: subject {stanch(port, subject)}, "
-          f"attacker {stanch(port, attacker)}")
-    patch_ids(port, [subject, sentinel])
-    patch_no_damage(port)
+    # The stale window's own real hit, on its own subject. `patch_no_damage`
+    # is still in force from the fresh window, so the bounded staging wrap
+    # `stage_hit` installs is what puts real swings back — over the SAME
+    # saved original, so `remove_patches` still restores it exactly.
+    stage_hit(port, ledger, "stale:staged-hit", stale_fx)
+    stale = run_case(port, ledger, "stale:log", stale_fx, STALE_AGE_SEC)
+    ledger.record("stale:no-swap", stale["postTarget"] == stale_fx.target,
+                  f"attackTargetUid stayed {stale['postTarget']} "
+                  f"(wanted {stale_fx.target}, not {stale_fx.attacker})")
+    ledger.record("stale:complete",
+                  stale["ok"] == 1 and stale["subjectNext"] > stale["t0"],
+                  f"pcall ok={stale['ok']}, nextActionAt "
+                  f"{stale['subjectNext']} vs t0 {stale['t0']}"
+                  + (f"; update raised {stale['err']}"
+                     if stale["ok"] != 1 else ""))
 
-    fresh = run_case(port, record, "fresh window", subject, target,
-                     attacker, sentinel, FRESH_AGE_SEC)
-    record("the retaliation swap retargets the subject onto the "
-           "recent attacker",
-           fresh["postTarget"] == attacker,
-           f"attackTargetUid {fresh['pre']['target']} -> "
-           f"{fresh['postTarget']} (wanted {attacker})")
-    record("the subject's tick reaches its post-execute completion "
-           "point",
-           fresh["ok"] == 1 and fresh["subjectNext"] > fresh["t0"],
-           f"nextActionAt {fresh['subjectNext']} vs t0 {fresh['t0']}"
-           + (f"; update raised {fresh['err']}"
-              if fresh["ok"] != 1 else ""))
-    record("a unit ordered after the subject is reached by the SAME "
-           "update invocation",
-           fresh["sentinelNext"] > fresh["t0"],
-           f"sentinel nextActionAt {fresh['sentinelNext']} vs t0 "
-           f"{fresh['t0']} (0 = never ticked)")
 
-    stale = run_case(port, record, "stale window", subject, target,
-                     attacker, sentinel, STALE_AGE_SEC)
-    record("a hit older than the window triggers no swap",
-           stale["postTarget"] == target,
-           f"attackTargetUid stayed {stale['postTarget']} "
-           f"(wanted {target}, not {attacker})")
-    record("the stale-window tick completes without raising",
-           stale["ok"] == 1 and stale["subjectNext"] > stale["t0"],
-           f"pcall ok={stale['ok']}, nextActionAt "
-           f"{stale['subjectNext']} vs t0 {stale['t0']}"
-           + (f"; update raised {stale['err']}"
-              if stale["ok"] != 1 else ""))
+def self_test() -> int:
+    """Drive the declared-check accounting with no engine at all.
+
+    Five green engine runs cannot exercise the path this covers: it is
+    what a run does when the fixture FAILS, which is precisely the run
+    that used to drop its unreached results on the floor (#1578). So the
+    failure is constructed here instead, after a check has already been
+    recorded, and the report is read back.
+    """
+    problems: list[str] = []
+
+    def report(ledger: Ledger, failure: FixtureFailure | None) -> tuple[int, str]:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            status = finish(ledger, failure)
+        return status, buf.getvalue()
+
+    # (a) a fixture failure after one recorded check still names every
+    #     declared check that never ran, and keeps exit status 2.
+    ledger = Ledger()
+    first_key, first_name = DECLARED_CHECKS[0]
+    with contextlib.redirect_stdout(io.StringIO()):
+        ledger.record(first_key, True, "synthetic")
+    status, out = report(ledger, FixtureFailure("synthetic staging failure"))
+    if status != 2:
+        problems.append(f"a fixture failure returned {status}, not 2")
+    if outcome_line("PASS", first_name) not in out:
+        problems.append(f"the recorded check {first_key!r} is missing from "
+                        "the report")
+    for key, name in DECLARED_CHECKS[1:]:
+        if outcome_line("NOT RUN", name) not in out:
+            problems.append(f"the unreached check {key!r} is not reported as "
+                            "NOT RUN")
+    if "synthetic staging failure" not in out:
+        problems.append("the report does not name the fixture failure")
+
+    # (b) every declared check recorded and passing is a clean exit 0 with
+    #     nothing reported as unreached.
+    ledger = Ledger()
+    with contextlib.redirect_stdout(io.StringIO()):
+        for key, _ in DECLARED_CHECKS:
+            ledger.record(key, True)
+    status, out = report(ledger, None)
+    if status != 0:
+        problems.append(f"an all-passing ledger returned {status}, not 0")
+    if "NOT RUN" in out:
+        problems.append("an all-passing ledger reported a check as NOT RUN")
+
+    # (c) a recorded FAILURE is a behavioural result (1), never conflated
+    #     with a check that never ran.
+    ledger = Ledger()
+    with contextlib.redirect_stdout(io.StringIO()):
+        for index, (key, _) in enumerate(DECLARED_CHECKS):
+            ledger.record(key, index != 2)
+    status, out = report(ledger, None)
+    if status != 1:
+        problems.append(f"a failing ledger returned {status}, not 1")
+    if outcome_line("FAIL", DECLARED_CHECKS[2][1]) not in out:
+        problems.append("the failing check is not reported as FAIL")
+
+    # (d) an incomplete ledger with no fixture failure is a defect, not a
+    #     pass — the shape a future edit that forgets to record a check
+    #     would take.
+    ledger = Ledger()
+    with contextlib.redirect_stdout(io.StringIO()):
+        for key, _ in DECLARED_CHECKS[:-1]:
+            ledger.record(key, True)
+    status, out = report(ledger, None)
+    if status != 2:
+        problems.append(f"a silently incomplete ledger returned {status}, "
+                        "not 2")
+    if outcome_line("NOT RUN", DECLARED_CHECKS[-1][1]) not in out:
+        problems.append("a silently incomplete ledger does not name the "
+                        "missing check")
+
+    # (e) the ledger refuses an undeclared key and a duplicate record, so a
+    #     typo cannot quietly create a check nothing declared.
+    ledger = Ledger()
+    try:
+        ledger.record("not-a-declared-check", True)
+    except KeyError:
+        pass
+    else:
+        problems.append("the ledger accepted an undeclared key")
+    with contextlib.redirect_stdout(io.StringIO()):
+        ledger.record(first_key, True)
+    try:
+        ledger.record(first_key, True)
+    except KeyError:
+        pass
+    else:
+        problems.append("the ledger accepted a duplicate record")
+
+    for problem in problems:
+        print(f"  [FAIL] {problem}")
+    if problems:
+        print(f"\n{len(problems)} self-test checks failed")
+        return 1
+    print("  [PASS] a fixture failure names every declared check that did "
+          "not run, and exits 2")
+    print("  [PASS] a complete, all-passing ledger exits 0 with nothing "
+          "unreached")
+    print("  [PASS] a recorded failure exits 1 and is not conflated with an "
+          "unreached check")
+    print("  [PASS] an incomplete ledger with no fixture failure exits 2 and "
+          "names the gap")
+    print("  [PASS] the ledger refuses undeclared and duplicate records")
+    print("\nall 5 self-test checks passed")
+    return 0
 
 
 if __name__ == "__main__":
