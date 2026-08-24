@@ -1452,16 +1452,121 @@ def test_only_a_python_three_interpreter_is_accepted() -> None:
         document["baseline"]["invocation"] = invocation(
             cmd=[program] + command()[1:])
         expect_rejected(lambda d=document: evaluate(d),
-                        "not a Python interpreter",
+                        "not the interpreter this lab records",
                         f"a command run by {program!r}")
 
-    for program in ("python3", "python3.12", "python3.14.2"):
+    document = diagnosis_document()
+    document["baseline"]["invocation"] = invocation(
+        cmd=["python3"] + command()[1:])
+    outcome = evaluate(document)
+    expect(outcome.route == dd.ROUTE_REPAIR,
+           f"'python3' is the recorded spelling; got {outcome.route}")
+
+
+def test_a_versioned_interpreter_is_not_a_recorded_command() -> None:
+    """`python3.9 tools/probe_flake.py` is a command nobody here types.
+
+    Every tracked invocation of either launcher spells the interpreter
+    bare — both CI files, `tools/README.md`, and `probe_flake.py`'s own
+    `--describe` subprocess — so a versioned spelling names a path no
+    tracked caller could have taken, whatever version it names. The
+    check is deliberately NOT a minimum-version floor: this repository
+    declares no minimum, and every one of these sources opens with
+    `from __future__ import annotations`, so its `X | None` annotations
+    parse far below any floor that could be written here.
+
+    Changing EVERY recorded command consistently is the mutation that
+    matters — a single altered record is already caught by the
+    same-environment comparison, which would make this rule look
+    enforced when only that one was.
+    """
+    for program in ("python3.9", "python3.12", "python3.14.2", "python3."):
         document = diagnosis_document()
-        document["baseline"]["invocation"] = invocation(
-            cmd=[program] + command()[1:])
-        outcome = evaluate(document)
-        expect(outcome.route == dd.ROUTE_REPAIR,
-               f"{program!r} is a supported spelling; got {outcome.route}")
+        for batch in ("baseline", "verification"):
+            document[batch]["invocation"] = invocation(
+                cmd=[program] + command()[1:])
+        document["handoff"]["invocation"] = deflake_invocation(
+            cmd=[program, f"{PRIMARY_WT}/tools/deflake.py", "--json",
+                 "--result", f"{OUTSIDE}/handoff.json"])
+        expect_rejected(lambda d=document: evaluate(d),
+                        "not the interpreter this lab records",
+                        f"every command consistently run by {program!r}")
+
+
+def test_an_identity_with_a_trailing_newline_is_not_an_identity() -> None:
+    """`re.match` with `$` is not full-string validation.
+
+    `$` matches immediately before a final newline, so a 40-character
+    hash spelled `"<sha>\n"` satisfies `COMMIT_RE.match` while being no
+    Git SHA at all. Every identity in the document is mutated together,
+    because a document that spells one that way spells all of them that
+    way — and a single altered field would be caught by the equality
+    comparisons instead, hiding whether this rule is enforced.
+    """
+    document = diagnosis_document()
+    document["handoff"]["result"]["commit_sha"] += "\n"
+    document["baseline"]["result"]["commit_sha"] += "\n"
+    expect_rejected(lambda d=document: evaluate(d),
+                    "does not name a resolved commit",
+                    "a measurement commit with a trailing newline")
+
+    document = diagnosis_document()
+    document["repair"]["commit_sha"] += "\n"
+    expect_rejected(lambda d=document: evaluate(d),
+                    "names no resolved commit",
+                    "a repair commit with a trailing newline")
+
+    document = diagnosis_document()
+    document["repair"]["base_sha"] += "\n"
+    expect_rejected(lambda d=document: evaluate(d),
+                    "names no resolved base commit",
+                    "a repair base commit with a trailing newline")
+
+
+def test_a_config_digest_with_a_trailing_newline_is_refused() -> None:
+    """The same `$`-before-newline hole, on the manifest's digests.
+
+    Driven through `require_manifest` directly, the way every sibling
+    manifest rule here is: the default fixture manifest is EMPTY, which
+    is this lab's expected default rather than an edge case.
+    """
+    expect_rejected(
+        lambda: dd.require_manifest(
+            manifest([("config/video.local.yaml", "c" * 64 + "\n")]),
+            "manifest"),
+        "SHA-256 digest",
+        "a configuration digest with a trailing newline")
+
+    # The same digest without it is the accepted spelling.
+    dd.require_manifest(
+        manifest([("config/video.local.yaml", "c" * 64)]), "manifest")
+
+
+def test_a_check_identifier_with_a_trailing_newline_is_refused() -> None:
+    """And on the protocol identifiers, for the same reason.
+
+    Renamed in EVERY place the identifier appears — the declaration, each
+    run's map, the tally, and the target list — because mutating one
+    alone is caught first by the census's own `check_counts` consistency
+    rule, which would make this rule look enforced when it was not.
+    """
+    document = handoff_document()
+    original = document["result"]["checks"][0]["id"]
+    spelled = original + "\n"
+    for entry in document["result"]["checks"]:
+        if entry["id"] == original:
+            entry["id"] = spelled
+    for run in document["result"]["runs"]:
+        if original in run["checks"]:
+            run["checks"][spelled] = run["checks"].pop(original)
+    counts = document["result"]["check_counts"]
+    if original in counts:
+        counts[spelled] = counts.pop(original)
+    document["targets"] = [(spelled if cid == original else cid)
+                           for cid in document["targets"]]
+    expect_rejected(lambda: dd.require_handoff(document),
+                    "no stable identifier",
+                    "a check identifier with a trailing newline")
 
 
 def test_the_handoff_comes_from_the_primary_checkout() -> None:
@@ -1826,7 +1931,7 @@ def test_a_fabricated_argv_is_not_a_harness_invocation() -> None:
              ["python3", f"{CLEAN_WT}/tools/probe_flake.py", "extra",
               "--probe", PROBE, "--runs", "10",
               "--result", f"{OUTSIDE}/b.json"]),
-            ("no script at all", "not a Python interpreter",
+            ("no script at all", "not the interpreter this lab records",
              ["--probe", PROBE, "--runs", "10"]),
             # The right SHAPE, running something that measures nothing.
             ("a program that is not an interpreter",
@@ -1841,7 +1946,7 @@ def test_a_fabricated_argv_is_not_a_harness_invocation() -> None:
              ["python3", "/tmp/counterfeit/probe_flake.py",
               "--probe", PROBE, "--runs", "10",
               "--result", f"{OUTSIDE}/b.json"]),
-            ("a shell", "not a Python interpreter",
+            ("a shell", "not the interpreter this lab records",
              ["sh", f"{CLEAN_WT}/tools/probe_flake.py",
               "--probe", PROBE, "--runs", "10"]),
             # Order is part of the grammar: Python rejects an option it

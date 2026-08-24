@@ -351,10 +351,19 @@ RTS_CAPABILITIES = probe_flake.DEFAULT_RTS_CAPS
 # rigorously as contents do.
 CONFIG_GLOB = "config/*.local.yaml"
 
-# `/deflake`'s own N and capability count, spelled as the thing every
-# supplied invocation is measured against.
-SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+# The two identity shapes every document is held to: a SHA-256 digest and
+# a resolved Git commit.
+#
+# UNANCHORED on purpose, and matched with `fullmatch` at every call site
+# below. `re.match` with a trailing `$` is not full-string validation:
+# `$` also matches immediately BEFORE a final newline, so
+# `COMMIT_RE.match("<40 hex>\n")` succeeds and a document could spell
+# every commit identity that way and still be attributed to a real SHA.
+# Leaving the anchors off makes `fullmatch` the only thing that can
+# decide the question, so a call site that forgets it fails loudly on
+# every input rather than silently on one.
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
+COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 
 # The two programs that really produce this lab's measurements, and the
 # only kind of program that runs either — `/bin/echo .../probe_flake.py
@@ -366,13 +375,35 @@ COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 # CLI has no `--probe` and no `--runs` at all. So requiring a
 # `probe_flake.py` argv everywhere would have made a truthful #1436
 # handoff impossible to submit while accepting an argv that never ran.
-# `python3`, optionally versioned. NOT bare `python` and NOT `python2`:
-# every tool in this lab is a Python 3 program — `from __future__ import
-# annotations`, `X | None` annotations, `dict[str, str]` — so `python2
-# tools/probe_flake.py` is a SyntaxError, not a measurement, and bare
-# `python` is whichever of the two that machine happens to mean, which a
-# document cannot settle.
-INTERPRETER_RE = re.compile(r"^python3(\.\d+){0,2}$")
+# EXACTLY `python3`, and nothing else — not bare `python`, not `python2`,
+# and not a versioned `python3.9` / `python3.14.2` either.
+#
+# The first two are refused for the obvious reason: every tool in this
+# lab is a Python 3 program, so `python2 tools/probe_flake.py` is a
+# SyntaxError rather than a measurement, and bare `python` is whichever
+# of the two that machine happens to mean, which a document cannot
+# settle.
+#
+# A VERSIONED spelling is refused for a different and stronger reason:
+# nothing in this repository produces one. Every tracked invocation of
+# either launcher is bare `python3` — `tools/ci-local.sh`,
+# `.github/workflows/ci.yml`, `tools/README.md`, and, load-bearingly,
+# `probe_flake.py`'s own `--describe` subprocess (`cmd = ["python3",
+# ...]`) — so a recorded `python3.9 tools/probe_flake.py` is a command
+# nobody in this lab types, and admitting it admits a measurement no
+# tracked path could have produced.
+#
+# The narrow rule is deliberate. Refusing versions BELOW some minimum
+# would require this module to name that minimum, and this repository
+# declares none: `.github/ci/Dockerfile` installs apt's unpinned
+# `python3`, no tool carries a `sys.version_info` floor, and every one
+# of these sources opens with `from __future__ import annotations`,
+# which makes their `X | None` annotations parse as far back as 3.6.
+# Any floor written here would therefore be invented rather than
+# derived, and would need an edit every time it drifted. "The spelling
+# every tracked caller actually uses" is checkable against the tree
+# instead, and subsumes the version question entirely.
+INTERPRETER_RE = re.compile(r"python3")
 
 
 class Launcher:
@@ -619,7 +650,7 @@ def require_manifest(document, what: str) -> dict:
                 f"something other than the per-worktree configuration state "
                 f"the probes actually read")
         digest = entry.get("sha256")
-        if not isinstance(digest, str) or not SHA256_RE.match(digest):
+        if not isinstance(digest, str) or not SHA256_RE.fullmatch(digest):
             raise HandoffError(
                 f"{where} has no SHA-256 digest for {relative!r}, got "
                 f"{digest!r}")
@@ -702,12 +733,15 @@ def parse_command(command, what: str, *, launcher=None, root=None,
             f"interpreter is named — `python3` — and resolved from PATH like "
             f"every command this lab records. `/tmp/counterfeit/python3` is "
             f"exactly the shape this refuses")
-    if not INTERPRETER_RE.match(program):
+    if not INTERPRETER_RE.fullmatch(program):
         raise HandoffError(
-            f"{what} runs {program!r}, which is not a Python interpreter; a "
-            f"command with the right shape and another program — "
-            f"`/bin/echo .../probe_flake.py --probe role --runs 10` — "
-            f"measures nothing")
+            f"{what} runs {program!r}, which is not the interpreter this lab "
+            f"records; every tracked invocation of either launcher — both CI "
+            f"files, tools/README.md, and probe_flake.py's own `--describe` "
+            f"subprocess — spells it exactly `python3`. Another program with "
+            f"the right shape (`/bin/echo .../probe_flake.py --probe role "
+            f"--runs 10`) measures nothing, and a versioned spelling "
+            f"(`python3.9`) is a command no tracked path here produces")
     if script.startswith("-"):
         raise HandoffError(
             f"{what} passes {script!r} before the script it ran; ORDER is "
@@ -1015,7 +1049,7 @@ def require_result(document, what: str) -> dict:
         raise HandoffError(f"{what}: {error}") from None
     probe = document["probe"]
     commit = document.get("commit_sha")
-    if not isinstance(commit, str) or not COMMIT_RE.match(commit):
+    if not isinstance(commit, str) or not COMMIT_RE.fullmatch(commit):
         raise HandoffError(
             f"{what} does not name a resolved commit ({commit!r}); "
             f"`probe_flake` writes the literal 'unknown' when git could not "
@@ -1032,7 +1066,7 @@ def require_result(document, what: str) -> dict:
     ids = []
     for position, entry in enumerate(document["checks"]):
         cid = entry["id"]
-        if not probe_protocol.CHECK_ID_RE.match(cid):
+        if not probe_protocol.CHECK_ID_RE.fullmatch(cid):
             raise HandoffError(
                 f"{what}.checks[{position}] has no stable identifier "
                 f"({cid!r}); `probe-result/v1` identifiers are static and "
@@ -2293,12 +2327,12 @@ def _require_repair(document, verification_section, *,
     if not isinstance(repair, dict):
         raise HandoffError("a repair route records its `repair` block")
     commit = repair.get("commit_sha")
-    if not isinstance(commit, str) or not COMMIT_RE.match(commit):
+    if not isinstance(commit, str) or not COMMIT_RE.fullmatch(commit):
         raise HandoffError(
             f"the repair names no resolved commit ({commit!r}); the repair "
             f"is committed and frozen BEFORE it is verified")
     base = repair.get("base_sha")
-    if not isinstance(base, str) or not COMMIT_RE.match(base):
+    if not isinstance(base, str) or not COMMIT_RE.fullmatch(base):
         raise HandoffError(
             f"the repair names no resolved base commit ({base!r}); the "
             f"repair worktree is created from the SAME SHA as the clean "

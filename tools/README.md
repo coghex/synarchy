@@ -1793,10 +1793,16 @@ argparse would read it (`--runs` and `--rts-caps` are `type=int`, so `--runs
 10.0` is refused rather than compared as ten), `--result` required of
 `probe_flake.py` and optional for `/deflake`, order-sensitive argv (interpreter,
 then script, then options — Python rejects an unknown option before the script
-runs), a NAMED Python 3 interpreter rather than one given by path (`python3`,
-optionally versioned — not bare `python`, which is whichever the machine means,
-nor `python2`, which cannot parse these programs; and a document cannot show
-which binary sits at `/tmp/counterfeit/python3`), and a script RESOLVED FROM THE DIRECTORY THE
+runs), exactly `python3` as the interpreter — not bare `python`, which is whichever
+of the two the machine means; nor `python2`, which cannot parse these programs;
+nor one given by path, since a document cannot show which binary sits at
+`/tmp/counterfeit/python3`; and nor a VERSIONED `python3.9`, because every
+tracked invocation of either launcher spells it bare (both CI files, this file,
+and `probe_flake.py`'s own `--describe` subprocess), so a versioned spelling
+names a path no tracked caller could have taken. That rule is deliberately not
+a minimum-version floor: this repository declares no minimum, and every one of
+these sources opens with `from __future__ import annotations`, so a floor
+written here would be invented rather than derived. Also a script RESOLVED FROM THE DIRECTORY THE
 COMMAND RAN IN (which is what Python does with a relative script path) and
 required to be the tool the declared checkout ships — `<worktree>/tools/probe_flake.py`
 for a controlled batch, `<directory>/tools/deflake.py` for the handoff, since
