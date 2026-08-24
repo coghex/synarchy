@@ -767,11 +767,17 @@ jobs:
       # orchestrator: every collaborator is an injected adapter, while
       # probe_census and probe_flake.Measurement themselves are driven
       # for real against throwaway censuses in temporary directories, so
-      # the recorder claims it checks are the shipped recorder's. The
-      # REAL engine-booting ten-run measurement is deliberately absent
-      # from this job and from tools/ci-local.sh — tools/README.md states
-      # that a real run is supplemental manual evidence and never a merge
-      # gate.
+      # the recorder claims it checks are the shipped recorder's.
+      # test_deflake_diagnosis is #1437's: the entry gate over a #1436
+      # handoff, X-out-of-10 arithmetic delegated to probe_census rather
+      # than restated, the configuration manifest including confirmed
+      # absence, the scoped MISSING rule, stable check identity,
+      # same-environment verification, the no-retry rule, every diagnosis
+      # route and the one-PR limit — decided over documents, so it boots
+      # nothing either. The REAL engine-booting ten-run measurements are
+      # deliberately absent from this job and from tools/ci-local.sh —
+      # tools/README.md states that a real run is supplemental manual
+      # evidence and never a merge gate.
       - name: probe runner self-tests
         run: |
           python3 tools/ci_probes.py --self-test
@@ -786,6 +792,7 @@ jobs:
           python3 tools/test_probe_claim.py
           python3 tools/test_probe_resource_lock.py
           python3 tools/test_deflake.py
+          python3 tools/test_deflake_diagnosis.py
 
       # Cheap, no-engine guard (#1355): fails if a `python3 tools/*.py`
       # check runs in this job and not in tools/ci-local.sh, or the other

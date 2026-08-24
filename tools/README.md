@@ -1637,6 +1637,87 @@ is an injected adapter, while `probe_census` and `probe_flake.Measurement`
 themselves are driven for real against throwaway censuses, because the census
 claims it checks are properties of the shipped recorder.
 
+### `deflake_diagnosis.py` — is the probe wrong, and did the fix work? (#1437)
+
+`deflake.py` answers "how often does this probe fail". A number is not a fix,
+and this is the step after it: given one complete measurement handoff, decide
+mechanically whether the evidence supports a probe-side repair and, when it
+does not, which declared non-repair route the invocation takes instead.
+
+```bash
+python3 tools/deflake_diagnosis.py --handoff handoff.json      # the entry gate alone
+python3 tools/deflake_diagnosis.py --diagnosis diagnosis.json  # the route its evidence supports
+python3 tools/deflake_diagnosis.py --manifest .                # a checkout's config manifest
+python3 tools/test_deflake_diagnosis.py                        # the deterministic self-test
+```
+
+Nothing here boots an engine, runs a probe, opens a port, edits a worktree or
+talks to GitHub: it reads documents and answers questions about them. The
+expensive half — twenty real runs across two worktrees — is `probe_flake.py`
+performing ten twice, and its retained `probe-flake-result/v1` documents are
+this tool's input.
+
+**Why a tracked module rather than skill prose.** The `/deflake` workflow
+surface is not tracked in this repository (`.gitignore` ignores `.claude/`), so
+a repository test cannot cover prose. The MECHANICAL half lives here so
+`tools/test_deflake_diagnosis.py` can hold it: the entry gate and one-probe
+enforcement, X-out-of-10 arithmetic, the configuration manifest including
+confirmed absence, MISSING evaluation and stable check identity,
+same-environment verification and the no-retry rule, the required diagnosis
+evidence and preservation attestations, and the one-PR limit. Whether a
+diagnosis is convincing, a repair minimal, or an expectation genuinely
+obsolete stays the reviewer's judgement — the module refuses a route whose
+machine-checkable evidence is missing and claims no more than that.
+
+**The entry gate.** One invocation, one handoff, one probe. A
+`deflake-handoff/v1` EMBEDS the original `probe-flake-result/v1` document
+rather than paraphrasing it, because `probe_census.ingest_result`
+deliberately drops the ports, per-run check maps, descriptor labels, artifact
+root, invocation directory and exact command — so a handoff rebuilt from the
+durable census row cannot identify the baseline invocation, and the gate
+refuses it by name.
+
+**Descriptor equality, not identifier normalization.** `probe-result/v1`
+already requires static identifiers and puts every runtime value in an event's
+`detail`, so a per-run undeclared or changing identifier is a MALFORMED
+protocol result — a rejected handoff — and never a diagnosis outcome to be
+scored.
+
+**The scoped MISSING rule.** Probes abort, so "every expected check in every
+run" is unsatisfiable for any probe with an X above zero. Instead: every TARGET
+identifier has zero MISSING across all ten runs; every PASSING run emits
+everything; an accepted failing or timed-out run may lose only a contiguous
+suffix of the declared order — which is checked, not assumed; and no identifier
+disappears from the batch as a whole. For X=0 this collapses to the strict
+formulation, so the default case is unchanged.
+
+**Same environment means the same measurement, not the same characters.** The
+two batches necessarily differ in worktree and destination, and ports are
+leased dynamically, so they are compared on behavior-affecting settings with
+effective defaults filled in. Both destinations must still sit outside every
+worktree: `check_artifact_root` guards the artifact root, but `--result` is
+written wherever it is pointed.
+
+**The repair is frozen before it is verified.** `probe_flake` records only
+`git rev-parse HEAD` and cannot see uncommitted source, so a declared repair
+needs a source-clean repair worktree and a verification whose `commit_sha` is
+the repair commit being proposed.
+
+**Routes.** `repair-pr` is the only one that opens a pull request, and the
+`Diagnosis` session enforces at most one per invocation. `handoff-rejected`
+stops at the gate; `cannot-reproduce`, `no-confident-fix` and
+`partial-improvement` hand off to #1439; `production-defect` hands off to
+#1438 and does not touch the probe. Emitting a handoff means emitting
+`deflake-diagnosis-outcome/v1` naming the route, its owning issue and the
+retained evidence — what those issues then do with it is theirs to define.
+
+The gate is `tools/test_deflake_diagnosis.py`, engine-free and document-only,
+and it runs in `make ci` and in CI beside the lab's other self-tests. What
+stays deliberately out of both, exactly as for `deflake.py`, is the REAL
+engine-booting measurement: a diagnosis consumes twenty ten-run batches' worth
+of wall clock and is supplemental manual pull-request evidence, never a merge
+gate.
+
 ### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets/save-compat selection
 
 Selects the four expensive gates that are conditional on pull requests:

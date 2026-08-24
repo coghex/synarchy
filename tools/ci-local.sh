@@ -227,9 +227,14 @@ python3 tools/world_check.py --quick
 # separate interpreters and one SIGKILLed holder; test_deflake is the
 # /deflake orchestrator, driven entirely through injected adapters, with
 # probe_census and probe_flake.Measurement themselves real against
-# throwaway censuses. No probe is ever executed by any of them, and the
-# real engine-booting ten-run measurement is deliberately NOT wired into
-# this gate or CI (tools/README.md states why).
+# throwaway censuses; test_deflake_diagnosis is #1437's, covering the
+# entry gate over a #1436 handoff, X-out-of-10 arithmetic delegated to
+# probe_census, the configuration manifest including confirmed absence,
+# the scoped MISSING rule, stable check identity, same-environment
+# verification, the no-retry rule, every diagnosis route and the one-PR
+# limit -- against documents alone. No probe is ever executed by any of
+# them, and the real engine-booting ten-run measurements are deliberately
+# NOT wired into this gate or CI (tools/README.md states why).
 echo "==> [19/21] probe runner self-tests"
 python3 tools/ci_probes.py --self-test
 python3 tools/ci_expensive_gates.py --self-test
@@ -243,6 +248,7 @@ python3 tools/test_probe_census.py
 python3 tools/test_probe_claim.py
 python3 tools/test_probe_resource_lock.py
 python3 tools/test_deflake.py
+python3 tools/test_deflake_diagnosis.py
 
 # Cheap, no-engine self-test of CI's cache-outcome report (#1358). The
 # report itself runs only in CI -- `make ci` restores no GitHub Actions
