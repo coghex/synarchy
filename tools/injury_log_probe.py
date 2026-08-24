@@ -9,10 +9,18 @@ This guards that plumbing against silent breakage:
   2. unit.injure on a live spawned unit emits an "injure" injury event.
   3. engine.emitEventForUnit tags the event with a uid that getEventLog
      surfaces (the per-unit log panel filters on this).
-  4. A real fall emits a "fall" injury event (closes the Fall.hs gap).
+  4. A real fall emits a "fall" injury event whose target is the unit that
+     fell and whose payload carries a well-formed detail / count / severity
+     (closes the Fall.hs gap). Gating, exactly like phases 1-3.
 
-It deliberately does NOT load injury_log_panel.lua — that script drains
-injury.drainEvents() on its own tick, which would race this probe's drains.
+This probe must be the injury stream's ONLY consumer, and it is not enough
+not to load the panel: scripts/init_loader.lua loads
+scripts/injury_log_panel.lua unconditionally at boot — headless included —
+and its 0.1s tick calls injury.drainEvents(). So `bootstrap` neutralises
+that tick (the same stub it applies to unit_ai's wander). Without it a
+phase that drains asynchronously, like phase 4's fall, loses the event to
+the panel before it can read it; the single-line phases 1-2 only survive
+because they emit and drain inside one console command.
 
 Usage:
   python3 tools/injury_log_probe.py [--port 9140] [--no-fall]
@@ -27,9 +35,73 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import quit_engine, boot, send
+from probelib import quit_engine, boot, send, send_json
 
 LOG = "/tmp/injury_log_probe_engine.log"
+
+# Phase 4's polling window: the fall_edge walk is ~7 tiles at the acolyte's
+# comfort speed, so 20 s of drains leaves room for a stalled approach to be
+# re-commanded and still finish.
+FALL_POLLS = 40
+FALL_POLL_SLEEP = 0.5
+
+# Phase 4 walks its own lane, this many tiles north of the fall_edge
+# course's own row. Phase 2's unit is standing on tile (0, 0) — which the
+# plateau then raises under it — and that is the course's LAST plateau
+# column on its own row, i.e. exactly the tile the faller has to cross to
+# reach the edge. Two units do not share a tile, so on the course row the
+# walk stops at the blocker and never goes over. The lane is still on the
+# same plateau, which the drop check below verifies rather than assumes.
+FALL_LANE_OFFSET = 2
+
+# The minimum drop the fall model guarantees is damaging for every acolyte
+# profile (test-headless/Test/Headless/Unit/Fall.hs:205-252): fallInjuries
+# treats <= 1 z as a free walk-off and yields a non-empty blunt injury set
+# from 2 z up. The event fires on ANY non-empty injury set
+# (src/Unit/Thread/Movement.hs:193-203), so this — not a fracture
+# threshold — is what the fixture height has to clear.
+FALL_MIN_DAMAGING_DROP = 2
+
+# One phase-4 poll: keep the session running, then scan one drained batch
+# for the event this phase is about — kind "fall" AND target == the unit we
+# pushed off the edge. Unrelated events in the same batch (another unit's
+# fall, an "injure" from elsewhere) are counted, never matched: they can
+# neither satisfy the assertions nor hide the real event behind an early
+# return. Payload values reach Lua as STRINGS (CombatEvent.cePayload is
+# HashMap Text Text), so they come back as text and are parsed in Python.
+#
+# The setPaused(false) is load-bearing, not defensive. `survival_critical`
+# is the one notification category shipping pause: true
+# (data/notification_categories.yaml), and Engine.PlayerEvent.Emit pauses
+# the whole session on any emit of it. Phase 3 emits one directly, and a
+# unit dying of its phase-2 wounds emits another at an unpredictable
+# moment — either freezes the walk mid-approach. Re-asserting it every
+# poll is what makes the fall happen at all. (engine.setNotificationOverrides
+# would silence the category instead, but it PERSISTS to
+# config/notifications.local.yaml, which a probe must not touch.)
+#
+# For the same reason the poll re-issues the walk when it finds the unit
+# idle and still up on the plateau: a pause landing mid-step can drop the
+# order and leave it parked at the edge. Re-commanding only recovers a
+# stalled approach — it cannot manufacture the event, which still has to
+# come from a real fall with the real payload.
+FALL_POLL_LUA = (
+    "engine.setPaused(false); "
+    "local e=injury.drainEvents(); local other=0; local hit=nil; "
+    "for _,ev in ipairs(e) do "
+    "if hit==nil and ev.kind=='fall' and ev.target==_FU then "
+    "local p=ev.payload or {}; "
+    "hit={found='1',kind=tostring(ev.kind),target=tostring(ev.target),"
+    "detail=tostring(p.detail or ''),count=tostring(p.count or ''),"
+    "severity=tostring(p.severity or '')} "
+    "else other=other+1 end end; "
+    "if hit==nil then hit={found='0'}; "
+    "local i=unit.getInfo(_FU); "
+    "if i and unit.getActivity(_FU)=='idle' and (i.gridZ or 0) > _FGZ then "
+    "hit.requeued=tostring(unit.moveTo(_FU,_FGX,_FGY,_FSPEED,'allow_falls')) "
+    "end end; "
+    "hit.other=tostring(other); return hit"
+)
 
 
 def bootstrap(port: int, with_movement: bool) -> None:
@@ -43,16 +115,47 @@ def bootstrap(port: int, with_movement: bool) -> None:
     for pattern, fn in loaders:
         for path in sorted(glob.glob(pattern)):
             send(port, f"{fn}('{path}'); return 'ok'")
+    # init_loader.lua loads injury_log_panel.lua at boot regardless of
+    # headlessness, and its tick drains injury.drainEvents(). Silence that
+    # tick so this probe owns the stream (verified: without the stub an
+    # event emitted and drained a second later is already gone).
+    send(port, "local ok,m = pcall(require, 'scripts.injury_log_panel'); "
+               "if ok and type(m) == 'table' then m.update = function() end end; "
+               "return 'ok'")
     if with_movement:
         # Stat + resource ticks drive movement; unit_ai is auto-loaded and
         # its wander would steer the unit off the cliff edge, so neutralise
-        # its tick (movement_probe does the same). We do NOT load
-        # injury_log_panel — it would drain the injury stream from under us.
+        # its tick (movement_probe does the same).
         send(port, "engine.loadScript('scripts/unit_stats.lua', 0.1); return 'ok'")
         send(port, "engine.loadScript('scripts/unit_resources.lua', 0.2); return 'ok'")
         send(port, "pcall(function() require('scripts.unit_ai').update = "
                    "function() end end); return 'ok'")
     send(port, "require('scripts.movement_arena'); return 'ok'")
+
+
+def parse_int(text: str | None) -> int | None:
+    """Payload values arrive as strings; None when absent/not an integer."""
+    try:
+        return int(str(text).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_float(text: str | None) -> float | None:
+    try:
+        return float(str(text).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def terrain_z(port: int, gx: int, gy: int) -> int | None:
+    """Ground z of TILE (gx, gy) — integer tile coords, not the +0.5
+    world positions a unit is spawned at (getTerrainAt takes tiles).
+    It returns two values (surface, terrain surface); the first is the
+    one a walking unit stands on."""
+    v = parse_float(send(port,
+        f"local a = world.getTerrainAt({gx}, {gy}); return tostring(a)"))
+    return None if v is None else int(v)
 
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
@@ -104,39 +207,119 @@ def main() -> int:
         passed &= check("getEventLog().uid carries the unit id", r == "4242", r)
 
         if not args.no_fall:
-            # INFORMATIONAL (non-gating): exercises the real Fall.hs producer
-            # by walking a unit off a TALL plateau (a 3-z drop only stuns; a
-            # fracture needs ~6 z). Whether the planner walks off a tall drop
-            # is terrain/pathing-dependent, so a miss here is reported but
-            # does NOT fail the probe — phases 1-3 gate the backend.
-            print("4. a real fall emits a 'fall' injury event (informational)")
-            send(args.port, "return require('scripts.movement_arena').buildCourse('flat')")
-            time.sleep(0.5)
-            # 7-high plateau over x in [-7,0]; low ground (z=0) to the east.
-            send(args.port,
-                "require('scripts.movement_arena').plateau(-7,-3,0,3,7,56); return 'built'")
-            time.sleep(0.5)
-            send(args.port, "injury.drainEvents(); return 'cleared'")  # clear prior
-            send(args.port, "_FU = unit.spawn('acolyte', -3, 0); return _FU")
-            time.sleep(0.8)
-            send(args.port, "unit.moveTo(_FU, 4, 0, 2.0); return 'moving'")
-            got = "NONE"
-            for _ in range(24):
-                time.sleep(0.5)
-                r = send(args.port,
-                    "local e=injury.drainEvents(); "
-                    "for _,ev in ipairs(e) do if ev.kind=='fall' then "
-                    "return 'fall|'..tostring(ev.target) end end; return 'NONE'")
-                if r.startswith("fall|"):
-                    got = r
-                    break
-            if got.startswith("fall|"):
-                check("fall landing -> 'fall' event", True, got)
+            # GATING: exercises the real Fall.hs producer by walking a unit
+            # off the arena's `fall_edge` plateau — the same 3-z fixture
+            # tools/movement_probe.py already gates its fall checks on. The
+            # height is chosen from the pure model, not a fracture
+            # threshold: the event fires on ANY non-empty injury set
+            # (src/Unit/Thread/Movement.hs:193-203), and a 2-z drop already
+            # injures every acolyte profile
+            # (test-headless/Test/Headless/Unit/Fall.hs:205-252). fallInjuries
+            # is RNG-free (src/Unit/Fall.hs:127-128), so once the unit steps
+            # off, the injuries — and therefore the event — are determined.
+            # `bootstrap` has already silenced injury_log_panel's tick, so
+            # this drain is the stream's only consumer.
+            print("4. a real fall emits a 'fall' injury event")
+            course = send_json(args.port,
+                "return require('scripts.movement_arena').buildCourse('fall_edge')")
+            if not isinstance(course, dict) or "sx" not in course:
+                passed &= check("fall_edge course built", False, str(course))
             else:
-                print(f"  [INFO] no fall event observed ({got}) — the unit may "
-                      f"not have walked off / the drop didn't injure. "
-                      f"Non-gating; the Fall.hs producer shares the verified "
-                      f"pushInjuryEvent path. Re-run or test in-game.")
+                sx = course["sx"] + 0.5
+                gx = course["gx"] + 0.5
+                sy = course["sy"] + FALL_LANE_OFFSET + 0.5
+                gy = course["gy"] + FALL_LANE_OFFSET + 0.5
+                time.sleep(0.5)
+                start_z = terrain_z(args.port, course["sx"],
+                                    course["sy"] + FALL_LANE_OFFSET)
+                goal_z = terrain_z(args.port, course["gx"],
+                                   course["gy"] + FALL_LANE_OFFSET)
+                drop = (None if start_z is None or goal_z is None
+                        else start_z - goal_z)
+                passed &= check(
+                    f"the lane drops at least {FALL_MIN_DAMAGING_DROP} z "
+                    f"(guaranteed damaging)",
+                    drop is not None and drop >= FALL_MIN_DAMAGING_DROP,
+                    f"tile ({course['sx']},{course['sy'] + FALL_LANE_OFFSET}) "
+                    f"z={start_z} -> tile ({course['gx']},"
+                    f"{course['gy'] + FALL_LANE_OFFSET}) z={goal_z}, "
+                    f"drop={drop}")
+                send(args.port, "injury.drainEvents(); return 'cleared'")  # clear prior
+                fu_raw = send(args.port,
+                              f"_FU = unit.spawn('acolyte', {sx}, {sy}); return _FU")
+                # The console may render the uid as "12" or "12.0"; compare
+                # the event's target numerically, never as text.
+                fu = parse_int(fu_raw)
+                if fu is None:
+                    fu = parse_float(fu_raw)
+                    fu = int(fu) if fu is not None else None
+                if fu is None or fu < 0:
+                    passed &= check("spawned the falling unit", False,
+                                    f"unit.spawn returned {fu_raw!r}")
+                    fu = None
+                time.sleep(1.5)  # settle onto the plateau before commanding
+                # Phase 3's survival_critical emit paused the session (see
+                # FALL_POLL_LUA); an ordered move on a paused world never
+                # takes a step. "allow_falls" is unit.moveTo's default, but
+                # this walk exists to go over an edge, so say so: the
+                # ambient "avoid_falls" policy would make the last step
+                # impassable (scripts/ambient_movement.lua).
+                #
+                # Travel at the unit's COMFORT speed, not a fixed fast
+                # value: comfort is stamina-neutral, and driving an acolyte
+                # above it collapses it from exhaustion short of the edge
+                # (observed, repeatedly, at 2.0 tiles/s). movement_probe
+                # commands its own courses the same way.
+                speed = send(args.port,
+                     f"_FGX={gx}; _FGY={gy}; _FGZ={goal_z}; "
+                     f"_FSPEED=require('scripts.movement_speed').comfort(_FU); "
+                     f"engine.setPaused(false); "
+                     f"unit.moveTo(_FU, _FGX, _FGY, _FSPEED, 'allow_falls'); "
+                     f"return tostring(_FSPEED)")
+                hit, others = None, 0
+                for _ in range(FALL_POLLS):
+                    time.sleep(FALL_POLL_SLEEP)
+                    r = send_json(args.port, FALL_POLL_LUA)
+                    if not isinstance(r, dict):
+                        continue
+                    others += int(r.get("other") or 0)
+                    if r.get("found") == "1":
+                        hit = r
+                        break
+                if hit is None:
+                    where = send(args.port,
+                        "local i = unit.getInfo(_FU); "
+                        "if not i then return 'gone' end; "
+                        "return tostring(i.gridX)..','..tostring(i.gridY)"
+                        "..','..tostring(i.gridZ)..' '"
+                        "..tostring(unit.getPose(_FU))..'/'"
+                        "..tostring(unit.getActivity(_FU))")
+                    passed &= check(
+                        "fall landing -> 'fall' event for the falling unit",
+                        False,
+                        f"no fall event with target={fu} in "
+                        f"{FALL_POLLS * FALL_POLL_SLEEP:.0f}s "
+                        f"({others} unrelated event(s) drained); "
+                        f"commanded at {speed} tiles/s; "
+                        f"unit ended at {where}")
+                else:
+                    detail = hit.get("detail") or ""
+                    count = parse_int(hit.get("count"))
+                    severity = parse_float(hit.get("severity"))
+                    ok = (hit.get("kind") == "fall"
+                          and fu is not None
+                          and parse_int(hit.get("target")) == fu
+                          and bool(detail)
+                          and count is not None and count >= 1
+                          and severity is not None and severity > 0.0)
+                    passed &= check(
+                        "fall landing -> 'fall' event for the falling unit",
+                        ok,
+                        f"target={hit.get('target')} (spawned {fu}) "
+                        f"kind={hit.get('kind')} detail='{detail}' "
+                        f"count={hit.get('count')} "
+                        f"severity={hit.get('severity')} "
+                        f"({others} unrelated event(s) drained)")
         else:
             print("4. fall test skipped (--no-fall)")
 

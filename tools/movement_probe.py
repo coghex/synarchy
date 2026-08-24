@@ -23,6 +23,7 @@ Usage:
   python3 tools/movement_probe.py --course cliff
   python3 tools/movement_probe.py --course ramp --unit acolyte --seconds 16
   python3 tools/movement_probe.py --list                # list courses + exit
+                                                        # (no engine is booted)
 
 Exit code 0 = all checks for the course passed.
 """
@@ -32,13 +33,268 @@ import argparse
 import glob
 import json
 import math
+import re
 import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
 from probelib import quit_engine, boot, send, send_json
 
 LOG = "/tmp/movement_probe_engine.log"
+
+REPO = Path(__file__).resolve().parent.parent
+# The Lua module is the shared course authority across probes (this one and
+# tools/wander_hazard_probe.py both build courses from it), so the cheap
+# `--list` path derives its inventory from this file rather than from a
+# separately maintained Python table.
+COURSE_SOURCE = REPO / "scripts" / "movement_arena.lua"
+# A canonical registration: `M.courses.<name> = function()`, anchored at the
+# start of the line so a `--` line comment or a quoted mention never matches.
+# Any other spelling is invisible here on purpose -- `check_course_inventory`
+# fails a real course run when the derived view and M.listCourses() disagree.
+_COURSE_DECL = re.compile(
+    r"^\s*M\.courses\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*function\s*\(")
+# Lua comments and string literals can both span lines and can both contain
+# text that looks like a registration, so the file is lexed before the
+# line-anchored pattern above is applied to it.
+_LONG_BRACKET = re.compile(r"\[(=*)\[")
+# Block keywords, for the structural check below. `for`/`while` are absent on
+# purpose: each is terminated by the `do` that follows it, so counting `do`
+# alone already accounts for them. `elseif`/`else` open no block, and `\b`
+# keeps the `if` inside `elseif` from matching.
+_BLOCK_WORD = re.compile(r"\b(function|if|do|end|repeat|until)\b")
+_BRACKET_PAIRS = {")": "(", "]": "[", "}": "{"}
+
+
+def _blank(run: str) -> str:
+    """Replace a lexed run with spaces, keeping its newlines."""
+    return "".join(c if c == "\n" else " " for c in run)
+
+
+def _line_of(text: str, offset: int) -> int:
+    return text.count("\n", 0, offset) + 1
+
+
+def _blank_lua_noise(text: str, path: Path) -> str:
+    """Blank every comment and string literal, preserving line structure.
+
+    Registrations are code, so blanking leaves them untouched while a
+    commented-out or quoted one stops looking like a declaration. Line
+    structure survives so reported line numbers name the real file.
+
+    An unterminated comment or string is raised rather than tolerated: it
+    means the module cannot be the one the engine loads, which is exactly
+    what requirement 6 asks `--list` to refuse.
+    """
+    pieces: list[str] = []
+    cursor, size = 0, len(text)
+    while cursor < size:
+        char = text[cursor]
+        if char == "-" and text.startswith("--", cursor):
+            opener = _LONG_BRACKET.match(text, cursor + 2)
+            if opener is None:                      # `--` to end of line
+                stop = text.find("\n", cursor)
+                stop = size if stop < 0 else stop
+                pieces.append(_blank(text[cursor:stop]))
+                cursor = stop
+                continue
+            kind, start = "long comment", cursor
+        elif char == "[" and (opener := _LONG_BRACKET.match(text, cursor)):
+            kind, start = "long string", cursor
+        elif char in "\"'":
+            literal = _short_string(text, cursor, path)
+            pieces.append(_blank(literal))
+            cursor += len(literal)
+            continue
+        else:
+            pieces.append(char)
+            cursor += 1
+            continue
+        closer = "]" + "=" * len(opener.group(1)) + "]"
+        stop = text.find(closer, opener.end())
+        if stop < 0:
+            raise CourseSourceError(
+                f"{path}: unterminated {kind} opened at line "
+                f"{_line_of(text, start)}")
+        pieces.append(_blank(text[start:stop + len(closer)]))
+        cursor = stop + len(closer)
+    return "".join(pieces)
+
+
+def _short_string(text: str, start: int, path: Path) -> str:
+    """The full `'...'` / `"..."` literal beginning at `start`."""
+    quote = text[start]
+    cursor = start + 1
+    while cursor < len(text):
+        char = text[cursor]
+        if char == "\\":                             # escape: skip the pair
+            cursor += 2
+            continue
+        if char == quote:
+            return text[start:cursor + 1]
+        if char == "\n":
+            break                                   # Lua strings end at EOL
+        cursor += 1
+    raise CourseSourceError(
+        f"{path}: unterminated string opened at line {_line_of(text, start)}")
+
+
+def _check_structure(code: str, path: Path) -> None:
+    """Reject a structurally broken module (#1586 requirement 6).
+
+    Deliberately a STRUCTURAL check and NOT a Lua parser, which is a scope
+    decision worth stating where someone will find it:
+
+      * The approved spec says what "unparseable" has to mean here. #1586's
+        own review amended requirement 6 to "failure to read the Lua source,
+        failure to derive any valid course registrations, or
+        duplicate/ambiguous derived registrations" -- three cases, each
+        implemented above. Full syntax validation is not one of them.
+      * Nothing could implement it here anyway. `--list` must answer in a
+        fresh checkout with nothing installed and no engine built, and the
+        CI image (.github/ci/Dockerfile) ships no Lua interpreter, so
+        shelling out to `luac -p` would be either a new hard dependency of a
+        metadata query or a silent skip. The alternative -- a Lua 5.4 parser
+        written out longhand here -- is several hundred lines of grammar to
+        make a probe's `--list` flag stricter than the contract asks.
+      * The gap is bounded and covered. What is left is a file whose blocks,
+        brackets, strings and comments all balance yet whose statements do
+        not parse (`local = 1`). That file cannot reach master unreviewed,
+        and the moment anything runs it the engine's own loader rejects it;
+        `check_course_inventory` then fails every real course run on the
+        disagreement. What this catches is how the file actually breaks in
+        practice -- truncated, half-edited, half-merged.
+
+    Scope: balanced `function`/`if`/`do` against `end`, `repeat` against
+    `until`, and balanced brackets, over the comment- and string-free text.
+    Agrees with `luac -p` on every case in the companion test and accepts
+    all 218 tracked .lua files.
+    """
+    depth = repeats = 0
+    for match in _BLOCK_WORD.finditer(code):
+        word = match.group(1)
+        if word in ("function", "if", "do"):
+            depth += 1
+        elif word == "end":
+            depth -= 1
+            if depth < 0:
+                raise CourseSourceError(
+                    f"{path}: 'end' with no open block at line "
+                    f"{_line_of(code, match.start())}")
+        elif word == "repeat":
+            repeats += 1
+        else:
+            repeats -= 1
+            if repeats < 0:
+                raise CourseSourceError(
+                    f"{path}: 'until' with no open 'repeat' at line "
+                    f"{_line_of(code, match.start())}")
+    if depth > 0:
+        raise CourseSourceError(
+            f"{path}: {depth} unterminated block(s) -- a 'function', 'if' or "
+            "'do' has no matching 'end'")
+    if repeats > 0:
+        raise CourseSourceError(f"{path}: 'repeat' with no matching 'until'")
+    stack: list[tuple[str, int]] = []
+    for offset, char in enumerate(code):
+        if char in "([{":
+            stack.append((char, offset))
+        elif char in ")]}":
+            if not stack or stack[-1][0] != _BRACKET_PAIRS[char]:
+                raise CourseSourceError(
+                    f"{path}: unbalanced '{char}' at line "
+                    f"{_line_of(code, offset)}")
+            stack.pop()
+    if stack:
+        char, offset = stack[-1]
+        raise CourseSourceError(
+            f"{path}: unclosed '{char}' opened at line {_line_of(code, offset)}")
+
+
+class CourseSourceError(RuntimeError):
+    """The course inventory could not be derived from the Lua module.
+
+    A SETUP failure, never a silently empty list (#1586): callers exit
+    non-zero naming the file so an unreadable, unparseable or ambiguous
+    source is distinguishable from a module that genuinely declares
+    nothing.
+    """
+
+
+def derive_courses(path: Path | None = None) -> list[str]:
+    """Course names declared by scripts/movement_arena.lua, WITHOUT booting.
+
+    `M.listCourses()` stays the runtime authority; this is a derived view of
+    the same source so `--list` costs nothing. Returned sorted, matching
+    that function's own `table.sort(names)`, so every `--list` invocation
+    prints identical output.
+
+    Raises `CourseSourceError` for a source that cannot honestly be read:
+    unreadable or not UTF-8, structurally broken, declaring nothing, or
+    declaring one name twice.
+    """
+    path = COURSE_SOURCE if path is None else path
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise CourseSourceError(f"cannot read {path}: {exc}") from exc
+    code = _blank_lua_noise(text, path)
+    _check_structure(code, path)
+    first_seen: dict[str, int] = {}
+    duplicates: list[str] = []
+    for lineno, line in enumerate(code.splitlines(), 1):
+        match = _COURSE_DECL.match(line)
+        if match is None:
+            continue
+        name = match.group(1)
+        if name in first_seen:
+            duplicates.append(f"{name} (lines {first_seen[name]} and {lineno})")
+        else:
+            first_seen[name] = lineno
+    if duplicates:
+        raise CourseSourceError(
+            f"{path} declares duplicate courses: " + ", ".join(duplicates))
+    if not first_seen:
+        raise CourseSourceError(
+            f"{path} declares no 'M.courses.<name> = function()' registrations")
+    return sorted(first_seen)
+
+
+def check_course_inventory(port: int) -> int:
+    """Guard the derived listing against the runtime authority (#1586).
+
+    A real course run already has an engine, so it is the place to prove the
+    cheap `--list` view has not drifted from
+    `require('scripts.movement_arena').listCourses()`. Returns 0 on
+    agreement, 2 otherwise, reporting the two directions of difference
+    separately so the message never depends on set iteration order.
+    """
+    try:
+        derived = derive_courses()
+    except CourseSourceError as exc:
+        print(f"FAIL: {exc}", file=sys.stderr)
+        return 2
+    runtime = send_json(
+        port, "return require('scripts.movement_arena').listCourses()")
+    if not isinstance(runtime, list) or not runtime:
+        print("FAIL: movement_arena.listCourses() returned no course names "
+              f"({runtime!r})", file=sys.stderr)
+        return 2
+    runtime_names = sorted(str(name) for name in runtime)
+    if runtime_names == derived:
+        return 0
+    derived_only = sorted(set(derived) - set(runtime_names))
+    runtime_only = sorted(set(runtime_names) - set(derived))
+    print(f"FAIL: course inventory drift between {COURSE_SOURCE} and "
+          "movement_arena.listCourses()", file=sys.stderr)
+    print("  derived from the Lua source but absent at runtime: "
+          + (", ".join(derived_only) if derived_only else "(none)"),
+          file=sys.stderr)
+    print("  registered at runtime but not derived from the Lua source: "
+          + (", ".join(runtime_only) if runtime_only else "(none)"),
+          file=sys.stderr)
+    return 2
 
 
 def bootstrap(port: int, with_resources: bool = False,
@@ -517,8 +773,24 @@ def main() -> int:
                          "override for slow courses like ramp_climb)")
     ap.add_argument("--port", type=int, default=9134)
     ap.add_argument("--list", action="store_true",
-                    help="list available courses and exit")
+                    help="list available courses and exit (no engine boot; "
+                         "honoured for every --mode)")
     args = ap.parse_args()
+
+    # #1586: listing is a metadata query, so it must not depend on a build,
+    # a free port or a resource root. Answered from the Lua source before
+    # any boot() and before the mode dispatch below, so `--list`,
+    # `--list --mode stamina` and `--list --mode pacing` all print the same
+    # inventory and exit 0.
+    if args.list:
+        try:
+            names = derive_courses()
+        except CourseSourceError as exc:
+            print(f"FAIL: {exc}", file=sys.stderr)
+            return 2
+        print("courses:", ", ".join(names))
+        return 0
+
     args.speed_explicit = args.speed is not None
     if args.seconds is None:
         args.seconds = COURSE_SECONDS.get(args.course, 14.0)
@@ -532,11 +804,11 @@ def main() -> int:
 
         bootstrap(args.port)
 
-        if args.list:
-            names = send_json(args.port,
-                              "return require('scripts.movement_arena').listCourses()")
-            print("courses:", ", ".join(names) if names else "(none)")
-            return 0
+        # This run has an engine, so it is where the cheap --list view is
+        # held to the runtime authority (#1586).
+        drift = check_course_inventory(args.port)
+        if drift:
+            return drift
 
         course = send_json(
             args.port,

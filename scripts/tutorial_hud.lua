@@ -42,6 +42,7 @@ package.loaded["scripts.tutorial_hud"] = tutorialHud
 local scale           = require("scripts.ui.scale")
 local reservedRegions = require("scripts.ui.reserved_regions")
 local responsive      = require("scripts.ui.responsive")
+local textWrap        = require("scripts.ui.text_wrap")
 
 -- Presentation state. Survives a rebuild, a resize, a UI-scale change,
 -- a HUD hide/show and a zoom-band change; reset only by the two
@@ -186,6 +187,26 @@ local function captionWidth(font, fontSize)
         end
     end
     return math.ceil(widest)
+end
+
+-- #1581: fit one row's rendered string into the width its indent leaves
+-- inside the panel, through the ONE shared width-fitting helper (#1157)
+-- rather than a sixth private copy of the truncation rule.
+--
+-- Guarded exactly like captionWidth above, and for the same reason: the
+-- headless UI fixture runs a bare Lua backend where engine.getTextWidth
+-- may be absent or answer 0, and an unmeasurable font means "no bound at
+-- all" -- the pre-#1581 string, unchanged. A raising helper must never
+-- cost the row its text.
+local function fitRowText(text, font, fontSize, budget)
+    if font == nil then return text end
+    if type(engine) ~= "table" or type(engine.getTextWidth) ~= "function" then
+        return text
+    end
+    local ok, fitted = pcall(textWrap.truncateToWidth,
+                             text, font, fontSize, budget)
+    if ok and type(fitted) == "string" then return fitted end
+    return text
 end
 
 -- How many times the box/font fit below may be re-derived. One
@@ -535,9 +556,30 @@ function tutorialHud.rebuild()
         if font then
             local indent = math.min(lay.indent * math.max(0, row.depth or 0),
                                      math.max(0, lay.panelW - lay.indent))
-            textH = UI.newText("tutorial_hud_row_label_" .. tostring(row.id),
+            -- #1581: the panel is RIGHT-ANCHORED and nothing clips a row,
+            -- so a string wider than the budget its indent leaves paints
+            -- toward and past the right framebuffer edge -- which every
+            -- shipped first_session row below the root actually did. The
+            -- caption's fitToggle solves this for the toggle alone; rows
+            -- are a fixed-height list, so they truncate instead of
+            -- shrinking a font the whole list shares.
+            --
+            -- The right-hand slack is captionPadFor's, for captionPadFor's
+            -- reason: glyph ink is placed at the pen position plus the
+            -- glyph's bearing and is bounded by its bitmap, not by the
+            -- advance sum engine.getTextWidth returns, so a string that
+            -- fits by advance can still put ink a few pixels further right.
+            local budget = lay.panelW - indent - captionPadFor(lay.indent)
+            local rowText = fitRowText(
                 markerFor(row) .. " " .. tostring(row.label or row.id),
-                font, lay.fontSize, 1.0, 1.0, 1.0, 1.0, tutorialHud.page)
+                font, lay.fontSize, budget)
+            -- An empty fit means the budget could not hold even the
+            -- ellipsis (an out-of-envelope framebuffer/scale combination).
+            -- Drawing nothing is the shared helper's own answer there;
+            -- drawing the full string would put it across the framebuffer.
+            textH = rowText ~= "" and UI.newText(
+                "tutorial_hud_row_label_" .. tostring(row.id), rowText,
+                font, lay.fontSize, 1.0, 1.0, 1.0, 1.0, tutorialHud.page) or nil
             if textH then
                 UI.addToPage(tutorialHud.page, textH,
                     lay.panelX + indent,
