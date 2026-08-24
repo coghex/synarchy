@@ -456,15 +456,25 @@ def build_handoff(*, result, acceptable_failures, argv, cwd, configuration,
     }
 
 
+HANDOFF_SUFFIX = "-handoff.json"
+
+
 def handoff_path_for(result_path) -> Path:
     """Where the handoff sits beside the retained result it describes.
 
     Derived from the result's own name rather than a fixed one, so a
     `--result` that puts two measurements in one directory cannot make
     two handoffs collide.
+
+    From the WHOLE filename, not its stem: `Path.stem` drops the
+    extension, so `census.json`, `census.txt` and `census` all stem to
+    `census` and would share one handoff, the later measurement
+    overwriting the earlier one's. Appending to the full name is
+    injective — distinct results in a directory have distinct names, and
+    distinct names give distinct handoffs.
     """
     retained = Path(result_path)
-    return retained.with_name(f"{retained.stem}-handoff.json")
+    return retained.with_name(f"{retained.name}{HANDOFF_SUFFIX}")
 
 
 def write_handoff(path, document) -> str | None:

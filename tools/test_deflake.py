@@ -1289,7 +1289,8 @@ def test_a_recorded_measurement_writes_its_handoff_beside_the_result() -> None:
                and Path(result.handoff_path).parent
                == Path(result.result_path).parent,
                f"beside the retained result ({result.handoff_path})")
-        expect(str(result.handoff_path).endswith("-handoff.json"),
+        expect(str(result.handoff_path)
+               == f"{result.result_path}{deflake.HANDOFF_SUFFIX}",
                f"named after it, so two results in one directory cannot "
                f"collide ({result.handoff_path})")
         expect(result.to_document()["handoff_document"]
@@ -1303,6 +1304,25 @@ def test_a_recorded_measurement_writes_its_handoff_beside_the_result() -> None:
                f"({document['schema']})")
     finally:
         scratch.cleanup()
+
+
+def test_two_results_in_one_directory_get_two_handoffs() -> None:
+    print("\n-- the handoff name is derived injectively from the result's")
+    directory = Path("/tmp/one-directory")
+    # `Path.stem` would map all three of these to `census`, so the later
+    # measurement's handoff would overwrite the earlier one's.
+    names = ["census.json", "census.txt", "census", "census.json.bak"]
+    produced = [deflake.handoff_path_for(directory / name) for name in names]
+    expect(len(set(produced)) == len(names),
+           f"distinct results give distinct handoffs ({produced})")
+    expect(all(path.parent == directory for path in produced),
+           f"all beside their own result ({produced})")
+    expect(all(path.name.endswith(deflake.HANDOFF_SUFFIX)
+               for path in produced),
+           f"and all recognisable as handoffs ({produced})")
+    expect(deflake.handoff_path_for(directory / "census.json").name
+           == f"census.json{deflake.HANDOFF_SUFFIX}",
+           "derived from the WHOLE filename, not its stem")
 
 
 def test_the_embedded_result_is_the_measurements_own_document() -> None:
@@ -1730,6 +1750,7 @@ def main() -> int:
     test_the_cli_takes_no_probe_or_run_overrides()
     # The handoff (#1659)
     test_a_recorded_measurement_writes_its_handoff_beside_the_result()
+    test_two_results_in_one_directory_get_two_handoffs()
     test_the_embedded_result_is_the_measurements_own_document()
     test_the_invocation_records_what_the_process_observed()
     test_the_adapter_is_told_the_timeout_and_starting_port()
