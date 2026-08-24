@@ -771,7 +771,16 @@ jobs:
       # REAL engine-booting ten-run measurement is deliberately absent
       # from this job and from tools/ci-local.sh — tools/README.md states
       # that a real run is supplemental manual evidence and never a merge
-      # gate.
+      # gate. test_location_embark_probe is #1569's: the artifact
+      # ownership of tools/location_embark_probe.py — one
+      # invocation-owned directory, --resource-root on every boot,
+      # release on a pass, a phase-0 return, an exception and a boot
+      # abort, residue as a failing check, a pre-existing same-named
+      # save slot left byte-identical, and a read-only checkout still
+      # yielding a removable tree. The probe itself is manual-only
+      # needs-gpu, so without this companion that contract is only ever
+      # observed by a GPU run nothing here can make; the companion boots
+      # nothing and runs in well under a second.
       - name: probe runner self-tests
         run: |
           python3 tools/ci_probes.py --self-test
@@ -786,6 +795,7 @@ jobs:
           python3 tools/test_probe_claim.py
           python3 tools/test_probe_resource_lock.py
           python3 tools/test_deflake.py
+          python3 tools/test_location_embark_probe.py
 
       # Cheap, no-engine guard (#1355): fails if a `python3 tools/*.py`
       # check runs in this job and not in tools/ci-local.sh, or the other
