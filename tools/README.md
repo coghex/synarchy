@@ -1845,9 +1845,14 @@ stops at the gate; `cannot-reproduce`, `no-confident-fix` and
 `deflake-diagnosis-outcome/v1` naming the route, its owning issue and the
 retained evidence — what those issues then do with it is theirs to define.
 
-The gate is `tools/test_deflake_diagnosis.py`, engine-free and document-only,
-and it runs in `make ci` and in CI beside the lab's other self-tests. What
-stays deliberately out of both, exactly as for `deflake.py`, is the REAL
+The gate is `tools/test_deflake_diagnosis.py`, engine-free and document-only.
+It is deliberately NOT wired into `make ci` or GitHub CI — #1437's approved
+rereview amendment scopes this lab's own self-test to manual invocation — so
+run it by hand when touching `tools/deflake_diagnosis.py`. It takes seconds and
+boots nothing. (`tools/test_deflake.py`, the #1436 orchestrator's self-test,
+IS in both; the two issues scoped their gates differently.)
+
+What stays out of everything, exactly as for `deflake.py`, is the REAL
 engine-booting measurement: a diagnosis consumes twenty ten-run batches' worth
 of wall clock and is supplemental manual pull-request evidence, never a merge
 gate.

@@ -2092,6 +2092,24 @@ def evaluate(document, *, worktrees=(), primary=None) -> Outcome:
                 f"both batches wrote to {path}; the baseline evidence must "
                 f"survive the verification that follows it")
 
+    # The command's destinations are not the whole story: `--artifact-root`
+    # is OPTIONAL, and two batches that both let `default_artifact_root`
+    # supply it share a root legitimately. What they can never share is
+    # the INVOCATION DIRECTORY beneath it — `new_invocation_dir` creates a
+    # fresh collision-free one per invocation, stamped with the time, the
+    # pid and a uuid — so a verification reporting the baseline's is
+    # reporting the baseline's artifacts as its own.
+    shared = _path_forms(baseline["invocation_dir"]) & _path_forms(
+        verification["invocation_dir"])
+    if shared:
+        raise RouteRefused(
+            f"both batches report the invocation directory "
+            f"{verification['invocation_dir']}; "
+            f"`probe_flake.new_invocation_dir` creates a fresh one per "
+            f"invocation, so a verification naming the baseline's is "
+            f"claiming the baseline's artifacts as its own — sharing the "
+            f"artifact ROOT is fine, sharing what sits under it is not")
+
     # A verification batch is ACCEPTED only when both halves hold: the
     # count is at or below X, and the scoped MISSING rule is intact. The
     # issue names them together for a reason — "verification remains

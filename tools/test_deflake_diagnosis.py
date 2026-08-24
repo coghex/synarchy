@@ -1084,6 +1084,49 @@ def test_a_repair_without_a_verification_batch_is_refused() -> None:
                         f"a {route} route with no verification")
 
 
+def test_the_two_batches_may_share_a_root_but_not_an_invocation() -> None:
+    """`--artifact-root` is optional, so a shared ROOT is legitimate.
+
+    What no two invocations can share is the directory beneath it:
+    `new_invocation_dir` creates a fresh collision-free one per
+    invocation, stamped with the time, the pid and a uuid. Checking only
+    the COMMAND's destinations let both batches omit `--artifact-root`,
+    point at one invocation directory, and keep distinct `--result`
+    paths — every per-batch rule passing while the verification reported
+    the baseline's artifacts as its own.
+    """
+    def defaulted(section, tree, result):
+        section["invocation"] = invocation(
+            cmd=["python3", f"{tree}/tools/probe_flake.py", "--probe", PROBE,
+                 "--runs", str(dd.RUN_COUNT), "--rts-caps",
+                 str(dd.RTS_CAPABILITIES), "--result", result],
+            directory=tree)
+
+    document = diagnosis_document()
+    defaulted(document["baseline"], CLEAN_WT, f"{OUTSIDE}/baseline.json")
+    defaulted(document["verification"], REPAIR_WT, f"{OUTSIDE}/verify.json")
+    shared_root = f"{OUTSIDE}/defaulted"
+    document["baseline"]["result"] = result_document(
+        runs=failing_runs(4), artifact_root=shared_root)
+    document["verification"]["result"] = verification_result(
+        artifact_root=shared_root)
+    expect(document["baseline"]["result"]["invocation_dir"]
+           == document["verification"]["result"]["invocation_dir"],
+           "the fixture really does reuse one invocation directory")
+    expect_refused(lambda: evaluate(document),
+                   "creates a fresh one per invocation",
+                   "two batches reporting one invocation directory")
+
+    # The same shared root with distinct invocation directories is fine.
+    document["verification"]["result"]["invocation_dir"] = (
+        f"{shared_root}/{PROBE}-20260822T090000Z-5150-beefcafe")
+    document["verification"]["result"]["runs"] = [
+        dict(run) for run in document["verification"]["result"]["runs"]]
+    outcome = evaluate(document)
+    expect(outcome.route == dd.ROUTE_REPAIR,
+           f"a shared artifact root is legitimate; got {outcome.route}")
+
+
 def test_the_two_batches_may_not_share_a_worktree() -> None:
     document = diagnosis_document()
     relocate_section(document["verification"], CLEAN_WT)
