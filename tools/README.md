@@ -1808,7 +1808,15 @@ The two controlled batches may SHARE an artifact root — `--artifact-root` is
 optional and `default_artifact_root` supplies a temporary directory to both —
 but never the invocation directory beneath it, which `new_invocation_dir`
 creates fresh per invocation: a verification naming the baseline's is claiming
-the baseline's artifacts as its own.
+the baseline's artifacts as its own. Nor may either batch write INTO the
+other's invocation directory — a `--result` pointing at the baseline's retained
+`run-001/events.jsonl` is a distinct path that overwrites the very evidence the
+comparison is made of — while a shared root stays legitimate, since a root
+contains both invocation directories rather than sitting inside either.
+
+Run indices are the sequence `measure` emits, `1..len(runs)`, with the
+harness-error record next: ten records all numbered `1` is one run replayed ten
+times, and every other rule reads a run's index.
 
 Destinations must sit outside every worktree, registered or declared:
 `check_artifact_root` guards the artifact root, but `--result` is written

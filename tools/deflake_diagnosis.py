@@ -1049,9 +1049,46 @@ def require_result(document, what: str) -> dict:
                 f"reports every declared check as PASS, FAIL or MISSING, so "
                 f"a key that is simply absent means the document was not "
                 f"written by the harness")
+    _require_indices(document, what)
     _require_retention(document, what)
     require_topology(document, what)
     return document
+
+
+def _require_indices(document, what: str) -> None:
+    """The consecutive numbering `probe_flake.measure` emits.
+
+    `measure` runs `for index in range(1, runs + 1)` and appends one
+    record per index, so a valid document's run indices are exactly
+    `1..completed_runs` in order — and the run that broke the stream,
+    when there is one, is the NEXT index, because it is the one the loop
+    was on when it stopped.
+
+    Without this, ten otherwise-valid records could all be numbered `1`:
+    a single run replayed ten times, counted as a complete ten-run
+    verification. Every other rule here reads a run's index — the
+    retention pairing and the `run-{index:03d}` topology both do — so
+    leaving the sequence unchecked let a forged layout satisfy them all
+    against one repeated number.
+    """
+    # Counted against the records PRESENT, not against `completed_runs`:
+    # whether that tally agrees is `controlled_problems`' rule, and one
+    # fact answered in two places is one fact nobody can locate.
+    indices = [run["index"] for run in document["runs"]]
+    expected = list(range(1, len(document["runs"]) + 1))
+    if indices != expected:
+        raise HandoffError(
+            f"{what} numbers its runs {indices} where "
+            f"`probe_flake.measure` emits {expected}; the loop runs "
+            f"`range(1, runs + 1)` and appends one record per index, so a "
+            f"sequence that repeats, skips or reorders is not a record of "
+            f"{len(expected)} runs")
+    broken = document.get("error_run")
+    if isinstance(broken, dict) and broken["index"] != len(expected) + 1:
+        raise HandoffError(
+            f"{what} numbers its harness-error run {broken['index']} where "
+            f"the loop was on {len(expected) + 1}; the run that broke the "
+            f"stream is the one after the last completed one")
 
 
 def _require_retention(document, what: str) -> None:
@@ -2109,6 +2146,29 @@ def evaluate(document, *, worktrees=(), primary=None) -> Outcome:
             f"invocation, so a verification naming the baseline's is "
             f"claiming the baseline's artifacts as its own — sharing the "
             f"artifact ROOT is fine, sharing what sits under it is not")
+
+    # Nor may either batch write INTO the other's invocation directory.
+    # Equality alone let a verification point `--result` at, say, the
+    # baseline's retained `run-001/events.jsonl` — distinct paths, and the
+    # baseline's evidence overwritten by the run that was supposed to be
+    # compared against it. Containment is the rule; a shared artifact ROOT
+    # stays legitimate because a root CONTAINS both invocation
+    # directories rather than sitting inside either.
+    for mine, theirs, label, other in (
+            (baseline_section, verification, "the baseline", "verification"),
+            (verification_section, baseline, "the verification", "baseline")):
+        their_dir = theirs["invocation_dir"]
+        paths = [("wrote", path) for path in destinations(mine["invocation"])]
+        paths += [(f"reports {name} at", path)
+                  for name, path in result_paths(mine["result"])]
+        for verb, path in paths:
+            if inside_any_worktree(path, [their_dir],
+                                   base=mine["invocation"]["directory"]):
+                raise RouteRefused(
+                    f"{label} {verb} {path}, inside the {other} batch's own "
+                    f"invocation directory {their_dir}; one batch writing "
+                    f"into the other's artifacts contaminates the evidence "
+                    f"the comparison is made of")
 
     # A verification batch is ACCEPTED only when both halves hold: the
     # count is at or below X, and the scoped MISSING rule is intact. The

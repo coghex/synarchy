@@ -1127,6 +1127,73 @@ def test_the_two_batches_may_share_a_root_but_not_an_invocation() -> None:
            f"a shared artifact root is legitimate; got {outcome.route}")
 
 
+def test_neither_batch_may_write_into_the_others_artifacts() -> None:
+    """Distinct paths are not isolation if one sits inside the other.
+
+    A verification `--result` pointing at the baseline's retained
+    `run-001/events.jsonl` is a different path from anything the baseline
+    wrote to, and it overwrites the very evidence the comparison is made
+    of.
+    """
+    document = diagnosis_document()
+    inside = (f"{document['baseline']['result']['invocation_dir']}"
+              f"/run-001/events.jsonl")
+    document["verification"]["invocation"] = invocation(
+        cmd=command(result=inside, artifacts=VERIFY_ARTIFACTS,
+                    worktree=REPAIR_WT),
+        directory=REPAIR_WT)
+    expect_refused(lambda: evaluate(document),
+                   "invocation directory",
+                   "a verification writing into the baseline's artifacts")
+
+    # And the other direction: the baseline reporting a retained artifact
+    # inside the verification's invocation directory.
+    other = diagnosis_document(handoff=handoff_document(acceptable=1))
+    other["verification"]["result"] = verification_result(
+        runs=failing_runs(1, abort=False))
+    victim = other["verification"]["result"]["invocation_dir"]
+    failing = next(run for run in other["baseline"]["result"]["runs"]
+                   if run["outcome"] != probe_flake.RUN_PASS)
+    moved = f"{victim}/run-{failing['index']:03d}"
+    other["baseline"]["result"]["retained_artifacts"] = [
+        moved if path == failing["artifact_dir"] else path
+        for path in other["baseline"]["result"]["retained_artifacts"]]
+    failing["artifact_dir"] = moved
+    expect_rejected(lambda: evaluate(other),
+                    "evidence from somewhere other than this measurement",
+                    "a baseline retaining artifacts in the verification's tree")
+
+
+def test_a_run_sequence_is_the_one_the_loop_emits() -> None:
+    """`measure` runs `range(1, runs + 1)`, one record per index.
+
+    Ten records all numbered `1` is one run replayed ten times — and
+    every other rule reads a run's index, so leaving the sequence
+    unchecked let a forged layout satisfy them all against one number.
+    """
+    for label, renumber in (
+            ("all the same", lambda runs: [1] * len(runs)),
+            ("a repeat", lambda runs: [1, 1] + list(range(3, len(runs) + 1))),
+            ("a skip", lambda runs: [1] + list(range(3, len(runs) + 2))),
+            ("reordered", lambda runs: list(range(len(runs), 0, -1))),
+            ("zero-based", lambda runs: list(range(0, len(runs)))),
+    ):
+        document = handoff_document()
+        runs = document["result"]["runs"]
+        for run, index in zip(runs, renumber(runs)):
+            run["index"] = index
+        expect_rejected(lambda d=document: dd.require_handoff(d),
+                        "numbers its runs",
+                        f"a batch whose indices are {label}")
+
+    broken = handoff_document(result=result_document(
+        runs=failing_runs(2), harness_error=True))
+    broken["result"]["error_run"]["index"] = 1
+    expect_rejected(lambda: dd.require_handoff(broken),
+                    "the one after the last completed one",
+                    "a harness-error run numbered before the completed ones")
+
+
 def test_the_two_batches_may_not_share_a_worktree() -> None:
     document = diagnosis_document()
     relocate_section(document["verification"], CLEAN_WT)
