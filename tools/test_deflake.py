@@ -1478,6 +1478,68 @@ def test_the_configuration_is_read_under_the_hold_before_the_runs() -> None:
         scratch.cleanup()
 
 
+def test_a_configuration_that_cannot_be_read_is_a_managed_failure() -> None:
+    print("\n-- capturing the configuration OPENS files, and that can fail")
+    scratch = Scratch()
+    try:
+        recorder = Recorder(measurement(scratch))
+        claim = FakeClaim()
+        attempts: list = []
+
+        def unreadable(root):
+            raise PermissionError(13, "Permission denied",
+                                  "config/save.local.yaml")
+
+        result = run(scratch, measure=recorder,
+                     acquire_claim=lambda probe, **kw: claim,
+                     read_configuration=unreadable,
+                     save_handoff=lambda path, document: attempts.append(path))
+        expect(result.outcome == deflake.OUTCOME_MANAGED_ERROR,
+               f"it is a managed outcome, not a traceback ({result.outcome})")
+        expect(result.exit_code != 0, f"and nonzero ({result.exit_code})")
+        expect("could not be captured" in (result.detail or ""),
+               f"naming what failed ({result.detail})")
+        expect(recorder.calls == [],
+               f"no engine was started ({recorder.calls})")
+        expect(attempts == [] and result.handoff_path is None
+               and result.to_document()["handoff_document"] is None,
+               "and there is no handoff, because nothing was measured")
+        expect(claim.released and result.ownership == deflake.OWNERSHIP_NONE,
+               f"the claim went back ({result.ownership})")
+
+        # And when the release ALSO fails, the retained ownership is the
+        # result rather than a footnote on it — the same rule every
+        # other pre-measurement failure follows.
+        held = FakeClaim(release_error="the claim file is unwritable")
+        result = run(scratch, measure=Recorder(measurement(scratch)),
+                     acquire_claim=lambda probe, **kw: held,
+                     read_configuration=unreadable)
+        expect(result.outcome == deflake.OUTCOME_MANAGED_ERROR
+               and result.ownership == deflake.OWNERSHIP_CLAIM_HELD,
+               f"({result.outcome}, {result.ownership})")
+
+        # The real reader raises for a real unreadable file, which is
+        # what makes the injected one a fair stand-in.
+        root = Path(tempfile.mkdtemp(prefix="test_deflake_unreadable_"))
+        try:
+            (root / "config").mkdir()
+            victim = root / "config" / "save.local.yaml"
+            victim.write_text("autosave: true\n")
+            victim.chmod(0)
+            if os.geteuid() != 0:
+                raised = None
+                try:
+                    deflake.configuration_manifest(root)
+                except OSError as error:
+                    raised = error
+                expect(raised is not None,
+                       "the shipped reader really does raise OSError")
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+    finally:
+        scratch.cleanup()
+
+
 def test_the_acceptable_failure_count_comes_from_the_installed_row() -> None:
     print("\n-- X comes from the row the transaction wrote, not a reread")
     scratch = Scratch()
@@ -1674,6 +1736,7 @@ def main() -> int:
     test_the_targets_are_the_non_pass_identifiers_in_descriptor_order()
     test_the_configuration_manifest_records_contents_and_absence()
     test_the_configuration_is_read_under_the_hold_before_the_runs()
+    test_a_configuration_that_cannot_be_read_is_a_managed_failure()
     test_the_acceptable_failure_count_comes_from_the_installed_row()
     test_a_recorder_that_answers_the_wrong_shape_is_refused()
     test_only_the_recorded_outcome_has_a_handoff()

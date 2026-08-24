@@ -1624,8 +1624,11 @@ Written LAST, after ingestion and a successful release, because
 `commit-changed`, `record-failed`, `record-indeterminate`,
 `recorded-release-failed` and `harness-error` can all happen after the
 measurement and none of them is the complete attributable measurement a
-diagnosis reads a handoff as. A `recorded` run with nothing retained to sit
-beside, or a handoff that cannot be written, is the existing nonzero
+diagnosis reads a handoff as. Capturing the configuration OPENS files, so it can fail
+the way reading a file fails; that is a managed pre-measurement failure —
+the claim goes back, no engine starts, and there is no handoff, because a
+handoff describes a measurement. A `recorded` run with nothing retained to sit
+beside, or a handoff that cannot be written, is the same existing nonzero
 `managed-error`: the committed census update is append-only and is neither
 retried nor rolled back, both facts are reported, and the outcome vocabulary
 does not grow.

@@ -840,7 +840,26 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
             # configuration the runs will actually read, and reading it
             # afterwards would describe whatever the directory held once
             # they were done.
-            configuration = read_configuration(repo_root)
+            #
+            # It OPENS files, so it can fail the way reading a file
+            # fails — unreadable, or gone between the directory listing
+            # and the open. That is a managed pre-measurement failure
+            # like any other: the claim goes back, no engine starts, and
+            # there is no handoff, because a handoff describes a
+            # measurement. Letting the `OSError` escape would leave this
+            # command with no outcome at all, having already taken and
+            # given back ownership.
+            try:
+                configuration = read_configuration(repo_root)
+            except OSError as error:
+                problem = _release(claim)
+                return Result(OUTCOME_MANAGED_ERROR, detail=(
+                    f"the configuration the runs would read could not be "
+                    f"captured ({error}); the probe was not run, so nothing "
+                    f"was measured, recorded or handed off"),
+                    ownership=(OWNERSHIP_CLAIM_HELD if problem
+                               else OWNERSHIP_NONE),
+                    commit=captured, **common)
             say(f"measuring {probe!r}: {runs} runs at {rts_caps} RTS "
                 f"capabilities")
             with probe_claim.Renewer(claim):
