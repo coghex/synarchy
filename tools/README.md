@@ -1726,6 +1726,12 @@ that is an interpreter plus a path ending in `probe_flake.py` — because an
 option the CLI does not have would compare equal across both batches while
 describing a measurement neither could have run.
 
+Two labels are not two worktrees, either: the declared paths are canonicalised,
+neither may contain the other, and each invocation must have run inside the
+worktree its section names. Deliberately not "must be a registered `git
+worktree`" — the workflow removes or hands off both comparison worktrees when
+it finishes, so by evaluation time the paths it correctly names may be gone.
+
 Destinations must sit outside every worktree, registered or declared:
 `check_artifact_root` guards the artifact root, but `--result` is written
 wherever it is pointed — and it is opened RELATIVE TO THE PROCESS'S DIRECTORY,
@@ -1733,6 +1739,16 @@ so a destination is joined onto the recorded invocation directory and
 normalised first. Where a batch SAYS it wrote is bound by the same rule, and
 its declared `--artifact-root` must agree with the root its result document
 reports.
+
+**Artifacts are paired with outcomes, and handed on.** `probe_flake` deletes a
+run's directory the moment it passes and retains every unsuccessful one, so
+`artifact_dir` pairs with the outcome exactly and `retained_artifacts` is the
+list of the non-null ones — checked in both directions, because "no
+successful-run raw artifacts remain" is one of verification's success
+conditions and a failing run whose logs are gone is a failure nobody can
+diagnose. An emitted outcome then names the retained artifacts of EVERY batch
+the invocation ran, not just the handoff's: the batch that went wrong is
+usually the verification.
 
 **An invalid batch is a route, not a rejection.** "Verification remains above
 X, contains any MISSING result, becomes invalid, or only partially improves the

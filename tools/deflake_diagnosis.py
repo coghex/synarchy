@@ -98,13 +98,60 @@ The baseline and the verification batch necessarily differ in the
 worktree they run from and in where they write, and `probe_flake` leases
 ports dynamically. So "the same invocation" is compared on
 BEHAVIOR-AFFECTING settings with effective defaults filled in — probe,
-run count, RTS capabilities, timeout, retry policy — while `--result`,
+run count, RTS capabilities, retry policy — while `--result`,
 `--artifact-root` and the observed ports are recorded and permitted to
-differ. Both destinations must still sit outside every worktree: the
-artifact root is guarded by `probe_flake.check_artifact_root`, but
-`--result` is written wherever it is pointed, and a result document
-inside the repair worktree would either enter the commit or wedge the
-drainer's cleanup.
+differ.
+
+A command is first checked against the REAL harness interface. Every
+option must be one `probe_flake.main` actually accepts and the argv must
+be an interpreter and a path ending in `probe_flake.py`, because an
+option the CLI does not have — `--timeout`, say — would compare equal
+across two batches while describing a measurement neither could have
+run.
+
+Destinations must sit outside every worktree, registered or DECLARED:
+the artifact root is guarded by `probe_flake.check_artifact_root`, but
+`--result` is written wherever it is pointed — and it is opened relative
+to the process's directory, so a destination is joined onto the recorded
+invocation directory and normalised before anyone asks which worktree it
+lands in. Where a batch SAYS it wrote is bound by the same rule — its own
+`artifact_root`, `invocation_dir` and retained artifact paths — and its
+declared `--artifact-root` must agree with the root its result document
+reports, or neither record constrains the other.
+
+Two labels are not two worktrees, either: the declared paths are
+canonicalised, neither may contain the other, and each invocation must
+have run inside the worktree its section names. Deliberately NOT "must
+be a registered `git worktree`" — the workflow is required to remove or
+hand off both comparison worktrees when it finishes, so by the time its
+document is evaluated the paths it correctly names may be gone.
+
+Artifacts are paired with outcomes, and handed on
+-------------------------------------------------
+`probe_flake.measure` deletes a run's directory the moment it passes and
+retains every unsuccessful one, so `artifact_dir` pairs with the run's
+outcome exactly and `retained_artifacts` is literally the list of the
+non-null ones. Both directions are checked. "No successful-run raw
+artifacts remain" is one of verification's own success conditions, and a
+FAILING run whose directory has gone is a failure nobody can diagnose —
+which is precisely the evidence #1438 and #1439 are handed.
+
+That evidence then has to reach them: an emitted outcome names the
+retained artifacts of EVERY batch this invocation ran, not just the
+handoff's. The batch that went wrong is usually the verification, whose
+logs an outcome built from the handoff alone would never mention.
+
+An invalid batch is a ROUTE, not a rejection
+--------------------------------------------
+"Verification remains above X, contains any MISSING result, becomes
+invalid, or only partially improves the rate" is ONE list in the issue
+and every entry on it goes to #1439. So a harness error, a short batch or
+a contended machine in the VERIFICATION reaches `partial-improvement`
+with its evidence retained, and the same in the BASELINE reaches
+`cannot-reproduce` — never a gate rejection, which would report an
+invocation that got nowhere and lose the artifacts it did keep. What
+stays a rejection is a document that is not a `probe-flake-result/v1` at
+all, and a descriptor whose identities changed.
 
 The repair is frozen before it is verified
 ------------------------------------------
@@ -112,7 +159,9 @@ The repair is frozen before it is verified
 source changes, so a verification batch run against a dirty worktree
 measures something no commit contains. A declared repair therefore
 requires a source-clean repair worktree and a verification result whose
-`commit_sha` equals the repair commit being proposed.
+`commit_sha` equals the repair commit being proposed — and a `base_sha`
+equal to the handoff's own baseline commit, since the clean comparison
+worktree and the repair worktree are cut from one common SHA.
 
 Weakening an assertion is never a fix
 -------------------------------------
@@ -613,7 +662,60 @@ def require_result(document, what: str) -> dict:
                 f"reports every declared check as PASS, FAIL or MISSING, so "
                 f"a key that is simply absent means the document was not "
                 f"written by the harness")
+    _require_retention(document, what)
     return document
+
+
+def _require_retention(document, what: str) -> None:
+    """Successful runs kept nothing; unsuccessful ones kept everything.
+
+    `probe_flake.measure` deletes a run's directory the moment the run
+    passes and records `artifact_dir: null` for it, and retains the
+    directory of every FAIL, TIMEOUT and harness-error run. So the
+    pairing is exact in both directions, and `retained_artifacts` is
+    literally the list of the non-null ones.
+
+    Both halves matter to this workflow, which is why they are checked
+    rather than assumed. "No successful-run raw artifacts remain" is one
+    of verification's own success conditions; and a FAILING run whose
+    directory has gone is a failure nobody can diagnose, which is the
+    evidence #1438 and #1439 are handed. Neither shape can be produced
+    by the shipped harness, so both are malformed input rather than a
+    measurement that went wrong.
+    """
+    records = [(f"{what}.runs[{position}]", run)
+               for position, run in enumerate(document["runs"])]
+    broken = document.get("error_run")
+    if isinstance(broken, dict):
+        records.append((f"{what}.error_run", broken))
+    retained = []
+    for where, run in records:
+        directory = run.get("artifact_dir")
+        if run.get("outcome") == probe_flake.RUN_PASS:
+            if directory is not None:
+                raise HandoffError(
+                    f"{where} passed and still names the artifact directory "
+                    f"{directory}; a successful run's raw artifacts are "
+                    f"deleted as soon as it passes, so a passing run that "
+                    f"kept its directory was not written by the harness — "
+                    f"and leaving successful-run artifacts behind is exactly "
+                    f"what verification may not do")
+            continue
+        if directory is None:
+            raise HandoffError(
+                f"{where} did not pass ({run.get('outcome')!r}) and names no "
+                f"artifact directory; every unsuccessful run's artifacts are "
+                f"retained, and a failure whose logs are gone is a failure "
+                f"nobody can diagnose")
+        retained.append(directory)
+    declared = document.get("retained_artifacts") or []
+    if list(declared) != retained:
+        raise HandoffError(
+            f"{what}.retained_artifacts is {list(declared)} where its own "
+            f"runs retained {retained}; the list is exactly the non-null "
+            f"artifact directories in run order, so a document where the two "
+            f"disagree is naming evidence it does not have, or hiding "
+            f"evidence it does")
 
 
 def descriptor_ids(document) -> list:
@@ -952,12 +1054,12 @@ def require_handoff(document) -> Handoff:
                                   or not all(isinstance(path, str)
                                              for path in artifacts)):
         raise HandoffError(f"{what}.artifacts must be a list of paths")
-    retained = result.get("retained_artifacts") or []
-    if failure_count(result) and not (artifacts or retained):
-        raise HandoffError(
-            f"{what} observed {failure_count(result)} unsuccessful run(s) "
-            f"and records no retained artifact; the failing logs are the "
-            f"diagnosis evidence and `probe_flake` keeps them by default")
+    # No "failing runs must have retained evidence" rule here: since
+    # `_require_retention`, `retained_artifacts` IS the list of the
+    # unsuccessful runs' own directories, so a measurement with failures
+    # and no retained evidence is unrepresentable rather than merely
+    # refused. `artifacts` stays a place for a handoff to name anything
+    # further it kept.
     return Handoff(document, acceptable_failures=acceptable)
 
 
@@ -1186,14 +1288,19 @@ def evaluate(document, *, worktrees=()) -> Outcome:
             f"was admitted")
 
     owner = ROUTE_OWNER[route]
+    # Every retained artifact this invocation has, from every batch it
+    # ran — not just the handoff's. A #1439 route exists to hand the
+    # evidence on, and the batch that went wrong is usually the
+    # VERIFICATION, whose logs would otherwise never be named at all.
+    artifacts = list(handoff.artifacts) + list(
+        handoff.result.get("retained_artifacts") or [])
     common = {
         "handoff": handoff,
         "probe": handoff.probe,
         "targets": handoff.targets,
         "acceptable_failures": handoff.acceptable_failures,
         "owner_issue": owner,
-        "artifacts": handoff.artifacts or (
-            handoff.result.get("retained_artifacts") or []),
+        "artifacts": artifacts,
     }
 
     baseline_section = document.get("baseline")
@@ -1207,6 +1314,7 @@ def evaluate(document, *, worktrees=()) -> Outcome:
     baseline = baseline_section["result"]
     baseline_failures = failure_count(baseline)
     common["baseline_failures"] = baseline_failures
+    common["artifacts"] = _accumulate(common["artifacts"], baseline)
 
     config_problems = manifest_differences(
         handoff.configuration, baseline_section["configuration"],
@@ -1288,6 +1396,7 @@ def evaluate(document, *, worktrees=()) -> Outcome:
     verification = verification_section["result"]
     verification_failures = failure_count(verification)
     common["verification_failures"] = verification_failures
+    common["artifacts"] = _accumulate(common["artifacts"], verification)
 
     clean = _require_worktree(baseline_section, what="baseline")
     repair_tree = _require_worktree(verification_section, what="verification")
@@ -1378,6 +1487,15 @@ def evaluate(document, *, worktrees=()) -> Outcome:
         f"{baseline_failures}/{RUN_COUNT} before, {verification_failures}/"
         f"{RUN_COUNT} after, against an X of "
         f"{handoff.acceptable_failures}"), **common)
+
+
+def _accumulate(artifacts, document) -> list:
+    """`artifacts` plus everything `document` retained, order preserved."""
+    combined = list(artifacts)
+    for path in document.get("retained_artifacts") or []:
+        if path not in combined:
+            combined.append(path)
+    return combined
 
 
 def _require_evidence(document, route: str) -> None:

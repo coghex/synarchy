@@ -436,13 +436,57 @@ def test_an_expected_check_list_that_contradicts_the_descriptor_is_refused() -> 
                     "a reordered expected-check list")
 
 
-def test_unsuccessful_runs_without_retained_artifacts_are_refused() -> None:
+def test_the_retained_list_is_exactly_what_the_runs_kept() -> None:
+    """So "failures with no evidence" is unrepresentable, not just refused."""
     document = handoff_document()
-    document["artifacts"] = []
     document["result"]["retained_artifacts"] = []
     expect_rejected(lambda: dd.require_handoff(document),
-                    "records no retained artifact",
-                    "failing runs with no retained evidence")
+                    "naming evidence it does not have",
+                    "a document that dropped its retained list")
+
+    document = handoff_document()
+    document["result"]["retained_artifacts"].append(f"{OUTSIDE}/invented")
+    expect_rejected(lambda: dd.require_handoff(document),
+                    "naming evidence it does not have",
+                    "a document that invented a retained path")
+
+
+def test_a_passing_run_keeps_no_raw_artifacts() -> None:
+    """One of verification's own success conditions, and a harness fact.
+
+    `probe_flake.measure` deletes a run's directory the moment it passes
+    and records `artifact_dir: null`, so a PASS run naming one was not
+    written by the harness — and leaving successful-run artifacts behind
+    is exactly what a verification batch may not do.
+    """
+    document = handoff_document()
+    passing = next(run for run in document["result"]["runs"]
+                   if run["outcome"] == probe_flake.RUN_PASS)
+    passing["artifact_dir"] = f"{OUTSIDE}/artifacts/invocation/kept"
+    document["result"]["retained_artifacts"].append(passing["artifact_dir"])
+    expect_rejected(lambda: dd.require_handoff(document),
+                    "passed and still names the artifact directory",
+                    "a passing run that kept its directory")
+
+    end_to_end = diagnosis_document()
+    kept = end_to_end["verification"]["result"]["runs"][0]
+    kept["artifact_dir"] = f"{VERIFY_ARTIFACTS}/invocation/kept"
+    end_to_end["verification"]["result"]["retained_artifacts"] = [
+        kept["artifact_dir"]]
+    expect_rejected(lambda: evaluate(end_to_end),
+                    "passed and still names the artifact directory",
+                    "a verification batch that kept a passing run")
+
+
+def test_an_unsuccessful_run_must_still_have_its_logs() -> None:
+    document = handoff_document()
+    failing = next(run for run in document["result"]["runs"]
+                   if run["outcome"] != probe_flake.RUN_PASS)
+    document["result"]["retained_artifacts"].remove(failing["artifact_dir"])
+    failing["artifact_dir"] = None
+    expect_rejected(lambda: dd.require_handoff(document),
+                    "a failure whose logs are gone",
+                    "a failing run whose artifacts were discarded")
 
 
 # ==========================================================================
@@ -1314,20 +1358,31 @@ def test_a_result_document_that_names_a_path_inside_a_worktree_is_refused() -> N
                     "have to describe one measurement",
                     "a result document whose artifact_root is in a worktree")
 
+    def relocate(result) -> None:
+        """Move the one FAILING run's retained directory into the worktree.
+
+        Retention pairs a run's directory with its outcome exactly, so a
+        containment case has to move a real retained path rather than
+        invent one on a passing run — which would be refused for keeping
+        artifacts, not for where it kept them.
+        """
+        failing = next(run for run in result["runs"]
+                       if run["outcome"] != probe_flake.RUN_PASS)
+        moved = f"{REPAIR_WT}/artifacts/run-{failing['index']:03d}"
+        result["retained_artifacts"] = [
+            moved if path == failing["artifact_dir"] else path
+            for path in result["retained_artifacts"]]
+        failing["artifact_dir"] = moved
+
     for label, mutate in (
             ("invocation_dir",
              lambda r: r.update({"invocation_dir": f"{REPAIR_WT}/inv"})),
-            ("a run's artifact_dir",
-             lambda r: r["runs"][0].update(
-                 {"artifact_dir": f"{REPAIR_WT}/run-001"})),
-            ("a retained artifact",
-             lambda r: r.update(
-                 {"retained_artifacts": [f"{REPAIR_WT}/run-001"]})),
+            ("a retained run directory", relocate),
     ):
-        document = diagnosis_document()
-        result = document["verification"]["result"]
-        result["runs"][0]["artifact_dir"] = f"{OUTSIDE}/verify-artifacts/r1"
-        mutate(result)
+        document = diagnosis_document(handoff=handoff_document(acceptable=1))
+        document["verification"]["result"] = verification_result(
+            runs=failing_runs(1))
+        mutate(document["verification"]["result"])
         expect_rejected(lambda d=document: evaluate(d),
                         "inside the working tree",
                         f"a result document whose {label} is in a worktree")
@@ -1340,6 +1395,47 @@ def test_the_command_and_its_result_must_describe_one_measurement() -> None:
     expect_rejected(lambda: evaluate(document),
                     "have to describe one measurement",
                     "a result reporting a root its command never named")
+
+
+def test_every_route_hands_on_every_batchs_retained_artifacts() -> None:
+    """#1439 and #1438 are handed the evidence, so it has to be named.
+
+    The batch that went wrong is usually the VERIFICATION, whose logs an
+    outcome built from the handoff alone would never mention at all.
+    """
+    document = diagnosis_document(route=dd.ROUTE_PARTIAL_IMPROVEMENT,
+                                  handoff=handoff_document(acceptable=1))
+    document["verification"]["result"] = verification_result(
+        runs=failing_runs(2), harness_error=True)
+    outcome = evaluate(document)
+    expect(outcome.route == dd.ROUTE_PARTIAL_IMPROVEMENT,
+           f"an aborted verification is #1439; got {outcome.route}")
+    for label, expected in (
+            ("handoff", document["handoff"]["result"]["retained_artifacts"]),
+            ("baseline", document["baseline"]["result"]["retained_artifacts"]),
+            ("verification",
+             document["verification"]["result"]["retained_artifacts"])):
+        missing = [path for path in expected
+                   if path not in outcome.artifacts]
+        expect(not missing,
+               f"the outcome names the {label} batch's retained artifacts; "
+               f"missing {missing} from {outcome.artifacts}")
+    expect(len(outcome.artifacts) == len(set(outcome.artifacts)),
+           f"and names each one once: {outcome.artifacts}")
+    expect(outcome.to_document()["retained_artifacts"] == outcome.artifacts,
+           "and the emitted document carries the same list")
+
+
+def test_a_cannot_reproduce_outcome_names_the_baseline_it_ran() -> None:
+    document = diagnosis_document(route=dd.ROUTE_CANNOT_REPRODUCE,
+                                  handoff=handoff_document(acceptable=1))
+    document["baseline"]["result"] = result_document(runs=failing_runs(1))
+    document.pop("verification", None)
+    outcome = evaluate(document)
+    expect(outcome.route == dd.ROUTE_CANNOT_REPRODUCE, "the route holds")
+    for path in document["baseline"]["result"]["retained_artifacts"]:
+        expect(path in outcome.artifacts,
+               f"the baseline's {path} is handed on; got {outcome.artifacts}")
 
 
 def test_partial_improvement_is_refused_when_the_batch_was_accepted() -> None:
