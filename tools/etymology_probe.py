@@ -19,8 +19,10 @@ tile.
 
 Phases:
 
-  1. Boot, generate a world named through the real generated-language
-     path, and reach the in-game HUD.
+  1. Boot, let the boot asset queue drain — ``data/locations`` is the
+     LAST data family it registers, and a world generated before that
+     places no locations at all — then generate a world named through
+     the real generated-language path and reach the in-game HUD.
   2. The WORLD entry point opens the panel, and its content is genuinely
      populated: the stored name, the whole gloss, at least one morpheme
      row carrying a concept/role/realized spelling/canonical free
@@ -42,21 +44,38 @@ Phases:
   8. A resize keeps the panel valid, reachable, and pointed at the same
      entity; close and teardown remove it cleanly with no stale handles.
 
-Needs a GPU (Vulkan device) — manual-only, never CI-gated.
+Phases 3 and 4 each need the generated world to actually SUPPLY an
+entity — a placed location, and a named river with segments to select.
+The default fixture (seed 42, 64 chunks, three plates) supplies both.
+When one is absent the probe FAILS (#1604) rather than printing ``SKIP``
+and exiting 0, because a required phase that never ran is not a phase
+that passed. Such a failure is reported as a ``FIXTURE`` line naming
+those generation parameters, kept distinct from an ordinary ``FAIL`` so
+a reader can tell "the world came up short" from "the UI behaved
+wrongly". The optional language-shape cases in phases 5 and 6 are
+genuinely data-dependent and still skip.
+
+Needs a GPU (Vulkan device) — manual-only, never CI-gated. ``--self-test``
+is the exception: it drives the fixture classification with synthetic
+readings and boots nothing at all.
 
 Usage:
   python3 tools/etymology_probe.py
-  python3 tools/etymology_probe.py --port 9422 --seed 42 --size 16
+  python3 tools/etymology_probe.py --port 9422 --seed 42 --size 64
+  python3 tools/etymology_probe.py --self-test     # no engine at all
 
-Exit code 0 = all checks passed.
+Exit code 0 = all checks passed AND the fixture supplied every entity
+the required phases need.
 """
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import sys
 import time
+from contextlib import redirect_stdout
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from probelib import boot, quit_engine, send, send_json
@@ -67,6 +86,11 @@ LOG = "/tmp/etymology_engine.log"
 #: hardcodes it, and scripts/hud.lua points at the same id, which is what
 #: the name plate reads through.
 PAGE = "main_world"
+
+#: The tectonic plate count the fixture generates with. Named alongside
+#: the seed and world size by every FIXTURE failure, so the world that
+#: came up short can be reproduced exactly.
+PLATE_COUNT = 3
 
 
 def q(v) -> str:
@@ -82,6 +106,7 @@ def q(v) -> str:
 LANG_SEED = "12345678901234567890"
 
 failures = 0
+fixture_failures = 0
 
 
 def check(ok: bool, label: str, detail: str = "") -> bool:
@@ -92,6 +117,135 @@ def check(ok: bool, label: str, detail: str = "") -> bool:
         failures += 1
         print(f"  FAIL  {label}" + (f"\n        {detail}" if detail else ""))
     return ok
+
+
+def fixture_failure(label: str, detail: str) -> None:
+    """A required phase could not run: the world never supplied the
+    entity it needs, or the precondition for reading that entity never
+    held.
+
+    Counted and printed SEPARATELY from ``check``'s FAIL because the two
+    say different things (#1604 requirement 4): a FAIL says the UI
+    behaved wrongly, a FIXTURE says the UI was never asked. Both exit
+    non-zero — the whole point is that a phase which never ran can no
+    longer report as one that passed.
+    """
+    global fixture_failures
+    fixture_failures += 1
+    print(f"  FIXTURE  {label}\n           {detail}")
+
+
+# --------------------------------------------------------------------
+# Fixture classification (#1604) — pure decisions over readings, so
+# `--self-test` can drive both missing-entity branches with no engine.
+# --------------------------------------------------------------------
+
+
+def fixture_params(args) -> str:
+    """The generation parameters every FIXTURE failure names."""
+    return (f"seed {args.seed}, world size {args.size}, "
+            f"plateCount {PLATE_COUNT}")
+
+
+def residency_cause(active, remaining, params: str) -> str | None:
+    """Why phase 3's precondition does not hold, or ``None``.
+
+    Chunk loading is NOT what populates ``world.listPlacedLocations``:
+    ``src/World/Thread/Command/Init.hs`` builds the instances and
+    publishes them into the page's generation parameters at
+    ``world.init`` time, and
+    ``src/Engine/Scripting/Lua/API/WorldQuery/Location.hs`` reads that
+    precomputed overlay straight back out. What a completed load supplies
+    is a SYNCHRONIZATION point against the world thread's command queue
+    for the ACTIVE page, which is why both readings are graded here:
+
+    * ``world.waitForInit`` follows only the active world, and
+      ``world.getRivers`` answers only for it, so a run whose active page
+      is not ``main_world`` would be reading a different world entirely;
+    * ``world.waitForChunks`` returns the number of chunks still
+      OUTSTANDING and a timeout returns a nonzero remainder
+      (``.../WorldQuery/Chunk.hs``), so only a zero remainder proves the
+      queue drained rather than the wait expiring.
+
+    Either way this is a fixture/setup failure, not a verdict on whether
+    the world placed locations — it is what makes an empty list afterwards
+    mean "this world placed none" instead of "not synchronized yet".
+    """
+    if not isinstance(active, str) or active != PAGE:
+        return (f"'{PAGE}' is not the active page "
+                f"(world.getActiveWorldId() = {active!r}), so every query "
+                f"below would answer for a different world; the fixture "
+                f"({params}) never came up")
+    if isinstance(remaining, bool) or not isinstance(remaining, int):
+        return (f"world.waitForChunks reported no remaining chunk count "
+                f"(got {remaining!r}), so the load around the camera cannot "
+                f"be known to have drained; the fixture ({params}) never "
+                f"synchronized")
+    if remaining != 0:
+        return (f"world.waitForChunks timed out with {remaining} chunk(s) "
+                f"still outstanding, so the load around the camera never "
+                f"drained; the fixture ({params}) never synchronized")
+    return None
+
+
+def is_empty_table(value) -> bool:
+    """Lua cannot tell an empty array from an empty map, so the console's
+    serializer renders BOTH as ``{}`` — which decodes to an empty dict,
+    not an empty list. Every "the engine returned nothing" reading here
+    has to accept that shape, or an absent entity would be misreported as
+    a malformed query result."""
+    return value == [] or value == {}
+
+
+def location_fixture_cause(locs, params: str) -> str | None:
+    """Why phase 3 has no location to drive, or ``None``. Read only once
+    ``residency_cause`` has passed, so an empty list is an answer about
+    the WORLD rather than about timing.
+    """
+    if is_empty_table(locs):
+        return (f"this world placed no locations, so the fixture ({params}) "
+                f"supplied no discovered-location entry point for phase 3 "
+                f"to open")
+    if not isinstance(locs, list):
+        return (f"world.listPlacedLocations('{PAGE}') returned {locs!r} "
+                f"rather than a list, so the fixture ({params}) supplied no "
+                f"discovered-location entry point for phase 3 to open")
+    return None
+
+
+def named_rivers(rivers) -> list:
+    """The rivers phase 4 can actually drive: a stable #1102 identity, a
+    stored name, and at least one segment whose tile can be selected."""
+    if not isinstance(rivers, list):
+        return []
+    return [r for r in rivers
+            if isinstance(r, dict) and r.get("id") is not None
+            and r.get("name") and r.get("segments")]
+
+
+def river_fixture_cause(rivers, params: str) -> str | None:
+    """Why phase 4 has no named river to drive, or ``None``."""
+    if is_empty_table(rivers):
+        return (f"this world generated no rivers at all, so the fixture "
+                f"({params}) supplied no named river entry point for phase 4 "
+                f"to select")
+    if not isinstance(rivers, list):
+        return (f"world.getRivers() returned {rivers!r} rather than a list, "
+                f"so the fixture ({params}) supplied no named river entry "
+                f"point for phase 4 to select")
+    if not named_rivers(rivers):
+        return (f"none of the {len(rivers)} river(s) this world generated "
+                f"carries the id, name and segments phase 4 selects through, "
+                f"so the fixture ({params}) supplied no named river entry "
+                f"point")
+    return None
+
+
+def exit_code(failed_checks: int, failed_fixtures: int) -> int:
+    """The run's exit status. A fixture failure is as non-zero as a
+    behavioural one (#1604 requirements 2 and 3) — a required phase that
+    never ran must not report as a pass."""
+    return 1 if (failed_checks or failed_fixtures) else 0
 
 
 def panel_dump(port: int):
@@ -155,10 +309,48 @@ def morpheme_fields_populated(d) -> tuple[bool, str]:
     return True, ""
 
 
+def wait_for_startup_loader(port: int, timeout: float = 300.0) -> bool:
+    """Block until the boot loading screen's asset queue has drained.
+
+    Phase 3's precondition starts HERE, before the world exists, and it
+    is the half no later wait can repair. ``scripts/startup_loader.lua``
+    queues ``data/locations`` LAST, after every other data family, and
+    ``src/World/Thread/Command/Init.hs`` builds a page's placed-location
+    instances from the location REGISTRY at ``world.init`` time — so a
+    world generated while that registry is still empty places no
+    locations at all, permanently, however long anything waits
+    afterwards. The real game cannot reach Create World before this
+    drains (``scripts/ui_manager_boot.lua`` only pushes the main menu
+    once the loader is done); a probe that stages the gameplay view as
+    soon as the debug console answers can, and did.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        done = send_json(
+            port,
+            "local sl = package.loaded['scripts.startup_loader']; "
+            "return (sl ~= nil and sl.isDone() == true)",
+            timeout=15)
+        if done is True:
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def phase1_boot(args) -> tuple[object, str]:
     print("\n[1] boot offscreen, generate a language-named world, reach the HUD")
     proc = boot(args.port, log=LOG, args=["--size", args.window],
                 ready_timeout=240, mode=("--offscreen",))
+    if not wait_for_startup_loader(args.port):
+        fixture_failure(
+            "the boot loading screen never drained, so the world below "
+            "would be generated against half-empty data registries",
+            f"scripts/startup_loader.lua never reported isDone(); the "
+            f"fixture ({fixture_params(args)}) never came up, and a world "
+            f"generated before data/locations registers places no locations "
+            f"at all")
+        return proc, ""
+    check(True, "the boot asset queue drained before the world is generated")
     # The name/gloss/expression triple comes from world.suggestName
     # itself, so the stored name really was rendered from the expression
     # stored beside it — a hand-written pair would satisfy the surface
@@ -182,10 +374,11 @@ def phase1_boot(args) -> tuple[object, str]:
     # being forwarded at all.
     send(args.port,
         "local wv = require('scripts.world_view'); "
-        "wv.worldParams = { seed = %d, worldSize = %d, plateCount = 3, "
+        "wv.worldParams = { seed = %d, worldSize = %d, plateCount = %d, "
         "worldName = %s, worldGloss = %s, languageSeed = %s, "
         "languageVersion = %s, nameExpr = %s }; return 'ok'"
-        % (args.seed, args.size, q(name), q(gloss), q(seed), version, q(expr)),
+        % (args.seed, args.size, PLATE_COUNT, q(name), q(gloss), q(seed),
+           version, q(expr)),
         timeout=20)
     send(args.port,
          "local ui = require('scripts.ui_manager'); ui.showMenu('world_view')",
@@ -240,13 +433,46 @@ def phase2_world(port: int, stored_name: str) -> None:
     check((d.get("rowCount") or 0) > 0, "visible rows were actually rendered")
 
 
-def phase3_location(port: int) -> None:
+def location_precondition(port: int, params: str) -> str | None:
+    """Synchronize against the world thread, then grade phase 3's
+    precondition. ``None`` means it holds.
+
+    The region is the one around the camera, which the gameplay view
+    leaves at the world origin — the same
+    ``loadChunksInRegion`` -> ``waitForChunks`` order
+    ``tools/location_content_probe.py`` establishes before it queries a
+    page. The active page is only VERIFIED, never forced: phase 1's
+    production Create World chain is what activates it, so switching
+    pages here would paper over exactly the setup failure this is
+    grading. See ``residency_cause`` for what each reading proves.
+    """
+    send(port, "return world.loadChunksInRegion(-2, -2, 2, 2)", timeout=60)
+    remaining = send_json(port, "return world.waitForChunks(120)", timeout=130)
+    active = send(port, "return world.getActiveWorldId()", timeout=20)
+    return residency_cause(active, remaining, params)
+
+
+def phase3_location(args) -> None:
+    port = args.port
     print("\n[3] a DISCOVERED location opens the SAME panel")
-    locs = send_json(port, f"return world.listPlacedLocations('{PAGE}')", timeout=30)
-    if not isinstance(locs, list) or not locs:
-        print("  SKIP  this world placed no locations")
+    params = fixture_params(args)
+    cause = location_precondition(port, params)
+    if cause:
+        fixture_failure(
+            "phase 3's precondition never held, so no location entry point "
+            "was exercised", cause)
         return
-    target = locs[0]
+    locs = send_json(port, f"return world.listPlacedLocations('{PAGE}')", timeout=30)
+    cause = location_fixture_cause(locs, params)
+    if cause:
+        fixture_failure("phase 3 had no placed location to exercise", cause)
+        return
+    # Prefer the ruin nearest the origin, for the same reason phase 4
+    # prefers the nearest river segment: the camera starts there, so that
+    # column is the likeliest to be selectable through the REAL route
+    # (requirement 6's primary path) rather than through the fallback.
+    target = min(locs, key=lambda loc: abs(loc.get("gx") or 0)
+                 + abs(loc.get("gy") or 0))
     iid = target.get("instance_id")
     # Discovery is a lifecycle promotion the game drives; drive it the way
     # the game does rather than asserting our own write, then select the
@@ -260,7 +486,8 @@ def phase3_location(port: int) -> None:
               "the plate offers a row for the DISCOVERED location, clicked "
               "at its real bounds")
     else:
-        print("  SKIP  the ruin's tile could not be made resident to select")
+        print(f"  SKIP  the ruin's tile ({target['gx']}, {target['gy']}) "
+              f"could not be made resident to select")
         send(port, "local ep = package.loaded['scripts.etymology_panel']; "
                    f"if ep then ep.openFor('location', {iid}) end", timeout=15)
     d = panel_dump(port)
@@ -280,6 +507,15 @@ def select_tile(port: int, gx: int, gy: int) -> bool:
     does. Requires the column to be resident, so its chunk region is
     loaded first; returns whether the selection actually took."""
     cx, cy = gx // 32, gy // 32
+    # Bring the camera along, which is what a player does and what keeps
+    # the region resident: eviction is camera-relative
+    # ('World.Tile.Types.evictDistantChunksWithReport' keeps a radius
+    # around the camera chunk and drops the furthest of the rest once the
+    # page is over its chunk cap), so loading a region eight chunks away
+    # and leaving the camera at the origin can see it generated and then
+    # evicted again before the selection lands. Each caller moves to its
+    # OWN target, so no phase strands another phase's tile.
+    send(port, f"camera.goToTile({gx}, {gy})", timeout=15)
     send(port, f"return world.loadChunksInRegion({cx - 2}, {cy - 2}, "
                f"{cx + 2}, {cy + 2})", timeout=60)
     send(port, "return world.waitForChunks(120)", timeout=130)
@@ -290,14 +526,22 @@ def select_tile(port: int, gx: int, gy: int) -> bool:
             and sel.get("gy") == gy)
 
 
-def phase4_river(port: int) -> None:
+def phase4_river(args) -> None:
+    port = args.port
     print("\n[4] selecting a visible named RIVER opens it again")
+    params = fixture_params(args)
+    # Rivers need no residency wait of their own: world.getRivers reads
+    # the ACTIVE page's settled fluid identification, which world.init
+    # finishes before world.waitForInit returns — unlike the chunk-queue
+    # synchronization phase 3 establishes, nothing here is queued behind
+    # a chunk load.
     rivers = send_json(port, "return world.getRivers()", timeout=45)
-    named = [r for r in (rivers or [])
-             if r.get("id") is not None and r.get("name") and r.get("segments")]
-    if not named:
-        print("  SKIP  this world generated no named rivers")
+    cause = river_fixture_cause(rivers, params)
+    if cause:
+        fixture_failure("phase 4 had no named, segmented river to exercise",
+                        cause)
         return
+    named = named_rivers(rivers)
     # Prefer a river whose first segment sits nearest the origin: the
     # camera starts there, so its chunks are the likeliest to become
     # resident, and a tile can only be SELECTED once its column is.
@@ -329,7 +573,8 @@ def phase4_river(port: int) -> None:
         # A river far from the camera can have no resident column to
         # select; the plate's own row-building is gated by the hspec
         # "Etymology panel" group, so skip rather than fail on residency.
-        print("  SKIP  the river's tile could not be made resident to select")
+        print(f"  SKIP  the river's tile ({gx}, {gy}) could not be made "
+              f"resident to select")
         send(port, "local ep = package.loaded['scripts.etymology_panel']; "
                    f"if ep then ep.openFor('river', {river['id']}) end",
              timeout=15)
@@ -577,27 +822,185 @@ def phase8_lifecycle(port: int) -> None:
               f"viewport={closed.get('viewport')!r}")
 
 
+# --------------------------------------------------------------------
+# Negative-path coverage (#1604) — no engine, no worldgen, no GPU
+# --------------------------------------------------------------------
+
+
+class _FixtureArgs:
+    """The default fixture's identifying parameters, for the self-test's
+    message assertions."""
+
+    def __init__(self, seed: int = 42, size: int = 64) -> None:
+        self.seed = seed
+        self.size = size
+
+
+def self_test() -> int:
+    """Drive the fixture classification with synthetic readings.
+
+    A live run can only show that the DEFAULT fixture supplies both
+    entities; it cannot show what happens when a fixture does not. One
+    ``--size 8`` is a live negative fixture for the RIVER branch (seed
+    42 generates no rivers at all that small), but the LOCATION branch
+    has no cheap live fixture at any size: #997 places a guaranteed
+    location whenever the world has land, so only a landless world
+    reaches it. Both branches are therefore covered here, alike and
+    deterministically, against the same decision functions and the same
+    exit accounting a live run uses.
+    """
+    global failures, fixture_failures
+    args = _FixtureArgs()
+    params = fixture_params(args)
+    problems: list[str] = []
+
+    def expect_none(label: str, cause) -> None:
+        if cause is not None:
+            problems.append(f"{label}: expected no cause, got {cause!r}")
+
+    def expect_cause(label: str, cause) -> None:
+        if cause is None:
+            problems.append(f"{label}: expected a cause, got none")
+            return
+        # Requirements 2 and 3: the fixture that came up short is named.
+        for needle in ("seed 42", "world size 64", f"plateCount {PLATE_COUNT}"):
+            if needle not in cause:
+                problems.append(
+                    f"{label}: cause does not name {needle!r}: {cause!r}")
+
+    # --- the fixture parameter line itself ---------------------------
+    expect_cause("fixture_params carries the whole triple",
+                 f"placeholder ({params})")
+
+    # --- phase 3's precondition --------------------------------------
+    expect_none("synchronized on the right page",
+                residency_cause(PAGE, 0, params))
+    expect_cause("a different active page",
+                 residency_cause("custom", 0, params))
+    expect_cause("no active page at all", residency_cause(None, 0, params))
+    expect_cause("a chunk wait that timed out",
+                 residency_cause(PAGE, 3, params))
+    expect_cause("a chunk wait that reported nothing",
+                 residency_cause(PAGE, None, params))
+    expect_cause("a chunk wait that answered with text",
+                 residency_cause(PAGE, "120", params))
+    # A bool is an int in Python; `True` is not a remaining count.
+    expect_cause("a chunk wait that answered with a boolean",
+                 residency_cause(PAGE, True, params))
+
+    # --- phase 3's entity --------------------------------------------
+    expect_none("one placed location is enough",
+                location_fixture_cause([{"instance_id": 1, "gx": 0, "gy": 0}],
+                                       params))
+    expect_cause("a world that placed no locations",
+                 location_fixture_cause([], params))
+    # The console renders an empty Lua table as `{}`, which decodes to a
+    # dict; a live run really does read that shape, so it must classify
+    # as "placed none" and not as a malformed query result.
+    expect_cause("an empty location table serialized as {}",
+                 location_fixture_cause({}, params))
+    expect_cause("a location query that returned nothing",
+                 location_fixture_cause(None, params))
+    expect_cause("a location query that errored into text",
+                 location_fixture_cause("attempt to index a nil value", params))
+
+    # --- phase 4's entity (no live fixture exists for this branch) ----
+    river = {"id": 7, "name": "Ashen", "segments": [{"sx": 1, "sy": 2}]}
+    expect_none("one named, segmented river is enough",
+                river_fixture_cause([river], params))
+    expect_cause("a world that generated no rivers",
+                 river_fixture_cause([], params))
+    expect_cause("an empty river table serialized as {}",
+                 river_fixture_cause({}, params))
+    expect_cause("rivers that carry no name",
+                 river_fixture_cause(
+                     [{"id": 7, "segments": [{"sx": 1, "sy": 2}]}], params))
+    expect_cause("a named river with no segment to select",
+                 river_fixture_cause([{"id": 7, "name": "Ashen"}], params))
+    expect_cause("a named river with no stable identity",
+                 river_fixture_cause(
+                     [{"name": "Ashen", "segments": [{"sx": 1}]}], params))
+    expect_cause("a river query that returned nothing",
+                 river_fixture_cause(None, params))
+    if named_rivers([river, {"id": 8}]) != [river]:
+        problems.append("named_rivers kept a river phase 4 cannot drive")
+    for shape in ([], {}):
+        if not is_empty_table(shape):
+            problems.append(f"{shape!r} was not read as an empty table")
+    for shape in ([river], {"missing": True}, None, "boom"):
+        if is_empty_table(shape):
+            problems.append(f"{shape!r} was misread as an empty table")
+
+    # --- requirement 4: the two failures stay distinguishable ---------
+    before = (failures, fixture_failures)
+    captured = io.StringIO()
+    with redirect_stdout(captured):
+        check(False, "synthetic behavioural failure", "detail")
+        fixture_failure("synthetic fixture failure", params)
+    counted = (failures, fixture_failures)
+    failures, fixture_failures = before
+    if counted != (before[0] + 1, before[1] + 1):
+        problems.append(
+            f"the two failure kinds do not count independently: "
+            f"{before!r} -> {counted!r}")
+    printed = captured.getvalue()
+    if "  FAIL  synthetic behavioural failure" not in printed:
+        problems.append(f"an ordinary failure lost its FAIL marker: {printed!r}")
+    if "  FIXTURE  synthetic fixture failure" not in printed:
+        problems.append(
+            f"a fixture failure lost its FIXTURE marker: {printed!r}")
+    if "FAIL" in printed.split("FIXTURE", 1)[-1]:
+        problems.append(
+            f"a fixture failure is reported as an ordinary FAIL: {printed!r}")
+
+    # --- and both kinds really do exit non-zero ----------------------
+    for label, seen, want in (
+            ("a clean run", (0, 0), 0),
+            ("a behavioural failure alone", (1, 0), 1),
+            ("a fixture failure alone", (0, 1), 1),
+            ("both kinds together", (2, 3), 1)):
+        got = exit_code(*seen)
+        if got != want:
+            problems.append(f"{label} exits {got}, expected {want}")
+
+    for line in problems:
+        print(f"FAIL: {line}", file=sys.stderr)
+    print(f"--- self-test ---\n  fixture classification cases: "
+          f"{'OK' if not problems else f'{len(problems)} FAILED'}")
+    return 0 if not problems else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=9422)
     ap.add_argument("--seed", type=int, default=42)
-    # 64 chunks, matching tools/location_content_probe.py: a smaller
-    # world places no locations at all, which would silently skip the
-    # location entry point AND most recurrence (two discovered ruins of
-    # one definition are the likeliest place a modifier recurs).
+    # 64 chunks, matching tools/location_content_probe.py. Phase 3's
+    # entity is not what pins it: #997's guaranteed placement puts a
+    # location on even a 4-chunk world. Phase 4's is — measured on this
+    # fixture, seed 42 generates NO rivers at all at 4 or 8 chunks and
+    # rivers by 16, and since #1604 an absent river FAILS rather than
+    # skipping. 64 also buys the recurrence coverage phase 5 looks for:
+    # two discovered ruins of one definition are the likeliest place a
+    # modifier recurs.
     ap.add_argument("--size", type=int, default=64,
                     help="world size in chunks")
     ap.add_argument("--window", default="1280x720",
                     help="offscreen render target size")
+    ap.add_argument("--self-test", action="store_true",
+                    help="grade the fixture classification with synthetic "
+                         "readings; boots no engine")
     args = ap.parse_args()
+
+    if args.self_test:
+        return self_test()
 
     proc = None
     try:
         proc, stored_name = phase1_boot(args)
         if stored_name:
             phase2_world(args.port, stored_name)
-            phase3_location(args.port)
-            phase4_river(args.port)
+            phase3_location(args)
+            phase4_river(args)
             phase5_bound_and_recurrence(args.port)
             # Scrolling runs BEFORE the unavailable phase: that phase
             # switches the active page to a custom-named one, and every
@@ -609,9 +1012,14 @@ def main() -> int:
         quit_engine(args.port, proc)
 
     print()
+    if fixture_failures:
+        print(f"etymology_probe: {fixture_failures} FIXTURE failure(s) — the "
+              f"generated world did not supply an entity a required phase "
+              f"needs, so that phase never ran")
     if failures:
         print(f"etymology_probe: {failures} check(s) FAILED")
-        return 1
+    if exit_code(failures, fixture_failures):
+        return exit_code(failures, fixture_failures)
     print("etymology_probe: all checks passed")
     return 0
 
