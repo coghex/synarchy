@@ -99,6 +99,16 @@ scoping exists to remove. See `missing_problems`.
 
 Same environment means the same MEASUREMENT, not the same characters
 --------------------------------------------------------------------
+The conditions travel the WHOLE chain — handoff, then controlled
+baseline, then verification — and each link is compared to the one
+before it. Comparing only the last pair would let BOTH controlled
+batches agree on some arbitrary timeout while the handoff sat at the
+defaults, and an agreement between two batches is not the measurement
+the handoff was taken under. The first link crosses LAUNCHERS, which is
+the point: `/deflake` supplies its run count and capability count from
+its own constants while the harness reads them from a command line, and
+that is where the two accounts of one contract are made to agree.
+
 The baseline and the verification batch necessarily differ in the
 worktree they run from and in where they write, and `probe_flake` leases
 ports dynamically. So "the same invocation" is compared on
@@ -883,13 +893,22 @@ def effective_settings(invocation, what: str, *, result=None) -> dict:
     return settings
 
 
-def invocation_differences(baseline, verification, *, results=(None, None)) -> list:
-    """Every behavior-affecting difference between two invocations."""
-    left = effective_settings(baseline, "baseline.invocation",
+def invocation_differences(baseline, verification, *, results=(None, None),
+                           names=("baseline", "verification")) -> list:
+    """Every behavior-affecting difference between two invocations.
+
+    Used for two pairs: handoff-versus-baseline and
+    baseline-versus-verification. The first crosses LAUNCHERS, which is
+    the point — `/deflake` supplies its run count and capability count
+    from its own constants while the harness reads them from a command
+    line, and this is where the two accounts of one contract are made to
+    agree.
+    """
+    left = effective_settings(baseline, f"{names[0]}.invocation",
                               result=results[0])
-    right = effective_settings(verification, "verification.invocation",
+    right = effective_settings(verification, f"{names[1]}.invocation",
                                result=results[1])
-    return [f"{key}: baseline {left[key]!r}, verification {right[key]!r}"
+    return [f"{key}: {names[0]} {left[key]!r}, {names[1]} {right[key]!r}"
             for key in sorted(set(left) | set(right))
             if left.get(key) != right.get(key)]
 
@@ -1944,6 +1963,26 @@ def evaluate(document, *, worktrees=(), primary=None) -> Outcome:
             "the controlled baseline did not reproduce the handoff's "
             "configuration state, so it is not the same condition: "
             + "; ".join(config_problems))
+
+    # The conditions travel the WHOLE chain: handoff -> baseline ->
+    # verification. Comparing only the last pair let both controlled
+    # batches agree on some arbitrary timeout and starting port while the
+    # handoff sat at the defaults — an agreement between two batches is
+    # not the measurement the handoff was taken under, and neither CLI
+    # can set those values anyway.
+    #
+    # Compared across LAUNCHERS, which is the point: `/deflake` supplies
+    # its run count and capability count from its own constants and the
+    # harness reads them from a command line, so this is where those two
+    # accounts of one contract are made to agree.
+    replay = invocation_differences(
+        handoff.invocation, baseline_section["invocation"],
+        results=(handoff.result, baseline), names=("handoff", "baseline"))
+    if replay:
+        raise RouteRefused(
+            "the controlled baseline did not replay the conditions the "
+            "handoff was measured under, so it is not the same "
+            "measurement: " + "; ".join(replay))
 
     reproduced = probe_census.tolerance_state(
         handoff.acceptable_failures, baseline["requested_runs"],

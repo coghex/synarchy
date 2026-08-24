@@ -1735,7 +1735,12 @@ two batches necessarily differ in worktree and destination, and ports are
 leased dynamically, so they are compared on behavior-affecting settings with
 effective defaults filled in — including the TIMEOUT and STARTING PORT
 `probe_flake.measure` applies from module constants that no command line
-exposes, which is why each invocation records them. A command is checked against the REAL
+exposes, which is why each invocation records them. The comparison runs the
+whole chain, handoff → baseline → verification: comparing only the last pair
+would let both controlled batches agree on some arbitrary value while the
+handoff sat at the defaults, and the first link crosses launchers, which is
+where `/deflake`'s own constants and the harness's command line are made to
+agree. A command is checked against the REAL
 interface of the tool that ran it, and there are TWO tools because the three
 batches do not come from one command: `/deflake` does not shell out — it calls
 `probe_flake.measure` in process, and its CLI has no `--probe`, `--runs` or RTS

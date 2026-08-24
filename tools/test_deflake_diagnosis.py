@@ -1159,14 +1159,16 @@ def test_two_commands_that_agree_with_each_other_are_not_the_contract() -> None:
     expect(dd.invocation_differences(document["baseline"]["invocation"],
                                      document["verification"]["invocation"])
            == [], "the two commands really do compare equal to each other")
-    outcome = evaluate(document)
-    expect(outcome.route == dd.ROUTE_CANNOT_REPRODUCE,
-           f"and neither is a measurement; got {outcome.route}")
+    # And that is not enough: the conditions travel the whole chain, so
+    # both are measured against the HANDOFF's contract, not each other's.
+    expect_refused(lambda: evaluate(document),
+                   "did not replay the conditions the handoff was measured",
+                   "two batches agreeing with each other but not the handoff")
 
     repair = copy.deepcopy(document)
     repair["route"] = dd.ROUTE_REPAIR
     expect_refused(lambda: evaluate(repair),
-                   "established nothing to repair from",
+                   "did not replay the conditions the handoff was measured",
                    "a repair declared over two agreeing non-measurements")
 
 
@@ -1554,6 +1556,65 @@ def test_the_defaults_no_command_line_names_are_recorded_and_compared() -> None:
         probe_flake.PORT_MIN + 100)
     expect_refused(lambda: evaluate(repair), "start_port",
                    "a repair verified from another starting port")
+
+
+def test_the_baseline_replays_the_handoffs_own_conditions() -> None:
+    """The chain is handoff -> baseline -> verification, not a pair.
+
+    Comparing only the last pair let BOTH controlled batches agree on
+    some arbitrary timeout and starting port while the handoff sat at the
+    defaults — and an agreement between two batches is not the
+    measurement the handoff was taken under.
+    """
+    for field, other in (("timeout_seconds", probe_flake.DEFAULT_TIMEOUT * 3),
+                         ("start_port", probe_flake.PORT_MIN + 200),
+                         ("retries", 0)):
+        if field == "retries":
+            continue
+        document = diagnosis_document()
+        for section in ("baseline", "verification"):
+            document[section]["invocation"][field] = other
+        expect_refused(lambda d=document: evaluate(d),
+                       "did not replay the conditions the handoff",
+                       f"two batches agreeing on another {field}")
+
+    # The refusal names BOTH sides, so a reader can tell which value came
+    # from where rather than seeing one label twice.
+    document = diagnosis_document()
+    for section in ("baseline", "verification"):
+        document[section]["invocation"]["start_port"] = (
+            probe_flake.PORT_MIN + 200)
+    try:
+        evaluate(document)
+    except dd.RouteRefused as error:
+        message = str(error)
+        expect(f"handoff {probe_flake.PORT_MIN!r}" in message
+               and f"baseline {probe_flake.PORT_MIN + 200!r}" in message,
+               f"the refusal names each side's own value: {message}")
+    else:
+        FAILURES.append("a baseline that did not replay was accepted")
+
+    # The run count and capability count are compared ACROSS launchers:
+    # /deflake supplies them from its own constants, the harness reads
+    # them from a command line, and this is where the two agree.
+    document = diagnosis_document()
+    for section in ("baseline", "verification"):
+        tree = CLEAN_WT if section == "baseline" else REPAIR_WT
+        artifacts = (f"{OUTSIDE}/artifacts" if section == "baseline"
+                     else VERIFY_ARTIFACTS)
+        document[section]["invocation"] = invocation(
+            cmd=command(rts_caps=8, worktree=tree, artifacts=artifacts,
+                        result=(f"{OUTSIDE}/baseline.json"
+                                if section == "baseline"
+                                else f"{OUTSIDE}/verify.json")),
+            directory=tree)
+        document[section]["result"] = (
+            result_document(runs=failing_runs(4), rts_caps=8)
+            if section == "baseline"
+            else verification_result(rts_caps=8))
+    expect_refused(lambda: evaluate(document),
+                   "did not replay the conditions the handoff",
+                   "two batches at a capability count /deflake never used")
 
 
 def test_a_changed_path_is_repository_relative_and_traversal_free() -> None:
