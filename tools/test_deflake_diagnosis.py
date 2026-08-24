@@ -239,12 +239,24 @@ def command(*, probe: str = PROBE, runs=None, rts_caps=None,
 
 
 def invocation(*, cmd=None, directory: str = CLEAN_WT,
-               retries: int = 0, ports=None) -> dict:
+               retries: int = 0, ports=None, timeout=None,
+               start_port=None) -> dict:
+    """One recorded harness invocation.
+
+    `timeout` and `start_port` are `probe_flake.measure`'s own defaults,
+    which neither CLI exposes — recorded because they are
+    behavior-affecting and invisible to the command, so without them two
+    identical argv strings could describe two different measurements.
+    """
     return {
         "command": command() if cmd is None else cmd,
         "directory": directory,
         "retries": retries,
         "ports": [9101, 9102] if ports is None else ports,
+        "timeout_seconds": (probe_flake.DEFAULT_TIMEOUT if timeout is None
+                            else timeout),
+        "start_port": (probe_flake.PORT_MIN if start_port is None
+                       else start_port),
     }
 
 
@@ -265,6 +277,8 @@ def deflake_invocation(*, cmd=None, directory: str = PRIMARY_WT,
         "directory": directory,
         "retries": retries,
         "ports": [9101, 9102] if ports is None else ports,
+        "timeout_seconds": probe_flake.DEFAULT_TIMEOUT,
+        "start_port": probe_flake.PORT_MIN,
     }
 
 
@@ -1479,6 +1493,67 @@ def test_a_relabelled_check_has_changed_what_it_measures() -> None:
     expect(dd.descriptor_of(result_document()) ==
            [{"id": cid, "label": label} for cid, label in CHECKS],
            "the descriptor is compared as identifiers AND labels")
+
+
+def test_a_repair_may_not_change_the_measurement_apparatus() -> None:
+    """The probe is under diagnosis; the harness that measures it is not.
+
+    `probe_flake.measure`'s timeout and starting port are module
+    constants neither CLI exposes, so a repair that lengthened
+    `DEFAULT_TIMEOUT` would produce a calmer verification while both
+    command records still compared equal — the two batches would have
+    been run by different harnesses.
+    """
+    for module in dd.HARNESS_MODULES:
+        document = diagnosis_document(repair={
+            "commit_sha": REPAIR_COMMIT, "base_sha": BASE_COMMIT,
+            "changed_paths": ["tools/role_probe.py", module]})
+        expect_rejected(lambda d=document: evaluate(d),
+                        "measurement apparatus",
+                        f"a repair that changed {module}")
+
+    expect("tools/probe_flake.py" in dd.HARNESS_MODULES
+           and "tools/probe_protocol.py" in dd.HARNESS_MODULES
+           and "tools/deflake.py" in dd.HARNESS_MODULES,
+           f"the apparatus names the tools that decide what a run IS: "
+           f"{dd.HARNESS_MODULES}")
+    expect("tools/role_probe.py" not in dd.HARNESS_MODULES,
+           "and not the probes it runs")
+
+
+def test_the_defaults_no_command_line_names_are_recorded_and_compared() -> None:
+    """Two identical argv strings can still be two measurements."""
+    for field in ("timeout_seconds", "start_port"):
+        for section in ("baseline", "verification"):
+            document = diagnosis_document()
+            del document[section]["invocation"][field]
+            expect_rejected(lambda d=document: evaluate(d),
+                            f"records no `{field}`",
+                            f"a {section} that recorded no {field}")
+        document = handoff_document()
+        del document["invocation"][field]
+        expect_rejected(lambda d=document: dd.require_handoff(d),
+                        f"records no `{field}`",
+                        f"a handoff that recorded no {field}")
+
+    # The comparison itself: a longer timeout on the repair side is
+    # exactly the shape a harness edit would produce.
+    document = diagnosis_document(route=dd.ROUTE_PARTIAL_IMPROVEMENT)
+    document["verification"]["invocation"]["timeout_seconds"] = (
+        probe_flake.DEFAULT_TIMEOUT * 2)
+    document["verification"]["result"] = verification_result(
+        runs=failing_runs(1))
+    document["handoff"]["acceptable_failures"] = 1
+    outcome = evaluate(document)
+    expect(outcome.route == dd.ROUTE_PARTIAL_IMPROVEMENT,
+           f"a verification under another timeout is not comparable; got "
+           f"{outcome.route}")
+
+    repair = diagnosis_document()
+    repair["verification"]["invocation"]["start_port"] = (
+        probe_flake.PORT_MIN + 100)
+    expect_refused(lambda: evaluate(repair), "start_port",
+                   "a repair verified from another starting port")
 
 
 def test_a_changed_path_is_repository_relative_and_traversal_free() -> None:

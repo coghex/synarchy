@@ -57,6 +57,11 @@ this gate refuses it.
 
 Descriptor equality, not identifier normalization
 -------------------------------------------------
+The descriptor is compared WHOLE — identifiers, their order, and their
+LABELS. A label is the check's stated meaning, so a batch that kept
+every identifier while relabelling one to describe a different assertion
+has changed what it measures and said so nowhere.
+
 `probe-result/v1` already requires STATIC descriptor identifiers and
 puts every runtime value in an event's `detail`
 (`tools/probe_protocol.py`). So a per-run undeclared or changing
@@ -193,13 +198,13 @@ the state the probes actually read.
 
 The artifact layout is the one the harness creates
 --------------------------------------------------
-Every path is ABSOLUTE and CANONICAL, because `check_artifact_root`
-resolves its root before a run begins: no `.`, no `..`, no doubled
-separator, no trailing slash. Normalising a supplied path before
-comparing it would have accepted
-`/tmp/evidence/forged/../artifacts/…` as the artifact root, which the
-harness could not have written and which points somewhere else entirely
-if any component is a symlink.
+Every path is ABSOLUTE and fully RESOLVED, because
+`check_artifact_root` calls `Path.resolve` on its root before a run
+begins: no `.`, no `..`, no doubled separator, no trailing slash, and no
+unresolved symlink. A lexical check alone would have accepted
+`/tmp/evidence/forged/../artifacts/…` as the artifact root, and on a
+host where `/tmp` is a link to `/private/tmp` it would call two
+different places the same one.
 
 `new_invocation_dir` puts the invocation directory DIRECTLY under that
 root and GENERATES its name — `{probe}-{%Y%m%dT%H%M%SZ}-{pid}-{uuid8}` —
@@ -261,10 +266,19 @@ worktree and the repair worktree are cut from one common SHA.
 
 Weakening an assertion is never a fix
 -------------------------------------
-The shapes a machine can see are refused here: a descriptor that lost or
-renamed an identifier, a target check that became MISSING, a run count
-below the policy, a retry policy that lets any passing attempt count,
-and a repair declared without the three preservation attestations.
+The shapes a machine can see are refused here: a descriptor that lost,
+renamed or RELABELLED an identifier, a target check that became MISSING,
+a run count below the policy, a retry policy that lets any passing
+attempt count, a repair declared without the three preservation
+attestations, a repair that edits the measurement APPARATUS rather than
+the probe under diagnosis (`HARNESS_MODULES`) — `measure`'s timeout and
+starting port are module constants, so lengthening one would buy a
+calmer verification while both command records still compared equal, and
+the two batches would have been run by different harnesses — and a
+`changed_paths` entry that reaches production code through a traversal:
+`tools/../src/Engine/Core/Init.hs` begins with `tools/`, so the scope
+check is applied to the NORMALISED repository-relative path or it checks
+nothing.
 Whether a surviving assertion was quietly BROADENED is a reviewer
 judgement this module cannot make, and it says so rather than implying
 coverage it does not have.
@@ -430,6 +444,32 @@ DEFLAKE_LAUNCHER = Launcher(
 
 LAUNCHERS = {launcher.script: launcher
              for launcher in (HARNESS_LAUNCHER, DEFLAKE_LAUNCHER)}
+
+# The measurement apparatus: the modules that DECIDE what a run is, as
+# opposed to the probe whose behavior is being diagnosed. A repair may
+# not touch them.
+#
+# It is not a style rule. `probe_flake.measure`'s timeout and starting
+# port are module constants that neither CLI exposes, so a repair that
+# lengthened `DEFAULT_TIMEOUT` would produce a calmer verification while
+# both command records still compared equal — the baseline and the
+# verification would have been run by two different harnesses. The two
+# comparison worktrees share one base commit and the clean one is
+# attested source-clean, so a repair changing these files is the only
+# way they can differ at all.
+HARNESS_MODULES = (
+    "tools/probe_flake.py",
+    "tools/probe_protocol.py",
+    "tools/probe_census.py",
+    "tools/probe_claim.py",
+    "tools/probe_resource_lock.py",
+    "tools/probe_select.py",
+    "tools/probe_engine.py",
+    "tools/probelib.py",
+    "tools/run_probes.py",
+    "tools/deflake.py",
+    "tools/deflake_diagnosis.py",
+)
 
 # The probe-side defect categories of the issue's diagnosis boundary.
 # A declared repair names exactly one: "several independent causes" is
@@ -773,6 +813,18 @@ def require_invocation(document, what: str, *, launcher=None,
                   launcher=launcher,
                   root=directory if root is None else root,
                   base=directory)
+    # `probe_flake.measure`'s own defaults, which NEITHER CLI exposes.
+    # Recorded because they are behavior-affecting and invisible to the
+    # command, so without them two identical argv strings could describe
+    # two different measurements.
+    for field, expected in (("timeout_seconds", probe_flake.DEFAULT_TIMEOUT),
+                            ("start_port", probe_flake.PORT_MIN)):
+        value = document.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise HandoffError(
+                f"{what} records no `{field}`; it is the value "
+                f"`probe_flake.measure` ran under, which no command line "
+                f"names — this checkout's is {expected!r}")
     retries = document.get("retries")
     if retries != 0:
         raise HandoffError(
@@ -826,6 +878,8 @@ def effective_settings(invocation, what: str, *, result=None) -> dict:
         settings[key] = (_integer(options[option], f"{what}.command {option}")
                          if option in options else default)
     settings["retries"] = invocation["retries"]
+    settings["timeout_seconds"] = invocation["timeout_seconds"]
+    settings["start_port"] = invocation["start_port"]
     return settings
 
 
@@ -2165,6 +2219,17 @@ def _require_repair(document, verification_section, *,
                 f"`tools/../src/Engine/Core/Init.hs` begins with `tools/` "
                 f"and changes production code, so the scope check is applied "
                 f"to the normalised path or it checks nothing")
+    apparatus = [path for path in changed if path in HARNESS_MODULES]
+    if apparatus:
+        raise HandoffError(
+            f"the repair changes {', '.join(apparatus)}, which is the "
+            f"measurement apparatus rather than the probe under diagnosis. "
+            f"`probe_flake.measure`'s timeout and starting port are module "
+            f"constants no command line exposes, so a repair that changed "
+            f"one would produce a calmer verification while both command "
+            f"records still compared equal — the two batches would have "
+            f"been run by different harnesses, and the comparison would "
+            f"mean nothing")
     offenders = [path for path in changed
                  if not (path.startswith("tools/")
                          or path.startswith("test-headless/"))]

@@ -1692,7 +1692,10 @@ while relabelling one to describe a different assertion has changed what it
 measures and said so nowhere. A repair's `changed_paths` are normalised
 repository-relative paths before the `tools/` scope check is applied, since
 `tools/../src/Engine/Core/Init.hs` begins with `tools/` and changes production
-code.
+code — and a repair may not touch the measurement APPARATUS at all
+(`HARNESS_MODULES`), because `measure`'s timeout and starting port are module
+constants and lengthening one would buy a calmer verification while both command
+records still compared equal.
 
 **The targets are not a selection from the measurement — they ARE it.** Every
 non-PASS identifier is a diagnosis input, so the handoff's target list must
@@ -1730,7 +1733,9 @@ construction, which is the defect the scoping exists to remove.
 **Same environment means the same measurement, not the same characters.** The
 two batches necessarily differ in worktree and destination, and ports are
 leased dynamically, so they are compared on behavior-affecting settings with
-effective defaults filled in. A command is checked against the REAL
+effective defaults filled in — including the TIMEOUT and STARTING PORT
+`probe_flake.measure` applies from module constants that no command line
+exposes, which is why each invocation records them. A command is checked against the REAL
 interface of the tool that ran it, and there are TWO tools because the three
 batches do not come from one command: `/deflake` does not shell out — it calls
 `probe_flake.measure` in process, and its CLI has no `--probe`, `--runs` or RTS
