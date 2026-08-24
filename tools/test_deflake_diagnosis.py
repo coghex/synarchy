@@ -1360,6 +1360,86 @@ def test_the_handoff_comes_from_the_primary_checkout() -> None:
            "and the primary checkout is the head of the registered list")
 
 
+def test_a_result_path_must_be_spelled_the_way_resolve_spells_it() -> None:
+    """`check_artifact_root` resolves, so a real path has no `.` or `..`.
+
+    Normalising a supplied path before comparing it would accept
+    `/tmp/evidence/forged/../artifacts/…`, which the harness could not
+    have written and which points somewhere else entirely if any
+    component is a symlink.
+    """
+    # Written straight onto the document: `Path` collapses `.`, doubled
+    # separators and a trailing slash as it is CONSTRUCTED, so a fixture
+    # that went through it could not produce these spellings — which is
+    # also why no real result document carries one.
+    for label, root in (
+            ("a parent step", f"{OUTSIDE}/forged/../artifacts"),
+            ("a self step", f"{OUTSIDE}/./artifacts"),
+            ("a doubled separator", f"{OUTSIDE}//artifacts"),
+            ("a trailing slash", f"{OUTSIDE}/artifacts/")):
+        document = handoff_document()
+        document["result"]["artifact_root"] = root
+        expect_rejected(lambda d=document: dd.require_handoff(d),
+                        "not the canonical spelling",
+                        f"an artifact root with {label}")
+
+    document = handoff_document()
+    failing = next(run for run in document["result"]["runs"]
+                   if run["outcome"] != probe_flake.RUN_PASS)
+    forged = failing["artifact_dir"].replace("/run-", "/./run-")
+    document["result"]["retained_artifacts"] = [
+        forged if path == failing["artifact_dir"] else path
+        for path in document["result"]["retained_artifacts"]]
+    failing["artifact_dir"] = forged
+    expect_rejected(lambda: dd.require_handoff(document),
+                    "not the canonical spelling",
+                    "a run directory with a self step")
+
+
+def test_a_generated_directory_name_names_a_real_instant_and_process() -> None:
+    """`\\d{8}T\\d{6}Z` matches `99999999T999999Z`; no clock produced that."""
+    for label, name in (
+            ("an impossible date", f"{PROBE}-99999999T999999Z-4711-abcdef12"),
+            ("an impossible month", f"{PROBE}-20261321T120000Z-4711-abcdef12"),
+            ("an impossible hour", f"{PROBE}-20260821T250000Z-4711-abcdef12"),
+            ("a process id of zero", f"{PROBE}-20260821T120000Z-0-abcdef12")):
+        document = handoff_document()
+        document["result"]["invocation_dir"] = f"{OUTSIDE}/artifacts/{name}"
+        expect_rejected(lambda d=document: dd.require_handoff(d),
+                        "not a directory this measurement created",
+                        f"an invocation directory with {label}")
+
+
+def test_a_measurements_timestamp_is_an_instant() -> None:
+    """Delegated to `probe_census.parse_timestamp`, the shipped reader."""
+    for label, stamp in (("an impossible date", "2026-99-99T99:99:99Z"),
+                         ("no timezone marker", "2026-08-21T12:00:00"),
+                         ("a date alone", "2026-08-21"),
+                         ("nothing at all", None),
+                         ("a number", 20260821)):
+        document = handoff_document()
+        document["result"]["timestamp_utc"] = stamp
+        expect_rejected(lambda d=document: dd.require_handoff(d),
+                        "timestamp", f"a measurement stamped with {label}")
+
+    for section in ("baseline", "verification"):
+        document = diagnosis_document()
+        document[section]["result"]["timestamp_utc"] = "2026-99-99T99:99:99Z"
+        expect_rejected(lambda d=document: evaluate(d), "timestamp",
+                        f"a {section} stamped with an impossible date")
+
+
+def test_a_malformed_list_is_a_refusal_not_a_traceback() -> None:
+    """`list(42)` raises `TypeError`; a document must never do that."""
+    for field in ("expected_checks", "targets"):
+        for value in (42, "beta", {"beta": True}, [42], [""], [None]):
+            document = handoff_document()
+            document[field] = value
+            expect_rejected(lambda d=document: dd.require_handoff(d),
+                            "must be a list of identifiers",
+                            f"a {field} of {value!r}")
+
+
 def test_a_fabricated_argv_is_not_a_harness_invocation() -> None:
     for label, fragment, cmd in (
             ("another script", "the programs that produce",
@@ -2234,6 +2314,32 @@ def test_the_cli_needs_exactly_one_mode() -> None:
     expect(done.returncode != 0, "no mode at all is an error")
     done = _run_cli("--diagnosis", "a.json", "--handoff", "b.json")
     expect(done.returncode != 0, "two modes at once is an error")
+
+
+def test_a_malformed_document_reaches_the_cli_as_a_rejection() -> None:
+    root = Path(tempfile.mkdtemp(prefix="test_deflake_diagnosis_"))
+    try:
+        for label, mutate in (
+                ("expected_checks", lambda d: d["handoff"].update(
+                    {"expected_checks": 42})),
+                ("targets", lambda d: d["handoff"].update({"targets": 42})),
+                ("timestamp_utc", lambda d: d["handoff"]["result"].update(
+                    {"timestamp_utc": "2026-99-99T99:99:99Z"})),
+                ("artifact_root", lambda d: d["handoff"]["result"].update(
+                    {"artifact_root": f"{OUTSIDE}/a/../b"})),
+        ):
+            document = _live_document()
+            mutate(document)
+            path = root / f"malformed-{label}.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            done = _run_cli("--diagnosis", str(path))
+            expect(done.returncode == dd.EXIT_REJECTED,
+                   f"a malformed {label} exits {dd.EXIT_REJECTED}, got "
+                   f"{done.returncode}: {done.stderr}")
+            expect("Traceback" not in done.stderr,
+                   f"without a traceback: {done.stderr}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_an_unreadable_document_is_a_rejection_not_a_traceback() -> None:

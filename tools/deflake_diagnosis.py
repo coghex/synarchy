@@ -188,12 +188,21 @@ the state the probes actually read.
 
 The artifact layout is the one the harness creates
 --------------------------------------------------
-Every path is ABSOLUTE, because `check_artifact_root` resolves its root
-before a run begins. `new_invocation_dir` puts the invocation directory
-DIRECTLY under that root and GENERATES its name —
-`{probe}-{%Y%m%dT%H%M%SZ}-{pid}-{uuid8}` — so a name the harness could
-not have produced is a forged layout however coherent the rest of the
-document is. Every run directory is
+Every path is ABSOLUTE and CANONICAL, because `check_artifact_root`
+resolves its root before a run begins: no `.`, no `..`, no doubled
+separator, no trailing slash. Normalising a supplied path before
+comparing it would have accepted
+`/tmp/evidence/forged/../artifacts/…` as the artifact root, which the
+harness could not have written and which points somewhere else entirely
+if any component is a symlink.
+
+`new_invocation_dir` puts the invocation directory DIRECTLY under that
+root and GENERATES its name — `{probe}-{%Y%m%dT%H%M%SZ}-{pid}-{uuid8}` —
+from a real clock and a real process, both of which are checked for
+MEANING and not only shape: eight digits, `T`, six digits and `Z` also
+matches `99999999T999999Z`, and a bare digit run also matches a pid of
+0, and neither was ever produced. Every run
+directory is
 `invocation_dir / f"run-{index:03d}"` — so three recorded values
 determine the whole layout and nothing in it is free. Checking only "is
 this inside a worktree" left a batch able to swap a failed run's
@@ -285,6 +294,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -596,9 +606,14 @@ TOOLS_DIR = "tools"
 # `new_invocation_dir`'s generated name: the probe, a UTC stamp, the pid
 # and eight hex characters of a uuid4. Serialized by the harness and by
 # nothing else, so an arbitrary name like `role-not-a-harness-directory`
-# is a forged layout however coherent the rest of the document is.
+# is a forged layout however coherent the rest of the document is. The
+# STAMP and the PID are checked for meaning as well as shape below —
+# `\d{8}T\d{6}Z` alone matches `99999999T999999Z`, which no clock ever
+# produced, and `\d+` matches a pid of 0, which no process ever has.
 INVOCATION_DIR_RE = re.compile(
-    r"^[a-z][a-z_]*-\d{8}T\d{6}Z-\d+-[0-9a-f]{8}$")
+    r"^(?P<probe>[a-z][a-z_]*)-(?P<stamp>\d{8}T\d{6}Z)-(?P<pid>\d+)"
+    r"-[0-9a-f]{8}$")
+INVOCATION_STAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 
 
 def parse_command(command, what: str, *, launcher=None, root=None):
@@ -890,11 +905,13 @@ def require_result(document, what: str) -> dict:
     PASS while their check maps carry FAIL, which `failure_count` would
     otherwise count as a spotless batch and admit as a verified repair.
 
-    Only two rules are added afterwards, and only because the canonical
-    validator does not make them: the diagnosis-specific one that a
-    result attributed to no commit is not evidence, and the identifier
-    SHAPE rule (`probe_protocol.CHECK_ID_RE`) that a self-consistent
-    document carrying a runtime value in an identifier still satisfies.
+    Its `timestamp_utc` goes through `probe_census.parse_timestamp` too, so
+    it names a real UTC instant rather than merely having the right
+    shape. Two further rules are this module's own, because the
+    canonical validator does not make them: a result attributed to no
+    commit is not evidence, and the identifier SHAPE rule
+    (`probe_protocol.CHECK_ID_RE`) that a self-consistent document
+    carrying a runtime value in an identifier still satisfies.
     """
     try:
         probe_census.validate_result(document)
@@ -908,6 +925,14 @@ def require_result(document, what: str) -> dict:
             f"`probe_flake` writes the literal 'unknown' when git could not "
             f"be consulted, and a measurement nobody can attribute to a "
             f"commit is not evidence")
+    try:
+        probe_census.parse_timestamp(document.get("timestamp_utc"),
+                                     f"{what}.timestamp_utc")
+    except probe_census.CensusError as error:
+        raise HandoffError(
+            f"{error}; the handoff records WHEN its baseline was measured, "
+            f"and `probe_flake.Measurement` stamps every document from a "
+            f"real clock") from None
     ids = []
     for position, entry in enumerate(document["checks"]):
         cid = entry["id"]
@@ -1203,6 +1228,17 @@ class Handoff:
         return self.result["commit_sha"]
 
 
+def _is_string_list(value) -> bool:
+    """A list of non-empty strings, and nothing else.
+
+    Checked BEFORE anything iterates: `list(42)` raises `TypeError`, and
+    a malformed document must reach a caller as this module's own
+    controlled refusal rather than as a traceback out of the CLI.
+    """
+    return (isinstance(value, list)
+            and all(isinstance(item, str) and item for item in value))
+
+
 def require_handoff(document, *, worktrees=(), primary=None) -> Handoff:
     """`document` as a usable handoff, or the entry gate's refusal.
 
@@ -1263,6 +1299,10 @@ def require_handoff(document, *, worktrees=(), primary=None) -> Handoff:
             f"{result['probe']!r}")
 
     expected = document.get("expected_checks")
+    if expected is not None and not _is_string_list(expected):
+        raise HandoffError(
+            f"{what}.expected_checks must be a list of identifiers, got "
+            f"{expected!r}")
     if expected is not None and list(expected) != descriptor_ids(result):
         raise HandoffError(
             f"{what}.expected_checks is {list(expected)} where its own "
@@ -1277,6 +1317,9 @@ def require_handoff(document, *, worktrees=(), primary=None) -> Handoff:
     # quietly left out of scope. Equality, in the descriptor's own order.
     observed = non_pass_ids(result)
     targets = document.get("targets")
+    if targets is not None and not _is_string_list(targets):
+        raise HandoffError(
+            f"{what}.targets must be a list of identifiers, got {targets!r}")
     if not isinstance(targets, list) or not targets:
         raise HandoffError(
             f"{what} names no target check identifiers; every non-PASS "
@@ -1390,6 +1433,34 @@ class Outcome:
         }
 
 
+def _require_canonical(path, what: str) -> None:
+    """A path exactly as `Path.resolve` would have serialized it.
+
+    `probe_flake.check_artifact_root` RESOLVES its root before a run
+    begins and every other path is built from it, so a real result
+    document carries absolute paths with no `.`, no `..`, no doubled
+    separator and no trailing slash. Normalising a supplied path before
+    comparing it would have accepted
+    `/tmp/evidence/forged/../artifacts/...` as the artifact root, which
+    the harness could not have written and which points somewhere else
+    entirely if any component is a symlink.
+    """
+    if not isinstance(path, str) or not path:
+        raise HandoffError(f"{what} is not a path ({path!r})")
+    if not Path(path).is_absolute():
+        raise HandoffError(
+            f"{what} is the relative path {path!r}; `check_artifact_root` "
+            f"resolves its root before a run begins, so every path a real "
+            f"result document carries is absolute")
+    if os.path.normpath(path) != path:
+        raise HandoffError(
+            f"{what} is {path!r}, which is not the canonical spelling "
+            f"{os.path.normpath(path)!r}; a resolved path carries no `.`, "
+            f"no `..`, no doubled separator and no trailing slash, and one "
+            f"that does points somewhere else entirely if any component is "
+            f"a symlink")
+
+
 def require_topology(document, what: str) -> None:
     """The artifact layout `probe_flake.measure` actually creates.
 
@@ -1406,29 +1477,35 @@ def require_topology(document, what: str) -> None:
     construction, which a uniqueness test would only approximate.
     """
     for key in ("artifact_root", "invocation_dir"):
-        if not Path(document[key]).is_absolute():
-            raise HandoffError(
-                f"{what} reports {key} as the relative path "
-                f"{document[key]!r}; `probe_flake.check_artifact_root` "
-                f"RESOLVES its root before a run begins, so every path a "
-                f"real result document carries is absolute and canonical")
-    root = Path(os.path.normpath(document["artifact_root"]))
-    invocation = Path(os.path.normpath(document["invocation_dir"]))
+        _require_canonical(document[key], f"{what}.{key}")
+    root = Path(document["artifact_root"])
+    invocation = Path(document["invocation_dir"])
     if invocation.parent != root:
         raise HandoffError(
             f"{what} reports the invocation directory {invocation} under the "
             f"artifact root {root}; `probe_flake.new_invocation_dir` creates "
             f"it as a DIRECT child of the root, so this pair was not "
             f"produced by a harness run")
-    if not INVOCATION_DIR_RE.fullmatch(
-            invocation.name, ) or not invocation.name.startswith(
-            f"{document['probe']}-"):
+    generated = INVOCATION_DIR_RE.fullmatch(invocation.name)
+    problem = None
+    if generated is None:
+        problem = "it is not the generated shape"
+    elif generated["probe"] != document["probe"]:
+        problem = f"it names the probe {generated['probe']!r}"
+    else:
+        try:
+            datetime.strptime(generated["stamp"], INVOCATION_STAMP_FORMAT)
+        except ValueError:
+            problem = f"{generated['stamp']!r} is not a real UTC instant"
+        if problem is None and int(generated["pid"]) <= 0:
+            problem = f"{generated['pid']!r} is not a process id"
+    if problem is not None:
         raise HandoffError(
-            f"{what} reports the invocation directory {invocation.name!r}; "
-            f"`probe_flake.new_invocation_dir` generates "
-            f"`{{probe}}-{{%Y%m%dT%H%M%SZ}}-{{pid}}-{{uuid8}}`, so a name "
-            f"the harness could not have generated — or one generated for "
-            f"another probe — is not a directory this measurement created")
+            f"{what} reports the invocation directory {invocation.name!r}: "
+            f"{problem}. `probe_flake.new_invocation_dir` generates "
+            f"`{{probe}}-{{%Y%m%dT%H%M%SZ}}-{{pid}}-{{uuid8}}` from a real "
+            f"clock and a real process, so this is not a directory this "
+            f"measurement created")
     records = [(f"{what}.runs[{position}]", run)
                for position, run in enumerate(document["runs"])]
     broken = document.get("error_run")
@@ -1438,8 +1515,9 @@ def require_topology(document, what: str) -> None:
         directory = run.get("artifact_dir")
         if directory is None:
             continue
+        _require_canonical(directory, where)
         expected = invocation / f"run-{run['index']:03d}"
-        if Path(os.path.normpath(directory)) != expected:
+        if Path(directory) != expected:
             raise HandoffError(
                 f"{where} reports the artifact directory {directory} where "
                 f"run {run['index']} of this invocation would be at "

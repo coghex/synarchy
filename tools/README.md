@@ -1682,7 +1682,9 @@ shipped validator for that schema, before a single field is read. Deriving a
 subset of it locally is the failure this delegation exists to avoid:
 `_rule_pass_run_has_no_failed_check` alone is what stops a document whose runs
 all claim PASS while their check maps carry FAIL, which a run-outcome failure
-count would otherwise read as a spotless batch.
+count would otherwise read as a spotless batch. Its `timestamp_utc` is read by
+`probe_census.parse_timestamp` too, so it names a real UTC instant rather than
+merely having the right shape.
 
 **The targets are not a selection from the measurement — they ARE it.** Every
 non-PASS identifier is a diagnosis input, so the handoff's target list must
@@ -1748,11 +1750,15 @@ then bound to its own result document, so two commands agreeing with each other
 cannot stand in for the contract.
 
 **The artifact layout is the one the harness creates.** Every path is absolute
-(`check_artifact_root` resolves its root before a run begins);
-`new_invocation_dir` puts the invocation directory directly under that root and
-GENERATES its name, `{probe}-{%Y%m%dT%H%M%SZ}-{pid}-{uuid8}`, so a name the
-harness could not have produced is a forged layout however coherent the rest of
-the document is; and every run directory is `invocation_dir /
+AND canonical — `check_artifact_root` resolves its root before a run begins, so
+no real path carries a `.`, a `..`, a doubled separator or a trailing slash, and
+normalising a supplied one before comparing would accept
+`/tmp/evidence/forged/../artifacts/…`, which points somewhere else entirely if
+any component is a symlink. `new_invocation_dir` puts the invocation directory
+directly under that root and GENERATES its name,
+`{probe}-{%Y%m%dT%H%M%SZ}-{pid}-{uuid8}`, whose stamp must be a real UTC instant
+and whose pid must be a real process — the shape alone matches
+`99999999T999999Z` and a pid of 0. And every run directory is `invocation_dir /
 f"run-{index:03d}"` — three recorded values determine the whole layout, so a
 failed run's directory cannot be swapped for an unrelated path, and the run
 directories are unique by construction. The containment sweep over the paths a
