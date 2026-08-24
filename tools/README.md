@@ -1804,6 +1804,12 @@ must be members of the `config/*.local.yaml` family, since two manifests that
 agree perfectly about `../outside.local.yaml` establish nothing about the state
 the probes actually read.
 
+The two controlled batches may SHARE an artifact root — `--artifact-root` is
+optional and `default_artifact_root` supplies a temporary directory to both —
+but never the invocation directory beneath it, which `new_invocation_dir`
+creates fresh per invocation: a verification naming the baseline's is claiming
+the baseline's artifacts as its own.
+
 Destinations must sit outside every worktree, registered or declared:
 `check_artifact_root` guards the artifact root, but `--result` is written
 wherever it is pointed — and it is opened RELATIVE TO THE PROCESS'S DIRECTORY,
