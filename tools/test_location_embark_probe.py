@@ -9,8 +9,8 @@ boots every engine against that directory's resource root, and removes
 the whole tree again on success, on failure, and on an abort — unless
 `--keep-artifacts` says otherwise.
 
-Four properties are asserted directly rather than inferred, because each
-is a way the pre-#1569 probe actually leaked:
+Five properties are asserted directly rather than inferred, because each
+is a way the probe would leak, or has leaked:
 
   * The isolated root is real isolation, not a name: the content
     families are symlinks to the checkout, `config/` is a copy WITHOUT
@@ -22,6 +22,10 @@ is a way the pre-#1569 probe actually leaked:
     even when it carries one of the probe's own save-slot names.
   * Residue is a FAILING check. A run that cannot remove its own tree
     must not report a pass, and the failure must name what is left.
+  * A read-only checkout still yields a removable tree. `copytree`
+    reproduces the source's mode bits, so a read-only `config/` would
+    otherwise produce a private copy whose entries cannot be unlinked —
+    residue, and a failing run, from a source the probe only read.
 
 No engine, no world, no GPU: every test here runs against temporary
 directories in well under a second.
@@ -133,6 +137,94 @@ def test_root_symlinks_content_and_copies_config() -> None:
         saves = os.path.join(art.root, "saves")
         expect(os.path.isdir(saves) and not os.listdir(saves),
                "saves/ starts empty and belongs to this run")
+
+
+@contextlib.contextmanager
+def read_only_checkout():
+    """A stand-in checkout whose `config/` (and a subdirectory of it) is
+    mode 0555, with `probe.REPO` pointed at it.
+
+    `shutil.copytree` reproduces the source's mode bits, so this is what
+    a read-only checkout hands the run: a private `config/` whose entries
+    cannot be unlinked. Always restored to writable before teardown, so
+    the fixture can remove itself.
+    """
+    repo = tempfile.mkdtemp(prefix="test_embark_ro_repo_")
+    for family in ("scripts", "assets", "data"):
+        os.makedirs(os.path.join(repo, family))
+    config = os.path.join(repo, "config")
+    os.makedirs(os.path.join(config, "nested"))
+    for path in (os.path.join(config, "video_default.yaml"),
+                 os.path.join(config, "nested", "extra_default.yaml")):
+        with open(path, "w") as handle:
+            handle.write("tracked: default\n")
+        os.chmod(path, 0o444)
+    os.chmod(os.path.join(config, "nested"), 0o555)
+    os.chmod(config, 0o555)
+    original = probe.REPO
+    probe.REPO = repo
+    try:
+        yield repo
+    finally:
+        probe.REPO = original
+        for path, dirs, _files in os.walk(repo):
+            os.chmod(path, 0o755)
+            for name in dirs:
+                os.chmod(os.path.join(path, name), 0o755)
+        shutil.rmtree(repo, ignore_errors=True)
+
+
+def test_a_read_only_checkout_still_yields_a_removable_tree() -> None:
+    print("\ntest_a_read_only_checkout_still_yields_a_removable_tree")
+    with read_only_checkout():
+        probe.failures.clear()
+        art = probe.RunArtifacts(tempfile.mkdtemp(prefix="test_embark_ro_"))
+        try:
+            art.build()
+            config = os.path.join(art.root, "config")
+            expect(os.access(config, os.W_OK | os.X_OK),
+                   "the private config/ is writable by this run even though "
+                   "the source was not")
+            expect(os.access(os.path.join(config, "nested"), os.W_OK | os.X_OK),
+                   "...and so is a nested config directory")
+            expect(os.access(os.path.join(config, "video_default.yaml"), os.W_OK),
+                   "...and a copied config file, which the engine rewrites "
+                   "when it saves settings")
+            probe.release_artifacts(art, keep=False)
+            expect(not os.path.exists(art.base),
+                   "the run removes its own tree instead of reporting residue")
+            expect(not probe.failures,
+                   f"a read-only source is not a cleanup failure "
+                   f"(got {probe.failures})")
+        finally:
+            for path, dirs, _files in os.walk(art.base):
+                os.chmod(path, 0o755)
+                for name in dirs:
+                    os.chmod(os.path.join(path, name), 0o755)
+            shutil.rmtree(art.base, ignore_errors=True)
+            probe.failures.clear()
+
+
+def test_the_read_only_source_itself_is_never_modified() -> None:
+    print("\ntest_the_read_only_source_itself_is_never_modified")
+    with read_only_checkout() as repo:
+        config = os.path.join(repo, "config")
+        before = {p: os.stat(p).st_mode
+                  for p in (config,
+                            os.path.join(config, "nested"),
+                            os.path.join(config, "video_default.yaml"))}
+        probe.failures.clear()
+        art = probe.RunArtifacts(tempfile.mkdtemp(prefix="test_embark_ro2_"))
+        try:
+            art.build()
+            probe.release_artifacts(art, keep=False)
+            after = {p: os.stat(p).st_mode for p in before}
+            expect(before == after,
+                   "the checkout's own modes are untouched — only the copy "
+                   "is relaxed")
+        finally:
+            shutil.rmtree(art.base, ignore_errors=True)
+            probe.failures.clear()
 
 
 def test_every_boot_is_pinned_to_the_run_root() -> None:
@@ -385,6 +477,8 @@ def test_release_failure_fails_an_otherwise_clean_run() -> None:
 
 def main() -> int:
     test_root_symlinks_content_and_copies_config()
+    test_a_read_only_checkout_still_yields_a_removable_tree()
+    test_the_read_only_source_itself_is_never_modified()
     test_every_boot_is_pinned_to_the_run_root()
     test_two_invocations_share_no_path()
     test_release_removes_the_tree_without_following_symlinks()
