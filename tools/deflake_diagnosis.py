@@ -124,8 +124,13 @@ evidence at all; it is optional for `/deflake`, which retains the
 document beside its artifacts either way. ORDER is part of the grammar
 too: argv[0] is the interpreter, argv[1] the script, and only argv[2:]
 are options, because Python rejects an option it does not know before the
-script runs. And the argv must be a PYTHON INTERPRETER running one of
-those two scripts,
+script runs. And the argv must be a PYTHON INTERPRETER — named, not given
+by path, since a document cannot show which binary sits at
+`/tmp/counterfeit/python3` — running one of those two scripts AT THE PATH
+the checkout it says it ran in keeps it: `<worktree>/tools/probe_flake.py`
+for a controlled batch, `<directory>/tools/deflake.py` for the handoff.
+Matching only the file name would admit `/tmp/counterfeit/probe_flake.py`,
+a different program spelled the same way,
 because an option the CLI does not have — `--timeout`, say — would
 compare equal across two batches while describing a measurement neither
 could have run, and `/bin/echo .../probe_flake.py --probe role --runs 10`
@@ -567,7 +572,13 @@ def manifest_differences(left, right, *, left_name: str,
 # ==========================================================================
 # Invocation records
 # ==========================================================================
-def parse_command(command, what: str, *, launcher=None):
+# Where a checkout keeps the tools this lab runs. A recorded script path
+# must be this directory of the worktree the command says it ran in —
+# `Path(script).name` alone would accept `/tmp/counterfeit/probe_flake.py`.
+TOOLS_DIR = "tools"
+
+
+def parse_command(command, what: str, *, launcher=None, root=None):
     """One recorded argument vector, as `(launcher, {option: value})`.
 
     ORDER is part of the grammar, not decoration: `python3 --probe role
@@ -590,7 +601,14 @@ def parse_command(command, what: str, *, launcher=None):
             f"{what} is {command}, where an invocation is a Python "
             f"interpreter and the script it ran")
     program, script = command[0], command[1]
-    if not INTERPRETER_RE.match(Path(program).name):
+    if os.sep in program or (os.altsep and os.altsep in program):
+        raise HandoffError(
+            f"{what} runs the interpreter by path ({program!r}); a document "
+            f"cannot show which binary sits at an arbitrary path, so the "
+            f"interpreter is named — `python3` — and resolved from PATH like "
+            f"every command this lab records. `/tmp/counterfeit/python3` is "
+            f"exactly the shape this refuses")
+    if not INTERPRETER_RE.match(program):
         raise HandoffError(
             f"{what} runs {program!r}, which is not a Python interpreter; a "
             f"command with the right shape and another program — "
@@ -608,6 +626,14 @@ def parse_command(command, what: str, *, launcher=None):
             f"{what} runs {script!r}; the programs that produce a "
             f"{probe_flake.RESULT_SCHEMA} document are "
             f"{', '.join(sorted(LAUNCHERS))}")
+    if root is not None:
+        expected = Path(root) / TOOLS_DIR / found.script
+        if not (_path_forms(script, root) & _path_forms(expected)):
+            raise HandoffError(
+                f"{what} runs {script}, where the checkout it says it ran in "
+                f"keeps that tool at {expected}; matching only the file NAME "
+                f"would admit `/tmp/counterfeit/{found.script}`, which is a "
+                f"different program that happens to be spelled the same")
     if launcher is not None and found is not launcher:
         raise HandoffError(
             f"{what} runs {found.script}, where {launcher.describes} come "
@@ -675,7 +701,8 @@ def _integer(value, what: str) -> int:
             f"command before it measured anything") from None
 
 
-def require_invocation(document, what: str, *, launcher=None) -> dict:
+def require_invocation(document, what: str, *, launcher=None,
+                       root=None) -> dict:
     """One recorded invocation, validated against the tool that ran it.
 
     The record is the COMMAND plus the things the command does not say:
@@ -686,11 +713,12 @@ def require_invocation(document, what: str, *, launcher=None) -> dict:
     if not isinstance(document, dict):
         raise HandoffError(
             f"{what} must be a JSON object, got {type(document).__name__}")
-    parse_command(document.get("command"), f"{what}.command",
-                  launcher=launcher)
     directory = document.get("directory")
     if not isinstance(directory, str) or not directory:
         raise HandoffError(f"{what} has no `directory`")
+    parse_command(document.get("command"), f"{what}.command",
+                  launcher=launcher,
+                  root=directory if root is None else root)
     retries = document.get("retries")
     if retries != 0:
         raise HandoffError(
@@ -1242,6 +1270,8 @@ def require_handoff(document, *, worktrees=()) -> Handoff:
             f"scope, and naming a check that never went non-PASS targets "
             f"something this measurement did not see")
 
+    # `/deflake` runs in the primary checkout, which is the only worktree
+    # the handoff names, so its own recorded directory is the root.
     require_invocation(document.get("invocation"), f"{what}.invocation",
                        launcher=DEFLAKE_LAUNCHER)
     settings = effective_settings(document["invocation"],
@@ -1415,6 +1445,21 @@ def declared_worktrees(document) -> list:
     return declared
 
 
+def _declared_worktree(section, what: str) -> str:
+    """The worktree a section names, as a usable path.
+
+    One check, called by both readers: `_require_batch` needs it before
+    it can bind the recorded script to `<worktree>/tools/…`, and
+    `_require_worktree` needs it to bind the invocation directory. Two
+    copies would mean neither could be shown to be the one doing the
+    work.
+    """
+    declared = section.get("worktree")
+    if not isinstance(declared, str) or not declared:
+        raise HandoffError(f"{what} names no worktree")
+    return declared
+
+
 def _require_worktree(section, *, what: str) -> Path:
     """The section's declared worktree, canonical and really measured in.
 
@@ -1434,9 +1479,7 @@ def _require_worktree(section, *, what: str) -> Path:
     as well as the registered ones, so nothing may be written into
     either comparison state whether or not it is still checked out.
     """
-    declared = section.get("worktree")
-    if not isinstance(declared, str) or not declared:
-        raise HandoffError(f"{what} names no worktree")
+    declared = _declared_worktree(section, what)
     directory = section["invocation"]["directory"]
     if inside_any_worktree(directory, [declared]) is None:
         raise HandoffError(
@@ -1490,9 +1533,13 @@ def _require_batch(section, *, what: str, handoff: Handoff,
         raise HandoffError(
             f"{what}.result measured {result['probe']!r}, not "
             f"{handoff.probe!r}")
+    # A controlled batch runs the harness out of the worktree it DECLARES,
+    # which is the state it is supposed to be measuring — its invocation
+    # directory may be a subdirectory of that, and the tool is not there.
+    declared = _declared_worktree(section, what)
     invocation = require_invocation(section.get("invocation"),
                                    f"{what}.invocation",
-                                   launcher=HARNESS_LAUNCHER)
+                                   launcher=HARNESS_LAUNCHER, root=declared)
     require_manifest(section.get("configuration"), f"{what}.configuration")
 
     # A command and the document it produced have to be one measurement.

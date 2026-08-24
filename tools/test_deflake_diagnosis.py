@@ -352,6 +352,21 @@ def diagnosis_document(*, route: str = dd.ROUTE_REPAIR, handoff=None,
     return document
 
 
+def relocate_section(section, tree, *, result=f"{OUTSIDE}/verify.json",
+                     artifacts=None) -> None:
+    """Move a section to `tree`, command and all.
+
+    A recorded command names the tool inside the checkout it ran in, so a
+    fixture that moved only the declaration would be refused for the
+    script-path binding rather than for whatever it meant to test.
+    """
+    section["worktree"] = tree
+    section["invocation"] = invocation(
+        cmd=command(result=result,
+                    artifacts=artifacts or VERIFY_ARTIFACTS, worktree=tree),
+        directory=tree, ports=[9201])
+
+
 def evaluate(document, **kwargs):
     return dd.evaluate(document,
                        worktrees=kwargs.pop("worktrees", WORKTREES))
@@ -674,10 +689,17 @@ def test_the_handoff_comes_from_deflake_and_the_batches_from_the_harness() -> No
 
     document = diagnosis_document()
     document["baseline"]["invocation"] = deflake_invocation(
+        cmd=["python3", f"{CLEAN_WT}/tools/deflake.py", "--json"],
         directory=CLEAN_WT)
     expect_rejected(lambda: evaluate(document),
                     "come from probe_flake.py",
                     "a controlled batch claiming a /deflake argv")
+
+    counterfeit = handoff_document(inv=deflake_invocation(cmd=[
+        "python3", "/tmp/counterfeit/deflake.py", "--json"]))
+    expect_rejected(lambda: dd.require_handoff(counterfeit),
+                    "different program that happens to be",
+                    "a handoff claiming a counterfeit /deflake")
 
 
 def test_a_deflake_command_takes_only_its_own_two_options() -> None:
@@ -1037,23 +1059,20 @@ def test_a_repair_without_a_verification_batch_is_refused() -> None:
 
 def test_the_two_batches_may_not_share_a_worktree() -> None:
     document = diagnosis_document()
-    document["verification"]["worktree"] = CLEAN_WT
-    document["verification"]["invocation"]["directory"] = CLEAN_WT
+    relocate_section(document["verification"], CLEAN_WT)
     expect_refused(lambda: evaluate(document), "not two separate states",
                    "a verification run in the clean comparison worktree")
 
     for label, declared in (("a trailing dot", f"{CLEAN_WT}/."),
                             ("a redundant step", f"{CLEAN_WT}/sub/..")):
         document = diagnosis_document()
-        document["verification"]["worktree"] = declared
-        document["verification"]["invocation"]["directory"] = declared
+        relocate_section(document["verification"], declared)
         expect_refused(lambda d=document: evaluate(d),
                        "not two separate states",
                        f"the same worktree spelled with {label}")
 
     nested = diagnosis_document()
-    nested["verification"]["worktree"] = f"{CLEAN_WT}/nested"
-    nested["verification"]["invocation"]["directory"] = f"{CLEAN_WT}/nested"
+    relocate_section(nested["verification"], f"{CLEAN_WT}/nested")
     expect_refused(lambda: evaluate(nested), "not two separate states",
                    "a repair worktree nested inside the clean one")
 
@@ -1202,9 +1221,11 @@ def test_a_command_that_wrote_no_result_document_produced_no_evidence() -> None:
         cmd = [token for token in command()]
         index = cmd.index("--result")
         del cmd[index:index + 2]
+        tree = CLEAN_WT if section == "baseline" else REPAIR_WT
+        cmd = [f"{tree}/tools/probe_flake.py" if token.endswith(
+            "/tools/probe_flake.py") else token for token in cmd]
         document[section]["invocation"] = invocation(
-            cmd=cmd, directory=(CLEAN_WT if section == "baseline"
-                                else REPAIR_WT))
+            cmd=cmd, directory=tree)
         expect_rejected(lambda d=document: evaluate(d), "names no --result",
                         f"a {section} command with no result destination")
 
@@ -1278,9 +1299,18 @@ def test_a_fabricated_argv_is_not_a_harness_invocation() -> None:
             ("no script at all", "not a Python interpreter",
              ["--probe", PROBE, "--runs", "10"]),
             # The right SHAPE, running something that measures nothing.
-            ("a program that is not an interpreter", "not a Python interpreter",
+            ("a program that is not an interpreter",
+             "runs the interpreter by path",
              ["/bin/echo", f"{CLEAN_WT}/tools/probe_flake.py",
               "--probe", PROBE, "--runs", "10"]),
+            ("a counterfeit interpreter", "runs the interpreter by path",
+             ["/tmp/counterfeit/python3", f"{CLEAN_WT}/tools/probe_flake.py",
+              "--probe", PROBE, "--runs", "10",
+              "--result", f"{OUTSIDE}/b.json"]),
+            ("a counterfeit script", "different program that happens to be",
+             ["python3", "/tmp/counterfeit/probe_flake.py",
+              "--probe", PROBE, "--runs", "10",
+              "--result", f"{OUTSIDE}/b.json"]),
             ("a shell", "not a Python interpreter",
              ["sh", f"{CLEAN_WT}/tools/probe_flake.py",
               "--probe", PROBE, "--runs", "10"]),

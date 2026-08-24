@@ -1735,8 +1735,11 @@ argparse would read it (`--runs` and `--rts-caps` are `type=int`, so `--runs
 10.0` is refused rather than compared as ten), `--result` required of
 `probe_flake.py` and optional for `/deflake`, order-sensitive argv (interpreter,
 then script, then options — Python rejects an unknown option before the script
-runs), and a PYTHON INTERPRETER as the program, because `/bin/echo
-.../probe_flake.py …` has the right shape and measures nothing. Each command is
+runs), a NAMED Python interpreter rather than one given by path (a document
+cannot show which binary sits at `/tmp/counterfeit/python3`), and a script at
+the path the checkout it says it ran in keeps it — `<worktree>/tools/probe_flake.py`
+for a controlled batch, `<directory>/tools/deflake.py` for the handoff, since
+matching only the file name would admit `/tmp/counterfeit/probe_flake.py`. Each command is
 then bound to its own result document, so two commands agreeing with each other
 cannot stand in for the contract.
 
