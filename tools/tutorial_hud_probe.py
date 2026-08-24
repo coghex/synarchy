@@ -47,10 +47,12 @@ in-game HUD, then:
      rather than a synthetic stand-in. Every one of the five shipped
      rows is measured, covering all four depths the tree uses, and each
      row's ink must fall inside both the checklist panel and the
-     framebuffer. Row text is placed with no width budget, no
-     truncation, no wrapping and no clip (scripts/tutorial_hud.lua's
-     `fitToggle` covers the caption alone), so nothing but this oracle
-     stands between a too-long label and ink off the right edge.
+     framebuffer. This oracle found the shipped tree overrunning the
+     panel on every row below the root, which is why
+     scripts/tutorial_hud.lua now fits a row's string to the budget its
+     indent leaves; the assertions stay because that fit is the ONLY
+     thing bounding a row (rows are still never clipped by the renderer,
+     and `fitToggle` covers the caption alone).
 
 Needs a GPU (Vulkan device) — manual-only, never CI-gated, same as
 tools/offscreen_probe.py.
