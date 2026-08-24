@@ -1538,24 +1538,18 @@ def test_a_configuration_that_cannot_be_read_is_a_managed_failure() -> None:
                and result.ownership == deflake.OWNERSHIP_CLAIM_HELD,
                f"({result.outcome}, {result.ownership})")
 
-        # The real reader raises for a real unreadable file, which is
-        # what makes the injected one a fair stand-in.
-        root = Path(tempfile.mkdtemp(prefix="test_deflake_unreadable_"))
-        try:
-            (root / "config").mkdir()
-            victim = root / "config" / "save.local.yaml"
-            victim.write_text("autosave: true\n")
-            victim.chmod(0)
-            if os.geteuid() != 0:
-                raised = None
-                try:
-                    deflake.configuration_manifest(root)
-                except OSError as error:
-                    raised = error
-                expect(raised is not None,
-                       "the shipped reader really does raise OSError")
-        finally:
-            shutil.rmtree(root, ignore_errors=True)
+        # The shipped reader OPENS each file and swallows nothing, which
+        # is what makes the injected one a fair stand-in. Asserted by
+        # reading the source rather than by denying permission: CI runs
+        # as root, where a mode of 0 stops nothing, and a test that
+        # quietly skipped there would be coverage only on a laptop.
+        source = Path(deflake.__file__).read_text(encoding="utf-8")
+        body = source[source.index("def configuration_manifest"):
+                      source.index("def handoff_targets")]
+        expect("open(path, \"rb\")" in body,
+               "the reader opens each file, so it can fail like one")
+        expect("except" not in body,
+               f"and catches nothing, so the caller sees the OSError")
     finally:
         scratch.cleanup()
 
@@ -1657,8 +1651,15 @@ def test_a_recorded_measurement_with_nothing_retained_cannot_hand_off() -> None:
     try:
         real = measurement(scratch)
         real.invocation_dir = None
+        # An ancestor that is a regular FILE, so `mkdir(parents=True)`
+        # raises `NotADirectoryError` for every user. A path under a
+        # nonexistent root would not do: CI runs as root in a container,
+        # where `/nonexistent/dir/...` is perfectly creatable, and the
+        # measurement would be retained after all.
+        blocker = scratch.root / "a-regular-file"
+        blocker.write_text("not a directory\n", encoding="utf-8")
         result = run(scratch, measure=Recorder(real),
-                     result_path="/nonexistent/dir/that/cannot/be/made/r.json")
+                     result_path=str(blocker / "sub" / "r.json"))
         expect(result.outcome == deflake.OUTCOME_MANAGED_ERROR,
                f"({result.outcome})")
         expect(result.result_path is None,
@@ -1731,27 +1732,19 @@ def test_the_real_writer_produces_a_readable_document() -> None:
         expect(unserialisable.read_text(encoding="utf-8") == "PRIOR CONTENT\n",
                "and the target was never even opened, let alone truncated")
 
-        # And when the write itself fails, nothing partial is left and
-        # whatever was there is untouched.
-        locked = scratch.root / "locked"
-        locked.mkdir()
-        victim = locked / "result.json-handoff.json"
-        victim.write_text("EARLIER HANDOFF\n", encoding="utf-8")
-        locked.chmod(0o500)
-        try:
-            problem = deflake.write_handoff(victim, document)
-            if os.geteuid() != 0:
-                expect(problem is not None and "could not write" in problem,
-                       f"a directory that refuses the write is reported "
-                       f"({problem})")
-                expect(victim.read_text(encoding="utf-8")
-                       == "EARLIER HANDOFF\n",
-                       "the existing file is untouched")
-                expect(list(locked.iterdir()) == [victim],
-                       f"and no staging file is left behind "
-                       f"({list(locked.iterdir())})")
-        finally:
-            locked.chmod(0o700)
+        # A write whose own I/O fails, with an existing handoff in place:
+        # an ancestor that is a regular FILE refuses `mkdir` for every
+        # user, so this holds in a root CI container too — a chmod would
+        # not, which is exactly how the first version of this suite
+        # passed locally and failed in CI.
+        blocker = scratch.root / "blocking-file"
+        blocker.write_text("not a directory\n", encoding="utf-8")
+        problem = deflake.write_handoff(blocker / "deep" / "x-handoff.json",
+                                        document)
+        expect(problem is not None and "could not write" in problem,
+               f"an uncreatable target is reported ({problem})")
+        expect(blocker.read_text(encoding="utf-8") == "not a directory\n",
+               "and nothing on the way to it was disturbed")
     finally:
         scratch.cleanup()
 
