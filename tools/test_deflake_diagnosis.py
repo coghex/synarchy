@@ -40,6 +40,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import deflake_diagnosis as dd  # type: ignore
 import probe_census  # type: ignore
+import deflake  # type: ignore
 import probe_flake  # type: ignore
 import probe_protocol  # type: ignore
 import run_probes  # type: ignore
@@ -73,6 +74,9 @@ OUTSIDE = "/tmp/synarchy-deflake-evidence"
 CLEAN_WT = "/tmp/deflake-clean-role"
 REPAIR_WT = "/tmp/deflake-role"
 WORKTREES = (CLEAN_WT, REPAIR_WT)
+# `/deflake` runs in the primary checkout, not in either comparison
+# worktree: it is the step BEFORE this workflow creates them.
+PRIMARY_WT = "/tmp/synarchy-primary"
 VERIFY_ARTIFACTS = f"{OUTSIDE}/verify-artifacts"
 
 
@@ -240,6 +244,26 @@ def invocation(*, cmd=None, directory: str = CLEAN_WT,
     }
 
 
+def deflake_invocation(*, cmd=None, directory: str = PRIMARY_WT,
+                       retries: int = 0, ports=None) -> dict:
+    """The #1436 handoff's own invocation: `python3 tools/deflake.py`.
+
+    `/deflake` does NOT shell out to the harness — it calls
+    `probe_flake.measure` in process — and its CLI has no `--probe`, no
+    `--runs` and no RTS override at all. A fixture claiming a
+    `probe_flake.py` argv for the handoff would be asserting against a
+    command that never ran.
+    """
+    return {
+        "command": cmd if cmd is not None else [
+            "python3", f"{PRIMARY_WT}/tools/deflake.py", "--json",
+            "--result", f"{OUTSIDE}/handoff.json"],
+        "directory": directory,
+        "retries": retries,
+        "ports": [9101, 9102] if ports is None else ports,
+    }
+
+
 def manifest(entries=()) -> dict:
     return {"schema": dd.MANIFEST_SCHEMA, "root": "/tmp/whatever",
             "entries": [{"path": path, "sha256": digest}
@@ -266,9 +290,9 @@ def handoff_document(*, probe: str = PROBE, acceptable: int = 0,
         "targets": (list(targets) if targets is not None
                     else dd.non_pass_ids(result)),
         "result": result,
-        "invocation": invocation() if inv is None else inv,
+        "invocation": deflake_invocation() if inv is None else inv,
         "configuration": manifest() if config is None else config,
-        "artifacts": [f"{OUTSIDE}/artifacts/run-001"],
+        "artifacts": [],
     }
 
 
@@ -613,30 +637,86 @@ def test_an_unresolved_commit_is_not_evidence() -> None:
 # No retries
 # ==========================================================================
 def test_a_retry_policy_is_refused() -> None:
-    document = handoff_document(inv=invocation(retries=1))
+    document = handoff_document(inv=deflake_invocation(retries=1))
     expect_rejected(lambda: dd.require_handoff(document),
                     "retry policy", "a handoff measured with retries")
 
 
 def test_an_absent_retry_policy_is_refused() -> None:
-    inv = invocation()
+    inv = deflake_invocation()
     del inv["retries"]
     document = handoff_document(inv=inv)
     expect_rejected(lambda: dd.require_handoff(document),
                     "retry policy", "a handoff that states no retry policy")
 
 
-def test_the_invocation_must_match_the_measurement_it_describes() -> None:
-    wrong_probe = handoff_document(inv=invocation(cmd=command(probe=OTHER)))
-    expect_rejected(lambda: dd.require_handoff(wrong_probe), "where the "
-                    "handoff names", "an invocation measuring another probe")
-    wrong_runs = handoff_document(inv=invocation(cmd=command(runs=5)))
-    expect_rejected(lambda: dd.require_handoff(wrong_runs),
-                    "measurement contract is exactly",
-                    "an invocation requesting five runs")
-    wrong_caps = handoff_document(inv=invocation(cmd=command(rts_caps=8)))
-    expect_rejected(lambda: dd.require_handoff(wrong_caps),
-                    "RTS capabilities", "an invocation at eight capabilities")
+def test_the_handoff_comes_from_deflake_and_the_batches_from_the_harness() -> None:
+    """The three batches do not come from one command.
+
+    `/deflake` calls `probe_flake.measure` IN PROCESS and its CLI has no
+    `--probe`, `--runs` or RTS override at all, so requiring a
+    `probe_flake.py` argv for the handoff would make a truthful #1436
+    record impossible to submit while accepting an argv nobody ran.
+    """
+    expect(dd.DEFLAKE_LAUNCHER.fixed == {"runs": dd.RUN_COUNT,
+                                         "rts_caps": dd.RTS_CAPABILITIES},
+           f"/deflake supplies both counts itself: {dd.DEFLAKE_LAUNCHER.fixed}")
+    expect(dd.DEFLAKE_LAUNCHER.probe_from_result,
+           "and the probe comes from the document its selector produced")
+
+    accepted = dd.require_handoff(handoff_document())
+    expect(accepted.probe == PROBE, "a real /deflake record is admitted")
+
+    swapped = handoff_document(inv=invocation())
+    expect_rejected(lambda: dd.require_handoff(swapped),
+                    "come from deflake.py",
+                    "a handoff claiming a probe_flake.py argv")
+
+    document = diagnosis_document()
+    document["baseline"]["invocation"] = deflake_invocation(
+        directory=CLEAN_WT)
+    expect_rejected(lambda: evaluate(document),
+                    "come from probe_flake.py",
+                    "a controlled batch claiming a /deflake argv")
+
+
+def test_a_deflake_command_takes_only_its_own_two_options() -> None:
+    for extra in (["--probe", PROBE], ["--runs", "10"],
+                  ["--rts-caps", "4"], ["--artifact-root", OUTSIDE]):
+        document = handoff_document(inv=deflake_invocation(cmd=[
+            "python3", f"{PRIMARY_WT}/tools/deflake.py", "--json"] + extra))
+        expect_rejected(lambda d=document: dd.require_handoff(d),
+                        "does not accept",
+                        f"a /deflake command carrying {extra[0]}")
+
+    # `--json` is a flag, so it must not swallow the next argument.
+    document = handoff_document(inv=deflake_invocation(cmd=[
+        "python3", f"{PRIMARY_WT}/tools/deflake.py",
+        "--json", "--result", f"{OUTSIDE}/handoff.json"]))
+    dd.require_handoff(document)
+    document = handoff_document(inv=deflake_invocation(cmd=[
+        "python3", f"{PRIMARY_WT}/tools/deflake.py",
+        "--json=true", "--result", f"{OUTSIDE}/handoff.json"]))
+    expect_rejected(lambda: dd.require_handoff(document),
+                    "which is a flag", "a value passed to --json")
+
+    # `--result` is OPTIONAL there: /deflake retains the document beside
+    # its artifacts whether or not it is also copied out.
+    document = handoff_document(inv=deflake_invocation(cmd=[
+        "python3", f"{PRIMARY_WT}/tools/deflake.py", "--json"]))
+    dd.require_handoff(document)
+
+
+def test_a_batch_invocation_must_match_the_measurement_it_describes() -> None:
+    for label, cmd, fragment in (
+            ("another probe", command(probe=OTHER), "describe one measurement"),
+            ("five runs", command(runs=5), "describe one measurement"),
+            ("eight capabilities", command(rts_caps=8),
+             "describe one measurement")):
+        document = diagnosis_document()
+        document["baseline"]["invocation"] = invocation(cmd=cmd)
+        expect_rejected(lambda d=document: evaluate(d), fragment,
+                        f"a baseline command claiming {label}")
 
 
 # ==========================================================================
@@ -1128,13 +1208,8 @@ def test_a_command_that_wrote_no_result_document_produced_no_evidence() -> None:
         expect_rejected(lambda d=document: evaluate(d), "names no --result",
                         f"a {section} command with no result destination")
 
-    document = handoff_document()
-    cmd = [token for token in command()]
-    index = cmd.index("--result")
-    del cmd[index:index + 2]
-    document["invocation"] = invocation(cmd=cmd)
-    expect_rejected(lambda: dd.require_handoff(document), "names no --result",
-                    "a handoff command with no result destination")
+    # Not the handoff: `/deflake` retains the document beside its
+    # artifacts either way, so its `--result` is genuinely optional.
 
 
 def test_the_artifact_layout_is_the_one_the_harness_creates() -> None:
@@ -1192,24 +1267,33 @@ def test_the_artifact_layout_is_the_one_the_harness_creates() -> None:
 
 
 def test_a_fabricated_argv_is_not_a_harness_invocation() -> None:
-    for label, cmd in (
-            ("another script", ["python3", f"{CLEAN_WT}/tools/run_probes.py",
-                                "--probe", PROBE, "--runs", "10"]),
-            ("an extra positional", ["python3", f"{CLEAN_WT}/tools/probe_flake.py",
-                                     "extra", "--probe", PROBE,
-                                     "--runs", "10"]),
-            ("no script at all", ["--probe", PROBE, "--runs", "10"]),
+    for label, fragment, cmd in (
+            ("another script", "the programs that produce",
+             ["python3", f"{CLEAN_WT}/tools/run_probes.py",
+              "--probe", PROBE, "--runs", "10"]),
+            ("an extra positional", "positional token",
+             ["python3", f"{CLEAN_WT}/tools/probe_flake.py", "extra",
+              "--probe", PROBE, "--runs", "10",
+              "--result", f"{OUTSIDE}/b.json"]),
+            ("no script at all", "not a Python interpreter",
+             ["--probe", PROBE, "--runs", "10"]),
             # The right SHAPE, running something that measures nothing.
-            ("a program that is not an interpreter",
+            ("a program that is not an interpreter", "not a Python interpreter",
              ["/bin/echo", f"{CLEAN_WT}/tools/probe_flake.py",
               "--probe", PROBE, "--runs", "10"]),
-            ("a shell", ["sh", f"{CLEAN_WT}/tools/probe_flake.py",
-                         "--probe", PROBE, "--runs", "10"]),
+            ("a shell", "not a Python interpreter",
+             ["sh", f"{CLEAN_WT}/tools/probe_flake.py",
+              "--probe", PROBE, "--runs", "10"]),
+            # Order is part of the grammar: Python rejects an option it
+            # does not know BEFORE it runs the script.
+            ("an option before the script", "before the script it ran",
+             ["python3", "--probe", PROBE,
+              f"{CLEAN_WT}/tools/probe_flake.py", "--runs", "10",
+              "--result", f"{OUTSIDE}/b.json"]),
     ):
         document = diagnosis_document()
         document["baseline"]["invocation"] = invocation(cmd=cmd)
-        expect_rejected(lambda d=document: evaluate(d),
-                        "a harness invocation is",
+        expect_rejected(lambda d=document: evaluate(d), fragment,
                         f"a command with {label}")
 
 
@@ -1226,23 +1310,44 @@ def test_an_absent_option_compares_as_its_effective_default() -> None:
            "an omitted --rts-caps equals an explicit one at the default")
 
 
-def test_the_option_table_matches_the_shipped_harness() -> None:
-    """Drift guard: the real `--help` is the authority on the surface.
-
-    `probe_flake.main` builds its parser inside the function, so the
-    table here is hard-coded — and this reads the shipped CLI's own help
-    output, so adding, removing or renaming a harness option fails here
-    instead of silently widening what this module will accept.
-    """
+def _shipped_options(script: str) -> set:
     done = subprocess.run(
-        [sys.executable, str(Path(TOOL).parent / "probe_flake.py"), "--help"],
+        [sys.executable, str(Path(TOOL).parent / script), "--help"],
         capture_output=True, text=True, timeout=120)
-    expect(done.returncode == 0, f"probe_flake --help exits 0: {done.stderr}")
+    expect(done.returncode == 0, f"{script} --help exits 0: {done.stderr}")
     real = set(re.findall(r"(?<![\w-])(--[a-z][a-z-]*)", done.stdout))
     real.discard("--help")
+    return real
+
+
+def test_the_option_tables_match_the_shipped_tools() -> None:
+    """Drift guard: the real `--help` is the authority on each surface.
+
+    Both tools build their parsers inside `main`, so the tables here are
+    hard-coded — and this reads each shipped CLI's own help output, so
+    adding, removing or renaming an option fails here instead of
+    silently widening what this module will accept.
+    """
+    for launcher in (dd.HARNESS_LAUNCHER, dd.DEFLAKE_LAUNCHER):
+        real = _shipped_options(launcher.script)
+        expect(real == set(launcher.options),
+               f"{launcher.script}'s classified options "
+               f"{sorted(launcher.options)} are exactly the shipped ones "
+               f"{sorted(real)}")
+        expect(set(launcher.required) <= set(launcher.options),
+               f"and {launcher.script}'s required options are ones it has")
+        expect(set(launcher.destinations) <= set(launcher.options),
+               f"and so are its destinations")
+        expect(launcher.values.isdisjoint(launcher.flags),
+               f"and no {launcher.script} option both takes a value and does not")
+
+    real = _shipped_options(dd.HARNESS_LAUNCHER.script)
     expect(real == set(dd.HARNESS_OPTIONS),
            f"the classified options {sorted(dd.HARNESS_OPTIONS)} are exactly "
            f"the shipped ones {sorted(real)}")
+    expect(dd.DEFLAKE_LAUNCHER.fixed["runs"] == deflake.CENSUS_RUN_COUNT
+           and dd.DEFLAKE_LAUNCHER.fixed["rts_caps"] == deflake.RTS_CAPABILITIES,
+           "and /deflake's fixed contract is its own module's constants")
     expect(set(dd.CONDITION_OPTIONS).isdisjoint(dd.DESTINATION_OPTIONS),
            "and no option is both a condition and a destination")
     expect(set(dd.HARNESS_OPTIONS) ==
@@ -1642,6 +1747,35 @@ def test_an_artifact_layout_inside_a_worktree_is_refused() -> None:
         expect_rejected(lambda d=document: evaluate(d, worktrees=()),
                         "inside the working tree",
                         f"a verification whose artifacts live in {label}")
+
+
+def test_the_handoffs_own_evidence_may_not_live_in_a_worktree() -> None:
+    """The handoff is held to the batches' containment rule, not exempt.
+
+    Checked with NO registered worktrees, because the comparison
+    worktrees the diagnosis DECLARES are collected before the handoff is
+    admitted — which is what still holds after they are removed.
+    """
+    document = diagnosis_document()
+    document["handoff"]["result"] = result_document(
+        runs=failing_runs(3), artifact_root=f"{CLEAN_WT}/artifacts")
+    expect_rejected(lambda: evaluate(document, worktrees=()),
+                    "inside the working tree",
+                    "a handoff whose artifact tree is in a comparison worktree")
+
+    moved = diagnosis_document()
+    moved["handoff"]["invocation"] = deflake_invocation(cmd=[
+        "python3", f"{PRIMARY_WT}/tools/deflake.py", "--json",
+        "--result", f"{REPAIR_WT}/handoff.json"])
+    expect_rejected(lambda: evaluate(moved, worktrees=()),
+                    "inside the working tree",
+                    "a handoff result document written into a worktree")
+
+    extra = diagnosis_document()
+    extra["handoff"]["artifacts"] = [f"{REPAIR_WT}/kept"]
+    expect_rejected(lambda: evaluate(extra, worktrees=()),
+                    "inside the working tree",
+                    "a handoff naming a retained artifact in a worktree")
 
 
 def test_a_default_artifact_root_inside_a_worktree_is_still_refused() -> None:

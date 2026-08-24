@@ -1720,17 +1720,25 @@ construction, which is the defect the scoping exists to remove.
 **Same environment means the same measurement, not the same characters.** The
 two batches necessarily differ in worktree and destination, and ports are
 leased dynamically, so they are compared on behavior-affecting settings with
-effective defaults filled in. A command is first checked against the REAL
-harness interface — every option one `probe_flake.main` accepts, spelled the way
-its own argparse would read it (`--runs` and `--rts-caps` are `type=int`, so
-`--runs 10.0` is refused rather than compared as ten), `--result` required
-because the document is written only `if args.result`, and an argv that is a
-PYTHON INTERPRETER plus a path ending in `probe_flake.py` — because an option
-the CLI does not have would compare equal across both batches while describing a
-measurement neither could have run, and `/bin/echo .../probe_flake.py …` has the
-right shape and measures nothing. Each command is then bound to its own result
-document, so two commands agreeing with each other cannot stand in for the
-contract.
+effective defaults filled in. A command is checked against the REAL
+interface of the tool that ran it, and there are TWO tools because the three
+batches do not come from one command: `/deflake` does not shell out — it calls
+`probe_flake.measure` in process, and its CLI has no `--probe`, `--runs` or RTS
+override — so the handoff's command is `python3 tools/deflake.py` with its
+contract from `/deflake`'s own constants and its probe from the result document,
+while the two controlled batches are the `probe_flake.py --probe … --runs 10`
+the issue spells out. Requiring a harness argv everywhere would make a truthful
+#1436 handoff impossible to submit while accepting an argv nobody ran.
+
+Within a tool's surface: every option one it accepts, spelled the way its
+argparse would read it (`--runs` and `--rts-caps` are `type=int`, so `--runs
+10.0` is refused rather than compared as ten), `--result` required of
+`probe_flake.py` and optional for `/deflake`, order-sensitive argv (interpreter,
+then script, then options — Python rejects an unknown option before the script
+runs), and a PYTHON INTERPRETER as the program, because `/bin/echo
+.../probe_flake.py …` has the right shape and measures nothing. Each command is
+then bound to its own result document, so two commands agreeing with each other
+cannot stand in for the contract.
 
 **The artifact layout is the one the harness creates.** `new_invocation_dir`
 puts the invocation directory directly under the artifact root and names it
@@ -1747,8 +1755,10 @@ neither may contain the other, and each invocation must have run inside the
 worktree its section names. Deliberately not "must be a registered `git
 worktree`" — the workflow removes or hands off both comparison worktrees when
 it finishes, so by evaluation time the paths it correctly names may be gone.
-Both declarations are collected before either batch is validated, so every path
-is checked against both comparison states even once neither is registered.
+Both declarations are collected before the HANDOFF is admitted and before either
+batch is validated, so every path — the handoff's own result tree and extra
+retained artifacts included — is checked against both comparison states even
+once neither is registered.
 
 Both worktrees are attested source-clean at measurement time — the recorded SHA
 cannot reveal an uncommitted change — and a configuration manifest's entries

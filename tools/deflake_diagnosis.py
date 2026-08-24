@@ -102,15 +102,30 @@ run count, RTS capabilities, retry policy — while `--result`,
 `--artifact-root` and the observed ports are recorded and permitted to
 differ.
 
-A command is first checked against the REAL harness interface. Every
-option must be one `probe_flake.main` actually accepts and be spelled the
-way its own argparse would read it — `--runs` and `--rts-caps` are
-`type=int`, so `--runs 10.0` is refused here exactly as the harness would
-have refused it rather than compared as the number ten. `--result` is
-required alongside `--probe` and `--runs`, because the document is
+A command is first checked against the REAL interface of the tool that
+ran it — and there are TWO tools, because the three batches do not come
+from one command. `/deflake` (#1436) does not shell out: it calls
+`probe_flake.measure` IN PROCESS, and its CLI has no `--probe`, no
+`--runs` and no RTS override at all. So the handoff's command is
+`python3 tools/deflake.py`, whose measurement contract comes from
+`/deflake`'s own constants and whose probe comes from the result document
+its selector produced; the two CONTROLLED batches are the ones the issue
+spells as `probe_flake.py --probe … --runs 10`. Requiring a
+`probe_flake.py` argv everywhere would have made a truthful #1436 handoff
+impossible to submit while accepting an argv nobody ran.
+
+Within a tool's own surface, every option must be one it actually accepts
+and be spelled the way its argparse would read it — `--runs` and
+`--rts-caps` are `type=int`, so `--runs 10.0` is refused here exactly as
+the harness would have refused it rather than compared as the number ten.
+`--result` is required of `probe_flake.py`, because the document is
 written only `if args.result` and a command without one produced no
-evidence at all. And the argv must be a PYTHON INTERPRETER running a path
-ending in `probe_flake.py`,
+evidence at all; it is optional for `/deflake`, which retains the
+document beside its artifacts either way. ORDER is part of the grammar
+too: argv[0] is the interpreter, argv[1] the script, and only argv[2:]
+are options, because Python rejects an option it does not know before the
+script runs. And the argv must be a PYTHON INTERPRETER running one of
+those two scripts,
 because an option the CLI does not have — `--timeout`, say — would
 compare equal across two batches while describing a measurement neither
 could have run, and `/bin/echo .../probe_flake.py --probe role --runs 10`
@@ -124,6 +139,11 @@ equal while their documents both claimed the handoff's contract. What
 the agreed value has to BE stays where it already lives, so one fact is
 not scored twice: the probe against the handoff, and the run and
 capability counts in `controlled_problems`, which routes them.
+
+One sweep covers all three batches — the handoff included, since a
+handoff whose result tree was rewritten under a comparison worktree is
+exactly as unusable as a verification that wrote into one, and its own
+extra `artifacts` are swept with it.
 
 Destinations must sit outside every worktree, registered or DECLARED:
 the artifact root is guarded by `probe_flake.check_artifact_root`, but
@@ -253,6 +273,7 @@ import sys
 from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import deflake  # noqa: E402
 import probe_census  # noqa: E402
 import probe_flake  # noqa: E402
 import probe_protocol  # noqa: E402
@@ -281,48 +302,98 @@ CONFIG_GLOB = "config/*.local.yaml"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 
-# The measuring script, and the only kind of program that runs it. A
-# recorded command that does not run THIS, with a Python interpreter, is
-# not a record of a measurement this lab can reason about — `/bin/echo
-# .../probe_flake.py --probe role --runs 10` has the right SHAPE and
-# measures nothing.
-HARNESS_SCRIPT = "probe_flake.py"
+# The two programs that really produce this lab's measurements, and the
+# only kind of program that runs either — `/bin/echo .../probe_flake.py
+# --probe role --runs 10` has the right SHAPE and measures nothing.
+#
+# There are TWO because the three batches do not come from one command.
+# `/deflake` (#1436) does NOT shell out: it calls `probe_flake.measure`
+# in process with its own fixed run count and capability count, and its
+# CLI has no `--probe` and no `--runs` at all. So requiring a
+# `probe_flake.py` argv everywhere would have made a truthful #1436
+# handoff impossible to submit while accepting an argv that never ran.
 INTERPRETER_RE = re.compile(r"^python(\d+(\.\d+)*)?$")
 
-# `probe_flake.main`'s ENTIRE option surface, split by what each one is.
-# Hard-coded rather than introspected because argparse builds its parser
-# inside `main`, and kept honest by `test_deflake_diagnosis`, which reads
-# the real `--help` and fails if the two ever disagree. A command naming
-# an option outside this set could not have been run by the shipped
-# harness, so accepting it would mean comparing two fabrications.
+
+class Launcher:
+    """One program that produces a `probe-flake-result/v1` document.
+
+    `values` are options taking a value and `flags` are argparse's
+    `store_true` ones, which take none — reading a flag as though it
+    consumed the next token would silently swallow a real argument.
+    `conditions` are the behavior-affecting options this launcher reads
+    from its command line; `fixed` are the ones it does not expose at
+    all and supplies itself, which is what makes `/deflake`'s
+    measurement contract a property of the module rather than of a
+    command nobody typed.
+    """
+
+    def __init__(self, script, *, values, flags=(), destinations=(),
+                 required=(), conditions=(), defaults=None, fixed=None,
+                 probe_from_result=False, describes=""):
+        self.script = script
+        self.values = frozenset(values)
+        self.flags = frozenset(flags)
+        self.destinations = tuple(destinations)
+        self.required = tuple(required)
+        self.conditions = tuple(conditions)
+        self.defaults = dict(defaults or {})
+        self.fixed = dict(fixed or {})
+        self.probe_from_result = probe_from_result
+        self.describes = describes
+
+    @property
+    def options(self) -> frozenset:
+        return self.values | self.flags
+
+
+# `probe_flake.main`'s ENTIRE option surface. Hard-coded because argparse
+# builds its parser inside `main`, and kept honest by
+# `test_deflake_diagnosis`, which reads the real `--help` and fails if the
+# two ever disagree.
 #
 # Destinations must DIFFER between the batches — writing both to one path
 # would destroy the comparison — so they are dropped before conditions
-# are compared, and validated separately.
+# are compared, and validated separately. `--result` is REQUIRED as well
+# as a destination: `probe_flake.main` writes the document only `if
+# args.result`, so a command without one produced no evidence, and being
+# required and being a destination are orthogonal properties.
 DESTINATION_OPTIONS = ("--result", "--artifact-root")
-
-# Behavior-affecting settings, with the effective default `probe_flake`
-# applies when one is absent. `--probe` and `--runs` have no default:
-# `probe_flake.main` requires both, so a command missing either never ran.
-# `--result` is required alongside them: `probe_flake.main` writes the
-# `probe-flake-result/v1` document only `if args.result`, so a command
-# without one produced NO document — and a section embedding a result
-# while claiming a command that could not have written it is describing
-# two different things.
 REQUIRED_OPTIONS = ("--probe", "--runs", "--result")
 INVOCATION_DEFAULTS = {"--rts-caps": RTS_CAPABILITIES}
-
-# Being REQUIRED and being a DESTINATION are orthogonal: `--result` is
-# both, because a command that wrote no result document produced no
-# evidence, while where it wrote must still differ between the batches.
-# The split that has to be exclusive is condition-versus-destination —
-# a destination compared as a condition would refuse every legitimate
-# pair, and a condition dropped as a destination would compare equal
-# whatever it said.
 CONDITION_OPTIONS = ("--probe", "--runs") + tuple(INVOCATION_DEFAULTS)
 
 HARNESS_OPTIONS = frozenset(REQUIRED_OPTIONS) | frozenset(
     DESTINATION_OPTIONS) | frozenset(CONDITION_OPTIONS)
+
+HARNESS_LAUNCHER = Launcher(
+    "probe_flake.py",
+    values=HARNESS_OPTIONS,
+    destinations=DESTINATION_OPTIONS,
+    required=REQUIRED_OPTIONS,
+    conditions=CONDITION_OPTIONS,
+    defaults=INVOCATION_DEFAULTS,
+    describes="the controlled baseline and verification batches")
+
+# `deflake.main`'s entire surface: one flag and one optional destination,
+# and deliberately no probe, run-count or RTS override — "a forced probe
+# would let an operator manufacture a `recorded` outcome that proves
+# nothing about the selection it skipped". So the probe comes from the
+# result document the selector produced, and the two counts come from
+# `/deflake`'s own constants. `--result` is optional there because the
+# document is retained beside its artifacts either way.
+DEFLAKE_LAUNCHER = Launcher(
+    "deflake.py",
+    values=("--result",),
+    flags=("--json",),
+    destinations=("--result",),
+    fixed={"runs": deflake.CENSUS_RUN_COUNT,
+           "rts_caps": deflake.RTS_CAPABILITIES},
+    probe_from_result=True,
+    describes="the #1436 census handoff")
+
+LAUNCHERS = {launcher.script: launcher
+             for launcher in (HARNESS_LAUNCHER, DEFLAKE_LAUNCHER)}
 
 # The probe-side defect categories of the issue's diagnosis boundary.
 # A declared repair names exactly one: "several independent causes" is
@@ -496,58 +567,89 @@ def manifest_differences(left, right, *, left_name: str,
 # ==========================================================================
 # Invocation records
 # ==========================================================================
-def parse_command(command, what: str) -> dict:
-    """A `probe_flake.py` argument vector as `{option: value}`.
+def parse_command(command, what: str, *, launcher=None):
+    """One recorded argument vector, as `(launcher, {option: value})`.
 
-    `--flag value` and `--flag=value` are the same thing; anything else
-    in the vector is positional and kept under `_positional`, because a
-    command this cannot read is a command whose conditions cannot be
-    compared, and that is a refusal rather than a silent pass.
+    ORDER is part of the grammar, not decoration: `python3 --probe role
+    tools/probe_flake.py --runs 10` is rejected by PYTHON before the
+    script runs, so argv[0] must be the interpreter, argv[1] the script,
+    and only argv[2:] are that script's options. Parsing
+    order-insensitively accepted a command the shell would never have got
+    past.
+
+    `--flag value` and `--flag=value` are the same thing for an option
+    that takes a value; a `store_true` flag takes none, and reading one
+    as though it did would swallow a real argument.
     """
     if not isinstance(command, list) or not command:
         raise HandoffError(f"{what} must be a non-empty list of arguments")
     if not all(isinstance(token, str) for token in command):
         raise HandoffError(f"{what} must contain only strings")
+    if len(command) < 2:
+        raise HandoffError(
+            f"{what} is {command}, where an invocation is a Python "
+            f"interpreter and the script it ran")
+    program, script = command[0], command[1]
+    if not INTERPRETER_RE.match(Path(program).name):
+        raise HandoffError(
+            f"{what} runs {program!r}, which is not a Python interpreter; a "
+            f"command with the right shape and another program — "
+            f"`/bin/echo .../probe_flake.py --probe role --runs 10` — "
+            f"measures nothing")
+    if script.startswith("-"):
+        raise HandoffError(
+            f"{what} passes {script!r} before the script it ran; ORDER is "
+            f"part of the grammar — Python rejects an option it does not "
+            f"know before the script runs at all, so argv[1] is the script "
+            f"and every option comes after it")
+    found = LAUNCHERS.get(Path(script).name)
+    if found is None:
+        raise HandoffError(
+            f"{what} runs {script!r}; the programs that produce a "
+            f"{probe_flake.RESULT_SCHEMA} document are "
+            f"{', '.join(sorted(LAUNCHERS))}")
+    if launcher is not None and found is not launcher:
+        raise HandoffError(
+            f"{what} runs {found.script}, where {launcher.describes} come "
+            f"from {launcher.script}")
     options: dict = {}
-    positional: list = []
-    index = 0
+    index = 2
     while index < len(command):
         token = command[index]
-        if token.startswith("--"):
-            if "=" in token:
-                name, value = token.split("=", 1)
-            else:
-                name = token
-                if index + 1 >= len(command):
-                    raise HandoffError(f"{what}: {token} has no value")
-                index += 1
-                value = command[index]
-            if name in options:
-                raise HandoffError(f"{what} repeats {name}")
-            if name not in HARNESS_OPTIONS:
+        if not token.startswith("--"):
+            raise HandoffError(
+                f"{what} carries the positional token {token!r} after "
+                f"{Path(script).name}; every remaining argument is one of "
+                f"that script's options, so a bare token ran something the "
+                f"comparison cannot see")
+        inline = "=" in token
+        name, inline_value = (token.split("=", 1) if inline
+                              else (token, None))
+        if name not in found.options:
+            raise HandoffError(
+                f"{what} names {name}, which `{found.script}` does not "
+                f"accept; its whole option surface is "
+                f"{', '.join(sorted(found.options))}, so a command carrying "
+                f"anything else was never run by the shipped tool")
+        if name in options:
+            raise HandoffError(f"{what} repeats {name}")
+        if name in found.flags:
+            if inline:
                 raise HandoffError(
-                    f"{what} names {name}, which `probe_flake.main` does not "
-                    f"accept; its whole option surface is "
-                    f"{', '.join(sorted(HARNESS_OPTIONS))}, so a command "
-                    f"carrying anything else was never run by the shipped "
-                    f"harness")
-            options[name] = value
+                    f"{what} passes a value to {name}, which is a flag")
+            options[name] = True
+        elif inline:
+            options[name] = inline_value
         else:
-            positional.append(token)
+            index += 1
+            if index >= len(command):
+                raise HandoffError(f"{what}: {token} has no value")
+            options[name] = command[index]
         index += 1
-    if (len(positional) != 2
-            or not INTERPRETER_RE.match(Path(positional[0]).name)
-            or Path(positional[1]).name != HARNESS_SCRIPT):
-        raise HandoffError(
-            f"{what} is {positional}, where a harness invocation is a Python "
-            f"interpreter and a path ending in {HARNESS_SCRIPT}; a command "
-            f"with extra positional tokens ran something else, and one whose "
-            f"program is not an interpreter did not run the harness at all")
-    for option in REQUIRED_OPTIONS:
+    for option in found.required:
         if option not in options:
             raise HandoffError(f"{what} names no {option}")
-    options["_positional"] = positional
-    return options
+    return found, options
 
 
 def _integer(value, what: str) -> int:
@@ -573,8 +675,8 @@ def _integer(value, what: str) -> int:
             f"command before it measured anything") from None
 
 
-def require_invocation(document, what: str) -> dict:
-    """One recorded `probe_flake.py` invocation, validated.
+def require_invocation(document, what: str, *, launcher=None) -> dict:
+    """One recorded invocation, validated against the tool that ran it.
 
     The record is the COMMAND plus the things the command does not say:
     the directory it ran in, the ports the harness actually leased, and
@@ -584,7 +686,8 @@ def require_invocation(document, what: str) -> dict:
     if not isinstance(document, dict):
         raise HandoffError(
             f"{what} must be a JSON object, got {type(document).__name__}")
-    options = parse_command(document.get("command"), f"{what}.command")
+    parse_command(document.get("command"), f"{what}.command",
+                  launcher=launcher)
     directory = document.get("directory")
     if not isinstance(directory, str) or not directory:
         raise HandoffError(f"{what} has no `directory`")
@@ -605,21 +708,38 @@ def require_invocation(document, what: str) -> dict:
     return document
 
 
-def effective_settings(invocation, what: str) -> dict:
+def effective_settings(invocation, what: str, *, result=None) -> dict:
     """The behavior-affecting conditions one invocation actually ran under.
 
-    Destinations and positional tokens are dropped: the script path
+    Destinations and the program tokens are dropped: the script path
     differs by worktree and `--result`/`--artifact-root` MUST differ, so
-    comparing them would refuse every legitimate pair. Absent options
-    are filled in with the effective default `probe_flake` would apply,
+    comparing them would refuse every legitimate pair. An absent option
+    is filled in with the effective default its own tool would apply,
     because "the caller declined to override a default" is not a
     difference in conditions.
+
+    A launcher that does not EXPOSE a setting supplies it instead:
+    `/deflake` has no `--runs` and no `--rts-caps`, so its contract comes
+    from its own constants, and the probe it measured comes from the
+    result document its selector produced rather than from a command
+    that never named one.
     """
-    options = parse_command(invocation["command"], f"{what}.command")
-    settings = {}
-    settings["probe"] = options["--probe"]
-    settings["runs"] = _integer(options["--runs"], f"{what}.command --runs")
-    for option, default in INVOCATION_DEFAULTS.items():
+    launcher, options = parse_command(invocation["command"],
+                                      f"{what}.command")
+    settings = dict(launcher.fixed)
+    if launcher.probe_from_result:
+        if not isinstance(result, dict):
+            raise HandoffError(
+                f"{what} was run by {launcher.script}, which chooses the "
+                f"probe itself, so its conditions can only be read beside "
+                f"the result document it produced")
+        settings["probe"] = result["probe"]
+    else:
+        settings["probe"] = options["--probe"]
+    if "--runs" in launcher.conditions:
+        settings["runs"] = _integer(options["--runs"],
+                                    f"{what}.command --runs")
+    for option, default in launcher.defaults.items():
         key = option.lstrip("-").replace("-", "_")
         settings[key] = (_integer(options[option], f"{what}.command {option}")
                          if option in options else default)
@@ -627,10 +747,12 @@ def effective_settings(invocation, what: str) -> dict:
     return settings
 
 
-def invocation_differences(baseline, verification) -> list:
+def invocation_differences(baseline, verification, *, results=(None, None)) -> list:
     """Every behavior-affecting difference between two invocations."""
-    left = effective_settings(baseline, "baseline.invocation")
-    right = effective_settings(verification, "verification.invocation")
+    left = effective_settings(baseline, "baseline.invocation",
+                              result=results[0])
+    right = effective_settings(verification, "verification.invocation",
+                               result=results[1])
     return [f"{key}: baseline {left[key]!r}, verification {right[key]!r}"
             for key in sorted(set(left) | set(right))
             if left.get(key) != right.get(key)]
@@ -638,8 +760,10 @@ def invocation_differences(baseline, verification) -> list:
 
 def destinations(invocation) -> list:
     """The paths one invocation wrote to, as recorded in its command."""
-    options = parse_command(invocation["command"], "invocation.command")
-    return [options[name] for name in DESTINATION_OPTIONS if name in options]
+    launcher, options = parse_command(invocation["command"],
+                                      "invocation.command")
+    return [options[name] for name in launcher.destinations
+            if name in options]
 
 
 def worktree_paths() -> list:
@@ -1022,7 +1146,7 @@ class Handoff:
         return self.result["commit_sha"]
 
 
-def require_handoff(document) -> Handoff:
+def require_handoff(document, *, worktrees=()) -> Handoff:
     """`document` as a usable handoff, or the entry gate's refusal.
 
     Every refusal here is `handoff-rejected`: the invocation stops
@@ -1118,8 +1242,10 @@ def require_handoff(document) -> Handoff:
             f"scope, and naming a check that never went non-PASS targets "
             f"something this measurement did not see")
 
-    require_invocation(document.get("invocation"), f"{what}.invocation")
-    settings = effective_settings(document["invocation"], f"{what}.invocation")
+    require_invocation(document.get("invocation"), f"{what}.invocation",
+                       launcher=DEFLAKE_LAUNCHER)
+    settings = effective_settings(document["invocation"],
+                                  f"{what}.invocation", result=result)
     if settings["probe"] != probe:
         raise HandoffError(
             f"{what}.invocation measured {settings['probe']!r} where the "
@@ -1140,6 +1266,8 @@ def require_handoff(document) -> Handoff:
                                   or not all(isinstance(path, str)
                                              for path in artifacts)):
         raise HandoffError(f"{what}.artifacts must be a list of paths")
+    _check_paths(what=what, invocation=document["invocation"], result=result,
+                 extra=artifacts or (), trees=worktrees)
     # No "failing runs must have retained evidence" rule here: since
     # `_require_retention`, `retained_artifacts` IS the list of the
     # unsuccessful runs' own directories, so a measurement with failures
@@ -1318,6 +1446,30 @@ def _require_worktree(section, *, what: str) -> Path:
     return sorted(_path_forms(declared))[0]
 
 
+def _check_paths(*, what: str, invocation, result, extra=(), trees) -> None:
+    """Nothing this measurement touched may sit in a repository worktree.
+
+    Shared by the handoff and by both controlled batches, because the
+    rule does not care which of the three produced the evidence: a
+    handoff whose result tree was rewritten under a comparison worktree
+    is exactly as unusable as a verification that wrote into one.
+    """
+    base = invocation["directory"]
+    checked = [(f"{what} wrote {path}", path)
+               for path in destinations(invocation)]
+    checked += [(f"{what}.result reports {label} at {path}", path)
+                for label, path in result_paths(result)]
+    checked += [(f"{what} retained {path}", path) for path in extra]
+    for description, path in checked:
+        tree = inside_any_worktree(path, trees, base=base)
+        if tree is not None:
+            raise HandoffError(
+                f"{description}, inside the working tree {tree}; a "
+                f"measurement's result document and raw artifacts must all "
+                f"stay outside every worktree, or they enter a commit or "
+                f"wedge the drainer's cleanup")
+
+
 def _require_batch(section, *, what: str, handoff: Handoff,
                    worktrees) -> list:
     """One controlled measurement side, and why it is unusable if it is.
@@ -1339,7 +1491,8 @@ def _require_batch(section, *, what: str, handoff: Handoff,
             f"{what}.result measured {result['probe']!r}, not "
             f"{handoff.probe!r}")
     invocation = require_invocation(section.get("invocation"),
-                                   f"{what}.invocation")
+                                   f"{what}.invocation",
+                                   launcher=HARNESS_LAUNCHER)
     require_manifest(section.get("configuration"), f"{what}.configuration")
 
     # A command and the document it produced have to be one measurement.
@@ -1347,7 +1500,8 @@ def _require_batch(section, *, what: str, handoff: Handoff,
     # commands that agreed on another probe, twenty runs and eight
     # capabilities would compare equal while their result documents both
     # claimed the handoff's contract.
-    settings = effective_settings(invocation, f"{what}.invocation")
+    settings = effective_settings(invocation, f"{what}.invocation",
+                                  result=result)
     for label, recorded, reported in (
             ("--probe", settings["probe"], result["probe"]),
             ("--runs", settings["runs"], result["requested_runs"]),
@@ -1397,7 +1551,8 @@ def _require_batch(section, *, what: str, handoff: Handoff,
     # checked only against its own declaration could name an artifact
     # root inside the OTHER comparison state and pass.
 
-    options = parse_command(invocation["command"], f"{what}.invocation.command")
+    _launcher, options = parse_command(invocation["command"],
+                                       f"{what}.invocation.command")
     declared_root = options.get("--artifact-root")
     if declared_root is not None:
         told = _path_forms(declared_root, invocation["directory"])
@@ -1409,23 +1564,8 @@ def _require_batch(section, *, what: str, handoff: Handoff,
                 f"its result document reports {result['artifact_root']}; the "
                 f"command and the document it produced have to describe one "
                 f"measurement, or neither constrains the other")
-    for path in destinations(invocation):
-        tree = inside_any_worktree(path, trees,
-                                   base=invocation["directory"])
-        if tree is not None:
-            raise HandoffError(
-                f"{what} wrote {path} inside the working tree {tree}; the "
-                f"result document and the raw artifacts must both stay "
-                f"outside every worktree, or they enter a commit or wedge "
-                f"the drainer's cleanup")
-    for label, path in result_paths(result):
-        tree = inside_any_worktree(path, trees,
-                                   base=invocation["directory"])
-        if tree is not None:
-            raise HandoffError(
-                f"{what}.result reports {label} at {path}, inside the "
-                f"working tree {tree}; where a batch says it WROTE is bound "
-                f"by the same rule as where it was told to")
+    _check_paths(what=what, invocation=invocation, result=result,
+                 trees=trees)
     return controlled_problems(result, what=f"{what}.result")
 
 
@@ -1472,7 +1612,12 @@ def evaluate(document, *, worktrees=()) -> Outcome:
     if schema != DIAGNOSIS_SCHEMA:
         raise HandoffError(
             f"diagnosis is {schema!r}, expected {DIAGNOSIS_SCHEMA!r}")
-    handoff = require_handoff(document.get("handoff"))
+    # The comparison worktrees are collected BEFORE the handoff is
+    # admitted, so its own evidence is held to the same containment rule
+    # the batches are — including once those worktrees have been removed
+    # and no longer appear in `worktree_paths()`.
+    trees = list(worktrees) + declared_worktrees(document)
+    handoff = require_handoff(document.get("handoff"), worktrees=trees)
     route = document.get("route")
     if route not in ROUTES:
         raise HandoffError(
@@ -1507,7 +1652,6 @@ def evaluate(document, *, worktrees=()) -> Outcome:
             "diagnosis carries no controlled pre-fix baseline; the #1436 "
             "census result triggers diagnosis but is not itself the "
             "controlled base-versus-branch comparison")
-    trees = list(worktrees) + declared_worktrees(document)
     baseline_invalid = _require_batch(baseline_section, what="baseline",
                                       handoff=handoff, worktrees=trees)
     baseline = baseline_section["result"]
@@ -1611,7 +1755,8 @@ def evaluate(document, *, worktrees=()) -> Outcome:
         f"the verification batch did not run under the baseline's "
         f"conditions, so the two are not comparable: {difference}"
         for difference in invocation_differences(
-            baseline_section["invocation"], verification_section["invocation"])
+            baseline_section["invocation"], verification_section["invocation"],
+            results=(baseline, verification))
     ] + [
         f"the two comparison worktrees do not hold the same configuration "
         f"state: {difference}"
@@ -1830,7 +1975,8 @@ def main(argv=None) -> int:
 
     try:
         if args.handoff:
-            handoff = require_handoff(_load(args.handoff, "handoff"))
+            handoff = require_handoff(_load(args.handoff, "handoff"),
+                                      worktrees=worktree_paths())
             if args.json:
                 print(json.dumps({"accepted": True, "probe": handoff.probe,
                                   "targets": list(handoff.targets),
