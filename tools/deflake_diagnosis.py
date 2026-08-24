@@ -79,8 +79,7 @@ those as MISSING. Demanding "every expected check in every run" would
 therefore be unsatisfiable for any probe with an X above zero, so the
 rule is scoped:
 
-* every TARGET check identifier is really measured — PASS — in at least
-  `RUN_COUNT - X` runs;
+* every TARGET check identifier has ZERO MISSING across all ten runs;
 * every PASSING run emits every expected check, MISSING zero;
 * an accepted failing or timed-out run may omit only checks after its
   own abort point — and because `probe_protocol` enforces declared
@@ -88,14 +87,15 @@ rule is scoped:
   declared order", which is checked rather than assumed; and
 * no expected identifier disappears from the batch as a whole.
 
-For X=0 the first rule is "PASS in all ten runs", which is the absolute
-"zero MISSING across all ten" stated the other way round, so the default
-case is unchanged. It has to be stated in terms of X rather than
-absolutely because the diagnosis inputs are EVERY non-PASS identifier,
-which for an aborting probe includes the checks that went MISSING as
-collateral of an earlier FAIL — and forbidding those to go MISSING again
-would make X>0 unsatisfiable by construction, which is the defect the
-scoping exists to remove. See `missing_problems`.
+The suffix allowance is for the checks that are NOT targets: an accepted
+failing run may abort, but it may not abort BEFORE a target, because a
+run that never reached the target did not demonstrate the target was
+fixed. Since the targets are every non-PASS identifier and an aborting
+probe's are a suffix of the descriptor, that means a verification's
+accepted failing runs must not abort before the end — restrictive for an
+X above zero, but satisfiable (a run that FAILs its last check, or
+reports a failed check and keeps going, emits everything) and exactly
+what the contract says. See `missing_problems`.
 
 Same environment means the same MEASUREMENT, not the same characters
 --------------------------------------------------------------------
@@ -835,6 +835,13 @@ def require_invocation(document, what: str, *, launcher=None,
                 f"{what} records no `{field}`; it is the value "
                 f"`probe_flake.measure` ran under, which no command line "
                 f"names — this checkout's is {expected!r}")
+        if value != expected:
+            raise HandoffError(
+                f"{what} records `{field}` as {value!r} where "
+                f"`probe_flake.measure` applies {expected!r}; NEITHER CLI "
+                f"exposes this setting, so the default is the only value a "
+                f"real measurement can have used, and a record naming "
+                f"another one describes a run that did not happen")
     retries = document.get("retries")
     if retries != 0:
         raise HandoffError(
@@ -1234,28 +1241,24 @@ def failure_count(document) -> int:
                                      probe_flake.RUN_TIMEOUT))
 
 
-def missing_problems(document, *, targets, acceptable_failures,
-                     what: str) -> list:
+def missing_problems(document, *, targets, what: str) -> list:
     """Every violation of the scoped MISSING rule in one batch.
 
-    Four rules, and the first is where the two reviews of #1437 have to
-    be read together rather than one at a time.
+    **A target check has zero MISSING across all ten runs.** That is the
+    approved correction, applied as written. The suffix allowance below
+    is for the checks that are NOT targets: an accepted failing run may
+    abort, and everything after its abort point is MISSING, but it may
+    not abort before a target — because a run that never reached the
+    target did not demonstrate the target was fixed.
 
-    "Every target has zero MISSING across all ten runs" and "an accepted
-    failing run may omit checks after its abort point" cannot BOTH be
-    literal, because the diagnosis inputs are every non-PASS identifier
-    — which, for a probe that aborts, includes the checks that went
-    MISSING as collateral of an earlier FAIL. Demanding those never go
-    MISSING again would make X>0 unsatisfiable by construction, which is
-    the exact defect the scoping was introduced to remove.
-
-    So the target rule is stated as the guarantee the absolute version
-    was reaching for, in the terms X already supplies: **a target must be
-    really measured — PASS — in at least `RUN_COUNT - X` runs.** For X=0
-    that is all ten runs, so the default case is byte-for-byte the
-    absolute rule; for X>0 it degrades exactly as far as X already
-    permits and not one run further. A target that "improved" by no
-    longer being emitted fails it, which is the thing worth stopping.
+    The consequence is worth naming rather than discovering. The targets
+    are every non-PASS identifier of the handoff's measurement, and for
+    a probe that ABORTS those form a suffix of the descriptor — so a
+    verification's accepted failing runs must not abort before the end.
+    That is restrictive for an X above zero; it is not unsatisfiable (a
+    run that FAILs its last check, or that reports a failed check and
+    keeps going, emits everything), and it is what the contract says.
+    Relaxing it needs an approved spec change, not a reading.
 
     The other three: no MISSING at all in a run that PASSED; MISSING in a
     failing run must be a contiguous suffix of the declared order, which
@@ -1265,20 +1268,25 @@ def missing_problems(document, *, targets, acceptable_failures,
     """
     ids = descriptor_ids(document)
     order = {cid: position for position, cid in enumerate(ids)}
-    counts = {cid: 0 for cid in ids}
     problems = []
     emitted = set()
     for run in document["runs"]:
         index = run.get("index")
         results = run["checks"]
-        for cid, result in results.items():
-            if result == probe_protocol.PASS:
-                counts[cid] += 1
         emitted |= {cid for cid, result in results.items()
                     if result != probe_protocol.MISSING}
         missing = sorted((cid for cid, result in results.items()
                           if result == probe_protocol.MISSING),
                          key=order.__getitem__)
+        for cid in missing:
+            if cid in targets:
+                problems.append(
+                    f"{what} run {index} reports the target check {cid!r} as "
+                    f"MISSING; a target has zero MISSING across all "
+                    f"{len(document['runs'])} runs, because a run that never "
+                    f"reached it did not demonstrate it was fixed — and a "
+                    f"target that stops being emitted has not been fixed, it "
+                    f"has stopped being measured")
         if not missing:
             continue
         if run["outcome"] == probe_flake.RUN_PASS:
@@ -1295,15 +1303,6 @@ def missing_problems(document, *, targets, acceptable_failures,
                 f"run loses everything after its abort point and nothing "
                 f"before it, so this is a malformed result rather than an "
                 f"abort")
-    required = RUN_COUNT - acceptable_failures
-    for cid in ids:
-        if cid in targets and counts[cid] < required:
-            problems.append(
-                f"{what} measured the target check {cid!r} as PASS in "
-                f"{counts[cid]} of {len(document['runs'])} runs where an X "
-                f"of {acceptable_failures} requires at least {required}; a "
-                f"target that stops being emitted has not been fixed, it "
-                f"has stopped being measured")
     vanished = [cid for cid in ids if cid not in emitted]
     if vanished:
         problems.append(
@@ -2101,7 +2100,6 @@ def evaluate(document, *, worktrees=(), primary=None) -> Outcome:
     # goes to #1439 rather than to a pull request.
     problems = verification_invalid + comparability + missing_problems(
         verification, targets=set(handoff.targets),
-        acceptable_failures=handoff.acceptable_failures,
         what="the verification batch")
     state = probe_census.tolerance_state(
         handoff.acceptable_failures, verification["requested_runs"],

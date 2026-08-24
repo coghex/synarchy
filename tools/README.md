@@ -1715,27 +1715,30 @@ already requires static identifiers and puts every runtime value in an event's
 protocol result — a rejected handoff — and never a diagnosis outcome to be
 scored.
 
-**The scoped MISSING rule.** Probes abort, so "every expected check in every
-run" is unsatisfiable for any probe with an X above zero. Instead: every TARGET
-identifier is really measured — PASS — in at least `RUN_COUNT - X` runs; every
-PASSING run emits everything; an accepted failing or timed-out run may lose
-only a contiguous suffix of the declared order, which is checked rather than
-assumed; and no identifier disappears from the batch as a whole.
+**The scoped MISSING rule.** Every TARGET identifier has ZERO MISSING across
+all ten runs; every PASSING run emits everything; an accepted failing or
+timed-out run may lose only a contiguous suffix of the declared order, which is
+checked rather than assumed; and no identifier disappears from the batch as a
+whole.
 
-For X=0 the first rule is "PASS in all ten runs", which is "zero MISSING
-across all ten" stated the other way round, so the default case is unchanged.
-It has to be expressed in terms of X rather than absolutely because the
-diagnosis inputs are EVERY non-PASS identifier, which for an aborting probe
-includes the checks that went MISSING as collateral of an earlier FAIL —
-forbidding those to go MISSING again would make X>0 unsatisfiable by
-construction, which is the defect the scoping exists to remove.
+The suffix allowance is for the checks that are NOT targets: an accepted
+failing run may abort, but not BEFORE a target, because a run that never
+reached the target did not demonstrate it was fixed. Since the targets are
+every non-PASS identifier and an aborting probe's form a suffix of the
+descriptor, that means a verification's accepted failing runs must not abort
+before the end — restrictive for an X above zero, satisfiable (a run that FAILs
+its last check, or reports a failed check and keeps going, emits everything),
+and exactly what the approved contract says.
 
 **Same environment means the same measurement, not the same characters.** The
 two batches necessarily differ in worktree and destination, and ports are
 leased dynamically, so they are compared on behavior-affecting settings with
 effective defaults filled in — including the TIMEOUT and STARTING PORT
 `probe_flake.measure` applies from module constants that no command line
-exposes, which is why each invocation records them. The comparison runs the
+exposes. Each invocation records them, and each is PINNED to the harness's own
+value — neither CLI can set them, so the default is the only value a real
+measurement can have used, and altering all three records together would agree
+perfectly and still be fiction. The comparison runs the
 whole chain, handoff → baseline → verification: comparing only the last pair
 would let both controlled batches agree on some arbitrary value while the
 handoff sat at the defaults, and the first link crosses launchers, which is

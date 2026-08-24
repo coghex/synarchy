@@ -570,17 +570,25 @@ def test_x_must_be_a_validated_integer() -> None:
 
 
 def test_x_is_the_census_policys_own_arithmetic() -> None:
-    """At or below X passes, above it does not — X=1 accepts 1, rejects 2."""
+    """At or below X passes, above it does not — X=1 accepts 1, rejects 2.
+
+    The accepted failing run is NON-aborting (`abort=False`): a target
+    has zero MISSING across all ten runs, so a run that aborted before
+    one would be refused for that instead, and this case is about the
+    arithmetic.
+    """
     handoff = handoff_document(acceptable=1)
     accepted = diagnosis_document(handoff=handoff)
-    accepted["verification"]["result"] = verification_result(runs=failing_runs(1))
+    accepted["verification"]["result"] = verification_result(
+        runs=failing_runs(1, abort=False))
     outcome = evaluate(accepted)
     expect(outcome.route == dd.ROUTE_REPAIR,
            f"one failure against X=1 is a repair, got {outcome.route}")
     expect(outcome.verification_failures == 1, "the count is reported")
 
     over = diagnosis_document(handoff=handoff_document(acceptable=1))
-    over["verification"]["result"] = verification_result(runs=failing_runs(2))
+    over["verification"]["result"] = verification_result(
+        runs=failing_runs(2, abort=False))
     expect_refused(lambda: evaluate(over), "partial-improvement",
                    "two failures against X=1")
 
@@ -1523,80 +1531,81 @@ def test_a_repair_may_not_change_the_measurement_apparatus() -> None:
            "and not the probes it runs")
 
 
-def test_the_defaults_no_command_line_names_are_recorded_and_compared() -> None:
-    """Two identical argv strings can still be two measurements."""
-    for field in ("timeout_seconds", "start_port"):
+def test_the_defaults_no_command_line_names_are_pinned() -> None:
+    """Neither CLI exposes them, so the default is the only value there is.
+
+    A record naming another one describes a run that did not happen —
+    which is what makes this stronger than comparing the three records to
+    each other: setting all three to the same arbitrary value would agree
+    perfectly and still be fiction.
+    """
+    for field, wrong in (("timeout_seconds", probe_flake.DEFAULT_TIMEOUT * 3),
+                         ("start_port", probe_flake.PORT_MIN + 200)):
         for section in ("baseline", "verification"):
-            document = diagnosis_document()
-            del document[section]["invocation"][field]
-            expect_rejected(lambda d=document: evaluate(d),
+            absent = diagnosis_document()
+            del absent[section]["invocation"][field]
+            expect_rejected(lambda d=absent: evaluate(d),
                             f"records no `{field}`",
                             f"a {section} that recorded no {field}")
-        document = handoff_document()
-        del document["invocation"][field]
-        expect_rejected(lambda d=document: dd.require_handoff(d),
+
+        # All three altered together, which no comparison between them
+        # could catch.
+        document = diagnosis_document()
+        document["handoff"]["invocation"][field] = wrong
+        for section in ("baseline", "verification"):
+            document[section]["invocation"][field] = wrong
+        expect_rejected(lambda d=document: evaluate(d),
+                        "the only value a real measurement can have used",
+                        f"every record altered to another {field}")
+
+        handoff = handoff_document()
+        del handoff["invocation"][field]
+        expect_rejected(lambda d=handoff: dd.require_handoff(d),
                         f"records no `{field}`",
                         f"a handoff that recorded no {field}")
 
-    # The comparison itself: a longer timeout on the repair side is
-    # exactly the shape a harness edit would produce.
-    document = diagnosis_document(route=dd.ROUTE_PARTIAL_IMPROVEMENT)
-    document["verification"]["invocation"]["timeout_seconds"] = (
-        probe_flake.DEFAULT_TIMEOUT * 2)
-    document["verification"]["result"] = verification_result(
-        runs=failing_runs(1))
-    document["handoff"]["acceptable_failures"] = 1
-    outcome = evaluate(document)
-    expect(outcome.route == dd.ROUTE_PARTIAL_IMPROVEMENT,
-           f"a verification under another timeout is not comparable; got "
-           f"{outcome.route}")
 
-    repair = diagnosis_document()
-    repair["verification"]["invocation"]["start_port"] = (
-        probe_flake.PORT_MIN + 100)
-    expect_refused(lambda: evaluate(repair), "start_port",
-                   "a repair verified from another starting port")
+def test_the_conditions_a_measurement_ran_under_include_the_defaults() -> None:
+    """`effective_settings` carries them, even though pinning hides it.
+
+    `require_invocation` pins `timeout_seconds` and `start_port` to the
+    harness's own values, so two well-formed records can never differ
+    here and no end-to-end case can reach this comparison. It is asserted
+    directly instead: the settings are what a measurement RAN UNDER, and
+    a future `--timeout` flag would make the comparison load-bearing
+    without anyone having to remember to add it.
+    """
+    settings = dd.effective_settings(invocation(), "invocation",
+                                     result=result_document())
+    expect(settings["timeout_seconds"] == probe_flake.DEFAULT_TIMEOUT,
+           f"the timeout is a condition: {settings}")
+    expect(settings["start_port"] == probe_flake.PORT_MIN,
+           f"and so is the starting port: {settings}")
+
+    altered = invocation(timeout=probe_flake.DEFAULT_TIMEOUT * 2,
+                         start_port=probe_flake.PORT_MIN + 1)
+    differences = dd.invocation_differences(
+        invocation(), altered,
+        results=(result_document(), result_document()))
+    expect(any("timeout_seconds" in d for d in differences)
+           and any("start_port" in d for d in differences),
+           f"and both are compared when they differ: {differences}")
 
 
 def test_the_baseline_replays_the_handoffs_own_conditions() -> None:
     """The chain is handoff -> baseline -> verification, not a pair.
 
     Comparing only the last pair let BOTH controlled batches agree on
-    some arbitrary timeout and starting port while the handoff sat at the
-    defaults — and an agreement between two batches is not the
-    measurement the handoff was taken under.
+    some arbitrary condition while the handoff sat at the defaults — and
+    an agreement between two batches is not the measurement the handoff
+    was taken under.
+
+    Driven with the RUN COUNT and CAPABILITY COUNT, which are the
+    conditions a command line can actually carry. `timeout_seconds` and
+    `start_port` are pinned to the harness's own values by
+    `require_invocation` before any comparison, so they cannot differ
+    between two well-formed records at all.
     """
-    for field, other in (("timeout_seconds", probe_flake.DEFAULT_TIMEOUT * 3),
-                         ("start_port", probe_flake.PORT_MIN + 200),
-                         ("retries", 0)):
-        if field == "retries":
-            continue
-        document = diagnosis_document()
-        for section in ("baseline", "verification"):
-            document[section]["invocation"][field] = other
-        expect_refused(lambda d=document: evaluate(d),
-                       "did not replay the conditions the handoff",
-                       f"two batches agreeing on another {field}")
-
-    # The refusal names BOTH sides, so a reader can tell which value came
-    # from where rather than seeing one label twice.
-    document = diagnosis_document()
-    for section in ("baseline", "verification"):
-        document[section]["invocation"]["start_port"] = (
-            probe_flake.PORT_MIN + 200)
-    try:
-        evaluate(document)
-    except dd.RouteRefused as error:
-        message = str(error)
-        expect(f"handoff {probe_flake.PORT_MIN!r}" in message
-               and f"baseline {probe_flake.PORT_MIN + 200!r}" in message,
-               f"the refusal names each side's own value: {message}")
-    else:
-        FAILURES.append("a baseline that did not replay was accepted")
-
-    # The run count and capability count are compared ACROSS launchers:
-    # /deflake supplies them from its own constants, the harness reads
-    # them from a command line, and this is where the two agree.
     document = diagnosis_document()
     for section in ("baseline", "verification"):
         tree = CLEAN_WT if section == "baseline" else REPAIR_WT
@@ -1612,9 +1621,25 @@ def test_the_baseline_replays_the_handoffs_own_conditions() -> None:
             result_document(runs=failing_runs(4), rts_caps=8)
             if section == "baseline"
             else verification_result(rts_caps=8))
+    expect(dd.invocation_differences(document["baseline"]["invocation"],
+                                     document["verification"]["invocation"],
+                                     results=(document["baseline"]["result"],
+                                              document["verification"]["result"]))
+           == [], "the two controlled batches agree with each other")
     expect_refused(lambda: evaluate(document),
                    "did not replay the conditions the handoff",
                    "two batches at a capability count /deflake never used")
+
+    # The refusal names BOTH sides, so a reader can tell which value came
+    # from where rather than seeing one label twice.
+    try:
+        evaluate(document)
+    except dd.RouteRefused as error:
+        message = str(error)
+        expect("handoff 4" in message and "baseline 8" in message,
+               f"the refusal names each side's own value: {message}")
+    else:
+        FAILURES.append("a baseline that did not replay was accepted")
 
 
 def test_a_changed_path_is_repository_relative_and_traversal_free() -> None:
@@ -1874,30 +1899,29 @@ def test_a_run_that_simply_omits_a_declared_identifier_is_malformed() -> None:
 # ==========================================================================
 # MISSING
 # ==========================================================================
-def test_a_target_must_really_be_measured_in_ten_runs_minus_x() -> None:
-    """The scoped target rule, isolated.
+def test_a_target_has_zero_missing_however_many_runs_may_fail() -> None:
+    """The approved rule, isolated, and independent of X.
 
-    Asserted against `missing_problems` directly. Inside `evaluate` the
-    failure COUNT refuses this batch too — a check can only go MISSING in
-    a run that did not pass — so driving it end to end would prove the
-    count rule and say nothing about this one.
+    Asserted against `missing_problems` directly, because inside
+    `evaluate` the failure COUNT also refuses a batch with three aborted
+    runs — driving it end to end would prove the count rule and say
+    nothing about this one.
     """
-    document = verification_result(runs=failing_runs(3, cid="beta"))
-    for acceptable, expected in ((2, True), (3, False)):
-        problems = dd.missing_problems(
-            document, targets={"gamma"}, acceptable_failures=acceptable,
-            what="the verification batch")
-        offending = [p for p in problems if "stopped being measured" in p]
-        expect(bool(offending) is expected,
-               f"gamma passes 7 of 10 runs, so an X of {acceptable} "
-               f"requires {dd.RUN_COUNT - acceptable}: expected "
-               f"{'a' if expected else 'no'} complaint, got {problems}")
+    document = result_document(commit=REPAIR_COMMIT,
+                               runs=failing_runs(3, cid="beta"))
+    problems = dd.missing_problems(document, targets={"gamma"},
+                                   what="the verification batch")
+    expect(any("zero MISSING" in problem for problem in problems),
+           f"gamma is MISSING in the aborted runs, so it is refused: "
+           f"{problems}")
 
-    spotless = verification_result()
-    expect(dd.missing_problems(spotless, targets={"gamma"},
-                               acceptable_failures=0,
-                               what="x") == [],
-           "and an X of zero is satisfied by ten real passes")
+    expect(dd.missing_problems(document, targets={"beta"},
+                               what="the verification batch") == [],
+           "beta is emitted in every run, so it is not")
+
+    spotless = result_document(commit=REPAIR_COMMIT)
+    expect(dd.missing_problems(spotless, targets={"gamma"}, what="x") == [],
+           "and a batch that aborted nowhere satisfies it outright")
 
 
 def test_a_target_that_stops_being_emitted_is_refused_end_to_end() -> None:
@@ -1919,17 +1943,42 @@ def test_a_passing_run_may_not_omit_a_check() -> None:
                    "a passing run that omitted a check")
 
 
-def test_an_accepted_failing_run_may_lose_the_suffix_after_its_abort() -> None:
-    """The scoped rule: X>0 stays satisfiable, which strict MISSING is not."""
+def test_an_accepted_failing_run_may_abort_after_the_targets() -> None:
+    """The suffix allowance is for the checks that are NOT targets.
+
+    A target has zero MISSING across all ten runs, so an accepted failing
+    run may abort — but only AFTER every target. Here the handoff fails
+    at `alpha` without aborting, so `alpha` alone is the target, and the
+    verification's one accepted failing run aborts at `beta`, losing only
+    non-targets.
+    """
     handoff = handoff_document(acceptable=1, result=result_document(
-        runs=failing_runs(3, cid="alpha")))
+        runs=failing_runs(3, cid="alpha", abort=False)))
+    expect(list(handoff["targets"]) == ["alpha"],
+           f"a non-aborting failure implicates only itself; got "
+           f"{handoff['targets']}")
     document = diagnosis_document(handoff=handoff)
     document["baseline"]["result"] = result_document(
-        runs=failing_runs(4, cid="alpha"))
-    document["verification"]["result"] = verification_result(runs=failing_runs(1, cid="alpha"))
+        runs=failing_runs(4, cid="alpha", abort=False))
+    document["verification"]["result"] = verification_result(
+        runs=failing_runs(1, cid="beta"))
     outcome = evaluate(document)
     expect(outcome.route == dd.ROUTE_REPAIR,
-           f"one aborted run within X is accepted; got {outcome.route}")
+           f"an abort after every target is accepted; got {outcome.route}")
+
+    # A run that aborted BEFORE the target is refused, however few such
+    # runs the batch has: a run that never reached the target did not
+    # demonstrate the target was fixed.
+    losing = diagnosis_document(handoff=handoff)
+    losing["baseline"]["result"] = result_document(
+        runs=failing_runs(4, cid="alpha", abort=False))
+    runs = [{"__timeout__": True, "alpha": MISSING, "beta": MISSING,
+             "gamma": MISSING}]
+    runs += [{cid: PASS for cid, _l in CHECKS}] * (dd.RUN_COUNT - 1)
+    losing["verification"]["result"] = verification_result(runs=runs)
+    expect_refused(lambda: evaluate(losing),
+                   "a target has zero MISSING across all",
+                   "an accepted failing run that lost a target")
 
 
 def test_a_non_contiguous_gap_is_malformed_rather_than_an_abort() -> None:
@@ -2164,7 +2213,7 @@ def test_an_artifact_layout_inside_a_worktree_is_refused() -> None:
                         ("the clean worktree", f"{CLEAN_WT}/artifacts")):
         document = diagnosis_document(handoff=handoff_document(acceptable=1))
         document["verification"]["result"] = verification_result(
-            runs=failing_runs(1), artifact_root=root)
+            runs=failing_runs(1, abort=False), artifact_root=root)
         document["verification"]["invocation"] = invocation(
             cmd=command(result=f"{OUTSIDE}/verify.json", artifacts=root,
                         worktree=REPAIR_WT),
@@ -2215,7 +2264,8 @@ def test_a_default_artifact_root_inside_a_worktree_is_still_refused() -> None:
     """
     document = diagnosis_document(handoff=handoff_document(acceptable=1))
     document["verification"]["result"] = verification_result(
-        runs=failing_runs(1), artifact_root=f"{REPAIR_WT}/artifacts")
+        runs=failing_runs(1, abort=False),
+        artifact_root=f"{REPAIR_WT}/artifacts")
     document["verification"]["invocation"] = invocation(
         cmd=["python3", f"{REPAIR_WT}/tools/probe_flake.py",
              "--probe", PROBE, "--runs", str(dd.RUN_COUNT),
@@ -2228,7 +2278,8 @@ def test_a_default_artifact_root_inside_a_worktree_is_still_refused() -> None:
 
     outside = diagnosis_document(handoff=handoff_document(acceptable=1))
     outside["verification"]["result"] = verification_result(
-        runs=failing_runs(1), artifact_root=f"{OUTSIDE}/defaulted")
+        runs=failing_runs(1, abort=False),
+        artifact_root=f"{OUTSIDE}/defaulted")
     outside["verification"]["invocation"] = invocation(
         cmd=["python3", f"{REPAIR_WT}/tools/probe_flake.py",
              "--probe", PROBE, "--runs", str(dd.RUN_COUNT),
