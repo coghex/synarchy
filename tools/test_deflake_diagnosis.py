@@ -46,6 +46,11 @@ import probe_protocol  # type: ignore
 import run_probes  # type: ignore
 
 TOOL = str(Path(__file__).resolve().parent / "deflake_diagnosis.py")
+
+# `deflake.build_handoff` and this module's own controlled records spell
+# one setting differently; the entry gate adapts at the boundary and the
+# fixtures have to know which side they are on.
+PRODUCER_FIELD = {"timeout_seconds": "timeout"}
 FAILURES: list[str] = []
 
 # A REGISTERED, manual-only, `probe-result/v1` probe key. A real key
@@ -260,58 +265,126 @@ def invocation(*, cmd=None, directory: str = CLEAN_WT,
     }
 
 
-def deflake_invocation(*, cmd=None, directory: str = PRIMARY_WT,
-                       retries: int = 0, ports=None) -> dict:
-    """The #1436 handoff's own invocation: `python3 tools/deflake.py`.
+def deflake_argv(*, worktree: str = PRIMARY_WT,
+                 result: str = f"{OUTSIDE}/handoff.json") -> list:
+    """`/deflake`'s own argv: one flag and one optional destination.
 
-    `/deflake` does NOT shell out to the harness — it calls
-    `probe_flake.measure` in process — and its CLI has no `--probe`, no
-    `--runs` and no RTS override at all. A fixture claiming a
-    `probe_flake.py` argv for the handoff would be asserting against a
-    command that never ran.
+    Deliberately no `--probe`, no `--runs` and no RTS override — that CLI
+    exposes none of them, so a fixture naming one would be asserting
+    against a command that cannot exist.
+    """
+    return ["python3", f"{worktree}/tools/deflake.py", "--json",
+            "--result", result]
+
+
+def deflake_invocation(*, cmd=None, directory: str = PRIMARY_WT,
+                       retries: int = 0, ports=None, timeout=None,
+                       start_port=None, runs: int = dd.RUN_COUNT) -> dict:
+    """#1659's OWN invocation record, in the PRODUCER's spelling.
+
+    `argv`/`cwd`/`timeout`, not `command`/`directory`/`timeout_seconds`:
+    `deflake.build_handoff` writes these names (`tools/deflake.py:446-453`)
+    and the entry gate reads what the producer writes. `ports` defaults to
+    the ordered base ports `result_document` gives a full batch, because
+    the envelope requires it to equal the result's own run ports.
     """
     return {
-        "command": cmd if cmd is not None else [
-            "python3", f"{PRIMARY_WT}/tools/deflake.py", "--json",
-            "--result", f"{OUTSIDE}/handoff.json"],
-        "directory": directory,
+        "argv": deflake_argv() if cmd is None else cmd,
+        "cwd": directory,
         "retries": retries,
-        "ports": [9101, 9102] if ports is None else ports,
-        "timeout_seconds": probe_flake.DEFAULT_TIMEOUT,
-        "start_port": probe_flake.PORT_MIN,
+        "ports": [9100 + index for index in range(1, runs + 1)]
+                 if ports is None else ports,
+        "timeout": deflake.TIMEOUT if timeout is None else timeout,
+        "start_port": (deflake.START_PORT if start_port is None
+                       else start_port),
     }
 
 
+def config_entries(entries=()) -> list:
+    """The producer's `configuration`: a bare sorted list of entries."""
+    return [{"path": path, "sha256": digest} for path, digest in entries]
+
+
 def manifest(entries=()) -> dict:
+    """This module's OWN manifest document, which also names its root.
+
+    The controlled batches record one of these; the handoff records
+    `config_entries`' bare list, because that is what
+    `deflake.configuration_manifest` returns.
+    """
     return {"schema": dd.MANIFEST_SCHEMA, "root": "/tmp/whatever",
-            "entries": [{"path": path, "sha256": digest}
-                        for path, digest in entries]}
+            "entries": list(config_entries(entries))}
 
 
 def handoff_document(*, probe: str = PROBE, acceptable: int = 0,
                      targets=None, result=None, inv=None,
-                     config=None) -> dict:
-    """A handoff whose targets DERIVE from its own measurement.
+                     config=None, artifacts=None) -> dict:
+    """A handoff built by the PRODUCER, not hand-assembled to match us.
 
-    Deriving rather than declaring is the point: the entry gate requires
-    the target list to equal the measurement's ordered non-PASS
-    identifiers exactly, so a fixture that hard-coded one would be
-    asserting against itself. A case that wants a wrong target passes
-    `targets=` explicitly.
+    `deflake.build_handoff` is the function #1659 ships and the only
+    thing that writes a real `deflake-handoff/v1`. Calling it here is
+    what makes this suite able to fail when the entry gate and the
+    producer disagree — a hand-written envelope agrees with whatever the
+    validator happens to require, which is exactly how a validator that
+    could not consume a single real handoff kept a green suite.
+
+    Consequently `targets`, `invocation.ports` and `artifacts` all DERIVE
+    from the embedded measurement. A case that wants one of them wrong
+    overrides it afterwards, so the fixture breaks one relationship and
+    not three.
     """
     result = result if result is not None else result_document(
         probe=probe, runs=failing_runs(3))
-    return {
-        "schema": dd.HANDOFF_SCHEMA,
-        "probe": probe,
-        "acceptable_failures": acceptable,
-        "targets": (list(targets) if targets is not None
-                    else dd.non_pass_ids(result)),
-        "result": result,
-        "invocation": deflake_invocation() if inv is None else inv,
-        "configuration": manifest() if config is None else config,
-        "artifacts": [],
+    document = deflake.build_handoff(
+        result=result,
+        acceptable_failures=acceptable,
+        argv=deflake_argv(),
+        cwd=PRIMARY_WT,
+        configuration=[] if config is None else config,
+        artifacts=list(result.get("retained_artifacts") or []))
+    if targets is not None:
+        document["targets"] = list(targets)
+    if inv is not None:
+        document["invocation"] = inv
+    if artifacts is not None:
+        document["artifacts"] = list(artifacts)
+    return document
+
+
+def resource_hold(*, probe: str = PROBE, held: bool = True,
+                  exclusive=None, shared=None,
+                  covers: bool = True, detail=None) -> dict:
+    """The batch's cross-process hold on the probe's DECLARED interests.
+
+    Taken from `run_probes` rather than spelled out, because they are the
+    probe's own and a fixture that listed them would drift from the
+    registry it is supposed to be reproducing.
+    """
+    record = {
+        "held": held,
+        "exclusive": (sorted(run_probes.exclusive_resources(probe))
+                      if exclusive is None else list(exclusive)),
+        "shared": (sorted(run_probes.shared_resources(probe))
+                   if shared is None else list(shared)),
+        "covers_configuration_install": covers,
     }
+    if detail is not None:
+        record["detail"] = detail
+    return record
+
+
+def batch_section(**overrides) -> dict:
+    """One controlled batch, in the shape this module defines itself."""
+    section = {
+        "worktree": CLEAN_WT,
+        "source_clean": True,
+        "result": result_document(runs=failing_runs(4)),
+        "invocation": invocation(),
+        "configuration": manifest(),
+        "resource_hold": resource_hold(),
+    }
+    section.update(overrides)
+    return section
 
 
 def diagnosis_document(*, route: str = dd.ROUTE_REPAIR, handoff=None,
@@ -329,18 +402,19 @@ def diagnosis_document(*, route: str = dd.ROUTE_REPAIR, handoff=None,
                          "loaded before the fixture was placed"],
         },
     }
-    if baseline is not None:
+    # `False` OMITS the section, which `None` cannot express: the
+    # no-target route has to be able to carry no batch at all.
+    if baseline is False:
+        pass
+    elif baseline is not None:
         document["baseline"] = baseline
     else:
-        document["baseline"] = {
-            "worktree": CLEAN_WT,
-            "source_clean": True,
-            "result": result_document(runs=failing_runs(4)),
-            "invocation": invocation(),
-            "configuration": manifest(),
-        }
-    document["baseline"].setdefault("result", result_document())
-    if verification is not None:
+        document["baseline"] = batch_section()
+    if "baseline" in document:
+        document["baseline"].setdefault("result", result_document())
+    if verification is False:
+        pass
+    elif verification is not None:
         document["verification"] = verification
     elif route in (dd.ROUTE_REPAIR, dd.ROUTE_PARTIAL_IMPROVEMENT):
         document["verification"] = {
@@ -353,6 +427,7 @@ def diagnosis_document(*, route: str = dd.ROUTE_REPAIR, handoff=None,
                             worktree=REPAIR_WT),
                 directory=REPAIR_WT, ports=[9201, 9202]),
             "configuration": manifest(),
+            "resource_hold": resource_hold(),
         }
     if route == dd.ROUTE_REPAIR:
         document["attestations"] = attestations if attestations is not None else {
@@ -489,11 +564,79 @@ def test_the_targets_are_every_non_pass_identifier_in_order() -> None:
         "a repeated target")
 
 
-def test_a_handoff_with_no_targets_is_refused() -> None:
+def test_an_emptied_target_list_still_has_to_match_the_measurement() -> None:
+    """Emptying the list under a FAILING measurement is still a lie.
+
+    An empty `targets` is only legitimate when the measurement itself
+    observed nothing non-PASS; here it contradicts two observed failures,
+    and the equality rule says so.
+    """
     document = handoff_document(targets=())
     expect_rejected(lambda: dd.require_handoff(document),
-                    "names no target check identifiers",
-                    "a handoff naming no target")
+                    "All of them are diagnosis inputs",
+                    "an emptied target list over a failing measurement")
+
+    document = handoff_document()
+    del document["targets"]
+    expect_rejected(lambda: dd.require_handoff(document),
+                    "absence has to be asserted",
+                    "a handoff with no `targets` key at all")
+
+
+def test_an_all_pass_handoff_is_the_no_target_outcome() -> None:
+    """`/deflake` writes one, so the gate may not call it malformed.
+
+    `deflake.handoff_targets` returns `[]` for an all-PASS measurement
+    and `tools/test_deflake.py` pins that case, so this is a legitimate
+    input with nothing to diagnose. The approved correction routes it to
+    #1439 instead of rejecting it or inventing a target.
+    """
+    passing = handoff_document(result=result_document())
+    expect(passing["targets"] == [],
+           f"the producer derives no target from an all-PASS measurement; "
+           f"got {passing['targets']}")
+    accepted = dd.require_handoff(copy.deepcopy(passing))
+    expect(accepted.targets == (),
+           "and the entry gate admits it rather than refusing it")
+
+    document = diagnosis_document(route=dd.ROUTE_NO_TARGET, handoff=passing,
+                                  baseline=False, verification=False)
+    outcome = evaluate(document)
+    expect(outcome.route == dd.ROUTE_NO_TARGET,
+           f"an all-PASS handoff is the no-target outcome; got {outcome.route}")
+    expect(outcome.owner_issue == 1439,
+           f"owned by #1439; got {outcome.owner_issue}")
+    expect(not outcome.opens_pull_request,
+           "and it opens no pull request")
+    expect(outcome.targets == [], "with no targets to report")
+
+    # Any other route over the same handoff is mislabelled.
+    for route in (dd.ROUTE_REPAIR, dd.ROUTE_CANNOT_REPRODUCE,
+                  dd.ROUTE_PRODUCTION_DEFECT):
+        mislabelled = diagnosis_document(route=route, handoff=passing,
+                                         baseline=False, verification=False)
+        expect_refused(lambda d=mislabelled: evaluate(d),
+                       "no target to diagnose",
+                       f"an all-PASS handoff declared as {route!r}")
+
+    # And the no-target route over a handoff that DOES name targets.
+    inverted = diagnosis_document(route=dd.ROUTE_NO_TARGET)
+    expect_refused(lambda: evaluate(inverted),
+                   "what an all-PASS measurement produces",
+                   "the no-target route over a handoff naming targets")
+
+
+def test_the_no_target_route_runs_no_controlled_batch() -> None:
+    """It stops before creating repair work, so a batch is work it forbids."""
+    passing = handoff_document(result=result_document())
+    for section in ("baseline", "verification"):
+        document = diagnosis_document(route=dd.ROUTE_NO_TARGET,
+                                      handoff=passing, baseline=False,
+                                      verification=False)
+        document[section] = batch_section()
+        expect_refused(lambda d=document: evaluate(d),
+                       f"runs no {section} batch",
+                       f"a no-target diagnosis carrying a {section}")
 
 
 def test_an_expected_check_list_that_contradicts_the_descriptor_is_refused() -> None:
@@ -709,21 +852,24 @@ def test_the_handoff_comes_from_deflake_and_the_batches_from_the_harness() -> No
     accepted = dd.require_handoff(handoff_document())
     expect(accepted.probe == PROBE, "a real /deflake record is admitted")
 
-    swapped = handoff_document(inv=invocation())
+    # Each record keeps its OWN shape and borrows only the other's argv,
+    # so what fails is the launcher rule rather than a missing key.
+    swapped = handoff_document()
+    swapped["invocation"]["argv"] = command(worktree=PRIMARY_WT)
     expect_rejected(lambda: dd.require_handoff(swapped),
                     "come from deflake.py",
                     "a handoff claiming a probe_flake.py argv")
 
     document = diagnosis_document()
-    document["baseline"]["invocation"] = deflake_invocation(
-        cmd=["python3", f"{CLEAN_WT}/tools/deflake.py", "--json"],
-        directory=CLEAN_WT)
+    document["baseline"]["invocation"]["command"] = [
+        "python3", f"{CLEAN_WT}/tools/deflake.py", "--json"]
     expect_rejected(lambda: evaluate(document),
                     "come from probe_flake.py",
                     "a controlled batch claiming a /deflake argv")
 
-    counterfeit = handoff_document(inv=deflake_invocation(cmd=[
-        "python3", "/tmp/counterfeit/deflake.py", "--json"]))
+    counterfeit = handoff_document()
+    counterfeit["invocation"]["argv"] = [
+        "python3", "/tmp/counterfeit/deflake.py", "--json"]
     expect_rejected(lambda: dd.require_handoff(counterfeit),
                     "the checkout it declares keeps that tool at",
                     "a handoff claiming a counterfeit /deflake")
@@ -962,9 +1108,16 @@ def test_a_baseline_at_or_below_x_cannot_support_a_repair() -> None:
     "the controlled baseline must exceed X" — a spotless baseline would
     be refused by the target rule first and would prove nothing about
     the arithmetic.
+
+    `abort=False` is load-bearing: an aborting run leaves the later
+    target MISSING, which since the 2026-08-24 correction qualifies for
+    repair on its own and would refuse this for the OTHER reason. A
+    non-aborting run FAILs its target and emits the rest, so the
+    aggregate rule is genuinely the only one left.
     """
     document = diagnosis_document(handoff=handoff_document(acceptable=1))
-    document["baseline"]["result"] = result_document(runs=failing_runs(1))
+    document["baseline"]["result"] = result_document(
+        runs=failing_runs(1, abort=False))
     expect_refused(lambda: evaluate(document), "cannot-reproduce",
                    "a baseline within tolerance")
 
@@ -1763,10 +1916,14 @@ def test_the_defaults_no_command_line_names_are_pinned() -> None:
                             f"records no `{field}`",
                             f"a {section} that recorded no {field}")
 
+        # The producer spells this one `timeout`; the controlled records,
+        # which this module defines, spell it `timeout_seconds`.
+        producer_field = PRODUCER_FIELD.get(field, field)
+
         # All three altered together, which no comparison between them
         # could catch.
         document = diagnosis_document()
-        document["handoff"]["invocation"][field] = wrong
+        document["handoff"]["invocation"][producer_field] = wrong
         for section in ("baseline", "verification"):
             document[section]["invocation"][field] = wrong
         expect_rejected(lambda d=document: evaluate(d),
@@ -1774,10 +1931,10 @@ def test_the_defaults_no_command_line_names_are_pinned() -> None:
                         f"every record altered to another {field}")
 
         handoff = handoff_document()
-        del handoff["invocation"][field]
+        del handoff["invocation"][producer_field]
         expect_rejected(lambda d=handoff: dd.require_handoff(d),
                         f"records no `{field}`",
-                        f"a handoff that recorded no {field}")
+                        f"a handoff that recorded no {producer_field}")
 
 
 def test_the_conditions_a_measurement_ran_under_include_the_defaults() -> None:
@@ -2445,26 +2602,35 @@ def test_the_handoffs_own_evidence_may_not_live_in_a_worktree() -> None:
     worktrees the diagnosis DECLARES are collected before the handoff is
     admitted — which is what still holds after they are removed.
     """
-    document = diagnosis_document()
-    document["handoff"]["result"] = result_document(
-        runs=failing_runs(3), artifact_root=f"{CLEAN_WT}/artifacts")
+    # Built THROUGH the producer from that result, so `artifacts` and
+    # `invocation.ports` follow it: swapping the result alone would break
+    # the envelope's equality rules instead of the containment rule.
+    document = diagnosis_document(handoff=handoff_document(
+        result=result_document(runs=failing_runs(3),
+                               artifact_root=f"{CLEAN_WT}/artifacts")))
     expect_rejected(lambda: evaluate(document, worktrees=()),
                     "inside the working tree",
                     "a handoff whose artifact tree is in a comparison worktree")
 
     moved = diagnosis_document()
-    moved["handoff"]["invocation"] = deflake_invocation(cmd=[
+    moved["handoff"]["invocation"]["argv"] = [
         "python3", f"{PRIMARY_WT}/tools/deflake.py", "--json",
-        "--result", f"{REPAIR_WT}/handoff.json"])
+        "--result", f"{REPAIR_WT}/handoff.json"]
     expect_rejected(lambda: evaluate(moved, worktrees=()),
                     "inside the working tree",
                     "a handoff result document written into a worktree")
 
+    # A handoff can no longer name an EXTRA kept path at all: the approved
+    # envelope rule makes `artifacts` equal `result.retained_artifacts`
+    # exactly, and that list is `_require_retention`'s derived view of the
+    # runs' own directories. So the stricter rule answers first, and a
+    # path inside a worktree can only arrive through the artifact ROOT —
+    # which is the first case above.
     extra = diagnosis_document()
     extra["handoff"]["artifacts"] = [f"{REPAIR_WT}/kept"]
     expect_rejected(lambda: evaluate(extra, worktrees=()),
-                    "inside the working tree",
-                    "a handoff naming a retained artifact in a worktree")
+                    "cannot disagree",
+                    "a handoff naming a kept path its result never retained")
 
 
 def test_a_default_artifact_root_inside_a_worktree_is_still_refused() -> None:
@@ -2574,10 +2740,365 @@ def test_every_route_hands_on_every_batchs_retained_artifacts() -> None:
            "and the emitted document carries the same list")
 
 
+DIGEST_A = "a" * 64
+DIGEST_B = "b" * 64
+LOCAL_YAML = "config/video.local.yaml"
+
+
+def test_the_entry_gate_reads_the_producers_own_spelling() -> None:
+    """`argv`/`cwd`/`timeout`, because that is what #1659 writes.
+
+    This is the regression that mattered: requiring `command`/`directory`
+    — the names the CONTROLLED batches use, which this module defines
+    itself — rejected every real handoff for "no `directory`", so the
+    workflow could not consume its own prerequisite. The messages are
+    pinned because a producer document diagnosed against the internal
+    spelling is exactly the confusion that hid the bug.
+    """
+    for field, fragment in (("cwd", "records the directory it ran in"),
+                            ("argv", "records the command it ran")):
+        document = handoff_document()
+        del document["invocation"][field]
+        expect_rejected(lambda d=document: dd.require_handoff(d),
+                        fragment,
+                        f"a handoff invocation with no `{field}`")
+
+    # And the internal spelling is NOT a second accepted form: a document
+    # naming `command`/`directory` is not one the producer wrote.
+    document = handoff_document()
+    document["invocation"] = invocation()
+    expect_rejected(lambda: dd.require_handoff(document),
+                    "records the directory it ran in",
+                    "a handoff invocation in the controlled batches' shape")
+
+    # The producer's own output goes straight through.
+    built = deflake.build_handoff(
+        result=result_document(runs=failing_runs(3)),
+        acceptable_failures=0, argv=deflake_argv(), cwd=PRIMARY_WT,
+        configuration=[],
+        artifacts=list(result_document(
+            runs=failing_runs(3))["retained_artifacts"]))
+    accepted = dd.require_handoff(built, primary=PRIMARY_WT)
+    expect(accepted.probe == PROBE,
+           "a handoff `deflake.build_handoff` actually produced is admitted")
+    expect(accepted.invocation["directory"] == PRIMARY_WT,
+           "and its `cwd` reaches the internal record as `directory`")
+    expect(accepted.invocation["timeout_seconds"] == deflake.TIMEOUT,
+           "and its `timeout` as `timeout_seconds`")
+
+
+def test_the_envelope_redundancies_are_enforced() -> None:
+    """Values the producer DERIVED from the result cannot disagree with it.
+
+    `deflake.build_handoff` reads `artifacts` from
+    `measurement.retained_artifacts()` and `ports` from the result's own
+    runs, so each is one list recorded twice. `probe_census.validate_result`
+    checks neither.
+    """
+    document = handoff_document()
+    document["artifacts"] = list(document["artifacts"]) + ["/tmp/extra"]
+    expect_rejected(lambda d=document: dd.require_handoff(d),
+                    "cannot disagree",
+                    "a handoff naming an artifact its result never retained")
+
+    document = handoff_document()
+    document["artifacts"] = []
+    expect_rejected(lambda d=document: dd.require_handoff(d),
+                    "cannot disagree",
+                    "a handoff dropping the artifacts its result retained")
+
+    document = handoff_document()
+    document["invocation"]["ports"] = [
+        port + 1 for port in document["invocation"]["ports"]]
+    expect_rejected(lambda d=document: dd.require_handoff(d),
+                    "describes runs that did not happen",
+                    "a handoff whose ports are not its runs' own")
+
+    document = handoff_document()
+    document["invocation"]["ports"] = list(
+        reversed(document["invocation"]["ports"]))
+    expect_rejected(lambda d=document: dd.require_handoff(d),
+                    "in that order",
+                    "a handoff whose ports are its runs' in another order")
+
+
+def test_the_handoff_manifest_defines_both_batches_configuration() -> None:
+    """Not the incidental `config/` state when the diagnosis started.
+
+    `Engine.Core.Init.migrateLegacyConfig` can materialize an absent local
+    file during a first boot, so "what is there now" and "what the
+    measurement read" are different questions. The handoff's manifest is
+    the authority, and a batch that diverges from it did not reproduce
+    the condition.
+    """
+    # Present in the handoff, absent from the batch.
+    document = diagnosis_document(
+        handoff=handoff_document(config=config_entries([(LOCAL_YAML,
+                                                         DIGEST_A)])))
+    expect_refused(lambda d=document: evaluate(d), "is absent from",
+                   "a baseline missing a file the handoff recorded")
+
+    # Absent from the handoff, present in the batch — absence matches as
+    # rigorously as contents, or the extra file is an unrecorded condition.
+    document = diagnosis_document()
+    document["baseline"]["configuration"] = manifest([(LOCAL_YAML, DIGEST_A)])
+    expect_refused(lambda d=document: evaluate(d), "is absent from",
+                   "a baseline carrying a file the handoff never recorded")
+
+    # Present in both, different bytes.
+    document = diagnosis_document(
+        handoff=handoff_document(config=config_entries([(LOCAL_YAML,
+                                                         DIGEST_A)])))
+    document["baseline"]["configuration"] = manifest([(LOCAL_YAML, DIGEST_B)])
+    document["verification"]["configuration"] = manifest([(LOCAL_YAML,
+                                                           DIGEST_B)])
+    expect_refused(lambda d=document: evaluate(d), "differs",
+                   "a baseline whose recorded bytes do not match")
+
+    # An empty manifest on both sides is the expected default, not a gap.
+    agreeing = diagnosis_document()
+    expect(evaluate(agreeing).route == dd.ROUTE_REPAIR,
+           "two confirmed-empty manifests are the same condition")
+
+
+def test_unrecoverable_configuration_bytes_are_the_cannot_reproduce_route()\
+        -> None:
+    """The condition could not be established, which is a RESULT.
+
+    The approved correction routes it to #1439 with its evidence rather
+    than rejecting it: the invocation ran and found it could not recreate
+    the bytes, which is exactly what that route reports.
+    """
+    document = diagnosis_document(
+        route=dd.ROUTE_CANNOT_REPRODUCE,
+        handoff=handoff_document(config=config_entries([(LOCAL_YAML,
+                                                         DIGEST_A)])))
+    document.pop("verification", None)
+    outcome = evaluate(document)
+    expect(outcome.route == dd.ROUTE_CANNOT_REPRODUCE,
+           f"an unrecoverable configuration is that outcome; got "
+           f"{outcome.route}")
+    expect(outcome.owner_issue == 1439,
+           f"owned by #1439; got {outcome.owner_issue}")
+    expect("configuration state" in outcome.detail,
+           f"and it says why: {outcome.detail}")
+
+    # Declared as a repair, the same evidence names the route it should be.
+    repair = diagnosis_document(
+        handoff=handoff_document(config=config_entries([(LOCAL_YAML,
+                                                         DIGEST_A)])))
+    expect_refused(lambda: evaluate(repair), "cannot-reproduce",
+                   "a repair over a configuration that could not be recreated")
+
+
+def test_a_batch_must_hold_the_probes_declared_resource_interests() -> None:
+    """`peak_concurrency: 1` cannot prove cross-process isolation.
+
+    It counts other flake-harness invocations only; an independent
+    `run_probes.py` sweep holding the same repository-relative resource
+    never appears in it. `probe_resource_lock` is what coordinates across
+    processes, so the batch has to have held the probe's own declared
+    interests.
+    """
+    for section in ("baseline", "verification"):
+        absent = diagnosis_document()
+        del absent[section]["resource_hold"]
+        expect_rejected(lambda d=absent: evaluate(d),
+                        "records no `resource_hold`",
+                        f"a {section} that recorded no resource hold")
+
+        # The interests are the PROBE's, not the batch's to choose.
+        narrowed = diagnosis_document()
+        narrowed[section]["resource_hold"] = resource_hold(shared=[])
+        expect_rejected(lambda d=narrowed: evaluate(d),
+                        "the probe's own, not this batch's to choose",
+                        f"a {section} declaring fewer interests than {PROBE}")
+
+        invented = diagnosis_document()
+        invented[section]["resource_hold"] = resource_hold(
+            exclusive=["a-resource-nobody-declared"])
+        expect_rejected(lambda d=invented: evaluate(d),
+                        "the probe's own, not this batch's to choose",
+                        f"a {section} inventing an exclusive interest")
+
+        # A hold taken AFTER the configuration was installed leaves the
+        # manifest describing a state the runs never saw.
+        late = diagnosis_document()
+        late[section]["resource_hold"] = resource_hold(covers=False)
+        expect_rejected(lambda d=late: evaluate(d),
+                        "covered the configuration install",
+                        f"a {section} hold that started after the install")
+
+
+def test_a_busy_resource_hold_is_a_measurement_that_did_not_happen() -> None:
+    """Another process owned it, so the batch was never controlled.
+
+    Reported as a batch problem and routed to #1439, not raised: the
+    documents are well-formed and the invocation really ran — it simply
+    did not run under the conditions the comparison assumes.
+    """
+    document = diagnosis_document(route=dd.ROUTE_CANNOT_REPRODUCE)
+    document["baseline"]["resource_hold"] = resource_hold(
+        held=False, detail="held by an independent run_probes.py sweep")
+    document.pop("verification", None)
+    outcome = evaluate(document)
+    expect(outcome.route == dd.ROUTE_CANNOT_REPRODUCE,
+           f"a contended baseline is cannot-reproduce; got {outcome.route}")
+    expect("run_probes.py sweep" in outcome.detail,
+           f"and the reason is carried, not summarised away: {outcome.detail}")
+
+    repair = diagnosis_document()
+    repair["baseline"]["resource_hold"] = resource_hold(
+        held=False, detail="held by an independent run_probes.py sweep")
+    expect_refused(lambda: evaluate(repair), "not a usable measurement",
+                   "a repair built on a contended baseline")
+
+
+def test_the_emitted_outcome_carries_every_declared_field() -> None:
+    """#1437 owns the PRODUCER record; #1438/#1439 own consumption.
+
+    The approved spec addition enumerates what the one versioned
+    diagnosis-result artifact must carry. Asserted field by field against
+    that list rather than against a snapshot, so a field that silently
+    stopped being populated fails here instead of downstream.
+    """
+    document = diagnosis_document()
+    emitted = evaluate(document).to_document()
+
+    expect(emitted["schema"] == dd.OUTCOME_SCHEMA,
+           f"a stable schema: {emitted['schema']}")
+    expect(emitted["route"] == dd.ROUTE_REPAIR,
+           f"a stable route identifier: {emitted['route']}")
+
+    handoff = document["handoff"]
+    identity = emitted["handoff"]
+    expect(identity is not None, "the input handoff is identified")
+    # The census row cannot answer these, which is why they are here.
+    for field, expected in (
+            ("probe", handoff["probe"]),
+            ("commit_sha", handoff["result"]["commit_sha"]),
+            ("acceptable_failures", handoff["acceptable_failures"]),
+            ("targets", handoff["targets"]),
+            ("timestamp_utc", handoff["result"]["timestamp_utc"]),
+            ("artifact_root", handoff["result"]["artifact_root"]),
+            ("invocation_dir", handoff["result"]["invocation_dir"]),
+            ("command", handoff["invocation"]["argv"]),
+            ("directory", handoff["invocation"]["cwd"]),
+            ("retained_artifacts", handoff["artifacts"])):
+        expect(identity[field] == expected,
+               f"the handoff identity carries {field}: "
+               f"{identity[field]!r} vs {expected!r}")
+
+    expect(emitted["baseline_sha"] == handoff["result"]["commit_sha"],
+           f"the baseline SHA: {emitted['baseline_sha']}")
+    expect(emitted["acceptable_failures"] == handoff["acceptable_failures"],
+           f"X: {emitted['acceptable_failures']}")
+    expect(emitted["configuration"]["entries"]
+           == handoff["configuration"],
+           f"the configuration manifest: {emitted['configuration']}")
+
+    for label in ("baseline", "verification"):
+        reference = emitted[label]
+        expect(reference is not None, f"the {label} is referenced")
+        result = document[label]["result"]
+        for field in ("commit_sha", "artifact_root", "invocation_dir",
+                      "retained_artifacts"):
+            expect(reference[field] == result[field],
+                   f"the {label} reference carries {field}: "
+                   f"{reference[field]!r} vs {result[field]!r}")
+        expect(reference["worktree"] == document[label]["worktree"],
+               f"and the {label} worktree it ran in")
+
+    expect(emitted["diagnosis"] == document["diagnosis"],
+           "the diagnosis evidence rides along")
+    expect(emitted["attestations"] == document["attestations"],
+           "so do the preservation attestations")
+    expect(emitted["repair"] == document["repair"],
+           "and the repair's commit evidence")
+
+    # A route with no batches leaves the optional halves explicitly null
+    # rather than dropping the keys, so a consumer reads one shape.
+    passing = handoff_document(result=result_document())
+    quiet = evaluate(diagnosis_document(
+        route=dd.ROUTE_NO_TARGET, handoff=passing, baseline=False,
+        verification=False)).to_document()
+    for field in ("baseline", "verification", "repair", "attestations"):
+        expect(field in quiet and quiet[field] is None,
+               f"the no-target outcome states {field} as null; got "
+               f"{quiet.get(field)!r}")
+    expect(quiet["handoff"] is not None and quiet["baseline_sha"],
+           "while still identifying the handoff it consumed")
+
+
+def test_a_missing_target_qualifies_for_repair_below_x() -> None:
+    """A batch can be clean by the numbers and still have lost a check.
+
+    `probe_protocol.parse_event_stream` represents a declared check that
+    was never emitted as MISSING, while `probe_flake.reconcile` classifies
+    a zero-exit run carrying no FAIL event as PASS. So the run outcome is
+    PASS, the aggregate failure count is 0, and the target check was not
+    observed at all — which the approved correction says qualifies for
+    repair independently of the aggregate arithmetic.
+    """
+    # Every run PASSes as a RUN while `gamma` is never emitted.
+    ids = [cid for cid, _label in CHECKS]
+    lost = [{cid: (MISSING if cid == "gamma" else PASS) for cid in ids}
+            for _ in range(dd.RUN_COUNT)]
+    baseline = result_document(runs=lost)
+    expect(dd.failure_count(baseline) == 0,
+           f"the batch is clean by the numbers; got "
+           f"{dd.failure_count(baseline)} failures")
+    expect(dd.missing_targets(baseline, ("gamma",)) == ["gamma"],
+           "and yet the target was never emitted")
+
+    handoff = handoff_document(result=baseline, acceptable=1)
+    expect(handoff["targets"] == ["gamma"],
+           f"the producer derives the lost check as the target; got "
+           f"{handoff['targets']}")
+
+    document = diagnosis_document(handoff=handoff)
+    document["baseline"]["result"] = baseline
+    outcome = evaluate(document)
+    expect(outcome.route == dd.ROUTE_REPAIR,
+           f"a reproducibly MISSING target supports a repair below X; got "
+           f"{outcome.route}")
+
+    # And the same evidence refuses `cannot-reproduce`, which would be
+    # claiming the batch showed nothing.
+    denied = diagnosis_document(route=dd.ROUTE_CANNOT_REPRODUCE,
+                                handoff=handoff)
+    denied["baseline"]["result"] = baseline
+    denied.pop("verification", None)
+    expect_refused(lambda: evaluate(denied), "as MISSING",
+                   "cannot-reproduce over a reproducibly MISSING target")
+
+
+def test_verification_is_not_relaxed_by_the_missing_qualification() -> None:
+    """Repair may START from a MISSING target; it may not END with one.
+
+    The correction widened the pre-fix qualification only. Verification
+    still has to come in at or below X AND satisfy the MISSING rules, so
+    a repair whose verification still loses the target is not a repair.
+    """
+    ids = [cid for cid, _label in CHECKS]
+    lost = [{cid: (MISSING if cid == "gamma" else PASS) for cid in ids}
+            for _ in range(dd.RUN_COUNT)]
+    handoff = handoff_document(result=result_document(runs=lost), acceptable=1)
+    document = diagnosis_document(handoff=handoff)
+    document["baseline"]["result"] = result_document(runs=lost)
+    document["verification"]["result"] = verification_result(
+        runs=lost, artifact_root=VERIFY_ARTIFACTS)
+    expect_refused(lambda: evaluate(document), "MISSING",
+                   "a verification that still loses the target")
+
+
 def test_a_cannot_reproduce_outcome_names_the_baseline_it_ran() -> None:
     document = diagnosis_document(route=dd.ROUTE_CANNOT_REPRODUCE,
                                   handoff=handoff_document(acceptable=1))
-    document["baseline"]["result"] = result_document(runs=failing_runs(1))
+    # Non-aborting, so no target is left MISSING: a MISSING target is a
+    # reproduced defect and would refuse `cannot-reproduce` outright.
+    document["baseline"]["result"] = result_document(
+        runs=failing_runs(1, abort=False))
     document.pop("verification", None)
     outcome = evaluate(document)
     expect(outcome.route == dd.ROUTE_CANNOT_REPRODUCE, "the route holds")

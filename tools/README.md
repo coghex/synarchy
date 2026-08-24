@@ -1732,11 +1732,55 @@ code — and a repair may not touch the measurement APPARATUS at all
 constants and lengthening one would buy a calmer verification while both command
 records still compared equal.
 
+**The producer's spelling is the contract.** `deflake.build_handoff` writes
+`invocation.argv`, `cwd` and `timeout`, and a bare `configuration` LIST; the
+controlled batches this module defines itself use `command`, `directory`,
+`timeout_seconds` and a manifest object. The entry gate reads what #1659
+actually writes and adapts it at the boundary, so one vocabulary reaches
+everything downstream while the producer stays the authority. The self-test
+builds its handoffs by CALLING `deflake.build_handoff` rather than assembling
+an envelope by hand — a hand-written fixture agrees with whatever the
+validator happens to require, which is exactly how a gate that could not
+consume a single real handoff kept a green suite.
+
+**The envelope's redundant relationships are enforced.** `probe` equals
+`result.probe`, `targets` equals the descriptor-ordered union of FAIL/MISSING
+identifiers, `artifacts` equals `result.retained_artifacts`, and
+`invocation.ports` equals the ordered run ports. Each is a value the producer
+DERIVED from the embedded result, so a document where the two disagree was not
+the one that measurement produced — and `probe_census.validate_result` checks
+none of them.
+
 **The targets are not a selection from the measurement — they ARE it.** Every
 non-PASS identifier is a diagnosis input, so the handoff's target list must
 equal the measurement's ordered non-PASS identifiers exactly. A subset would
 let a repair be declared verified while another observed failure stayed
-quietly out of scope.
+quietly out of scope. An EMPTY list is legitimate rather than malformed:
+`/deflake` writes one for an all-PASS measurement, and it is the `no-target`
+route to #1439 — nothing to diagnose, no batch run, no PR opened.
+
+**Two independent qualifications for repair.** The controlled baseline exceeds
+X, OR a target check is reproducibly MISSING. The second is not reachable
+through the first: `probe_protocol.parse_event_stream` represents an unemitted
+declared check as MISSING while `probe_flake.reconcile` classifies a zero-exit
+run carrying no FAIL event as PASS, so a batch can sit at 0 failures with a
+target that was never observed at all. Verification is NOT relaxed to match —
+it must still come in at or below X and satisfy the MISSING rules.
+
+**The handoff's manifest defines both batches' configuration**, not whatever
+`config/` held when the diagnosis started: `Engine.Core.Init.migrateLegacyConfig`
+can materialize an absent local file during a first boot, so those are
+different questions. Bytes that cannot be recreated exactly are the
+`cannot-reproduce` outcome for #1439 — a result to hand on with its evidence,
+not a malformed input.
+
+**Each batch holds the probe's declared cross-process interests**, for the
+configuration install as well as the runs. `probe_flake`'s `peak_concurrency`
+counts other flake-harness invocations only, so an independent
+`tools/run_probes.py` sweep holding the same repository-relative resource
+never appears in it; `probe_resource_lock` is what coordinates across
+processes. A hold that was not obtained is a batch that did not run under
+control, routed to #1439 rather than rejected.
 
 **One common SHA.** The clean comparison worktree is created at the handoff's
 baseline commit and the repair worktree from that same commit, so the baseline
@@ -1894,11 +1938,20 @@ the repair commit being proposed.
 
 **Routes.** `repair-pr` is the only one that opens a pull request, and the
 `Diagnosis` session enforces at most one per invocation. `handoff-rejected`
-stops at the gate; `cannot-reproduce`, `no-confident-fix` and
+stops at the gate; `no-target`, `cannot-reproduce`, `no-confident-fix` and
 `partial-improvement` hand off to #1439; `production-defect` hands off to
-#1438 and does not touch the probe. Emitting a handoff means emitting
-`deflake-diagnosis-outcome/v1` naming the route, its owning issue and the
-retained evidence — what those issues then do with it is theirs to define.
+#1438 and does not touch the probe.
+
+Emitting a handoff means emitting `deflake-diagnosis-outcome/v1`, and #1437
+owns that PRODUCER record: the route, its owning issue, the identity of the
+`/deflake` invocation consumed (its command, directory, artifact root,
+invocation directory and timestamp — none of which the census row retains),
+the probe and targets, the baseline SHA and X, the configuration manifest,
+references to the controlled results, the diagnosis evidence, the preservation
+attestations, and the repair commit and verification evidence when the route
+has them. A route with no batches states those halves as `null` rather than
+dropping the keys, so a consumer reads one shape. What #1438 and #1439 then do
+with it is theirs to define.
 
 The gate is `tools/test_deflake_diagnosis.py`, engine-free and document-only.
 It is deliberately NOT wired into `make ci` or GitHub CI — #1437's approved

@@ -300,8 +300,14 @@ Exactly one per invocation, and only the first opens a pull request:
 * `repair-pr` — a confidently diagnosed, successfully verified
   probe-side repair. One PR, one probe, one root cause.
 * `handoff-rejected` — the entry gate refused. No code change, no PR.
-* `cannot-reproduce` — the controlled baseline did not reproduce an
-  over-X result. Handed off to #1439.
+* `no-target` — a schema-valid handoff whose measurement went all-PASS.
+  `/deflake` writes one, so it is a legitimate input with nothing to
+  diagnose rather than a malformed document; it runs no batch at all.
+  Handed off to #1439.
+* `cannot-reproduce` — the controlled baseline reproduced neither an
+  over-X result nor a MISSING target, or its configuration could not be
+  recreated from the handoff's manifest, or another process held the
+  probe's declared resources. Handed off to #1439.
 * `production-defect` — the assertion is right and the product is
   wrong. The probe is not touched; handed off to #1438.
 * `no-confident-fix` — several failures with no one established
@@ -309,10 +315,20 @@ Exactly one per invocation, and only the first opens a pull request:
 * `partial-improvement` — the repaired batch improved but stayed above
   X, or the batch became invalid. Handed off to #1439.
 
-Emitting a handoff here means emitting `deflake-diagnosis-outcome/v1`
-naming the route, the owning issue and the retained evidence. What #1438
-and #1439 then DO with it is theirs to define; this module does not
-invent their contracts, and filing an issue is not its job.
+Emitting a handoff here means emitting `deflake-diagnosis-outcome/v1`:
+the route, the owning issue, the identity of the `/deflake` invocation
+consumed, the probe and targets, the baseline SHA and X, the
+configuration manifest, references to the controlled results, the
+diagnosis evidence, the preservation attestations, and the repair and
+verification evidence when the route has them. #1437 owns that PRODUCER
+record; what #1438 and #1439 DO with it is theirs to define, this module
+does not invent their contracts, and filing an issue is not its job.
+
+The handoff this module CONSUMES is #1659's, in #1659's own spelling:
+`invocation.argv`/`cwd`/`timeout` and a bare `configuration` list.
+`require_producer_invocation` and `require_producer_configuration` adapt
+those at the boundary, so everything downstream reads one vocabulary
+while the producer stays the authority on what it writes.
 """
 from __future__ import annotations
 
@@ -331,6 +347,7 @@ import deflake  # noqa: E402
 import probe_census  # noqa: E402
 import probe_flake  # noqa: E402
 import probe_protocol  # noqa: E402
+import run_probes  # noqa: E402
 
 HANDOFF_SCHEMA = "deflake-handoff/v1"
 DIAGNOSIS_SCHEMA = "deflake-diagnosis/v1"
@@ -542,10 +559,16 @@ ROUTE_CANNOT_REPRODUCE = "cannot-reproduce"
 ROUTE_PRODUCTION_DEFECT = "production-defect"
 ROUTE_NO_CONFIDENT_FIX = "no-confident-fix"
 ROUTE_PARTIAL_IMPROVEMENT = "partial-improvement"
+# A schema-valid handoff whose measurement went all-PASS. `/deflake`
+# writes one (`tools/test_deflake.py` pins that all-PASS case), so it is
+# a legitimate input with nothing to diagnose — NOT a malformed document.
+# The approved correction routes it to #1439 rather than letting the gate
+# call it malformed or letting the workflow invent a target.
+ROUTE_NO_TARGET = "no-target"
 
 ROUTES = (ROUTE_REPAIR, ROUTE_HANDOFF_REJECTED, ROUTE_CANNOT_REPRODUCE,
           ROUTE_PRODUCTION_DEFECT, ROUTE_NO_CONFIDENT_FIX,
-          ROUTE_PARTIAL_IMPROVEMENT)
+          ROUTE_PARTIAL_IMPROVEMENT, ROUTE_NO_TARGET)
 
 # Which issue owns each non-repair route's handoff. `repair-pr` owns its
 # own standalone pull request and `handoff-rejected` hands off to nobody
@@ -558,6 +581,7 @@ ROUTE_OWNER = {
     ROUTE_PRODUCTION_DEFECT: 1438,
     ROUTE_NO_CONFIDENT_FIX: 1439,
     ROUTE_PARTIAL_IMPROVEMENT: 1439,
+    ROUTE_NO_TARGET: 1439,
 }
 
 # The one route that may touch the probe's source. Every other route
@@ -891,6 +915,71 @@ def require_invocation(document, what: str, *, launcher=None,
                            for port in ports)):
             raise HandoffError(f"{what}.ports must be a list of integers")
     return document
+
+
+def require_producer_invocation(document, what: str) -> dict:
+    """`deflake.build_handoff`'s OWN invocation record, as this module reads it.
+
+    #1659 is the producer and its spelling is the contract, not ours:
+    `tools/deflake.py:446-453` writes `argv`, `cwd`, `retries`, `ports`,
+    `timeout` and `start_port`. Requiring `command`/`directory`/
+    `timeout_seconds` here — the names the CONTROLLED batches use, which
+    this module defines itself because nothing else produces them —
+    rejected every real handoff for lacking `directory`, which made the
+    advertised workflow unusable with its own prerequisite.
+
+    Adapting at the boundary rather than teaching every consumer two
+    spellings: the returned record is the internal shape, so
+    `effective_settings`, `invocation_differences`, `destinations` and
+    `_check_paths` keep working on one vocabulary. The producer's
+    document is never mutated.
+    """
+    if not isinstance(document, dict):
+        raise HandoffError(
+            f"{what} must be a JSON object, got {type(document).__name__}")
+    directory = document.get("cwd")
+    if not isinstance(directory, str) or not directory:
+        raise HandoffError(
+            f"{what} has no `cwd`; `deflake.build_handoff` records the "
+            f"directory it ran in under that name")
+    argv = document.get("argv")
+    if not isinstance(argv, list) or not argv:
+        raise HandoffError(
+            f"{what} has no `argv`; `deflake.build_handoff` records the "
+            f"command it ran under that name")
+    adapted = {
+        "command": list(argv),
+        "directory": directory,
+        "retries": document.get("retries"),
+        "ports": document.get("ports"),
+        "timeout_seconds": document.get("timeout"),
+        "start_port": document.get("start_port"),
+    }
+    return require_invocation(adapted, what, launcher=DEFLAKE_LAUNCHER)
+
+
+def require_producer_configuration(entries, what: str, *, root) -> dict:
+    """The producer's `configuration` LIST, as this module's manifest object.
+
+    `deflake.configuration_manifest` returns a bare sorted list of
+    `{path, sha256}` (`tools/deflake.py:380-405`); this module's own
+    `config_manifest` wraps the identical entries in a document that also
+    names the root it scanned. Same entries, same rules — so the list is
+    wrapped and put through `require_manifest` rather than validated a
+    second way, which is how the two would come to disagree about what a
+    manifest entry may be.
+
+    An empty list is the expected default here, not an edge case: none of
+    the four `config/*.local.yaml` paths is tracked.
+    """
+    if not isinstance(entries, list):
+        raise HandoffError(
+            f"{what} must be the list `deflake.configuration_manifest` "
+            f"returns, got {type(entries).__name__}; record an empty list to "
+            f"state that no {CONFIG_GLOB} file exists, rather than omitting "
+            f"it — absence has to be asserted, not inferred")
+    return require_manifest(
+        {"schema": MANIFEST_SCHEMA, "root": root, "entries": entries}, what)
 
 
 def effective_settings(invocation, what: str, *, result=None) -> dict:
@@ -1305,6 +1394,30 @@ def non_pass_ids(document) -> list:
     return [cid for cid in ids if cid in seen]
 
 
+def missing_targets(document, targets) -> list:
+    """Every target check some run of `document` reported MISSING.
+
+    A second, independent qualification for repair, and the reason it
+    exists: `probe_protocol.parse_event_stream` represents every declared
+    check that was never emitted as MISSING, while `probe_flake.reconcile`
+    can classify a zero-exit run carrying no FAIL event as PASS. So a
+    batch can sit at or below X — the aggregate arithmetic seeing nothing
+    wrong — while a target check was never emitted at all. That is a
+    reproduced probe-side defect, not a clean batch, and the approved
+    correction says it qualifies independently of the failure count.
+
+    In the descriptor's own order, once each, like every other identifier
+    list this module returns.
+    """
+    names = set(targets)
+    found = set()
+    for run in document.get("runs") or []:
+        for cid, outcome in (run.get("checks") or {}).items():
+            if cid in names and outcome == probe_protocol.MISSING:
+                found.add(cid)
+    return [cid for cid in targets if cid in found]
+
+
 def failure_count(document) -> int:
     """Runs that failed or timed out — the quantity X is stated against."""
     return sum(1 for run in document["runs"]
@@ -1396,13 +1509,17 @@ class Handoff:
     workflow's whole bound is one invocation, one probe, one root cause.
     """
 
-    def __init__(self, document, *, acceptable_failures: int):
+    def __init__(self, document, *, acceptable_failures: int,
+                 invocation, configuration):
         self.document = document
         self.probe = document["probe"]
         self.acceptable_failures = acceptable_failures
         self.result = document["result"]
-        self.invocation = document["invocation"]
-        self.configuration = document["configuration"]
+        # The producer's records, adapted to this module's vocabulary by
+        # `require_producer_invocation` / `require_producer_configuration`.
+        # `document` keeps #1659's own spelling, untouched.
+        self.invocation = invocation
+        self.configuration = configuration
         self.expected_checks = descriptor_ids(self.result)
         self.expected_descriptor = descriptor_of(self.result)
         self.targets = tuple(document["targets"])
@@ -1505,11 +1622,16 @@ def require_handoff(document, *, worktrees=(), primary=None) -> Handoff:
     if targets is not None and not _is_string_list(targets):
         raise HandoffError(
             f"{what}.targets must be a list of identifiers, got {targets!r}")
-    if not isinstance(targets, list) or not targets:
+    if not isinstance(targets, list):
         raise HandoffError(
-            f"{what} names no target check identifiers; every non-PASS "
-            f"identifier for this probe is a diagnosis input, and this "
-            f"measurement observed {', '.join(observed) or 'none'}")
+            f"{what} has no `targets` list; record an empty list to state "
+            f"that the measurement went all-PASS, rather than omitting it — "
+            f"absence has to be asserted, not inferred")
+    # An EMPTY list is a legitimate handoff, not a malformed one:
+    # `deflake.handoff_targets` returns `[]` for an all-PASS measurement
+    # and `/deflake` writes it. `evaluate` routes it to #1439 as the
+    # no-target outcome; refusing it here would have made the gate call a
+    # document its own prerequisite emits malformed.
     if len(set(targets)) != len(targets):
         raise HandoffError(f"{what}.targets repeats an identifier: {targets}")
     if list(targets) != observed:
@@ -1534,9 +1656,9 @@ def require_handoff(document, *, worktrees=(), primary=None) -> Handoff:
     # only to the directory it claims would accept
     # `/tmp/not-a-synarchy-checkout` as a checkout, which is the one thing
     # a path cannot assert about itself.
-    require_invocation(document.get("invocation"), f"{what}.invocation",
-                       launcher=DEFLAKE_LAUNCHER)
-    directory = document["invocation"]["directory"]
+    invocation = require_producer_invocation(document.get("invocation"),
+                                             f"{what}.invocation")
+    directory = invocation["directory"]
     if primary is not None and not (_path_forms(directory)
                                     & _path_forms(primary)):
         raise HandoffError(
@@ -1544,8 +1666,8 @@ def require_handoff(document, *, worktrees=(), primary=None) -> Handoff:
             f"checkout {primary}; `/deflake` runs there — before this "
             f"workflow's comparison worktrees exist — so a handoff from "
             f"anywhere else names a checkout nothing has established is one")
-    settings = effective_settings(document["invocation"],
-                                  f"{what}.invocation", result=result)
+    settings = effective_settings(invocation, f"{what}.invocation",
+                                  result=result)
     if settings["probe"] != probe:
         raise HandoffError(
             f"{what}.invocation measured {settings['probe']!r} where the "
@@ -1559,22 +1681,46 @@ def require_handoff(document, *, worktrees=(), primary=None) -> Handoff:
             f"{what}.invocation ran at {settings['rts_caps']!r} RTS "
             f"capabilities; the fixed condition is {RTS_CAPABILITIES}")
 
-    require_manifest(document.get("configuration"), f"{what}.configuration")
+    configuration = require_producer_configuration(
+        document.get("configuration"), f"{what}.configuration",
+        root=directory)
 
+    # The envelope's REDUNDANT relationships, which `deflake.build_handoff`
+    # establishes and `probe_census.validate_result` does not check
+    # (approved spec addition, 2026-08-24). Each is a value the producer
+    # derived from the embedded result, so a document where the two
+    # disagree was not the one that measurement produced.
     artifacts = document.get("artifacts")
     if artifacts is not None and (not isinstance(artifacts, list)
                                   or not all(isinstance(path, str)
                                              for path in artifacts)):
         raise HandoffError(f"{what}.artifacts must be a list of paths")
-    _check_paths(what=what, invocation=document["invocation"], result=result,
+    retained = list(result.get("retained_artifacts") or [])
+    if list(artifacts or []) != retained:
+        raise HandoffError(
+            f"{what}.artifacts is {list(artifacts or [])} where its own "
+            f"result document retained {retained}; `deflake.build_handoff` "
+            f"passes `measurement.retained_artifacts()` straight through, so "
+            f"the two are one list recorded twice and cannot disagree")
+    run_ports = [run.get("port") for run in result.get("runs") or []]
+    if list(invocation["ports"] or []) != run_ports:
+        raise HandoffError(
+            f"{what}.invocation.ports is {list(invocation['ports'] or [])} "
+            f"where its own result document's runs used {run_ports}, in that "
+            f"order; the producer reads one from the other, so a record "
+            f"naming different ports describes runs that did not happen")
+    _check_paths(what=what, invocation=invocation, result=result,
                  extra=artifacts or (), trees=worktrees)
     # No "failing runs must have retained evidence" rule here: since
     # `_require_retention`, `retained_artifacts` IS the list of the
     # unsuccessful runs' own directories, so a measurement with failures
     # and no retained evidence is unrepresentable rather than merely
-    # refused. `artifacts` stays a place for a handoff to name anything
-    # further it kept.
-    return Handoff(document, acceptable_failures=acceptable)
+    # refused. And since the envelope rule above, `artifacts` is that
+    # same list recorded twice rather than a place to name anything
+    # further — an extra kept path is now refused by the equality, not
+    # only by the containment rule below it.
+    return Handoff(document, acceptable_failures=acceptable,
+                   invocation=invocation, configuration=configuration)
 
 
 # ==========================================================================
@@ -1587,8 +1733,12 @@ class Outcome:
                  owner_issue=None, opens_pull_request: bool = False,
                  targets=(), baseline_failures=None,
                  verification_failures=None, acceptable_failures=None,
-                 artifacts=(), notes=(), handoff=None):
+                 artifacts=(), notes=(), handoff=None, source=None):
         self.handoff = handoff
+        # The diagnosis document this outcome was derived from, kept so
+        # the emitted artifact can carry its evidence, attestations and
+        # repair record without `evaluate` threading each one separately.
+        self.source = source
         self.route = route
         self.probe = probe
         self.detail = detail
@@ -1601,7 +1751,66 @@ class Outcome:
         self.artifacts = list(artifacts)
         self.notes = list(notes)
 
+    @staticmethod
+    def _batch_reference(section) -> dict | None:
+        """One controlled batch, by the values that IDENTIFY its evidence.
+
+        A reference, not a copy: the result documents stay on disk beside
+        their retained artifacts, and #1438/#1439 need to find them, not
+        to receive them inline.
+        """
+        if not isinstance(section, dict):
+            return None
+        result = section.get("result") or {}
+        return {
+            "worktree": section.get("worktree"),
+            "commit_sha": result.get("commit_sha"),
+            "timestamp_utc": result.get("timestamp_utc"),
+            "artifact_root": result.get("artifact_root"),
+            "invocation_dir": result.get("invocation_dir"),
+            "retained_artifacts": list(result.get("retained_artifacts") or []),
+        }
+
+    def _handoff_identity(self) -> dict | None:
+        """WHICH `/deflake` invocation this diagnosis consumed.
+
+        The census row cannot answer this — `probe_census.ingest_result`
+        drops the ports, the per-run check maps, the artifact root, the
+        invocation directory and the exact command — so the identity is
+        taken from the handoff's own embedded result and invocation.
+        """
+        if self.handoff is None:
+            return None
+        result = self.handoff.result
+        return {
+            "probe": self.handoff.probe,
+            "commit_sha": self.handoff.commit_sha,
+            "acceptable_failures": self.handoff.acceptable_failures,
+            "targets": list(self.handoff.targets),
+            "expected_checks": list(self.handoff.expected_checks),
+            "timestamp_utc": result.get("timestamp_utc"),
+            "artifact_root": result.get("artifact_root"),
+            "invocation_dir": result.get("invocation_dir"),
+            "command": list(self.handoff.invocation["command"]),
+            "directory": self.handoff.invocation["directory"],
+            "retained_artifacts": list(self.handoff.artifacts),
+        }
+
     def to_document(self) -> dict:
+        """The one versioned artifact #1438 and #1439 consume.
+
+        #1437 owns the PRODUCER record; what those issues do with it is
+        theirs to define. Everything the approved spec addition names is
+        here — route, input-handoff identity, probe, targets, baseline
+        SHA, X, configuration manifest, controlled result references,
+        diagnosis evidence, preservation attestations, and the repair
+        commit and verification evidence when the route has them — so a
+        downstream consumer never has to re-read the diagnosis document
+        this was derived from.
+        """
+        source = self.source or {}
+        baseline = self._batch_reference(source.get("baseline"))
+        verification = self._batch_reference(source.get("verification"))
         return {
             "schema": OUTCOME_SCHEMA,
             "route": self.route,
@@ -1615,6 +1824,16 @@ class Outcome:
             "verification_failures": self.verification_failures,
             "retained_artifacts": self.artifacts,
             "notes": self.notes or None,
+            "handoff": self._handoff_identity(),
+            "baseline_sha": (self.handoff.commit_sha
+                             if self.handoff is not None else None),
+            "configuration": (self.handoff.configuration
+                              if self.handoff is not None else None),
+            "baseline": baseline,
+            "verification": verification,
+            "diagnosis": source.get("diagnosis"),
+            "attestations": source.get("attestations"),
+            "repair": source.get("repair"),
         }
 
 
@@ -1831,6 +2050,67 @@ def _check_paths(*, what: str, invocation, result, extra=(), trees) -> None:
                 f"wedge the drainer's cleanup")
 
 
+def resource_hold_problems(section, *, what: str, probe: str) -> list:
+    """Why a controlled batch was not isolated from the rest of the machine.
+
+    `probe_flake.measure` records `peak_concurrency`, which counts other
+    FLAKE-HARNESS invocations and nothing else (`tools/probe_flake.py`
+    keeps its own registry). An independent `tools/run_probes.py` sweep
+    holding the same repository-relative resource would not appear there
+    at all, so `peak_concurrency: 1` cannot prove the isolation this
+    comparison depends on — `probe_resource_lock` is what coordinates
+    across processes, and the approved spec addition requires the batch
+    to have held the probe's DECLARED interests.
+
+    The hold has to span the CONFIGURATION INSTALL as well as the runs:
+    the manifest is reproduced into the worktree before the batch starts,
+    and a concurrent sweep that rewrote `config/*.local.yaml` in between
+    would leave the recorded manifest describing a state the runs never
+    saw.
+
+    A malformed block RAISES — that is a malformed input. A hold that was
+    not obtained is RETURNED as a problem, because "another process held
+    the resource" is a measurement that did not happen under control,
+    which this workflow routes to #1439 rather than rejecting.
+    """
+    record = section.get("resource_hold")
+    if not isinstance(record, dict):
+        raise HandoffError(
+            f"{what} records no `resource_hold`; `peak_concurrency` counts "
+            f"only other flake-harness runs, so a batch that did not hold "
+            f"{probe!r}'s declared cross-process interests has not shown it "
+            f"was isolated from an independent `run_probes.py` sweep")
+    for field, expected in (
+            ("exclusive", sorted(run_probes.exclusive_resources(probe))),
+            ("shared", sorted(run_probes.shared_resources(probe)))):
+        declared = record.get(field)
+        if not isinstance(declared, list) or not all(
+                isinstance(name, str) for name in declared):
+            raise HandoffError(
+                f"{what}.resource_hold.{field} must be a list of resource "
+                f"names, got {declared!r}")
+        if sorted(declared) != expected:
+            raise HandoffError(
+                f"{what}.resource_hold.{field} is {sorted(declared)} where "
+                f"`run_probes` declares {expected} for {probe!r}; the "
+                f"interests are the probe's own, not this batch's to choose")
+    if record.get("covers_configuration_install") is not True:
+        raise HandoffError(
+            f"{what}.resource_hold does not state that it covered the "
+            f"configuration install; the manifest is reproduced into the "
+            f"worktree BEFORE the runs begin, so a hold taken afterwards "
+            f"leaves the recorded configuration describing a state the "
+            f"measurement never ran under")
+    problems = []
+    if record.get("held") is not True:
+        problems.append(
+            f"{what} did not obtain {probe!r}'s declared resource hold "
+            f"({record.get('detail') or 'no reason recorded'}); another "
+            f"process owned the resource, so this batch did not run under "
+            f"the controlled conditions the comparison assumes")
+    return problems
+
+
 def _require_batch(section, *, what: str, handoff: Handoff,
                    worktrees) -> list:
     """One controlled measurement side, and why it is unusable if it is.
@@ -1931,7 +2211,8 @@ def _require_batch(section, *, what: str, handoff: Handoff,
                 f"measurement, or neither constrains the other")
     _check_paths(what=what, invocation=invocation, result=result,
                  trees=trees)
-    return controlled_problems(result, what=f"{what}.result")
+    return (controlled_problems(result, what=f"{what}.result")
+            + resource_hold_problems(section, what=what, probe=handoff.probe))
 
 
 class Diagnosis:
@@ -1996,15 +2277,52 @@ def evaluate(document, *, worktrees=(), primary=None) -> Outcome:
             f"handoff produces, and it is never a conclusion drawn after one "
             f"was admitted")
 
+    # A handoff with no targets ends here, before any batch is read: there
+    # is nothing to reproduce, nothing to repair and no PR to open, so the
+    # invocation hands the measurement to #1439 and stops. Declaring any
+    # OTHER route over such a handoff is the mislabelling this refuses —
+    # `cannot-reproduce` would claim a batch failed to reproduce something
+    # that was never observed.
+    if not handoff.targets:
+        if route != ROUTE_NO_TARGET:
+            raise RouteRefused(
+                f"the handoff's measurement observed no non-PASS check, so "
+                f"there is no target to diagnose and {route!r} is not its "
+                f"outcome; this is the {ROUTE_NO_TARGET!r} outcome for "
+                f"#{ROUTE_OWNER[ROUTE_NO_TARGET]}")
+        for section in ("baseline", "verification"):
+            if document.get(section) is not None:
+                raise RouteRefused(
+                    f"the {ROUTE_NO_TARGET!r} route runs no {section} batch: "
+                    f"it stops before creating repair work, so a {section} "
+                    f"result here describes work the route forbids")
+        return Outcome(
+            ROUTE_NO_TARGET, probe=handoff.probe,
+            owner_issue=ROUTE_OWNER[ROUTE_NO_TARGET],
+            detail=(f"the handoff's {RUN_COUNT}-run measurement observed no "
+                    f"non-PASS check, so it identifies nothing to diagnose"),
+            targets=[], acceptable_failures=handoff.acceptable_failures,
+            artifacts=_accumulate(handoff.artifacts, handoff.result),
+            handoff=handoff, source=document)
+    if route == ROUTE_NO_TARGET:
+        raise RouteRefused(
+            f"diagnosis declares {ROUTE_NO_TARGET!r} while its handoff names "
+            f"the target check(s) {', '.join(handoff.targets)}; that route is "
+            f"what an all-PASS measurement produces")
+
     owner = ROUTE_OWNER[route]
     # Every retained artifact this invocation has, from every batch it
     # ran — not just the handoff's. A #1439 route exists to hand the
     # evidence on, and the batch that went wrong is usually the
     # VERIFICATION, whose logs would otherwise never be named at all.
-    artifacts = list(handoff.artifacts) + list(
-        handoff.result.get("retained_artifacts") or [])
+    # Deduplicated, not concatenated. The envelope requires `artifacts` to
+    # EQUAL `result.retained_artifacts`, so a real handoff names every
+    # retained directory twice and a plain `+` would report each of them
+    # twice in the outcome.
+    artifacts = _accumulate(handoff.artifacts, handoff.result)
     common = {
         "handoff": handoff,
+        "source": document,
         "probe": handoff.probe,
         "targets": handoff.targets,
         "acceptable_failures": handoff.acceptable_failures,
@@ -2025,14 +2343,31 @@ def evaluate(document, *, worktrees=(), primary=None) -> Outcome:
     common["baseline_failures"] = baseline_failures
     common["artifacts"] = _accumulate(common["artifacts"], baseline)
 
+    # The HANDOFF's manifest defines both batches' initial configuration —
+    # not whatever `config/` happened to hold when the diagnosis started.
+    # `Engine.Core.Init.migrateLegacyConfig` can materialize an absent
+    # local file during a first boot, so "the files that are there now"
+    # and "the files the measurement read" are different questions.
+    #
+    # A mismatch means the recorded bytes could not be reproduced, and the
+    # approved correction makes that the #1439 cannot-reproduce OUTCOME
+    # rather than a refusal: the invocation genuinely could not establish
+    # the condition, which is a result to hand on with its evidence, not a
+    # malformed input to reject.
     config_problems = manifest_differences(
         handoff.configuration, baseline_section["configuration"],
         left_name="the handoff", right_name="the clean comparison worktree")
     if config_problems:
+        detail = ("the controlled baseline did not reproduce the handoff's "
+                  "configuration state, so it is not the same condition: "
+                  + "; ".join(config_problems))
+        if route == ROUTE_CANNOT_REPRODUCE:
+            _require_evidence(document, route)
+            return Outcome(route, detail=detail, **common)
         raise RouteRefused(
-            "the controlled baseline did not reproduce the handoff's "
-            "configuration state, so it is not the same condition: "
-            + "; ".join(config_problems))
+            f"{detail}; recorded bytes that cannot be recovered exactly are "
+            f"the {ROUTE_CANNOT_REPRODUCE!r} outcome for "
+            f"#{ROUTE_OWNER[ROUTE_CANNOT_REPRODUCE]}")
 
     # The conditions travel the WHOLE chain: handoff -> baseline ->
     # verification. Comparing only the last pair let both controlled
@@ -2059,6 +2394,8 @@ def evaluate(document, *, worktrees=(), primary=None) -> Outcome:
         baseline["completed_runs"], baseline_failures)
     observed = set(non_pass_ids(baseline))
     hit = [cid for cid in handoff.targets if cid in observed]
+    # The SECOND qualification, independent of the aggregate arithmetic.
+    missing_hit = missing_targets(baseline, handoff.targets)
 
     # An INVALID baseline reproduced nothing: it is not evidence that the
     # probe is fine, so it goes to #1439 with what it did retain rather
@@ -2083,18 +2420,35 @@ def evaluate(document, *, worktrees=(), primary=None) -> Outcome:
                 f"{handoff.acceptable_failures}) with the target check(s) "
                 f"{', '.join(hit)} non-PASS, so {ROUTE_CANNOT_REPRODUCE!r} "
                 f"is not this measurement's outcome")
+        if missing_hit:
+            raise RouteRefused(
+                f"the controlled baseline DID reproduce the target check(s) "
+                f"{', '.join(missing_hit)} as MISSING, which qualifies as a "
+                f"pre-fix defect however the aggregate count fell "
+                f"({baseline_failures}/{RUN_COUNT} against an X of "
+                f"{handoff.acceptable_failures}), so "
+                f"{ROUTE_CANNOT_REPRODUCE!r} is not this measurement's "
+                f"outcome")
         return Outcome(route, detail=(
             f"the controlled baseline observed {baseline_failures}/"
             f"{RUN_COUNT} failures against an X of "
             f"{handoff.acceptable_failures}"), **common)
 
-    if reproduced != probe_census.TOLERANCE_OVER:
+    # EITHER qualification is enough (approved correction, 2026-08-24):
+    # the batch is over tolerance, or a target was reproducibly MISSING.
+    # The second is not reachable through the first — a run whose target
+    # check was never emitted can still be classified PASS, so a 0/X
+    # baseline can carry a reproduced defect the aggregate cannot see.
+    # Verification is NOT relaxed to match: it must still come in at or
+    # below X *and* satisfy the MISSING rules.
+    if reproduced != probe_census.TOLERANCE_OVER and not missing_hit:
         raise RouteRefused(
             f"the controlled baseline observed {baseline_failures}/"
             f"{RUN_COUNT} failures against an X of "
-            f"{handoff.acceptable_failures} ({reproduced}); a repair may "
-            f"only proceed from a baseline that exceeds X, so this is the "
-            f"{ROUTE_CANNOT_REPRODUCE!r} outcome for #1439")
+            f"{handoff.acceptable_failures} ({reproduced}) and reported no "
+            f"target check MISSING; a repair may only proceed from a "
+            f"baseline that exceeds X or reproducibly loses a target, so "
+            f"this is the {ROUTE_CANNOT_REPRODUCE!r} outcome for #1439")
     if not hit:
         raise RouteRefused(
             f"the controlled baseline never observed the target check(s) "
