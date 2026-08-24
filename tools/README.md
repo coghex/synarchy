@@ -1735,17 +1735,24 @@ argparse would read it (`--runs` and `--rts-caps` are `type=int`, so `--runs
 10.0` is refused rather than compared as ten), `--result` required of
 `probe_flake.py` and optional for `/deflake`, order-sensitive argv (interpreter,
 then script, then options — Python rejects an unknown option before the script
-runs), a NAMED Python interpreter rather than one given by path (a document
-cannot show which binary sits at `/tmp/counterfeit/python3`), and a script at
-the path the checkout it says it ran in keeps it — `<worktree>/tools/probe_flake.py`
+runs), a NAMED Python 3 interpreter rather than one given by path (`python3`,
+optionally versioned — not bare `python`, which is whichever the machine means,
+nor `python2`, which cannot parse these programs; and a document cannot show
+which binary sits at `/tmp/counterfeit/python3`), and a script at the path the
+checkout it says it ran in keeps it — `<worktree>/tools/probe_flake.py`
 for a controlled batch, `<directory>/tools/deflake.py` for the handoff, since
-matching only the file name would admit `/tmp/counterfeit/probe_flake.py`. Each command is
+matching only the file name would admit `/tmp/counterfeit/probe_flake.py` —
+and the handoff's directory must be the PRIMARY checkout rather than any path
+calling itself one. Each command is
 then bound to its own result document, so two commands agreeing with each other
 cannot stand in for the contract.
 
-**The artifact layout is the one the harness creates.** `new_invocation_dir`
-puts the invocation directory directly under the artifact root and names it
-after the probe, and every run directory is `invocation_dir /
+**The artifact layout is the one the harness creates.** Every path is absolute
+(`check_artifact_root` resolves its root before a run begins);
+`new_invocation_dir` puts the invocation directory directly under that root and
+GENERATES its name, `{probe}-{%Y%m%dT%H%M%SZ}-{pid}-{uuid8}`, so a name the
+harness could not have produced is a forged layout however coherent the rest of
+the document is; and every run directory is `invocation_dir /
 f"run-{index:03d}"` — three recorded values determine the whole layout, so a
 failed run's directory cannot be swapped for an unrelated path, and the run
 directories are unique by construction. The containment sweep over the paths a

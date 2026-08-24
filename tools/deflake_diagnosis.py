@@ -124,13 +124,19 @@ evidence at all; it is optional for `/deflake`, which retains the
 document beside its artifacts either way. ORDER is part of the grammar
 too: argv[0] is the interpreter, argv[1] the script, and only argv[2:]
 are options, because Python rejects an option it does not know before the
-script runs. And the argv must be a PYTHON INTERPRETER — named, not given
-by path, since a document cannot show which binary sits at
-`/tmp/counterfeit/python3` — running one of those two scripts AT THE PATH
+script runs. And the argv must be a PYTHON 3 INTERPRETER — `python3`, optionally
+versioned; not bare `python`, which is whichever of the two that machine
+means, and not `python2`, which cannot parse these programs at all —
+named rather than given by path, since a document cannot show which
+binary sits at `/tmp/counterfeit/python3` — running one of those two
+scripts AT THE PATH
 the checkout it says it ran in keeps it: `<worktree>/tools/probe_flake.py`
 for a controlled batch, `<directory>/tools/deflake.py` for the handoff.
 Matching only the file name would admit `/tmp/counterfeit/probe_flake.py`,
-a different program spelled the same way,
+a different program spelled the same way, and the handoff's directory
+must be the PRIMARY checkout rather than any path calling itself one —
+`/deflake` runs there, before this workflow's comparison worktrees
+exist,
 because an option the CLI does not have — `--timeout`, say — would
 compare equal across two batches while describing a measurement neither
 could have run, and `/bin/echo .../probe_flake.py --probe role --runs 10`
@@ -182,8 +188,12 @@ the state the probes actually read.
 
 The artifact layout is the one the harness creates
 --------------------------------------------------
-`new_invocation_dir` puts the invocation directory DIRECTLY under the
-artifact root and names it after the probe, and every run directory is
+Every path is ABSOLUTE, because `check_artifact_root` resolves its root
+before a run begins. `new_invocation_dir` puts the invocation directory
+DIRECTLY under that root and GENERATES its name —
+`{probe}-{%Y%m%dT%H%M%SZ}-{pid}-{uuid8}` — so a name the harness could
+not have produced is a forged layout however coherent the rest of the
+document is. Every run directory is
 `invocation_dir / f"run-{index:03d}"` — so three recorded values
 determine the whole layout and nothing in it is free. Checking only "is
 this inside a worktree" left a batch able to swap a failed run's
@@ -317,7 +327,13 @@ COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 # CLI has no `--probe` and no `--runs` at all. So requiring a
 # `probe_flake.py` argv everywhere would have made a truthful #1436
 # handoff impossible to submit while accepting an argv that never ran.
-INTERPRETER_RE = re.compile(r"^python(\d+(\.\d+)*)?$")
+# `python3`, optionally versioned. NOT bare `python` and NOT `python2`:
+# every tool in this lab is a Python 3 program — `from __future__ import
+# annotations`, `X | None` annotations, `dict[str, str]` — so `python2
+# tools/probe_flake.py` is a SyntaxError, not a measurement, and bare
+# `python` is whichever of the two that machine happens to mean, which a
+# document cannot settle.
+INTERPRETER_RE = re.compile(r"^python3(\.\d+){0,2}$")
 
 
 class Launcher:
@@ -577,6 +593,13 @@ def manifest_differences(left, right, *, left_name: str,
 # `Path(script).name` alone would accept `/tmp/counterfeit/probe_flake.py`.
 TOOLS_DIR = "tools"
 
+# `new_invocation_dir`'s generated name: the probe, a UTC stamp, the pid
+# and eight hex characters of a uuid4. Serialized by the harness and by
+# nothing else, so an arbitrary name like `role-not-a-harness-directory`
+# is a forged layout however coherent the rest of the document is.
+INVOCATION_DIR_RE = re.compile(
+    r"^[a-z][a-z_]*-\d{8}T\d{6}Z-\d+-[0-9a-f]{8}$")
+
 
 def parse_command(command, what: str, *, launcher=None, root=None):
     """One recorded argument vector, as `(launcher, {option: value})`.
@@ -795,14 +818,20 @@ def destinations(invocation) -> list:
 
 
 def worktree_paths() -> list:
-    """Every registered worktree, including the primary checkout.
+    """Every registered worktree, the primary checkout FIRST.
 
     Delegated to `probe_flake`, which already computes exactly this for
-    `check_artifact_root`. Answering it a second way is how the artifact
-    root and the result document would come to disagree about what
-    "inside a worktree" means.
+    `check_artifact_root` and puts `run_probes.REPO_ROOT` at the head.
+    Answering it a second way is how the artifact root and the result
+    document would come to disagree about what "inside a worktree" means.
     """
     return probe_flake._worktree_paths()
+
+
+def primary_checkout():
+    """The checkout `/deflake` runs in, or None if it cannot be resolved."""
+    trees = worktree_paths()
+    return trees[0] if trees else None
 
 
 def _path_forms(path, base=None) -> set:
@@ -1174,7 +1203,7 @@ class Handoff:
         return self.result["commit_sha"]
 
 
-def require_handoff(document, *, worktrees=()) -> Handoff:
+def require_handoff(document, *, worktrees=(), primary=None) -> Handoff:
     """`document` as a usable handoff, or the entry gate's refusal.
 
     Every refusal here is `handoff-rejected`: the invocation stops
@@ -1270,10 +1299,23 @@ def require_handoff(document, *, worktrees=()) -> Handoff:
             f"scope, and naming a check that never went non-PASS targets "
             f"something this measurement did not see")
 
-    # `/deflake` runs in the primary checkout, which is the only worktree
-    # the handoff names, so its own recorded directory is the root.
+    # `/deflake` runs in the PRIMARY checkout — it is the step BEFORE this
+    # workflow creates its comparison worktrees, it claims a probe and
+    # writes the census from there, and CLAUDE.md's working-tree
+    # discipline puts that class of tool nowhere else. Binding the record
+    # only to the directory it claims would accept
+    # `/tmp/not-a-synarchy-checkout` as a checkout, which is the one thing
+    # a path cannot assert about itself.
     require_invocation(document.get("invocation"), f"{what}.invocation",
                        launcher=DEFLAKE_LAUNCHER)
+    directory = document["invocation"]["directory"]
+    if primary is not None and not (_path_forms(directory)
+                                    & _path_forms(primary)):
+        raise HandoffError(
+            f"{what}.invocation ran in {directory}, which is not the primary "
+            f"checkout {primary}; `/deflake` runs there — before this "
+            f"workflow's comparison worktrees exist — so a handoff from "
+            f"anywhere else names a checkout nothing has established is one")
     settings = effective_settings(document["invocation"],
                                   f"{what}.invocation", result=result)
     if settings["probe"] != probe:
@@ -1363,6 +1405,13 @@ def require_topology(document, what: str) -> None:
     the exact path also makes the run directories unique by
     construction, which a uniqueness test would only approximate.
     """
+    for key in ("artifact_root", "invocation_dir"):
+        if not Path(document[key]).is_absolute():
+            raise HandoffError(
+                f"{what} reports {key} as the relative path "
+                f"{document[key]!r}; `probe_flake.check_artifact_root` "
+                f"RESOLVES its root before a run begins, so every path a "
+                f"real result document carries is absolute and canonical")
     root = Path(os.path.normpath(document["artifact_root"]))
     invocation = Path(os.path.normpath(document["invocation_dir"]))
     if invocation.parent != root:
@@ -1371,12 +1420,15 @@ def require_topology(document, what: str) -> None:
             f"artifact root {root}; `probe_flake.new_invocation_dir` creates "
             f"it as a DIRECT child of the root, so this pair was not "
             f"produced by a harness run")
-    prefix = f"{document['probe']}-"
-    if not invocation.name.startswith(prefix):
+    if not INVOCATION_DIR_RE.fullmatch(
+            invocation.name, ) or not invocation.name.startswith(
+            f"{document['probe']}-"):
         raise HandoffError(
-            f"{what} reports the invocation directory {invocation.name!r}, "
-            f"which does not begin with {prefix!r}; the harness names it "
-            f"after the probe it measured")
+            f"{what} reports the invocation directory {invocation.name!r}; "
+            f"`probe_flake.new_invocation_dir` generates "
+            f"`{{probe}}-{{%Y%m%dT%H%M%SZ}}-{{pid}}-{{uuid8}}`, so a name "
+            f"the harness could not have generated — or one generated for "
+            f"another probe — is not a directory this measurement created")
     records = [(f"{what}.runs[{position}]", run)
                for position, run in enumerate(document["runs"])]
     broken = document.get("error_run")
@@ -1643,7 +1695,7 @@ class Diagnosis:
         return self.pull_requests
 
 
-def evaluate(document, *, worktrees=()) -> Outcome:
+def evaluate(document, *, worktrees=(), primary=None) -> Outcome:
     """The route one diagnosis document's own evidence supports.
 
     Raises `HandoffError` when the entry gate refuses the input and
@@ -1664,7 +1716,8 @@ def evaluate(document, *, worktrees=()) -> Outcome:
     # the batches are — including once those worktrees have been removed
     # and no longer appear in `worktree_paths()`.
     trees = list(worktrees) + declared_worktrees(document)
-    handoff = require_handoff(document.get("handoff"), worktrees=trees)
+    handoff = require_handoff(document.get("handoff"), worktrees=trees,
+                              primary=primary)
     route = document.get("route")
     if route not in ROUTES:
         raise HandoffError(
@@ -2023,7 +2076,8 @@ def main(argv=None) -> int:
     try:
         if args.handoff:
             handoff = require_handoff(_load(args.handoff, "handoff"),
-                                      worktrees=worktree_paths())
+                                      worktrees=worktree_paths(),
+                                      primary=primary_checkout())
             if args.json:
                 print(json.dumps({"accepted": True, "probe": handoff.probe,
                                   "targets": list(handoff.targets),
@@ -2036,7 +2090,8 @@ def main(argv=None) -> int:
                       f"{handoff.acceptable_failures}/{RUN_COUNT}")
             return EXIT_OK
         document = _load(args.diagnosis, "diagnosis")
-        outcome = evaluate(document, worktrees=worktree_paths())
+        outcome = evaluate(document, worktrees=worktree_paths(),
+                           primary=primary_checkout())
         # The one-PR limit, exercised rather than described: a repair
         # route reaches it exactly once per invocation, and every other
         # route is refused by the session itself rather than by prose.

@@ -369,7 +369,8 @@ def relocate_section(section, tree, *, result=f"{OUTSIDE}/verify.json",
 
 def evaluate(document, **kwargs):
     return dd.evaluate(document,
-                       worktrees=kwargs.pop("worktrees", WORKTREES))
+                       worktrees=kwargs.pop("worktrees", WORKTREES),
+                       primary=kwargs.pop("primary", PRIMARY_WT))
 
 
 # ==========================================================================
@@ -1249,11 +1250,26 @@ def test_the_artifact_layout_is_the_one_the_harness_creates() -> None:
                     "DIRECT child of the root",
                     "an invocation directory two levels under the root")
 
-    misnamed = handoff_document()
-    misnamed["result"]["invocation_dir"] = f"{OUTSIDE}/artifacts/invocation"
-    expect_rejected(lambda: dd.require_handoff(misnamed),
-                    "does not begin with",
-                    "an invocation directory not named after the probe")
+    for label, name in (
+            ("not named after the probe", f"{OTHER}-20260821T120000Z-1-abcdef12"),
+            ("a name the harness never generates", "invocation"),
+            ("a name with no uuid", f"{PROBE}-20260821T120000Z-1"),
+            ("a name with a bad stamp", f"{PROBE}-2026-08-21-1-abcdef12"),
+            ("a name with non-hex", f"{PROBE}-20260821T120000Z-1-abcdefgh")):
+        misnamed = handoff_document()
+        misnamed["result"]["invocation_dir"] = f"{OUTSIDE}/artifacts/{name}"
+        expect_rejected(lambda d=misnamed: dd.require_handoff(d),
+                        "not a directory this measurement created",
+                        f"an invocation directory {label}")
+
+    for label, key in (("an artifact root", "artifact_root"),
+                       ("an invocation directory", "invocation_dir")):
+        relative = handoff_document()
+        relative["result"][key] = "artifacts/relative"
+        expect_rejected(lambda d=relative: dd.require_handoff(d),
+                        "every path a real result document carries is "
+                        "absolute",
+                        f"{label} recorded as a relative path")
 
     for label, replacement in (
             ("an unrelated external path", f"{OUTSIDE}/elsewhere/run-001"),
@@ -1285,6 +1301,63 @@ def test_the_artifact_layout_is_the_one_the_harness_creates() -> None:
     expect_rejected(lambda: dd.require_handoff(broken),
                     "evidence from somewhere other than this measurement",
                     "a harness-error run directory somewhere else")
+
+
+def test_only_a_python_three_interpreter_is_accepted() -> None:
+    """These are Python 3 programs; `python2` is a SyntaxError, not a run.
+
+    Bare `python` is refused for a different reason: it is whichever of
+    the two that machine happens to mean, which a document cannot settle.
+    """
+    for program in ("python", "python2", "python2.7", "pypy", "python4x"):
+        document = diagnosis_document()
+        document["baseline"]["invocation"] = invocation(
+            cmd=[program] + command()[1:])
+        expect_rejected(lambda d=document: evaluate(d),
+                        "not a Python interpreter",
+                        f"a command run by {program!r}")
+
+    for program in ("python3", "python3.12", "python3.14.2"):
+        document = diagnosis_document()
+        document["baseline"]["invocation"] = invocation(
+            cmd=[program] + command()[1:])
+        outcome = evaluate(document)
+        expect(outcome.route == dd.ROUTE_REPAIR,
+               f"{program!r} is a supported spelling; got {outcome.route}")
+
+
+def test_the_handoff_comes_from_the_primary_checkout() -> None:
+    """A path cannot assert that it is a checkout, so one must be named.
+
+    `/deflake` runs in the primary checkout — it is the step BEFORE this
+    workflow creates its comparison worktrees, and it claims a probe and
+    writes the census from there.
+    """
+    for label, elsewhere in (
+            ("an invented root", "/tmp/not-a-synarchy-checkout"),
+            ("the clean comparison worktree", CLEAN_WT),
+            ("the repair worktree", REPAIR_WT)):
+        document = diagnosis_document()
+        document["handoff"]["invocation"] = deflake_invocation(
+            cmd=["python3", f"{elsewhere}/tools/deflake.py", "--json",
+                 "--result", f"{OUTSIDE}/handoff.json"],
+            directory=elsewhere)
+        expect_rejected(lambda d=document: evaluate(d),
+                        "is not the primary checkout",
+                        f"a handoff claiming to have run in {label}")
+
+    # Spelled differently, the same checkout is still the same checkout.
+    document = diagnosis_document()
+    document["handoff"]["invocation"] = deflake_invocation(
+        cmd=["python3", f"{PRIMARY_WT}/./tools/deflake.py", "--json",
+             "--result", f"{OUTSIDE}/handoff.json"],
+        directory=f"{PRIMARY_WT}/.")
+    outcome = evaluate(document)
+    expect(outcome.route == dd.ROUTE_REPAIR,
+           f"a canonically equal spelling is accepted; got {outcome.route}")
+
+    expect(dd.primary_checkout() == dd.worktree_paths()[0],
+           "and the primary checkout is the head of the registered list")
 
 
 def test_a_fabricated_argv_is_not_a_harness_invocation() -> None:
@@ -2090,11 +2163,28 @@ def _run_cli(*args) -> subprocess.CompletedProcess:
                           capture_output=True, timeout=120)
 
 
+def _live_document(**kwargs) -> dict:
+    """A diagnosis the CLI's OWN worktree resolution will accept.
+
+    The CLI derives the primary checkout from `git worktree list`, so a
+    fixture that invented one would exercise nothing but the refusal.
+    Everything else — the comparison worktrees, the evidence paths — stays
+    synthetic and outside every real worktree.
+    """
+    document = diagnosis_document(**kwargs)
+    live = dd.primary_checkout()
+    document["handoff"]["invocation"] = deflake_invocation(
+        cmd=["python3", f"{live}/tools/deflake.py", "--json",
+             "--result", f"{OUTSIDE}/handoff.json"],
+        directory=str(live))
+    return document
+
+
 def test_the_cli_reports_the_route_and_its_exit_status() -> None:
     root = Path(tempfile.mkdtemp(prefix="test_deflake_diagnosis_"))
     try:
         path = root / "diagnosis.json"
-        path.write_text(json.dumps(diagnosis_document()), encoding="utf-8")
+        path.write_text(json.dumps(_live_document()), encoding="utf-8")
         done = _run_cli("--diagnosis", str(path), "--json")
         expect(done.returncode == dd.EXIT_OK,
                f"an accepted repair exits {dd.EXIT_OK}: {done.stderr}")
@@ -2106,7 +2196,7 @@ def test_the_cli_reports_the_route_and_its_exit_status() -> None:
                "declaring that it opens the pull request")
 
         broken = root / "broken.json"
-        document = diagnosis_document()
+        document = _live_document()
         document["handoff"]["probe"] = [PROBE, OTHER]
         broken.write_text(json.dumps(document), encoding="utf-8")
         done = _run_cli("--diagnosis", str(broken))
@@ -2116,7 +2206,7 @@ def test_the_cli_reports_the_route_and_its_exit_status() -> None:
                f"naming the route: {done.stderr}")
 
         refused = root / "refused.json"
-        document = diagnosis_document()
+        document = _live_document()
         document["baseline"]["result"] = result_document()
         refused.write_text(json.dumps(document), encoding="utf-8")
         done = _run_cli("--diagnosis", str(refused))
@@ -2124,7 +2214,8 @@ def test_the_cli_reports_the_route_and_its_exit_status() -> None:
                f"a denied route exits {dd.EXIT_REFUSED}")
 
         gate = root / "handoff.json"
-        gate.write_text(json.dumps(handoff_document()), encoding="utf-8")
+        gate.write_text(json.dumps(_live_document()["handoff"]),
+                        encoding="utf-8")
         done = _run_cli("--handoff", str(gate))
         expect(done.returncode == dd.EXIT_OK,
                f"the entry gate alone exits 0: {done.stderr}")
