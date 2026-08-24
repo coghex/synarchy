@@ -3385,6 +3385,102 @@ def _live_document(**kwargs) -> dict:
     return document
 
 
+def test_a_path_no_filesystem_can_name_is_refused_not_a_traceback() -> None:
+    """`probe-flake-result/v1` says "string"; the filesystem says more.
+
+    A path carrying an embedded NUL is schema-valid and makes
+    `Path.resolve()` raise `ValueError` out of `lstat` — not `OSError`,
+    which the containment helper already tolerated, and not this module's
+    own exception, which is all `main` catches. So the CLI printed a
+    traceback where `handoff-rejected` was the required answer.
+
+    NB the NUL only ever arrives inside a DOCUMENT: `subprocess` refuses
+    an argv token containing one, so `--manifest` cannot be handed such a
+    root by any real caller.
+    """
+    for field, place in (("artifact_root", "the result's artifact root"),
+                         ("invocation_dir", "the result's invocation dir")):
+        document = handoff_document()
+        document["result"][field] = "/tmp/\x00"
+        expect_rejected(lambda d=document: dd.require_handoff(d),
+                        "contains a NUL", f"{place} carrying a NUL")
+
+    # A run's own directory, kept consistent with the retention rule so
+    # the NUL is what fails rather than the envelope's equality.
+    document = handoff_document()
+    unnameable = "/tmp/a\x00b"
+    document["result"]["runs"][0]["artifact_dir"] = unnameable
+    document["result"]["retained_artifacts"][0] = unnameable
+    document["artifacts"][0] = unnameable
+    expect_rejected(lambda d=document: dd.require_handoff(d),
+                    "contains a NUL", "a run's artifact dir carrying a NUL")
+
+    # Through the real CLI, because "does not raise" and "exits the way
+    # this tool is specified to exit" are different claims.
+    root = Path(tempfile.mkdtemp(prefix="test_deflake_diagnosis_nul_"))
+    try:
+        document = handoff_document()
+        document["result"]["artifact_root"] = "/tmp/\x00"
+        path = root / "handoff.json"
+        path.write_text(json.dumps(document), encoding="utf-8")
+        done = _run_cli("--handoff", str(path))
+        expect(done.returncode == dd.EXIT_REJECTED,
+               f"an unnameable path exits {dd.EXIT_REJECTED}; got "
+               f"{done.returncode}")
+        expect("Traceback" not in done.stderr,
+               f"without a traceback: {done.stderr[:200]}")
+        expect(dd.ROUTE_HANDOFF_REJECTED in done.stderr,
+               f"naming the route: {done.stderr[:200]}")
+
+        # The same through the diagnosis entry point.
+        document = _live_document()
+        document["baseline"]["result"]["artifact_root"] = "/tmp/\x00"
+        path = root / "diagnosis.json"
+        path.write_text(json.dumps(document), encoding="utf-8")
+        done = _run_cli("--diagnosis", str(path))
+        expect(done.returncode == dd.EXIT_REJECTED,
+               f"and so does a diagnosis carrying one; got {done.returncode}")
+        expect("Traceback" not in done.stderr,
+               f"without a traceback: {done.stderr[:200]}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    # A NUL in a recorded COMMAND destination reaches the containment
+    # helper instead, which `_require_canonical` never sees — so
+    # `_path_forms` has to stay total for it. Without that, this is an
+    # uncaught ValueError rather than a refusal.
+    document = diagnosis_document()
+    command_tokens = list(document["baseline"]["invocation"]["command"])
+    command_tokens[command_tokens.index("--artifact-root") + 1] = "/tmp/\x00a"
+    document["baseline"]["invocation"]["command"] = command_tokens
+    raised = None
+    try:
+        evaluate(document)
+    except (dd.HandoffError, dd.RouteRefused) as error:
+        raised = error
+    except Exception as error:                      # noqa: BLE001
+        expect(False, f"an unnameable destination escaped as "
+                      f"{type(error).__name__}: {error}")
+    expect(raised is not None,
+           "a command destination carrying a NUL is refused")
+
+    # And the helper is total for it directly.
+    forms = dd._path_forms("/tmp/\x00a")
+    expect(bool(forms),
+           f"_path_forms answers for an unnameable path: {forms}")
+
+    # The helper itself, on the two shapes a document can carry.
+    for value in (None, 42, "", "/tmp/\x00"):
+        raised = False
+        try:
+            dd.require_path(value, "a path")
+        except dd.HandoffError:
+            raised = True
+        expect(raised, f"require_path refuses {value!r}")
+    expect(dd.require_path("/tmp/fine", "a path") == "/tmp/fine",
+           "and returns a usable one unchanged")
+
+
 def test_the_cli_reports_the_route_and_its_exit_status() -> None:
     root = Path(tempfile.mkdtemp(prefix="test_deflake_diagnosis_"))
     try:

@@ -1114,6 +1114,35 @@ def primary_checkout():
     return trees[0] if trees else None
 
 
+def require_path(value, what: str) -> str:
+    """A recorded path string this module can actually operate on.
+
+    `probe-flake-result/v1` constrains these to strings and nothing more,
+    so a schema-valid document can carry one the FILESYSTEM refuses to
+    talk about: an embedded NUL makes `Path.resolve()` raise `ValueError`
+    from `lstat` rather than `OSError`, and `main` catches only this
+    module's own two exceptions — so the CLI printed a traceback where a
+    `handoff-rejected` was the required answer.
+
+    Checked at every point a document-supplied path is first read, rather
+    than defended at each `resolve()` call: the refusal is a property of
+    the input, and naming the field is what makes it actionable.
+    """
+    if not isinstance(value, str) or not value:
+        raise HandoffError(f"{what} is not a path ({value!r})")
+    if "\x00" in value:
+        raise HandoffError(
+            f"{what} is {value!r}, which contains a NUL; no filesystem can "
+            f"name that path, so it is not somewhere a measurement wrote")
+    try:
+        Path(value)
+    except (TypeError, ValueError) as error:
+        raise HandoffError(
+            f"{what} is {value!r}, which is not a usable path ({error})"
+        ) from None
+    return value
+
+
 def _path_forms(path, base=None) -> set:
     """Every absolute form `path` can denote, for containment purposes.
 
@@ -1136,7 +1165,11 @@ def _path_forms(path, base=None) -> set:
     forms = {Path(os.path.normpath(str(raw)))}
     try:
         forms.add(raw.resolve())
-    except OSError:
+    except (OSError, ValueError):
+        # ValueError is not hypothetical: `lstat` raises it, not OSError,
+        # for a path carrying an embedded NUL. `require_path` refuses
+        # those at the boundary; this keeps the helper total for any
+        # caller that reaches it another way.
         pass
     return forms
 
@@ -1895,8 +1928,7 @@ def _require_canonical(path, what: str) -> None:
     have written, and on a host where `/tmp` links to `/private/tmp` it
     would call two different places the same one.
     """
-    if not isinstance(path, str) or not path:
-        raise HandoffError(f"{what} is not a path ({path!r})")
+    require_path(path, what)
     if not Path(path).is_absolute():
         raise HandoffError(
             f"{what} is the relative path {path!r}; `check_artifact_root` "
