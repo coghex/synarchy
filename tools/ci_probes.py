@@ -221,7 +221,7 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                             "fresh-process regeneration -- around two real "
                                             "16-chunk worldgens"),),
     "item_temp": (Reason(SCENARIO_HEAVY, "real worldgen, cooling waits, and save/load round-trip"),),
-    "position_hold": (Reason(SCENARIO_HEAVY, "#1216: four acolytes sharing one arena through a "
+    "position_hold": (Reason(SCENARIO_HEAVY, "#1216: three acolytes sharing one arena through a "
                                              "32 s unpaused containment window, a real "
                                              "refill excursion out to a lake and back, and a "
                                              "post-release work resume -- every stage is a "
