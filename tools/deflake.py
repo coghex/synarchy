@@ -68,6 +68,43 @@ Ownership, in order, and what each step may not do
    expensive thing, and everything after it is cheap — then ingested
    under one hold of the claim's sidecar lock.
 7. RELEASE. Only what this invocation acquired, and never a successor's.
+8. HAND OFF. LAST, and only on the exact `recorded` outcome (#1659).
+
+The handoff
+-----------
+`deflake-handoff/v1`, written beside the retained result and named after
+it, is the record the diagnosis step consumes. It exists because the
+alternative is a HAND-WRITTEN account of a run nobody observed: a
+consumer given one has to detect a forged record field by field, which
+has no natural stopping point. Every value here comes from what this
+process saw — the argv and working directory captured at CLI entry, the
+configuration read under the resource hold immediately before the first
+engine, the base port of each completed run, the two settings passed to
+the measurement adapter, and the result document itself, EMBEDDED
+unchanged because its schema rejects additional properties.
+
+The acceptable-failure count comes from the census row this invocation's
+own recording transaction INSTALLED, which is why that seam now answers
+`(probe, installed_census)`. The lock is released the moment the call
+returns, so a reread here could pick up another agent's policy edit and
+attribute it to this measurement.
+
+Written LAST for a reason. `commit-changed`, `record-failed`,
+`record-indeterminate`, `recorded-release-failed` and `harness-error` can
+all happen AFTER the measurement, and a diagnosis reads a handoff as a
+complete, attributable census measurement — which is exactly what each of
+those outcomes says this is not. So the write happens after census
+ingestion and after a successful release, and only then does the
+invocation report `recorded`.
+
+A `recorded` outcome does not guarantee a retained result to sit beside:
+`probe_claim.retain_measurement` can fail while the ingestion that
+follows it succeeds. That, and a handoff that cannot be written, are the
+nonzero `managed-error` — the census update has already committed, is
+append-only, and is neither retried nor rolled back, so both facts are
+reported and `handoff_document` stays null. The outcome vocabulary does
+not grow: an eleventh step that invented a new one would make every
+caller's branch table wrong.
 
 The commit cohort
 -----------------
@@ -132,6 +169,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import sys
@@ -141,6 +179,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe_census  # noqa: E402
 import probe_claim  # noqa: E402
 import probe_flake  # noqa: E402
+import probe_protocol  # noqa: E402
 import probe_resource_lock  # noqa: E402
 import probe_select  # noqa: E402
 import run_probes  # noqa: E402
@@ -156,6 +195,26 @@ CENSUS_RUN_COUNT = probe_census.POLICY_RUN_COUNT
 # that would make "the orchestrator supplies four capabilities" a
 # property of the harness's defaults rather than of this command.
 RTS_CAPABILITIES = 4
+
+# The two settings `probe_flake.measure` would otherwise apply from its
+# own module constants. Passed EXPLICITLY for the same reason the run
+# count and capability count are: "the orchestrator declined to override
+# a default" is not a property a test can assert about an invocation, and
+# #1659's handoff has to record the values this command actually used.
+TIMEOUT = probe_flake.DEFAULT_TIMEOUT
+START_PORT = probe_flake.PORT_MIN
+
+# The handoff (#1659): the record the diagnosis step consumes, written
+# by the process that performed the measurement rather than assembled
+# afterwards from an account of it.
+HANDOFF_SCHEMA = "deflake-handoff/v1"
+
+# The gitignored per-worktree configuration family. Probes symlink the
+# invoking worktree's `config/` into their isolated resource roots, so
+# two comparison worktrees that disagree here measure two different
+# conditions — which is why a diagnosis has to know what this
+# measurement ran under.
+CONFIG_GLOB = "config/*.local.yaml"
 
 OUTCOME_RECORDED = "recorded"
 OUTCOME_NO_QUALIFYING_PROBE = "no-qualifying-probe"
@@ -222,7 +281,7 @@ class Result:
                  commit: str | None = None, result_path=None,
                  artifacts=(), skipped=(), rung: int | None = None,
                  conflict=None, runs: int | None = None,
-                 rts_capabilities: int | None = None):
+                 rts_capabilities: int | None = None, handoff_path=None):
         self.outcome = outcome
         self.probe = probe
         self.detail = detail
@@ -238,6 +297,7 @@ class Result:
         self.conflict = conflict
         self.runs = runs
         self.rts_capabilities = rts_capabilities
+        self.handoff_path = handoff_path
 
     @property
     def exit_code(self) -> int:
@@ -258,6 +318,11 @@ class Result:
             "token": self.token,
             "commit": self.commit,
             "result_document": str(self.result_path) if self.result_path else None,
+            # Always present, so a consumer branches on the VALUE rather
+            # than on whether the key exists: the sibling path on
+            # `recorded`, null on every other outcome.
+            "handoff_document": (str(self.handoff_path)
+                                 if self.handoff_path else None),
             "retained_artifacts": self.artifacts,
             "runs": self.runs,
             "rts_capabilities": self.rts_capabilities,
@@ -314,6 +379,146 @@ def _skip_report(selection) -> list:
             for skip in selection.skipped]
 
 
+def configuration_manifest(root) -> list:
+    """The `config/*.local.yaml` state of the checkout, as a sorted list.
+
+    Every regular file in the family, by repository-relative POSIX path
+    and the lowercase SHA-256 of the bytes actually read, sorted by path
+    so two manifests compare as data rather than as directory order. An
+    absent family is `[]` — a POSITIVE statement that nothing is there,
+    which is the expected default in this repository since none of the
+    four paths is tracked.
+
+    Captured while the resource hold is active and immediately before
+    the measurement begins, so it describes the configuration the runs
+    actually read rather than whatever the directory held afterwards.
+    """
+    base = Path(root if root is not None else run_probes.REPO_ROOT)
+    entries = []
+    for path in sorted(base.glob(CONFIG_GLOB)):
+        if not path.is_file():
+            continue
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for block in iter(lambda: handle.read(65536), b""):
+                digest.update(block)
+        entries.append({"path": path.relative_to(base).as_posix(),
+                        "sha256": digest.hexdigest()})
+    return entries
+
+
+def handoff_targets(document) -> list:
+    """Every declared check any completed run reported FAIL or MISSING.
+
+    Once each, in the descriptor's own order: these are the diagnosis
+    inputs, and a set would lose the order the probe declared while a
+    per-run list would repeat them.
+    """
+    seen = set()
+    for run in document.get("runs") or []:
+        for check, outcome in (run.get("checks") or {}).items():
+            if outcome != probe_protocol.PASS:
+                seen.add(check)
+    return [entry["id"] for entry in document.get("checks") or []
+            if entry.get("id") in seen]
+
+
+def build_handoff(*, result, acceptable_failures, argv, cwd, configuration,
+                  artifacts) -> dict:
+    """The `deflake-handoff/v1` document for one completed measurement.
+
+    Every value comes from what this process observed. `ports` is the
+    ordered BASE port of each completed run — the value the result
+    document records — rather than any wider span the harness may have
+    reserved beneath it, and `timeout` and `start_port` are the ones
+    this command passed to the measurement adapter.
+
+    The result is embedded UNCHANGED. Its declared schema rejects
+    additional properties, so it must not gain a field here; a consumer
+    that wants provenance reads this envelope's own keys instead.
+    """
+    return {
+        "schema": HANDOFF_SCHEMA,
+        "probe": result["probe"],
+        "acceptable_failures": acceptable_failures,
+        "targets": handoff_targets(result),
+        "result": result,
+        "invocation": {
+            "argv": list(argv),
+            "cwd": str(cwd),
+            "retries": 0,
+            "ports": [run["port"] for run in result.get("runs") or []],
+            "timeout": TIMEOUT,
+            "start_port": START_PORT,
+        },
+        "configuration": list(configuration),
+        "artifacts": list(artifacts),
+    }
+
+
+HANDOFF_SUFFIX = "-handoff.json"
+
+
+def handoff_path_for(result_path) -> Path:
+    """Where the handoff sits beside the retained result it describes.
+
+    Derived from the result's own name rather than a fixed one, so a
+    `--result` that puts two measurements in one directory cannot make
+    two handoffs collide.
+
+    From the WHOLE filename, not its stem: `Path.stem` drops the
+    extension, so `census.json`, `census.txt` and `census` all stem to
+    `census` and would share one handoff, the later measurement
+    overwriting the earlier one's. Appending to the full name is
+    injective — distinct results in a directory have distinct names, and
+    distinct names give distinct handoffs.
+    """
+    retained = Path(result_path)
+    return retained.with_name(f"{retained.name}{HANDOFF_SUFFIX}")
+
+
+def write_handoff(path, document) -> str | None:
+    """Write the handoff ATOMICALLY. Returns a problem description, or None.
+
+    Raises nothing: a handoff that cannot be written is an outcome this
+    command reports, never a traceback out of a run whose census update
+    has already committed.
+
+    Staged and renamed rather than written in place, because only the
+    `recorded` outcome may leave a handoff and a failed write must leave
+    NONE. Writing to the final path directly truncates it first, so a
+    disk that fills mid-write would leave a partial or empty
+    `*-handoff.json` beside the result while this command reported
+    `managed-error` and a null `handoff_document` — a later consumer
+    would find evidence that says it is a complete measurement and is
+    not. `os.replace` is atomic within a filesystem, and the staging
+    file is a sibling, so it is the same one.
+
+    The document is serialized BEFORE anything is opened, so a value
+    json cannot encode fails without touching the target at all.
+    """
+    target = Path(path)
+    staging = target.with_name(f"{target.name}.partial")
+    try:
+        payload = json.dumps(document, indent=2, sort_keys=True) + "\n"
+    except (TypeError, ValueError) as error:
+        return f"could not serialize the handoff for {target} ({error})"
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staging.write_text(payload, encoding="utf-8")
+        os.replace(staging, target)
+    except OSError as error:
+        try:
+            staging.unlink()
+        except OSError:
+            # The staging file is named for its target and ends
+            # `.partial`, so one left behind is inert: nothing reads it,
+            # and the next successful write replaces it.
+            pass
+        return f"could not write {target} ({error})"
+    return None
+
+
 def _require_commit(value, what: str) -> str:
     """A resolved full commit identity, or None.
 
@@ -341,7 +546,8 @@ def measure_next_probe(*, repo_root=None, census_path=None, claim_root=None,
                        inputs=None, load_census=None, claimed=None,
                        acquire_claim=None, acquire_resources=None,
                        measure=None, record_claim=None, record_result=None,
-                       head_commit=None, announce=None) -> Result:
+                       head_commit=None, announce=None, argv=None, cwd=None,
+                       read_configuration=None, save_handoff=None) -> Result:
     """Select, claim, measure, record and release ONE probe.
 
     Every collaborator is a keyword seam defaulting to the real thing,
@@ -358,7 +564,16 @@ def measure_next_probe(*, repo_root=None, census_path=None, claim_root=None,
                       else _acquire_probe_resources)
     run_measure = measure if measure is not None else probe_flake.measure
     log_claim = record_claim if record_claim is not None else probe_census.record_claim
-    log_result = record_result if record_result is not None else probe_census.record_result
+    # The INSTALLED candidate, not just the probe key: #1659's handoff
+    # records the acceptable-failure count from the row this transaction
+    # wrote, and a later reread happens after the lock is released.
+    log_result = (record_result if record_result is not None
+                  else probe_census.record_result_installed)
+    read_config = (read_configuration if read_configuration is not None
+                   else configuration_manifest)
+    store_handoff = save_handoff if save_handoff is not None else write_handoff
+    observed_argv = list(sys.argv) if argv is None else list(argv)
+    observed_cwd = os.getcwd() if cwd is None else str(cwd)
     read_head = (head_commit if head_commit is not None
                  else (lambda: probe_claim.commit_sha(repo_root)))
 
@@ -439,7 +654,9 @@ def measure_next_probe(*, repo_root=None, census_path=None, claim_root=None,
             artifact_root=artifact_root, result_path=result_path, runs=runs,
             rts_caps=rts_caps, take_resources=take_resources,
             run_measure=run_measure, log_claim=log_claim,
-            log_result=log_result, read_head=read_head, say=say)
+            log_result=log_result, read_head=read_head, say=say,
+            argv=observed_argv, cwd=observed_cwd,
+            read_configuration=read_config, save_handoff=store_handoff)
     except KeyboardInterrupt:
         problem = _release(claim)
         return Result(OUTCOME_INTERRUPTED, probe=probe, census_path=target,
@@ -527,10 +744,54 @@ def _acquire_probe_resources(probe: str, *, namespace, repo_root=None):
         namespace=token, purpose=f"deflake {probe}")
 
 
+def _build_recorded_handoff(*, measurement, retained, recorded_row, probe,
+                            argv, cwd, configuration, artifacts,
+                            save_handoff):
+    """Write the handoff for a recorded measurement. `(path, problem)`.
+
+    The acceptable-failure count comes from the census row the recording
+    transaction INSTALLED, which is why `record_result_installed` hands
+    it back: the lock is released the moment that call returns, so a
+    reread here could answer with another agent's policy edit and
+    attribute it to this measurement.
+
+    A `recorded` outcome does not guarantee a retained result path —
+    `probe_claim.retain_measurement` may fail while the census ingestion
+    that follows it succeeds — and there is nowhere to put a sibling
+    document without one.
+    """
+    if retained is None:
+        return None, ("the completed measurement was not retained, so there "
+                      "is no result for a handoff to sit beside")
+    answered = recorded_row[0] if recorded_row else None
+    if not (isinstance(answered, tuple) and len(answered) == 2
+            and isinstance(answered[1], dict)):
+        # The seam's contract is `(probe, installed_census)`. Anything
+        # else is a caller that substituted the wrong recorder, and
+        # saying so beats reaching into it and raising from inside a
+        # transaction that has already committed.
+        return None, (f"the recording seam answered {answered!r}, not the "
+                      f"probe and the census document it installed")
+    row = probe_census.find_entry(answered[1], probe)
+    census = (row or {}).get("census") or {}
+    acceptable = census.get("acceptable_failures")
+    if not isinstance(acceptable, int) or isinstance(acceptable, bool):
+        return None, (f"the census row this transaction installed names no "
+                      f"acceptable-failure count for {probe!r} "
+                      f"({acceptable!r})")
+    document = build_handoff(
+        result=measurement.to_document(), acceptable_failures=acceptable,
+        argv=argv, cwd=cwd, configuration=configuration, artifacts=artifacts)
+    path = handoff_path_for(retained)
+    problem = save_handoff(path, document)
+    return (None, problem) if problem is not None else (path, None)
+
+
 def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
                      artifact_root, result_path, runs, rts_caps,
                      take_resources, run_measure, log_claim, log_result,
-                     read_head, say) -> Result:
+                     read_head, say, argv, cwd, read_configuration,
+                     save_handoff) -> Result:
     """Everything that happens while this invocation owns `probe`."""
     common = {"probe": probe, "census_path": target, "token": claim.token,
               "rung": selection.rung, "runs": runs,
@@ -610,12 +871,38 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
                     f"the claim was lost before the measurement started "
                     f"({error}); the probe was not run"),
                     commit=captured, **common)
+            # Under the hold and before the first engine: this is the
+            # configuration the runs will actually read, and reading it
+            # afterwards would describe whatever the directory held once
+            # they were done.
+            #
+            # It OPENS files, so it can fail the way reading a file
+            # fails — unreadable, or gone between the directory listing
+            # and the open. That is a managed pre-measurement failure
+            # like any other: the claim goes back, no engine starts, and
+            # there is no handoff, because a handoff describes a
+            # measurement. Letting the `OSError` escape would leave this
+            # command with no outcome at all, having already taken and
+            # given back ownership.
+            try:
+                configuration = read_configuration(repo_root)
+            except OSError as error:
+                problem = _release(claim)
+                return Result(OUTCOME_MANAGED_ERROR, detail=(
+                    f"the configuration the runs would read could not be "
+                    f"captured ({error}); the probe was not run, so nothing "
+                    f"was measured, recorded or handed off"),
+                    ownership=(OWNERSHIP_CLAIM_HELD if problem
+                               else OWNERSHIP_NONE),
+                    commit=captured, **common)
             say(f"measuring {probe!r}: {runs} runs at {rts_caps} RTS "
                 f"capabilities")
             with probe_claim.Renewer(claim):
                 measurement = run_measure(probe, runs,
                                           artifact_root=artifact_root,
-                                          rts_caps=rts_caps)
+                                          rts_caps=rts_caps,
+                                          timeout=TIMEOUT,
+                                          start_port=START_PORT)
     except (probe_flake.Rejection, probe_flake.PortExhausted) as error:
         problem = _release(claim)
         return Result(OUTCOME_MANAGED_ERROR,
@@ -667,9 +954,11 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
     # attempt unconditionally while leaving `current`, `history`, samples
     # and aggregates untouched, so the attempt log stays a complete
     # record of what was tried.
+    recorded_row: list = []
     try:
         claim.commit_while_held(
-            lambda: log_result(target, measurement.to_document()))
+            lambda: recorded_row.append(
+                log_result(target, measurement.to_document())))
     except probe_census.CensusDurabilityUnconfirmed as error:
         # AFTER the replacement. The update may already be visible, so
         # nothing is retried, nothing compensating is appended, and the
@@ -732,11 +1021,34 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
             f"({measurement.error}); the non-accepted attempt was recorded "
             f"and no cohort, sample or aggregate changed — {kept}"),
             commit=captured, **common)
+
+    # ---- 11. Hand off ---------------------------------------------------
+    # LAST, and only on the exact `recorded` outcome. Every step above
+    # that returns early — `commit-changed`, `record-failed`,
+    # `record-indeterminate`, `recorded-release-failed`, `harness-error`
+    # — can happen AFTER the measurement, and none of them may leave a
+    # handoff behind: the diagnosis step reads one as a complete,
+    # attributable census measurement, which is exactly what those
+    # outcomes say this is not.
+    document, problem = _build_recorded_handoff(
+        measurement=measurement, retained=retained, recorded_row=recorded_row,
+        probe=probe, argv=argv, cwd=cwd, configuration=configuration,
+        artifacts=artifacts, save_handoff=save_handoff)
+    if problem is not None:
+        # The census update has already committed and is append-only, so
+        # nothing here retries it or rolls it back. The claim was
+        # released above, so this invocation owns nothing.
+        return Result(OUTCOME_MANAGED_ERROR, detail=(
+            f"the measurement WAS recorded in the census at {target}, and "
+            f"the handoff could not be written ({problem}); the committed "
+            f"census update was neither rolled back nor repeated, and "
+            f"{kept}"),
+            commit=captured, **common)
     return Result(OUTCOME_RECORDED, detail=(
         f"{len(measurement.runs)}/{measurement.requested_runs} runs at "
         f"{rts_caps} RTS capabilities, {measurement.failure_count} failure(s) "
         f"including {measurement.timeout_count} timeout(s)"),
-        commit=captured, **common)
+        commit=captured, handoff_path=document, **common)
 
 
 # --------------------------------------------------------------------------
@@ -754,6 +1066,8 @@ def render(result: Result) -> str:
         lines.append(f"  census:    {result.census_path}")
     if result.result_path:
         lines.append(f"  result:    {result.result_path}")
+    if result.handoff_path:
+        lines.append(f"  handoff:   {result.handoff_path}")
     for artifact in result.artifacts:
         lines.append(f"  artifacts: {artifact}")
     lines.append(f"  ownership: {result.ownership}")
@@ -786,8 +1100,12 @@ def main(argv: list[str] | None = None) -> int:
             print(message, flush=True)
 
     try:
+        # argv and the working directory are captured HERE, at CLI entry,
+        # so the handoff records what this process was actually invoked
+        # as rather than what a later frame could reconstruct.
         result = measure_next_probe(result_path=args.result,
-                                    announce=announce)
+                                    announce=announce,
+                                    argv=list(sys.argv), cwd=os.getcwd())
     except KeyboardInterrupt:
         # Only reachable before the claim is owned: once it is,
         # `measure_next_probe` handles the interrupt itself so it can

@@ -1601,6 +1601,41 @@ A census update that commits but whose claim release then fails is
 `recorded-release-failed`: both facts reported, nothing rolled back or
 repeated.
 
+**The handoff (#1659).** On the exact `recorded` outcome — and on no other —
+`/deflake` writes a `deflake-handoff/v1` document beside the retained result,
+named after it, and reports the path in `handoff_document` (null on every other
+outcome, so a consumer branches on the value rather than on whether the key is
+there). It carries the probe, X, the target checks, the result document
+EMBEDDED unchanged, the invocation, the `config/*.local.yaml` manifest and every
+retained artifact.
+
+It exists so the diagnosis step consumes a record the measuring process WROTE
+rather than a hand-written account of a run nobody observed — a consumer given
+one of those has to detect a forgery field by field, which has no natural
+stopping point. So every value comes from what the process saw: argv and the
+working directory captured at CLI entry, the configuration read under the
+resource hold immediately before the first engine, the base port of each
+completed run, the two settings passed to the measurement adapter, and the
+acceptable-failure count read from the census row this invocation's own
+recording transaction INSTALLED — not a reread, because the lock is gone by
+then and another agent's policy edit would be attributed to this measurement.
+
+Written LAST, after ingestion and a successful release, because
+`commit-changed`, `record-failed`, `record-indeterminate`,
+`recorded-release-failed` and `harness-error` can all happen after the
+measurement and none of them is the complete attributable measurement a
+diagnosis reads a handoff as. Capturing the configuration OPENS files, so it can fail
+the way reading a file fails; that is a managed pre-measurement failure —
+the claim goes back, no engine starts, and there is no handoff, because a
+handoff describes a measurement. The write is STAGED and renamed, because only
+`recorded` may leave a handoff and a failed write must leave none: writing in
+place truncates first, so a disk filling mid-write would leave a partial
+`*-handoff.json` beside the result while the command reported no handoff at
+all. A `recorded` run with nothing retained to sit beside, or a handoff that
+cannot be written, is the same existing nonzero `managed-error`: the committed census update is append-only and is neither
+retried nor rolled back, both facts are reported, and the outcome vocabulary
+does not grow.
+
 **Outcomes.** Successful, exit 0: `recorded`, `no-qualifying-probe`,
 `claim-busy`, `resource-busy`. Nonzero: `selector-error`,
 `claim-audit-failed`, `commit-changed`, `harness-error`, `record-failed`,

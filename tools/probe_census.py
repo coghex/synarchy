@@ -2655,6 +2655,30 @@ def refuse_ci_eligible_measurement(probe: str) -> None:
             f"authority on that classification.")
 
 
+def record_result_installed(path: Path, result) -> tuple:
+    """Ingest one result and return `(probe, installed_census)`.
+
+    `update` already returns the candidate it installed;
+    `record_result` discards it and answers only the probe key. A caller
+    that needs a field of the row it just wrote — #1659's handoff needs
+    the acceptable-failure count — must read it from THAT document and
+    not from a later reread: the lock is released when `update` returns,
+    so a second read can answer with another agent's edit and attribute
+    it to this measurement.
+    """
+    validate_result(result)
+    refuse_ci_eligible_measurement(result["probe"])
+    touched: list[str] = []
+
+    def mutate(before):
+        document = require_current_schema(before, path)
+        candidate, probe = ingest_result(document, result)
+        touched.append(probe)
+        return candidate, {probe: {"measurements"}}
+    installed = update(path, mutate)
+    return touched[0], installed
+
+
 def record_result(path: Path, result) -> str:
     """Ingest one `probe-flake-result/v1` document. Returns the probe.
 
@@ -2668,17 +2692,7 @@ def record_result(path: Path, result) -> str:
     reason: in front of the lock, so a promoted probe's census bytes
     are never even opened for a measurement it may not receive.
     """
-    validate_result(result)
-    refuse_ci_eligible_measurement(result["probe"])
-    touched: list[str] = []
-
-    def mutate(before):
-        document = require_current_schema(before, path)
-        candidate, probe = ingest_result(document, result)
-        touched.append(probe)
-        return candidate, {probe: {"measurements"}}
-    update(path, mutate)
-    return touched[0]
+    return record_result_installed(path, result)[0]
 
 
 def record_claim(path: Path, probe: str, claim) -> str:
