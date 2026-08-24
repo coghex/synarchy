@@ -184,20 +184,30 @@ CONFIG_GLOB = "config/*.local.yaml"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 
-# Command-line options whose VALUE is a destination rather than a
-# condition. Baseline and verification must differ here — writing both
-# batches to one path would destroy the comparison — so they are dropped
-# before two invocations are compared, and validated separately.
+# The measuring script. A recorded command that does not run THIS is not
+# a record of a measurement this lab can reason about.
+HARNESS_SCRIPT = "probe_flake.py"
+
+# `probe_flake.main`'s ENTIRE option surface, split by what each one is.
+# Hard-coded rather than introspected because argparse builds its parser
+# inside `main`, and kept honest by `test_deflake_diagnosis`, which reads
+# the real `--help` and fails if the two ever disagree. A command naming
+# an option outside this set could not have been run by the shipped
+# harness, so accepting it would mean comparing two fabrications.
+#
+# Destinations must DIFFER between the batches — writing both to one path
+# would destroy the comparison — so they are dropped before conditions
+# are compared, and validated separately.
 DESTINATION_OPTIONS = ("--result", "--artifact-root")
 
-# Every behavior-affecting setting an invocation is compared on, with
-# the effective default `probe_flake` would apply when it is absent.
-# `--runs` and `--probe` have no default: `probe_flake.main` requires
-# both, so an invocation missing one never ran.
-INVOCATION_DEFAULTS = {
-    "--rts-caps": RTS_CAPABILITIES,
-    "--timeout": probe_flake.DEFAULT_TIMEOUT,
-}
+# Behavior-affecting settings, with the effective default `probe_flake`
+# applies when one is absent. `--probe` and `--runs` have no default:
+# `probe_flake.main` requires both, so a command missing either never ran.
+REQUIRED_OPTIONS = ("--probe", "--runs")
+INVOCATION_DEFAULTS = {"--rts-caps": RTS_CAPABILITIES}
+
+HARNESS_OPTIONS = frozenset(REQUIRED_OPTIONS) | frozenset(
+    DESTINATION_OPTIONS) | frozenset(INVOCATION_DEFAULTS)
 
 # The probe-side defect categories of the issue's diagnosis boundary.
 # A declared repair names exactly one: "several independent causes" is
@@ -389,10 +399,26 @@ def parse_command(command, what: str) -> dict:
                 value = command[index]
             if name in options:
                 raise HandoffError(f"{what} repeats {name}")
+            if name not in HARNESS_OPTIONS:
+                raise HandoffError(
+                    f"{what} names {name}, which `probe_flake.main` does not "
+                    f"accept; its whole option surface is "
+                    f"{', '.join(sorted(HARNESS_OPTIONS))}, so a command "
+                    f"carrying anything else was never run by the shipped "
+                    f"harness")
             options[name] = value
         else:
             positional.append(token)
         index += 1
+    if len(positional) != 2 or Path(positional[1]).name != HARNESS_SCRIPT:
+        raise HandoffError(
+            f"{what} is {positional}, where a harness invocation is an "
+            f"interpreter and a path ending in {HARNESS_SCRIPT}; a command "
+            f"with extra positional tokens ran something else, or ran this "
+            f"with arguments the comparison cannot see")
+    for option in REQUIRED_OPTIONS:
+        if option not in options:
+            raise HandoffError(f"{what} names no {option}")
     options["_positional"] = positional
     return options
 
@@ -457,33 +483,12 @@ def effective_settings(invocation, what: str) -> dict:
     """
     options = parse_command(invocation["command"], f"{what}.command")
     settings = {}
-    probe = options.get("--probe")
-    if not probe:
-        raise HandoffError(f"{what}.command names no --probe")
-    settings["probe"] = probe
-    if "--runs" not in options:
-        raise HandoffError(f"{what}.command names no --runs")
+    settings["probe"] = options["--probe"]
     settings["runs"] = _number(options["--runs"], f"{what}.command --runs")
     for option, default in INVOCATION_DEFAULTS.items():
         key = option.lstrip("-").replace("-", "_")
-        if option in options:
-            settings[key] = _number(options[option],
-                                    f"{what}.command {option}")
-        else:
-            settings[key] = default
-    unknown = sorted(name for name in options
-                     if name != "_positional"
-                     and name not in INVOCATION_DEFAULTS
-                     and name not in DESTINATION_OPTIONS
-                     and name not in ("--probe", "--runs"))
-    if unknown:
-        raise HandoffError(
-            f"{what}.command carries options this comparison does not know "
-            f"how to classify as a condition or a destination: "
-            f"{', '.join(unknown)}. Classify them in "
-            f"`deflake_diagnosis.INVOCATION_DEFAULTS` or "
-            f"`DESTINATION_OPTIONS` rather than letting an unrecognised "
-            f"option silently compare equal")
+        settings[key] = (_number(options[option], f"{what}.command {option}")
+                         if option in options else default)
     settings["retries"] = invocation["retries"]
     return settings
 
@@ -615,49 +620,69 @@ def descriptor_ids(document) -> list:
     return [entry["id"] for entry in document["checks"]]
 
 
-def require_controlled(document, *, what: str, expected_ids=None) -> dict:
-    """A result document usable as one side of a controlled comparison.
+def controlled_problems(document, *, what: str) -> list:
+    """Why `document` is not a usable controlled measurement, if it isn't.
 
-    The four conditions beyond structural validity: the measurement did
-    not abort, it is the policy's own size, it ran at the fixed
-    capability count, and nothing else was running beside it. The last
-    one matters because an overlapping flake-harness invocation shares
-    the machine, and a comparison made against a contended baseline is
-    not controlled.
+    Reported rather than raised, because "the batch became invalid" is a
+    declared OUTCOME of this workflow and not a malformed input. The
+    issue's own list — "verification remains above X, contains any
+    MISSING result, becomes invalid, or only partially improves the
+    rate" — routes every entry to #1439, so a harness error in the
+    verification batch must reach `partial-improvement` with its
+    evidence retained, never a gate rejection that reports nothing.
+
+    Four conditions: the measurement did not abort, it is the policy's
+    own size, it ran at the fixed capability count, and nothing else ran
+    beside it. The last matters because an overlapping flake-harness
+    invocation shares the machine, and a comparison made against a
+    contended side is not controlled.
+
+    Structural validity is NOT here — `require_result` raises for that,
+    because a document that is not a `probe-flake-result/v1` at all is a
+    malformed input rather than a measurement that went wrong.
     """
-    require_result(document, what)
+    problems = []
     if document.get("status") != "ok":
-        raise HandoffError(
-            f"{what} has status {document.get('status')!r}; only a valid "
-            f"measurement is a controlled comparison side (a harness error "
-            f"has no trustworthy failure rate at all)")
+        problems.append(
+            f"{what} has status {document.get('status')!r}; a harness error "
+            f"has no trustworthy failure rate at all, so it is not a "
+            f"controlled comparison side")
     requested = document.get("requested_runs")
     completed = document.get("completed_runs")
     if requested != RUN_COUNT:
-        raise HandoffError(
+        problems.append(
             f"{what} requested {requested!r} runs; this lab's measurement "
             f"contract is exactly {RUN_COUNT}, which is the basis X is "
             f"stated on")
     if completed != requested:
-        raise HandoffError(
+        problems.append(
             f"{what} completed {completed!r} of {requested!r} runs; an "
             f"incomplete batch is not a measurement")
     if len(document["runs"]) != completed:
-        raise HandoffError(
+        problems.append(
             f"{what} reports {completed!r} completed runs but carries "
             f"{len(document['runs'])} run record(s)")
     caps = document.get("rts_capabilities")
     if caps != RTS_CAPABILITIES:
-        raise HandoffError(
+        problems.append(
             f"{what} ran at {caps!r} RTS capabilities; the fixed condition "
             f"is {RTS_CAPABILITIES}, and an unpinned run measures a "
             f"different condition on every machine")
     peak = document.get("peak_concurrency")
     if peak != 1:
-        raise HandoffError(
+        problems.append(
             f"{what} observed peak concurrency {peak!r}; another flake "
-            f"harness invocation overlapped this measurement, so it is not "
-            f"a controlled comparison side")
+            f"harness invocation overlapped this measurement")
+    return problems
+
+
+def require_descriptor(document, expected_ids, what: str) -> None:
+    """The stable check identities, which a route may never reinterpret.
+
+    A rename, a removal or a reorder is a REJECTION and not a #1439
+    outcome: it is an attempt to change the reporting protocol, which
+    needs a separately approved mapping this issue does not invent.
+    """
     ids = descriptor_ids(document)
     if expected_ids is not None and list(expected_ids) != ids:
         raise HandoffError(
@@ -666,6 +691,20 @@ def require_controlled(document, *, what: str, expected_ids=None) -> dict:
             f"order are the stable contract, and a rename or removal is a "
             f"separately approved protocol change this issue does not "
             f"invent a mapping for")
+
+
+def require_controlled(document, *, what: str, expected_ids=None) -> dict:
+    """A usable controlled measurement, or the refusal that names why.
+
+    Used where an unusable measurement really IS a malformed input: the
+    handoff's own result document, whose invalidity means the handoff
+    "omits required evidence" and stops the invocation at the gate.
+    """
+    require_result(document, what)
+    problems = controlled_problems(document, what=what)
+    if problems:
+        raise HandoffError(problems[0])
+    require_descriptor(document, expected_ids, what)
     return document
 
 
@@ -963,17 +1002,82 @@ class Outcome:
         }
 
 
+def result_paths(document) -> list:
+    """Every filesystem path a result document itself names.
+
+    The invocation's `--result` and `--artifact-root` say where a batch
+    was TOLD to write; these say where it reports having written. Both
+    have to stay outside every worktree, and checking only the first
+    would accept a document whose own artifact root is inside the repair
+    worktree while its separately recorded command names an external one.
+    """
+    paths = []
+    for key in ("artifact_root", "invocation_dir"):
+        value = document.get(key)
+        if isinstance(value, str) and value:
+            paths.append((key, value))
+    for position, run in enumerate(document["runs"]):
+        value = run.get("artifact_dir")
+        if isinstance(value, str) and value:
+            paths.append((f"runs[{position}].artifact_dir", value))
+    broken = document.get("error_run")
+    if isinstance(broken, dict):
+        value = broken.get("artifact_dir")
+        if isinstance(value, str) and value:
+            paths.append(("error_run.artifact_dir", value))
+    for position, value in enumerate(document.get("retained_artifacts") or []):
+        if isinstance(value, str) and value:
+            paths.append((f"retained_artifacts[{position}]", value))
+    return paths
+
+
+def _require_worktree(section, *, what: str) -> Path:
+    """The section's declared worktree, canonical and really measured in.
+
+    Two raw strings are not two worktrees: `/tmp/tree` and `/tmp/tree/.`
+    name one checkout. So the declared path is canonicalised, and the
+    invocation is bound to it — without that binding a section could
+    declare one worktree and measure in another, and the "not the same
+    worktree" rule would compare labels nobody used.
+
+    Deliberately NOT "must be a registered `git worktree`". The workflow
+    is required to remove or hand off BOTH comparison worktrees when it
+    finishes, so by the time its document is evaluated the paths it
+    correctly names may no longer exist — and a rule that rejected a
+    truthful record for being tidy would push agents into leaving
+    worktrees behind. What replaces it is stronger for the risk that
+    matters: every destination is checked against the DECLARED worktrees
+    as well as the registered ones, so nothing may be written into
+    either comparison state whether or not it is still checked out.
+    """
+    declared = section.get("worktree")
+    if not isinstance(declared, str) or not declared:
+        raise HandoffError(f"{what} names no worktree")
+    directory = section["invocation"]["directory"]
+    if inside_any_worktree(directory, [declared]) is None:
+        raise HandoffError(
+            f"{what} declares the worktree {declared} but its invocation "
+            f"ran in {directory}; a section that measures somewhere other "
+            f"than the worktree it names is not describing one state")
+    return sorted(_path_forms(declared))[0]
+
+
 def _require_batch(section, *, what: str, handoff: Handoff,
-                   worktrees) -> dict:
-    """One controlled measurement side: its result, command and manifest."""
+                   worktrees) -> list:
+    """One controlled measurement side, and why it is unusable if it is.
+
+    Raises for a malformed input; RETURNS the reasons the batch is not a
+    usable controlled measurement, which the caller routes rather than
+    rejects (see `controlled_problems`).
+    """
     if not isinstance(section, dict):
         raise HandoffError(f"{what} must be a JSON object")
     result = section.get("result")
     if not isinstance(result, dict):
         raise HandoffError(
             f"{what} carries no {probe_flake.RESULT_SCHEMA!r} document")
-    require_controlled(result, what=f"{what}.result",
-                       expected_ids=handoff.expected_checks)
+    require_result(result, f"{what}.result")
+    require_descriptor(result, handoff.expected_checks, f"{what}.result")
     if result["probe"] != handoff.probe:
         raise HandoffError(
             f"{what}.result measured {result['probe']!r}, not "
@@ -981,7 +1085,6 @@ def _require_batch(section, *, what: str, handoff: Handoff,
     invocation = require_invocation(section.get("invocation"),
                                    f"{what}.invocation")
     require_manifest(section.get("configuration"), f"{what}.configuration")
-    worktree = section.get("worktree")
     if what == "baseline" and result["commit_sha"] != handoff.commit_sha:
         raise HandoffError(
             f"the controlled baseline measured commit "
@@ -992,10 +1095,22 @@ def _require_batch(section, *, what: str, handoff: Handoff,
             f"commit is not the control this comparison needs — if the "
             f"intended base moved, recreate BOTH states on one new common "
             f"SHA and repeat the baseline")
-    if not isinstance(worktree, str) or not worktree:
-        raise HandoffError(f"{what} names no worktree")
+    trees = list(worktrees) + [_require_worktree(section, what=what)]
+
+    options = parse_command(invocation["command"], f"{what}.invocation.command")
+    declared_root = options.get("--artifact-root")
+    if declared_root is not None:
+        told = _path_forms(declared_root, invocation["directory"])
+        reported = _path_forms(result["artifact_root"],
+                               invocation["directory"])
+        if not told & reported:
+            raise HandoffError(
+                f"{what} was told to write artifacts to {declared_root} but "
+                f"its result document reports {result['artifact_root']}; the "
+                f"command and the document it produced have to describe one "
+                f"measurement, or neither constrains the other")
     for path in destinations(invocation):
-        tree = inside_any_worktree(path, worktrees,
+        tree = inside_any_worktree(path, trees,
                                    base=invocation["directory"])
         if tree is not None:
             raise HandoffError(
@@ -1003,7 +1118,15 @@ def _require_batch(section, *, what: str, handoff: Handoff,
                 f"result document and the raw artifacts must both stay "
                 f"outside every worktree, or they enter a commit or wedge "
                 f"the drainer's cleanup")
-    return section
+    for label, path in result_paths(result):
+        tree = inside_any_worktree(path, trees,
+                                   base=invocation["directory"])
+        if tree is not None:
+            raise HandoffError(
+                f"{what}.result reports {label} at {path}, inside the "
+                f"working tree {tree}; where a batch says it WROTE is bound "
+                f"by the same rule as where it was told to")
+    return controlled_problems(result, what=f"{what}.result")
 
 
 class Diagnosis:
@@ -1079,8 +1202,8 @@ def evaluate(document, *, worktrees=()) -> Outcome:
             "diagnosis carries no controlled pre-fix baseline; the #1436 "
             "census result triggers diagnosis but is not itself the "
             "controlled base-versus-branch comparison")
-    _require_batch(baseline_section, what="baseline", handoff=handoff,
-                   worktrees=worktrees)
+    baseline_invalid = _require_batch(baseline_section, what="baseline",
+                                      handoff=handoff, worktrees=worktrees)
     baseline = baseline_section["result"]
     baseline_failures = failure_count(baseline)
     common["baseline_failures"] = baseline_failures
@@ -1100,8 +1223,22 @@ def evaluate(document, *, worktrees=()) -> Outcome:
     observed = set(non_pass_ids(baseline))
     hit = [cid for cid in handoff.targets if cid in observed]
 
+    # An INVALID baseline reproduced nothing: it is not evidence that the
+    # probe is fine, so it goes to #1439 with what it did retain rather
+    # than being rejected as a malformed input.
+    if baseline_invalid and route != ROUTE_CANNOT_REPRODUCE:
+        raise RouteRefused(
+            f"the controlled baseline is not a usable measurement, so it "
+            f"established nothing to repair from; this is the "
+            f"{ROUTE_CANNOT_REPRODUCE!r} outcome for #1439: "
+            + "; ".join(baseline_invalid))
+
     if route == ROUTE_CANNOT_REPRODUCE:
         _require_evidence(document, route)
+        if baseline_invalid:
+            return Outcome(route, detail=(
+                "the controlled baseline never became a measurement: "
+                + "; ".join(baseline_invalid)), **common)
         if reproduced == probe_census.TOLERANCE_OVER and hit:
             raise RouteRefused(
                 f"the controlled baseline DID reproduce an over-tolerance "
@@ -1145,12 +1282,23 @@ def evaluate(document, *, worktrees=()) -> Outcome:
             f"the {route!r} route requires a verification batch; a repair "
             f"is only ever accepted against a fresh {RUN_COUNT}-run "
             f"measurement in the repair worktree")
-    _require_batch(verification_section, what="verification", handoff=handoff,
-                   worktrees=worktrees)
+    verification_invalid = _require_batch(
+        verification_section, what="verification", handoff=handoff,
+        worktrees=worktrees)
     verification = verification_section["result"]
     verification_failures = failure_count(verification)
     common["verification_failures"] = verification_failures
 
+    clean = _require_worktree(baseline_section, what="baseline")
+    repair_tree = _require_worktree(verification_section, what="verification")
+    if (clean == repair_tree or clean in repair_tree.parents
+            or repair_tree in clean.parents):
+        raise RouteRefused(
+            f"the baseline worktree {baseline_section['worktree']} and the "
+            f"verification worktree {verification_section['worktree']} are "
+            f"not two separate states; the clean comparison worktree stays "
+            f"at the baseline commit and unmodified, and the repair lives "
+            f"in its own")
     differences = invocation_differences(baseline_section["invocation"],
                                          verification_section["invocation"])
     if differences:
@@ -1166,12 +1314,6 @@ def evaluate(document, *, worktrees=()) -> Outcome:
         raise RouteRefused(
             "the two comparison worktrees do not hold the same "
             "configuration state: " + "; ".join(config_problems))
-    if (baseline_section["worktree"] == verification_section["worktree"]):
-        raise RouteRefused(
-            f"the baseline and the verification ran in the same worktree "
-            f"({baseline_section['worktree']}); the clean comparison "
-            f"worktree stays at the baseline commit and the repair lives in "
-            f"its own")
     verification_destinations = set()
     for path in destinations(verification_section["invocation"]):
         verification_destinations |= _path_forms(
@@ -1189,7 +1331,7 @@ def evaluate(document, *, worktrees=()) -> Outcome:
     # above X, contains any MISSING result, becomes invalid, or only
     # partially improves the rate" is ONE list, and every entry on it
     # goes to #1439 rather than to a pull request.
-    problems = missing_problems(
+    problems = verification_invalid + missing_problems(
         verification, targets=set(handoff.targets),
         acceptable_failures=handoff.acceptable_failures,
         what="the verification batch")
@@ -1218,9 +1360,9 @@ def evaluate(document, *, worktrees=()) -> Outcome:
     # are the ones about the repair itself.
     if problems:
         raise RouteRefused(
-            f"the verification batch violates the MISSING rule, so it is "
-            f"not an accepted verification whatever its failure count; "
-            f"this is the {ROUTE_PARTIAL_IMPROVEMENT!r} outcome for #1439: "
+            f"the verification batch is not an accepted verification "
+            f"whatever its failure count; this is the "
+            f"{ROUTE_PARTIAL_IMPROVEMENT!r} outcome for #1439: "
             + "; ".join(problems))
     if state != probe_census.TOLERANCE_ACCEPTABLE:
         raise RouteRefused(

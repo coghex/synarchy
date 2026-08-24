@@ -1720,11 +1720,29 @@ construction, which is the defect the scoping exists to remove.
 **Same environment means the same measurement, not the same characters.** The
 two batches necessarily differ in worktree and destination, and ports are
 leased dynamically, so they are compared on behavior-affecting settings with
-effective defaults filled in. Both destinations must still sit outside every
-worktree: `check_artifact_root` guards the artifact root, but `--result` is
-written wherever it is pointed — and it is opened RELATIVE TO THE PROCESS'S
-DIRECTORY, so a destination is joined onto the recorded invocation directory
-and normalised before anyone asks which worktree it lands in.
+effective defaults filled in. A command is first checked against the REAL
+harness interface — every option one `probe_flake.main` accepts, and an argv
+that is an interpreter plus a path ending in `probe_flake.py` — because an
+option the CLI does not have would compare equal across both batches while
+describing a measurement neither could have run.
+
+Destinations must sit outside every worktree, registered or declared:
+`check_artifact_root` guards the artifact root, but `--result` is written
+wherever it is pointed — and it is opened RELATIVE TO THE PROCESS'S DIRECTORY,
+so a destination is joined onto the recorded invocation directory and
+normalised first. Where a batch SAYS it wrote is bound by the same rule, and
+its declared `--artifact-root` must agree with the root its result document
+reports.
+
+**An invalid batch is a route, not a rejection.** "Verification remains above
+X, contains any MISSING result, becomes invalid, or only partially improves the
+rate" is one list in the issue and every entry goes to #1439 — so a harness
+error, a short batch or a contended machine reaches `partial-improvement` in
+the verification and `cannot-reproduce` in the baseline, with the evidence
+retained. A gate rejection would describe an invocation that got nowhere and
+lose the artifacts it did keep. What stays a rejection is a document that is
+not a `probe-flake-result/v1` at all, and a descriptor whose identities
+changed.
 
 **The repair is frozen before it is verified.** `probe_flake` records only
 `git rev-parse HEAD` and cannot see uncommitted source, so a declared repair

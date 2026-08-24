@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -65,6 +66,14 @@ FAIL = probe_protocol.FAIL
 MISSING = probe_protocol.MISSING
 
 OUTSIDE = "/tmp/synarchy-deflake-evidence"
+
+# The two comparison worktrees. `evaluate` requires each declared
+# worktree to be a REGISTERED one, so every case supplies these unless it
+# is deliberately testing that rule.
+CLEAN_WT = "/tmp/deflake-clean-role"
+REPAIR_WT = "/tmp/deflake-role"
+WORKTREES = (CLEAN_WT, REPAIR_WT)
+VERIFY_ARTIFACTS = f"{OUTSIDE}/verify-artifacts"
 
 
 def expect(cond: bool, msg: str) -> None:
@@ -109,7 +118,8 @@ def expect_refused(thunk, fragment: str, msg: str) -> None:
 # --------------------------------------------------------------------------
 def result_document(*, probe: str = PROBE, commit: str = BASE_COMMIT,
                     checks=None, runs=None, rts_caps=None,
-                    requested=None, harness_error: bool = False) -> dict:
+                    requested=None, harness_error: bool = False,
+                    artifact_root=None) -> dict:
     """A REAL `probe-flake-result/v1` document.
 
     `runs` is a list of per-run check maps; the run outcome is derived
@@ -121,7 +131,8 @@ def result_document(*, probe: str = PROBE, commit: str = BASE_COMMIT,
     descriptor = probe_protocol.build_descriptor(probe, declared)
     requested = dd.RUN_COUNT if requested is None else requested
     caps = dd.RTS_CAPABILITIES if rts_caps is None else rts_caps
-    root = Path(OUTSIDE) / "artifacts"
+    root = Path(artifact_root if artifact_root is not None
+                else f"{OUTSIDE}/artifacts")
     measurement = probe_flake.Measurement(
         probe, descriptor, requested, caps, root, root / "invocation")
     measurement.commit_sha = commit
@@ -156,6 +167,18 @@ def result_document(*, probe: str = PROBE, commit: str = BASE_COMMIT,
     return measurement.to_document()
 
 
+def verification_result(**kwargs) -> dict:
+    """The repair batch's result: its own commit, its own artifact root.
+
+    `_require_batch` binds a batch's declared `--artifact-root` to the
+    root its result document reports, so the two halves of a fixture
+    cannot drift apart the way a hand-written pair would.
+    """
+    kwargs.setdefault("commit", REPAIR_COMMIT)
+    kwargs.setdefault("artifact_root", VERIFY_ARTIFACTS)
+    return result_document(**kwargs)
+
+
 def failing_runs(count: int, *, cid: str = "beta", declared=None,
                  abort: bool = True) -> list:
     """`count` runs that FAIL at `cid`, then clean runs to fill the batch.
@@ -188,7 +211,7 @@ def failing_runs(count: int, *, cid: str = "beta", declared=None,
 def command(*, probe: str = PROBE, runs=None, rts_caps=None,
             result: str = f"{OUTSIDE}/baseline.json",
             artifacts: str = f"{OUTSIDE}/artifacts",
-            worktree: str = "/tmp/deflake-clean-role") -> list:
+            worktree: str = CLEAN_WT) -> list:
     runs = dd.RUN_COUNT if runs is None else runs
     caps = dd.RTS_CAPABILITIES if rts_caps is None else rts_caps
     return [
@@ -198,7 +221,7 @@ def command(*, probe: str = PROBE, runs=None, rts_caps=None,
     ]
 
 
-def invocation(*, cmd=None, directory: str = "/tmp/deflake-clean-role",
+def invocation(*, cmd=None, directory: str = CLEAN_WT,
                retries: int = 0, ports=None) -> dict:
     return {
         "command": command() if cmd is None else cmd,
@@ -259,7 +282,7 @@ def diagnosis_document(*, route: str = dd.ROUTE_REPAIR, handoff=None,
         document["baseline"] = baseline
     else:
         document["baseline"] = {
-            "worktree": "/tmp/deflake-clean-role",
+            "worktree": CLEAN_WT,
             "result": result_document(runs=failing_runs(4)),
             "invocation": invocation(),
             "configuration": manifest(),
@@ -269,14 +292,14 @@ def diagnosis_document(*, route: str = dd.ROUTE_REPAIR, handoff=None,
         document["verification"] = verification
     elif route in (dd.ROUTE_REPAIR, dd.ROUTE_PARTIAL_IMPROVEMENT):
         document["verification"] = {
-            "worktree": "/tmp/deflake-role",
+            "worktree": REPAIR_WT,
             "source_clean": True,
-            "result": result_document(commit=REPAIR_COMMIT),
+            "result": verification_result(artifact_root=VERIFY_ARTIFACTS),
             "invocation": invocation(
                 cmd=command(result=f"{OUTSIDE}/verify.json",
-                            artifacts=f"{OUTSIDE}/verify-artifacts",
-                            worktree="/tmp/deflake-role"),
-                directory="/tmp/deflake-role", ports=[9201, 9202]),
+                            artifacts=VERIFY_ARTIFACTS,
+                            worktree=REPAIR_WT),
+                directory=REPAIR_WT, ports=[9201, 9202]),
             "configuration": manifest(),
         }
     if route == dd.ROUTE_REPAIR:
@@ -296,7 +319,8 @@ def diagnosis_document(*, route: str = dd.ROUTE_REPAIR, handoff=None,
 
 
 def evaluate(document, **kwargs):
-    return dd.evaluate(document, worktrees=kwargs.pop("worktrees", ()))
+    return dd.evaluate(document,
+                       worktrees=kwargs.pop("worktrees", WORKTREES))
 
 
 # ==========================================================================
@@ -437,24 +461,21 @@ def test_x_is_the_census_policys_own_arithmetic() -> None:
     """At or below X passes, above it does not — X=1 accepts 1, rejects 2."""
     handoff = handoff_document(acceptable=1)
     accepted = diagnosis_document(handoff=handoff)
-    accepted["verification"]["result"] = result_document(
-        commit=REPAIR_COMMIT, runs=failing_runs(1))
+    accepted["verification"]["result"] = verification_result(runs=failing_runs(1))
     outcome = evaluate(accepted)
     expect(outcome.route == dd.ROUTE_REPAIR,
            f"one failure against X=1 is a repair, got {outcome.route}")
     expect(outcome.verification_failures == 1, "the count is reported")
 
     over = diagnosis_document(handoff=handoff_document(acceptable=1))
-    over["verification"]["result"] = result_document(
-        commit=REPAIR_COMMIT, runs=failing_runs(2))
+    over["verification"]["result"] = verification_result(runs=failing_runs(2))
     expect_refused(lambda: evaluate(over), "partial-improvement",
                    "two failures against X=1")
 
 
 def test_x_zero_requires_a_spotless_batch() -> None:
     document = diagnosis_document()
-    document["verification"]["result"] = result_document(
-        commit=REPAIR_COMMIT, runs=failing_runs(1))
+    document["verification"]["result"] = verification_result(runs=failing_runs(1))
     expect_refused(lambda: evaluate(document), "partial-improvement",
                    "one failure against X=0")
 
@@ -479,7 +500,8 @@ def test_a_harness_error_is_not_a_comparison_side() -> None:
     document = handoff_document(result=result_document(
         runs=failing_runs(3), harness_error=True))
     expect_rejected(lambda: dd.require_handoff(document),
-                    "only a valid measurement", "a harness-error batch")
+                    "no trustworthy failure rate",
+                    "a harness-error batch")
 
 
 def test_the_capability_count_is_fixed() -> None:
@@ -729,15 +751,15 @@ def test_a_relative_destination_is_resolved_before_it_is_judged() -> None:
     destination mean something, and it is joined on before containment
     is decided.
     """
-    trees = ["/tmp/deflake-role"]
+    trees = [REPAIR_WT]
     for relative in ("results/verification.json",
                      "./results/verification.json",
                      "../deflake-role/verification.json"):
         document = diagnosis_document()
         document["verification"]["invocation"] = invocation(
-            cmd=command(result=relative, artifacts=f"{OUTSIDE}/verify-artifacts",
-                        worktree="/tmp/deflake-role"),
-            directory="/tmp/deflake-role", ports=[9201])
+            cmd=command(result=relative, artifacts=VERIFY_ARTIFACTS,
+                        worktree=REPAIR_WT),
+            directory=REPAIR_WT, ports=[9201])
         expect_rejected(lambda d=document: evaluate(d, worktrees=trees),
                         "inside the working tree",
                         f"a --result of {relative!r}")
@@ -745,22 +767,22 @@ def test_a_relative_destination_is_resolved_before_it_is_judged() -> None:
     outside = diagnosis_document()
     outside["verification"]["invocation"] = invocation(
         cmd=command(result="../evidence/verification.json",
-                    artifacts=f"{OUTSIDE}/verify-artifacts",
-                    worktree="/tmp/deflake-role"),
-        directory="/tmp/deflake-role", ports=[9201])
+                    artifacts=VERIFY_ARTIFACTS,
+                    worktree=REPAIR_WT),
+        directory=REPAIR_WT, ports=[9201])
     outcome = evaluate(outside, worktrees=trees)
     expect(outcome.route == dd.ROUTE_REPAIR,
            "a relative path that really does leave the worktree is fine")
 
 
 def test_both_batches_must_stay_outside_every_worktree() -> None:
-    trees = ["/tmp/deflake-role"]
+    trees = [REPAIR_WT]
     document = diagnosis_document()
     document["verification"]["invocation"] = invocation(
         cmd=command(result="/tmp/deflake-role/verify.json",
-                    artifacts=f"{OUTSIDE}/verify-artifacts",
-                    worktree="/tmp/deflake-role"),
-        directory="/tmp/deflake-role", ports=[9201])
+                    artifacts=VERIFY_ARTIFACTS,
+                    worktree=REPAIR_WT),
+        directory=REPAIR_WT, ports=[9201])
     expect_rejected(lambda: evaluate(document, worktrees=trees),
                     "inside the working tree",
                     "a result document written into a worktree")
@@ -769,8 +791,9 @@ def test_both_batches_must_stay_outside_every_worktree() -> None:
 def test_the_two_batches_may_not_share_a_destination() -> None:
     document = diagnosis_document()
     document["verification"]["invocation"] = invocation(
-        cmd=command(worktree="/tmp/deflake-role"),
-        directory="/tmp/deflake-role", ports=[9201])
+        cmd=command(worktree=REPAIR_WT), directory=REPAIR_WT, ports=[9201])
+    document["verification"]["result"] = verification_result(
+        artifact_root=f"{OUTSIDE}/artifacts")
     expect_refused(lambda: evaluate(document), "both batches wrote to",
                    "two batches sharing one result path")
 
@@ -787,9 +810,33 @@ def test_a_repair_without_a_verification_batch_is_refused() -> None:
 
 def test_the_two_batches_may_not_share_a_worktree() -> None:
     document = diagnosis_document()
-    document["verification"]["worktree"] = document["baseline"]["worktree"]
-    expect_refused(lambda: evaluate(document), "same worktree",
+    document["verification"]["worktree"] = CLEAN_WT
+    document["verification"]["invocation"]["directory"] = CLEAN_WT
+    expect_refused(lambda: evaluate(document), "not two separate states",
                    "a verification run in the clean comparison worktree")
+
+    for label, declared in (("a trailing dot", f"{CLEAN_WT}/."),
+                            ("a redundant step", f"{CLEAN_WT}/sub/..")):
+        document = diagnosis_document()
+        document["verification"]["worktree"] = declared
+        document["verification"]["invocation"]["directory"] = declared
+        expect_refused(lambda d=document: evaluate(d),
+                       "not two separate states",
+                       f"the same worktree spelled with {label}")
+
+    nested = diagnosis_document()
+    nested["verification"]["worktree"] = f"{CLEAN_WT}/nested"
+    nested["verification"]["invocation"]["directory"] = f"{CLEAN_WT}/nested"
+    expect_refused(lambda: evaluate(nested), "not two separate states",
+                   "a repair worktree nested inside the clean one")
+
+
+def test_a_section_must_measure_in_the_worktree_it_declares() -> None:
+    document = diagnosis_document()
+    document["verification"]["invocation"]["directory"] = "/tmp/somewhere-else"
+    expect_rejected(lambda: evaluate(document),
+                    "measures somewhere other than the worktree it names",
+                    "a section whose invocation ran elsewhere")
 
 
 # ==========================================================================
@@ -802,29 +849,55 @@ def test_destinations_and_ports_may_differ_and_nothing_else() -> None:
 
     for label, fragment, cmd in (
             ("run count", "runs", command(runs=20, result=f"{OUTSIDE}/verify.json",
-                                  artifacts=f"{OUTSIDE}/v",
-                                  worktree="/tmp/deflake-role")),
+                                  artifacts=VERIFY_ARTIFACTS,
+                                  worktree=REPAIR_WT)),
             ("capabilities", "rts_caps", command(rts_caps=8,
                                      result=f"{OUTSIDE}/verify.json",
-                                     artifacts=f"{OUTSIDE}/v",
-                                     worktree="/tmp/deflake-role")),
+                                     artifacts=VERIFY_ARTIFACTS,
+                                     worktree=REPAIR_WT)),
     ):
         document = diagnosis_document()
         document["verification"]["invocation"] = invocation(
-            cmd=cmd, directory="/tmp/deflake-role", ports=[9201])
+            cmd=cmd, directory=REPAIR_WT, ports=[9201])
         expect_refused(lambda d=document: evaluate(d), fragment,
                        f"a verification that changed the {label}")
 
 
-def test_a_timeout_difference_is_a_different_condition() -> None:
-    document = diagnosis_document()
-    document["verification"]["invocation"] = invocation(
-        cmd=command(result=f"{OUTSIDE}/verify.json",
-                    artifacts=f"{OUTSIDE}/v",
-                    worktree="/tmp/deflake-role") + ["--timeout", "60"],
-        directory="/tmp/deflake-role", ports=[9201])
-    expect_refused(lambda: evaluate(document), "timeout",
-                   "a verification under another timeout")
+def test_only_the_real_harness_options_are_accepted() -> None:
+    """A plausible option the shipped CLI does not have is not a condition.
+
+    `probe_flake.main` exposes no `--timeout`, so a pair of commands both
+    carrying `--timeout 60` would compare EQUAL and pass same-environment
+    validation while describing a measurement neither batch could have
+    run. Every option is checked against the real surface instead.
+    """
+    for extra in (["--timeout", "60"], ["--start-port", "9500"],
+                  ["--retries", "2"], ["--jobs", "4"]):
+        document = diagnosis_document()
+        document["verification"]["invocation"] = invocation(
+            cmd=command(result=f"{OUTSIDE}/verify.json",
+                        artifacts=VERIFY_ARTIFACTS,
+                        worktree=REPAIR_WT) + extra,
+            directory=REPAIR_WT, ports=[9201])
+        expect_rejected(lambda d=document: evaluate(d),
+                        "does not accept",
+                        f"a command carrying {extra[0]}")
+
+
+def test_a_fabricated_argv_is_not_a_harness_invocation() -> None:
+    for label, cmd in (
+            ("another script", ["python3", f"{CLEAN_WT}/tools/run_probes.py",
+                                "--probe", PROBE, "--runs", "10"]),
+            ("an extra positional", ["python3", f"{CLEAN_WT}/tools/probe_flake.py",
+                                     "extra", "--probe", PROBE,
+                                     "--runs", "10"]),
+            ("no script at all", ["--probe", PROBE, "--runs", "10"]),
+    ):
+        document = diagnosis_document()
+        document["baseline"]["invocation"] = invocation(cmd=cmd)
+        expect_rejected(lambda d=document: evaluate(d),
+                        "a harness invocation is",
+                        f"a command with {label}")
 
 
 def test_an_absent_option_compares_as_its_effective_default() -> None:
@@ -840,13 +913,26 @@ def test_an_absent_option_compares_as_its_effective_default() -> None:
            "an omitted --rts-caps equals an explicit one at the default")
 
 
-def test_an_unclassifiable_option_is_refused_rather_than_ignored() -> None:
-    document = diagnosis_document()
-    document["baseline"]["invocation"] = invocation(
-        cmd=command() + ["--start-port", "9500"])
-    expect_rejected(lambda: evaluate(document),
-                    "does not know how to classify",
-                    "an option that is neither a condition nor a destination")
+def test_the_option_table_matches_the_shipped_harness() -> None:
+    """Drift guard: the real `--help` is the authority on the surface.
+
+    `probe_flake.main` builds its parser inside the function, so the
+    table here is hard-coded — and this reads the shipped CLI's own help
+    output, so adding, removing or renaming a harness option fails here
+    instead of silently widening what this module will accept.
+    """
+    done = subprocess.run(
+        [sys.executable, str(Path(TOOL).parent / "probe_flake.py"), "--help"],
+        capture_output=True, text=True, timeout=120)
+    expect(done.returncode == 0, f"probe_flake --help exits 0: {done.stderr}")
+    real = set(re.findall(r"(?<![\w-])(--[a-z][a-z-]*)", done.stdout))
+    real.discard("--help")
+    expect(real == set(dd.HARNESS_OPTIONS),
+           f"the classified options {sorted(dd.HARNESS_OPTIONS)} are exactly "
+           f"the shipped ones {sorted(real)}")
+    expect(set(dd.REQUIRED_OPTIONS).isdisjoint(dd.DESTINATION_OPTIONS)
+           and set(dd.INVOCATION_DEFAULTS).isdisjoint(dd.DESTINATION_OPTIONS),
+           "and no option is both a condition and a destination")
 
 
 # ==========================================================================
@@ -856,8 +942,7 @@ def test_a_renamed_identifier_is_refused() -> None:
     document = diagnosis_document()
     renamed = [("alpha", "the first check"), ("beta_two", "renamed"),
                ("gamma", "the third check")]
-    document["verification"]["result"] = result_document(
-        commit=REPAIR_COMMIT, checks=renamed,
+    document["verification"]["result"] = verification_result(checks=renamed,
         runs=[{cid: PASS for cid, _l in renamed}] * dd.RUN_COUNT)
     expect_rejected(lambda: evaluate(document),
                     "separately approved protocol change",
@@ -867,8 +952,7 @@ def test_a_renamed_identifier_is_refused() -> None:
 def test_a_removed_identifier_is_refused() -> None:
     document = diagnosis_document()
     fewer = [("alpha", "the first check"), ("beta", "the second check")]
-    document["verification"]["result"] = result_document(
-        commit=REPAIR_COMMIT, checks=fewer,
+    document["verification"]["result"] = verification_result(checks=fewer,
         runs=[{cid: PASS for cid, _l in fewer}] * dd.RUN_COUNT)
     expect_rejected(lambda: evaluate(document),
                     "separately approved protocol change",
@@ -878,8 +962,7 @@ def test_a_removed_identifier_is_refused() -> None:
 def test_a_reordered_descriptor_is_refused() -> None:
     document = diagnosis_document()
     swapped = [CHECKS[1], CHECKS[0], CHECKS[2]]
-    document["verification"]["result"] = result_document(
-        commit=REPAIR_COMMIT, checks=swapped,
+    document["verification"]["result"] = verification_result(checks=swapped,
         runs=[{cid: PASS for cid, _l in swapped}] * dd.RUN_COUNT)
     expect_rejected(lambda: evaluate(document),
                     "separately approved protocol change",
@@ -952,8 +1035,7 @@ def test_a_target_must_really_be_measured_in_ten_runs_minus_x() -> None:
     a run that did not pass — so driving it end to end would prove the
     count rule and say nothing about this one.
     """
-    document = result_document(commit=REPAIR_COMMIT,
-                               runs=failing_runs(3, cid="beta"))
+    document = verification_result(runs=failing_runs(3, cid="beta"))
     for acceptable, expected in ((2, True), (3, False)):
         problems = dd.missing_problems(
             document, targets={"gamma"}, acceptable_failures=acceptable,
@@ -964,7 +1046,7 @@ def test_a_target_must_really_be_measured_in_ten_runs_minus_x() -> None:
                f"requires {dd.RUN_COUNT - acceptable}: expected "
                f"{'a' if expected else 'no'} complaint, got {problems}")
 
-    spotless = result_document(commit=REPAIR_COMMIT)
+    spotless = verification_result()
     expect(dd.missing_problems(spotless, targets={"gamma"},
                                acceptable_failures=0,
                                what="x") == [],
@@ -975,8 +1057,7 @@ def test_a_target_that_stops_being_emitted_is_refused_end_to_end() -> None:
     """One accepted failing run may lose it; more than X may not."""
     handoff = handoff_document(acceptable=1)
     document = diagnosis_document(handoff=handoff)
-    document["verification"]["result"] = result_document(
-        commit=REPAIR_COMMIT, runs=failing_runs(2))
+    document["verification"]["result"] = verification_result(runs=failing_runs(2))
     expect_refused(lambda: evaluate(document), "partial-improvement",
                    "a target lost in more runs than X allows")
 
@@ -985,8 +1066,7 @@ def test_a_passing_run_may_not_omit_a_check() -> None:
     document = diagnosis_document()
     runs = [{"alpha": PASS, "beta": PASS, "gamma": MISSING}]
     runs += [{cid: PASS for cid, _l in CHECKS}] * (dd.RUN_COUNT - 1)
-    document["verification"]["result"] = result_document(
-        commit=REPAIR_COMMIT, runs=runs)
+    document["verification"]["result"] = verification_result(runs=runs)
     expect_refused(lambda: evaluate(document),
                    "passed while omitting",
                    "a passing run that omitted a check")
@@ -999,8 +1079,7 @@ def test_an_accepted_failing_run_may_lose_the_suffix_after_its_abort() -> None:
     document = diagnosis_document(handoff=handoff)
     document["baseline"]["result"] = result_document(
         runs=failing_runs(4, cid="alpha"))
-    document["verification"]["result"] = result_document(
-        commit=REPAIR_COMMIT, runs=failing_runs(1, cid="alpha"))
+    document["verification"]["result"] = verification_result(runs=failing_runs(1, cid="alpha"))
     outcome = evaluate(document)
     expect(outcome.route == dd.ROUTE_REPAIR,
            f"one aborted run within X is accepted; got {outcome.route}")
@@ -1011,8 +1090,7 @@ def test_a_non_contiguous_gap_is_malformed_rather_than_an_abort() -> None:
     document["handoff"]["acceptable_failures"] = 1
     runs = [{"alpha": MISSING, "beta": FAIL, "gamma": MISSING}]
     runs += [{cid: PASS for cid, _l in CHECKS}] * (dd.RUN_COUNT - 1)
-    document["verification"]["result"] = result_document(
-        commit=REPAIR_COMMIT, runs=runs)
+    document["verification"]["result"] = verification_result(runs=runs)
     expect_refused(lambda: evaluate(document), "contiguous suffix",
                    "a run with a hole in the middle of its results")
 
@@ -1021,8 +1099,7 @@ def test_an_identifier_that_vanishes_from_the_batch_is_refused() -> None:
     document = diagnosis_document()
     document["handoff"]["acceptable_failures"] = 3
     runs = [{"alpha": PASS, "beta": FAIL, "gamma": MISSING}] * dd.RUN_COUNT
-    document["verification"]["result"] = result_document(
-        commit=REPAIR_COMMIT, runs=runs)
+    document["verification"]["result"] = verification_result(runs=runs)
     expect_refused(lambda: evaluate(document),
                    "never emitted gamma",
                    "a check that was never emitted in the whole batch")
@@ -1033,8 +1110,7 @@ def test_a_missing_violation_is_the_partial_improvement_route() -> None:
     document = diagnosis_document(route=dd.ROUTE_PARTIAL_IMPROVEMENT)
     runs = [{"alpha": PASS, "beta": PASS, "gamma": MISSING}]
     runs += [{cid: PASS for cid, _l in CHECKS}] * (dd.RUN_COUNT - 1)
-    document["verification"]["result"] = result_document(
-        commit=REPAIR_COMMIT, runs=runs)
+    document["verification"]["result"] = verification_result(runs=runs)
     outcome = evaluate(document)
     expect(outcome.route == dd.ROUTE_PARTIAL_IMPROVEMENT,
            f"a MISSING violation routes to #1439; got {outcome.route}")
@@ -1070,8 +1146,7 @@ def test_every_non_repair_route_preserves_its_evidence() -> None:
             document["baseline"]["result"] = result_document()
             document.pop("verification", None)
         if route == dd.ROUTE_PARTIAL_IMPROVEMENT:
-            document["verification"]["result"] = result_document(
-                commit=REPAIR_COMMIT, runs=failing_runs(2))
+            document["verification"]["result"] = verification_result(runs=failing_runs(2))
         del document["diagnosis"]
         expect_rejected(lambda d=document: evaluate(d),
                         "states no diagnosis",
@@ -1104,9 +1179,9 @@ def test_a_non_repair_route_may_not_carry_a_verification_batch() -> None:
                                   diagnosis={"summary": "the product is wrong",
                                              "evidence": ["engine log"]})
     document["verification"] = {
-        "worktree": "/tmp/deflake-role", "source_clean": True,
-        "result": result_document(commit=REPAIR_COMMIT),
-        "invocation": invocation(directory="/tmp/deflake-role"),
+        "worktree": REPAIR_WT, "source_clean": True,
+        "result": verification_result(),
+        "invocation": invocation(directory=REPAIR_WT),
         "configuration": manifest(),
     }
     expect_refused(lambda: evaluate(document), "runs no verification batch",
@@ -1127,13 +1202,144 @@ def test_the_no_confident_fix_route_hands_off_to_1439() -> None:
 
 def test_partial_improvement_hands_off_to_1439() -> None:
     document = diagnosis_document(route=dd.ROUTE_PARTIAL_IMPROVEMENT)
-    document["verification"]["result"] = result_document(
-        commit=REPAIR_COMMIT, runs=failing_runs(2))
+    document["verification"]["result"] = verification_result(runs=failing_runs(2))
     outcome = evaluate(document)
     expect(outcome.route == dd.ROUTE_PARTIAL_IMPROVEMENT, "the route holds")
     expect(outcome.owner_issue == 1439, "and hands off to #1439")
     expect(outcome.baseline_failures == 4 and outcome.verification_failures == 2,
            "and reports both counts")
+
+
+def test_an_invalid_verification_batch_is_1439_not_a_rejection() -> None:
+    """The issue lists "becomes invalid" beside "remains above X".
+
+    Both are #1439 outcomes with the evidence preserved, so a harness
+    error in the verification batch must reach `partial-improvement` —
+    reporting it as a rejected handoff would lose the retained artifacts
+    and describe an invocation that never got past the gate.
+    """
+    for label, result in (
+            ("a harness error", verification_result(
+                runs=failing_runs(1), harness_error=True)),
+            ("a short batch", verification_result(
+                runs=failing_runs(1)[:5], requested=5)),
+            ("a contended machine", None),
+    ):
+        document = diagnosis_document(route=dd.ROUTE_PARTIAL_IMPROVEMENT)
+        if result is None:
+            document["verification"]["result"]["peak_concurrency"] = 2
+        else:
+            document["verification"]["result"] = result
+        outcome = evaluate(document)
+        expect(outcome.route == dd.ROUTE_PARTIAL_IMPROVEMENT,
+               f"{label} routes to #1439; got {outcome.route}")
+        expect(outcome.owner_issue == 1439, f"{label} names its owner")
+
+    repair = diagnosis_document()
+    repair["verification"]["result"]["peak_concurrency"] = 2
+    expect_refused(lambda: evaluate(repair), "partial-improvement",
+                   "a repair declared over a contended verification")
+
+
+def test_an_invalid_baseline_is_cannot_reproduce_not_a_rejection() -> None:
+    document = diagnosis_document(route=dd.ROUTE_CANNOT_REPRODUCE)
+    document["baseline"]["result"] = result_document(
+        runs=failing_runs(4), harness_error=True)
+    document.pop("verification", None)
+    outcome = evaluate(document)
+    expect(outcome.route == dd.ROUTE_CANNOT_REPRODUCE,
+           f"an aborted baseline established nothing; got {outcome.route}")
+    expect(outcome.owner_issue == 1439, "and hands off to #1439")
+
+    repair = diagnosis_document()
+    repair["baseline"]["result"] = result_document(
+        runs=failing_runs(4), harness_error=True)
+    expect_refused(lambda: evaluate(repair), "cannot-reproduce",
+                   "a repair declared over an aborted baseline")
+
+
+def test_an_over_tolerance_baseline_that_is_still_invalid_is_refused() -> None:
+    """An invalid baseline is never a repair, whatever its failure count.
+
+    A harness error also leaves the batch incomparable on run count, so
+    the tolerance rule would refuse it anyway. This one is over
+    tolerance, hits the target, and is unusable ONLY because the machine
+    was contended — which makes the "not a usable measurement" rule the
+    single thing standing between it and a pull request.
+    """
+    document = diagnosis_document()
+    document["baseline"]["result"]["peak_concurrency"] = 2
+    expect_refused(lambda: evaluate(document),
+                   "established nothing to repair from",
+                   "a repair declared over a contended baseline")
+
+
+def test_a_command_missing_a_required_option_never_ran() -> None:
+    for option in dd.REQUIRED_OPTIONS:
+        cmd = [token for token in command()]
+        index = cmd.index(option)
+        del cmd[index:index + 2]
+        document = diagnosis_document()
+        document["baseline"]["invocation"] = invocation(cmd=cmd)
+        expect_rejected(lambda d=document: evaluate(d),
+                        f"names no {option}",
+                        f"a command with no {option}")
+
+
+def test_a_section_with_no_worktree_at_all_is_refused() -> None:
+    for value in (None, "", 42):
+        document = diagnosis_document()
+        if value is None:
+            del document["verification"]["worktree"]
+        else:
+            document["verification"]["worktree"] = value
+        expect_rejected(lambda d=document: evaluate(d), "names no worktree",
+                        f"a section whose worktree is {value!r}")
+
+
+def test_a_result_document_that_names_a_path_inside_a_worktree_is_refused() -> None:
+    """Where a batch says it WROTE is bound like where it was told to.
+
+    Checking only the command would accept a document whose own artifact
+    root is inside the repair worktree while its separately recorded
+    command names an external one.
+    """
+    # `artifact_root` is reached by the agreement rule first — the command
+    # named an external root and the document reports one inside the
+    # worktree, which is exactly the disagreement that rule exists for —
+    # so it is asserted separately rather than pinned to the wrong rule.
+    document = diagnosis_document()
+    document["verification"]["result"]["artifact_root"] = f"{REPAIR_WT}/a"
+    expect_rejected(lambda: evaluate(document),
+                    "have to describe one measurement",
+                    "a result document whose artifact_root is in a worktree")
+
+    for label, mutate in (
+            ("invocation_dir",
+             lambda r: r.update({"invocation_dir": f"{REPAIR_WT}/inv"})),
+            ("a run's artifact_dir",
+             lambda r: r["runs"][0].update(
+                 {"artifact_dir": f"{REPAIR_WT}/run-001"})),
+            ("a retained artifact",
+             lambda r: r.update(
+                 {"retained_artifacts": [f"{REPAIR_WT}/run-001"]})),
+    ):
+        document = diagnosis_document()
+        result = document["verification"]["result"]
+        result["runs"][0]["artifact_dir"] = f"{OUTSIDE}/verify-artifacts/r1"
+        mutate(result)
+        expect_rejected(lambda d=document: evaluate(d),
+                        "inside the working tree",
+                        f"a result document whose {label} is in a worktree")
+
+
+def test_the_command_and_its_result_must_describe_one_measurement() -> None:
+    document = diagnosis_document()
+    document["verification"]["result"] = verification_result(
+        artifact_root=f"{OUTSIDE}/somewhere-else")
+    expect_rejected(lambda: evaluate(document),
+                    "have to describe one measurement",
+                    "a result reporting a root its command never named")
 
 
 def test_partial_improvement_is_refused_when_the_batch_was_accepted() -> None:
