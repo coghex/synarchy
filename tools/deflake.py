@@ -478,19 +478,44 @@ def handoff_path_for(result_path) -> Path:
 
 
 def write_handoff(path, document) -> str | None:
-    """Write the handoff. Returns a problem description, or None.
+    """Write the handoff ATOMICALLY. Returns a problem description, or None.
 
     Raises nothing: a handoff that cannot be written is an outcome this
     command reports, never a traceback out of a run whose census update
     has already committed.
+
+    Staged and renamed rather than written in place, because only the
+    `recorded` outcome may leave a handoff and a failed write must leave
+    NONE. Writing to the final path directly truncates it first, so a
+    disk that fills mid-write would leave a partial or empty
+    `*-handoff.json` beside the result while this command reported
+    `managed-error` and a null `handoff_document` — a later consumer
+    would find evidence that says it is a complete measurement and is
+    not. `os.replace` is atomic within a filesystem, and the staging
+    file is a sibling, so it is the same one.
+
+    The document is serialized BEFORE anything is opened, so a value
+    json cannot encode fails without touching the target at all.
     """
+    target = Path(path)
+    staging = target.with_name(f"{target.name}.partial")
     try:
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        Path(path).write_text(
-            json.dumps(document, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8")
-    except (OSError, TypeError, ValueError) as error:
-        return f"could not write {path} ({error})"
+        payload = json.dumps(document, indent=2, sort_keys=True) + "\n"
+    except (TypeError, ValueError) as error:
+        return f"could not serialize the handoff for {target} ({error})"
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staging.write_text(payload, encoding="utf-8")
+        os.replace(staging, target)
+    except OSError as error:
+        try:
+            staging.unlink()
+        except OSError:
+            # The staging file is named for its target and ends
+            # `.partial`, so one left behind is inert: nothing reads it,
+            # and the next successful write replaces it.
+            pass
+        return f"could not write {target} ({error})"
     return None
 
 

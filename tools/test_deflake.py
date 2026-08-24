@@ -1713,6 +1713,45 @@ def test_the_real_writer_produces_a_readable_document() -> None:
         expect(problem is not None and "could not write" in problem,
                f"an unwritable target is a reported problem, not a "
                f"traceback ({problem})")
+        # Here the staging file WAS created and the rename is what
+        # failed, so this is the case that proves it gets cleaned up.
+        expect(not (scratch.root / "beside.partial").exists(),
+               f"and the staging file it created is removed "
+               f"({sorted(path.name for path in scratch.root.iterdir())})")
+
+        # A failed write leaves NO handoff: only `recorded` may leave
+        # one, and a partial file beside the result would tell a later
+        # consumer it had a complete measurement when it does not.
+        unserialisable = scratch.root / "beside" / "bad-handoff.json"
+        unserialisable.parent.mkdir(parents=True, exist_ok=True)
+        unserialisable.write_text("PRIOR CONTENT\n", encoding="utf-8")
+        problem = deflake.write_handoff(unserialisable, {"runs": {1, 2}})
+        expect(problem is not None and "could not serialize" in problem,
+               f"a document json cannot encode is reported ({problem})")
+        expect(unserialisable.read_text(encoding="utf-8") == "PRIOR CONTENT\n",
+               "and the target was never even opened, let alone truncated")
+
+        # And when the write itself fails, nothing partial is left and
+        # whatever was there is untouched.
+        locked = scratch.root / "locked"
+        locked.mkdir()
+        victim = locked / "result.json-handoff.json"
+        victim.write_text("EARLIER HANDOFF\n", encoding="utf-8")
+        locked.chmod(0o500)
+        try:
+            problem = deflake.write_handoff(victim, document)
+            if os.geteuid() != 0:
+                expect(problem is not None and "could not write" in problem,
+                       f"a directory that refuses the write is reported "
+                       f"({problem})")
+                expect(victim.read_text(encoding="utf-8")
+                       == "EARLIER HANDOFF\n",
+                       "the existing file is untouched")
+                expect(list(locked.iterdir()) == [victim],
+                       f"and no staging file is left behind "
+                       f"({list(locked.iterdir())})")
+        finally:
+            locked.chmod(0o700)
     finally:
         scratch.cleanup()
 

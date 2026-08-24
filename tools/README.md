@@ -1627,9 +1627,12 @@ measurement and none of them is the complete attributable measurement a
 diagnosis reads a handoff as. Capturing the configuration OPENS files, so it can fail
 the way reading a file fails; that is a managed pre-measurement failure —
 the claim goes back, no engine starts, and there is no handoff, because a
-handoff describes a measurement. A `recorded` run with nothing retained to sit
-beside, or a handoff that cannot be written, is the same existing nonzero
-`managed-error`: the committed census update is append-only and is neither
+handoff describes a measurement. The write is STAGED and renamed, because only
+`recorded` may leave a handoff and a failed write must leave none: writing in
+place truncates first, so a disk filling mid-write would leave a partial
+`*-handoff.json` beside the result while the command reported no handoff at
+all. A `recorded` run with nothing retained to sit beside, or a handoff that
+cannot be written, is the same existing nonzero `managed-error`: the committed census update is append-only and is neither
 retried nor rolled back, both facts are reported, and the outcome vocabulary
 does not grow.
 
