@@ -8,8 +8,9 @@ iiTemp / cooling-tick stack end-to-end:
      ambient (world.getAmbientAt) through item.getGroundTemp.
   2. Cooling: an item spawned hot ({temp=100}) cools monotonically
      toward ambient on the game clock; a cold one (-40) warms.
-  3. Newtonian rate: of two items on the same tile, the one further
-     from ambient closes more °C in the same interval.
+  3. Newtonian rate: of two items on the same tile, both placed on
+     one side of the ambient the probe measured, the one further from
+     ambient closes more °C in the same interval.
   4. Pause: the pause flag freezes cooling (same gate as flora
      regrowth).
   5. Held items: unit.setItemTemp / unit.getItemTemp round-trip on a
@@ -23,12 +24,33 @@ iiTemp / cooling-tick stack end-to-end:
 Usage: python3 tools/item_temp_probe.py [--port 9177] [--seed 42]
        [--size 64] [--plates 3]
 """
-import argparse, glob, os, shutil, socket, subprocess, sys, tempfile, time, uuid
+import argparse, glob, math, os, shutil, socket, subprocess, sys
+import tempfile, time, uuid
 from probelib import (boot, capture_request_id, quit_engine, send,
                       wait_load_published, wait_save_complete)
 
 SPROOT = "/tmp"
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Phase 3's two items are placed relative to the ambient this run
+# actually measures instead of at fixed temperatures (#1611). The old
+# fixed 100/60 pair only carried a valid relation below a hard-coded
+# 45°C ambient, so the comparison was skipped -- and the probe still
+# reported success -- across every warmer world. These offsets reproduce
+# the gaps that pair had at this fixture's own ambient (36.0°C), so the
+# default run measures exactly what it measured before while every other
+# ambient now gets the same check rather than none.
+RATE_FAR_OFFSET = 64.0
+RATE_NEAR_OFFSET = 24.0
+# What the pair the engine actually stored has to look like for the
+# comparison to be about behaviour rather than sampling resolution. An
+# item within `Item.Temperature.itemTempSnapEpsilon` of ambient is
+# untracked and reads exactly ambient, reporting its whole initial gap as
+# a closure, so both items keep a healthy margin above that; the
+# separation is what makes "further from ambient" a real difference.
+TEMP_SNAP_EPSILON = 0.25
+RATE_MIN_GAP = 4.0
+RATE_MIN_SEPARATION = 8.0
 
 
 def make_isolated_root(base: str) -> str:
@@ -147,6 +169,96 @@ def num(port, lua, timeout=10.0):
         return None
 
 
+def finite(value):
+    """Is this reading usable in temperature arithmetic?
+
+    `num` answers None for a non-numeric reply and hands `nan`/`inf`
+    straight through, while `iiTemp` is an engine `Float`. Phase 3 places
+    its fixture relative to a measured ambient, so every value it
+    computes with is put through this first: a comparison against a NaN
+    is silently false rather than an error, which is the shape of failure
+    this probe exists to not report as success.
+    """
+    return isinstance(value, float) and math.isfinite(value)
+
+
+def deg(value):
+    """A temperature for a diagnostic line: two decimals across every
+    scale a world ambient plausibly reaches, compact scientific notation
+    beyond it — so a pathological fixture reports `1e+30` rather than
+    thirty-one digits of the same thing."""
+    return f"{value:.2f}" if abs(value) < 1e6 else f"{value:.6g}"
+
+
+def ground_temp(port, gid):
+    """Read one ground item's temperature, tolerating an item that never
+    spawned: None in, None out, rather than a query built around a
+    missing id."""
+    if gid is None:
+        return None
+    return num(port, f"return item.getGroundTemp({gid})")
+
+
+def spawn_rate_item(port, temp):
+    """Spawn one of phase 3's ambient-derived items and read back what
+    the engine actually stored.
+
+    Returns `(gid, observed)`, either element None when the step it names
+    produced no usable number: `item.spawnGround` answers nil on a
+    rejected spawn and `item.getGroundTemp` on an unknown id. The read is
+    not a formality -- `item.spawnGround` narrows the requested Lua
+    number to a `Float` -- so the stored value is the only one phase 3
+    judges its fixture on. Ground-item ids are zero-based, so 0 is a real
+    id.
+    """
+    gid = num(port, "return item.spawnGround('steel_bar', 2.5, 2.5, "
+                    f"{{temp={temp:.4f}}})")
+    if not finite(gid) or gid < 0:
+        return None, None
+    gid = int(gid)
+    return gid, ground_temp(port, gid)
+
+
+def rate_fixture_failure(amb, near_want, far_want,
+                         gid_near, t0_near, gid_far, t0_far):
+    """Say why phase 3's fixture cannot carry the rate comparison, or
+    None when it can.
+
+    The probe never skips this phase (#1611), so an ambient that genuinely
+    cannot support a valid pair has to surface as a failure naming the
+    ambient, the temperatures the probe wanted, and what was wrong with
+    them. The judgement is made on what the engine STORED rather than on
+    the Python floats that were asked for: the spawn narrows to `Float`,
+    so at an extreme ambient two distinct requests can collapse onto each
+    other, or onto ambient itself.
+    """
+    wanted = (f"ambient {deg(amb)}°C, wanted {deg(near_want)}°C and "
+              f"{deg(far_want)}°C")
+    if gid_near is None or gid_far is None:
+        return (f"{wanted}: the engine would not spawn the pair "
+                f"(ids {gid_near}, {gid_far})")
+    if not finite(t0_near) or not finite(t0_far):
+        return (f"{wanted}: the engine read back unusable initial "
+                f"temperatures ({t0_near!r}, {t0_far!r})")
+    stored = f"the stored pair {deg(t0_near)}°C / {deg(t0_far)}°C"
+    gap_near = t0_near - amb
+    gap_far = t0_far - amb
+    if gap_near <= 0 or gap_far <= 0:
+        return (f"{wanted}: {stored} is not both above ambient, so the two "
+                f"items would not close their gaps in one direction")
+    if min(gap_near, gap_far) < RATE_MIN_GAP:
+        return (f"{wanted}: {stored} leaves only "
+                f"{deg(min(gap_near, gap_far))}°C above ambient, under the "
+                f"{deg(RATE_MIN_GAP)}°C this comparison needs to stay clear "
+                f"of the {deg(TEMP_SNAP_EPSILON)}°C snap-to-ambient "
+                f"threshold")
+    if gap_far - gap_near < RATE_MIN_SEPARATION:
+        return (f"{wanted}: {stored} sits {deg(gap_far - gap_near)}°C apart, "
+                f"under the {deg(RATE_MIN_SEPARATION)}°C separation that "
+                f"makes one item measurably further from ambient")
+    return None
+
+
 def bootstrap(port):
     for pattern, fn in [
         ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
@@ -209,15 +321,37 @@ def main():
         print(f"  [{'PASS' if ok1 else 'FAIL'}] bare spawn reads ambient: "
               f"getGroundTemp={t_plain} ambient={amb}")
 
+        # Phase 3 places its fixture relative to THIS reading, so an
+        # unusable ambient is a fixture failure to report rather than a
+        # value to compute with. Stopping here is what keeps requirement
+        # 4's diagnostic a diagnostic: every later phase compares against
+        # `amb` too, and a None would raise out of phase 2 before the
+        # rate fixture ever got to explain itself.
+        if not finite(amb):
+            print(f"  [FAIL] the ambient at (2, 2) is unusable ({amb!r}); "
+                  f"the rate fixture places its two items at "
+                  f"ambient+{RATE_NEAR_OFFSET:.0f}°C and "
+                  f"ambient+{RATE_FAR_OFFSET:.0f}°C and can locate neither")
+            return 1
+
         # --- 2. Hot cools / cold warms on the game clock ---
         gid_hot = int(num(port,
             "return item.spawnGround('steel_bar', 2.5, 2.5, {temp=100})"))
         gid_cold = int(num(port,
             "return item.spawnGround('steel_bar', 2.5, 2.5, {temp=-40})"))
-        gid_warm = int(num(port,
-            "return item.spawnGround('steel_bar', 2.5, 2.5, {temp=60})"))
         t0_hot = num(port, f"return item.getGroundTemp({gid_hot})")
-        t0_warm = num(port, f"return item.getGroundTemp({gid_warm})")
+
+        # Phase 3's own pair, on the same tile and the same clock but
+        # deliberately NOT phase 2's fixed items: those two anchor the
+        # monotonic direction checks at 100 and -40 and the pause gate
+        # below, and they stay exactly where they are.
+        near_want = amb + RATE_NEAR_OFFSET
+        far_want = amb + RATE_FAR_OFFSET
+        gid_near, t0_near = spawn_rate_item(port, near_want)
+        gid_far, t0_far = spawn_rate_item(port, far_want)
+        rate_setup = rate_fixture_failure(amb, near_want, far_want,
+                                          gid_near, t0_near, gid_far, t0_far)
+
         # steel_bar = 0.5 kg → tau = 1800 game-sec; timeScale 10 ticks
         # 600 game-sec per real-second, so ~1 tau every 3 s of polling.
         send(port, "world.setTimeScale('probe', 10); return 'ok'")
@@ -226,7 +360,10 @@ def main():
             time.sleep(1.0)
             hot_series.append(num(port, f"return item.getGroundTemp({gid_hot})"))
         t1_cold = num(port, f"return item.getGroundTemp({gid_cold})")
-        t1_warm = num(port, f"return item.getGroundTemp({gid_warm})")
+        # Read back to back and immediately after the loop, so the two
+        # items really did have the same interval to close their gaps in.
+        t1_near = ground_temp(port, gid_near)
+        t1_far = ground_temp(port, gid_far)
         ok2 = all(b < a for a, b in zip(hot_series, hot_series[1:])) \
               and hot_series[-1] > amb
         ok2b = t1_cold > -40 and t1_cold < amb
@@ -237,15 +374,28 @@ def main():
               f"ambient: -40 → {t1_cold}")
 
         # --- 3. Newtonian rate: bigger ΔT closes more °C ---
-        drop_hot = t0_hot - hot_series[-1]
-        drop_warm = t0_warm - t1_warm
-        if amb < 45:
-            ok3 = drop_hot > drop_warm > 0
-            passed &= ok3
-            print(f"  [{'PASS' if ok3 else 'FAIL'}] hotter item sheds more "
-                  f"°C in the same time: {drop_hot:.1f} vs {drop_warm:.1f}")
+        # Asserted at every ambient (#1611): the pair was derived from the
+        # ambient measured above, so there is no band in which this phase
+        # reports success without comparing the two closures.
+        if rate_setup:
+            ok3 = False
+            print(f"  [FAIL] rate comparison has no usable fixture: "
+                  f"{rate_setup}")
+        elif not finite(t1_near) or not finite(t1_far):
+            ok3 = False
+            print(f"  [FAIL] rate comparison could not read both items back "
+                  f"after the interval ({t1_near!r}, {t1_far!r}) — started "
+                  f"at {deg(t0_near)}°C and {deg(t0_far)}°C over ambient "
+                  f"{deg(amb)}°C")
         else:
-            print(f"  [SKIP] ambient {amb} too warm for the ΔT comparison")
+            drop_near = t0_near - t1_near
+            drop_far = t0_far - t1_far
+            ok3 = drop_far > drop_near > 0
+            print(f"  [{'PASS' if ok3 else 'FAIL'}] hotter item sheds more "
+                  f"°C in the same time: over ambient {amb:.1f}°C, "
+                  f"{t0_far:.1f}°C shed {drop_far:.1f} vs {t0_near:.1f}°C "
+                  f"shed {drop_near:.1f}")
+        passed &= ok3
 
         # --- 4. Pause freezes cooling ---
         send(port, "engine.setPaused(true); return 'ok'")
