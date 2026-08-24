@@ -1686,6 +1686,14 @@ count would otherwise read as a spotless batch. Its `timestamp_utc` is read by
 `probe_census.parse_timestamp` too, so it names a real UTC instant rather than
 merely having the right shape.
 
+**A descriptor is compared whole.** Identifiers, their order, AND their labels:
+a label is the check's stated meaning, so a batch that kept every identifier
+while relabelling one to describe a different assertion has changed what it
+measures and said so nowhere. A repair's `changed_paths` are normalised
+repository-relative paths before the `tools/` scope check is applied, since
+`tools/../src/Engine/Core/Init.hs` begins with `tools/` and changes production
+code.
+
 **The targets are not a selection from the measurement — they ARE it.** Every
 non-PASS identifier is a diagnosis input, so the handoff's target list must
 equal the measurement's ordered non-PASS identifiers exactly. A subset would
@@ -1740,8 +1748,9 @@ then script, then options — Python rejects an unknown option before the script
 runs), a NAMED Python 3 interpreter rather than one given by path (`python3`,
 optionally versioned — not bare `python`, which is whichever the machine means,
 nor `python2`, which cannot parse these programs; and a document cannot show
-which binary sits at `/tmp/counterfeit/python3`), and a script at the path the
-checkout it says it ran in keeps it — `<worktree>/tools/probe_flake.py`
+which binary sits at `/tmp/counterfeit/python3`), and a script RESOLVED FROM THE DIRECTORY THE
+COMMAND RAN IN (which is what Python does with a relative script path) and
+required to be the tool the declared checkout ships — `<worktree>/tools/probe_flake.py`
 for a controlled batch, `<directory>/tools/deflake.py` for the handoff, since
 matching only the file name would admit `/tmp/counterfeit/probe_flake.py` —
 and the handoff's directory must be the PRIMARY checkout rather than any path
@@ -1750,11 +1759,11 @@ then bound to its own result document, so two commands agreeing with each other
 cannot stand in for the contract.
 
 **The artifact layout is the one the harness creates.** Every path is absolute
-AND canonical — `check_artifact_root` resolves its root before a run begins, so
-no real path carries a `.`, a `..`, a doubled separator or a trailing slash, and
-normalising a supplied one before comparing would accept
-`/tmp/evidence/forged/../artifacts/…`, which points somewhere else entirely if
-any component is a symlink. `new_invocation_dir` puts the invocation directory
+and fully RESOLVED — `check_artifact_root` calls `Path.resolve` on its root
+before a run begins, so no real path carries a `.`, a `..`, a doubled separator,
+a trailing slash or an unresolved symlink. A lexical check alone would accept
+`/tmp/evidence/forged/../artifacts/…`, and on a host where `/tmp` links to
+`/private/tmp` it would call two different places the same one. `new_invocation_dir` puts the invocation directory
 directly under that root and GENERATES its name,
 `{probe}-{%Y%m%dT%H%M%SZ}-{pid}-{uuid8}`, whose stamp must be a real UTC instant
 and whose pid must be a real process — the shape alone matches

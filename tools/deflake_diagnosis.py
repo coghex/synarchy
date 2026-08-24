@@ -129,11 +129,16 @@ versioned; not bare `python`, which is whichever of the two that machine
 means, and not `python2`, which cannot parse these programs at all —
 named rather than given by path, since a document cannot show which
 binary sits at `/tmp/counterfeit/python3` — running one of those two
-scripts AT THE PATH
-the checkout it says it ran in keeps it: `<worktree>/tools/probe_flake.py`
-for a controlled batch, `<directory>/tools/deflake.py` for the handoff.
-Matching only the file name would admit `/tmp/counterfeit/probe_flake.py`,
-a different program spelled the same way, and the handoff's directory
+scripts. The script is
+RESOLVED FROM THE DIRECTORY THE COMMAND RAN IN — which is what Python
+does with a relative path — and must then be the tool the DECLARED
+checkout ships: `<worktree>/tools/probe_flake.py` for a controlled
+batch, `<directory>/tools/deflake.py` for the handoff. Matching only the
+file name would admit `/tmp/counterfeit/probe_flake.py`, a different
+program spelled the same way; resolving against the checkout instead let
+an invocation in a SUBDIRECTORY write `tools/probe_flake.py`, mean a
+counterfeit nested beside it, and be compared to the real one. And the
+handoff's directory
 must be the PRIMARY checkout rather than any path calling itself one —
 `/deflake` runs there, before this workflow's comparison worktrees
 exist,
@@ -616,7 +621,8 @@ INVOCATION_DIR_RE = re.compile(
 INVOCATION_STAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 
 
-def parse_command(command, what: str, *, launcher=None, root=None):
+def parse_command(command, what: str, *, launcher=None, root=None,
+                  base=None):
     """One recorded argument vector, as `(launcher, {option: value})`.
 
     ORDER is part of the grammar, not decoration: `python3 --probe role
@@ -665,13 +671,22 @@ def parse_command(command, what: str, *, launcher=None, root=None):
             f"{probe_flake.RESULT_SCHEMA} document are "
             f"{', '.join(sorted(LAUNCHERS))}")
     if root is not None:
+        # Resolved from the DIRECTORY THE COMMAND RAN IN, because that is
+        # what Python does with a relative script path — then required to
+        # be the tool the declared checkout ships. Resolving against the
+        # checkout instead let an invocation in a subdirectory name a
+        # counterfeit nested `tools/probe_flake.py` and have it compared
+        # to the real one.
         expected = Path(root) / TOOLS_DIR / found.script
-        if not (_path_forms(script, root) & _path_forms(expected)):
+        if not (_path_forms(script, base if base is not None else root)
+                & _path_forms(expected)):
             raise HandoffError(
-                f"{what} runs {script}, where the checkout it says it ran in "
-                f"keeps that tool at {expected}; matching only the file NAME "
-                f"would admit `/tmp/counterfeit/{found.script}`, which is a "
-                f"different program that happens to be spelled the same")
+                f"{what} runs {script} from {base if base is not None else root}, "
+                f"where the checkout it declares keeps that tool at "
+                f"{expected}; matching only the file NAME would admit "
+                f"`/tmp/counterfeit/{found.script}`, and resolving from the "
+                f"checkout rather than the working directory would admit a "
+                f"counterfeit nested beside it")
     if launcher is not None and found is not launcher:
         raise HandoffError(
             f"{what} runs {found.script}, where {launcher.describes} come "
@@ -756,7 +771,8 @@ def require_invocation(document, what: str, *, launcher=None,
         raise HandoffError(f"{what} has no `directory`")
     parse_command(document.get("command"), f"{what}.command",
                   launcher=launcher,
-                  root=directory if root is None else root)
+                  root=directory if root is None else root,
+                  base=directory)
     retries = document.get("retries")
     if retries != 0:
         raise HandoffError(
@@ -1070,24 +1086,49 @@ def controlled_problems(document, *, what: str) -> list:
     return problems
 
 
-def require_descriptor(document, expected_ids, what: str) -> None:
-    """The stable check identities, which a route may never reinterpret.
+def descriptor_of(document) -> list:
+    """The document's ordered descriptor, identifiers AND labels."""
+    return [{"id": entry["id"], "label": entry["label"]}
+            for entry in document["checks"]]
 
-    A rename, a removal or a reorder is a REJECTION and not a #1439
-    outcome: it is an attempt to change the reporting protocol, which
-    needs a separately approved mapping this issue does not invent.
+
+def require_descriptor(document, expected, what: str) -> None:
+    """The whole declared descriptor, which a route may never reinterpret.
+
+    Identifiers, their order, AND their labels. The label is the check's
+    stated MEANING — `probe_protocol.build_descriptor` carries it as the
+    human-readable half of the contract — so a verification that kept
+    every identifier while relabelling one to describe a different
+    assertion has changed what the batch measures and reported the
+    change nowhere.
+
+    A rename, a removal, a reorder or a relabel is a REJECTION and not a
+    #1439 outcome: each is an attempt to change the reporting protocol,
+    which needs a separately approved mapping this issue does not invent.
     """
-    ids = descriptor_ids(document)
-    if expected_ids is not None and list(expected_ids) != ids:
+    if expected is None:
+        return
+    found = descriptor_of(document)
+    if list(expected) == found:
+        return
+    ids, expected_ids = descriptor_ids(document), [e["id"] for e in expected]
+    if ids != expected_ids:
         raise HandoffError(
             f"{what} declares the checks {ids} where the handoff's expected "
-            f"descriptor is {list(expected_ids)}; identifiers and their "
-            f"order are the stable contract, and a rename or removal is a "
-            f"separately approved protocol change this issue does not "
-            f"invent a mapping for")
+            f"descriptor is {expected_ids}; identifiers and their order are "
+            f"the stable contract, and a rename or removal is a separately "
+            f"approved protocol change this issue does not invent a mapping "
+            f"for")
+    changed = [f"{e['id']}: {e['label']!r} -> {f['label']!r}"
+               for e, f in zip(expected, found) if e["label"] != f["label"]]
+    raise HandoffError(
+        f"{what} relabels {'; '.join(changed)}; a label is the check's "
+        f"stated MEANING, so keeping the identifier while describing a "
+        f"different assertion changes what the batch measures and says so "
+        f"nowhere")
 
 
-def require_controlled(document, *, what: str, expected_ids=None) -> dict:
+def require_controlled(document, *, what: str, expected=None) -> dict:
     """A usable controlled measurement, or the refusal that names why.
 
     Used where an unusable measurement really IS a malformed input: the
@@ -1098,7 +1139,7 @@ def require_controlled(document, *, what: str, expected_ids=None) -> dict:
     problems = controlled_problems(document, what=what)
     if problems:
         raise HandoffError(problems[0])
-    require_descriptor(document, expected_ids, what)
+    require_descriptor(document, expected, what)
     return document
 
 
@@ -1220,6 +1261,7 @@ class Handoff:
         self.invocation = document["invocation"]
         self.configuration = document["configuration"]
         self.expected_checks = descriptor_ids(self.result)
+        self.expected_descriptor = descriptor_of(self.result)
         self.targets = tuple(document["targets"])
         self.artifacts = list(document.get("artifacts") or [])
 
@@ -1436,14 +1478,14 @@ class Outcome:
 def _require_canonical(path, what: str) -> None:
     """A path exactly as `Path.resolve` would have serialized it.
 
-    `probe_flake.check_artifact_root` RESOLVES its root before a run
-    begins and every other path is built from it, so a real result
-    document carries absolute paths with no `.`, no `..`, no doubled
-    separator and no trailing slash. Normalising a supplied path before
-    comparing it would have accepted
-    `/tmp/evidence/forged/../artifacts/...` as the artifact root, which
-    the harness could not have written and which points somewhere else
-    entirely if any component is a symlink.
+    `probe_flake.check_artifact_root` calls `Path.resolve` on its root
+    before a run begins and every other path is built from it, so a real
+    result document carries fully RESOLVED absolute paths — no `.`, no
+    `..`, no doubled separator, no trailing slash, and no unresolved
+    symlink. A lexical `normpath` check alone would accept
+    `/tmp/evidence/forged/../artifacts/...`, which the harness could not
+    have written, and on a host where `/tmp` links to `/private/tmp` it
+    would call two different places the same one.
     """
     if not isinstance(path, str) or not path:
         raise HandoffError(f"{what} is not a path ({path!r})")
@@ -1452,13 +1494,16 @@ def _require_canonical(path, what: str) -> None:
             f"{what} is the relative path {path!r}; `check_artifact_root` "
             f"resolves its root before a run begins, so every path a real "
             f"result document carries is absolute")
-    if os.path.normpath(path) != path:
+    resolved = str(Path(path).resolve())
+    if resolved != path:
         raise HandoffError(
-            f"{what} is {path!r}, which is not the canonical spelling "
-            f"{os.path.normpath(path)!r}; a resolved path carries no `.`, "
-            f"no `..`, no doubled separator and no trailing slash, and one "
-            f"that does points somewhere else entirely if any component is "
-            f"a symlink")
+            f"{what} is {path!r}, which is not the spelling "
+            f"`Path.resolve` produces ({resolved!r}); "
+            f"`check_artifact_root` RESOLVES its root, so a real document's "
+            f"paths carry no `.`, no `..`, no doubled separator, no trailing "
+            f"slash AND no unresolved symlink — on this host `/tmp` is a "
+            f"link to `/private/tmp`, and a lexical check alone would call "
+            f"two different places the same one")
 
 
 def require_topology(document, what: str) -> None:
@@ -1658,7 +1703,7 @@ def _require_batch(section, *, what: str, handoff: Handoff,
         raise HandoffError(
             f"{what} carries no {probe_flake.RESULT_SCHEMA!r} document")
     require_result(result, f"{what}.result")
-    require_descriptor(result, handoff.expected_checks, f"{what}.result")
+    require_descriptor(result, handoff.expected_descriptor, f"{what}.result")
     if result["probe"] != handoff.probe:
         raise HandoffError(
             f"{what}.result measured {result['probe']!r}, not "
@@ -2107,6 +2152,19 @@ def _require_repair(document, verification_section, *,
     if (not isinstance(changed, list) or not changed
             or not all(isinstance(path, str) and path for path in changed)):
         raise HandoffError("the repair records no changed paths")
+    for path in changed:
+        if Path(path).is_absolute():
+            raise HandoffError(
+                f"the repair names the absolute path {path!r}; changed paths "
+                f"are repository-relative, so an absolute one is not a "
+                f"statement about this repository at all")
+        if os.path.normpath(path) != path or ".." in Path(path).parts:
+            raise HandoffError(
+                f"the repair names {path!r}, which is not its normalised "
+                f"repository-relative form ({os.path.normpath(path)!r}); "
+                f"`tools/../src/Engine/Core/Init.hs` begins with `tools/` "
+                f"and changes production code, so the scope check is applied "
+                f"to the normalised path or it checks nothing")
     offenders = [path for path in changed
                  if not (path.startswith("tools/")
                          or path.startswith("test-headless/"))]

@@ -66,17 +66,21 @@ PASS = probe_protocol.PASS
 FAIL = probe_protocol.FAIL
 MISSING = probe_protocol.MISSING
 
-OUTSIDE = "/tmp/synarchy-deflake-evidence"
+# RESOLVED, because `check_artifact_root` resolves and a real document
+# therefore carries no unresolved symlink — on macOS `/tmp` is a link to
+# `/private/tmp`, so a fixture spelling it `/tmp/...` would be asserting
+# against a path the harness could not have serialized.
+OUTSIDE = str(Path("/tmp/synarchy-deflake-evidence").resolve())
 
 # The two comparison worktrees. `evaluate` requires each declared
 # worktree to be a REGISTERED one, so every case supplies these unless it
 # is deliberately testing that rule.
-CLEAN_WT = "/tmp/deflake-clean-role"
-REPAIR_WT = "/tmp/deflake-role"
+CLEAN_WT = str(Path("/tmp/deflake-clean-role").resolve())
+REPAIR_WT = str(Path("/tmp/deflake-role").resolve())
 WORKTREES = (CLEAN_WT, REPAIR_WT)
 # `/deflake` runs in the primary checkout, not in either comparison
 # worktree: it is the step BEFORE this workflow creates them.
-PRIMARY_WT = "/tmp/synarchy-primary"
+PRIMARY_WT = str(Path("/tmp/synarchy-primary").resolve())
 VERIFY_ARTIFACTS = f"{OUTSIDE}/verify-artifacts"
 
 
@@ -699,7 +703,7 @@ def test_the_handoff_comes_from_deflake_and_the_batches_from_the_harness() -> No
     counterfeit = handoff_document(inv=deflake_invocation(cmd=[
         "python3", "/tmp/counterfeit/deflake.py", "--json"]))
     expect_rejected(lambda: dd.require_handoff(counterfeit),
-                    "different program that happens to be",
+                    "the checkout it declares keeps that tool at",
                     "a handoff claiming a counterfeit /deflake")
 
 
@@ -1380,7 +1384,7 @@ def test_a_result_path_must_be_spelled_the_way_resolve_spells_it() -> None:
         document = handoff_document()
         document["result"]["artifact_root"] = root
         expect_rejected(lambda d=document: dd.require_handoff(d),
-                        "not the canonical spelling",
+                        "not the spelling `Path.resolve` produces",
                         f"an artifact root with {label}")
 
     document = handoff_document()
@@ -1392,8 +1396,110 @@ def test_a_result_path_must_be_spelled_the_way_resolve_spells_it() -> None:
         for path in document["result"]["retained_artifacts"]]
     failing["artifact_dir"] = forged
     expect_rejected(lambda: dd.require_handoff(document),
-                    "not the canonical spelling",
+                    "not the spelling `Path.resolve` produces",
                     "a run directory with a self step")
+
+
+def test_an_unresolved_symlink_is_not_the_serialized_path() -> None:
+    """`check_artifact_root` RESOLVES, so a real path has none left.
+
+    Driven against a real symlink rather than a hard-coded platform
+    quirk, so it means the same thing on a host where `/tmp` is a real
+    directory as on one where it is a link to `/private/tmp`.
+    """
+    root = Path(tempfile.mkdtemp(prefix="test_deflake_diagnosis_")).resolve()
+    try:
+        (root / "real").mkdir()
+        (root / "link").symlink_to(root / "real")
+        document = handoff_document()
+        document["result"]["artifact_root"] = str(root / "link" / "artifacts")
+        expect_rejected(lambda: dd.require_handoff(document),
+                        "not the spelling `Path.resolve` produces",
+                        "an artifact root reached through a symlink")
+
+        resolved = handoff_document(result=result_document(
+            runs=failing_runs(3),
+            artifact_root=str(root / "real" / "artifacts")))
+        dd.require_handoff(resolved)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_relative_script_resolves_from_the_directory_it_ran_in() -> None:
+    """Python resolves a relative script path from the CWD, not the checkout.
+
+    So an invocation in a SUBDIRECTORY of the declared worktree can write
+    `tools/probe_flake.py` and mean a counterfeit nested beside it —
+    which resolving against the checkout would have compared to the real
+    tool and accepted.
+    """
+    document = diagnosis_document()
+    document["baseline"]["invocation"] = invocation(
+        cmd=["python3", "tools/probe_flake.py", "--probe", PROBE,
+             "--runs", str(dd.RUN_COUNT), "--rts-caps",
+             str(dd.RTS_CAPABILITIES), "--result", f"{OUTSIDE}/baseline.json",
+             "--artifact-root", f"{OUTSIDE}/artifacts"],
+        directory=f"{CLEAN_WT}/nested")
+    expect_rejected(lambda: evaluate(document),
+                    "the checkout it declares keeps that tool at",
+                    "a relative script naming a counterfeit nested tool")
+
+    # The same relative spelling from the checkout ROOT is the real tool.
+    fine = diagnosis_document()
+    fine["baseline"]["invocation"] = invocation(
+        cmd=["python3", "tools/probe_flake.py", "--probe", PROBE,
+             "--runs", str(dd.RUN_COUNT), "--rts-caps",
+             str(dd.RTS_CAPABILITIES), "--result", f"{OUTSIDE}/baseline.json",
+             "--artifact-root", f"{OUTSIDE}/artifacts"],
+        directory=CLEAN_WT)
+    outcome = evaluate(fine)
+    expect(outcome.route == dd.ROUTE_REPAIR,
+           f"a relative script from the checkout root is fine; got "
+           f"{outcome.route}")
+
+
+def test_a_relabelled_check_has_changed_what_it_measures() -> None:
+    """A label is the check's stated MEANING, not decoration."""
+    relabelled = [("alpha", "the first check"),
+                  ("beta", "an entirely different assertion"),
+                  ("gamma", "the third check")]
+    document = diagnosis_document()
+    document["verification"]["result"] = verification_result(
+        checks=relabelled,
+        runs=[{cid: PASS for cid, _l in relabelled}] * dd.RUN_COUNT)
+    expect_rejected(lambda: evaluate(document), "relabels",
+                    "a verification that relabelled a check")
+
+    baseline = diagnosis_document()
+    baseline["baseline"]["result"] = result_document(
+        checks=relabelled, runs=failing_runs(4, declared=relabelled))
+    expect_rejected(lambda: evaluate(baseline), "relabels",
+                    "a baseline that relabelled a check")
+
+    expect(dd.descriptor_of(result_document()) ==
+           [{"id": cid, "label": label} for cid, label in CHECKS],
+           "the descriptor is compared as identifiers AND labels")
+
+
+def test_a_changed_path_is_repository_relative_and_traversal_free() -> None:
+    """`tools/../src/…` begins with `tools/` and changes production code."""
+    for label, path in (
+            ("a traversal out of tools", "tools/../src/Engine/Core/Init.hs"),
+            ("a traversal to the root", "tools/../../etc/passwd"),
+            ("a self step", "tools/./role_probe.py"),
+            ("a doubled separator", "tools//role_probe.py")):
+        document = diagnosis_document(repair={
+            "commit_sha": REPAIR_COMMIT, "base_sha": BASE_COMMIT,
+            "changed_paths": [path]})
+        expect_rejected(lambda d=document: evaluate(d),
+                        "normalised repository-relative form",
+                        f"a changed path with {label}")
+
+    document = diagnosis_document(repair={
+        "commit_sha": REPAIR_COMMIT, "base_sha": BASE_COMMIT,
+        "changed_paths": [f"{CLEAN_WT}/tools/role_probe.py"]})
+    expect_rejected(lambda: evaluate(document), "absolute path",
+                    "a changed path given absolutely")
 
 
 def test_a_generated_directory_name_names_a_real_instant_and_process() -> None:
@@ -1460,7 +1566,7 @@ def test_a_fabricated_argv_is_not_a_harness_invocation() -> None:
              ["/tmp/counterfeit/python3", f"{CLEAN_WT}/tools/probe_flake.py",
               "--probe", PROBE, "--runs", "10",
               "--result", f"{OUTSIDE}/b.json"]),
-            ("a counterfeit script", "different program that happens to be",
+            ("a counterfeit script", "the checkout it declares keeps that tool at",
              ["python3", "/tmp/counterfeit/probe_flake.py",
               "--probe", PROBE, "--runs", "10",
               "--result", f"{OUTSIDE}/b.json"]),
