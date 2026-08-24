@@ -23,6 +23,7 @@ Usage:
   python3 tools/movement_probe.py --course cliff
   python3 tools/movement_probe.py --course ramp --unit acolyte --seconds 16
   python3 tools/movement_probe.py --list                # list courses + exit
+                                                        # (no engine is booted)
 
 Exit code 0 = all checks for the course passed.
 """
@@ -32,13 +33,138 @@ import argparse
 import glob
 import json
 import math
+import re
 import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
 from probelib import quit_engine, boot, send, send_json
 
 LOG = "/tmp/movement_probe_engine.log"
+
+REPO = Path(__file__).resolve().parent.parent
+# The Lua module is the shared course authority across probes (this one and
+# tools/wander_hazard_probe.py both build courses from it), so the cheap
+# `--list` path derives its inventory from this file rather than from a
+# separately maintained Python table.
+COURSE_SOURCE = REPO / "scripts" / "movement_arena.lua"
+# A canonical registration: `M.courses.<name> = function()`, anchored at the
+# start of the line so a `--` line comment or a quoted mention never matches.
+# Any other spelling is invisible here on purpose -- `check_course_inventory`
+# fails a real course run when the derived view and M.listCourses() disagree.
+_COURSE_DECL = re.compile(
+    r"^\s*M\.courses\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*function\s*\(")
+# Lua long-bracket comments (--[[ ... ]], --[==[ ... ]==]) span lines, so the
+# line-anchored pattern above cannot see that it is inside one.
+_LONG_COMMENT_OPEN = re.compile(r"--\[(=*)\[")
+
+
+def _blank_long_comments(text: str) -> str:
+    """Blank out Lua long-bracket comments, preserving line structure.
+
+    A commented-OUT registration is not a registration (requirement 2), and
+    the line-anchored pattern alone would derive one. Newlines survive so
+    reported line numbers still name the real file. A `--[[` inside a string
+    literal would be misread as an opener; that can only LOSE a course, which
+    is exactly what `check_course_inventory` fails a real course run for.
+    """
+    pieces: list[str] = []
+    cursor = 0
+    while cursor < len(text):
+        opener = _LONG_COMMENT_OPEN.search(text, cursor)
+        if opener is None:
+            pieces.append(text[cursor:])
+            break
+        pieces.append(text[cursor:opener.start()])
+        closer = "]" + "=" * len(opener.group(1)) + "]"
+        end = text.find(closer, opener.end())
+        if end == -1:                       # unterminated: the rest is comment
+            body, cursor = text[opener.start():], len(text)
+        else:
+            body = text[opener.start():end + len(closer)]
+            cursor = end + len(closer)
+        pieces.append("".join(c if c == "\n" else " " for c in body))
+    return "".join(pieces)
+
+
+class CourseSourceError(RuntimeError):
+    """The course inventory could not be derived from the Lua module.
+
+    A SETUP failure, never a silently empty list (#1586): callers exit
+    non-zero naming the file so an unreadable, unparseable or ambiguous
+    source is distinguishable from a module that genuinely declares
+    nothing.
+    """
+
+
+def derive_courses(path: Path | None = None) -> list[str]:
+    """Course names declared by scripts/movement_arena.lua, WITHOUT booting.
+
+    `M.listCourses()` stays the runtime authority; this is a derived view of
+    the same source so `--list` costs nothing. Returned sorted, matching
+    that function's own `table.sort(names)`, so every `--list` invocation
+    prints identical output.
+    """
+    path = COURSE_SOURCE if path is None else path
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise CourseSourceError(f"cannot read {path}: {exc}") from exc
+    first_seen: dict[str, int] = {}
+    duplicates: list[str] = []
+    for lineno, line in enumerate(_blank_long_comments(text).splitlines(), 1):
+        match = _COURSE_DECL.match(line)
+        if match is None:
+            continue
+        name = match.group(1)
+        if name in first_seen:
+            duplicates.append(f"{name} (lines {first_seen[name]} and {lineno})")
+        else:
+            first_seen[name] = lineno
+    if duplicates:
+        raise CourseSourceError(
+            f"{path} declares duplicate courses: " + ", ".join(duplicates))
+    if not first_seen:
+        raise CourseSourceError(
+            f"{path} declares no 'M.courses.<name> = function()' registrations")
+    return sorted(first_seen)
+
+
+def check_course_inventory(port: int) -> int:
+    """Guard the derived listing against the runtime authority (#1586).
+
+    A real course run already has an engine, so it is the place to prove the
+    cheap `--list` view has not drifted from
+    `require('scripts.movement_arena').listCourses()`. Returns 0 on
+    agreement, 2 otherwise, reporting the two directions of difference
+    separately so the message never depends on set iteration order.
+    """
+    try:
+        derived = derive_courses()
+    except CourseSourceError as exc:
+        print(f"FAIL: {exc}", file=sys.stderr)
+        return 2
+    runtime = send_json(
+        port, "return require('scripts.movement_arena').listCourses()")
+    if not isinstance(runtime, list) or not runtime:
+        print("FAIL: movement_arena.listCourses() returned no course names "
+              f"({runtime!r})", file=sys.stderr)
+        return 2
+    runtime_names = sorted(str(name) for name in runtime)
+    if runtime_names == derived:
+        return 0
+    derived_only = sorted(set(derived) - set(runtime_names))
+    runtime_only = sorted(set(runtime_names) - set(derived))
+    print(f"FAIL: course inventory drift between {COURSE_SOURCE} and "
+          "movement_arena.listCourses()", file=sys.stderr)
+    print("  derived from the Lua source but absent at runtime: "
+          + (", ".join(derived_only) if derived_only else "(none)"),
+          file=sys.stderr)
+    print("  registered at runtime but not derived from the Lua source: "
+          + (", ".join(runtime_only) if runtime_only else "(none)"),
+          file=sys.stderr)
+    return 2
 
 
 def bootstrap(port: int, with_resources: bool = False,
@@ -517,8 +643,24 @@ def main() -> int:
                          "override for slow courses like ramp_climb)")
     ap.add_argument("--port", type=int, default=9134)
     ap.add_argument("--list", action="store_true",
-                    help="list available courses and exit")
+                    help="list available courses and exit (no engine boot; "
+                         "honoured for every --mode)")
     args = ap.parse_args()
+
+    # #1586: listing is a metadata query, so it must not depend on a build,
+    # a free port or a resource root. Answered from the Lua source before
+    # any boot() and before the mode dispatch below, so `--list`,
+    # `--list --mode stamina` and `--list --mode pacing` all print the same
+    # inventory and exit 0.
+    if args.list:
+        try:
+            names = derive_courses()
+        except CourseSourceError as exc:
+            print(f"FAIL: {exc}", file=sys.stderr)
+            return 2
+        print("courses:", ", ".join(names))
+        return 0
+
     args.speed_explicit = args.speed is not None
     if args.seconds is None:
         args.seconds = COURSE_SECONDS.get(args.course, 14.0)
@@ -532,11 +674,11 @@ def main() -> int:
 
         bootstrap(args.port)
 
-        if args.list:
-            names = send_json(args.port,
-                              "return require('scripts.movement_arena').listCourses()")
-            print("courses:", ", ".join(names) if names else "(none)")
-            return 0
+        # This run has an engine, so it is where the cheap --list view is
+        # held to the runtime authority (#1586).
+        drift = check_course_inventory(args.port)
+        if drift:
+            return drift
 
         course = send_json(
             args.port,

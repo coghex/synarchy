@@ -781,6 +781,15 @@ jobs:
       # needs-gpu, so without this companion that contract is only ever
       # observed by a GPU run nothing here can make; the companion boots
       # nothing and runs in well under a second.
+      # test_movement_probe is #1586's: `tools/movement_probe.py --list`
+      # is a metadata query, answered from scripts/movement_arena.lua
+      # before any boot() and for every --mode, with the derived view
+      # held to the runtime M.listCourses() by every real course run.
+      # That probe is manual-only too, so without this companion a
+      # reintroduced boot() on the listing path, a mode dispatch that
+      # preempts --list again, or a silently empty inventory would only
+      # ever be caught by hand. It boots nothing and runs in well under
+      # a second.
       - name: probe runner self-tests
         run: |
           python3 tools/ci_probes.py --self-test
@@ -796,6 +805,7 @@ jobs:
           python3 tools/test_probe_resource_lock.py
           python3 tools/test_deflake.py
           python3 tools/test_location_embark_probe.py
+          python3 tools/test_movement_probe.py
 
       # Cheap, no-engine guard (#1355): fails if a `python3 tools/*.py`
       # check runs in this job and not in tools/ci-local.sh, or the other
