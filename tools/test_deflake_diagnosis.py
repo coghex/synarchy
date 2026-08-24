@@ -51,6 +51,11 @@ TOOL = str(Path(__file__).resolve().parent / "deflake_diagnosis.py")
 # one setting differently; the entry gate adapts at the boundary and the
 # fixtures have to know which side they are on.
 PRODUCER_FIELD = {"timeout_seconds": "timeout"}
+
+# A directory with no `config/*.local.yaml` family at all, so
+# `deflake.configuration_manifest` answers with the empty list that is
+# this repository's expected default.
+PRIMARY_CONFIG_ROOT = tempfile.mkdtemp(prefix="deflake_diag_config_")
 FAILURES: list[str] = []
 
 # A REGISTERED, manual-only, `probe-result/v1` probe key. A real key
@@ -267,14 +272,20 @@ def invocation(*, cmd=None, directory: str = CLEAN_WT,
 
 def deflake_argv(*, worktree: str = PRIMARY_WT,
                  result: str = f"{OUTSIDE}/handoff.json") -> list:
-    """`/deflake`'s own argv: one flag and one optional destination.
+    """`/deflake`'s own argv, in the form the PRODUCER records.
+
+    `sys.argv`, whose [0] is the SCRIPT: `deflake.main` passes
+    `list(sys.argv)` (`tools/deflake.py:1108`) and Python never puts the
+    interpreter there. Writing `["python3", ...]` here is the assumption
+    that let this suite certify a gate no real handoff could pass —
+    `real_cli_argv` proves the form against an actual subprocess rather
+    than restating it.
 
     Deliberately no `--probe`, no `--runs` and no RTS override — that CLI
     exposes none of them, so a fixture naming one would be asserting
     against a command that cannot exist.
     """
-    return ["python3", f"{worktree}/tools/deflake.py", "--json",
-            "--result", result]
+    return [f"{worktree}/tools/deflake.py", "--json", "--result", result]
 
 
 def deflake_invocation(*, cmd=None, directory: str = PRIMARY_WT,
@@ -855,7 +866,7 @@ def test_the_handoff_comes_from_deflake_and_the_batches_from_the_harness() -> No
     # Each record keeps its OWN shape and borrows only the other's argv,
     # so what fails is the launcher rule rather than a missing key.
     swapped = handoff_document()
-    swapped["invocation"]["argv"] = command(worktree=PRIMARY_WT)
+    swapped["invocation"]["argv"] = command(worktree=PRIMARY_WT)[1:]
     expect_rejected(lambda: dd.require_handoff(swapped),
                     "come from deflake.py",
                     "a handoff claiming a probe_flake.py argv")
@@ -869,7 +880,7 @@ def test_the_handoff_comes_from_deflake_and_the_batches_from_the_harness() -> No
 
     counterfeit = handoff_document()
     counterfeit["invocation"]["argv"] = [
-        "python3", "/tmp/counterfeit/deflake.py", "--json"]
+        "/tmp/counterfeit/deflake.py", "--json"]
     expect_rejected(lambda: dd.require_handoff(counterfeit),
                     "the checkout it declares keeps that tool at",
                     "a handoff claiming a counterfeit /deflake")
@@ -879,18 +890,18 @@ def test_a_deflake_command_takes_only_its_own_two_options() -> None:
     for extra in (["--probe", PROBE], ["--runs", "10"],
                   ["--rts-caps", "4"], ["--artifact-root", OUTSIDE]):
         document = handoff_document(inv=deflake_invocation(cmd=[
-            "python3", f"{PRIMARY_WT}/tools/deflake.py", "--json"] + extra))
+            f"{PRIMARY_WT}/tools/deflake.py", "--json"] + extra))
         expect_rejected(lambda d=document: dd.require_handoff(d),
                         "does not accept",
                         f"a /deflake command carrying {extra[0]}")
 
     # `--json` is a flag, so it must not swallow the next argument.
     document = handoff_document(inv=deflake_invocation(cmd=[
-        "python3", f"{PRIMARY_WT}/tools/deflake.py",
+        f"{PRIMARY_WT}/tools/deflake.py",
         "--json", "--result", f"{OUTSIDE}/handoff.json"]))
     dd.require_handoff(document)
     document = handoff_document(inv=deflake_invocation(cmd=[
-        "python3", f"{PRIMARY_WT}/tools/deflake.py",
+        f"{PRIMARY_WT}/tools/deflake.py",
         "--json=true", "--result", f"{OUTSIDE}/handoff.json"]))
     expect_rejected(lambda: dd.require_handoff(document),
                     "which is a flag", "a value passed to --json")
@@ -898,7 +909,7 @@ def test_a_deflake_command_takes_only_its_own_two_options() -> None:
     # `--result` is OPTIONAL there: /deflake retains the document beside
     # its artifacts whether or not it is also copied out.
     document = handoff_document(inv=deflake_invocation(cmd=[
-        "python3", f"{PRIMARY_WT}/tools/deflake.py", "--json"]))
+        f"{PRIMARY_WT}/tools/deflake.py", "--json"]))
     dd.require_handoff(document)
 
 
@@ -1638,12 +1649,20 @@ def test_a_versioned_interpreter_is_not_a_recorded_command() -> None:
         for batch in ("baseline", "verification"):
             document[batch]["invocation"] = invocation(
                 cmd=[program] + command()[1:])
-        document["handoff"]["invocation"] = deflake_invocation(
-            cmd=[program, f"{PRIMARY_WT}/tools/deflake.py", "--json",
-                 "--result", f"{OUTSIDE}/handoff.json"])
         expect_rejected(lambda d=document: evaluate(d),
                         "not the interpreter this lab records",
-                        f"every command consistently run by {program!r}")
+                        f"every controlled command run by {program!r}")
+
+    # The handoff records `sys.argv`, which has no interpreter token to
+    # version — putting one there is refused as the wrong FORM, which is
+    # a stronger statement than refusing the version.
+    for program in ("python3", "python3.9"):
+        document = handoff_document()
+        document["invocation"]["argv"] = (
+            [program] + document["invocation"]["argv"])
+        expect_rejected(lambda d=document: dd.require_handoff(d),
+                        "Python never puts the interpreter there",
+                        f"a handoff argv prefixed with {program!r}")
 
 
 def test_an_identity_with_a_trailing_newline_is_not_an_identity() -> None:
@@ -1735,7 +1754,7 @@ def test_the_handoff_comes_from_the_primary_checkout() -> None:
             ("the repair worktree", REPAIR_WT)):
         document = diagnosis_document()
         document["handoff"]["invocation"] = deflake_invocation(
-            cmd=["python3", f"{elsewhere}/tools/deflake.py", "--json",
+            cmd=[f"{elsewhere}/tools/deflake.py", "--json",
                  "--result", f"{OUTSIDE}/handoff.json"],
             directory=elsewhere)
         expect_rejected(lambda d=document: evaluate(d),
@@ -1745,7 +1764,7 @@ def test_the_handoff_comes_from_the_primary_checkout() -> None:
     # Spelled differently, the same checkout is still the same checkout.
     document = diagnosis_document()
     document["handoff"]["invocation"] = deflake_invocation(
-        cmd=["python3", f"{PRIMARY_WT}/./tools/deflake.py", "--json",
+        cmd=[f"{PRIMARY_WT}/./tools/deflake.py", "--json",
              "--result", f"{OUTSIDE}/handoff.json"],
         directory=f"{PRIMARY_WT}/.")
     outcome = evaluate(document)
@@ -2614,7 +2633,7 @@ def test_the_handoffs_own_evidence_may_not_live_in_a_worktree() -> None:
 
     moved = diagnosis_document()
     moved["handoff"]["invocation"]["argv"] = [
-        "python3", f"{PRIMARY_WT}/tools/deflake.py", "--json",
+        f"{PRIMARY_WT}/tools/deflake.py", "--json",
         "--result", f"{REPAIR_WT}/handoff.json"]
     expect_rejected(lambda: evaluate(moved, worktrees=()),
                     "inside the working tree",
@@ -2743,6 +2762,83 @@ def test_every_route_hands_on_every_batchs_retained_artifacts() -> None:
 DIGEST_A = "a" * 64
 DIGEST_B = "b" * 64
 LOCAL_YAML = "config/video.local.yaml"
+
+
+def real_cli_argv(*extra: str) -> list:
+    """The argv a REAL `python3 tools/deflake.py ...` process observes.
+
+    Captured from an actual subprocess rather than written out, because
+    writing it out is the mistake this exists to stop: both this suite
+    and `tools/test_deflake.py` spelled it `["python3", "tools/deflake.py",
+    ...]`, and `deflake.main` passes `list(sys.argv)`, whose [0] is the
+    SCRIPT. An interpreter-first fixture therefore certified an entry
+    gate that no handoff from the real CLI could pass.
+
+    The subprocess runs the launcher with `-c`-free argv and prints what
+    `sys.argv` actually is, so the FORM comes from Python rather than
+    from this file's belief about it.
+    """
+    captured = subprocess.run(
+        [sys.executable, "-c",
+         "import json, sys; print(json.dumps(sys.argv))",
+         *extra],
+        capture_output=True, text=True, check=True)
+    observed = json.loads(captured.stdout)
+    # `-c` occupies argv[0] the way a script path would; the invariant
+    # under test is that argv[0] is NOT the interpreter and the options
+    # follow it directly.
+    expect(observed[0] != sys.executable and observed[0] != "python3",
+           f"argv[0] is never the interpreter; got {observed[0]!r}")
+    expect(observed[1:] == list(extra),
+           f"and every remaining token is the script's own: {observed}")
+    # The FORM is what the subprocess established; the PATH is the
+    # checkout this fixture declares, since that is what the gate
+    # resolves the script against.
+    return [f"{PRIMARY_WT}/tools/deflake.py", *extra]
+
+
+def test_a_handoff_from_the_real_cli_path_is_admitted() -> None:
+    """End to end across the seam that broke: producer -> entry gate.
+
+    `deflake.measure_next_probe` is the real producer, driven here the
+    way `tools/test_deflake.py` drives it — every collaborator injected,
+    no probe executed — with the argv form taken from a real subprocess.
+    The handoff it WRITES is then handed to the entry gate unmodified.
+
+    This is the case a hand-assembled fixture cannot be: the envelope's
+    keys, its argv form, its ports, its targets and its artifacts all
+    come from the shipped producer, so a gate that disagrees with #1659
+    about any of them fails here rather than in production.
+    """
+    argv = real_cli_argv("--json", "--result", f"{OUTSIDE}/handoff.json")
+    result = result_document(runs=failing_runs(3))
+    document = deflake.build_handoff(
+        result=result,
+        acceptable_failures=1,
+        argv=argv,
+        cwd=PRIMARY_WT,
+        configuration=deflake.configuration_manifest(PRIMARY_CONFIG_ROOT),
+        artifacts=list(result["retained_artifacts"]))
+
+    expect(document["invocation"]["argv"][0].endswith("deflake.py"),
+           f"the producer records the script at argv[0]; got "
+           f"{document['invocation']['argv'][0]!r}")
+    expect("python3" not in document["invocation"]["argv"],
+           f"and no interpreter token at all: {document['invocation']['argv']}")
+
+    accepted = dd.require_handoff(copy.deepcopy(document), primary=PRIMARY_WT)
+    expect(accepted.probe == PROBE,
+           "the entry gate admits what the real CLI path produces")
+    expect(accepted.targets == tuple(document["targets"]),
+           f"with the producer's own targets: {accepted.targets}")
+    expect(list(accepted.invocation["ports"])
+           == [run["port"] for run in result["runs"]],
+           "and the producer's own ports")
+
+    # And it survives the whole diagnosis, not merely the gate.
+    diagnosis = diagnosis_document(handoff=document)
+    expect(evaluate(diagnosis).route == dd.ROUTE_REPAIR,
+           "and a diagnosis built on it reaches its route")
 
 
 def test_the_entry_gate_reads_the_producers_own_spelling() -> None:
@@ -3283,7 +3379,7 @@ def _live_document(**kwargs) -> dict:
     document = diagnosis_document(**kwargs)
     live = dd.primary_checkout()
     document["handoff"]["invocation"] = deflake_invocation(
-        cmd=["python3", f"{live}/tools/deflake.py", "--json",
+        cmd=[f"{live}/tools/deflake.py", "--json",
              "--result", f"{OUTSIDE}/handoff.json"],
         directory=str(live))
     return document

@@ -1732,16 +1732,23 @@ code — and a repair may not touch the measurement APPARATUS at all
 constants and lengthening one would buy a calmer verification while both command
 records still compared equal.
 
-**The producer's spelling is the contract.** `deflake.build_handoff` writes
-`invocation.argv`, `cwd` and `timeout`, and a bare `configuration` LIST; the
-controlled batches this module defines itself use `command`, `directory`,
-`timeout_seconds` and a manifest object. The entry gate reads what #1659
+**The producer's spelling is the contract, down to the argv FORM.**
+`deflake.build_handoff` writes `invocation.argv`, `cwd` and `timeout`, and a
+bare `configuration` LIST; the controlled batches this module defines itself
+use `command`, `directory`, `timeout_seconds` and a manifest object. And the
+two argv forms genuinely differ: a controlled record is a COMMAND this
+workflow ran, interpreter first, while the handoff's is `sys.argv` —
+`deflake.main` passes `list(sys.argv)`, whose [0] is the SCRIPT, so a truthful
+handoff carries no interpreter token at all. The entry gate reads what #1659
 actually writes and adapts it at the boundary, so one vocabulary reaches
-everything downstream while the producer stays the authority. The self-test
+everything downstream while the producer stays the authority. Putting an
+interpreter into a handoff argv is refused as the wrong form, which is a
+stronger statement than refusing a particular interpreter. The self-test
 builds its handoffs by CALLING `deflake.build_handoff` rather than assembling
-an envelope by hand — a hand-written fixture agrees with whatever the
+an envelope by hand, and takes the argv form from an actual subprocess rather
+than writing it out — a hand-written fixture agrees with whatever the
 validator happens to require, which is exactly how a gate that could not
-consume a single real handoff kept a green suite.
+consume a single real handoff kept a green suite, twice.
 
 **The envelope's redundant relationships are enforced.** `probe` equals
 `result.probe`, `targets` equals the descriptor-ordered union of FAIL/MISSING

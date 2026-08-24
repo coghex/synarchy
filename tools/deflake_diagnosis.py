@@ -325,7 +325,9 @@ record; what #1438 and #1439 DO with it is theirs to define, this module
 does not invent their contracts, and filing an issue is not its job.
 
 The handoff this module CONSUMES is #1659's, in #1659's own spelling:
-`invocation.argv`/`cwd`/`timeout` and a bare `configuration` list.
+`invocation.argv`/`cwd`/`timeout` and a bare `configuration` list — and
+`argv` is `sys.argv`, whose [0] is the SCRIPT, because `deflake.main`
+passes `list(sys.argv)` and Python never puts the interpreter there.
 `require_producer_invocation` and `require_producer_configuration` adapt
 those at the boundary, so everything downstream reads one vocabulary
 while the producer stays the authority on what it writes.
@@ -727,15 +729,25 @@ INVOCATION_STAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 
 
 def parse_command(command, what: str, *, launcher=None, root=None,
-                  base=None):
+                  base=None, script_first: bool = False):
     """One recorded argument vector, as `(launcher, {option: value})`.
 
     ORDER is part of the grammar, not decoration: `python3 --probe role
     tools/probe_flake.py --runs 10` is rejected by PYTHON before the
-    script runs, so argv[0] must be the interpreter, argv[1] the script,
-    and only argv[2:] are that script's options. Parsing
-    order-insensitively accepted a command the shell would never have got
-    past.
+    script runs, so the script comes before its own options and only the
+    tokens after it are that script's. Parsing order-insensitively
+    accepted a command the shell would never have got past.
+
+    TWO forms, because the two records genuinely differ:
+
+    * `script_first=False` — a COMMAND this workflow ran, interpreter
+      first: `["python3", "<worktree>/tools/probe_flake.py", ...]`. The
+      controlled batches use it, and this module defines their shape.
+    * `script_first=True` — `sys.argv`, whose [0] is the SCRIPT and never
+      the interpreter. `deflake.main` records `list(sys.argv)`
+      (`tools/deflake.py:1108`), so a truthful #1659 handoff carries
+      `["tools/deflake.py", "--json", ...]` with no interpreter token at
+      all. Requiring one here rejected every real handoff.
 
     `--flag value` and `--flag=value` are the same thing for an option
     that takes a value; a `store_true` flag takes none, and reading one
@@ -745,6 +757,19 @@ def parse_command(command, what: str, *, launcher=None, root=None,
         raise HandoffError(f"{what} must be a non-empty list of arguments")
     if not all(isinstance(token, str) for token in command):
         raise HandoffError(f"{what} must contain only strings")
+    if script_first:
+        # `sys.argv`: the script is [0] and there is no interpreter token
+        # to check. An interpreter-first argv is refused on purpose — it
+        # is not a vector the recording process could have observed.
+        if (len(command) > 1 and Path(command[0]).name not in LAUNCHERS
+                and Path(command[1]).name in LAUNCHERS):
+            raise HandoffError(
+                f"{what} is {command}, which puts {command[0]!r} before the "
+                f"script; this record is `sys.argv`, whose [0] is the SCRIPT "
+                f"— `deflake.main` passes `list(sys.argv)` and Python never "
+                f"puts the interpreter there")
+        return _parse_from_script(command, 0, what, launcher=launcher,
+                                  root=root, base=base)
     if len(command) < 2:
         raise HandoffError(
             f"{what} is {command}, where an invocation is a Python "
@@ -766,11 +791,24 @@ def parse_command(command, what: str, *, launcher=None, root=None,
             f"the right shape (`/bin/echo .../probe_flake.py --probe role "
             f"--runs 10`) measures nothing, and a versioned spelling "
             f"(`python3.9`) is a command no tracked path here produces")
+    return _parse_from_script(command, 1, what, launcher=launcher,
+                              root=root, base=base)
+
+
+def _parse_from_script(command, position: int, what: str, *, launcher, root,
+                       base):
+    """The half both argv forms share: the script, then its own options.
+
+    `position` is where the script sits — 1 for a command that names its
+    interpreter, 0 for a recorded `sys.argv`. Everything after it is that
+    script's option surface, in both forms.
+    """
+    script = command[position]
     if script.startswith("-"):
         raise HandoffError(
             f"{what} passes {script!r} before the script it ran; ORDER is "
             f"part of the grammar — Python rejects an option it does not "
-            f"know before the script runs at all, so argv[1] is the script "
+            f"know before the script runs at all, so the script comes first "
             f"and every option comes after it")
     found = LAUNCHERS.get(Path(script).name)
     if found is None:
@@ -800,7 +838,7 @@ def parse_command(command, what: str, *, launcher=None, root=None,
             f"{what} runs {found.script}, where {launcher.describes} come "
             f"from {launcher.script}")
     options: dict = {}
-    index = 2
+    index = position + 1
     while index < len(command):
         token = command[index]
         if not token.startswith("--"):
@@ -880,7 +918,8 @@ def require_invocation(document, what: str, *, launcher=None,
     parse_command(document.get("command"), f"{what}.command",
                   launcher=launcher,
                   root=directory if root is None else root,
-                  base=directory)
+                  base=directory,
+                  script_first=bool(document.get("script_first")))
     # `probe_flake.measure`'s own defaults, which NEITHER CLI exposes.
     # Recorded because they are behavior-affecting and invisible to the
     # command, so without them two identical argv strings could describe
@@ -949,6 +988,11 @@ def require_producer_invocation(document, what: str) -> dict:
             f"command it ran under that name")
     adapted = {
         "command": list(argv),
+        # INTERNAL, never serialized: which argv form `command` is in.
+        # The producer records `sys.argv`, so every re-parse of this
+        # record has to know that, or the interpreter rule would be
+        # applied to a script token.
+        "script_first": True,
         "directory": directory,
         "retries": document.get("retries"),
         "ports": document.get("ports"),
@@ -998,8 +1042,9 @@ def effective_settings(invocation, what: str, *, result=None) -> dict:
     result document its selector produced rather than from a command
     that never named one.
     """
-    launcher, options = parse_command(invocation["command"],
-                                      f"{what}.command")
+    launcher, options = parse_command(
+        invocation["command"], f"{what}.command",
+        script_first=bool(invocation.get("script_first")))
     settings = dict(launcher.fixed)
     if launcher.probe_from_result:
         if not isinstance(result, dict):
@@ -1045,8 +1090,9 @@ def invocation_differences(baseline, verification, *, results=(None, None),
 
 def destinations(invocation) -> list:
     """The paths one invocation wrote to, as recorded in its command."""
-    launcher, options = parse_command(invocation["command"],
-                                      "invocation.command")
+    launcher, options = parse_command(
+        invocation["command"], "invocation.command",
+        script_first=bool(invocation.get("script_first")))
     return [options[name] for name in launcher.destinations
             if name in options]
 
@@ -2196,8 +2242,9 @@ def _require_batch(section, *, what: str, handoff: Handoff,
     # checked only against its own declaration could name an artifact
     # root inside the OTHER comparison state and pass.
 
-    _launcher, options = parse_command(invocation["command"],
-                                       f"{what}.invocation.command")
+    _launcher, options = parse_command(
+        invocation["command"], f"{what}.invocation.command",
+        script_first=bool(invocation.get("script_first")))
     declared_root = options.get("--artifact-root")
     if declared_root is not None:
         told = _path_forms(declared_root, invocation["directory"])
